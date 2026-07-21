@@ -29,7 +29,7 @@ export default function InspectionAreasScreen() {
     <AppScreen
       title="Room checklist"
       subtitle="One approved room, one focused video"
-      refresh={{ refreshing: query.isFetching, onRefresh: () => void query.refetch() }}
+      refresh={{ onRefresh: () => query.refetch() }}
       bottomAction={
         nextRoom ? (
           <AppButton

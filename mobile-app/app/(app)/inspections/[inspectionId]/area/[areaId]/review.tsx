@@ -6,7 +6,11 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppScreen } from '../../../../../../src/components/AppScreen';
 import { formatDuration } from '../../../../../../src/components/FeatureCards';
 import { AppButton, Card, ConfirmationModal } from '../../../../../../src/components/ui';
-import { useRoom, useSaveRecording } from '../../../../../../src/features/queries';
+import {
+  useInspection,
+  useRoom,
+  useSaveRecording,
+} from '../../../../../../src/features/queries';
 import { deleteDraftRecording } from '../../../../../../src/media/local-recordings';
 import { useDemoStore } from '../../../../../../src/stores/demo.store';
 import {
@@ -26,6 +30,7 @@ export default function RecordingReviewScreen() {
     areaId: string;
   }>();
   const room = useRoom(areaId);
+  const inspection = useInspection(inspectionId);
   const draft = useDemoStore((state) => state.draftRecording);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const save = useSaveRecording();
@@ -56,6 +61,8 @@ export default function RecordingReviewScreen() {
         input: {
           inspectionId,
           roomId: areaId,
+          propertyAddress: inspection.data?.property.address ?? 'Assigned property',
+          roomName: room.data?.name ?? 'Room evidence',
           uri: draft.uri,
           durationSeconds: draft.durationSeconds,
           estimatedSizeMb: draft.estimatedSizeMb,

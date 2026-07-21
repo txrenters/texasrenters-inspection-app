@@ -37,6 +37,11 @@ export default function RoomDetailsScreen() {
   if (room.isLoading || media.isLoading) return <LoadingState label="Loading room baseline…" />;
   if (!room.data)
     return <ErrorState message="Room unavailable" onRetry={() => void room.refetch()} />;
+  const hasSavedRecording = Boolean(media.data?.length);
+  const completionStatus =
+    hasSavedRecording && room.data.completionStatus === 'NOT_STARTED'
+      ? 'RECORDING_SAVED'
+      : room.data.completionStatus;
   const record = () =>
     router.push({
       pathname: '/(app)/inspections/[inspectionId]/area/[areaId]/record',
@@ -49,7 +54,7 @@ export default function RoomDetailsScreen() {
       bottomAction={
         <AppButton
           label={
-            room.data.completionStatus === 'NOT_STARTED'
+            !hasSavedRecording
               ? 'Record room video'
               : 'Record another video'
           }
@@ -58,7 +63,7 @@ export default function RoomDetailsScreen() {
       }
     >
       <View style={styles.badges}>
-        <StatusBadge label={room.data.completionStatus} />
+        <StatusBadge label={completionStatus} />
         <StatusBadge label={room.data.uploadStatus} />
         <StatusBadge label={room.data.processingStatus} />
       </View>
@@ -136,7 +141,7 @@ export default function RoomDetailsScreen() {
       <Card muted>
         <SectionHeader title="Room status" />
         <Timeline label="Baseline reviewed" complete />
-        <Timeline label="Recording saved" complete={room.data.completionStatus !== 'NOT_STARTED'} />
+        <Timeline label="Recording saved" complete={hasSavedRecording} />
         <Timeline label="Upload confirmed" complete={room.data.uploadStatus === 'COMPLETED'} />
         <Timeline
           label="AI findings ready"

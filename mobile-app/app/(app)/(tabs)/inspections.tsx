@@ -56,7 +56,7 @@ export default function InspectionsScreen() {
     <AppScreen
       title="Inspections"
       subtitle="Assigned, active, and recently completed work"
-      refresh={{ refreshing: query.isFetching, onRefresh: () => void query.refetch() }}
+      refresh={{ onRefresh: () => query.refetch() }}
     >
       <SearchInput
         value={search}

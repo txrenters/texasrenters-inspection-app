@@ -6,6 +6,7 @@ import type {
   InspectionRoom,
   LocalMedia,
   ProcessingStatus,
+  RoomSnapshot,
   UploadItem,
 } from '../domain/models';
 import { seedFindings, seedUploads } from '../repositories/mock/data';
@@ -20,6 +21,7 @@ interface DemoState {
   mockErrorEnabled: boolean;
   roomOverrides: Record<string, Partial<InspectionRoom>>;
   media: LocalMedia[];
+  snapshots: RoomSnapshot[];
   uploads: UploadItem[];
   findings: Record<string, Finding>;
   draftRecording: LocalMedia | null;
@@ -33,6 +35,7 @@ interface DemoState {
   updateRoom: (id: string, update: Partial<InspectionRoom>) => void;
   setDraftRecording: (media: LocalMedia | null) => void;
   saveMedia: (media: LocalMedia) => void;
+  addSnapshot: (snapshot: RoomSnapshot) => void;
   enqueueUpload: (item: UploadItem) => void;
   updateUpload: (id: string, update: Partial<UploadItem>) => void;
   removeUpload: (id: string) => void;
@@ -61,6 +64,7 @@ const initialDemoData = () => ({
   mockErrorEnabled: false,
   roomOverrides: {} as Record<string, Partial<InspectionRoom>>,
   media: [] as LocalMedia[],
+  snapshots: [] as RoomSnapshot[],
   uploads: seedUploads.map((item) => ({ ...item })),
   findings: findingRecord(),
   draftRecording: null as LocalMedia | null,
@@ -98,6 +102,13 @@ export const useDemoStore = create<DemoState>()(
             },
           },
           draftRecording: null,
+        })),
+      addSnapshot: (snapshot) =>
+        set((state) => ({
+          snapshots: [
+            snapshot,
+            ...(state.snapshots ?? []).filter((item) => item.id !== snapshot.id),
+          ],
         })),
       enqueueUpload: (item) => set((state) => ({ uploads: [item, ...state.uploads] })),
       updateUpload: (id, update) =>
@@ -179,6 +190,7 @@ export const useDemoStore = create<DemoState>()(
         mockErrorEnabled: state.mockErrorEnabled,
         roomOverrides: state.roomOverrides,
         media: state.media,
+        snapshots: state.snapshots,
         uploads: state.uploads,
         findings: state.findings,
         draftRecording: state.draftRecording,

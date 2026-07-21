@@ -135,11 +135,24 @@ export interface LocalMedia {
   id: string;
   inspectionId: string;
   roomId: string;
+  propertyAddress?: string;
+  roomName?: string;
   uri: string;
   durationSeconds: number;
   estimatedSizeMb: number;
   recordedAt: string;
   note: string;
+}
+
+export interface RoomSnapshot {
+  id: string;
+  inspectionId: string;
+  roomId: string;
+  uri: string;
+  width: number;
+  height: number;
+  sizeBytes?: number;
+  capturedAt: string;
 }
 
 export interface UploadItem {

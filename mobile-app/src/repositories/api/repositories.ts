@@ -1,6 +1,8 @@
 import { getSupabaseClient } from '../../auth/supabase';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
+import type { LocalMedia, UploadItem } from '../../domain/models';
+import { useDemoStore } from '../../stores/demo.store';
 import type {
   AuthRepository,
   CatalogRepository,
@@ -383,18 +385,33 @@ export class ApiFloorPlanRepository implements FloorPlanRepository {
 
 export class ApiMediaRepository implements MediaRepository {
   async listForRoom(roomId: string) {
-    const records = z
-      .array(
-        z.object({
-          id: z.string(),
-          inspectionId: z.string(),
-          inspectionAreaId: z.string(),
-          durationSeconds: z.number(),
-          createdAt: z.string(),
-        }),
-      )
-      .parse(await getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/media`));
-    return records.map((record) => ({
+    const localRecords = useDemoStore
+      .getState()
+      .media.filter((item) => item.roomId === roomId && item.id.startsWith('local-media-'));
+    let records: Array<{
+      id: string;
+      inspectionId: string;
+      inspectionAreaId: string;
+      durationSeconds: number;
+      createdAt: string;
+    }>;
+    try {
+      records = z
+        .array(
+          z.object({
+            id: z.string(),
+            inspectionId: z.string(),
+            inspectionAreaId: z.string(),
+            durationSeconds: z.number(),
+            createdAt: z.string(),
+          }),
+        )
+        .parse(await getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/media`));
+    } catch (error) {
+      if (localRecords.length) return localRecords;
+      throw error;
+    }
+    const remoteRecords = records.map((record) => ({
       id: record.id,
       inspectionId: record.inspectionId,
       roomId: record.inspectionAreaId,
@@ -404,22 +421,91 @@ export class ApiMediaRepository implements MediaRepository {
       recordedAt: record.createdAt,
       note: '',
     }));
+    return [
+      ...localRecords,
+      ...remoteRecords.filter(
+        (remote) => !localRecords.some((local) => local.id === remote.id),
+      ),
+    ];
   }
-  save = async () =>
-    unavailable('Cloud video upload is not configured yet. The recording remains on this device.');
+  async save(input: Omit<LocalMedia, 'id' | 'recordedAt'>) {
+    const media: LocalMedia = {
+      ...input,
+      id: `local-media-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      recordedAt: new Date().toISOString(),
+    };
+    useDemoStore.getState().saveMedia(media);
+    return media;
+  }
 }
 
 export class ApiUploadRepository implements UploadRepository {
   async list() {
-    return z.array(uploadSchema).parse(await getJson('/api/v1/technician/uploads'));
+    const localRecords = localUploads();
+    try {
+      const remoteRecords = z
+        .array(uploadSchema)
+        .parse(await getJson('/api/v1/technician/uploads'));
+      return [
+        ...localRecords,
+        ...remoteRecords.filter(
+          (remote) => !localRecords.some((local) => local.mediaId === remote.mediaId),
+        ),
+      ];
+    } catch (error) {
+      if (localRecords.length) return localRecords;
+      throw error;
+    }
   }
-  enqueue = async () => unavailable('Cloud video upload is not configured yet.');
-  pause = async () => unavailable('Cloud video upload is not configured yet.');
-  resume = async () => unavailable('Cloud video upload is not configured yet.');
-  retry = async () => unavailable('Cloud video upload is not configured yet.');
-  retryProcessing = async () => unavailable('Cloud processing is not configured yet.');
-  remove = async () => unavailable('Server-backed uploads cannot be removed from the device.');
+  async enqueue(media: LocalMedia) {
+    const existing = localUploads().find((item) => item.mediaId === media.id);
+    if (existing) return existing;
+    const item: UploadItem = {
+      id: `local-upload-${media.id}`,
+      mediaId: media.id,
+      inspectionId: media.inspectionId,
+      roomId: media.roomId,
+      propertyAddress: media.propertyAddress ?? 'Assigned property',
+      roomName: media.roomName ?? 'Room evidence',
+      durationSeconds: media.durationSeconds,
+      estimatedSizeMb: media.estimatedSizeMb,
+      status: 'PENDING',
+      progress: 0,
+      processingStatus: 'NOT_STARTED',
+      processingProgress: 0,
+      createdAt: new Date().toISOString(),
+    };
+    useDemoStore.getState().enqueueUpload(item);
+    return item;
+  }
+  async pause(id: string) {
+    this.updateLocal(id, { status: 'PAUSED' });
+  }
+  async resume(id: string) {
+    this.updateLocal(id, { status: 'PENDING', lastError: undefined });
+  }
+  async retry(id: string) {
+    this.updateLocal(id, { status: 'PENDING', progress: 0, lastError: undefined });
+  }
+  async retryProcessing(id: string) {
+    this.updateLocal(id, { processingStatus: 'NOT_STARTED', processingProgress: 0 });
+  }
+  async remove(id: string) {
+    if (!localUploads().some((item) => item.id === id))
+      return unavailable('Server-backed uploads cannot be removed from the device.');
+    useDemoStore.getState().removeUpload(id);
+  }
   tick = async () => undefined;
+
+  private updateLocal(id: string, update: Partial<UploadItem>) {
+    if (!localUploads().some((item) => item.id === id))
+      return unavailable('Cloud video upload is not configured yet.');
+    useDemoStore.getState().updateUpload(id, update);
+  }
+}
+
+function localUploads() {
+  return useDemoStore.getState().uploads.filter((item) => item.id.startsWith('local-upload-'));
 }
 
 export class ApiFindingRepository implements FindingRepository {

@@ -1,5 +1,4 @@
-import type { PropsWithChildren, ReactNode } from 'react';
-import type { RefreshControlProps } from 'react-native';
+import { useState, type PropsWithChildren, type ReactNode } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { DemoModeBanner } from './ui';
@@ -18,21 +17,37 @@ export function AppScreen({
   subtitle?: string;
   action?: ReactNode;
   bottomAction?: ReactNode;
-  refresh?: Pick<RefreshControlProps, 'refreshing' | 'onRefresh'>;
+  refresh?: {
+    onRefresh: () => void | Promise<unknown>;
+    refreshing?: boolean;
+  };
 }>) {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
+  const [manualRefreshActive, setManualRefreshActive] = useState(false);
+  const refreshActive = refresh?.refreshing ?? manualRefreshActive;
+  const handleRefresh = async () => {
+    if (!refresh || refreshActive) return;
+    setManualRefreshActive(true);
+    try {
+      await refresh.onRefresh();
+    } finally {
+      setManualRefreshActive(false);
+    }
+  };
   return (
     <View style={styles.root}>
       <DemoModeBanner />
       <NetworkBanner />
       <ScrollView
+        testID="app-screen-scroll"
+        accessibilityState={{ busy: refreshActive }}
         keyboardShouldPersistTaps="handled"
         refreshControl={
           refresh ? (
             <RefreshControl
-              refreshing={refresh.refreshing}
-              onRefresh={refresh.onRefresh}
+              refreshing={refreshActive}
+              onRefresh={() => void handleRefresh()}
               tintColor={colors.primary}
             />
           ) : undefined

@@ -35,7 +35,7 @@ export default function DashboardScreen() {
       title={`Good morning, ${firstName}`}
       subtitle={date}
       action={user.data ? <InitialsAvatar initials={user.data.initials} /> : null}
-      refresh={{ refreshing: dashboard.isFetching, onRefresh: () => void dashboard.refetch() }}
+      refresh={{ onRefresh: () => dashboard.refetch() }}
     >
       <View style={styles.stats}>
         <StatCard value={dashboard.data?.today ?? 0} label="Today’s inspections" />

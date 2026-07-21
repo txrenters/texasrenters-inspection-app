@@ -38,7 +38,7 @@ export default function FindingsScreen() {
     <AppScreen
       title="Findings review"
       subtitle="AI observations are suggestions until an authorized human decides"
-      refresh={{ refreshing: query.isFetching, onRefresh: () => void query.refetch() }}
+      refresh={{ onRefresh: () => query.refetch() }}
     >
       <ScrollView
         horizontal

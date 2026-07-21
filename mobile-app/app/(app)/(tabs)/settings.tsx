@@ -17,6 +17,7 @@ import {
 import { environment, isDemoMode } from '../../../src/config/environment';
 import { useCurrentUser, useSignOut } from '../../../src/features/queries';
 import { clearLocalRecordings } from '../../../src/media/local-recordings';
+import { clearLocalSnapshots } from '../../../src/media/local-snapshots';
 import { useDemoStore } from '../../../src/stores/demo.store';
 import {
   type AppColors,
@@ -36,6 +37,7 @@ export default function SettingsScreen() {
   const [resetOpen, setResetOpen] = useState(false);
   const reset = () => {
     clearLocalRecordings();
+    clearLocalSnapshots();
     state.resetDemoData();
     client.clear();
     setResetOpen(false);
