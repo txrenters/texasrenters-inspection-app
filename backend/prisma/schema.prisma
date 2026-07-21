@@ -1,0 +1,857 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  SYSTEM_ADMIN
+  PROPERTY_ADMIN
+  INSPECTION_SUPERVISOR
+  INSPECTION_TECHNICIAN
+  CONDITION_REVIEWER
+  CHARGE_APPROVER
+  PROPERTY_OWNER_READ_ONLY
+}
+
+enum FloorPlanStatus {
+  UPLOADED
+  PROCESSING
+  REVIEW_REQUIRED
+  APPROVED
+  FAILED
+}
+
+enum ExtractionJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum PropertyAreaStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+}
+
+enum InspectionStatus {
+  SCHEDULED
+  IN_PROGRESS
+  PROCESSING
+  REVIEW_REQUIRED
+  COMPLETED
+  CANCELLED
+}
+
+enum InspectionType {
+  MOVE_IN
+  OCCUPIED
+  BACK_TO_MARKET
+  MOVE_OUT
+}
+
+enum InspectionAreaCompletionStatus {
+  PENDING
+  RECORDING
+  RECORDED
+  UPLOADED
+  COMPLETED
+  SKIPPED
+  FAILED
+}
+
+enum MediaUploadStatus {
+  PENDING
+  SESSION_CREATED
+  UPLOADING
+  UPLOADED
+  FAILED
+}
+
+enum MediaProcessingStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum TranscriptionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AiAnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum FindingReviewStatus {
+  PENDING_REVIEW
+  APPROVED
+  EDITED
+  REJECTED
+  REINSPECTION_REQUESTED
+}
+
+enum FindingType {
+  POSSIBLE_NEW_DAMAGE
+  EXISTING_CONDITION
+  MAINTENANCE
+  NO_CHANGE
+}
+
+enum ComparisonResult {
+  EXISTING_CONDITION
+  POSSIBLE_NEW_DAMAGE
+  NO_MATERIAL_CHANGE
+  NORMAL_WEAR
+  OWNER_MAINTENANCE
+  MISSING_EVIDENCE
+  INSUFFICIENT_DATA
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ResponsibilityClassification {
+  TENANT_REVIEW_REQUIRED
+  OWNER_REVIEW_REQUIRED
+  UNDETERMINED
+}
+
+enum WebhookProcessingStatus {
+  RECEIVED
+  PROCESSING
+  COMPLETED
+  FAILED
+  IGNORED_DUPLICATE
+}
+
+model Organization {
+  id          String               @id @default(uuid()) @db.Uuid
+  name        String
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  members     OrganizationMember[]
+  properties  Property[]
+  inspections Inspection[]
+  auditLogs   AuditLog[]
+}
+
+model UserProfile {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  authUserId         String                 @unique
+  email              String                 @unique
+  displayName        String
+  isActive           Boolean                @default(true)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  memberships        OrganizationMember[]
+  assignments        InspectionAssignment[] @relation("AssignedTechnician")
+  assignmentsCreated InspectionAssignment[] @relation("AssignmentActor")
+  assignmentsEnded   InspectionAssignment[] @relation("AssignmentEndActor")
+  media              InspectionMedia[]
+  reviews            FindingReview[]
+  pushDevices        MobilePushDevice[]
+}
+
+model MobilePushDevice {
+  id            String      @id @default(uuid()) @db.Uuid
+  userProfileId String      @db.Uuid
+  expoPushToken String      @unique
+  platform      String
+  isActive      Boolean     @default(true)
+  lastSeenAt    DateTime    @default(now())
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  userProfile   UserProfile @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userProfileId, isActive])
+}
+
+model OrganizationMember {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userProfileId  String       @db.Uuid
+  role           UserRole
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userProfile    UserProfile  @relation(fields: [userProfileId], references: [id])
+
+  @@unique([organizationId, userProfileId, role])
+}
+
+model Property {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  name           String
+  addressLine1   String
+  city           String
+  state          String               @default("TX")
+  postalCode     String
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id])
+  floorPlans     PropertyFloorPlan[]
+  floors         PropertyFloor[]
+  areas          PropertyArea[]
+  inspections    Inspection[]
+  baselines      BaselineInspection[]
+}
+
+model PropertyFloorPlan {
+  id             String                   @id @default(uuid()) @db.Uuid
+  propertyId     String                   @db.Uuid
+  fileName       String
+  mimeType       String
+  storageKey     String
+  sizeBytes      Int
+  status         FloorPlanStatus          @default(UPLOADED)
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  property       Property                 @relation(fields: [propertyId], references: [id])
+  extractionJobs FloorPlanExtractionJob[]
+}
+
+model FloorPlanExtractionJob {
+  id            String              @id @default(uuid()) @db.Uuid
+  floorPlanId   String              @db.Uuid
+  status        ExtractionJobStatus @default(PENDING)
+  provider      String
+  modelId       String
+  schemaVersion String
+  output        Json?
+  errorCode     String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  floorPlan     PropertyFloorPlan   @relation(fields: [floorPlanId], references: [id])
+
+  @@index([status])
+}
+
+model PropertyFloor {
+  id         String         @id @default(uuid()) @db.Uuid
+  propertyId String         @db.Uuid
+  name       String
+  sortOrder  Int
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  property   Property       @relation(fields: [propertyId], references: [id])
+  areas      PropertyArea[]
+
+  @@unique([propertyId, name])
+}
+
+model PropertyArea {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  propertyId         String                  @db.Uuid
+  floorId            String?                 @db.Uuid
+  name               String
+  inspectionOrder    Int
+  isRequired         Boolean                 @default(true)
+  status             PropertyAreaStatus      @default(DRAFT)
+  source             String                  @default("MANUAL")
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  property           Property                @relation(fields: [propertyId], references: [id])
+  floor              PropertyFloor?          @relation(fields: [floorId], references: [id])
+  inspectionAreas    InspectionArea[]
+  baselineConditions BaselineAreaCondition[]
+  findings           InspectionFinding[]
+
+  @@unique([propertyId, floorId, name])
+  @@index([propertyId, floorId, inspectionOrder])
+}
+
+model BaselineInspection {
+  id             String                  @id @default(uuid()) @db.Uuid
+  propertyId     String                  @db.Uuid
+  inspectedAt    DateTime
+  notes          String?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  property       Property                @relation(fields: [propertyId], references: [id])
+  areaConditions BaselineAreaCondition[]
+}
+
+model BaselineAreaCondition {
+  id                   String             @id @default(uuid()) @db.Uuid
+  baselineInspectionId String             @db.Uuid
+  propertyAreaId       String             @db.Uuid
+  conditionSummary     String
+  knownDefects         Json
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  baselineInspection   BaselineInspection @relation(fields: [baselineInspectionId], references: [id])
+  propertyArea         PropertyArea       @relation(fields: [propertyAreaId], references: [id])
+  media                BaselineMedia[]
+
+  @@unique([baselineInspectionId, propertyAreaId])
+}
+
+model BaselineMedia {
+  id                      String                @id @default(uuid()) @db.Uuid
+  baselineAreaConditionId String                @db.Uuid
+  mediaType               String
+  storageKey              String
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  baselineAreaCondition   BaselineAreaCondition @relation(fields: [baselineAreaConditionId], references: [id])
+}
+
+model Inspection {
+  id                     String                 @id @default(uuid()) @db.Uuid
+  organizationId         String                 @db.Uuid
+  propertyId             String?                @db.Uuid
+  propertywareBuildingId String?                @db.Uuid
+  propertywareUnitId     String?                @db.Uuid
+  propertywareLeaseId    String?                @db.Uuid
+  inspectionType         InspectionType
+  baselineInspectionId   String?                @db.Uuid
+  priority               String                 @default("STANDARD")
+  internalNotes          String?
+  createdById            String?                @db.Uuid
+  status                 InspectionStatus       @default(SCHEDULED)
+  scheduledAt            DateTime
+  startedAt              DateTime?
+  completedAt            DateTime?
+  cancelledAt            DateTime?
+  cancellationReason     String?
+  propertySnapshot       Json?
+  leaseSnapshot          Json?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  organization           Organization           @relation(fields: [organizationId], references: [id])
+  property               Property?              @relation(fields: [propertyId], references: [id])
+  propertywareBuilding   PropertywareBuilding?  @relation(fields: [propertywareBuildingId], references: [id])
+  propertywareUnit       PropertywareUnit?      @relation(fields: [propertywareUnitId], references: [id])
+  propertywareLease      PropertywareLease?     @relation(fields: [propertywareLeaseId], references: [id])
+  baselineInspection     Inspection?            @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
+  comparisonInspections  Inspection[]           @relation("InspectionLifecycleBaseline")
+  assignments            InspectionAssignment[]
+  areas                  InspectionArea[]
+  findings               InspectionFinding[]
+
+  @@index([organizationId, status, scheduledAt])
+  @@index([organizationId, scheduledAt(sort: Desc)])
+  @@index([propertywareBuildingId, scheduledAt])
+  @@index([propertywareUnitId, scheduledAt])
+  @@index([baselineInspectionId])
+  @@index([organizationId, propertywareBuildingId, propertywareUnitId, propertywareLeaseId, inspectionType, scheduledAt])
+}
+
+model PropertywarePortfolio {
+  id              String                       @id @default(uuid()) @db.Uuid
+  organizationId  String                       @db.Uuid
+  externalId      String
+  sourceSystem    String                       @default("propertyware")
+  idNumber        String?
+  name            String
+  abbreviation    String?
+  sourceStatus    String?
+  isActive        Boolean                      @default(true)
+  sourceCreatedAt DateTime?
+  sourceUpdatedAt DateTime?
+  firstSyncedAt   DateTime                     @default(now())
+  lastSyncedAt    DateTime                     @default(now())
+  lastSeenAt      DateTime                     @default(now())
+  deactivatedAt   DateTime?
+  sourceHash      String?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+  owners          PropertywarePortfolioOwner[]
+  buildings       PropertywareBuilding[]
+  units           PropertywareUnit[]
+  leases          PropertywareLease[]
+
+  @@unique([organizationId, sourceSystem, externalId])
+  @@index([organizationId, isActive, name])
+  @@map("propertyware_portfolios")
+}
+
+model PropertywareOwner {
+  id              String                       @id @default(uuid()) @db.Uuid
+  organizationId  String                       @db.Uuid
+  externalId      String
+  sourceSystem    String                       @default("propertyware")
+  displayName     String
+  sourceStatus    String?
+  isActive        Boolean                      @default(true)
+  sourceCreatedAt DateTime?
+  sourceUpdatedAt DateTime?
+  firstSyncedAt   DateTime                     @default(now())
+  lastSyncedAt    DateTime                     @default(now())
+  lastSeenAt      DateTime                     @default(now())
+  deactivatedAt   DateTime?
+  sourceHash      String?
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+  portfolios      PropertywarePortfolioOwner[]
+
+  @@unique([organizationId, sourceSystem, externalId])
+  @@map("propertyware_owners")
+}
+
+model PropertywarePortfolioOwner {
+  id                  String                @id @default(uuid()) @db.Uuid
+  portfolioId         String                @db.Uuid
+  ownerId             String                @db.Uuid
+  percentageOwnership Float?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
+  owner               PropertywareOwner     @relation(fields: [ownerId], references: [id])
+
+  @@unique([portfolioId, ownerId])
+  @@map("propertyware_portfolio_owners")
+}
+
+model PropertywareBuilding {
+  id                  String                @id @default(uuid()) @db.Uuid
+  organizationId      String                @db.Uuid
+  externalId          String
+  sourceSystem        String                @default("propertyware")
+  portfolioId         String                @db.Uuid
+  externalPortfolioId String
+  idNumber            String?
+  name                String
+  abbreviation        String?
+  propertyType        String?
+  addressLine1        String?
+  addressLine2        String?
+  city                String?
+  state               String?
+  postalCode          String?
+  country             String?
+  sourceStatus        String?
+  isActive            Boolean               @default(true)
+  sourceCreatedAt     DateTime?
+  sourceUpdatedAt     DateTime?
+  firstSyncedAt       DateTime              @default(now())
+  lastSyncedAt        DateTime              @default(now())
+  lastSeenAt          DateTime              @default(now())
+  deactivatedAt       DateTime?
+  sourceHash          String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
+  units               PropertywareUnit[]
+  leases              PropertywareLease[]
+  inspections         Inspection[]
+
+  @@unique([organizationId, sourceSystem, externalId])
+  @@index([organizationId, isActive, name])
+  @@map("propertyware_buildings")
+}
+
+model PropertywareUnit {
+  id                  String                @id @default(uuid()) @db.Uuid
+  organizationId      String                @db.Uuid
+  externalId          String
+  sourceSystem        String                @default("propertyware")
+  buildingId          String                @db.Uuid
+  portfolioId         String                @db.Uuid
+  externalBuildingId  String
+  externalPortfolioId String
+  idNumber            String?
+  name                String
+  abbreviation        String?
+  type                String?
+  vacant              Boolean?
+  publishedForRent    Boolean?
+  bedrooms            Int?
+  bathrooms           Float?
+  addressLine1        String?
+  addressLine2        String?
+  city                String?
+  state               String?
+  postalCode          String?
+  country             String?
+  sourceStatus        String?
+  isActive            Boolean               @default(true)
+  sourceCreatedAt     DateTime?
+  sourceUpdatedAt     DateTime?
+  firstSyncedAt       DateTime              @default(now())
+  lastSyncedAt        DateTime              @default(now())
+  lastSeenAt          DateTime              @default(now())
+  deactivatedAt       DateTime?
+  sourceHash          String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  building            PropertywareBuilding  @relation(fields: [buildingId], references: [id])
+  portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
+  leases              PropertywareLease[]
+  inspections         Inspection[]
+
+  @@unique([organizationId, sourceSystem, externalId])
+  @@index([organizationId, buildingId, isActive])
+  @@map("propertyware_units")
+}
+
+model PropertywareLease {
+  id                   String                @id @default(uuid()) @db.Uuid
+  organizationId       String                @db.Uuid
+  externalId           String
+  sourceSystem         String                @default("propertyware")
+  portfolioId          String                @db.Uuid
+  buildingId           String                @db.Uuid
+  unitId               String                @db.Uuid
+  externalPortfolioId  String
+  externalBuildingId   String
+  externalUnitId       String
+  idNumber             String?
+  leaseName            String?
+  sourceStatus         String?
+  isActive             Boolean               @default(true)
+  startDate            DateTime?             @db.Date
+  endDate              DateTime?             @db.Date
+  moveInDate           DateTime?             @db.Date
+  scheduledMoveOutDate DateTime?             @db.Date
+  moveOutDate          DateTime?             @db.Date
+  noticeGivenDate      DateTime?             @db.Date
+  reasonForLeaving     String?
+  tenantDisplayNames   String[]
+  sourceCreatedAt      DateTime?
+  sourceUpdatedAt      DateTime?
+  firstSyncedAt        DateTime              @default(now())
+  lastSyncedAt         DateTime              @default(now())
+  lastSeenAt           DateTime              @default(now())
+  deactivatedAt        DateTime?
+  sourceHash           String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  portfolio            PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
+  building             PropertywareBuilding  @relation(fields: [buildingId], references: [id])
+  unit                 PropertywareUnit      @relation(fields: [unitId], references: [id])
+  inspections          Inspection[]
+
+  @@unique([organizationId, sourceSystem, externalId])
+  @@index([organizationId, unitId, isActive, scheduledMoveOutDate])
+  @@map("propertyware_leases")
+}
+
+model PropertywareSyncCursor {
+  id                       String    @id @default(uuid()) @db.Uuid
+  organizationId           String    @db.Uuid
+  entityType               String
+  lastSuccessfulCursor     DateTime?
+  lastAttemptedCursor      DateTime?
+  lastSuccessfulSyncAt     DateTime?
+  lastFullReconciliationAt DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@unique([organizationId, entityType])
+  @@map("propertyware_sync_cursors")
+}
+
+model PropertywareSyncRun {
+  id                 String                      @id @default(uuid()) @db.Uuid
+  organizationId     String                      @db.Uuid
+  syncType           String
+  requestedBy        String
+  status             String
+  startedAt          DateTime?
+  completedAt        DateTime?
+  cursorStart        DateTime?
+  cursorEnd          DateTime?
+  recordsFetched     Int                         @default(0)
+  recordsCreated     Int                         @default(0)
+  recordsUpdated     Int                         @default(0)
+  recordsUnchanged   Int                         @default(0)
+  recordsDeactivated Int                         @default(0)
+  recordsReactivated Int                         @default(0)
+  recordsFailed      Int                         @default(0)
+  pagesFetched       Int                         @default(0)
+  warnings           Int                         @default(0)
+  errorSummary       String?
+  createdAt          DateTime                    @default(now())
+  entities           PropertywareSyncRunEntity[]
+  errors             PropertywareSyncError[]
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status, completedAt(sort: Desc)])
+  @@map("propertyware_sync_runs")
+}
+
+model PropertywareSyncRunEntity {
+  id                 String              @id @default(uuid()) @db.Uuid
+  syncRunId          String              @db.Uuid
+  entityType         String
+  status             String
+  recordsFetched     Int                 @default(0)
+  recordsCreated     Int                 @default(0)
+  recordsUpdated     Int                 @default(0)
+  recordsUnchanged   Int                 @default(0)
+  recordsDeactivated Int                 @default(0)
+  recordsReactivated Int                 @default(0)
+  recordsFailed      Int                 @default(0)
+  pagesFetched       Int                 @default(0)
+  warnings           Int                 @default(0)
+  startedAt          DateTime            @default(now())
+  completedAt        DateTime?
+  syncRun            PropertywareSyncRun @relation(fields: [syncRunId], references: [id])
+
+  @@unique([syncRunId, entityType])
+  @@map("propertyware_sync_run_entities")
+}
+
+model PropertywareSyncError {
+  id                 String              @id @default(uuid()) @db.Uuid
+  syncRunId          String              @db.Uuid
+  entityType         String
+  externalId         String?
+  pageOffset         Int?
+  errorCode          String
+  sanitizedMessage   String
+  retryable          Boolean             @default(false)
+  payloadFingerprint String?
+  createdAt          DateTime            @default(now())
+  resolvedAt         DateTime?
+  syncRun            PropertywareSyncRun @relation(fields: [syncRunId], references: [id])
+
+  @@index([syncRunId, entityType])
+  @@map("propertyware_sync_errors")
+}
+
+model PropertywareSyncLock {
+  lockKey   String   @id
+  ownerId   String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("propertyware_sync_locks")
+}
+
+model InspectionAssignment {
+  id             String                @id @default(uuid()) @db.Uuid
+  inspectionId   String                @db.Uuid
+  technicianId   String                @db.Uuid
+  assignedById   String                @db.Uuid
+  endedById      String?               @db.Uuid
+  supersedesId   String?               @unique @db.Uuid
+  status         String                @default("ASSIGNED")
+  isCurrent      Boolean               @default(true)
+  assignedAt     DateTime              @default(now())
+  endedAt        DateTime?
+  reason         String?
+  idempotencyKey String?               @unique
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  inspection     Inspection            @relation(fields: [inspectionId], references: [id])
+  technician     UserProfile           @relation("AssignedTechnician", fields: [technicianId], references: [id])
+  assignedBy     UserProfile           @relation("AssignmentActor", fields: [assignedById], references: [id])
+  endedBy        UserProfile?          @relation("AssignmentEndActor", fields: [endedById], references: [id])
+  supersedes     InspectionAssignment? @relation("AssignmentSupersession", fields: [supersedesId], references: [id])
+  supersededBy   InspectionAssignment? @relation("AssignmentSupersession")
+
+  @@index([inspectionId, isCurrent])
+  @@index([technicianId, isCurrent, status])
+}
+
+model InspectionArea {
+  id               String                         @id @default(uuid()) @db.Uuid
+  inspectionId     String                         @db.Uuid
+  propertyAreaId   String                         @db.Uuid
+  completionStatus InspectionAreaCompletionStatus @default(PENDING)
+  skipReason       String?
+  technicianNote   String?
+  completedAt      DateTime?
+  createdAt        DateTime                       @default(now())
+  updatedAt        DateTime                       @updatedAt
+  inspection       Inspection                     @relation(fields: [inspectionId], references: [id])
+  propertyArea     PropertyArea                   @relation(fields: [propertyAreaId], references: [id])
+  media            InspectionMedia[]
+  statusHistory    InspectionAreaStatusHistory[]
+  uploadSessions   MediaUploadSession[]
+
+  @@unique([inspectionId, propertyAreaId])
+  @@index([inspectionId])
+}
+
+model InspectionAreaStatusHistory {
+  id               String                          @id @default(uuid()) @db.Uuid
+  inspectionAreaId String                          @db.Uuid
+  fromStatus       InspectionAreaCompletionStatus?
+  toStatus         InspectionAreaCompletionStatus
+  reason           String?
+  createdAt        DateTime                        @default(now())
+  updatedAt        DateTime                        @updatedAt
+  inspectionArea   InspectionArea                  @relation(fields: [inspectionAreaId], references: [id])
+}
+
+model InspectionMedia {
+  id               String                 @id @default(uuid()) @db.Uuid
+  organizationId   String                 @db.Uuid
+  propertyId       String                 @db.Uuid
+  inspectionId     String                 @db.Uuid
+  inspectionAreaId String                 @db.Uuid
+  technicianId     String                 @db.Uuid
+  provider         String
+  providerMediaId  String                 @unique
+  mimeType         String
+  durationSeconds  Int
+  uploadStatus     MediaUploadStatus      @default(PENDING)
+  processingStatus MediaProcessingStatus  @default(PENDING)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  inspectionArea   InspectionArea         @relation(fields: [inspectionAreaId], references: [id])
+  technician       UserProfile            @relation(fields: [technicianId], references: [id])
+  processingEvents MediaProcessingEvent[]
+  transcriptionJob TranscriptionJob?
+  aiJobs           AiAnalysisJob[]
+  findings         InspectionFinding[]
+
+  @@index([inspectionAreaId])
+}
+
+model MediaUploadSession {
+  id               String         @id @default(uuid()) @db.Uuid
+  inspectionAreaId String         @db.Uuid
+  idempotencyKey   String         @unique
+  provider         String
+  providerUploadId String         @unique
+  expiresAt        DateTime
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  inspectionArea   InspectionArea @relation(fields: [inspectionAreaId], references: [id])
+}
+
+model MediaProcessingEvent {
+  id                String          @id @default(uuid()) @db.Uuid
+  inspectionMediaId String          @db.Uuid
+  eventType         String
+  providerEventId   String?
+  payloadSummary    Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  inspectionMedia   InspectionMedia @relation(fields: [inspectionMediaId], references: [id])
+}
+
+model TranscriptionJob {
+  id                String              @id @default(uuid()) @db.Uuid
+  inspectionMediaId String              @unique @db.Uuid
+  status            TranscriptionStatus @default(PENDING)
+  provider          String
+  language          String?
+  confidence        Float?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  inspectionMedia   InspectionMedia     @relation(fields: [inspectionMediaId], references: [id])
+  segments          TranscriptSegment[]
+
+  @@index([status])
+}
+
+model TranscriptSegment {
+  id                 String           @id @default(uuid()) @db.Uuid
+  transcriptionJobId String           @db.Uuid
+  startSeconds       Int
+  endSeconds         Int
+  text               String
+  confidence         Float?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  transcriptionJob   TranscriptionJob @relation(fields: [transcriptionJobId], references: [id])
+}
+
+model AiAnalysisJob {
+  id                String              @id @default(uuid()) @db.Uuid
+  inspectionMediaId String              @db.Uuid
+  status            AiAnalysisStatus    @default(PENDING)
+  provider          String
+  modelId           String
+  promptVersion     String
+  schemaVersion     String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  inspectionMedia   InspectionMedia     @relation(fields: [inspectionMediaId], references: [id])
+  findings          InspectionFinding[]
+
+  @@index([status])
+}
+
+model InspectionFinding {
+  id                     String                       @id @default(uuid()) @db.Uuid
+  inspectionId           String                       @db.Uuid
+  propertyAreaId         String                       @db.Uuid
+  inspectionMediaId      String                       @db.Uuid
+  aiAnalysisJobId        String?                      @db.Uuid
+  findingType            FindingType
+  category               String
+  title                  String
+  description            String
+  baselineCondition      String
+  comparisonResult       ComparisonResult
+  videoTimestampStart    Int
+  videoTimestampEnd      Int
+  severity               Severity
+  possibleResponsibility ResponsibilityClassification
+  confidence             Float
+  recommendedReview      String
+  reviewStatus           FindingReviewStatus          @default(PENDING_REVIEW)
+  createdAt              DateTime                     @default(now())
+  updatedAt              DateTime                     @updatedAt
+  inspection             Inspection                   @relation(fields: [inspectionId], references: [id])
+  propertyArea           PropertyArea                 @relation(fields: [propertyAreaId], references: [id])
+  inspectionMedia        InspectionMedia              @relation(fields: [inspectionMediaId], references: [id])
+  aiAnalysisJob          AiAnalysisJob?               @relation(fields: [aiAnalysisJobId], references: [id])
+  reviews                FindingReview[]
+
+  @@index([inspectionId, reviewStatus])
+}
+
+model FindingReview {
+  id          String              @id @default(uuid()) @db.Uuid
+  findingId   String              @db.Uuid
+  reviewerId  String              @db.Uuid
+  status      FindingReviewStatus
+  reason      String?
+  editedValue Json?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  finding     InspectionFinding   @relation(fields: [findingId], references: [id])
+  reviewer    UserProfile         @relation(fields: [reviewerId], references: [id])
+}
+
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  actorUserId    String?      @db.Uuid
+  action         String
+  entityType     String
+  entityId       String
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([entityType, entityId, createdAt])
+}
+
+model WebhookEvent {
+  id              String                  @id @default(uuid()) @db.Uuid
+  provider        String
+  providerEventId String
+  status          WebhookProcessingStatus @default(RECEIVED)
+  payloadHash     String
+  processedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([provider, providerEventId])
+}

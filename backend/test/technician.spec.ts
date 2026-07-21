@@ -1,0 +1,304 @@
+import { InspectionStatus } from '@prisma/client';
+import { UserRole } from '@texasrenters/shared';
+
+import type { AuthenticatedUser } from '../src/common/auth';
+import { TechnicianService } from '../src/technician/technician.service';
+
+const technician: AuthenticatedUser = {
+  id: '10000000-0000-4000-8000-000000000004',
+  authUserId: 'auth-technician',
+  organizationId: '10000000-0000-4000-8000-000000000001',
+  displayName: 'Field Technician',
+  roles: [UserRole.INSPECTION_TECHNICIAN],
+  mustChangePassword: false,
+};
+
+describe('technician mobile data boundary', () => {
+  it('builds the dashboard from bounded database summaries instead of a 100-row client filter', async () => {
+    const prisma = {
+      inspection: {
+        groupBy: jest.fn().mockResolvedValue([
+          { status: InspectionStatus.IN_PROGRESS, _count: { _all: 2 } },
+          { status: InspectionStatus.COMPLETED, _count: { _all: 4 } },
+        ]),
+        count: jest.fn().mockResolvedValue(3),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      inspectionMedia: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.dashboard(technician)).resolves.toMatchObject({
+      today: 3,
+      inProgress: 2,
+      completed: 4,
+      pendingUploads: 1,
+      assignments: [],
+      recent: [],
+    });
+    expect(prisma.inspection.findMany).toHaveBeenCalledTimes(2);
+    for (const [request] of prisma.inspection.findMany.mock.calls) {
+      expect(request.take).toBeLessThanOrEqual(25);
+      expect(request.select).toEqual(expect.any(Object));
+    }
+  });
+
+  it('returns an empty first-time workspace and scopes inspection reads to current assignments', async () => {
+    const prisma = {
+      inspection: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.inspections(technician)).resolves.toEqual(
+      expect.objectContaining({ items: [], total: 0 }),
+    );
+    expect(prisma.inspection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: technician.organizationId,
+          assignments: {
+            some: { technicianId: technician.id, isCurrent: true },
+          },
+        }),
+      }),
+    );
+  });
+
+  it('treats an unassigned inspection as missing', async () => {
+    const prisma = {
+      inspection: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.inspection(technician, 'inspection-other')).rejects.toMatchObject({
+      status: 404,
+      code: 'ASSIGNED_INSPECTION_NOT_FOUND',
+    });
+    expect(prisma.inspection.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'inspection-other',
+          assignments: {
+            some: { technicianId: technician.id, isCurrent: true },
+          },
+        }),
+      }),
+    );
+  });
+
+  it('returns the assigned inspection screen context from one scoped read', async () => {
+    const scheduledAt = new Date('2026-07-21T10:00:00.000Z');
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'inspection-1',
+          inspectionType: 'MOVE_OUT',
+          scheduledAt,
+          status: InspectionStatus.SCHEDULED,
+          priority: 'STANDARD',
+          internalNotes: null,
+          propertywareBuilding: {
+            id: 'building-1',
+            externalId: 'external-building',
+            externalPortfolioId: 'external-portfolio',
+            name: 'Building',
+            addressLine1: '1 Main St',
+            city: 'Austin',
+            state: 'TX',
+            postalCode: '78701',
+            units: [{ bedrooms: 2, bathrooms: 1 }],
+          },
+          areas: [],
+          _count: { findings: 0 },
+        }),
+      },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.inspectionContext(technician, 'inspection-1')).resolves.toMatchObject({
+      inspection: { id: 'inspection-1', roomIds: [] },
+      property: { id: 'building-1', bedrooms: 2, bathrooms: 1 },
+      rooms: [],
+      pendingReviewCount: 0,
+    });
+    expect(prisma.inspection.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.inspection.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: 'inspection-1',
+          organizationId: technician.organizationId,
+          assignments: { some: { technicianId: technician.id, isCurrent: true } },
+        }),
+        select: expect.objectContaining({ _count: expect.any(Object), areas: expect.any(Object) }),
+      }),
+    );
+  });
+
+  it('paginates findings and applies review status in the database query', async () => {
+    const finding = {
+      id: 'finding-1',
+      inspectionId: 'inspection-1',
+      propertyAreaId: 'area-1',
+      title: 'Wall damage',
+      category: 'DAMAGE',
+      severity: 'MODERATE',
+      comparisonResult: 'WORSENED',
+      confidence: 0.8,
+      videoTimestampStart: null,
+      videoTimestampEnd: null,
+      baselineCondition: null,
+      description: 'A new mark is visible.',
+      recommendedReview: true,
+      reviewStatus: 'PENDING_REVIEW',
+      propertyArea: { name: 'Living Room' },
+      reviews: [],
+    };
+    const prisma = {
+      inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1' }) },
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([finding]),
+        count: jest.fn().mockResolvedValue(26),
+      },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(
+      service.findings(technician, 'inspection-1', {
+        page: 2,
+        pageSize: 25,
+        reviewStatus: 'PENDING_REVIEW',
+      }),
+    ).resolves.toMatchObject({ page: 2, pageSize: 25, total: 26, totalPages: 2 });
+    expect(prisma.inspectionFinding.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { inspectionId: 'inspection-1', reviewStatus: 'PENDING_REVIEW' },
+        skip: 25,
+        take: 25,
+        select: expect.objectContaining({ propertyArea: { select: { name: true } } }),
+      }),
+    );
+  });
+
+  it('does not allow a room to complete without confirmed uploaded video', async () => {
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'room-1',
+          inspectionId: 'inspection-1',
+          propertyAreaId: 'area-1',
+          completionStatus: 'PENDING',
+          propertyArea: { baselineConditions: [] },
+          media: [],
+        }),
+        update: jest.fn(),
+      },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.completeRoom(technician, 'room-1')).rejects.toMatchObject({
+      status: 409,
+      code: 'ROOM_VIDEO_REQUIRED',
+    });
+    expect(prisma.inspectionArea.update).not.toHaveBeenCalled();
+  });
+
+  it('maps only active assignment statuses into the technician contract', async () => {
+    const scheduledAt = new Date('2026-07-21T10:00:00.000Z');
+    const prisma = {
+      inspection: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'inspection-1',
+            inspectionType: 'MOVE_OUT',
+            scheduledAt,
+            status: InspectionStatus.SCHEDULED,
+            priority: 'STANDARD',
+            internalNotes: null,
+            propertywareBuilding: {
+              id: 'building-1',
+              name: 'Building',
+              addressLine1: '1 Main St',
+              city: 'Austin',
+              state: 'TX',
+              postalCode: '78701',
+            },
+            areas: [],
+          },
+        ]),
+        count: jest.fn().mockResolvedValue(1),
+      },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.inspections(technician)).resolves.toEqual(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            id: 'inspection-1',
+            propertyId: 'building-1',
+            assignedUserId: technician.id,
+            status: 'SCHEDULED',
+            scheduledAt: scheduledAt.toISOString(),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('returns only the latest approved plan for an assigned property', async () => {
+    const createdAt = new Date('2026-07-21T10:00:00.000Z');
+    const prisma = {
+      propertywareBuilding: { findFirst: jest.fn().mockResolvedValue({ id: 'building-1' }) },
+      propertyFloorPlan: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'plan-1',
+          fileName: 'approved.png',
+          mimeType: 'image/png',
+          sizeBytes: 100,
+          status: 'APPROVED',
+          createdAt,
+        }),
+      },
+    };
+    const service = new TechnicianService(prisma as never, {} as never);
+
+    await expect(service.floorPlan(technician, 'building-1')).resolves.toEqual({
+      id: 'plan-1',
+      fileName: 'approved.png',
+      mimeType: 'image/png',
+      sizeBytes: 100,
+      status: 'APPROVED',
+      createdAt: createdAt.toISOString(),
+      contentPath: '/api/v1/technician/floor-plans/plan-1/content',
+    });
+    expect(prisma.propertyFloorPlan.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { propertyId: 'building-1', status: 'APPROVED' } }),
+    );
+  });
+
+  it('does not read plan bytes when the technician has no current property assignment', async () => {
+    const prisma = {
+      propertyFloorPlan: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'plan-1',
+          propertyId: 'building-other',
+          storageKey: 'private/plan.png',
+          fileName: 'plan.png',
+          mimeType: 'image/png',
+        }),
+      },
+      propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const storage = { get: jest.fn() };
+    const service = new TechnicianService(prisma as never, storage as never);
+
+    await expect(service.floorPlanContent(technician, 'plan-1')).rejects.toMatchObject({
+      status: 404,
+      code: 'ASSIGNED_PROPERTY_NOT_FOUND',
+    });
+    expect(storage.get).not.toHaveBeenCalled();
+  });
+});
