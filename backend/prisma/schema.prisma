@@ -166,6 +166,7 @@ model UserProfile {
   media              InspectionMedia[]
   reviews            FindingReview[]
   pushDevices        MobilePushDevice[]
+  reportShares       InspectionReportShare[]
 }
 
 model MobilePushDevice {
@@ -345,6 +346,7 @@ model Inspection {
   assignments            InspectionAssignment[]
   areas                  InspectionArea[]
   findings               InspectionFinding[]
+  reportShares           InspectionReportShare[]
 
   @@index([organizationId, status, scheduledAt])
   @@index([organizationId, scheduledAt(sort: Desc)])
@@ -813,6 +815,23 @@ model InspectionFinding {
   reviews                FindingReview[]
 
   @@index([inspectionId, reviewStatus])
+}
+
+model InspectionReportShare {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  inspectionId   String      @db.Uuid
+  createdById    String      @db.Uuid
+  token          String      @unique
+  recipientEmail String?
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  inspection     Inspection  @relation(fields: [inspectionId], references: [id])
+  createdBy      UserProfile @relation(fields: [createdById], references: [id])
+
+  @@index([inspectionId])
 }
 
 model FindingReview {

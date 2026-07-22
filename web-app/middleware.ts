@@ -35,7 +35,8 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except auth pages, Next.js internals, and static assets.
-    '/((?!login|forgot-password|reset-password|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+    // Everything except auth pages, public homeowner reports, Next.js
+    // internals, and static assets.
+    '/((?!login|forgot-password|reset-password|report/|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
   ],
 };

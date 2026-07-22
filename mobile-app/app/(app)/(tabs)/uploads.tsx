@@ -65,10 +65,17 @@ export default function UploadQueueScreen() {
   return (
     <AppScreen
       title="Upload center"
-      subtitle="Local media, transfer progress, and AI processing"
+      subtitle="Saved videos upload from here automatically"
       eyebrow="MEDIA PIPELINE"
       refresh={{ refreshing: isRefreshing, onRefresh: () => void refreshUploads() }}
     >
+      <Card muted>
+        <Text style={styles.body}>
+          Room videos you save are queued here and upload on their own — you can keep inspecting.
+          After upload, each video is transcribed and analyzed by AI, and the results go to the
+          TexasRenters team for review.
+        </Text>
+      </Card>
       {!isOnline ? (
         <Card muted>
           <View style={styles.row}>
@@ -76,7 +83,8 @@ export default function UploadQueueScreen() {
             <View style={styles.flex}>
               <Text style={styles.cardTitle}>Uploads are waiting</Text>
               <Text style={styles.body}>
-                Offline simulation is active. Videos remain safely queued on this device.
+                This device is offline. Videos remain safely queued and resume when the connection
+                returns.
               </Text>
             </View>
           </View>
@@ -128,7 +136,7 @@ export default function UploadQueueScreen() {
       <ConfirmationModal
         visible={Boolean(removeId)}
         title="Remove this queue item?"
-        message="The demo queue record will be removed. Local source media is retained for recovery."
+        message="The queue entry is removed, but the recorded video stays on this device until you re-save it."
         confirmLabel="Remove"
         destructive
         onCancel={() => setRemoveId(null)}

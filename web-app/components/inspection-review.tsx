@@ -63,9 +63,16 @@ function RoomVideoPlayer({ contentPath, label }: { contentPath: string; label: s
 export function InspectionMediaSection({ inspectionId }: { inspectionId: string }) {
   const media = useInspectionMedia(inspectionId);
   return (
-    <section className="panel section-gap">
+    <section className="panel section-gap inspection-section">
       <div className="panel-header">
-        <h2>Room recordings</h2>
+        <div>
+          <span className="section-kicker">Inspection evidence</span>
+          <h2>Room recordings</h2>
+          <p className="panel-description">Video evidence uploaded by the assigned technician.</p>
+        </div>
+        {!media.isLoading && !media.isError ? (
+          <span className="section-count">{media.data?.length ?? 0} recordings</span>
+        ) : null}
       </div>
       {media.isLoading ? (
         <LoadingState label="Loading room recordings…" />
@@ -93,7 +100,15 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
           ))}
         </div>
       ) : (
-        <p>No room videos have been uploaded for this inspection yet.</p>
+        <div className="inspection-empty-state">
+          <span className="inspection-empty-icon" aria-hidden>
+            <svg viewBox="0 0 24 24"><path d="M4 6h11v12H4zM15 10l5-3v10l-5-3" /></svg>
+          </span>
+          <div>
+            <strong>No room recordings yet</strong>
+            <p>Videos will appear here after the technician records and uploads inspection areas.</p>
+          </div>
+        </div>
       )}
     </section>
   );
@@ -186,27 +201,32 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
   const [reviewStatus, setReviewStatus] = useState('');
   const findings = useInspectionFindings(inspectionId, page, reviewStatus);
   return (
-    <section className="panel section-gap">
+    <section className="panel section-gap inspection-section">
       <div className="panel-header">
-        <h2>AI findings review</h2>
-        <select
-          aria-label="Filter findings by review status"
-          value={reviewStatus}
-          onChange={(event) => {
-            setPage(1);
-            setReviewStatus(event.target.value);
-          }}
-        >
-          <option value="">All statuses</option>
-          <option value="PENDING_REVIEW">Pending review</option>
-          <option value="APPROVED">Approved</option>
-          <option value="REJECTED">Rejected</option>
-        </select>
+        <div>
+          <span className="section-kicker">Human oversight</span>
+          <h2>AI findings review</h2>
+          <p className="panel-description">
+            Suggestions remain pending until an authorized person approves or rejects them.
+          </p>
+        </div>
+        <div className="finding-filter field">
+          <label htmlFor="finding-review-status">Review status</label>
+          <select
+            id="finding-review-status"
+            value={reviewStatus}
+            onChange={(event) => {
+              setPage(1);
+              setReviewStatus(event.target.value);
+            }}
+          >
+            <option value="">All statuses</option>
+            <option value="PENDING_REVIEW">Pending review</option>
+            <option value="APPROVED">Approved</option>
+            <option value="REJECTED">Rejected</option>
+          </select>
+        </div>
       </div>
-      <p className="media-meta">
-        AI findings stay pending until a person approves or rejects them. Approvals and rejections
-        are recorded in the audit trail.
-      </p>
       {findings.isLoading ? (
         <LoadingState label="Loading findings…" />
       ) : findings.isError ? (
@@ -243,11 +263,19 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
           <Pagination page={page} totalPages={findings.data.totalPages} onPage={setPage} />
         </>
       ) : (
-        <p>
-          {reviewStatus
-            ? 'No findings match this filter.'
-            : 'No AI findings have been generated for this inspection yet.'}
-        </p>
+        <div className="inspection-empty-state">
+          <span className="inspection-empty-icon" aria-hidden>
+            <svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 4.5 3 7.5 8 9 5-1.5 8-4.5 8-9V7l-8-4Zm-3 9 2 2 4-5" /></svg>
+          </span>
+          <div>
+            <strong>{reviewStatus ? 'No findings match this filter' : 'No AI findings generated'}</strong>
+            <p>
+              {reviewStatus
+                ? 'Choose another review status to see available findings.'
+                : 'Findings will appear after uploaded room evidence has been processed.'}
+            </p>
+          </div>
+        </div>
       )}
     </section>
   );

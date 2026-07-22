@@ -90,6 +90,16 @@ export default function InspectionOverviewScreen() {
               : 'A completed move-in inspection is required as the comparison baseline.'}
         </Text>
       </Card>
+      {['SCHEDULED', 'IN_PROGRESS'].includes(inspection.status) ? (
+        <Card>
+          <SectionHeader title="How this inspection works" />
+          <Step number={1} text="Open the room checklist and record one video per room. You can also snap photos of details between takes." />
+          <Step number={2} text="Save each recording. It queues in the Uploads tab and uploads by itself — keep working while it transfers." />
+          <Step number={3} text="After upload, the video is transcribed and analyzed by AI automatically. Watch progress under Uploads." />
+          <Step number={4} text="Mark every required room complete (or skipped with a reason), then submit the inspection." />
+          <Step number={5} text="The TexasRenters team reviews the AI findings. Nothing is final until a person approves it." />
+        </Card>
+      ) : null}
       <Card>
         <SectionHeader title="Inspection progress" />
         <ProgressBar
@@ -156,6 +166,18 @@ function Metric({ value, label }: { value: number; label: string }) {
   );
 }
 
+function Step({ number, text }: { number: number; text: string }) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <View style={styles.step}>
+      <View style={styles.stepBadge}>
+        <Text style={styles.stepNumber}>{number}</Text>
+      </View>
+      <Text style={styles.stepText}>{text}</Text>
+    </View>
+  );
+}
+
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     statusRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.sm },
@@ -184,4 +206,16 @@ const createStyles = (colors: AppColors) =>
     cardBody: { ...typography.body, color: colors.textPrimary },
     actions: { gap: spacing.sm },
     actionError: { ...typography.caption, color: colors.danger },
+    step: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+    stepBadge: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+      marginTop: 2,
+    },
+    stepNumber: { ...typography.caption, color: colors.primary, fontWeight: '800' },
+    stepText: { ...typography.caption, color: colors.textSecondary, flex: 1 },
   });

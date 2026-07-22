@@ -200,6 +200,52 @@ export interface AdminAuditEvent {
   createdAt: string;
 }
 
+export interface AdminReportShare {
+  id: string;
+  inspectionId: string;
+  token: string;
+  sharePath: string;
+  recipientEmail?: string | null;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdAt: string;
+}
+
+export interface PublicInspectionReport {
+  property: {
+    name: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    postalCode: string;
+  };
+  inspection: {
+    type: string;
+    status: string;
+    scheduledAt: string;
+    completedAt?: string | null;
+  };
+  rooms: Array<{
+    id: string;
+    name: string;
+    floorName?: string | null;
+    completionStatus: string;
+    skipReason?: string | null;
+    completedAt?: string | null;
+  }>;
+  findings: Array<{
+    id: string;
+    roomName: string;
+    title: string;
+    description: string;
+    category: string;
+    severity: string;
+    comparisonResult: string;
+    baselineCondition: string;
+  }>;
+  generatedAt: string;
+}
+
 export interface AdminInspectionMedia {
   id: string;
   roomId: string;

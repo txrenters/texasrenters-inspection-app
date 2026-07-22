@@ -34,6 +34,7 @@ import {
   AuditListQueryDto,
   CreateAdminInspectionDto,
   CreatePropertyAreaDto,
+  CreateReportShareDto,
   CreateTechnicianDto,
   FindingRejectDto,
   FindingReviewDto,
@@ -50,6 +51,7 @@ import {
 } from './admin.dto';
 import { AdminService } from './admin.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
+import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 
 const ADMIN_ROLES = [
@@ -68,6 +70,7 @@ export class AdminController {
     private readonly service: AdminService,
     private readonly technicianProvisioning: TechnicianProvisioningService,
     private readonly floorPlans: FloorPlanAdminService,
+    private readonly reportShares: ReportShareService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -237,6 +240,25 @@ export class AdminController {
     @Body() body: FindingRejectDto,
   ) {
     return this.service.reviewFinding(request.user, id, 'REJECTED', body.reason);
+  }
+  @Post('inspections/:inspectionId/report-shares') createReportShare(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: CreateReportShareDto,
+  ) {
+    return this.reportShares.createShare(request.user, id, body.recipientEmail);
+  }
+  @Get('inspections/:inspectionId/report-shares') listReportShares(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.reportShares.listShares(request.user, id);
+  }
+  @Delete('report-shares/:shareId') revokeReportShare(
+    @Req() request: AuthenticatedRequest,
+    @Param('shareId') id: string,
+  ) {
+    return this.reportShares.revokeShare(request.user, id);
   }
   @Get('inspections/:inspectionId/audit') inspectionAudit(
     @Req() request: AuthenticatedRequest,

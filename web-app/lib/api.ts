@@ -79,6 +79,29 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
   return response.blob();
 }
 
+/** Unauthenticated fetch for public capability-URL endpoints (homeowner reports). */
+export async function publicApi<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
+  if (!baseUrl)
+    throw new ApiError(0, 'API_NOT_CONFIGURED', 'The report service is not configured.');
+  let response: Response;
+  try {
+    response = await fetch(resolveApiUrl(baseUrl, path), { signal });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'The report could not be loaded. Check your connection.');
+  }
+  if (!response.ok) {
+    const error = (await response.json().catch(() => null)) as ApiErrorContract | null;
+    throw new ApiError(
+      response.status,
+      error?.code ?? 'REQUEST_FAILED',
+      error?.message ?? 'The report could not be loaded.',
+      error?.requestId ?? undefined,
+    );
+  }
+  return response.json() as Promise<T>;
+}
+
 export function queryString(input: Record<string, string | number | boolean | undefined>) {
   const params = new URLSearchParams();
   Object.entries(input).forEach(([key, value]) => {

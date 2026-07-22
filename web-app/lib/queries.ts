@@ -7,6 +7,7 @@ import type {
   AdminInspection,
   AdminInspectionFinding,
   AdminInspectionMedia,
+  AdminReportShare,
   AdminFloorPlan,
   AdminPropertyArea,
   AdminPortfolio,
@@ -45,6 +46,7 @@ export const keys = {
   inspectionAudit: (id: string, page: number) =>
     ['admin', 'inspection', id, 'audit', page] as const,
   inspectionMedia: (id: string) => ['admin', 'inspection', id, 'media'] as const,
+  reportShares: (id: string) => ['admin', 'inspection', id, 'report-shares'] as const,
   inspectionFindings: (id: string, page: number, reviewStatus: string) =>
     ['admin', 'inspection', id, 'findings', page, reviewStatus] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
@@ -183,6 +185,13 @@ export const useInspectionFindings = (id: string, page: number, reviewStatus = '
       ),
     enabled: Boolean(id),
     placeholderData: keepPreviousData,
+  });
+export const useReportShares = (id: string) =>
+  useQuery({
+    queryKey: keys.reportShares(id),
+    queryFn: ({ signal }) =>
+      api<AdminReportShare[]>(`/api/v1/admin/inspections/${id}/report-shares`, { signal }),
+    enabled: Boolean(id),
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({
@@ -377,6 +386,35 @@ export function useAdminMutations() {
           body: JSON.stringify(input),
         }),
       onSuccess: (_data, variables) => refreshInspection(variables.id),
+    }),
+    createReportShare: useMutation({
+      mutationFn: ({
+        inspectionId,
+        recipientEmail,
+      }: {
+        inspectionId: string;
+        recipientEmail?: string;
+      }) =>
+        api<AdminReportShare>(`/api/v1/admin/inspections/${inspectionId}/report-shares`, {
+          method: 'POST',
+          body: JSON.stringify(recipientEmail ? { recipientEmail } : {}),
+        }),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({ queryKey: keys.reportShares(variables.inspectionId) });
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
+        });
+      },
+    }),
+    revokeReportShare: useMutation({
+      mutationFn: ({ id }: { id: string; inspectionId: string }) =>
+        api<AdminReportShare>(`/api/v1/admin/report-shares/${id}`, { method: 'DELETE' }),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({ queryKey: keys.reportShares(variables.inspectionId) });
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
+        });
+      },
     }),
     approveFinding: useMutation({
       mutationFn: ({ id, reason }: { id: string; inspectionId: string; reason?: string }) =>

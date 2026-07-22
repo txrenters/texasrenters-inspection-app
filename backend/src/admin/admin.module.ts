@@ -8,6 +8,8 @@ import { AdminService } from './admin.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
+import { ReportShareService } from './report-share.service';
+import { ReportsController } from './reports.controller';
 import {
   SupabaseAdminGateway,
   TechnicianProvisioningService,
@@ -15,13 +17,14 @@ import {
 
 @Module({
   imports: [RealtimeModule],
-  controllers: [AdminController],
+  controllers: [AdminController, ReportsController],
   providers: [
     AdminService,
     FloorPlanAdminService,
     FloorPlanExtractionService,
     FloorPlanStorageService,
     InspectionMediaStorageService,
+    ReportShareService,
     TechnicianProvisioningService,
     SupabaseAdminGateway,
     ApiAuthGuard,

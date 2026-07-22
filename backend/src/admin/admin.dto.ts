@@ -88,6 +88,10 @@ export class FindingReviewDto {
   @IsOptional() @IsString() @MaxLength(1000) reason?: string;
 }
 
+export class CreateReportShareDto {
+  @IsOptional() @IsEmail() @MaxLength(320) recipientEmail?: string;
+}
+
 export class FindingRejectDto {
   @IsString() @MinLength(2) @MaxLength(1000) reason!: string;
 }

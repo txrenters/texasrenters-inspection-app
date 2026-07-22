@@ -360,9 +360,10 @@ export default function RecordRoomScreen() {
 
         <View style={styles.prompts}>
           <Text style={styles.promptTitle}>Capture guidance</Text>
-          <Text style={styles.prompt}>• State the room name.</Text>
+          <Text style={styles.prompt}>• State the room name — your narration is transcribed.</Text>
           <Text style={styles.prompt}>• Show the entire room.</Text>
           <Text style={styles.prompt}>• Describe and approach visible defects.</Text>
+          <Text style={styles.prompt}>• Stop the video first if you want to snap a photo.</Text>
           <Text style={styles.prompt}>• Stop before leaving this room.</Text>
         </View>
 
@@ -392,7 +393,11 @@ export default function RecordRoomScreen() {
             <Text style={styles.snapshotCount}>
               {roomSnapshots.length} {roomSnapshots.length === 1 ? 'snapshot' : 'snapshots'} saved
             </Text>
-            <Text style={styles.snapshotHint}>Photos stay attached to this inspection room.</Text>
+            <Text style={styles.snapshotHint}>
+              {recording
+                ? 'Stop the video to snap a photo.'
+                : 'Photos stay attached to this inspection room.'}
+            </Text>
           </View>
           {latestSnapshot ? (
             <Image
