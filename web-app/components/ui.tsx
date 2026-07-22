@@ -76,14 +76,12 @@ export function MetricCard({
 
 export function LoadingState({ label = 'Loading data…' }: { label?: string }) {
   return (
-    <div className="panel state-panel" aria-live="polite">
-      <BrandLoader />
-      <div className="skeleton-lines">
-        <span />
+    <div className="panel state-panel loading-state-panel" aria-busy="true" aria-live="polite">
+      <BrandLoader label={label} />
+      <div className="skeleton-lines" aria-hidden="true">
         <span />
         <span />
       </div>
-      <p>{label}</p>
     </div>
   );
 }
@@ -91,10 +89,19 @@ export function LoadingState({ label = 'Loading data…' }: { label?: string }) 
 export function BrandLoader({ label = 'Preparing your workspace' }: { label?: string }) {
   return (
     <div className="brand-loader" role="status" aria-label={label}>
-      <span className="brand-loader-orbit" aria-hidden>
-        <span>★</span>
+      <span className="brand-loader-stage" aria-hidden="true">
+        <span className="brand-loader-halo" />
+        <span className="brand-loader-orbit">
+          <span className="brand-loader-dot" />
+        </span>
+        <span className="brand-loader-core">
+          <span className="brand-loader-mark">★</span>
+        </span>
       </span>
-      <strong>{label}</strong>
+      <span className="brand-loader-copy">
+        <span className="brand-loader-eyebrow">TEXASRENTERS</span>
+        <strong>{label}</strong>
+      </span>
     </div>
   );
 }
