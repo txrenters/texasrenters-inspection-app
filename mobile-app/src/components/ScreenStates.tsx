@@ -5,6 +5,7 @@ import { AppButton } from './ui';
 import {
   type AppColors,
   radius,
+  shadows,
   spacing,
   typography,
   useThemedStyles,
@@ -133,7 +134,20 @@ function friendlyMessage(message: string) {
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
-    center: { padding: spacing.xl, alignItems: 'center', gap: spacing.md },
+    center: {
+      width: '100%',
+      maxWidth: 440,
+      alignSelf: 'center',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: 36,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.xl,
+      backgroundColor: colors.surface,
+      ...shadows.card,
+    },
     loadingRoot: {
       flex: 1,
       width: '100%',

@@ -18,7 +18,10 @@ export default function AppLayout() {
         headerStyle: { backgroundColor: colors.surface },
         headerTintColor: colors.textPrimary,
         headerShadowVisible: false,
-        headerTitleStyle: { fontWeight: '700' },
+        headerTitleStyle: { fontWeight: '800', fontSize: 17 },
+        headerBackButtonDisplayMode: 'minimal',
+        animation: 'slide_from_right',
+        gestureEnabled: true,
         contentStyle: { backgroundColor: colors.background },
       }}
     >

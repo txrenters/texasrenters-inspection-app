@@ -91,7 +91,7 @@ export default function InspectionOverviewScreen() {
         </Text>
       </Card>
       <Card>
-        <SectionHeader title="Inspection progress" />
+        <SectionHeader title="Inspection progress" icon="pulse-outline" />
         <ProgressBar
           value={progress.value}
           label={`${progress.completed} of ${progress.total} required rooms complete`}
@@ -109,7 +109,7 @@ export default function InspectionOverviewScreen() {
         <Text style={styles.cardLabel}>ACCESS INSTRUCTIONS</Text>
         <Text style={styles.cardBody}>{property.accessInstructions}</Text>
       </Card>
-      <SectionHeader title="Plan and evidence" />
+      <SectionHeader title="Plan and evidence" icon="folder-open-outline" />
       <View style={styles.actions}>
         <AppButton
           label="View floor plan"

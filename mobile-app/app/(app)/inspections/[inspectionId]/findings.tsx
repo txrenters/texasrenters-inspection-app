@@ -57,7 +57,7 @@ export default function FindingsScreen() {
       {entries.length ? (
         entries.map(([roomName, findings]) => (
           <View key={roomName} style={styles.group}>
-            <SectionHeader title={roomName} />
+            <SectionHeader title={roomName} icon="location-outline" />
             {findings.map((finding) => (
               <FindingSummaryCard
                 key={finding.id}

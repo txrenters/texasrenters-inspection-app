@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { StyleSheet, Switch, Text, View } from 'react-native';
@@ -49,6 +50,7 @@ export default function SettingsScreen() {
       subtitle={
         isDemoMode ? 'Demo environment and field simulation controls' : 'Secure technician account'
       }
+      eyebrow="ACCOUNT & PREFERENCES"
     >
       <Card>
         <View style={styles.profileRow}>
@@ -68,26 +70,34 @@ export default function SettingsScreen() {
             variant="outline"
             onPress={() => router.push('/(auth)/login')}
             compact
+            icon="people-outline"
           />
         ) : null}
       </Card>
-      <SectionHeader title="Environment" />
+      <SectionHeader title="Environment" icon="server-outline" />
       <Card muted>
         <SettingRow
+          icon="git-network-outline"
           label="Data source"
           value={isDemoMode ? 'Test fixtures' : 'TexasRenters REST API'}
         />
         <SettingRow
+          icon="pulse-outline"
           label="Backend status"
           value={environment.apiBaseUrl ? 'Configured' : 'Not configured'}
         />
-        <SettingRow label="App version" value={Constants.expoConfig?.version ?? '0.1.0'} />
         <SettingRow
+          icon="phone-portrait-outline"
+          label="App version"
+          value={Constants.expoConfig?.version ?? '0.1.0'}
+        />
+        <SettingRow
+          icon="color-palette-outline"
           label="Theme"
           value={`${theme.preference.charAt(0).toUpperCase()}${theme.preference.slice(1)}`}
         />
       </Card>
-      <SectionHeader title="Appearance" />
+      <SectionHeader title="Appearance" icon="color-palette-outline" />
       <Card>
         <Text style={styles.settingLabel}>Color theme</Text>
         <View style={styles.chips}>
@@ -102,7 +112,7 @@ export default function SettingsScreen() {
         </View>
         <Text style={styles.description}>System follows your device appearance automatically.</Text>
       </Card>
-      {isDemoMode ? <SectionHeader title="Simulation controls" /> : null}
+      {isDemoMode ? <SectionHeader title="Simulation controls" icon="flask-outline" /> : null}
       {isDemoMode ? (
         <Card>
           <ToggleRow
@@ -136,19 +146,25 @@ export default function SettingsScreen() {
           </View>
         </Card>
       ) : null}
-      {isDemoMode ? <SectionHeader title="Demo data" /> : null}
+      {isDemoMode ? <SectionHeader title="Demo data" icon="archive-outline" /> : null}
       {isDemoMode ? (
         <Card>
           <Text style={styles.body}>
             Reset the selected user, inspection progress, room notes, local media, upload queue,
             failures, and finding decisions.
           </Text>
-          <AppButton label="Reset demo data" variant="danger" onPress={() => setResetOpen(true)} />
+          <AppButton
+            label="Reset demo data"
+            variant="danger"
+            onPress={() => setResetOpen(true)}
+            icon="trash-outline"
+          />
         </Card>
       ) : null}
       <AppButton
         label="Sign out"
         variant="ghost"
+        icon="log-out-outline"
         onPress={() => {
           if (isDemoMode) {
             state.signOut();
@@ -176,11 +192,24 @@ export default function SettingsScreen() {
   );
 }
 
-function SettingRow({ label, value }: { label: string; value: string }) {
+function SettingRow({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon: ComponentProps<typeof Ionicons>['name'];
+}) {
   const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.settingRow}>
-      <Text style={styles.settingLabel}>{label}</Text>
+      <View style={styles.settingIdentity}>
+        <View style={styles.settingIcon}>
+          <Ionicons name={icon} size={16} style={styles.settingIconGlyph} />
+        </View>
+        <Text style={styles.settingLabel}>{label}</Text>
+      </View>
       <Text style={styles.settingValue}>{value}</Text>
     </View>
   );
@@ -222,12 +251,22 @@ const createStyles = (colors: AppColors) =>
     profileName: { ...typography.heading, color: colors.textPrimary },
     body: { ...typography.body, color: colors.textSecondary },
     settingRow: {
-      minHeight: 38,
+      minHeight: 48,
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
       gap: spacing.md,
     },
+    settingIdentity: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flex: 1 },
+    settingIcon: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    settingIconGlyph: { color: colors.primary },
     settingLabel: { ...typography.label, color: colors.textPrimary },
     settingValue: { ...typography.body, color: colors.textSecondary, textAlign: 'right' },
     toggleRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md },

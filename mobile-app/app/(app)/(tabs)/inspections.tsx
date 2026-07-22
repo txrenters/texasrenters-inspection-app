@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppScreen } from '../../../src/components/AppScreen';
 import { ConnectedInspectionCard } from '../../../src/components/ConnectedInspectionCard';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
-import { FilterChip, SearchInput } from '../../../src/components/ui';
+import { Card, FilterChip, SearchInput, SectionHeader } from '../../../src/components/ui';
 import { useInspections } from '../../../src/features/queries';
-import { spacing } from '../../../src/theme';
+import { type AppColors, spacing, typography, useThemedStyles } from '../../../src/theme';
 
 const filters = [
   'ALL',
@@ -37,6 +38,7 @@ function SearchableInspection({
 }
 
 export default function InspectionsScreen() {
+  const styles = useThemedStyles(createStyles);
   const [filter, setFilter] = useState<(typeof filters)[number]>('ALL');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -56,27 +58,43 @@ export default function InspectionsScreen() {
     <AppScreen
       title="Inspections"
       subtitle="Assigned, active, and recently completed work"
+      eyebrow="MY WORK QUEUE"
       refresh={{ onRefresh: () => query.refetch() }}
     >
-      <SearchInput
-        value={search}
-        onChangeText={setSearch}
-        placeholder="Search by property address"
+      <Card muted>
+        <View style={styles.filterHeader}>
+          <View style={styles.filterIcon}>
+            <Ionicons name="options-outline" size={18} style={styles.filterIconGlyph} />
+          </View>
+          <View style={styles.flex}>
+            <Text style={styles.filterTitle}>Find an inspection</Text>
+            <Text style={styles.filterHint}>Search or narrow your assigned work by status.</Text>
+          </View>
+        </View>
+        <SearchInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search by property address"
+        />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filters}
+        >
+          {filters.map((item) => (
+            <FilterChip
+              key={item}
+              label={item.replaceAll('_', ' ')}
+              selected={filter === item}
+              onPress={() => setFilter(item)}
+            />
+          ))}
+        </ScrollView>
+      </Card>
+      <SectionHeader
+        title={`${filtered.length} ${filtered.length === 1 ? 'inspection' : 'inspections'}`}
+        icon="list-outline"
       />
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filters}
-      >
-        {filters.map((item) => (
-          <FilterChip
-            key={item}
-            label={item.replaceAll('_', ' ')}
-            selected={filter === item}
-            onPress={() => setFilter(item)}
-          />
-        ))}
-      </ScrollView>
       {filtered.length ? (
         <View style={styles.list}>
           {filtered.map((inspection) => (
@@ -97,7 +115,21 @@ export default function InspectionsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  filters: { gap: spacing.sm, paddingRight: spacing.md },
-  list: { gap: spacing.md },
-});
+const createStyles = (colors: AppColors) =>
+  StyleSheet.create({
+    flex: { flex: 1, minWidth: 0 },
+    filterHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    filterIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 13,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    filterIconGlyph: { color: colors.primary },
+    filterTitle: { ...typography.label, color: colors.textPrimary },
+    filterHint: { ...typography.caption, color: colors.textSecondary, marginTop: spacing.xs },
+    filters: { gap: spacing.sm, paddingRight: spacing.md },
+    list: { gap: spacing.md },
+  });

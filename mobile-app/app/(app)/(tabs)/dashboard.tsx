@@ -1,8 +1,10 @@
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { AppScreen } from '../../../src/components/AppScreen';
 import { ConnectedInspectionCard } from '../../../src/components/ConnectedInspectionCard';
+import { MotionPressable } from '../../../src/components/motion';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
 import {
   AppButton,
@@ -12,7 +14,7 @@ import {
   StatCard,
 } from '../../../src/components/ui';
 import { useCurrentUser, useDashboard } from '../../../src/features/queries';
-import { type AppColors, spacing, typography, useThemedStyles } from '../../../src/theme';
+import { type AppColors, radius, spacing, typography, useThemedStyles } from '../../../src/theme';
 
 export default function DashboardScreen() {
   const styles = useThemedStyles(createStyles);
@@ -34,28 +36,48 @@ export default function DashboardScreen() {
     <AppScreen
       title={`Good morning, ${firstName}`}
       subtitle={date}
+      eyebrow="TODAY’S FIELD PLAN"
       action={user.data ? <InitialsAvatar initials={user.data.initials} /> : null}
       refresh={{ onRefresh: () => dashboard.refetch() }}
     >
       <View style={styles.stats}>
-        <StatCard value={dashboard.data?.today ?? 0} label="Today’s inspections" />
-        <StatCard value={dashboard.data?.inProgress ?? 0} label="In progress" tone="info" />
-        <StatCard value={dashboard.data?.completed ?? 0} label="Completed" tone="success" />
+        <StatCard
+          value={dashboard.data?.today ?? 0}
+          label="Today’s inspections"
+          icon="calendar-outline"
+        />
+        <StatCard
+          value={dashboard.data?.inProgress ?? 0}
+          label="In progress"
+          tone="info"
+          icon="time-outline"
+        />
+        <StatCard
+          value={dashboard.data?.completed ?? 0}
+          label="Completed"
+          tone="success"
+          icon="checkmark-circle-outline"
+        />
         <StatCard
           value={dashboard.data?.pendingUploads ?? 0}
           label="Pending uploads"
           tone="warning"
+          icon="cloud-upload-outline"
         />
       </View>
       <SectionHeader
         title="Today’s assignments"
+        icon="navigate-outline"
         action={
-          <Pressable
+          <MotionPressable
             accessibilityRole="button"
             onPress={() => router.push('/(app)/(tabs)/inspections')}
+            style={styles.linkButton}
+            scaleTo={0.96}
           >
             <Text style={styles.link}>View all</Text>
-          </Pressable>
+            <Ionicons name="arrow-forward" size={15} style={styles.linkIcon} />
+          </MotionPressable>
         }
       />
       <View style={styles.list}>
@@ -79,28 +101,44 @@ export default function DashboardScreen() {
           />
         )}
       </View>
-      <SectionHeader title="Quick actions" />
+      <SectionHeader title="Quick actions" icon="flash-outline" />
       <View style={styles.quickActions}>
         <Card muted>
-          <Text style={styles.quickTitle}>Inspection queue</Text>
-          <Text style={styles.quickBody}>
-            Search all assigned and recently completed inspections.
-          </Text>
+          <View style={styles.quickHeader}>
+            <View style={styles.quickIcon}>
+              <Ionicons name="clipboard-outline" size={20} style={styles.quickIconGlyph} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.quickTitle}>Inspection queue</Text>
+              <Text style={styles.quickBody}>
+                Search all assigned and recently completed inspections.
+              </Text>
+            </View>
+          </View>
           <AppButton
             label="View inspections"
             variant="outline"
             onPress={() => router.push('/(app)/(tabs)/inspections')}
             compact
+            icon="arrow-forward"
           />
         </Card>
         <Card muted>
-          <Text style={styles.quickTitle}>Upload center</Text>
-          <Text style={styles.quickBody}>Monitor local videos, retries, and AI processing.</Text>
+          <View style={styles.quickHeader}>
+            <View style={styles.quickIcon}>
+              <Ionicons name="cloud-upload-outline" size={20} style={styles.quickIconGlyph} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.quickTitle}>Upload center</Text>
+              <Text style={styles.quickBody}>Monitor local videos, retries, and AI processing.</Text>
+            </View>
+          </View>
           <AppButton
             label="Open uploads"
             variant="outline"
             onPress={() => router.push('/(app)/(tabs)/uploads')}
             compact
+            icon="arrow-forward"
           />
         </Card>
       </View>
@@ -112,8 +150,29 @@ const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     stats: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     list: { gap: spacing.md },
+    flex: { flex: 1, minWidth: 0 },
+    linkButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.xs,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: radius.round,
+      backgroundColor: colors.primarySoft,
+    },
     link: { ...typography.label, color: colors.primary },
+    linkIcon: { color: colors.primary },
     quickActions: { gap: spacing.md },
+    quickHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+    quickIcon: {
+      width: 42,
+      height: 42,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    quickIconGlyph: { color: colors.primary },
     quickTitle: { ...typography.heading, color: colors.textPrimary },
     quickBody: { ...typography.body, color: colors.textSecondary },
   });

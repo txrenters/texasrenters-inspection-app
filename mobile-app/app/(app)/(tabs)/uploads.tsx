@@ -5,7 +5,13 @@ import { StyleSheet, Text, View } from 'react-native';
 import { AppScreen } from '../../../src/components/AppScreen';
 import { UploadProgressCard } from '../../../src/components/FeatureCards';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
-import { Card, ConfirmationModal, SectionHeader, StatusBadge } from '../../../src/components/ui';
+import {
+  Card,
+  ConfirmationModal,
+  SectionHeader,
+  StatCard,
+  StatusBadge,
+} from '../../../src/components/ui';
 import { useUploadActions, useUploads } from '../../../src/features/queries';
 import { repositories } from '../../../src/repositories';
 import { useDemoStore } from '../../../src/stores/demo.store';
@@ -57,6 +63,7 @@ export default function UploadQueueScreen() {
     return <ErrorState message={uploads.error.message} onRetry={() => void uploads.refetch()} />;
   const active = uploads.data?.filter((item) => item.status !== 'COMPLETED') ?? [];
   const processing = uploads.data?.filter((item) => item.status === 'COMPLETED') ?? [];
+  const failed = active.filter((item) => item.status === 'FAILED').length;
   const openRoom = (inspectionId: string, areaId: string) =>
     router.push({
       pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
@@ -66,8 +73,29 @@ export default function UploadQueueScreen() {
     <AppScreen
       title="Upload center"
       subtitle="Local media, transfer progress, and AI processing"
+      eyebrow="MEDIA PIPELINE"
       refresh={{ refreshing: isRefreshing, onRefresh: () => void refreshUploads() }}
     >
+      <View style={styles.stats}>
+        <StatCard
+          value={active.length}
+          label="In queue"
+          tone="warning"
+          icon="cloud-upload-outline"
+        />
+        <StatCard
+          value={processing.length}
+          label="Processing"
+          tone="info"
+          icon="sparkles-outline"
+        />
+        <StatCard
+          value={failed}
+          label="Needs attention"
+          tone={failed ? 'warning' : 'success'}
+          icon={failed ? 'alert-circle-outline' : 'shield-checkmark-outline'}
+        />
+      </View>
       {!isOnline ? (
         <Card muted>
           <View style={styles.row}>
@@ -81,7 +109,7 @@ export default function UploadQueueScreen() {
           </View>
         </Card>
       ) : null}
-      <SectionHeader title={`Active uploads (${active.length})`} />
+      <SectionHeader title={`Active uploads (${active.length})`} icon="arrow-up-circle-outline" />
       {active.length ? (
         <View style={styles.list}>
           {active.map((item) => (
@@ -102,7 +130,10 @@ export default function UploadQueueScreen() {
           message="New room recordings will appear here after they are saved."
         />
       )}
-      <SectionHeader title={`Processing and completed (${processing.length})`} />
+      <SectionHeader
+        title={`Processing and completed (${processing.length})`}
+        icon="checkmark-done-outline"
+      />
       <View style={styles.list}>
         {processing.map((item) => (
           <UploadProgressCard
@@ -139,6 +170,7 @@ export default function UploadQueueScreen() {
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
+    stats: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     list: { gap: spacing.md },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     flex: { flex: 1 },

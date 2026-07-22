@@ -1,15 +1,58 @@
+import { useEffect, useRef, type ComponentProps } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { StyleSheet, Text } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { type AppColors, sizes, useAppTheme, useThemedStyles } from '../../../src/theme';
+import {
+  type AppColors,
+  radius,
+  shadows,
+  useAppTheme,
+  useThemedStyles,
+} from '../../../src/theme';
 
-const icons: Record<string, string> = {
-  dashboard: '⌂',
-  inspections: '▣',
-  uploads: '⇧',
-  settings: '⚙',
+const icons: Record<string, ComponentProps<typeof Ionicons>['name']> = {
+  dashboard: 'home-outline',
+  inspections: 'clipboard-outline',
+  uploads: 'cloud-upload-outline',
+  settings: 'settings-outline',
 };
+
+function TabIcon({ name, focused }: { name: string; focused: boolean }) {
+  const { colors } = useAppTheme();
+  const styles = useThemedStyles(createStyles);
+  const progress = useRef(new Animated.Value(focused ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(progress, {
+      toValue: focused ? 1 : 0,
+      speed: 28,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  }, [focused, progress]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.iconShell,
+        focused && styles.activeIconShell,
+        {
+          transform: [
+            { scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+          ],
+        },
+      ]}
+    >
+      <Ionicons
+        name={icons[name] ?? 'ellipse-outline'}
+        size={21}
+        color={focused ? colors.primary : colors.textSecondary}
+      />
+    </Animated.View>
+  );
+}
 
 export default function TabsLayout() {
   const { colors } = useAppTheme();
@@ -23,9 +66,9 @@ export default function TabsLayout() {
           tabBarInactiveTintColor: colors.textSecondary,
           tabBarStyle: styles.tabBar,
           tabBarLabelStyle: styles.label,
-          tabBarIcon: ({ color }) => (
-            <Text style={[styles.icon, { color }]}>{icons[route.name] ?? '•'}</Text>
-          ),
+          tabBarHideOnKeyboard: true,
+          tabBarItemStyle: styles.tabItem,
+          tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
         })}
       >
         <Tabs.Screen name="dashboard" options={{ title: 'Home' }} />
@@ -41,12 +84,21 @@ const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: colors.canvas },
     tabBar: {
-      minHeight: 68,
-      paddingTop: 7,
-      paddingBottom: 8,
+      minHeight: 76,
+      paddingTop: 8,
+      paddingBottom: 9,
       borderTopColor: colors.border,
       backgroundColor: colors.surface,
+      ...shadows.floating,
     },
-    label: { fontSize: 11, fontWeight: '700' },
-    icon: { fontSize: sizes.icon, lineHeight: 26 },
+    tabItem: { paddingVertical: 2 },
+    label: { fontSize: 10, fontWeight: '800', letterSpacing: 0.15 },
+    iconShell: {
+      width: 40,
+      height: 30,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: radius.md,
+    },
+    activeIconShell: { backgroundColor: colors.primarySoft },
   });

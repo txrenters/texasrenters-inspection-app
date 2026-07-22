@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AppThemeProvider } from '../theme';
+import { MotionProvider } from '../components/motion';
 import { TechnicianRealtimeProvider } from '../realtime/TechnicianRealtimeProvider';
 
 const queryClient = new QueryClient({
@@ -23,9 +24,11 @@ export function AppProviders({ children }: PropsWithChildren) {
   return (
     <SafeAreaProvider>
       <AppThemeProvider>
-        <QueryClientProvider client={queryClient}>
-          <TechnicianRealtimeProvider>{children}</TechnicianRealtimeProvider>
-        </QueryClientProvider>
+        <MotionProvider>
+          <QueryClientProvider client={queryClient}>
+            <TechnicianRealtimeProvider>{children}</TechnicianRealtimeProvider>
+          </QueryClientProvider>
+        </MotionProvider>
       </AppThemeProvider>
     </SafeAreaProvider>
   );

@@ -1,8 +1,10 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, Text, View } from 'react-native';
 
 import type { Finding, Inspection, InspectionRoom, Property, UploadItem } from '../domain/models';
+import { MotionPressable } from './motion';
 import { AppButton, Card, ProgressBar, PropertyVisual, StatusBadge, formatStatus } from './ui';
-import { type AppColors, radius, spacing, typography, useThemedStyles } from '../theme';
+import { type AppColors, radius, shadows, spacing, typography, useThemedStyles } from '../theme';
 
 export function inspectionProgress(rooms: InspectionRoom[]) {
   const required = rooms.filter((room) => room.isRequired);
@@ -39,11 +41,11 @@ export function InspectionSummaryCard({
           ? 'View submitted inspection'
           : 'Continue inspection';
   return (
-    <Pressable
+    <MotionPressable
       accessibilityRole="button"
       accessibilityLabel={`${action} at ${property.address}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.inspectionCard, pressed && styles.pressed]}
+      style={styles.inspectionCard}
     >
       <View style={styles.inspectionHeader}>
         <Text numberOfLines={2} style={styles.eyebrow}>
@@ -69,10 +71,13 @@ export function InspectionSummaryCard({
             label={uploadAttention ? 'FAILED' : 'PENDING'}
             tone={uploadAttention ? 'danger' : 'warning'}
           />
-          <Text style={styles.actionText}>{action} →</Text>
+          <Text style={styles.actionText}>{action}</Text>
+          <View style={styles.actionArrow}>
+            <Ionicons name="arrow-forward" size={16} style={styles.actionArrowIcon} />
+          </View>
         </View>
       </View>
-    </Pressable>
+    </MotionPressable>
   );
 }
 
@@ -89,11 +94,11 @@ export function RoomCard({ room, onPress }: { room: InspectionRoom; onPress: () 
             ? 'Review finding'
             : 'Open room';
   return (
-    <Pressable
+    <MotionPressable
       accessibilityRole="button"
       accessibilityLabel={`${nextAction} for ${room.name}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.roomCard, pressed && styles.pressed]}
+      style={styles.roomCard}
     >
       <View style={styles.rowBetween}>
         <View style={styles.flex}>
@@ -102,7 +107,9 @@ export function RoomCard({ room, onPress }: { room: InspectionRoom; onPress: () 
             {room.floorName} · {room.isRequired ? 'Required' : 'Optional'}
           </Text>
         </View>
-        <Text style={styles.chevron}>›</Text>
+        <View style={styles.chevronShell}>
+          <Ionicons name="chevron-forward" size={18} style={styles.chevron} />
+        </View>
       </View>
       <View style={styles.statusGrid}>
         <StatusLine label="Baseline" value={room.baseline.condition} />
@@ -114,7 +121,7 @@ export function RoomCard({ room, onPress }: { room: InspectionRoom; onPress: () 
         <Text style={styles.nextActionLabel}>NEXT</Text>
         <Text style={styles.actionText}>{nextAction}</Text>
       </View>
-    </Pressable>
+    </MotionPressable>
   );
 }
 
@@ -235,11 +242,11 @@ export function FindingSummaryCard({
 }) {
   const styles = useThemedStyles(createStyles);
   return (
-    <Pressable
+    <MotionPressable
       accessibilityRole="button"
       accessibilityLabel={`Review ${finding.title}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.findingCard, pressed && styles.pressed]}
+      style={styles.findingCard}
     >
       <View style={styles.rowBetween}>
         <Text style={styles.eyebrow}>{finding.roomName.toUpperCase()}</Text>
@@ -259,7 +266,7 @@ export function FindingSummaryCard({
         </Text>
       </View>
       <Text style={styles.recommendation}>{finding.recommendedReview}</Text>
-    </Pressable>
+    </MotionPressable>
   );
 }
 
@@ -283,9 +290,10 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: radius.lg,
-      padding: spacing.md,
+      borderRadius: radius.xl,
+      padding: 18,
       gap: spacing.md,
+      ...shadows.card,
     },
     inspectionHeader: {
       minWidth: 0,
@@ -299,19 +307,20 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: radius.lg,
-      padding: spacing.md,
+      borderRadius: radius.xl,
+      padding: 18,
       gap: spacing.md,
+      ...shadows.card,
     },
     findingCard: {
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
-      borderRadius: radius.lg,
-      padding: spacing.md,
+      borderRadius: radius.xl,
+      padding: 18,
       gap: spacing.sm,
+      ...shadows.card,
     },
-    pressed: { opacity: 0.8, transform: [{ scale: 0.995 }] },
     flex: { flex: 1, minWidth: 0 },
     rowBetween: {
       flexDirection: 'row',
@@ -331,8 +340,25 @@ const createStyles = (colors: AppColors) =>
     date: { ...typography.caption, color: colors.textPrimary, marginTop: spacing.xs },
     meta: { ...typography.caption, color: colors.textSecondary },
     statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
-    actionText: { ...typography.label, color: colors.primary },
-    chevron: { color: colors.primary, fontSize: 30, lineHeight: 32 },
+    actionText: { ...typography.label, color: colors.primary, flex: 1 },
+    actionArrow: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    actionArrowIcon: { color: colors.primary },
+    chevronShell: {
+      width: 34,
+      height: 34,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    chevron: { color: colors.primary },
     statusGrid: {
       gap: spacing.sm,
       padding: spacing.sm,

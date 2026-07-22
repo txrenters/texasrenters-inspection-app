@@ -70,6 +70,7 @@ export default function RoomDetailsScreen() {
       <Card>
         <SectionHeader
           title={room.data.inspectionType === 'MOVE_IN' ? 'Initial condition' : 'Move-in baseline'}
+          icon="shield-checkmark-outline"
           action={<StatusBadge label={room.data.baseline.condition} />}
         />
         <Text style={styles.body}>{room.data.baseline.summary}</Text>
@@ -99,7 +100,7 @@ export default function RoomDetailsScreen() {
         </View>
       </Card>
       <Card>
-        <SectionHeader title="Current recordings" />
+        <SectionHeader title="Current recordings" icon="videocam-outline" />
         {media.data?.length ? (
           media.data.map((item) => (
             <View key={item.id} style={styles.mediaRow}>
@@ -121,7 +122,7 @@ export default function RoomDetailsScreen() {
         )}
       </Card>
       <Card>
-        <SectionHeader title="Technician note" />
+        <SectionHeader title="Technician note" icon="document-text-outline" />
         <TextInput
           accessibilityLabel="Room note"
           value={note}
@@ -139,7 +140,7 @@ export default function RoomDetailsScreen() {
         />
       </Card>
       <Card muted>
-        <SectionHeader title="Room status" />
+        <SectionHeader title="Room status" icon="analytics-outline" />
         <Timeline label="Baseline reviewed" complete />
         <Timeline label="Recording saved" complete={hasSavedRecording} />
         <Timeline label="Upload confirmed" complete={room.data.uploadStatus === 'COMPLETED'} />

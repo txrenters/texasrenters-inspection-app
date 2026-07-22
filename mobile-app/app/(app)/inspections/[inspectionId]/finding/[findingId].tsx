@@ -73,7 +73,7 @@ export default function FindingDetailScreen() {
         <StatusBadge label={finding.data.comparisonResult} />
       </View>
       <Card>
-        <SectionHeader title="Baseline comparison" />
+        <SectionHeader title="Baseline comparison" icon="git-compare-outline" />
         <Comparison
           label="MOVE-IN BASELINE"
           text={finding.data.baselineCondition}
@@ -94,7 +94,7 @@ export default function FindingDetailScreen() {
         <Text style={styles.recommendation}>{finding.data.recommendedReview}</Text>
       </Card>
       <Card>
-        <SectionHeader title="Reference evidence" />
+        <SectionHeader title="Reference evidence" icon="images-outline" />
         <View style={styles.thumbnails}>
           {[1, 2, 3].map((number) => (
             <View key={number} style={styles.thumbnail}>

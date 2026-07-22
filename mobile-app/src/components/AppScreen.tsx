@@ -1,13 +1,24 @@
 import { useState, type PropsWithChildren, type ReactNode } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { ScreenEntrance } from './motion';
 import { DemoModeBanner } from './ui';
 import { NetworkBanner } from './NetworkBanner';
-import { type AppColors, sizes, spacing, typography, useAppTheme, useThemedStyles } from '../theme';
+import {
+  type AppColors,
+  radius,
+  shadows,
+  sizes,
+  spacing,
+  typography,
+  useAppTheme,
+  useThemedStyles,
+} from '../theme';
 
 export function AppScreen({
   title,
   subtitle,
+  eyebrow = 'FIELD WORKSPACE',
   action,
   bottomAction,
   refresh,
@@ -15,6 +26,7 @@ export function AppScreen({
 }: PropsWithChildren<{
   title: string;
   subtitle?: string;
+  eyebrow?: string;
   action?: ReactNode;
   bottomAction?: ReactNode;
   refresh?: {
@@ -43,6 +55,7 @@ export function AppScreen({
         testID="app-screen-scroll"
         accessibilityState={{ busy: refreshActive }}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
         refreshControl={
           refresh ? (
             <RefreshControl
@@ -54,14 +67,22 @@ export function AppScreen({
         }
         contentContainerStyle={styles.content}
       >
-        <View style={styles.header}>
-          <View style={styles.flex}>
-            <Text style={styles.title}>{title}</Text>
-            {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        <ScreenEntrance>
+          <View style={styles.entranceContent}>
+            <View style={styles.headerCard}>
+              <View style={styles.headerAccent} />
+              <View style={styles.header}>
+                <View style={styles.flex}>
+                  <Text style={styles.eyebrow}>{eyebrow}</Text>
+                  <Text style={styles.title}>{title}</Text>
+                  {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+                </View>
+                {action}
+              </View>
+            </View>
+            <View style={styles.body}>{children}</View>
           </View>
-          {action}
-        </View>
-        {children}
+        </ScreenEntrance>
       </ScrollView>
       {bottomAction ? <View style={styles.bottomAction}>{bottomAction}</View> : null}
     </View>
@@ -75,17 +96,45 @@ const createStyles = (colors: AppColors) =>
       width: '100%',
       maxWidth: sizes.contentMax,
       alignSelf: 'center',
-      padding: spacing.md,
+      paddingHorizontal: spacing.md,
+      paddingTop: spacing.md,
       paddingBottom: 104,
-      gap: spacing.md,
+    },
+    entranceContent: { gap: spacing.lg },
+    body: { gap: spacing.lg },
+    headerCard: {
+      position: 'relative',
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.xl,
+      backgroundColor: colors.surface,
+      ...shadows.card,
+    },
+    headerAccent: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      bottom: 0,
+      width: 5,
+      backgroundColor: colors.secondary,
     },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.md,
-      marginVertical: spacing.sm,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: 20,
     },
     flex: { flex: 1 },
+    eyebrow: {
+      ...typography.caption,
+      color: colors.primary,
+      fontSize: 10,
+      fontWeight: '900',
+      letterSpacing: 1.35,
+      marginBottom: spacing.xs,
+    },
     title: { ...typography.title, color: colors.textPrimary },
     subtitle: { ...typography.body, color: colors.textSecondary, marginTop: spacing.xs },
     bottomAction: {
@@ -97,5 +146,6 @@ const createStyles = (colors: AppColors) =>
       borderTopWidth: 1,
       borderTopColor: colors.border,
       padding: spacing.md,
+      ...shadows.floating,
     },
   });
