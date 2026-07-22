@@ -82,7 +82,7 @@ export default function RecordingReviewScreen() {
       title="Review recording"
       subtitle={`${room.data?.name ?? 'Room'} · Stored on this device`}
       bottomAction={
-        <AppButton label="Save locally" onPress={saveForUpload} loading={save.isPending} />
+        <AppButton label="Save & queue upload" onPress={saveForUpload} loading={save.isPending} />
       }
     >
       {playableUri ? (
@@ -102,7 +102,8 @@ export default function RecordingReviewScreen() {
         </View>
       )}
       <Text style={styles.localNotice}>
-        This recording stays on the device. Cloud upload remains queued for later integration.
+        Saving keeps a copy on this device and queues the video for upload to TexasRenters. Track
+        progress in the Uploads tab.
       </Text>
       <Card>
         <View style={styles.row}>

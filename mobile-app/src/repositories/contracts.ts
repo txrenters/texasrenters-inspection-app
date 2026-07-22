@@ -75,7 +75,7 @@ export interface UploadRepository {
 
 export interface FindingRepository {
   list(inspectionId?: string): Promise<Finding[]>;
-  get(id: string): Promise<Finding>;
+  get(id: string, inspectionId?: string): Promise<Finding>;
   approve(id: string): Promise<Finding>;
   edit(id: string, observation: string, notes: string): Promise<Finding>;
   reject(id: string, reason: string): Promise<Finding>;

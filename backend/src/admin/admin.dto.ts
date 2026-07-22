@@ -80,8 +80,22 @@ export class UpdateAdminInspectionDto {
   @IsOptional() @IsDateString() scheduledAt?: string;
   @IsOptional() @IsIn(['STANDARD', 'HIGH']) priority?: string;
   @IsOptional() @IsString() @MaxLength(2000) internalNotes?: string;
-  @IsOptional() @IsIn(['CANCELLED']) status?: string;
+  @IsOptional() @IsIn(['CANCELLED', 'COMPLETED']) status?: string;
   @IsOptional() @IsString() @MaxLength(500) cancellationReason?: string;
+}
+
+export class FindingReviewDto {
+  @IsOptional() @IsString() @MaxLength(1000) reason?: string;
+}
+
+export class FindingRejectDto {
+  @IsString() @MinLength(2) @MaxLength(1000) reason!: string;
+}
+
+export class AdminFindingsQueryDto extends PaginationDto {
+  @IsOptional()
+  @IsIn(['PENDING_REVIEW', 'APPROVED', 'EDITED', 'REJECTED', 'REINSPECTION_REQUESTED'])
+  reviewStatus?: string;
 }
 
 export class AssignmentDto {

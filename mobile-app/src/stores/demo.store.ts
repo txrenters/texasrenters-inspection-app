@@ -35,6 +35,7 @@ interface DemoState {
   updateRoom: (id: string, update: Partial<InspectionRoom>) => void;
   setDraftRecording: (media: LocalMedia | null) => void;
   saveMedia: (media: LocalMedia) => void;
+  removeMedia: (id: string) => void;
   addSnapshot: (snapshot: RoomSnapshot) => void;
   enqueueUpload: (item: UploadItem) => void;
   updateUpload: (id: string, update: Partial<UploadItem>) => void;
@@ -103,6 +104,8 @@ export const useDemoStore = create<DemoState>()(
           },
           draftRecording: null,
         })),
+      removeMedia: (id) =>
+        set((state) => ({ media: state.media.filter((item) => item.id !== id) })),
       addSnapshot: (snapshot) =>
         set((state) => ({
           snapshots: [

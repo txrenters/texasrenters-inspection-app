@@ -9,6 +9,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FilterToolbar,
   PageHeader,
   Pagination,
   TableLoadingState,
@@ -54,7 +55,24 @@ export default function InspectionsPage() {
           </Link>
         }
       />
-      <div className="filter-bar">
+      <FilterToolbar
+        resultLabel={
+          inspections.isLoading
+            ? 'Loading inspections…'
+            : `${(inspections.data?.total ?? 0).toLocaleString()} inspections`
+        }
+        onClear={
+          search || status || inspectionType || unassignedOnly
+            ? () => {
+                setSearch('');
+                setStatus('');
+                setInspectionType('');
+                setUnassignedOnly(false);
+                setPage(1);
+              }
+            : undefined
+        }
+      >
         <div className="field field-grow">
           <label htmlFor="inspection-search">Search property or unit</label>
           <input
@@ -67,7 +85,7 @@ export default function InspectionsPage() {
             placeholder="Search inspections…"
           />
         </div>
-        <div className="field">
+        <div className="field field-compact">
           <label htmlFor="inspection-type">Type</label>
           <select
             id="inspection-type"
@@ -85,7 +103,7 @@ export default function InspectionsPage() {
             ))}
           </select>
         </div>
-        <div className="field">
+        <div className="field field-compact">
           <label htmlFor="inspection-status">Status</label>
           <select
             id="inspection-status"
@@ -108,7 +126,7 @@ export default function InspectionsPage() {
             ))}
           </select>
         </div>
-        <label className="check-field">
+        <label className="check-field filter-toggle">
           <input
             type="checkbox"
             checked={unassignedOnly}
@@ -119,7 +137,7 @@ export default function InspectionsPage() {
           />{' '}
           Unassigned only
         </label>
-      </div>
+      </FilterToolbar>
       {inspections.isLoading ? (
         <TableLoadingState headers={INSPECTION_HEADERS} label="Loading inspections" />
       ) : inspections.isError ? (
@@ -136,7 +154,7 @@ export default function InspectionsPage() {
         />
       ) : (
         <>
-          <DataTable headers={INSPECTION_HEADERS}>
+          <DataTable headers={INSPECTION_HEADERS} label="Property inspections">
             {inspections.data.items.map((inspection) => {
               const current = inspection.assignments.find((assignment) => assignment.isCurrent);
               return (

@@ -2,7 +2,12 @@ import type { InspectionType } from '@texasrenters/shared';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
 export type InspectionStatus =
-  'SCHEDULED' | 'IN_PROGRESS' | 'PROCESSING' | 'REVIEW_REQUIRED' | 'COMPLETED';
+  | 'SCHEDULED'
+  | 'IN_PROGRESS'
+  | 'PROCESSING'
+  | 'REVIEW_REQUIRED'
+  | 'COMPLETED'
+  | 'CANCELLED';
 export type Priority = 'STANDARD' | 'HIGH';
 export type RoomCompletionStatus = 'NOT_STARTED' | 'RECORDING_SAVED' | 'COMPLETED' | 'SKIPPED';
 export type UploadStatus = 'PENDING' | 'UPLOADING' | 'PAUSED' | 'FAILED' | 'COMPLETED';

@@ -5,11 +5,16 @@ export type DataSource = 'mock' | 'api';
 
 const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
 const configuredApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || null;
+// On networks with wireless client isolation the phone can never reach the dev
+// machine's LAN IP; `adb reverse tcp:3000 tcp:3000` tunnels localhost over USB
+// instead, so this flag keeps localhost as the primary API host on-device.
+const adbReverseEnabled = process.env.EXPO_PUBLIC_USE_ADB_REVERSE === 'true';
 const apiBaseUrls = resolveDeviceApiBaseUrls(
   configuredApiBaseUrl,
   Constants.expoConfig?.hostUri,
   Platform.OS,
   process.env.EXPO_PUBLIC_DEV_LAN_API_BASE_URL?.trim() || null,
+  adbReverseEnabled,
 );
 const apiBaseUrl = apiBaseUrls[0] ?? null;
 const realtimeBaseUrls = resolveRealtimeBaseUrls(apiBaseUrls);
@@ -56,11 +61,24 @@ export function resolveDeviceApiBaseUrls(
   metroHostUri: string | undefined,
   platform: string,
   lanFallbackUrl: string | null,
+  preferLocalhost = false,
 ) {
   const primary = resolveDeviceApiBaseUrl(baseUrl, metroHostUri, platform);
   if (!primary || platform === 'web' || !isLocalApiUrl(baseUrl)) return primary ? [primary] : [];
   const fallback = normalizePrivateApiUrl(lanFallbackUrl);
-  return [...new Set([primary, fallback].filter((value): value is string => Boolean(value)))];
+  const localhost = preferLocalhost ? normalizeLocalApiUrl(baseUrl) : null;
+  return [
+    ...new Set([localhost, primary, fallback].filter((value): value is string => Boolean(value))),
+  ];
+}
+
+function normalizeLocalApiUrl(value: string | null) {
+  if (!value) return null;
+  try {
+    return new URL(value).toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
 }
 
 function isLocalApiUrl(value: string | null) {

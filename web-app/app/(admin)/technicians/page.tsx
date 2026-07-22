@@ -8,6 +8,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FilterToolbar,
   PageHeader,
   Pagination,
   TableLoadingState,
@@ -30,6 +31,14 @@ export default function TechniciansPage() {
     search: debouncedSearch,
     active: active || undefined,
   });
+  const visibleWorkload = technicians.data?.items.reduce(
+    (summary, technician) => ({
+      current: summary.current + (technician.workload?.current ?? 0),
+      inProgress: summary.inProgress + (technician.workload?.inProgress ?? 0),
+      completed: summary.completed + (technician.workload?.completed ?? 0),
+    }),
+    { current: 0, inProgress: 0, completed: 0 },
+  );
   return (
     <>
       <PageHeader
@@ -42,7 +51,39 @@ export default function TechniciansPage() {
         }
       />
       {creating ? <TechnicianCreateDialog onClose={() => setCreating(false)} /> : null}
-      <div className="filter-bar">
+      {visibleWorkload ? (
+        <section className="workload-strip" aria-label="Visible technician workload">
+          <div>
+            <span>Current assignments</span>
+            <strong>{visibleWorkload.current}</strong>
+          </div>
+          <div>
+            <span>In progress</span>
+            <strong>{visibleWorkload.inProgress}</strong>
+          </div>
+          <div>
+            <span>Completed</span>
+            <strong>{visibleWorkload.completed}</strong>
+          </div>
+          <small>Workload totals for the accounts shown on this page</small>
+        </section>
+      ) : null}
+      <FilterToolbar
+        resultLabel={
+          technicians.isLoading
+            ? 'Loading technician accounts…'
+            : `${(technicians.data?.total ?? 0).toLocaleString()} technician accounts`
+        }
+        onClear={
+          search || active
+            ? () => {
+                setSearch('');
+                setActive('');
+                setPage(1);
+              }
+            : undefined
+        }
+      >
         <div className="field field-grow">
           <label htmlFor="technician-search">Search name or email</label>
           <input
@@ -55,7 +96,7 @@ export default function TechniciansPage() {
             placeholder="Search technicians…"
           />
         </div>
-        <div className="field">
+        <div className="field field-medium">
           <label htmlFor="technician-active">Account status</label>
           <select
             id="technician-active"
@@ -70,7 +111,7 @@ export default function TechniciansPage() {
             <option value="false">Inactive</option>
           </select>
         </div>
-      </div>
+      </FilterToolbar>
       {technicians.isLoading ? (
         <TableLoadingState headers={TECHNICIAN_HEADERS} label="Loading technicians" />
       ) : technicians.isError ? (
@@ -82,7 +123,7 @@ export default function TechniciansPage() {
         />
       ) : (
         <>
-          <DataTable headers={TECHNICIAN_HEADERS}>
+          <DataTable headers={TECHNICIAN_HEADERS} label="Technician accounts and workloads">
             {technicians.data.items.map((item) => (
               <tr key={item.id}>
                 <td>
@@ -91,9 +132,9 @@ export default function TechniciansPage() {
                   </Link>
                 </td>
                 <td>{item.email}</td>
-                <td>{item.workload?.current ?? 0}</td>
-                <td>{item.workload?.inProgress ?? 0}</td>
-                <td>{item.workload?.completed ?? 0}</td>
+                <td className="numeric-cell">{item.workload?.current ?? 0}</td>
+                <td className="numeric-cell">{item.workload?.inProgress ?? 0}</td>
+                <td className="numeric-cell">{item.workload?.completed ?? 0}</td>
                 <td>
                   <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
                 </td>

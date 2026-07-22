@@ -26,7 +26,7 @@ describe('technician mobile data boundary', () => {
       },
       inspectionMedia: { count: jest.fn().mockResolvedValue(1) },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.dashboard(technician)).resolves.toMatchObject({
       today: 3,
@@ -50,7 +50,7 @@ describe('technician mobile data boundary', () => {
         count: jest.fn().mockResolvedValue(0),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.inspections(technician)).resolves.toEqual(
       expect.objectContaining({ items: [], total: 0 }),
@@ -71,7 +71,7 @@ describe('technician mobile data boundary', () => {
     const prisma = {
       inspection: { findFirst: jest.fn().mockResolvedValue(null) },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.inspection(technician, 'inspection-other')).rejects.toMatchObject({
       status: 404,
@@ -116,7 +116,7 @@ describe('technician mobile data boundary', () => {
         }),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.inspectionContext(technician, 'inspection-1')).resolves.toMatchObject({
       inspection: { id: 'inspection-1', roomIds: [] },
@@ -163,7 +163,7 @@ describe('technician mobile data boundary', () => {
         count: jest.fn().mockResolvedValue(26),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(
       service.findings(technician, 'inspection-1', {
@@ -196,7 +196,7 @@ describe('technician mobile data boundary', () => {
         update: jest.fn(),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.completeRoom(technician, 'room-1')).rejects.toMatchObject({
       status: 409,
@@ -231,7 +231,7 @@ describe('technician mobile data boundary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.inspections(technician)).resolves.toEqual(
       expect.objectContaining({
@@ -263,7 +263,7 @@ describe('technician mobile data boundary', () => {
         }),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never);
+    const service = new TechnicianService(prisma as never, {} as never, {} as never);
 
     await expect(service.floorPlan(technician, 'building-1')).resolves.toEqual({
       id: 'plan-1',
@@ -277,6 +277,157 @@ describe('technician mobile data boundary', () => {
     expect(prisma.propertyFloorPlan.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { propertyId: 'building-1', status: 'APPROVED' } }),
     );
+  });
+
+  it('stores a room video once, replaces earlier recordings, and marks the room recorded', async () => {
+    const createdAt = new Date('2026-07-22T12:00:00.000Z');
+    const created = {
+      id: 'media-2',
+      inspectionId: 'inspection-1',
+      inspectionAreaId: 'area-1',
+      durationSeconds: 42,
+      uploadStatus: 'UPLOADED',
+      processingStatus: 'PENDING',
+      createdAt,
+    };
+    const tx = {
+      inspectionMedia: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+        create: jest.fn().mockResolvedValue(created),
+      },
+      inspectionArea: { update: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-1',
+          inspectionId: 'inspection-1',
+          completionStatus: 'PENDING',
+          inspection: {
+            organizationId: technician.organizationId,
+            propertyId: null,
+            propertywareBuilding: { addressLine1: '1 Main St' },
+          },
+          propertyArea: { name: 'Living Room' },
+          media: [{ id: 'media-1', providerMediaId: 'local-old-key' }],
+        }),
+      },
+      $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
+    };
+    const storage = {
+      putFromFile: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new TechnicianService(prisma as never, {} as never, storage as never);
+
+    await expect(
+      service.uploadRoomMedia(
+        technician,
+        'area-1',
+        { idempotencyKey: 'local-media-abc12345', durationSeconds: 42 },
+        { path: 'C:/tmp/upload.mp4', mimetype: 'video/mp4', size: 100, originalname: 'v.mp4' },
+      ),
+    ).resolves.toMatchObject({
+      id: 'media-2',
+      roomId: 'area-1',
+      roomName: 'Living Room',
+      status: 'COMPLETED',
+      progress: 1,
+    });
+    expect(storage.putFromFile).toHaveBeenCalledWith(
+      'local-local-media-abc12345',
+      'C:/tmp/upload.mp4',
+      'video/mp4',
+    );
+    expect(tx.inspectionMedia.deleteMany).toHaveBeenCalledWith({
+      where: { inspectionAreaId: 'area-1' },
+    });
+    expect(tx.inspectionArea.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ completionStatus: 'RECORDED' }) }),
+    );
+    expect(storage.delete).toHaveBeenCalledWith('local-old-key');
+  });
+
+  it('returns the stored media unchanged when the same idempotency key is re-sent', async () => {
+    const record = {
+      id: 'media-1',
+      inspectionId: 'inspection-1',
+      inspectionAreaId: 'area-1',
+      durationSeconds: 42,
+      uploadStatus: 'UPLOADED',
+      processingStatus: 'PENDING',
+      createdAt: new Date(),
+    };
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-1',
+          inspectionId: 'inspection-1',
+          completionStatus: 'RECORDED',
+          inspection: {
+            organizationId: technician.organizationId,
+            propertyId: null,
+            propertywareBuilding: null,
+          },
+          propertyArea: { name: 'Living Room' },
+          media: [{ id: 'media-1', providerMediaId: 'local-local-media-abc12345' }],
+        }),
+      },
+      inspectionMedia: { findUniqueOrThrow: jest.fn().mockResolvedValue(record) },
+      $transaction: jest.fn(),
+    };
+    const storage = { putFromFile: jest.fn(), delete: jest.fn() };
+    const service = new TechnicianService(prisma as never, {} as never, storage as never);
+
+    await expect(
+      service.uploadRoomMedia(
+        technician,
+        'area-1',
+        { idempotencyKey: 'local-media-abc12345', durationSeconds: 42 },
+        { path: 'C:/tmp/upload.mp4', mimetype: 'video/mp4', size: 100, originalname: 'v.mp4' },
+      ),
+    ).resolves.toMatchObject({ id: 'media-1', status: 'COMPLETED' });
+    expect(storage.putFromFile).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects new videos for completed rooms and non-video uploads', async () => {
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-1',
+          inspectionId: 'inspection-1',
+          completionStatus: 'COMPLETED',
+          inspection: {
+            organizationId: technician.organizationId,
+            propertyId: null,
+            propertywareBuilding: null,
+          },
+          propertyArea: { name: 'Living Room' },
+          media: [],
+        }),
+      },
+    };
+    const storage = { putFromFile: jest.fn(), delete: jest.fn() };
+    const service = new TechnicianService(prisma as never, {} as never, storage as never);
+
+    await expect(
+      service.uploadRoomMedia(
+        technician,
+        'area-1',
+        { idempotencyKey: 'local-media-abc12345', durationSeconds: 42 },
+        { path: 'C:/tmp/upload.mp4', mimetype: 'video/mp4', size: 100, originalname: 'v.mp4' },
+      ),
+    ).rejects.toMatchObject({ status: 409, code: 'ROOM_ALREADY_COMPLETED' });
+    await expect(
+      service.uploadRoomMedia(
+        technician,
+        'area-1',
+        { idempotencyKey: 'local-media-abc12345', durationSeconds: 42 },
+        { path: 'C:/tmp/upload.pdf', mimetype: 'application/pdf', size: 100, originalname: 'a.pdf' },
+      ),
+    ).rejects.toMatchObject({ status: 415, code: 'ROOM_VIDEO_TYPE_UNSUPPORTED' });
+    expect(storage.putFromFile).not.toHaveBeenCalled();
   });
 
   it('does not read plan bytes when the technician has no current property assignment', async () => {
@@ -293,7 +444,7 @@ describe('technician mobile data boundary', () => {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const storage = { get: jest.fn() };
-    const service = new TechnicianService(prisma as never, storage as never);
+    const service = new TechnicianService(prisma as never, storage as never, {} as never);
 
     await expect(service.floorPlanContent(technician, 'plan-1')).rejects.toMatchObject({
       status: 404,

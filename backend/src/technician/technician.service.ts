@@ -1,3 +1,5 @@
+import { rm } from 'node:fs/promises';
+
 import { Inject, Injectable } from '@nestjs/common';
 import {
   FloorPlanStatus,
@@ -13,10 +15,27 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
+import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import type {
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
+  TechnicianMediaUploadDto,
 } from './technician.dto';
+
+export interface UploadedRoomVideo {
+  path: string;
+  mimetype: string;
+  size: number;
+  originalname: string;
+}
+
+const allowedVideoMimeTypes = new Set([
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/3gpp',
+  'video/x-matroska',
+]);
 
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
 
@@ -123,6 +142,8 @@ export class TechnicianService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(FloorPlanStorageService) private readonly floorPlanStorage: FloorPlanStorageService,
+    @Inject(InspectionMediaStorageService)
+    private readonly mediaStorage: InspectionMediaStorageService,
   ) {}
 
   async dashboard(user: AuthenticatedUser) {
@@ -465,6 +486,139 @@ export class TechnicianService {
         createdAt: true,
       },
     });
+  }
+
+  async uploadRoomMedia(
+    user: AuthenticatedUser,
+    roomId: string,
+    dto: TechnicianMediaUploadDto,
+    file?: UploadedRoomVideo,
+  ) {
+    try {
+      if (!file)
+        throw new ApplicationError(400, 'ROOM_VIDEO_FILE_REQUIRED', 'A video file is required.');
+      if (!allowedVideoMimeTypes.has(file.mimetype))
+        throw new ApplicationError(
+          415,
+          'ROOM_VIDEO_TYPE_UNSUPPORTED',
+          'Only room-video recordings (mp4, mov, webm) can be uploaded.',
+        );
+      const area = await this.prisma.inspectionArea.findFirst({
+        relationLoadStrategy: 'join',
+        where: {
+          id: roomId,
+          inspection: {
+            organizationId: user.organizationId,
+            status: visibleStatuses,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+        select: {
+          id: true,
+          inspectionId: true,
+          completionStatus: true,
+          inspection: {
+            select: {
+              organizationId: true,
+              propertyId: true,
+              propertywareBuilding: { select: { addressLine1: true } },
+            },
+          },
+          propertyArea: { select: { name: true } },
+          media: { select: { id: true, providerMediaId: true } },
+        },
+      });
+      if (!area)
+        throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
+
+      // Retried uploads reuse the client-generated idempotency key, so a
+      // duplicate registration returns the already-stored media unchanged.
+      const providerMediaId = `local-${dto.idempotencyKey}`;
+      const existing = area.media.find((item) => item.providerMediaId === providerMediaId);
+      if (existing) {
+        const record = await this.prisma.inspectionMedia.findUniqueOrThrow({
+          where: { id: existing.id },
+        });
+        return this.mapUploadedMedia(record, area);
+      }
+      if (area.completionStatus === InspectionAreaCompletionStatus.COMPLETED)
+        throw new ApplicationError(
+          409,
+          'ROOM_ALREADY_COMPLETED',
+          'This room is completed. Its video can no longer be replaced.',
+        );
+
+      await this.mediaStorage.putFromFile(providerMediaId, file.path, file.mimetype);
+      const replaced = area.media.map((item) => item.providerMediaId);
+      let record;
+      try {
+        record = await this.prisma.$transaction(async (tx) => {
+          // Exactly one video per room: registering a new recording replaces
+          // any earlier one for this area.
+          await tx.inspectionMedia.deleteMany({ where: { inspectionAreaId: area.id } });
+          const created = await tx.inspectionMedia.create({
+            data: {
+              organizationId: area.inspection.organizationId,
+              propertyId: area.inspection.propertyId,
+              inspectionId: area.inspectionId,
+              inspectionAreaId: area.id,
+              technicianId: user.id,
+              provider: 'local',
+              providerMediaId,
+              mimeType: file.mimetype,
+              durationSeconds: dto.durationSeconds,
+              uploadStatus: MediaUploadStatus.UPLOADED,
+              processingStatus: MediaProcessingStatus.PENDING,
+            },
+          });
+          // A fresh recording also un-skips a previously skipped room.
+          await tx.inspectionArea.update({
+            where: { id: area.id },
+            data: { completionStatus: InspectionAreaCompletionStatus.RECORDED, skipReason: null },
+          });
+          return created;
+        });
+      } catch (error) {
+        await this.mediaStorage.delete(providerMediaId).catch(() => undefined);
+        throw error;
+      }
+      for (const key of replaced) await this.mediaStorage.delete(key).catch(() => undefined);
+      return this.mapUploadedMedia(record, area);
+    } finally {
+      if (file) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private mapUploadedMedia(
+    record: {
+      id: string;
+      inspectionId: string;
+      inspectionAreaId: string;
+      durationSeconds: number;
+      uploadStatus: MediaUploadStatus;
+      processingStatus: MediaProcessingStatus;
+      createdAt: Date;
+    },
+    area: {
+      inspection: { propertywareBuilding: { addressLine1: string | null } | null };
+      propertyArea: { name: string };
+    },
+  ) {
+    return {
+      id: record.id,
+      mediaId: record.id,
+      inspectionId: record.inspectionId,
+      roomId: record.inspectionAreaId,
+      propertyAddress: area.inspection.propertywareBuilding?.addressLine1 ?? 'Assigned property',
+      roomName: area.propertyArea.name,
+      durationSeconds: record.durationSeconds,
+      estimatedSizeMb: 0,
+      status: this.mapUploadStatus(record.uploadStatus),
+      progress: record.uploadStatus === MediaUploadStatus.UPLOADED ? 1 : 0,
+      processingStatus: this.mapProcessingStatus(record.processingStatus),
+      processingProgress: record.processingStatus === MediaProcessingStatus.READY ? 1 : 0,
+      createdAt: record.createdAt,
+    };
   }
 
   async uploads(user: AuthenticatedUser) {

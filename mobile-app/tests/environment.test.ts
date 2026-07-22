@@ -68,6 +68,21 @@ describe('mobile environment', () => {
     ]);
   });
 
+  it('keeps localhost first for adb-reverse devices, with LAN candidates after', () => {
+    expect(
+      resolveDeviceApiBaseUrls(
+        'http://localhost:3000/api/v1',
+        '192.168.123.44:8081',
+        'android',
+        'http://192.168.123.44:3000/api/v1',
+        true,
+      ),
+    ).toEqual([
+      'http://localhost:3000/api/v1',
+      'http://192.168.123.44:3000/api/v1',
+    ]);
+  });
+
   it('rejects public fallbacks and does not alter production API URLs', () => {
     expect(
       resolveDeviceApiBaseUrls(

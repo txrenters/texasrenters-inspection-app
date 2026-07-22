@@ -28,6 +28,7 @@ export function PageHeader({
       ) : null}
       <div className="page-heading">
         <div>
+          <span className="page-eyebrow">TexasRenters operations</span>
           <h1>{title}</h1>
           {description ? <p>{description}</p> : null}
         </div>
@@ -60,17 +61,45 @@ export function MetricCard({
   label,
   value,
   detail,
+  tone = 'blue',
 }: {
   label: string;
   value: number | string;
   detail?: string;
+  tone?: 'blue' | 'green' | 'warning' | 'danger' | 'neutral';
 }) {
   return (
-    <article className="metric-card">
+    <article className={`metric-card metric-card-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
       {detail ? <small>{detail}</small> : null}
     </article>
+  );
+}
+
+export function FilterToolbar({
+  children,
+  resultLabel,
+  onClear,
+}: {
+  children: ReactNode;
+  resultLabel: string;
+  onClear?: () => void;
+}) {
+  return (
+    <section className="filter-toolbar" aria-label="List filters">
+      <div className="filter-bar">{children}</div>
+      <div className="filter-toolbar-meta" aria-live="polite">
+        <span className="result-count">{resultLabel}</span>
+        {onClear ? (
+          <button className="clear-filters" onClick={onClear} type="button">
+            Clear filters
+          </button>
+        ) : (
+          <span>Showing the latest available data</span>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -218,10 +247,18 @@ export function Pagination({
   );
 }
 
-export function DataTable({ headers, children }: { headers: string[]; children: ReactNode }) {
+export function DataTable({
+  headers,
+  children,
+  label,
+}: {
+  headers: string[];
+  children: ReactNode;
+  label?: string;
+}) {
   return (
     <div className="table-wrap">
-      <table>
+      <table aria-label={label}>
         <thead>
           <tr>
             {headers.map((header) => (

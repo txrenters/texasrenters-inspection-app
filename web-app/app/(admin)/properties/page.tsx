@@ -9,6 +9,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FilterToolbar,
   PageHeader,
   Pagination,
   TableLoadingState,
@@ -56,7 +57,23 @@ export default function PropertiesPage() {
         title="Properties"
         description="Active normalized Propertyware properties available for inspections."
       />
-      <div className="filter-bar">
+      <FilterToolbar
+        resultLabel={
+          properties.isLoading
+            ? 'Loading active properties…'
+            : `${(properties.data?.total ?? 0).toLocaleString()} active properties`
+        }
+        onClear={
+          search || portfolioId
+            ? () => {
+                setSearch('');
+                setPortfolioId('');
+                setPortfolioSearch('');
+                setPage(1);
+              }
+            : undefined
+        }
+      >
         <div className="field field-grow">
           <label htmlFor="search">Search name or address</label>
           <input
@@ -69,7 +86,7 @@ export default function PropertiesPage() {
             placeholder="Search properties…"
           />
         </div>
-        <div className="field">
+        <div className="field field-medium">
           <label htmlFor="portfolio">Portfolio</label>
           <SearchableSelect
             id="portfolio"
@@ -93,7 +110,7 @@ export default function PropertiesPage() {
             }}
           />
         </div>
-      </div>
+      </FilterToolbar>
       {properties.isLoading ? (
         <TableLoadingState headers={PROPERTY_HEADERS} label="Loading properties" />
       ) : properties.isError ? (
@@ -110,7 +127,7 @@ export default function PropertiesPage() {
         />
       ) : (
         <>
-          <DataTable headers={PROPERTY_HEADERS}>
+          <DataTable headers={PROPERTY_HEADERS} label="Active synchronized properties">
             {properties.data.items.map((property) => (
               <tr key={property.id}>
                 <td>
@@ -120,8 +137,8 @@ export default function PropertiesPage() {
                 </td>
                 <td>{address(property)}</td>
                 <td>{property.portfolio.name}</td>
-                <td>{property._count?.units ?? 0}</td>
-                <td>{property._count?.inspections ?? 0}</td>
+                <td className="numeric-cell">{property._count?.units ?? 0}</td>
+                <td className="numeric-cell">{property._count?.inspections ?? 0}</td>
                 <td>
                   <Badge value={property.isActive ? 'ACTIVE' : 'INACTIVE'} />
                 </td>

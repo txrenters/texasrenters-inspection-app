@@ -27,6 +27,7 @@ import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto'
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
 import {
+  AdminFindingsQueryDto,
   AssignmentDto,
   ApprovePropertyAreasDto,
   AssignmentListQueryDto,
@@ -34,6 +35,8 @@ import {
   CreateAdminInspectionDto,
   CreatePropertyAreaDto,
   CreateTechnicianDto,
+  FindingRejectDto,
+  FindingReviewDto,
   InspectionListQueryDto,
   LeaseListQueryDto,
   PortfolioListQueryDto,
@@ -198,6 +201,42 @@ export class AdminController {
     @Param('inspectionId') id: string,
   ) {
     return this.service.inspection(request.user, id);
+  }
+  @Get('inspections/:inspectionId/media') inspectionMedia(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.service.inspectionMedia(request.user, id);
+  }
+  @Get('media/:mediaId/content')
+  @Header('Cache-Control', 'private, no-store')
+  async mediaContent(@Req() request: AuthenticatedRequest, @Param('mediaId') id: string) {
+    const file = await this.service.mediaContent(request.user, id);
+    return new StreamableFile(file.bytes, {
+      type: file.mimeType,
+      disposition: `inline; filename="${file.fileName}"`,
+    });
+  }
+  @Get('inspections/:inspectionId/findings') inspectionFindings(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Query() query: AdminFindingsQueryDto,
+  ) {
+    return this.service.findings(request.user, id, query);
+  }
+  @Post('findings/:findingId/approve') approveFinding(
+    @Req() request: AuthenticatedRequest,
+    @Param('findingId') id: string,
+    @Body() body: FindingReviewDto,
+  ) {
+    return this.service.reviewFinding(request.user, id, 'APPROVED', body.reason);
+  }
+  @Post('findings/:findingId/reject') rejectFinding(
+    @Req() request: AuthenticatedRequest,
+    @Param('findingId') id: string,
+    @Body() body: FindingRejectDto,
+  ) {
+    return this.service.reviewFinding(request.user, id, 'REJECTED', body.reason);
   }
   @Get('inspections/:inspectionId/audit') inspectionAudit(
     @Req() request: AuthenticatedRequest,

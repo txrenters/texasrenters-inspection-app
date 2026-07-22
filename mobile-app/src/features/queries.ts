@@ -165,10 +165,10 @@ export function useFindings(inspectionId?: string) {
     queryFn: () => repositories.findings.list(inspectionId),
   });
 }
-export function useFinding(id: string) {
+export function useFinding(id: string, inspectionId?: string) {
   return useQuery({
-    queryKey: queryKeys.finding(id),
-    queryFn: () => repositories.findings.get(id),
+    queryKey: [...queryKeys.finding(id), inspectionId ?? ''],
+    queryFn: () => repositories.findings.get(id, inspectionId),
     enabled: Boolean(id),
   });
 }

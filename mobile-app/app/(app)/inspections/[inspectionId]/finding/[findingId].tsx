@@ -11,6 +11,7 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../../../../../src/components/ui';
+import { isDemoMode } from '../../../../../src/config/environment';
 import { useFinding, useFindingActions } from '../../../../../src/features/queries';
 import {
   type AppColors,
@@ -28,7 +29,7 @@ export default function FindingDetailScreen() {
     inspectionId: string;
     findingId: string;
   }>();
-  const finding = useFinding(findingId);
+  const finding = useFinding(findingId, inspectionId);
   const actions = useFindingActions(inspectionId, findingId);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [reason, setReason] = useState('');
@@ -46,7 +47,9 @@ export default function FindingDetailScreen() {
   return (
     <AppScreen
       title={finding.data.title}
-      subtitle={`${finding.data.roomName} · Human review required`}
+      subtitle={`${finding.data.roomName} · ${
+        isDemoMode ? 'Human review required' : 'Read-only · reviewed in the admin console'
+      }`}
     >
       <View style={styles.video}>
         <View style={styles.play}>
@@ -109,27 +112,30 @@ export default function FindingDetailScreen() {
           <Text style={styles.body}>{finding.data.reviewerNotes}</Text>
         </Card>
       ) : null}
-      <View style={styles.actions}>
-        <AppButton label="Approve" onPress={() => setDialog('approve')} />
-        <AppButton
-          label="Edit observation"
-          variant="outline"
-          onPress={() => {
-            setObservation(finding.data.observation);
-            setNotes(finding.data.reviewerNotes ?? '');
-            setDialog('edit');
-          }}
-        />
-        <AppButton label="Reject" variant="outline" onPress={() => setDialog('reject')} />
-        <AppButton
-          label="Request reinspection"
-          variant="secondary"
-          onPress={() => setDialog('reinspect')}
-        />
-      </View>
+      {isDemoMode ? (
+        <View style={styles.actions}>
+          <AppButton label="Approve" onPress={() => setDialog('approve')} />
+          <AppButton
+            label="Edit observation"
+            variant="outline"
+            onPress={() => {
+              setObservation(finding.data.observation);
+              setNotes(finding.data.reviewerNotes ?? '');
+              setDialog('edit');
+            }}
+          />
+          <AppButton label="Reject" variant="outline" onPress={() => setDialog('reject')} />
+          <AppButton
+            label="Request reinspection"
+            variant="secondary"
+            onPress={() => setDialog('reinspect')}
+          />
+        </View>
+      ) : null}
       <Text style={styles.disclaimer}>
-        Approval confirms this finding for inspection review only. It does not authorize financial
-        charges or determine legal responsibility.
+        {isDemoMode
+          ? 'Approval confirms this finding for inspection review only. It does not authorize financial charges or determine legal responsibility.'
+          : 'Findings are approved or rejected by reviewers in the TexasRenters admin console. Nothing here authorizes financial charges.'}
       </Text>
       <ConfirmationModal
         visible={dialog === 'approve'}

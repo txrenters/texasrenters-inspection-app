@@ -200,6 +200,49 @@ export interface AdminAuditEvent {
   createdAt: string;
 }
 
+export interface AdminInspectionMedia {
+  id: string;
+  roomId: string;
+  roomName: string;
+  floorName?: string | null;
+  roomCompletionStatus: string;
+  technicianName: string;
+  mimeType: string;
+  durationSeconds: number;
+  uploadStatus: string;
+  processingStatus: string;
+  createdAt: string;
+  contentPath: string;
+}
+
+export interface AdminInspectionFinding {
+  id: string;
+  inspectionId: string;
+  roomId: string;
+  roomName: string;
+  mediaId: string;
+  findingType: string;
+  category: string;
+  title: string;
+  description: string;
+  baselineCondition: string;
+  comparisonResult: string;
+  videoTimestampStart: number;
+  videoTimestampEnd: number;
+  severity: string;
+  possibleResponsibility: string;
+  confidence: number;
+  recommendedReview: string;
+  reviewStatus: string;
+  createdAt: string;
+  lastReview?: {
+    status: string;
+    reason?: string | null;
+    reviewerName: string;
+    createdAt: string;
+  } | null;
+}
+
 export interface AdminTechnician {
   id: string;
   email: string;

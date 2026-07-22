@@ -157,6 +157,21 @@ export class TechnicianController {
   ) {
     return this.service.media(request.user, id);
   }
+  @Post('rooms/:roomId/media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({ destination: tmpdir() }),
+      limits: { fileSize: 2_000_000_000, files: 1 },
+    }),
+  )
+  uploadMedia(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+    @Body() body: TechnicianMediaUploadDto,
+    @UploadedFile() file?: UploadedRoomVideo,
+  ) {
+    return this.service.uploadRoomMedia(request.user, id, body, file);
+  }
   @Get('uploads') uploads(@Req() request: AuthenticatedRequest) {
     return this.service.uploads(request.user);
   }

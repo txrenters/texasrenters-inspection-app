@@ -12,6 +12,7 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../../../../../../src/components/ui';
+import { isDemoMode } from '../../../../../../src/config/environment';
 import { useRoom, useRoomMedia, useUpdateRoom } from '../../../../../../src/features/queries';
 import {
   type AppColors,
@@ -42,24 +43,35 @@ export default function RoomDetailsScreen() {
     hasSavedRecording && room.data.completionStatus === 'NOT_STARTED'
       ? 'RECORDING_SAVED'
       : room.data.completionStatus;
-  const record = () =>
-    router.push({
-      pathname: '/(app)/inspections/[inspectionId]/area/[areaId]/record',
-      params: { inspectionId, areaId },
-    });
+  const roomClosed = completionStatus === 'COMPLETED';
+  const record = () => {
+    const navigate = () =>
+      router.push({
+        pathname: '/(app)/inspections/[inspectionId]/area/[areaId]/record',
+        params: { inspectionId, areaId },
+      });
+    if (!hasSavedRecording) return navigate();
+    // Exactly one video per room: recording again replaces the saved one.
+    Alert.alert(
+      'Replace room video?',
+      'Each room keeps exactly one video. Recording again replaces the current recording for this room.',
+      [
+        { text: 'Keep current video', style: 'cancel' },
+        { text: 'Replace video', style: 'destructive', onPress: navigate },
+      ],
+    );
+  };
   return (
     <AppScreen
       title={room.data.name}
       subtitle={`${room.data.floorName} · ${room.data.isRequired ? 'Required room' : 'Optional room'}`}
       bottomAction={
-        <AppButton
-          label={
-            !hasSavedRecording
-              ? 'Record room video'
-              : 'Record another video'
-          }
-          onPress={record}
-        />
+        roomClosed ? undefined : (
+          <AppButton
+            label={!hasSavedRecording ? 'Record room video' : 'Replace room video'}
+            onPress={record}
+          />
+        )
       }
     >
       <View style={styles.badges}>
@@ -149,16 +161,18 @@ export default function RoomDetailsScreen() {
         />
       </Card>
       <View style={styles.actions}>
-        <AppButton
-          label="Add photo"
-          variant="outline"
-          onPress={() =>
-            Alert.alert(
-              'Demo photo added',
-              'Photo capture is represented as local mock evidence in this frontend demo.',
-            )
-          }
-        />
+        {isDemoMode ? (
+          <AppButton
+            label="Add photo"
+            variant="outline"
+            onPress={() =>
+              Alert.alert(
+                'Demo photo added',
+                'Photo capture is represented as local mock evidence in this frontend demo.',
+              )
+            }
+          />
+        ) : null}
         <AppButton
           label="Mark complete"
           variant="secondary"

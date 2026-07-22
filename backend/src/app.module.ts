@@ -25,7 +25,26 @@ import {
 } from './providers/mock.providers';
 import { VerticalSliceController } from './vertical-slice/vertical-slice.controller';
 import { VerticalSliceService } from './vertical-slice/vertical-slice.service';
+import { WebhookSignatureGuard } from './webhooks/webhook-signature.guard';
 import { WebhooksController } from './webhooks/webhooks.controller';
+
+// The in-memory vertical-slice stack (seeded demo data, mock providers, and
+// their webhook endpoints) exists for development and demos only. Production
+// serves exclusively the database-backed admin/technician modules.
+const isProduction = process.env.NODE_ENV === 'production';
+const mockStackControllers = isProduction ? [] : [VerticalSliceController, WebhooksController];
+const mockStackProviders = isProduction
+  ? []
+  : [
+      VerticalSliceService,
+      WebhookSignatureGuard,
+      MockFloorPlanExtractionProvider,
+      MockVideoPlatformProvider,
+      MockTranscriptionProvider,
+      MockAiAnalysisProvider,
+      InMemoryJobQueueProvider,
+      LocalDevelopmentFloorPlanStorageProvider,
+    ];
 
 @Module({
   imports: [
@@ -42,18 +61,12 @@ import { WebhooksController } from './webhooks/webhooks.controller';
     TechnicianModule,
     RealtimeModule,
   ],
-  controllers: [HealthController, VerticalSliceController, WebhooksController],
+  controllers: [HealthController, ...mockStackControllers],
   providers: [
-    VerticalSliceService,
     { provide: APP_INTERCEPTOR, useClass: RequestPerformanceInterceptor },
     ApiAuthGuard,
     RolesGuard,
-    MockFloorPlanExtractionProvider,
-    MockVideoPlatformProvider,
-    MockTranscriptionProvider,
-    MockAiAnalysisProvider,
-    InMemoryJobQueueProvider,
-    LocalDevelopmentFloorPlanStorageProvider,
+    ...mockStackProviders,
   ],
 })
 export class AppModule implements NestModule {

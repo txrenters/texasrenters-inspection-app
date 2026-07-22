@@ -60,7 +60,8 @@ export function configureApplication(app: Awaited<ReturnType<typeof NestFactory.
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  // rawBody keeps the exact request bytes available for webhook signature checks.
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   configureApplication(app);
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()

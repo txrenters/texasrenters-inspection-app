@@ -1,5 +1,6 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  FindingReviewStatus,
   InspectionStatus,
   InspectionType,
   Prisma,
@@ -13,7 +14,9 @@ import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
+import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import type {
+  AdminFindingsQueryDto,
   AssignmentDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
@@ -56,6 +59,9 @@ export class AdminService {
     @Optional()
     @Inject(CacheInvalidationService)
     private readonly cacheInvalidation?: CacheInvalidationService,
+    @Optional()
+    @Inject(InspectionMediaStorageService)
+    private readonly mediaStorage?: InspectionMediaStorageService,
   ) {}
 
   async profile(user: AuthenticatedUser) {
@@ -809,6 +815,7 @@ export class AdminService {
           internalNotes: input.internalNotes,
           status: input.status as InspectionStatus | undefined,
           cancelledAt: input.status === 'CANCELLED' ? new Date() : undefined,
+          completedAt: input.status === 'COMPLETED' ? new Date() : undefined,
           cancellationReason: input.cancellationReason,
         },
       });
@@ -832,7 +839,11 @@ export class AdminService {
       await this.audit(
         tx,
         user,
-        input.status === 'CANCELLED' ? 'INSPECTION_CANCELLED' : 'INSPECTION_UPDATED',
+        input.status === 'CANCELLED'
+          ? 'INSPECTION_CANCELLED'
+          : input.status === 'COMPLETED'
+            ? 'INSPECTION_COMPLETED'
+            : 'INSPECTION_UPDATED',
         id,
         { ...input, closedAssignmentId: current?.id },
       );
@@ -1427,6 +1438,193 @@ export class AdminService {
         'Select an active synchronized property.',
       );
     return property;
+  }
+
+  async inspectionMedia(user: AuthenticatedUser, inspectionId: string) {
+    await this.requireInspection(user.organizationId, inspectionId);
+    const records = await this.prisma.inspectionMedia.findMany({
+      relationLoadStrategy: 'join',
+      where: { inspectionId, organizationId: user.organizationId },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+      select: {
+        id: true,
+        inspectionAreaId: true,
+        mimeType: true,
+        durationSeconds: true,
+        uploadStatus: true,
+        processingStatus: true,
+        createdAt: true,
+        inspectionArea: {
+          select: {
+            completionStatus: true,
+            propertyArea: { select: { name: true, floor: { select: { name: true } } } },
+          },
+        },
+        technician: { select: { displayName: true } },
+      },
+    });
+    return records.map((record) => ({
+      id: record.id,
+      roomId: record.inspectionAreaId,
+      roomName: record.inspectionArea.propertyArea.name,
+      floorName: record.inspectionArea.propertyArea.floor?.name ?? null,
+      roomCompletionStatus: record.inspectionArea.completionStatus,
+      technicianName: record.technician.displayName,
+      mimeType: record.mimeType,
+      durationSeconds: record.durationSeconds,
+      uploadStatus: record.uploadStatus,
+      processingStatus: record.processingStatus,
+      createdAt: record.createdAt,
+      contentPath: `/api/v1/admin/media/${record.id}/content`,
+    }));
+  }
+
+  async mediaContent(user: AuthenticatedUser, mediaId: string) {
+    if (!this.mediaStorage)
+      throw new ApplicationError(
+        503,
+        'INSPECTION_MEDIA_STORAGE_NOT_CONFIGURED',
+        'Inspection media storage is not configured.',
+      );
+    const record = await this.prisma.inspectionMedia.findFirst({
+      where: { id: mediaId, organizationId: user.organizationId },
+      select: { id: true, providerMediaId: true, mimeType: true },
+    });
+    if (!record)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Room video not found.');
+    return {
+      bytes: await this.mediaStorage.get(record.providerMediaId),
+      mimeType: record.mimeType,
+      fileName: `room-video-${record.id}.mp4`,
+    };
+  }
+
+  async findings(user: AuthenticatedUser, inspectionId: string, query: AdminFindingsQueryDto) {
+    await this.requireInspection(user.organizationId, inspectionId);
+    const where = {
+      inspectionId,
+      inspection: { organizationId: user.organizationId },
+      ...(query.reviewStatus
+        ? { reviewStatus: query.reviewStatus as FindingReviewStatus }
+        : {}),
+    } satisfies Prisma.InspectionFindingWhereInput;
+    const [records, total] = await Promise.all([
+      this.prisma.inspectionFinding.findMany({
+        relationLoadStrategy: 'join',
+        where,
+        orderBy: { createdAt: 'asc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        select: {
+          id: true,
+          inspectionId: true,
+          propertyAreaId: true,
+          inspectionMediaId: true,
+          findingType: true,
+          category: true,
+          title: true,
+          description: true,
+          baselineCondition: true,
+          comparisonResult: true,
+          videoTimestampStart: true,
+          videoTimestampEnd: true,
+          severity: true,
+          possibleResponsibility: true,
+          confidence: true,
+          recommendedReview: true,
+          reviewStatus: true,
+          createdAt: true,
+          propertyArea: { select: { name: true } },
+          reviews: {
+            orderBy: { createdAt: 'desc' as const },
+            take: 1,
+            select: {
+              status: true,
+              reason: true,
+              createdAt: true,
+              reviewer: { select: { displayName: true } },
+            },
+          },
+        },
+      }),
+      this.prisma.inspectionFinding.count({ where }),
+    ]);
+    return this.page(
+      records.map((record) => ({
+        id: record.id,
+        inspectionId: record.inspectionId,
+        roomId: record.propertyAreaId,
+        roomName: record.propertyArea.name,
+        mediaId: record.inspectionMediaId,
+        findingType: record.findingType,
+        category: record.category,
+        title: record.title,
+        description: record.description,
+        baselineCondition: record.baselineCondition,
+        comparisonResult: record.comparisonResult,
+        videoTimestampStart: record.videoTimestampStart,
+        videoTimestampEnd: record.videoTimestampEnd,
+        severity: record.severity,
+        possibleResponsibility: record.possibleResponsibility,
+        confidence: record.confidence,
+        recommendedReview: record.recommendedReview,
+        reviewStatus: record.reviewStatus,
+        createdAt: record.createdAt,
+        lastReview: record.reviews[0]
+          ? {
+              status: record.reviews[0].status,
+              reason: record.reviews[0].reason,
+              reviewerName: record.reviews[0].reviewer.displayName,
+              createdAt: record.reviews[0].createdAt,
+            }
+          : null,
+      })),
+      total,
+      query,
+    );
+  }
+
+  async reviewFinding(
+    user: AuthenticatedUser,
+    findingId: string,
+    status: 'APPROVED' | 'REJECTED',
+    reason?: string,
+  ) {
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      const finding = await tx.inspectionFinding.findFirst({
+        where: { id: findingId, inspection: { organizationId: user.organizationId } },
+        select: { id: true, inspectionId: true, reviewStatus: true },
+      });
+      if (!finding)
+        throw new ApplicationError(404, 'FINDING_NOT_FOUND', 'Finding was not found.');
+      const nextStatus =
+        status === 'APPROVED' ? FindingReviewStatus.APPROVED : FindingReviewStatus.REJECTED;
+      // Re-sending the same decision is a no-op so review clicks are idempotent.
+      if (finding.reviewStatus === nextStatus) return { finding, review: null };
+      const review = await tx.findingReview.create({
+        data: { findingId: finding.id, reviewerId: user.id, status: nextStatus, reason },
+      });
+      const updated = await tx.inspectionFinding.update({
+        where: { id: finding.id },
+        data: { reviewStatus: nextStatus },
+        select: { id: true, inspectionId: true, reviewStatus: true },
+      });
+      await this.audit(
+        tx,
+        user,
+        status === 'APPROVED' ? 'FINDING_APPROVED' : 'FINDING_REJECTED',
+        finding.id,
+        { inspectionId: finding.inspectionId, reason: reason ?? null, reviewId: review.id },
+        'InspectionFinding',
+      );
+      return { finding: updated, review };
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return outcome.finding;
   }
 
   private async requireInspection(

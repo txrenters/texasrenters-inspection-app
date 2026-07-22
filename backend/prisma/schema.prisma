@@ -697,7 +697,7 @@ model InspectionAreaStatusHistory {
 model InspectionMedia {
   id               String                 @id @default(uuid()) @db.Uuid
   organizationId   String                 @db.Uuid
-  propertyId       String                 @db.Uuid
+  propertyId       String?                @db.Uuid
   inspectionId     String                 @db.Uuid
   inspectionAreaId String                 @db.Uuid
   technicianId     String                 @db.Uuid
@@ -716,7 +716,7 @@ model InspectionMedia {
   aiJobs           AiAnalysisJob[]
   findings         InspectionFinding[]
 
-  @@index([inspectionAreaId])
+  @@unique([inspectionAreaId])
 }
 
 model MediaUploadSession {

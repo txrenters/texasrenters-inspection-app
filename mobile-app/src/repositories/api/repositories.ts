@@ -1,3 +1,5 @@
+import * as LegacyFileSystem from 'expo-file-system/legacy';
+
 import { getSupabaseClient } from '../../auth/supabase';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
@@ -40,7 +42,14 @@ const inspectionSchema = z.object({
   baselineScheduledAt: z.string().optional(),
   scheduledAt: z.string(),
   assignedUserId: z.string(),
-  status: z.enum(['SCHEDULED', 'IN_PROGRESS', 'PROCESSING', 'REVIEW_REQUIRED', 'COMPLETED']),
+  status: z.enum([
+    'SCHEDULED',
+    'IN_PROGRESS',
+    'PROCESSING',
+    'REVIEW_REQUIRED',
+    'COMPLETED',
+    'CANCELLED',
+  ]),
   priority: z.enum(['STANDARD', 'HIGH']),
   roomIds: z.array(z.string()),
   propertyNotes: z.string(),
@@ -439,6 +448,8 @@ export class ApiMediaRepository implements MediaRepository {
   }
 }
 
+let uploadInFlight = false;
+
 export class ApiUploadRepository implements UploadRepository {
   async list() {
     const localRecords = localUploads();
@@ -476,6 +487,7 @@ export class ApiUploadRepository implements UploadRepository {
       createdAt: new Date().toISOString(),
     };
     useDemoStore.getState().enqueueUpload(item);
+    void this.tick();
     return item;
   }
   async pause(id: string) {
@@ -483,9 +495,11 @@ export class ApiUploadRepository implements UploadRepository {
   }
   async resume(id: string) {
     this.updateLocal(id, { status: 'PENDING', lastError: undefined });
+    void this.tick();
   }
   async retry(id: string) {
     this.updateLocal(id, { status: 'PENDING', progress: 0, lastError: undefined });
+    void this.tick();
   }
   async retryProcessing(id: string) {
     this.updateLocal(id, { processingStatus: 'NOT_STARTED', processingProgress: 0 });
@@ -495,11 +509,100 @@ export class ApiUploadRepository implements UploadRepository {
       return unavailable('Server-backed uploads cannot be removed from the device.');
     useDemoStore.getState().removeUpload(id);
   }
-  tick = async () => undefined;
+
+  // Pushes one pending recording per pass; the uploads/processing screens call
+  // this on an interval, so the queue drains even after transient failures.
+  tick = async () => {
+    if (uploadInFlight) return;
+    const pending = localUploads().find((item) => item.status === 'PENDING');
+    if (!pending) return;
+    uploadInFlight = true;
+    const store = useDemoStore.getState();
+    try {
+      const media = store.media.find((item) => item.id === pending.mediaId);
+      if (!media?.uri) {
+        store.updateUpload(pending.id, {
+          status: 'FAILED',
+          lastError: 'The recording file is no longer on this device. Record the room again.',
+        });
+        return;
+      }
+      const fileInfo = await LegacyFileSystem.getInfoAsync(media.uri);
+      if (!fileInfo.exists) {
+        store.updateUpload(pending.id, {
+          status: 'FAILED',
+          lastError: 'The recording file is no longer on this device. Record the room again.',
+        });
+        return;
+      }
+      const { data } = await getSupabaseClient().auth.getSession();
+      if (!data.session) throw new Error('Your session has expired. Sign in again.');
+      const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
+      if (!baseUrl) throw new Error('The TexasRenters API URL is not configured for this app build.');
+      store.updateUpload(pending.id, { status: 'UPLOADING', progress: 0, lastError: undefined });
+      const task = LegacyFileSystem.createUploadTask(
+        resolveApiUrl(baseUrl, `/api/v1/technician/rooms/${encodeURIComponent(pending.roomId)}/media`),
+        media.uri,
+        {
+          httpMethod: 'POST',
+          uploadType: LegacyFileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'file',
+          mimeType: 'video/mp4',
+          parameters: {
+            // The media id is stable across retries, so the backend can
+            // deduplicate re-sent recordings.
+            idempotencyKey: media.id,
+            durationSeconds: String(Math.max(1, Math.round(media.durationSeconds))),
+          },
+          headers: { authorization: `Bearer ${data.session.access_token}` },
+        },
+        (progress) => {
+          if (progress.totalBytesExpectedToSend > 0)
+            useDemoStore
+              .getState()
+              .updateUpload(pending.id, {
+                progress: Math.min(
+                  0.99,
+                  progress.totalBytesSent / progress.totalBytesExpectedToSend,
+                ),
+              });
+        },
+      );
+      const result = await task.uploadAsync();
+      if (!result || result.status < 200 || result.status >= 300) {
+        let message: string | undefined;
+        try {
+          message = (JSON.parse(result?.body ?? '{}') as { message?: string }).message;
+        } catch {
+          message = undefined;
+        }
+        store.updateUpload(pending.id, {
+          status: 'FAILED',
+          lastError:
+            message ?? `Upload failed (${result?.status ?? 'no response'}). Tap retry to resend.`,
+        });
+        return;
+      }
+      // The backend now owns this recording; drop the local queue entry so the
+      // uploads list shows the server-backed item instead.
+      store.removeUpload(pending.id);
+      store.removeMedia(pending.mediaId);
+    } catch (error) {
+      useDemoStore.getState().updateUpload(pending.id, {
+        status: 'FAILED',
+        lastError:
+          error instanceof Error
+            ? error.message
+            : 'Upload failed unexpectedly. It will retry when you tap retry.',
+      });
+    } finally {
+      uploadInFlight = false;
+    }
+  };
 
   private updateLocal(id: string, update: Partial<UploadItem>) {
     if (!localUploads().some((item) => item.id === id))
-      return unavailable('Cloud video upload is not configured yet.');
+      return unavailable('Server-backed uploads are managed by the TexasRenters platform.');
     useDemoStore.getState().updateUpload(id, update);
   }
 }
@@ -519,8 +622,12 @@ export class ApiFindingRepository implements FindingRepository {
         ),
       ).items;
   }
-  async get() {
-    return unavailable('Open findings from their assigned inspection.');
+  async get(id: string, inspectionId?: string) {
+    if (!inspectionId) return unavailable('Open findings from their assigned inspection.');
+    const findings = await this.list(inspectionId);
+    const finding = findings.find((item) => item.id === id);
+    if (!finding) throw new Error('This finding is no longer available for this inspection.');
+    return finding;
   }
   approve = async () => unavailable('Technicians cannot approve AI findings.');
   edit = async () => unavailable('Technicians cannot edit AI findings.');

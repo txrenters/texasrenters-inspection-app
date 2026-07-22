@@ -10,6 +10,11 @@ import {
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
 import {
+  InspectionCompleteDialog,
+  InspectionFindingsSection,
+  InspectionMediaSection,
+} from '@/components/inspection-review';
+import {
   Badge,
   DataTable,
   ErrorState,
@@ -19,7 +24,12 @@ import {
   TableLoadingState,
   formatDate,
 } from '@/components/ui';
-import { useAssignments, useInspection, useInspectionAudit } from '@/lib/queries';
+import {
+  useAssignments,
+  useInspection,
+  useInspectionAudit,
+  useInspectionFindings,
+} from '@/lib/queries';
 
 export default function InspectionDetailPage() {
   const id = useParams<{ inspectionId: string }>().inspectionId;
@@ -37,6 +47,8 @@ export default function InspectionDetailPage() {
   const [editing, setEditing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [unassigning, setUnassigning] = useState(false);
+  const [completing, setCompleting] = useState(false);
+  const pendingFindings = useInspectionFindings(id, 1, 'PENDING_REVIEW');
   if (inspection.isLoading) return <LoadingState label="Loading inspection…" />;
   if (inspection.isError)
     return <ErrorState error={inspection.error} retry={() => void inspection.refetch()} />;
@@ -70,6 +82,11 @@ export default function InspectionDetailPage() {
             {!finalized ? (
               <button className="button button-secondary" onClick={() => setCancelling(true)}>
                 Cancel inspection
+              </button>
+            ) : null}
+            {!finalized ? (
+              <button className="button button-primary" onClick={() => setCompleting(true)}>
+                Complete inspection
               </button>
             ) : null}
           </div>
@@ -123,6 +140,8 @@ export default function InspectionDetailPage() {
           </div>
         ) : null}
       </section>
+      <InspectionMediaSection inspectionId={id} />
+      <InspectionFindingsSection inspectionId={id} />
       <section className="panel section-gap">
         <div className="panel-header">
           <h2>Assignment history</h2>
@@ -198,6 +217,13 @@ export default function InspectionDetailPage() {
       ) : null}
       {unassigning ? (
         <InspectionUnassignDialog inspectionId={id} onClose={() => setUnassigning(false)} />
+      ) : null}
+      {completing ? (
+        <InspectionCompleteDialog
+          inspectionId={id}
+          pendingFindings={pendingFindings.data?.total ?? 0}
+          onClose={() => setCompleting(false)}
+        />
       ) : null}
     </>
   );

@@ -577,6 +577,11 @@ export class VerticalSliceService {
   private processMedia(media: MediaRecord, area: InspectionAreaContract) {
     const transcript = this.transcription.transcribe();
     this.transcripts.set(media.id, transcript.segments);
+    // Reprocessing replaces this recording's findings; retries must not append
+    // a duplicate set on every attempt.
+    const retained = this.findings.filter((finding) => finding.inspectionMediaId !== media.id);
+    this.findings.length = 0;
+    this.findings.push(...retained);
     const generated = this.analysis.analyze(area.propertyAreaId, area.name);
     generated.forEach((value) => {
       if (value.propertyAreaId !== area.propertyAreaId || value.areaName !== area.name)

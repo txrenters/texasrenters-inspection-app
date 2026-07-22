@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, RolesGuard } from '../common/auth';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
@@ -20,6 +21,7 @@ import {
     FloorPlanAdminService,
     FloorPlanExtractionService,
     FloorPlanStorageService,
+    InspectionMediaStorageService,
     TechnicianProvisioningService,
     SupabaseAdminGateway,
     ApiAuthGuard,

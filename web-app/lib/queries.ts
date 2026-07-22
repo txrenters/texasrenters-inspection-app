@@ -5,6 +5,8 @@ import type {
   AdminAuditEvent,
   AdminDashboard,
   AdminInspection,
+  AdminInspectionFinding,
+  AdminInspectionMedia,
   AdminFloorPlan,
   AdminPropertyArea,
   AdminPortfolio,
@@ -42,6 +44,9 @@ export const keys = {
   inspection: (id: string) => ['admin', 'inspection', id] as const,
   inspectionAudit: (id: string, page: number) =>
     ['admin', 'inspection', id, 'audit', page] as const,
+  inspectionMedia: (id: string) => ['admin', 'inspection', id, 'media'] as const,
+  inspectionFindings: (id: string, page: number, reviewStatus: string) =>
+    ['admin', 'inspection', id, 'findings', page, reviewStatus] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   technicians: (query: object) => ['admin', 'technicians', query] as const,
   technician: (id: string) => ['admin', 'technician', id] as const,
@@ -152,6 +157,28 @@ export const useInspectionAudit = (id: string, page: number) =>
     queryFn: ({ signal }) =>
       api<Page<AdminAuditEvent>>(
         `/api/v1/admin/inspections/${id}/audit${queryString({ page, pageSize: 20 })}`,
+        { signal },
+      ),
+    enabled: Boolean(id),
+    placeholderData: keepPreviousData,
+  });
+export const useInspectionMedia = (id: string) =>
+  useQuery({
+    queryKey: keys.inspectionMedia(id),
+    queryFn: ({ signal }) =>
+      api<AdminInspectionMedia[]>(`/api/v1/admin/inspections/${id}/media`, { signal }),
+    enabled: Boolean(id),
+  });
+export const useInspectionFindings = (id: string, page: number, reviewStatus = '') =>
+  useQuery({
+    queryKey: keys.inspectionFindings(id, page, reviewStatus),
+    queryFn: ({ signal }) =>
+      api<Page<AdminInspectionFinding>>(
+        `/api/v1/admin/inspections/${id}/findings${queryString({
+          page,
+          pageSize: 20,
+          reviewStatus: reviewStatus || undefined,
+        })}`,
         { signal },
       ),
     enabled: Boolean(id),
@@ -350,6 +377,36 @@ export function useAdminMutations() {
           body: JSON.stringify(input),
         }),
       onSuccess: (_data, variables) => refreshInspection(variables.id),
+    }),
+    approveFinding: useMutation({
+      mutationFn: ({ id, reason }: { id: string; inspectionId: string; reason?: string }) =>
+        api<AdminInspectionFinding>(`/api/v1/admin/findings/${id}/approve`, {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        }),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.inspectionId, 'findings'],
+        });
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
+        });
+      },
+    }),
+    rejectFinding: useMutation({
+      mutationFn: ({ id, reason }: { id: string; inspectionId: string; reason: string }) =>
+        api<AdminInspectionFinding>(`/api/v1/admin/findings/${id}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        }),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.inspectionId, 'findings'],
+        });
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
+        });
+      },
     }),
     assign: useMutation({
       mutationFn: ({

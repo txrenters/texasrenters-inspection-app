@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { LoadingState, TableLoadingState } from './ui';
+import { FilterToolbar, LoadingState, TableLoadingState } from './ui';
 
 describe('LoadingState', () => {
   it('announces the current loading task and exposes a busy container', () => {
@@ -31,5 +31,20 @@ describe('TableLoadingState', () => {
 
     expect(screen.getByRole('table', { name: 'Loading properties' })).toBeInTheDocument();
     expect(screen.getAllByRole('row')).toHaveLength(4);
+  });
+});
+
+describe('FilterToolbar', () => {
+  it('announces the result count and exposes a clear action only when supplied', () => {
+    const clear = vi.fn();
+    render(
+      <FilterToolbar resultLabel="24 inspections" onClear={clear}>
+        <input aria-label="Search" />
+      </FilterToolbar>,
+    );
+
+    expect(screen.getByText('24 inspections')).toBeInTheDocument();
+    screen.getByRole('button', { name: 'Clear filters' }).click();
+    expect(clear).toHaveBeenCalledOnce();
   });
 });

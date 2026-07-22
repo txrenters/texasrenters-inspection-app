@@ -9,6 +9,7 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
+  FilterToolbar,
   PageHeader,
   Pagination,
   TableLoadingState,
@@ -44,8 +45,23 @@ export default function AssignmentsPage() {
           </button>
         }
       />
-      <div className="filter-bar">
-        <div className="field">
+      <FilterToolbar
+        resultLabel={
+          assignments.isLoading
+            ? 'Loading assignment history…'
+            : `${(assignments.data?.total ?? 0).toLocaleString()} assignment records`
+        }
+        onClear={
+          technicianId || assignmentStatus
+            ? () => {
+                setTechnicianId('');
+                setAssignmentStatus('');
+                setPage(1);
+              }
+            : undefined
+        }
+      >
+        <div className="field field-medium">
           <label htmlFor="assignment-technician">Technician</label>
           <select
             id="assignment-technician"
@@ -64,7 +80,7 @@ export default function AssignmentsPage() {
             ))}
           </select>
         </div>
-        <div className="field">
+        <div className="field field-medium">
           <label htmlFor="assignment-status">Assignment status</label>
           <select
             id="assignment-status"
@@ -82,7 +98,7 @@ export default function AssignmentsPage() {
             ))}
           </select>
         </div>
-      </div>
+      </FilterToolbar>
       {assignments.isLoading ? (
         <TableLoadingState headers={ASSIGNMENT_HEADERS} label="Loading assignments" />
       ) : assignments.isError ? (
@@ -105,7 +121,7 @@ export default function AssignmentsPage() {
         />
       ) : (
         <>
-          <DataTable headers={ASSIGNMENT_HEADERS}>
+          <DataTable headers={ASSIGNMENT_HEADERS} label="Technician assignment history">
             {assignments.data.items.map((assignment) => (
               <tr key={assignment.id}>
                 <td>
