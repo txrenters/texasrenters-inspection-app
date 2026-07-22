@@ -66,6 +66,7 @@ export default function UploadQueueScreen() {
     <AppScreen
       title="Upload center"
       subtitle="Local media, transfer progress, and AI processing"
+      eyebrow="MEDIA PIPELINE"
       refresh={{ refreshing: isRefreshing, onRefresh: () => void refreshUploads() }}
     >
       {!isOnline ? (
@@ -81,7 +82,7 @@ export default function UploadQueueScreen() {
           </View>
         </Card>
       ) : null}
-      <SectionHeader title={`Active uploads (${active.length})`} />
+      <SectionHeader title={`Active uploads (${active.length})`} icon="arrow-up-circle-outline" />
       {active.length ? (
         <View style={styles.list}>
           {active.map((item) => (
@@ -102,7 +103,10 @@ export default function UploadQueueScreen() {
           message="New room recordings will appear here after they are saved."
         />
       )}
-      <SectionHeader title={`Processing and completed (${processing.length})`} />
+      <SectionHeader
+        title={`Processing and completed (${processing.length})`}
+        icon="checkmark-done-outline"
+      />
       <View style={styles.list}>
         {processing.map((item) => (
           <UploadProgressCard

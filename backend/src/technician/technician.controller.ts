@@ -1,5 +1,7 @@
 /* DTO classes and guards are runtime imports required by Nest metadata. */
 /* eslint-disable @typescript-eslint/consistent-type-imports */
+import { tmpdir } from 'node:os';
+
 import {
   Body,
   Controller,
@@ -12,10 +14,14 @@ import {
   Query,
   Req,
   StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@texasrenters/shared';
+import { diskStorage } from 'multer';
 
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
 import { MobilePushService } from '../realtime/mobile-push.service';
@@ -23,11 +29,12 @@ import {
   MobilePushDeviceDto,
   RemoveMobilePushDeviceDto,
   TechnicianFindingsQueryDto,
+  TechnicianMediaUploadDto,
   TechnicianNoteDto,
   TechnicianInspectionListQueryDto,
   TechnicianReasonDto,
 } from './technician.dto';
-import { TechnicianService } from './technician.service';
+import { TechnicianService, type UploadedRoomVideo } from './technician.service';
 
 @ApiTags('Technician mobile application')
 @ApiBearerAuth()

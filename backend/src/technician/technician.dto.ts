@@ -36,6 +36,14 @@ export class TechnicianReasonDto {
   @IsString() @MinLength(1) @MaxLength(500) reason!: string;
 }
 
+export class TechnicianMediaUploadDto {
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{8,128}$/)
+  idempotencyKey!: string;
+
+  @Type(() => Number) @IsInt() @Min(1) @Max(7200) durationSeconds!: number;
+}
+
 export class TechnicianNoteDto {
   @IsString() @MaxLength(2000) note!: string;
 }

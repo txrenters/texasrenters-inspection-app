@@ -49,8 +49,9 @@ export default function SettingsScreen() {
       subtitle={
         isDemoMode ? 'Demo environment and field simulation controls' : 'Secure technician account'
       }
+      eyebrow="ACCOUNT & PREFERENCES"
     >
-      <Card>
+      <View style={styles.profileSection}>
         <View style={styles.profileRow}>
           {user.data ? <InitialsAvatar initials={user.data.initials} /> : null}
           <View style={styles.flex}>
@@ -70,8 +71,8 @@ export default function SettingsScreen() {
             compact
           />
         ) : null}
-      </Card>
-      <SectionHeader title="Environment" />
+      </View>
+      <SectionHeader title="Environment" icon="server-outline" />
       <Card muted>
         <SettingRow
           label="Data source"
@@ -87,7 +88,7 @@ export default function SettingsScreen() {
           value={`${theme.preference.charAt(0).toUpperCase()}${theme.preference.slice(1)}`}
         />
       </Card>
-      <SectionHeader title="Appearance" />
+      <SectionHeader title="Appearance" icon="color-palette-outline" />
       <Card>
         <Text style={styles.settingLabel}>Color theme</Text>
         <View style={styles.chips}>
@@ -102,7 +103,7 @@ export default function SettingsScreen() {
         </View>
         <Text style={styles.description}>System follows your device appearance automatically.</Text>
       </Card>
-      {isDemoMode ? <SectionHeader title="Simulation controls" /> : null}
+      {isDemoMode ? <SectionHeader title="Simulation controls" icon="flask-outline" /> : null}
       {isDemoMode ? (
         <Card>
           <ToggleRow
@@ -136,15 +137,15 @@ export default function SettingsScreen() {
           </View>
         </Card>
       ) : null}
-      {isDemoMode ? <SectionHeader title="Demo data" /> : null}
+      {isDemoMode ? <SectionHeader title="Demo data" icon="archive-outline" /> : null}
       {isDemoMode ? (
-        <Card>
+        <View style={styles.dangerSection}>
           <Text style={styles.body}>
             Reset the selected user, inspection progress, room notes, local media, upload queue,
             failures, and finding decisions.
           </Text>
           <AppButton label="Reset demo data" variant="danger" onPress={() => setResetOpen(true)} />
-        </Card>
+        </View>
       ) : null}
       <AppButton
         label="Sign out"
@@ -217,6 +218,13 @@ function ToggleRow({
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
+    profileSection: { gap: spacing.md, paddingHorizontal: spacing.xs },
+    dangerSection: {
+      gap: spacing.md,
+      borderRadius: 12,
+      backgroundColor: colors.dangerSoft,
+      padding: spacing.md,
+    },
     profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     flex: { flex: 1 },
     profileName: { ...typography.heading, color: colors.textPrimary },

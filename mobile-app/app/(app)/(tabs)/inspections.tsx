@@ -5,7 +5,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { AppScreen } from '../../../src/components/AppScreen';
 import { ConnectedInspectionCard } from '../../../src/components/ConnectedInspectionCard';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
-import { FilterChip, SearchInput } from '../../../src/components/ui';
+import { FilterChip, SearchInput, SectionHeader } from '../../../src/components/ui';
 import { useInspections } from '../../../src/features/queries';
 import { spacing } from '../../../src/theme';
 
@@ -56,6 +56,7 @@ export default function InspectionsScreen() {
     <AppScreen
       title="Inspections"
       subtitle="Assigned, active, and recently completed work"
+      eyebrow="MY WORK QUEUE"
       refresh={{ onRefresh: () => query.refetch() }}
     >
       <SearchInput
@@ -77,6 +78,10 @@ export default function InspectionsScreen() {
           />
         ))}
       </ScrollView>
+      <SectionHeader
+        title={`${filtered.length} ${filtered.length === 1 ? 'inspection' : 'inspections'}`}
+        icon="list-outline"
+      />
       {filtered.length ? (
         <View style={styles.list}>
           {filtered.map((inspection) => (

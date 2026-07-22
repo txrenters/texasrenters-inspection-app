@@ -1,4 +1,5 @@
-import type { PropsWithChildren, ReactNode } from 'react';
+import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import {
   ActivityIndicator,
   Modal,
@@ -32,6 +33,7 @@ export function AppButton({
   loading = false,
   accessibilityLabel,
   compact = false,
+  icon,
 }: {
   label: string;
   onPress: () => void;
@@ -40,6 +42,7 @@ export function AppButton({
   loading?: boolean;
   accessibilityLabel?: string;
   compact?: boolean;
+  icon?: ComponentProps<typeof Ionicons>['name'];
 }) {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
@@ -66,7 +69,18 @@ export function AppButton({
           color={variant === 'primary' || variant === 'danger' ? colors.white : colors.primary}
         />
       ) : (
-        <Text style={[styles.buttonLabel, styles[`${variant}Label`]]}>{label}</Text>
+        <View style={styles.buttonContent}>
+          {icon ? (
+            <Ionicons
+              name={icon}
+              size={18}
+              color={
+                variant === 'primary' || variant === 'danger' ? colors.white : colors.primary
+              }
+            />
+          ) : null}
+          <Text style={[styles.buttonLabel, styles[`${variant}Label`]]}>{label}</Text>
+        </View>
       )}
     </Pressable>
   );
@@ -170,11 +184,22 @@ export function Card({ children, muted = false }: PropsWithChildren<{ muted?: bo
   return <View style={[styles.card, muted && styles.mutedCard]}>{children}</View>;
 }
 
-export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
+export function SectionHeader({
+  title,
+  action,
+  icon,
+}: {
+  title: string;
+  action?: ReactNode;
+  icon?: ComponentProps<typeof Ionicons>['name'];
+}) {
   const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+      <View style={styles.sectionHeading}>
+        {icon ? <Ionicons name={icon} size={18} style={styles.sectionIcon} /> : null}
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
       {action}
     </View>
   );
@@ -184,10 +209,12 @@ export function StatCard({
   value,
   label,
   tone = 'primary',
+  icon,
 }: {
   value: number | string;
   label: string;
   tone?: 'primary' | 'success' | 'warning' | 'info';
+  icon?: ComponentProps<typeof Ionicons>['name'];
 }) {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
@@ -199,8 +226,10 @@ export function StatCard({
   }[tone];
   return (
     <View style={styles.statCard}>
-      <View style={[styles.statMarker, { backgroundColor: toneColor }]} />
-      <Text style={styles.statValue}>{value}</Text>
+      <View style={styles.statTopRow}>
+        <Text style={styles.statValue}>{value}</Text>
+        {icon ? <Ionicons name={icon} size={19} color={toneColor} /> : null}
+      </View>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -245,9 +274,7 @@ export function SearchInput({
   const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.searchBox}>
-      <Text accessibilityElementsHidden style={styles.searchIcon}>
-        ⌕
-      </Text>
+      <Ionicons accessibilityElementsHidden name="search" size={20} color={colors.textSecondary} />
       <TextInput
         accessibilityLabel={placeholder}
         value={value}
@@ -361,6 +388,7 @@ const createStyles = (colors: AppColors) =>
       justifyContent: 'center',
       paddingHorizontal: spacing.lg,
     },
+    buttonContent: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     compactButton: { minHeight: sizes.touch, paddingHorizontal: spacing.md, flexGrow: 0 },
     primaryButton: { backgroundColor: colors.primary },
     secondaryButton: { backgroundColor: colors.secondarySoft },
@@ -373,7 +401,7 @@ const createStyles = (colors: AppColors) =>
     outlineLabel: { color: colors.primary },
     dangerLabel: { color: colors.white },
     ghostLabel: { color: colors.primary },
-    pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
+    pressed: { opacity: 0.78, transform: [{ scale: 0.975 }] },
     disabled: { opacity: 0.46 },
     badge: {
       minHeight: 28,
@@ -398,12 +426,9 @@ const createStyles = (colors: AppColors) =>
     progressFill: { height: 8, backgroundColor: colors.primary, borderRadius: radius.round },
     card: {
       backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
       borderRadius: radius.lg,
       padding: spacing.md,
-      gap: spacing.sm,
-      ...shadows.card,
+      gap: spacing.md,
     },
     mutedCard: {
       backgroundColor: colors.surfaceMuted,
@@ -419,19 +444,15 @@ const createStyles = (colors: AppColors) =>
       justifyContent: 'space-between',
       gap: spacing.md,
     },
+    sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minWidth: 0 },
+    sectionIcon: { color: colors.primary },
     sectionTitle: { ...typography.heading, color: colors.textPrimary },
     statCard: {
       minWidth: '46%',
       flexGrow: 1,
-      backgroundColor: colors.surface,
-      borderRadius: radius.lg,
-      borderWidth: 1,
-      borderColor: colors.border,
       padding: spacing.md,
-      overflow: 'hidden',
-      ...shadows.card,
     },
-    statMarker: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
+    statTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     statValue: { ...typography.title, color: colors.textPrimary },
     statLabel: { ...typography.caption, color: colors.textSecondary, marginTop: spacing.xs },
     chip: {
@@ -439,9 +460,7 @@ const createStyles = (colors: AppColors) =>
       justifyContent: 'center',
       paddingHorizontal: spacing.md,
       borderRadius: radius.round,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
+      backgroundColor: colors.surfaceMuted,
     },
     selectedChip: { backgroundColor: colors.primary, borderColor: colors.primary },
     chipText: { ...typography.label, color: colors.textSecondary },
@@ -451,13 +470,10 @@ const createStyles = (colors: AppColors) =>
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
       borderRadius: radius.md,
-      backgroundColor: colors.surface,
+      backgroundColor: colors.surfaceMuted,
       paddingHorizontal: spacing.md,
     },
-    searchIcon: { color: colors.textSecondary, fontSize: 24 },
     searchInput: { flex: 1, color: colors.textPrimary, fontSize: 15, paddingVertical: spacing.sm },
     demoBanner: {
       minHeight: 32,

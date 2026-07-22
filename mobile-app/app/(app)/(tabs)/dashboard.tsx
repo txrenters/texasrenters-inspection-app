@@ -1,3 +1,5 @@
+import type { ComponentProps } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -5,14 +7,12 @@ import { AppScreen } from '../../../src/components/AppScreen';
 import { ConnectedInspectionCard } from '../../../src/components/ConnectedInspectionCard';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
 import {
-  AppButton,
-  Card,
   InitialsAvatar,
   SectionHeader,
   StatCard,
 } from '../../../src/components/ui';
 import { useCurrentUser, useDashboard } from '../../../src/features/queries';
-import { type AppColors, spacing, typography, useThemedStyles } from '../../../src/theme';
+import { type AppColors, radius, spacing, typography, useThemedStyles } from '../../../src/theme';
 
 export default function DashboardScreen() {
   const styles = useThemedStyles(createStyles);
@@ -34,21 +34,38 @@ export default function DashboardScreen() {
     <AppScreen
       title={`Good morning, ${firstName}`}
       subtitle={date}
+      eyebrow="TODAY’S FIELD PLAN"
       action={user.data ? <InitialsAvatar initials={user.data.initials} /> : null}
       refresh={{ onRefresh: () => dashboard.refetch() }}
     >
       <View style={styles.stats}>
-        <StatCard value={dashboard.data?.today ?? 0} label="Today’s inspections" />
-        <StatCard value={dashboard.data?.inProgress ?? 0} label="In progress" tone="info" />
-        <StatCard value={dashboard.data?.completed ?? 0} label="Completed" tone="success" />
+        <StatCard
+          value={dashboard.data?.today ?? 0}
+          label="Today’s inspections"
+          icon="calendar-outline"
+        />
+        <StatCard
+          value={dashboard.data?.inProgress ?? 0}
+          label="In progress"
+          tone="info"
+          icon="time-outline"
+        />
+        <StatCard
+          value={dashboard.data?.completed ?? 0}
+          label="Completed"
+          tone="success"
+          icon="checkmark-circle-outline"
+        />
         <StatCard
           value={dashboard.data?.pendingUploads ?? 0}
           label="Pending uploads"
           tone="warning"
+          icon="cloud-upload-outline"
         />
       </View>
       <SectionHeader
         title="Today’s assignments"
+        icon="navigate-outline"
         action={
           <Pressable
             accessibilityRole="button"
@@ -79,41 +96,85 @@ export default function DashboardScreen() {
           />
         )}
       </View>
-      <SectionHeader title="Quick actions" />
-      <View style={styles.quickActions}>
-        <Card muted>
-          <Text style={styles.quickTitle}>Inspection queue</Text>
-          <Text style={styles.quickBody}>
-            Search all assigned and recently completed inspections.
-          </Text>
-          <AppButton
-            label="View inspections"
-            variant="outline"
-            onPress={() => router.push('/(app)/(tabs)/inspections')}
-            compact
-          />
-        </Card>
-        <Card muted>
-          <Text style={styles.quickTitle}>Upload center</Text>
-          <Text style={styles.quickBody}>Monitor local videos, retries, and AI processing.</Text>
-          <AppButton
-            label="Open uploads"
-            variant="outline"
-            onPress={() => router.push('/(app)/(tabs)/uploads')}
-            compact
-          />
-        </Card>
+      <SectionHeader title="Quick actions" icon="flash-outline" />
+      <View style={styles.actionList}>
+        <QuickActionRow
+          icon="clipboard-outline"
+          title="Inspection queue"
+          description="Search assigned and recently completed inspections."
+          onPress={() => router.push('/(app)/(tabs)/inspections')}
+        />
+        <View style={styles.separator} />
+        <QuickActionRow
+          icon="cloud-upload-outline"
+          title="Upload center"
+          description="Monitor local videos, retries, and AI processing."
+          onPress={() => router.push('/(app)/(tabs)/uploads')}
+        />
       </View>
     </AppScreen>
   );
 }
 
+function QuickActionRow({
+  icon,
+  title,
+  description,
+  onPress,
+}: {
+  icon: ComponentProps<typeof Ionicons>['name'];
+  title: string;
+  description: string;
+  onPress: () => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+      style={({ pressed }) => [styles.actionRow, pressed && styles.pressedRow]}
+    >
+      <Ionicons name={icon} size={22} style={styles.actionIcon} />
+      <View style={styles.actionCopy}>
+        <Text style={styles.quickTitle}>{title}</Text>
+        <Text style={styles.quickBody}>{description}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={19} style={styles.chevron} />
+    </Pressable>
+  );
+}
+
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
-    stats: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+    stats: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      overflow: 'hidden',
+      borderRadius: radius.lg,
+      backgroundColor: colors.surface,
+      padding: spacing.xs,
+    },
     list: { gap: spacing.md },
     link: { ...typography.label, color: colors.primary },
-    quickActions: { gap: spacing.md },
+    actionList: {
+      overflow: 'hidden',
+      borderRadius: radius.lg,
+      backgroundColor: colors.surface,
+      paddingHorizontal: spacing.md,
+    },
+    actionRow: {
+      minHeight: 78,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      paddingVertical: spacing.md,
+    },
+    pressedRow: { opacity: 0.65 },
+    actionIcon: { color: colors.primary },
+    actionCopy: { flex: 1, minWidth: 0 },
+    chevron: { color: colors.textSecondary },
+    separator: { height: 1, marginLeft: 38, backgroundColor: colors.border },
     quickTitle: { ...typography.heading, color: colors.textPrimary },
     quickBody: { ...typography.body, color: colors.textSecondary },
   });

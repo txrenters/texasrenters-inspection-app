@@ -1,14 +1,19 @@
+import type { ComponentProps } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { type AppColors, sizes, useAppTheme, useThemedStyles } from '../../../src/theme';
+import { type AppColors, useAppTheme, useThemedStyles } from '../../../src/theme';
 
-const icons: Record<string, string> = {
-  dashboard: '⌂',
-  inspections: '▣',
-  uploads: '⇧',
-  settings: '⚙',
+const icons: Record<
+  string,
+  [ComponentProps<typeof Ionicons>['name'], ComponentProps<typeof Ionicons>['name']]
+> = {
+  dashboard: ['home-outline', 'home'],
+  inspections: ['clipboard-outline', 'clipboard'],
+  uploads: ['cloud-upload-outline', 'cloud-upload'],
+  settings: ['settings-outline', 'settings'],
 };
 
 export default function TabsLayout() {
@@ -23,9 +28,11 @@ export default function TabsLayout() {
           tabBarInactiveTintColor: colors.textSecondary,
           tabBarStyle: styles.tabBar,
           tabBarLabelStyle: styles.label,
-          tabBarIcon: ({ color }) => (
-            <Text style={[styles.icon, { color }]}>{icons[route.name] ?? '•'}</Text>
-          ),
+          tabBarHideOnKeyboard: true,
+          tabBarIcon: ({ color, focused }) => {
+            const names = icons[route.name] ?? ['ellipse-outline', 'ellipse'];
+            return <Ionicons name={names[focused ? 1 : 0]} size={22} color={color} />;
+          },
         })}
       >
         <Tabs.Screen name="dashboard" options={{ title: 'Home' }} />
@@ -41,12 +48,11 @@ const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: colors.canvas },
     tabBar: {
-      minHeight: 68,
-      paddingTop: 7,
-      paddingBottom: 8,
+      minHeight: 74,
+      paddingTop: 8,
+      paddingBottom: 9,
       borderTopColor: colors.border,
       backgroundColor: colors.surface,
     },
-    label: { fontSize: 11, fontWeight: '700' },
-    icon: { fontSize: sizes.icon, lineHeight: 26 },
+    label: { fontSize: 10, fontWeight: '700', letterSpacing: 0.1 },
   });
