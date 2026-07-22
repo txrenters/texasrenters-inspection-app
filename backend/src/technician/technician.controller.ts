@@ -25,6 +25,7 @@ import { diskStorage } from 'multer';
 
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
 import { MobilePushService } from '../realtime/mobile-push.service';
+import { MediaProcessingService } from './media-processing.service';
 import {
   MobilePushDeviceDto,
   RemoveMobilePushDeviceDto,
@@ -45,6 +46,7 @@ export class TechnicianController {
   constructor(
     private readonly service: TechnicianService,
     private readonly mobilePush: MobilePushService,
+    private readonly mediaProcessing: MediaProcessingService,
   ) {}
 
   @Post('notification-devices')
@@ -174,5 +176,11 @@ export class TechnicianController {
   }
   @Get('uploads') uploads(@Req() request: AuthenticatedRequest) {
     return this.service.uploads(request.user);
+  }
+  @Post('media/:mediaId/reprocess') reprocessMedia(
+    @Req() request: AuthenticatedRequest,
+    @Param('mediaId') id: string,
+  ) {
+    return this.mediaProcessing.reprocess(request.user.organizationId, request.user.id, id);
   }
 }

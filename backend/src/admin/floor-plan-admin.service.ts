@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import type { CreatePropertyAreaDto, UpdatePropertyAreaDto } from './admin.dto';
+import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
 
@@ -23,6 +24,8 @@ const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'] as con
 const floorPlanResponseSelect = {
   id: true,
   propertyId: true,
+  unitId: true,
+  unit: { select: { id: true, name: true } },
   fileName: true,
   mimeType: true,
   sizeBytes: true,
@@ -49,6 +52,8 @@ const floorPlanResponseSelect = {
 const propertyAreaResponseSelect = {
   id: true,
   propertyId: true,
+  unitId: true,
+  unit: { select: { id: true, name: true } },
   name: true,
   inspectionOrder: true,
   isRequired: true,
@@ -64,6 +69,7 @@ export class FloorPlanAdminService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(FloorPlanStorageService) private readonly storage: FloorPlanStorageService,
     @Inject(FloorPlanExtractionService) private readonly extraction: FloorPlanExtractionService,
+    @Inject(AiProviderSettingsService) private readonly aiSettings: AiProviderSettingsService,
   ) {}
 
   async list(user: AuthenticatedUser, buildingId: string) {
@@ -80,11 +86,17 @@ export class FloorPlanAdminService {
     });
   }
 
-  async upload(user: AuthenticatedUser, buildingId: string, file?: UploadedFloorPlan) {
+  async upload(
+    user: AuthenticatedUser,
+    buildingId: string,
+    file?: UploadedFloorPlan,
+    unitId?: string,
+  ) {
     const building = await this.requireBuilding(user.organizationId, buildingId, true);
     if (!file)
       throw new ApplicationError(422, 'FLOOR_PLAN_FILE_REQUIRED', 'Select a floor-plan file.');
     this.validateFile(file);
+    if (unitId) await this.requireUnit(user.organizationId, buildingId, unitId);
     await this.ensureProperty(building);
     const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-140);
     const id = randomUUID();
@@ -95,6 +107,7 @@ export class FloorPlanAdminService {
         data: {
           id,
           propertyId: buildingId,
+          unitId: unitId ?? null,
           fileName: safeName,
           mimeType: file.mimetype,
           storageKey,
@@ -104,6 +117,7 @@ export class FloorPlanAdminService {
       });
       await this.audit(user, 'FLOOR_PLAN_UPLOADED', 'PropertyFloorPlan', plan.id, {
         propertywareBuildingId: buildingId,
+        unitId: unitId ?? null,
         mimeType: file.mimetype,
         sizeBytes: file.size,
       });
@@ -125,7 +139,8 @@ export class FloorPlanAdminService {
 
   async extract(user: AuthenticatedUser, floorPlanId: string) {
     const plan = await this.requirePlan(user.organizationId, floorPlanId);
-    const descriptor = this.extraction.descriptor();
+    const configuration = await this.aiSettings.resolve(user.organizationId);
+    const descriptor = this.extraction.descriptor(configuration);
     const job = await this.prisma.floorPlanExtractionJob.create({
       data: { floorPlanId, status: 'RUNNING', ...descriptor },
     });
@@ -134,88 +149,123 @@ export class FloorPlanAdminService {
       data: { status: FloorPlanStatus.PROCESSING },
     });
     try {
-      const extracted = await this.extraction.extract(
+      const extractionResult = await this.extraction.extract(
         await this.storage.get(plan.storageKey),
         plan.mimeType,
+        configuration,
       );
-      const result = await this.prisma.$transaction(async (tx) => {
-        await tx.propertyArea.deleteMany({
-          where: {
-            propertyId: plan.propertyId,
-            status: PropertyAreaStatus.DRAFT,
-            source: 'AI_FLOOR_PLAN',
-            inspectionAreas: { none: {} },
-          },
-        });
-        const existing = await tx.propertyArea.findMany({
-          where: { propertyId: plan.propertyId },
-          select: {
-            id: true,
-            name: true,
-            floor: { select: { id: true, name: true, sortOrder: true } },
-          },
-        });
-        const created = [];
-        const skipped: Array<{ floorName: string; name: string }> = [];
-        for (const suggestion of extracted) {
-          const duplicate = existing.some(
-            (area) =>
-              (area.floor?.name || 'Ground Floor').toLowerCase() ===
-                suggestion.floorName.toLowerCase() &&
-              area.name.toLowerCase() === suggestion.name.toLowerCase(),
-          );
-          if (duplicate) {
-            skipped.push({ floorName: suggestion.floorName, name: suggestion.name });
-            continue;
-          }
-          let floor = await tx.propertyFloor.findFirst({
+      const extracted = extractionResult.areas;
+      // The database can be several hundred milliseconds away (hosted
+      // Supabase), so the transaction batches its work into a constant number
+      // of round trips regardless of how many rooms were extracted, and runs
+      // with an explicit timeout instead of Prisma's 5-second default.
+      const result = await this.prisma.$transaction(
+        async (tx) => {
+          // All extraction bookkeeping is scoped to the plan's unit: a unit
+          // plan only replaces/collides with that unit's areas, and a
+          // building-level plan only with building-level areas.
+          await tx.propertyArea.deleteMany({
             where: {
               propertyId: plan.propertyId,
-              name: { equals: suggestion.floorName, mode: 'insensitive' },
+              unitId: plan.unitId,
+              status: PropertyAreaStatus.DRAFT,
+              source: 'AI_FLOOR_PLAN',
+              inspectionAreas: { none: {} },
             },
           });
-          if (!floor)
-            floor = await tx.propertyFloor.create({
+          const existing = await tx.propertyArea.findMany({
+            where: { propertyId: plan.propertyId, unitId: plan.unitId },
+            select: { name: true, floor: { select: { name: true } } },
+          });
+          const areaKey = (floorName: string, name: string) =>
+            `${floorName.trim().toLowerCase()}|${name.trim().toLowerCase()}`;
+          const seen = new Set(
+            existing.map((area) => areaKey(area.floor?.name || 'Ground Floor', area.name)),
+          );
+          const fresh: typeof extracted = [];
+          const skipped: Array<{ floorName: string; name: string }> = [];
+          for (const suggestion of extracted) {
+            const key = areaKey(suggestion.floorName, suggestion.name);
+            if (seen.has(key)) {
+              skipped.push({ floorName: suggestion.floorName, name: suggestion.name });
+              continue;
+            }
+            seen.add(key);
+            fresh.push(suggestion);
+          }
+          // Resolve all floors in one read; create only the missing ones.
+          const floors = await tx.propertyFloor.findMany({
+            where: { propertyId: plan.propertyId, unitId: plan.unitId },
+            select: { id: true, name: true },
+          });
+          const floorIdByName = new Map(
+            floors.map((floor) => [floor.name.trim().toLowerCase(), floor.id]),
+          );
+          for (const suggestion of fresh) {
+            const floorKey = suggestion.floorName.trim().toLowerCase();
+            if (floorIdByName.has(floorKey)) continue;
+            const floor = await tx.propertyFloor.create({
               data: {
                 propertyId: plan.propertyId,
+                unitId: plan.unitId,
                 name: suggestion.floorName,
                 sortOrder: suggestion.inspectionOrder,
               },
+              select: { id: true },
             });
-          const area = await tx.propertyArea.create({
-            data: {
-              propertyId: plan.propertyId,
-              floorId: floor.id,
-              name: suggestion.name,
-              inspectionOrder: suggestion.inspectionOrder,
-              isRequired: suggestion.isRequired,
-              source: 'AI_FLOOR_PLAN',
-              status: PropertyAreaStatus.DRAFT,
-            },
-            select: propertyAreaResponseSelect,
+            floorIdByName.set(floorKey, floor.id);
+          }
+          // Insert every area in one statement with pre-assigned ids, then
+          // load them back with the full response shape in one more read.
+          const areaRows = fresh.map((suggestion) => ({
+            id: randomUUID(),
+            propertyId: plan.propertyId,
+            unitId: plan.unitId,
+            floorId: floorIdByName.get(suggestion.floorName.trim().toLowerCase())!,
+            name: suggestion.name,
+            inspectionOrder: suggestion.inspectionOrder,
+            isRequired: suggestion.isRequired,
+            source: 'AI_FLOOR_PLAN',
+            status: PropertyAreaStatus.DRAFT,
+          }));
+          if (areaRows.length) await tx.propertyArea.createMany({ data: areaRows });
+          const created = areaRows.length
+            ? await tx.propertyArea.findMany({
+                where: { id: { in: areaRows.map((row) => row.id) } },
+                select: propertyAreaResponseSelect,
+                orderBy: { inspectionOrder: 'asc' },
+              })
+            : [];
+          const output = {
+            suggestions: extracted,
+            createdAreaIds: created.map((area) => area.id),
+            skipped,
+          };
+          await tx.floorPlanExtractionJob.update({
+            where: { id: job.id },
+            data: { status: 'COMPLETED', output },
           });
-          created.push(area);
-          existing.push(area);
-        }
-        const output = {
-          suggestions: extracted,
-          createdAreaIds: created.map((area) => area.id),
-          skipped,
-        };
-        await tx.floorPlanExtractionJob.update({
-          where: { id: job.id },
-          data: { status: 'COMPLETED', output },
-        });
-        await tx.propertyFloorPlan.update({
-          where: { id: floorPlanId },
-          data: { status: FloorPlanStatus.REVIEW_REQUIRED },
-        });
-        return { ...job, status: 'COMPLETED', output, areas: created };
-      });
+          await tx.propertyFloorPlan.update({
+            where: { id: floorPlanId },
+            data: { status: FloorPlanStatus.REVIEW_REQUIRED },
+          });
+          return { ...job, status: 'COMPLETED', output, areas: created };
+        },
+        { maxWait: 10_000, timeout: 60_000 },
+      );
       await this.audit(user, 'FLOOR_PLAN_EXTRACTED', 'PropertyFloorPlan', floorPlanId, {
         jobId: job.id,
         draftAreaCount: result.areas.length,
       });
+      await this.aiSettings
+        .recordUsage(
+          user.organizationId,
+          configuration,
+          'FLOOR_PLAN_EXTRACTION',
+          extractionResult.usage,
+          job.id,
+        )
+        .catch(() => undefined);
       return result;
     } catch (error) {
       const code = error instanceof ApplicationError ? error.code : 'FLOOR_PLAN_EXTRACTION_FAILED';
@@ -246,12 +296,20 @@ export class FloorPlanAdminService {
 
   async createArea(user: AuthenticatedUser, buildingId: string, input: CreatePropertyAreaDto) {
     const building = await this.requireBuilding(user.organizationId, buildingId, true);
+    const unitId = input.unitId ?? null;
+    if (unitId) await this.requireUnit(user.organizationId, buildingId, unitId);
     await this.ensureProperty(building);
-    await this.assertUniqueArea(buildingId, input.floorName, input.name);
-    const floor = await this.findOrCreateFloor(buildingId, input.floorName, input.inspectionOrder);
+    await this.assertUniqueArea(buildingId, unitId, input.floorName, input.name);
+    const floor = await this.findOrCreateFloor(
+      buildingId,
+      unitId,
+      input.floorName,
+      input.inspectionOrder,
+    );
     const area = await this.prisma.propertyArea.create({
       data: {
         propertyId: buildingId,
+        unitId,
         floorId: floor.id,
         name: input.name.trim(),
         inspectionOrder: input.inspectionOrder,
@@ -263,6 +321,7 @@ export class FloorPlanAdminService {
     });
     await this.audit(user, 'PROPERTY_AREA_CREATED', 'PropertyArea', area.id, {
       propertywareBuildingId: buildingId,
+      unitId,
     });
     return area;
   }
@@ -270,7 +329,7 @@ export class FloorPlanAdminService {
   async createFallbackArea(user: AuthenticatedUser, buildingId: string) {
     const building = await this.requireBuilding(user.organizationId, buildingId, true);
     await this.ensureProperty(building);
-    const floor = await this.findOrCreateFloor(buildingId, 'Whole property', 1);
+    const floor = await this.findOrCreateFloor(buildingId, null, 'Whole property', 1);
 
     return this.prisma.$transaction(async (tx) => {
       const approved = await tx.propertyArea.findFirst({
@@ -330,10 +389,11 @@ export class FloorPlanAdminService {
       throw new ApplicationError(409, 'AREA_ALREADY_APPROVED', 'Approved areas cannot be edited.');
     const floorName = input.floorName?.trim() || area.floor?.name || 'Ground Floor';
     const name = input.name?.trim() || area.name;
-    await this.assertUniqueArea(area.propertyId, floorName, name, area.id);
+    await this.assertUniqueArea(area.propertyId, area.unitId, floorName, name, area.id);
     const floor = input.floorName
       ? await this.findOrCreateFloor(
           area.propertyId,
+          area.unitId,
           floorName,
           input.inspectionOrder ?? area.inspectionOrder,
         )
@@ -480,6 +540,7 @@ export class FloorPlanAdminService {
       select: {
         id: true,
         propertyId: true,
+        unitId: true,
         storageKey: true,
         fileName: true,
         mimeType: true,
@@ -487,6 +548,20 @@ export class FloorPlanAdminService {
     });
     if (!plan) throw new ApplicationError(404, 'FLOOR_PLAN_NOT_FOUND', 'Floor plan was not found.');
     return plan;
+  }
+
+  private async requireUnit(organizationId: string, buildingId: string, unitId: string) {
+    const unit = await this.prisma.propertywareUnit.findFirst({
+      where: { id: unitId, organizationId, buildingId, isActive: true },
+      select: { id: true, name: true },
+    });
+    if (!unit)
+      throw new ApplicationError(
+        422,
+        'INVALID_ACTIVE_UNIT',
+        'Select an active unit belonging to this property.',
+      );
+    return unit;
   }
 
   private async requireArea(organizationId: string, id: string) {
@@ -498,16 +573,21 @@ export class FloorPlanAdminService {
     return area;
   }
 
-  private async findOrCreateFloor(propertyId: string, name: string, sortOrder: number) {
+  private async findOrCreateFloor(
+    propertyId: string,
+    unitId: string | null,
+    name: string,
+    sortOrder: number,
+  ) {
     const normalized = name.trim();
     const existing = await this.prisma.propertyFloor.findFirst({
-      where: { propertyId, name: { equals: normalized, mode: 'insensitive' } },
+      where: { propertyId, unitId, name: { equals: normalized, mode: 'insensitive' } },
       select: { id: true, propertyId: true, name: true, sortOrder: true },
     });
     return (
       existing ||
       this.prisma.propertyFloor.create({
-        data: { propertyId, name: normalized, sortOrder },
+        data: { propertyId, unitId, name: normalized, sortOrder },
         select: { id: true, propertyId: true, name: true, sortOrder: true },
       })
     );
@@ -515,6 +595,7 @@ export class FloorPlanAdminService {
 
   private async assertUniqueArea(
     propertyId: string,
+    unitId: string | null,
     floorName: string,
     name: string,
     ignoreId?: string,
@@ -522,6 +603,7 @@ export class FloorPlanAdminService {
     const duplicate = await this.prisma.propertyArea.findFirst({
       where: {
         propertyId,
+        unitId,
         ...(ignoreId ? { id: { not: ignoreId } } : {}),
         name: { equals: name.trim(), mode: 'insensitive' },
         floor: { name: { equals: floorName.trim(), mode: 'insensitive' } },

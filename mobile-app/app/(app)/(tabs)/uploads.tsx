@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -7,7 +7,6 @@ import { UploadProgressCard } from '../../../src/components/FeatureCards';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
 import { Card, ConfirmationModal, SectionHeader, StatusBadge } from '../../../src/components/ui';
 import { useUploadActions, useUploads } from '../../../src/features/queries';
-import { repositories } from '../../../src/repositories';
 import { useDemoStore } from '../../../src/stores/demo.store';
 import { type AppColors, spacing, typography, useThemedStyles } from '../../../src/theme';
 
@@ -29,29 +28,6 @@ export default function UploadQueueScreen() {
     }
   }, [refetchUploads]);
 
-  useEffect(() => {
-    let stopped = false;
-    let tickInProgress = false;
-
-    const updateQueue = async () => {
-      if (tickInProgress) return;
-      tickInProgress = true;
-      try {
-        await repositories.uploads.tick();
-        if (!stopped) await refetchUploads();
-      } finally {
-        tickInProgress = false;
-      }
-    };
-
-    const timer = setInterval(() => {
-      void updateQueue();
-    }, 850);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [refetchUploads]);
   if (uploads.isLoading) return <LoadingState label="Opening local upload queue…" />;
   if (uploads.isError)
     return <ErrorState message={uploads.error.message} onRetry={() => void uploads.refetch()} />;
@@ -65,7 +41,7 @@ export default function UploadQueueScreen() {
   return (
     <AppScreen
       title="Upload center"
-      subtitle="Saved videos upload from here automatically"
+      subtitle="Saved videos upload automatically while you keep inspecting"
       eyebrow="MEDIA PIPELINE"
       refresh={{ refreshing: isRefreshing, onRefresh: () => void refreshUploads() }}
     >

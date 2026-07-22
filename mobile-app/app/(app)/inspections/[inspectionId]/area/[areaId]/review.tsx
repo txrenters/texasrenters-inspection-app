@@ -9,6 +9,7 @@ import { AppButton, Card, ConfirmationModal } from '../../../../../../src/compon
 import {
   useInspection,
   useRoom,
+  useRooms,
   useSaveRecording,
 } from '../../../../../../src/features/queries';
 import { deleteDraftRecording } from '../../../../../../src/media/local-recordings';
@@ -21,6 +22,7 @@ import {
   useAppTheme,
   useThemedStyles,
 } from '../../../../../../src/theme';
+import { nextInspectionRoom } from '../../../../../../src/utils/room-workflow';
 
 export default function RecordingReviewScreen() {
   const { colors } = useAppTheme();
@@ -30,8 +32,11 @@ export default function RecordingReviewScreen() {
     areaId: string;
   }>();
   const room = useRoom(areaId);
+  const rooms = useRooms(inspectionId);
   const inspection = useInspection(inspectionId);
-  const draft = useDemoStore((state) => state.draftRecording);
+  const draft = useDemoStore((state) =>
+    state.draftRecording?.ownerUserId === state.selectedUserId ? state.draftRecording : null,
+  );
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const save = useSaveRecording();
   const [note, setNote] = useState(draft?.note ?? '');
@@ -55,6 +60,7 @@ export default function RecordingReviewScreen() {
         />
       </AppScreen>
     );
+  const nextRoom = nextInspectionRoom(rooms.data ?? [], areaId);
   const saveForUpload = () =>
     save.mutate(
       {
@@ -70,11 +76,19 @@ export default function RecordingReviewScreen() {
         },
       },
       {
-        onSuccess: () =>
+        onSuccess: () => {
+          if (nextRoom) {
+            router.replace({
+              pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
+              params: { inspectionId, areaId: nextRoom.id },
+            });
+            return;
+          }
           router.replace({
-            pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
-            params: { inspectionId, areaId },
-          }),
+            pathname: '/(app)/inspections/[inspectionId]/areas',
+            params: { inspectionId },
+          });
+        },
       },
     );
   return (
@@ -82,7 +96,11 @@ export default function RecordingReviewScreen() {
       title="Review recording"
       subtitle={`${room.data?.name ?? 'Room'} · Stored on this device`}
       bottomAction={
-        <AppButton label="Save & queue upload" onPress={saveForUpload} loading={save.isPending} />
+        <AppButton
+          label={nextRoom ? `Save & continue to ${nextRoom.name}` : 'Save & return to checklist'}
+          onPress={saveForUpload}
+          loading={save.isPending}
+        />
       }
     >
       {playableUri ? (

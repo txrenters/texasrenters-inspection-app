@@ -8,6 +8,7 @@ const descriptions: Record<string, string> = {
   Supabase: 'Administrator authentication and managed PostgreSQL services.',
   Deepgram: 'Video transcription provider.',
   Anthropic: 'AI-assisted inspection analysis. Human review remains mandatory.',
+  OpenAI: 'Alternative AI extraction and analysis provider. Human review remains mandatory.',
   'Cloudflare Stream': 'Direct video upload and processing.',
   Sentry: 'Application error monitoring and diagnostics.',
   Redis: 'Shared backend response cache and cache-health diagnostics.',

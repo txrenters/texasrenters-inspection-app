@@ -19,6 +19,8 @@ import type {
   PropertywareSyncRun,
   PropertywareSyncError,
   ProviderReadiness,
+  AiSettings,
+  AiProviderName,
 } from '@texasrenters/shared';
 import {
   keepPreviousData,
@@ -57,6 +59,7 @@ export const keys = {
   syncErrors: (runId: string, page: number) =>
     ['admin', 'propertyware', 'runs', runId, 'errors', page] as const,
   providers: ['admin', 'providers'] as const,
+  aiSettings: ['admin', 'ai-settings'] as const,
 };
 
 export const useDashboard = () =>
@@ -263,6 +266,55 @@ export const useProviders = () =>
       ),
   });
 
+export const useAiSettings = () =>
+  useQuery({
+    queryKey: keys.aiSettings,
+    queryFn: ({ signal }) => api<AiSettings>('/api/v1/admin/ai/settings', { signal }),
+  });
+
+export function useAiSettingsMutations() {
+  const client = useQueryClient();
+  const refresh = (data: AiSettings) => client.setQueryData(keys.aiSettings, data);
+  return {
+    setActiveProvider: useMutation({
+      mutationFn: (activeProvider: AiProviderName) =>
+        api<AiSettings>('/api/v1/admin/ai/settings/routing', {
+          method: 'PATCH',
+          body: JSON.stringify({ activeProvider }),
+        }),
+      onSuccess: refresh,
+    }),
+    updateProvider: useMutation({
+      mutationFn: ({
+        provider,
+        modelId,
+        apiKey,
+        clearApiKey,
+        monthlyTokenBudget,
+      }: {
+        provider: AiProviderName;
+        modelId: string;
+        apiKey?: string;
+        clearApiKey?: boolean;
+        monthlyTokenBudget?: number | null;
+      }) =>
+        api<AiSettings>(`/api/v1/admin/ai/providers/${provider}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ modelId, apiKey, clearApiKey, monthlyTokenBudget }),
+        }),
+      onSuccess: refresh,
+    }),
+    validateProvider: useMutation({
+      mutationFn: (provider: AiProviderName) =>
+        api<AiSettings>(`/api/v1/admin/ai/providers/${provider}/validate`, {
+          method: 'POST',
+        }),
+      onSuccess: refresh,
+      onSettled: () => client.invalidateQueries({ queryKey: keys.aiSettings }),
+    }),
+  };
+}
+
 export function useAdminMutations() {
   const client = useQueryClient();
   const refreshInspection = (id?: string) => {
@@ -277,9 +329,18 @@ export function useAdminMutations() {
   };
   return {
     uploadFloorPlan: useMutation({
-      mutationFn: ({ propertyId, file }: { propertyId: string; file: File }) => {
+      mutationFn: ({
+        propertyId,
+        file,
+        unitId,
+      }: {
+        propertyId: string;
+        file: File;
+        unitId?: string;
+      }) => {
         const form = new FormData();
         form.set('file', file);
+        if (unitId) form.set('unitId', unitId);
         return api<AdminFloorPlan>(`/api/v1/admin/properties/${propertyId}/floor-plans`, {
           method: 'POST',
           body: form,
@@ -302,6 +363,7 @@ export function useAdminMutations() {
         name: string;
         inspectionOrder: number;
         isRequired: boolean;
+        unitId?: string;
       }) =>
         api<AdminPropertyArea>(`/api/v1/admin/properties/${propertyId}/areas`, {
           method: 'POST',

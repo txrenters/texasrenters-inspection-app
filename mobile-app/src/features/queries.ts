@@ -157,12 +157,28 @@ export function useFloorPlan(propertyId: string) {
   });
 }
 export function useUploads() {
-  return useQuery({ queryKey: queryKeys.uploads, queryFn: () => repositories.uploads.list() });
+  return useQuery({
+    queryKey: queryKeys.uploads,
+    queryFn: () => repositories.uploads.list(),
+    refetchInterval: (query) => {
+      const uploads = query.state.data;
+      return uploads?.some(
+        (item) =>
+          item.status === 'COMPLETED' &&
+          !['READY_FOR_REVIEW', 'FAILED'].includes(item.processingStatus),
+      )
+        ? 5_000
+        : false;
+    },
+    refetchIntervalInBackground: false,
+  });
 }
-export function useFindings(inspectionId?: string) {
+export function useFindings(inspectionId?: string, pollWhileProcessing = false) {
   return useQuery({
     queryKey: queryKeys.findings(inspectionId),
     queryFn: () => repositories.findings.list(inspectionId),
+    refetchInterval: (query) => (pollWhileProcessing && !query.state.data?.length ? 5_000 : false),
+    refetchIntervalInBackground: false,
   });
 }
 export function useFinding(id: string, inspectionId?: string) {

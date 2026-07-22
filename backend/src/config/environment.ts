@@ -39,8 +39,12 @@ const environmentSchema = z
     USE_MOCK_AUTH: z.enum(['true', 'false']).default('false'),
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_JWT_SECRET: z.string().optional(),
-    FLOOR_PLAN_EXTRACTION_PROVIDER: z.enum(['disabled', 'mock', 'anthropic']).default('disabled'),
+    FLOOR_PLAN_EXTRACTION_PROVIDER: z
+      .enum(['disabled', 'mock', 'anthropic', 'openai'])
+      .default('disabled'),
     ANTHROPIC_FLOOR_PLAN_MODEL: z.string().optional(),
+    OPENAI_FLOOR_PLAN_MODEL: z.string().optional(),
+    AI_CREDENTIALS_ENCRYPTION_KEY: z.string().optional(),
     VIDEO_PLATFORM_PROVIDER: z.literal('mock').default('mock'),
     TRANSCRIPTION_PROVIDER: z.literal('mock').default('mock'),
     AI_ANALYSIS_PROVIDER: z.literal('mock').default('mock'),

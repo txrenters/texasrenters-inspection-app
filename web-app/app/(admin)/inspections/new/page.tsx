@@ -20,6 +20,7 @@ import {
   useTechnicians,
   useUnits,
 } from '@/lib/queries';
+import { ApiError } from '@/lib/api';
 
 const schema = z.object({
   portfolioId: z.string().min(1, 'Select a portfolio.'),
@@ -65,6 +66,8 @@ function CreateInspectionForm() {
     register,
     watch,
     setValue,
+    setError,
+    clearErrors,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<Values>({
@@ -105,13 +108,23 @@ function CreateInspectionForm() {
     [propertyRecords],
   );
   const units = useUnits(propertyId);
+  const activeUnits = useMemo(
+    () => units.data?.items.filter((unit) => unit.isActive) ?? [],
+    [units.data?.items],
+  );
+  const requiresUnit = activeUnits.length > 0;
   const propertyAreas = usePropertyAreas(propertyId);
   const leases = useLeases(unitId ?? '');
   const technicians = useTechnicians({ page: 1, pageSize: 100, active: true });
   const mutations = useAdminMutations();
   const mutation = mutations.createInspection;
   const fallbackArea = mutations.createFallbackPropertyArea;
-  const hasApprovedAreas = propertyAreas.data?.some((area) => area.status === 'APPROVED') ?? false;
+  const hasApprovedAreas =
+    propertyAreas.data?.some(
+      (area) =>
+        area.status === 'APPROVED' &&
+        (unitId ? !area.unitId || area.unitId === unitId : !area.unitId),
+    ) ?? false;
   const needsAreaSetup =
     Boolean(propertyId) && !propertyAreas.isLoading && !propertyAreas.isError && !hasApprovedAreas;
 
@@ -122,11 +135,24 @@ function CreateInspectionForm() {
     }
   }, [prefill.data, setValue]);
   useEffect(() => {
-    if (units.data?.items.length === 1) setValue('unitId', units.data.items[0]!.id);
-    if (units.data?.items.length === 0) setValue('unitId', '');
-  }, [setValue, units.data]);
+    if (activeUnits.length === 1) {
+      setValue('unitId', activeUnits[0]!.id, { shouldValidate: true });
+      clearErrors('unitId');
+    }
+    if (activeUnits.length === 0) {
+      setValue('unitId', '');
+      clearErrors('unitId');
+    }
+  }, [activeUnits, clearErrors, setValue]);
 
   async function submit(values: Values) {
+    if (requiresUnit && !values.unitId) {
+      setError('unitId', {
+        type: 'manual',
+        message: 'Choose the unit this inspection covers.',
+      });
+      return;
+    }
     try {
       const created = await mutation.mutateAsync({
         propertyId: values.propertyId,
@@ -140,7 +166,13 @@ function CreateInspectionForm() {
         idempotencyKey: crypto.randomUUID(),
       });
       router.push(`/inspections/${created.id}`);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'UNIT_REQUIRED') {
+        setError('unitId', {
+          type: 'server',
+          message: 'This property has units. Choose a unit before creating the inspection.',
+        });
+      }
       // The mutation error is rendered below the form without rejecting the submit event.
     }
   }
@@ -193,6 +225,7 @@ function CreateInspectionForm() {
                 setValue('propertyId', '');
                 setValue('unitId', '');
                 setValue('leaseId', '');
+                clearErrors('unitId');
                 setPropertySearch('');
                 setSelectedProperty(null);
                 mutation.reset();
@@ -246,6 +279,7 @@ function CreateInspectionForm() {
                 );
                 setValue('unitId', '');
                 setValue('leaseId', '');
+                clearErrors('unitId');
                 mutation.reset();
               }}
             />
@@ -269,7 +303,7 @@ function CreateInspectionForm() {
             />
           </div>
           <div className="field">
-            <label htmlFor="unitId">Unit (optional)</label>
+            <label htmlFor="unitId">Unit{requiresUnit ? '' : ' (optional)'}</label>
             <select
               id="unitId"
               {...register('unitId')}
@@ -277,17 +311,26 @@ function CreateInspectionForm() {
               onChange={(event) => {
                 setValue('unitId', event.target.value, { shouldValidate: true });
                 setValue('leaseId', '');
+                if (event.target.value) clearErrors('unitId');
               }}
             >
-              <option value="">Inspect the entire property</option>
-              {units.data?.items.map((item) => (
+              {requiresUnit ? (
+                <option value="">Select a unit</option>
+              ) : (
+                <option value="">Inspect the entire property</option>
+              )}
+              {activeUnits.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
             </select>
+            {requiresUnit ? (
+              <small>This property has units — choose which unit this inspection covers.</small>
+            ) : null}
+            {errors.unitId ? <span className="field-error">{errors.unitId.message}</span> : null}
             {units.isError ? <span className="field-error">{units.error.message}</span> : null}
-            {propertyId && units.data?.items.length === 0 ? (
+            {propertyId && activeUnits.length === 0 && !units.isLoading ? (
               <small>
                 No active units are synchronized; this will be a property-level inspection.
               </small>
@@ -384,7 +427,12 @@ function CreateInspectionForm() {
           <button
             className="button button-primary"
             disabled={
-              isSubmitting || mutation.isPending || propertyAreas.isLoading || needsAreaSetup
+              isSubmitting ||
+              mutation.isPending ||
+              propertyAreas.isLoading ||
+              needsAreaSetup ||
+              units.isLoading ||
+              (requiresUnit && !unitId)
             }
           >
             {isSubmitting ? 'Creating…' : 'Create inspection'}

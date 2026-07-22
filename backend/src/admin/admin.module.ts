@@ -5,6 +5,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
@@ -20,6 +21,7 @@ import {
   controllers: [AdminController, ReportsController],
   providers: [
     AdminService,
+    AiProviderSettingsService,
     FloorPlanAdminService,
     FloorPlanExtractionService,
     FloorPlanStorageService,

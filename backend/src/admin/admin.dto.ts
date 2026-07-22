@@ -1,4 +1,4 @@
-import { InspectionType } from '@prisma/client';
+import { AiProvider, InspectionType } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMinSize,
@@ -135,16 +135,33 @@ export class TechnicianStatusDto {
   @IsBoolean() isActive!: boolean;
 }
 
+export class UpdateAiRoutingDto {
+  @IsEnum(AiProvider) activeProvider!: AiProvider;
+}
+
+export class UpdateAiProviderDto {
+  @IsString() @MinLength(2) @MaxLength(120) modelId!: string;
+  @IsOptional() @IsString() @MinLength(20) @MaxLength(500) apiKey?: string;
+  @IsOptional() @IsBoolean() clearApiKey?: boolean;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1_000) @Max(2_000_000_000)
+  monthlyTokenBudget?: number | null;
+}
+
 export class CreateTechnicianDto {
   @IsEmail() @MaxLength(254) email!: string;
   @IsString() @MinLength(2) @MaxLength(120) displayName!: string;
 }
 
 export class CreatePropertyAreaDto {
+  @IsOptional() @IsUUID() unitId?: string;
   @IsString() @MinLength(1) @MaxLength(80) floorName!: string;
   @IsString() @MinLength(1) @MaxLength(120) name!: string;
   @Type(() => Number) @IsInt() @Min(1) @Max(500) inspectionOrder!: number;
   @IsBoolean() isRequired!: boolean;
+}
+
+export class UploadFloorPlanDto {
+  @IsOptional() @IsUUID() unitId?: string;
 }
 
 export class UpdatePropertyAreaDto {

@@ -32,7 +32,12 @@ describe('administrator floor plans', () => {
       propertyFloorPlan: { create: jest.fn() },
     };
     const storage = { put: jest.fn(), delete: jest.fn() };
-    const service = new FloorPlanAdminService(prisma as never, storage as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(
       service.upload(admin, building.id, {
@@ -58,7 +63,12 @@ describe('administrator floor plans', () => {
       put: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
     };
-    const service = new FloorPlanAdminService(prisma as never, storage as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
     const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 
     await expect(
@@ -85,7 +95,12 @@ describe('administrator floor plans', () => {
       propertyFloorPlan: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const storage = { get: jest.fn() };
-    const service = new FloorPlanAdminService(prisma as never, storage as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(
       service.content(admin, '30000000-0000-4000-8000-000000000099'),
@@ -140,6 +155,13 @@ describe('administrator floor plans', () => {
       prisma as never,
       storage as never,
       extraction as never,
+      {
+        resolve: jest.fn().mockResolvedValue({
+          provider: 'ANTHROPIC',
+          modelId: 'test-model',
+          apiKey: 'private-test-key',
+        }),
+      } as never,
     );
 
     await expect(service.extract(admin, 'plan-1')).rejects.toBe(providerError);
@@ -171,7 +193,12 @@ describe('administrator floor plans', () => {
       },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new FloorPlanAdminService(prisma as never, {} as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
     jest.spyOn(service, 'areas').mockResolvedValue([]);
 
     await service.approveAreas(admin, building.id, areaIds);
@@ -218,7 +245,12 @@ describe('administrator floor plans', () => {
       },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new FloorPlanAdminService(prisma as never, {} as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(service.createFallbackArea(admin, building.id)).resolves.toBe(fallback);
 

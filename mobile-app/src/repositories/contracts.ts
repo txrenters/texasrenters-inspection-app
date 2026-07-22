@@ -70,7 +70,7 @@ export interface UploadRepository {
   retry(id: string): Promise<void>;
   retryProcessing(id: string): Promise<void>;
   remove(id: string): Promise<void>;
-  tick(): Promise<void>;
+  tick(): Promise<boolean>;
 }
 
 export interface FindingRepository {

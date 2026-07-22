@@ -6,6 +6,7 @@ import type { RoomSnapshot } from '../domain/models';
 const SNAPSHOTS_FOLDER = 'inspection-snapshots';
 
 type RoomSnapshotInput = {
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   uri: string;
@@ -15,6 +16,7 @@ type RoomSnapshotInput = {
 };
 
 export function buildRoomSnapshot({
+  ownerUserId,
   inspectionId,
   roomId,
   uri,
@@ -24,6 +26,7 @@ export function buildRoomSnapshot({
 }: RoomSnapshotInput): RoomSnapshot {
   return {
     id: `snapshot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    ownerUserId,
     inspectionId,
     roomId,
     uri,

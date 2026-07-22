@@ -4,32 +4,78 @@ import type { AdminPropertyArea } from '@texasrenters/shared';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { apiBlob } from '@/lib/api';
-import { useAdminMutations, useFloorPlans, usePropertyAreas } from '@/lib/queries';
+import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/lib/queries';
 
 import { Badge, ErrorState, LoadingState, formatDate } from './ui';
+
+const BUILDING_SCOPE = 'building-wide';
 
 export function FloorPlanManager({ propertyId }: { propertyId: string }) {
   const plans = useFloorPlans(propertyId);
   const areas = usePropertyAreas(propertyId);
+  const units = useUnits(propertyId);
   const actions = useAdminMutations();
+  const [scope, setScope] = useState(BUILDING_SCOPE);
   const [file, setFile] = useState<File>();
   const [previewUrl, setPreviewUrl] = useState<string>();
   const [message, setMessage] = useState<string>();
-  const latest = plans.data?.[0];
+  const activeUnits = useMemo(
+    () => units.data?.items.filter((unit) => unit.isActive) ?? [],
+    [units.data?.items],
+  );
+  const selectedUnitId = scope === BUILDING_SCOPE ? null : scope;
+  const scopedPlans = useMemo(
+    () =>
+      plans.data?.filter((plan) => (plan.unitId ?? null) === selectedUnitId) ?? [],
+    [plans.data, selectedUnitId],
+  );
+  const scopedAreas = useMemo(
+    () =>
+      areas.data?.filter((area) => (area.unitId ?? null) === selectedUnitId) ?? [],
+    [areas.data, selectedUnitId],
+  );
+  const latest = scopedPlans[0];
   const drafts = useMemo(
-    () => areas.data?.filter((area) => area.status === 'DRAFT') ?? [],
-    [areas.data],
+    () => scopedAreas.filter((area) => area.status === 'DRAFT'),
+    [scopedAreas],
   );
   const approved = useMemo(
-    () => areas.data?.filter((area) => area.status === 'APPROVED') ?? [],
-    [areas.data],
+    () => scopedAreas.filter((area) => area.status === 'APPROVED'),
+    [scopedAreas],
   );
+  const floorNames = useMemo(
+    () =>
+      [...new Set(scopedAreas.map((area) => area.floor?.name).filter(Boolean) as string[])].sort(
+        (left, right) => left.localeCompare(right),
+      ),
+    [scopedAreas],
+  );
+  const draftGroups = useMemo(() => groupAreasByFloor(drafts), [drafts]);
+  const approvedGroups = useMemo(() => groupAreasByFloor(approved), [approved]);
+  const nextOrder =
+    scopedAreas.reduce((highest, area) => Math.max(highest, area.inspectionOrder), 0) + 1;
+  const scopeLabel =
+    selectedUnitId === null
+      ? 'Building-wide'
+      : (activeUnits.find((unit) => unit.id === selectedUnitId)?.name ?? 'Selected unit');
+
+  useEffect(() => {
+    if (scope !== BUILDING_SCOPE && !activeUnits.some((unit) => unit.id === scope)) {
+      setScope(BUILDING_SCOPE);
+    }
+  }, [activeUnits, scope]);
+
+  useEffect(() => {
+    setFile(undefined);
+    setMessage(undefined);
+  }, [scope]);
 
   useEffect(() => {
     if (!latest) {
       setPreviewUrl(undefined);
       return;
     }
+    setPreviewUrl(undefined);
     const controller = new AbortController();
     let objectUrl: string | undefined;
     void apiBlob(`/api/v1/admin/floor-plans/${latest.id}/content`, controller.signal)
@@ -44,9 +90,12 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
     };
   }, [latest]);
 
-  if (plans.isLoading || areas.isLoading) return <LoadingState label="Loading floor plan…" />;
+  if (plans.isLoading || areas.isLoading || units.isLoading) {
+    return <LoadingState label="Loading floor plan…" />;
+  }
   if (plans.isError) return <ErrorState error={plans.error} retry={() => void plans.refetch()} />;
   if (areas.isError) return <ErrorState error={areas.error} retry={() => void areas.refetch()} />;
+  if (units.isError) return <ErrorState error={units.error} retry={() => void units.refetch()} />;
 
   const actionError = [
     actions.uploadFloorPlan.error,
@@ -62,9 +111,13 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
     if (!file) return;
     setMessage(undefined);
     try {
-      await actions.uploadFloorPlan.mutateAsync({ propertyId, file });
+      await actions.uploadFloorPlan.mutateAsync({
+        propertyId,
+        file,
+        unitId: selectedUnitId ?? undefined,
+      });
       setFile(undefined);
-      setMessage('Floor plan uploaded securely. Extract areas or add them manually.');
+      setMessage(`${scopeLabel} floor plan uploaded securely. Extract areas or add them manually.`);
     } catch {
       // The mutation error is rendered in the workspace alert.
     }
@@ -75,7 +128,7 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
     setMessage(undefined);
     try {
       await actions.extractFloorPlan.mutateAsync({ propertyId, floorPlanId: latest.id });
-      setMessage('Area suggestions are ready for human review.');
+      setMessage(`${scopeLabel} area suggestions are ready for human review.`);
     } catch {
       // The mutation error is rendered in the workspace alert.
     }
@@ -83,11 +136,33 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
 
   return (
     <section className="floor-plan-workspace section-gap" aria-labelledby="floor-plan-heading">
+      <div className="floor-plan-scope" aria-label="Floor plan scope">
+        <div>
+          <strong>Plan and area scope</strong>
+          <span>Manage a shared building layout or a plan specific to one unit.</span>
+        </div>
+        <div className="floor-plan-scope-options" role="group" aria-label="Select plan scope">
+          <ScopeButton
+            label="Building-wide"
+            selected={scope === BUILDING_SCOPE}
+            onSelect={() => setScope(BUILDING_SCOPE)}
+          />
+          {activeUnits.map((unit) => (
+            <ScopeButton
+              key={unit.id}
+              label={unit.name}
+              selected={scope === unit.id}
+              onSelect={() => setScope(unit.id)}
+            />
+          ))}
+        </div>
+      </div>
+
       <div className="panel floor-plan-source">
         <div className="panel-header">
           <div>
-            <h2 id="floor-plan-heading">Floor plan</h2>
-            <p>Use the latest property plan as the source for the approved inspection-area list.</p>
+            <h2 id="floor-plan-heading">{scopeLabel} floor plan</h2>
+            <p>Use the latest plan in this scope as the source for its approved area list.</p>
           </div>
           {latest ? <Badge value={latest.status} /> : null}
         </div>
@@ -102,7 +177,7 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
             ) : (
               <div className="floor-plan-empty">
                 <span aria-hidden>⌗</span>
-                <strong>No floor plan uploaded</strong>
+                <strong>No {scopeLabel.toLowerCase()} floor plan uploaded</strong>
                 <p>Upload a PDF, PNG, or JPEG up to 20 MB.</p>
               </div>
             )}
@@ -124,9 +199,10 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
             <form onSubmit={(event) => void upload(event)} className="stack">
               <div className="field">
                 <label htmlFor="floor-plan-file">
-                  {latest ? 'Replace with a newer floor plan' : 'Upload floor plan'}
+                  {latest ? `Replace ${scopeLabel.toLowerCase()} plan` : `Upload for ${scopeLabel}`}
                 </label>
                 <input
+                  key={scope}
                   id="floor-plan-file"
                   type="file"
                   accept="application/pdf,image/png,image/jpeg"
@@ -155,7 +231,7 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
             </form>
             <div className="alert alert-warning">
               AI suggestions remain drafts. An authorized administrator must review and approve
-              every area.
+              every area in this scope.
             </div>
           </div>
         </div>
@@ -172,7 +248,7 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
       <div className="panel section-gap">
         <div className="panel-header">
           <div>
-            <h2>Draft area review</h2>
+            <h2>{scopeLabel} draft area review</h2>
             <p>Edit AI suggestions or add missing rooms before approval.</p>
           </div>
           <button
@@ -191,55 +267,81 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
           </button>
         </div>
         <ManualAreaForm
-          nextOrder={(areas.data?.length ?? 0) + 1}
+          key={scope}
+          floorNames={floorNames}
+          nextOrder={nextOrder}
           submitting={actions.createPropertyArea.isPending}
-          onCreate={(input) => actions.createPropertyArea.mutateAsync({ propertyId, ...input })}
+          onCreate={(input) =>
+            actions.createPropertyArea.mutateAsync({
+              propertyId,
+              unitId: selectedUnitId ?? undefined,
+              ...input,
+            })
+          }
         />
-        {drafts.length ? (
-          <div className="area-review-list">
-            {drafts.map((area) => (
-              <AreaReviewRow
-                key={area.id}
-                area={area}
-                saving={actions.updatePropertyArea.isPending}
-                deleting={actions.deletePropertyArea.isPending}
-                onSave={(input) =>
-                  actions.updatePropertyArea.mutateAsync({ propertyId, areaId: area.id, ...input })
-                }
-                onDelete={() =>
-                  actions.deletePropertyArea.mutateAsync({ propertyId, areaId: area.id })
-                }
-              />
+        {draftGroups.length ? (
+          <div className="floor-area-groups">
+            {draftGroups.map((group) => (
+              <section key={group.key} className="floor-area-group">
+                <FloorGroupHeading label={group.label} count={group.areas.length} />
+                <div className="area-review-list">
+                  {group.areas.map((area) => (
+                    <AreaReviewRow
+                      key={area.id}
+                      area={area}
+                      floorNames={floorNames}
+                      saving={actions.updatePropertyArea.isPending}
+                      deleting={actions.deletePropertyArea.isPending}
+                      onSave={(input) =>
+                        actions.updatePropertyArea.mutateAsync({
+                          propertyId,
+                          areaId: area.id,
+                          ...input,
+                        })
+                      }
+                      onDelete={() =>
+                        actions.deletePropertyArea.mutateAsync({ propertyId, areaId: area.id })
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         ) : (
-          <p className="floor-plan-muted">No draft areas are waiting for review.</p>
+          <p className="floor-plan-muted">No draft areas are waiting for review in this scope.</p>
         )}
       </div>
 
       <div className="panel section-gap">
         <div className="panel-header">
           <div>
-            <h2>Approved master areas</h2>
-            <p>Only these areas are copied into newly created inspections.</p>
+            <h2>{scopeLabel} approved master areas</h2>
+            <p>Only these areas are copied into newly created inspections for this scope.</p>
           </div>
           <Badge value={`${approved.length} APPROVED`} />
         </div>
-        {approved.length ? (
-          <div className="approved-area-grid">
-            {approved.map((area) => (
-              <article key={area.id}>
-                <span>{area.floor?.name ?? 'Ground Floor'}</span>
-                <strong>{area.name}</strong>
-                <small>
-                  #{area.inspectionOrder} · {area.isRequired ? 'Required' : 'Optional'}
-                </small>
-              </article>
+        {approvedGroups.length ? (
+          <div className="floor-area-groups">
+            {approvedGroups.map((group) => (
+              <section key={group.key} className="floor-area-group">
+                <FloorGroupHeading label={group.label} count={group.areas.length} />
+                <div className="approved-area-grid">
+                  {group.areas.map((area) => (
+                    <article key={area.id}>
+                      <strong>{area.name}</strong>
+                      <small>
+                        #{area.inspectionOrder} · {area.isRequired ? 'Required' : 'Optional'}
+                      </small>
+                    </article>
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         ) : (
           <p className="floor-plan-muted">
-            No areas are approved yet. Inspections require an approved master area list.
+            No areas are approved in this scope. Inspections require an approved master area list.
           </p>
         )}
       </div>
@@ -247,11 +349,45 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
   );
 }
 
+function ScopeButton({
+  label,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`floor-plan-scope-button${selected ? ' is-selected' : ''}`}
+      aria-pressed={selected}
+      onClick={onSelect}
+    >
+      {label}
+    </button>
+  );
+}
+
+function FloorGroupHeading({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="floor-area-heading">
+      <h3>{label}</h3>
+      <span>
+        {count} area{count === 1 ? '' : 's'}
+      </span>
+    </div>
+  );
+}
+
 function ManualAreaForm({
+  floorNames,
   nextOrder,
   submitting,
   onCreate,
 }: {
+  floorNames: string[];
   nextOrder: number;
   submitting: boolean;
   onCreate: (input: AreaInput) => Promise<unknown>;
@@ -271,7 +407,13 @@ function ManualAreaForm({
     >
       <div className="field">
         <label htmlFor="manual-floor">Floor</label>
-        <input id="manual-floor" value={floorName} onChange={(e) => setFloorName(e.target.value)} />
+        <input
+          id="manual-floor"
+          list="manual-floor-options"
+          value={floorName}
+          onChange={(event) => setFloorName(event.target.value)}
+        />
+        <FloorOptions id="manual-floor-options" floorNames={floorNames} />
       </div>
       <div className="field field-grow">
         <label htmlFor="manual-area">Area name</label>
@@ -279,18 +421,21 @@ function ManualAreaForm({
           id="manual-area"
           value={name}
           placeholder="e.g. Bedroom 1"
-          onChange={(e) => setName(e.target.value)}
+          onChange={(event) => setName(event.target.value)}
         />
       </div>
       <label className="check-field">
         <input
           type="checkbox"
           checked={isRequired}
-          onChange={(e) => setIsRequired(e.target.checked)}
+          onChange={(event) => setIsRequired(event.target.checked)}
         />
         Required
       </label>
-      <button className="button button-secondary" disabled={!name.trim() || submitting}>
+      <button
+        className="button button-secondary"
+        disabled={!floorName.trim() || !name.trim() || submitting}
+      >
         Add draft area
       </button>
     </form>
@@ -306,34 +451,43 @@ interface AreaInput {
 
 function AreaReviewRow({
   area,
+  floorNames,
   saving,
   deleting,
   onSave,
   onDelete,
 }: {
   area: AdminPropertyArea;
+  floorNames: string[];
   saving: boolean;
   deleting: boolean;
   onSave: (input: AreaInput) => Promise<unknown>;
   onDelete: () => Promise<unknown>;
 }) {
-  const [floorName, setFloorName] = useState(area.floor?.name ?? 'Ground Floor');
+  const [floorName, setFloorName] = useState(area.floor?.name ?? '');
   const [name, setName] = useState(area.name);
   const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
   const [isRequired, setIsRequired] = useState(area.isRequired);
+  const floorOptionsId = `floor-options-${area.id}`;
   return (
     <article className="area-review-row">
       <div className="field">
         <label htmlFor={`floor-${area.id}`}>Floor</label>
         <input
           id={`floor-${area.id}`}
+          list={floorOptionsId}
           value={floorName}
-          onChange={(e) => setFloorName(e.target.value)}
+          onChange={(event) => setFloorName(event.target.value)}
         />
+        <FloorOptions id={floorOptionsId} floorNames={floorNames} />
       </div>
       <div className="field field-grow">
         <label htmlFor={`area-${area.id}`}>Area</label>
-        <input id={`area-${area.id}`} value={name} onChange={(e) => setName(e.target.value)} />
+        <input
+          id={`area-${area.id}`}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
       </div>
       <div className="field area-order-field">
         <label htmlFor={`order-${area.id}`}>Order</label>
@@ -342,14 +496,14 @@ function AreaReviewRow({
           type="number"
           min={1}
           value={inspectionOrder}
-          onChange={(e) => setInspectionOrder(Number(e.target.value))}
+          onChange={(event) => setInspectionOrder(Number(event.target.value))}
         />
       </div>
       <label className="check-field">
         <input
           type="checkbox"
           checked={isRequired}
-          onChange={(e) => setIsRequired(e.target.checked)}
+          onChange={(event) => setIsRequired(event.target.checked)}
         />
         Required
       </label>
@@ -373,6 +527,44 @@ function AreaReviewRow({
       </div>
     </article>
   );
+}
+
+function FloorOptions({ id, floorNames }: { id: string; floorNames: string[] }) {
+  return (
+    <datalist id={id}>
+      {floorNames.map((floorName) => (
+        <option key={floorName} value={floorName} />
+      ))}
+    </datalist>
+  );
+}
+
+function groupAreasByFloor(areas: AdminPropertyArea[]) {
+  const groups = new Map<
+    string,
+    { key: string; label: string; sortOrder: number; areas: AdminPropertyArea[] }
+  >();
+  for (const area of areas) {
+    const key = area.floor?.id ?? 'no-floor';
+    const existing = groups.get(key);
+    if (existing) existing.areas.push(area);
+    else {
+      groups.set(key, {
+        key,
+        label: area.floor?.name ?? 'No floor',
+        sortOrder: area.floor?.sortOrder ?? Number.MAX_SAFE_INTEGER,
+        areas: [area],
+      });
+    }
+  }
+  return [...groups.values()]
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.label.localeCompare(right.label))
+    .map((group) => ({
+      ...group,
+      areas: [...group.areas].sort(
+        (left, right) => left.inspectionOrder - right.inspectionOrder || left.name.localeCompare(right.name),
+      ),
+    }));
 }
 
 function formatBytes(value: number) {

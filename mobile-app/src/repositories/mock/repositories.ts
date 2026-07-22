@@ -259,6 +259,7 @@ export class MockUploadRepository implements UploadRepository {
   }
   async tick() {
     useDemoStore.getState().tickUploads();
+    return true;
   }
 }
 

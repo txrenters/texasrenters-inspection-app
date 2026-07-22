@@ -5,6 +5,11 @@ import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type { LocalMedia, UploadItem } from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
+import {
+  ApiConnectionError,
+  cachedApiRecord,
+  storeApiRecord,
+} from '../../storage/offline-record-cache';
 import type {
   AuthRepository,
   CatalogRepository,
@@ -25,6 +30,7 @@ const propertySchema = z.object({
   externalPortfolioId: z.string(),
   name: z.string(),
   address: z.string(),
+  unitName: z.string().nullable().optional(),
   cityStateZip: z.string(),
   bedrooms: z.number(),
   bathrooms: z.number(),
@@ -37,6 +43,8 @@ const inspectionSchema = z.object({
   id: z.string(),
   externalInspectionId: z.string(),
   propertyId: z.string(),
+  unitId: z.string().nullable().optional(),
+  unitName: z.string().nullable().optional(),
   type: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT']),
   baselineInspectionId: z.string().nullable().optional(),
   baselineScheduledAt: z.string().optional(),
@@ -101,8 +109,11 @@ const findingSchema = z.object({
   comparisonResult: z.enum([
     'POSSIBLE_NEW_DAMAGE',
     'EXISTING_CONDITION',
-    'INSUFFICIENT_EVIDENCE',
+    'NO_MATERIAL_CHANGE',
     'NORMAL_WEAR',
+    'OWNER_MAINTENANCE',
+    'MISSING_EVIDENCE',
+    'INSUFFICIENT_DATA',
   ]),
   confidence: z.number(),
   videoTimestampStart: z.number(),
@@ -146,6 +157,26 @@ const floorPlanSchema = z
     contentPath: z.string().startsWith('/api/v1/technician/floor-plans/'),
   })
   .nullable();
+const profileSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  roles: z.array(z.string()),
+  mustChangePassword: z.boolean(),
+});
+const inspectionContextSchema = z.object({
+  inspection: inspectionSchema,
+  property: propertySchema,
+  rooms: z.array(roomSchema),
+  pendingReviewCount: z.number(),
+});
+const dashboardSchema = z.object({
+  today: z.number(),
+  inProgress: z.number(),
+  completed: z.number(),
+  pendingUploads: z.number(),
+  assignments: z.array(inspectionSchema),
+  recent: z.array(inspectionSchema),
+});
 
 export async function requestJson(path: string, options: RequestInit = {}): Promise<unknown> {
   if (!environment.apiBaseUrl)
@@ -179,10 +210,12 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
     } catch {
       if (hasFallback && !options.signal?.aborted) continue;
       if (controller.signal.aborted && !options.signal?.aborted)
-        throw new Error(
+        throw new ApiConnectionError(
           'The TexasRenters API did not respond in time. Check the server and retry.',
         );
-      throw new Error('Cannot connect to the TexasRenters API. Check the server and retry.');
+      throw new ApiConnectionError(
+        'Cannot connect to the TexasRenters API. Check the server and retry.',
+      );
     } finally {
       clearTimeout(timeout);
       options.signal?.removeEventListener('abort', abortFromCaller);
@@ -190,11 +223,15 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
       if (hasFallback && [502, 503, 504].includes(response.status)) continue;
-      throw new Error(payload?.message ?? `TexasRenters API request failed (${response.status}).`);
+      const message = payload?.message ?? `TexasRenters API request failed (${response.status}).`;
+      if (response.status >= 500) throw new ApiConnectionError(message);
+      throw new Error(message);
     }
     return response.status === 204 ? undefined : response.json();
   }
-  throw new Error('Cannot connect to the TexasRenters API. Check the server and retry.');
+  throw new ApiConnectionError(
+    'Cannot connect to the TexasRenters API. Check the server and retry.',
+  );
 }
 
 const getJson = (path: string) => requestJson(path);
@@ -225,18 +262,14 @@ export class ApiAuthRepository implements AuthRepository {
   async currentUser() {
     const { data } = await getSupabaseClient().auth.getSession();
     if (!data.session) return null;
-    const profile = z
-      .object({
-        id: z.string(),
-        displayName: z.string(),
-        roles: z.array(z.string()),
-        mustChangePassword: z.boolean(),
-      })
-      .parse(await getJson('/api/v1/auth/me'));
+    const profile = await cachedApiRecord('auth:profile', profileSchema, () =>
+      getJson('/api/v1/auth/me'),
+    );
     if (!profile.roles.includes('INSPECTION_TECHNICIAN')) {
       await getSupabaseClient().auth.signOut({ scope: 'local' });
       throw new Error('TexasRenters Inspection Mobile is available only to technicians.');
     }
+    useDemoStore.getState().selectUser(profile.id);
     return {
       id: profile.id,
       name: profile.displayName,
@@ -265,6 +298,7 @@ export class ApiAuthRepository implements AuthRepository {
       }
     }
     const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
+    useDemoStore.getState().signOut();
     if (error) throw new Error(error.message);
   }
 }
@@ -280,8 +314,8 @@ export class ApiPropertyRepository implements PropertyRepository {
     return Promise.all(ids.map((id) => this.get(id)));
   }
   async get(id: string) {
-    return propertySchema.parse(
-      await getJson(`/api/v1/technician/properties/${encodeURIComponent(id)}`),
+    return cachedApiRecord(`property:${id}`, propertySchema, () =>
+      getJson(`/api/v1/technician/properties/${encodeURIComponent(id)}`),
     );
   }
 }
@@ -295,39 +329,37 @@ export class ApiCatalogRepository implements CatalogRepository {
 
 export class ApiInspectionRepository implements InspectionRepository {
   async dashboard() {
-    return z
-      .object({
-        today: z.number(),
-        inProgress: z.number(),
-        completed: z.number(),
-        pendingUploads: z.number(),
-        assignments: z.array(inspectionSchema),
-        recent: z.array(inspectionSchema),
-      })
-      .parse(await getJson('/api/v1/technician/dashboard'));
+    return cachedApiRecord('dashboard', dashboardSchema, () =>
+      getJson('/api/v1/technician/dashboard'),
+    );
   }
   async list(filters: { status?: string; search?: string } = {}) {
     const query = new URLSearchParams({ page: '1', pageSize: '25' });
     if (filters.status) query.set('status', filters.status);
     if (filters.search?.trim()) query.set('search', filters.search.trim());
-    return z
-      .object({ items: z.array(inspectionSchema) })
-      .parse(await getJson(`/api/v1/technician/inspections?${query.toString()}`)).items;
+    const schema = z.object({ items: z.array(inspectionSchema) });
+    return (
+      await cachedApiRecord(`inspections:${query.toString()}`, schema, () =>
+        getJson(`/api/v1/technician/inspections?${query.toString()}`),
+      )
+    ).items;
   }
   async get(id: string) {
-    return inspectionSchema.parse(
-      await getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}`),
+    return cachedApiRecord(`inspection:${id}`, inspectionSchema, () =>
+      getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}`),
     );
   }
   async context(id: string) {
-    return z
-      .object({
-        inspection: inspectionSchema,
-        property: propertySchema,
-        rooms: z.array(roomSchema),
-        pendingReviewCount: z.number(),
-      })
-      .parse(await getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/context`));
+    const context = await cachedApiRecord(`inspection-context:${id}`, inspectionContextSchema, () =>
+      getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/context`),
+    );
+    await Promise.all([
+      storeApiRecord(`inspection:${id}`, inspectionSchema, context.inspection),
+      storeApiRecord(`property:${context.property.id}`, propertySchema, context.property),
+      storeApiRecord(`inspection-rooms:${id}`, z.array(roomSchema), context.rooms),
+      ...context.rooms.map((room) => storeApiRecord(`room:${room.id}`, roomSchema, room)),
+    ]);
+    return { ...context, rooms: context.rooms.map(withLocalRoomState) };
   }
   async start(id: string) {
     return inspectionSchema.parse(
@@ -340,15 +372,18 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
   }
   async rooms(inspectionId: string) {
-    return z
-      .array(roomSchema)
-      .parse(
-        await getJson(`/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/rooms`),
-      );
+    const rooms = await cachedApiRecord(
+      `inspection-rooms:${inspectionId}`,
+      z.array(roomSchema),
+      () => getJson(`/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/rooms`),
+    );
+    return rooms.map(withLocalRoomState);
   }
   async room(roomId: string) {
-    return roomSchema.parse(
-      await getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}`),
+    return withLocalRoomState(
+      await cachedApiRecord(`room:${roomId}`, roomSchema, () =>
+        getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}`),
+      ),
     );
   }
   async updateRoomNote(roomId: string, note: string) {
@@ -396,7 +431,12 @@ export class ApiMediaRepository implements MediaRepository {
   async listForRoom(roomId: string) {
     const localRecords = useDemoStore
       .getState()
-      .media.filter((item) => item.roomId === roomId && item.id.startsWith('local-media-'));
+      .media.filter(
+        (item) =>
+          item.ownerUserId === useDemoStore.getState().selectedUserId &&
+          item.roomId === roomId &&
+          item.id.startsWith('local-media-'),
+      );
     let records: Array<{
       id: string;
       inspectionId: string;
@@ -430,17 +470,16 @@ export class ApiMediaRepository implements MediaRepository {
       recordedAt: record.createdAt,
       note: '',
     }));
-    return [
-      ...localRecords,
-      ...remoteRecords.filter(
-        (remote) => !localRecords.some((local) => local.id === remote.id),
-      ),
-    ];
+    // Keep the durable local file after server confirmation, but show the
+    // authoritative server record once it exists so the room never displays a
+    // duplicate recording.
+    return remoteRecords.length ? remoteRecords : localRecords;
   }
   async save(input: Omit<LocalMedia, 'id' | 'recordedAt'>) {
     const media: LocalMedia = {
       ...input,
       id: `local-media-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      ownerUserId: useDemoStore.getState().selectedUserId ?? undefined,
       recordedAt: new Date().toISOString(),
     };
     useDemoStore.getState().saveMedia(media);
@@ -469,10 +508,13 @@ export class ApiUploadRepository implements UploadRepository {
     }
   }
   async enqueue(media: LocalMedia) {
+    if (!media.ownerUserId || media.ownerUserId !== useDemoStore.getState().selectedUserId)
+      throw new Error('This recording belongs to a different technician session.');
     const existing = localUploads().find((item) => item.mediaId === media.id);
     if (existing) return existing;
     const item: UploadItem = {
       id: `local-upload-${media.id}`,
+      ownerUserId: media.ownerUserId,
       mediaId: media.id,
       inspectionId: media.inspectionId,
       roomId: media.roomId,
@@ -484,6 +526,7 @@ export class ApiUploadRepository implements UploadRepository {
       progress: 0,
       processingStatus: 'NOT_STARTED',
       processingProgress: 0,
+      attemptCount: 0,
       createdAt: new Date().toISOString(),
     };
     useDemoStore.getState().enqueueUpload(item);
@@ -494,15 +537,32 @@ export class ApiUploadRepository implements UploadRepository {
     this.updateLocal(id, { status: 'PAUSED' });
   }
   async resume(id: string) {
-    this.updateLocal(id, { status: 'PENDING', lastError: undefined });
+    this.updateLocal(id, {
+      status: 'PENDING',
+      attemptCount: 0,
+      nextAttemptAt: undefined,
+      lastError: undefined,
+    });
     void this.tick();
   }
   async retry(id: string) {
-    this.updateLocal(id, { status: 'PENDING', progress: 0, lastError: undefined });
+    this.updateLocal(id, {
+      status: 'PENDING',
+      progress: 0,
+      attemptCount: 0,
+      nextAttemptAt: undefined,
+      lastError: undefined,
+    });
     void this.tick();
   }
   async retryProcessing(id: string) {
-    this.updateLocal(id, { processingStatus: 'NOT_STARTED', processingProgress: 0 });
+    if (localUploads().some((item) => item.id === id)) {
+      this.updateLocal(id, { processingStatus: 'NOT_STARTED', processingProgress: 0 });
+      return;
+    }
+    // Server-backed uploads: id is the media id — ask the backend to re-run
+    // transcription and AI analysis.
+    await writeJson(`/api/v1/technician/media/${encodeURIComponent(id)}/reprocess`, 'POST');
   }
   async remove(id: string) {
     if (!localUploads().some((item) => item.id === id))
@@ -510,12 +570,19 @@ export class ApiUploadRepository implements UploadRepository {
     useDemoStore.getState().removeUpload(id);
   }
 
-  // Pushes one pending recording per pass; the uploads/processing screens call
-  // this on an interval, so the queue drains even after transient failures.
-  tick = async () => {
-    if (uploadInFlight) return;
-    const pending = localUploads().find((item) => item.status === 'PENDING');
-    if (!pending) return;
+  // Push one durable local recording per pass. A global foreground runner calls
+  // this independently of the Uploads screen, so field work can continue while
+  // transfers happen and interrupted uploads recover when the app resumes.
+  tick = async (): Promise<boolean> => {
+    if (uploadInFlight) return false;
+    const now = Date.now();
+    const pending = localUploads().find(
+      (item) =>
+        item.status === 'UPLOADING' ||
+        (item.status === 'PENDING' &&
+          (!item.nextAttemptAt || new Date(item.nextAttemptAt).getTime() <= now)),
+    );
+    if (!pending) return false;
     uploadInFlight = true;
     const store = useDemoStore.getState();
     try {
@@ -525,7 +592,7 @@ export class ApiUploadRepository implements UploadRepository {
           status: 'FAILED',
           lastError: 'The recording file is no longer on this device. Record the room again.',
         });
-        return;
+        return true;
       }
       const fileInfo = await LegacyFileSystem.getInfoAsync(media.uri);
       if (!fileInfo.exists) {
@@ -533,15 +600,19 @@ export class ApiUploadRepository implements UploadRepository {
           status: 'FAILED',
           lastError: 'The recording file is no longer on this device. Record the room again.',
         });
-        return;
+        return true;
       }
       const { data } = await getSupabaseClient().auth.getSession();
       if (!data.session) throw new Error('Your session has expired. Sign in again.');
       const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
-      if (!baseUrl) throw new Error('The TexasRenters API URL is not configured for this app build.');
+      if (!baseUrl)
+        throw new Error('The TexasRenters API URL is not configured for this app build.');
       store.updateUpload(pending.id, { status: 'UPLOADING', progress: 0, lastError: undefined });
       const task = LegacyFileSystem.createUploadTask(
-        resolveApiUrl(baseUrl, `/api/v1/technician/rooms/${encodeURIComponent(pending.roomId)}/media`),
+        resolveApiUrl(
+          baseUrl,
+          `/api/v1/technician/rooms/${encodeURIComponent(pending.roomId)}/media`,
+        ),
         media.uri,
         {
           httpMethod: 'POST',
@@ -558,14 +629,9 @@ export class ApiUploadRepository implements UploadRepository {
         },
         (progress) => {
           if (progress.totalBytesExpectedToSend > 0)
-            useDemoStore
-              .getState()
-              .updateUpload(pending.id, {
-                progress: Math.min(
-                  0.99,
-                  progress.totalBytesSent / progress.totalBytesExpectedToSend,
-                ),
-              });
+            useDemoStore.getState().updateUpload(pending.id, {
+              progress: Math.min(0.99, progress.totalBytesSent / progress.totalBytesExpectedToSend),
+            });
         },
       );
       const result = await task.uploadAsync();
@@ -576,25 +642,31 @@ export class ApiUploadRepository implements UploadRepository {
         } catch {
           message = undefined;
         }
-        store.updateUpload(pending.id, {
-          status: 'FAILED',
-          lastError:
-            message ?? `Upload failed (${result?.status ?? 'no response'}). Tap retry to resend.`,
-        });
-        return;
+        if (!result || result.status >= 500) {
+          this.deferForRetry(
+            pending,
+            message ?? 'The server is temporarily unavailable. Upload will retry automatically.',
+          );
+        } else {
+          store.updateUpload(pending.id, {
+            status: 'FAILED',
+            lastError: message ?? `Upload failed (${result.status}). Tap retry to resend.`,
+          });
+        }
+        return true;
       }
       // The backend now owns this recording; drop the local queue entry so the
       // uploads list shows the server-backed item instead.
       store.removeUpload(pending.id);
-      store.removeMedia(pending.mediaId);
+      return true;
     } catch (error) {
-      useDemoStore.getState().updateUpload(pending.id, {
-        status: 'FAILED',
-        lastError:
-          error instanceof Error
-            ? error.message
-            : 'Upload failed unexpectedly. It will retry when you tap retry.',
-      });
+      this.deferForRetry(
+        pending,
+        error instanceof Error
+          ? error.message
+          : 'The network is unavailable. Upload will retry automatically.',
+      );
+      return true;
     } finally {
       uploadInFlight = false;
     }
@@ -605,10 +677,51 @@ export class ApiUploadRepository implements UploadRepository {
       return unavailable('Server-backed uploads are managed by the TexasRenters platform.');
     useDemoStore.getState().updateUpload(id, update);
   }
+
+  private deferForRetry(item: UploadItem, message: string) {
+    const attemptCount = (item.attemptCount ?? 0) + 1;
+    const delaySeconds = Math.min(60, 2 ** Math.min(attemptCount, 6));
+    useDemoStore.getState().updateUpload(item.id, {
+      status: 'PENDING',
+      progress: 0,
+      attemptCount,
+      nextAttemptAt: new Date(Date.now() + delaySeconds * 1_000).toISOString(),
+      lastError: `${message} Saved safely on this device; retrying automatically.`,
+    });
+  }
 }
 
 function localUploads() {
-  return useDemoStore.getState().uploads.filter((item) => item.id.startsWith('local-upload-'));
+  const state = useDemoStore.getState();
+  return state.uploads.filter(
+    (item) => item.id.startsWith('local-upload-') && item.ownerUserId === state.selectedUserId,
+  );
+}
+
+function withLocalRoomState(room: z.infer<typeof roomSchema>) {
+  const state = useDemoStore.getState();
+  const upload = state.uploads.find(
+    (item) =>
+      item.ownerUserId === state.selectedUserId &&
+      item.id.startsWith('local-upload-') &&
+      item.roomId === room.id,
+  );
+  const hasLocalRecording = state.media.some(
+    (item) =>
+      item.ownerUserId === state.selectedUserId &&
+      item.id.startsWith('local-media-') &&
+      item.roomId === room.id,
+  );
+  if (!upload && !hasLocalRecording) return room;
+  return {
+    ...room,
+    completionStatus:
+      room.completionStatus === 'COMPLETED' || room.completionStatus === 'SKIPPED'
+        ? room.completionStatus
+        : ('RECORDING_SAVED' as const),
+    uploadStatus: upload?.status ?? room.uploadStatus,
+    processingStatus: upload?.processingStatus ?? room.processingStatus,
+  };
 }
 
 export class ApiFindingRepository implements FindingRepository {

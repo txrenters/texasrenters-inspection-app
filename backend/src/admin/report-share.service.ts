@@ -111,6 +111,7 @@ export class ReportShareService {
         status: true,
         scheduledAt: true,
         completedAt: true,
+        propertywareUnit: { select: { name: true } },
         propertywareBuilding: {
           select: { name: true, addressLine1: true, city: true, state: true, postalCode: true },
         },
@@ -149,6 +150,7 @@ export class ReportShareService {
       property: {
         name: building?.name ?? 'Property',
         addressLine1: building?.addressLine1 ?? '',
+        unitName: inspection.propertywareUnit?.name ?? null,
         city: building?.city ?? '',
         state: building?.state ?? '',
         postalCode: building?.postalCode ?? '',

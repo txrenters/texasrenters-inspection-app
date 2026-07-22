@@ -2,12 +2,7 @@ import type { InspectionType } from '@texasrenters/shared';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
 export type InspectionStatus =
-  | 'SCHEDULED'
-  | 'IN_PROGRESS'
-  | 'PROCESSING'
-  | 'REVIEW_REQUIRED'
-  | 'COMPLETED'
-  | 'CANCELLED';
+  'SCHEDULED' | 'IN_PROGRESS' | 'PROCESSING' | 'REVIEW_REQUIRED' | 'COMPLETED' | 'CANCELLED';
 export type Priority = 'STANDARD' | 'HIGH';
 export type RoomCompletionStatus = 'NOT_STARTED' | 'RECORDING_SAVED' | 'COMPLETED' | 'SKIPPED';
 export type UploadStatus = 'PENDING' | 'UPLOADING' | 'PAUSED' | 'FAILED' | 'COMPLETED';
@@ -39,6 +34,7 @@ export interface Property {
   externalPortfolioId: string;
   name: string;
   address: string;
+  unitName?: string | null;
   cityStateZip: string;
   bedrooms: number;
   bathrooms: number;
@@ -116,6 +112,8 @@ export interface Inspection {
   id: string;
   externalInspectionId: string;
   propertyId: string;
+  unitId?: string | null;
+  unitName?: string | null;
   type: InspectionType;
   baselineInspectionId?: string | null;
   baselineScheduledAt?: string;
@@ -138,6 +136,7 @@ export interface InspectionContext {
 
 export interface LocalMedia {
   id: string;
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   propertyAddress?: string;
@@ -151,6 +150,7 @@ export interface LocalMedia {
 
 export interface RoomSnapshot {
   id: string;
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   uri: string;
@@ -162,6 +162,7 @@ export interface RoomSnapshot {
 
 export interface UploadItem {
   id: string;
+  ownerUserId?: string;
   mediaId: string;
   inspectionId: string;
   roomId: string;
@@ -172,6 +173,8 @@ export interface UploadItem {
   status: UploadStatus;
   progress: number;
   lastError?: string;
+  attemptCount?: number;
+  nextAttemptAt?: string;
   processingStatus: ProcessingStatus;
   processingProgress: number;
   createdAt: string;
@@ -186,7 +189,13 @@ export interface Finding {
   category: string;
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   comparisonResult:
-    'POSSIBLE_NEW_DAMAGE' | 'EXISTING_CONDITION' | 'INSUFFICIENT_EVIDENCE' | 'NORMAL_WEAR';
+    | 'POSSIBLE_NEW_DAMAGE'
+    | 'EXISTING_CONDITION'
+    | 'NO_MATERIAL_CHANGE'
+    | 'NORMAL_WEAR'
+    | 'OWNER_MAINTENANCE'
+    | 'MISSING_EVIDENCE'
+    | 'INSUFFICIENT_DATA';
   confidence: number;
   videoTimestampStart: number;
   videoTimestampEnd: number;

@@ -1,4 +1,4 @@
-import { UserRole } from '@texasrenters/shared';
+﻿import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { AdminService } from '../src/admin/admin.service';
@@ -136,7 +136,7 @@ describe('administrator inspection operations', () => {
     const created = { id: 'inspection-1', status: 'SCHEDULED' };
     const tx = {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-      propertywareUnit: { findFirst: jest.fn() },
+      propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: {
         findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }, { id: 'area-2' }]),
@@ -196,7 +196,7 @@ describe('administrator inspection operations', () => {
     };
     const tx = {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-      propertywareUnit: { findFirst: jest.fn() },
+      propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn() },
       inspection: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
@@ -231,7 +231,7 @@ describe('administrator inspection operations', () => {
     };
     const tx = {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-      propertywareUnit: { findFirst: jest.fn() },
+      propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
       inspection: {
@@ -279,7 +279,7 @@ describe('administrator inspection operations', () => {
       };
       const tx = {
         propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-        propertywareUnit: { findFirst: jest.fn() },
+        propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
         propertywareLease: { findFirst: jest.fn() },
         propertyArea: { findMany: jest.fn() },
         inspection: {

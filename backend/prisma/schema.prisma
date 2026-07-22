@@ -95,6 +95,17 @@ enum AiAnalysisStatus {
   FAILED
 }
 
+enum AiProvider {
+  ANTHROPIC
+  OPENAI
+}
+
+enum AiCredentialStatus {
+  UNVERIFIED
+  VALID
+  INVALID
+}
+
 enum FindingReviewStatus {
   PENDING_REVIEW
   APPROVED
@@ -141,28 +152,74 @@ enum WebhookProcessingStatus {
 }
 
 model Organization {
-  id          String               @id @default(uuid()) @db.Uuid
-  name        String
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
-  members     OrganizationMember[]
-  properties  Property[]
-  inspections Inspection[]
-  auditLogs   AuditLog[]
+  id            String                    @id @default(uuid()) @db.Uuid
+  name          String
+  createdAt     DateTime                  @default(now())
+  updatedAt     DateTime                  @updatedAt
+  members       OrganizationMember[]
+  properties    Property[]
+  inspections   Inspection[]
+  auditLogs     AuditLog[]
+  aiSettings    OrganizationAiSettings?
+  aiProviders   AiProviderConfiguration[]
+  aiUsageEvents AiUsageEvent[]
+}
+
+model OrganizationAiSettings {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @unique @db.Uuid
+  activeProvider AiProvider   @default(ANTHROPIC)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model AiProviderConfiguration {
+  id                 String             @id @default(uuid()) @db.Uuid
+  organizationId     String             @db.Uuid
+  provider           AiProvider
+  modelId            String
+  encryptedApiKey    String?
+  credentialStatus   AiCredentialStatus @default(UNVERIFIED)
+  lastValidatedAt    DateTime?
+  monthlyTokenBudget Int?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@index([provider, credentialStatus])
+}
+
+model AiUsageEvent {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  provider       AiProvider
+  modelId        String
+  operation      String
+  sourceId       String?      @db.Uuid
+  inputTokens    Int          @default(0)
+  outputTokens   Int          @default(0)
+  totalTokens    Int          @default(0)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, provider, createdAt])
+  @@index([sourceId])
 }
 
 model UserProfile {
-  id                 String                 @id @default(uuid()) @db.Uuid
-  authUserId         String                 @unique
-  email              String                 @unique
+  id                 String                  @id @default(uuid()) @db.Uuid
+  authUserId         String                  @unique
+  email              String                  @unique
   displayName        String
-  isActive           Boolean                @default(true)
-  createdAt          DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
+  isActive           Boolean                 @default(true)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
   memberships        OrganizationMember[]
-  assignments        InspectionAssignment[] @relation("AssignedTechnician")
-  assignmentsCreated InspectionAssignment[] @relation("AssignmentActor")
-  assignmentsEnded   InspectionAssignment[] @relation("AssignmentEndActor")
+  assignments        InspectionAssignment[]  @relation("AssignedTechnician")
+  assignmentsCreated InspectionAssignment[]  @relation("AssignmentActor")
+  assignmentsEnded   InspectionAssignment[]  @relation("AssignmentEndActor")
   media              InspectionMedia[]
   reviews            FindingReview[]
   pushDevices        MobilePushDevice[]
@@ -217,6 +274,9 @@ model Property {
 model PropertyFloorPlan {
   id             String                   @id @default(uuid()) @db.Uuid
   propertyId     String                   @db.Uuid
+  // Null = plan for the whole building (single-family or shared layout).
+  // Set = plan for one specific unit of a multi-unit building.
+  unitId         String?                  @db.Uuid
   fileName       String
   mimeType       String
   storageKey     String
@@ -225,7 +285,10 @@ model PropertyFloorPlan {
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
   property       Property                 @relation(fields: [propertyId], references: [id])
+  unit           PropertywareUnit?        @relation("UnitFloorPlans", fields: [unitId], references: [id], onDelete: Restrict)
   extractionJobs FloorPlanExtractionJob[]
+
+  @@index([propertyId, unitId])
 }
 
 model FloorPlanExtractionJob {
@@ -245,21 +308,26 @@ model FloorPlanExtractionJob {
 }
 
 model PropertyFloor {
-  id         String         @id @default(uuid()) @db.Uuid
-  propertyId String         @db.Uuid
+  id         String            @id @default(uuid()) @db.Uuid
+  propertyId String            @db.Uuid
+  unitId     String?           @db.Uuid
   name       String
   sortOrder  Int
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
-  property   Property       @relation(fields: [propertyId], references: [id])
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  property   Property          @relation(fields: [propertyId], references: [id])
+  unit       PropertywareUnit? @relation("UnitFloors", fields: [unitId], references: [id], onDelete: Restrict)
   areas      PropertyArea[]
 
-  @@unique([propertyId, name])
+  // The database index is created NULLS NOT DISTINCT so building-level floor
+  // names (unitId null) stay unique among themselves.
+  @@unique([propertyId, unitId, name])
 }
 
 model PropertyArea {
   id                 String                  @id @default(uuid()) @db.Uuid
   propertyId         String                  @db.Uuid
+  unitId             String?                 @db.Uuid
   floorId            String?                 @db.Uuid
   name               String
   inspectionOrder    Int
@@ -269,13 +337,16 @@ model PropertyArea {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   property           Property                @relation(fields: [propertyId], references: [id])
+  unit               PropertywareUnit?       @relation("UnitAreas", fields: [unitId], references: [id], onDelete: Restrict)
   floor              PropertyFloor?          @relation(fields: [floorId], references: [id])
   inspectionAreas    InspectionArea[]
   baselineConditions BaselineAreaCondition[]
   findings           InspectionFinding[]
 
-  @@unique([propertyId, floorId, name])
-  @@index([propertyId, floorId, inspectionOrder])
+  // The database index is created NULLS NOT DISTINCT so building-level areas
+  // (unitId null) stay unique among themselves.
+  @@unique([propertyId, unitId, floorId, name])
+  @@index([propertyId, unitId, floorId, inspectionOrder])
 }
 
 model BaselineInspection {
@@ -315,18 +386,18 @@ model BaselineMedia {
 }
 
 model Inspection {
-  id                     String                 @id @default(uuid()) @db.Uuid
-  organizationId         String                 @db.Uuid
-  propertyId             String?                @db.Uuid
-  propertywareBuildingId String?                @db.Uuid
-  propertywareUnitId     String?                @db.Uuid
-  propertywareLeaseId    String?                @db.Uuid
+  id                     String                  @id @default(uuid()) @db.Uuid
+  organizationId         String                  @db.Uuid
+  propertyId             String?                 @db.Uuid
+  propertywareBuildingId String?                 @db.Uuid
+  propertywareUnitId     String?                 @db.Uuid
+  propertywareLeaseId    String?                 @db.Uuid
   inspectionType         InspectionType
-  baselineInspectionId   String?                @db.Uuid
-  priority               String                 @default("STANDARD")
+  baselineInspectionId   String?                 @db.Uuid
+  priority               String                  @default("STANDARD")
   internalNotes          String?
-  createdById            String?                @db.Uuid
-  status                 InspectionStatus       @default(SCHEDULED)
+  createdById            String?                 @db.Uuid
+  status                 InspectionStatus        @default(SCHEDULED)
   scheduledAt            DateTime
   startedAt              DateTime?
   completedAt            DateTime?
@@ -334,15 +405,15 @@ model Inspection {
   cancellationReason     String?
   propertySnapshot       Json?
   leaseSnapshot          Json?
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
-  organization           Organization           @relation(fields: [organizationId], references: [id])
-  property               Property?              @relation(fields: [propertyId], references: [id])
-  propertywareBuilding   PropertywareBuilding?  @relation(fields: [propertywareBuildingId], references: [id])
-  propertywareUnit       PropertywareUnit?      @relation(fields: [propertywareUnitId], references: [id])
-  propertywareLease      PropertywareLease?     @relation(fields: [propertywareLeaseId], references: [id])
-  baselineInspection     Inspection?            @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
-  comparisonInspections  Inspection[]           @relation("InspectionLifecycleBaseline")
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  organization           Organization            @relation(fields: [organizationId], references: [id])
+  property               Property?               @relation(fields: [propertyId], references: [id])
+  propertywareBuilding   PropertywareBuilding?   @relation(fields: [propertywareBuildingId], references: [id])
+  propertywareUnit       PropertywareUnit?       @relation(fields: [propertywareUnitId], references: [id])
+  propertywareLease      PropertywareLease?      @relation(fields: [propertywareLeaseId], references: [id])
+  baselineInspection     Inspection?             @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
+  comparisonInspections  Inspection[]            @relation("InspectionLifecycleBaseline")
   assignments            InspectionAssignment[]
   areas                  InspectionArea[]
   findings               InspectionFinding[]
@@ -498,6 +569,9 @@ model PropertywareUnit {
   portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
   leases              PropertywareLease[]
   inspections         Inspection[]
+  floorPlans          PropertyFloorPlan[]   @relation("UnitFloorPlans")
+  floors              PropertyFloor[]       @relation("UnitFloors")
+  areas               PropertyArea[]        @relation("UnitAreas")
 
   @@unique([organizationId, sourceSystem, externalId])
   @@index([organizationId, buildingId, isActive])

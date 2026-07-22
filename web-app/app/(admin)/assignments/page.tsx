@@ -19,7 +19,8 @@ import { useAssignments, useTechnicians } from '@/lib/queries';
 
 const ASSIGNMENT_HEADERS = [
   'Inspection',
-  'Property / unit',
+  'Property',
+  'Unit',
   'Technician',
   'Assigned by',
   'Assigned',
@@ -131,10 +132,8 @@ export default function AssignmentsPage() {
                 </td>
                 <td>
                   {assignment.inspection?.propertywareBuilding?.name ?? 'Property unavailable'}
-                  <small className="cell-note">
-                    {assignment.inspection?.propertywareUnit?.name ?? 'Entire property'}
-                  </small>
                 </td>
+                <td>{assignment.inspection?.propertywareUnit?.name ?? 'Entire property'}</td>
                 <td>
                   {assignment.technician?.displayName ?? assignment.technicianId ?? 'Unassigned'}
                 </td>

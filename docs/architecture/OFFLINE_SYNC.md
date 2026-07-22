@@ -1,23 +1,17 @@
 # Offline Synchronization
 
-## Current demo behavior
+## Current device behavior
 
-Zustand persists lightweight demo metadata through SecureStore on native devices. Persisted data includes selected user, room changes, notes, local media metadata, queue items, upload failures, simulation settings, and finding decisions. Video bytes are represented by local mock URIs and are not stored in SecureStore.
+Zustand persists local workflow metadata through SQLite on native devices. Persisted data includes room changes, notes, durable local-media metadata, queue items, upload failures, retry checkpoints, simulation settings, and finding decisions. Supabase access and refresh tokens remain in the device keychain or keystore rather than SQLite.
 
-When offline simulation is enabled:
+Validated, user-scoped REST DTOs for the authenticated profile, assigned inspections, inspection context, properties, and approved rooms are cached in SQLite. Only connection or server-availability failures may use that cache; authorization, assignment, and business-rule responses from the backend always win.
 
-- Cached mock properties, inspections, rooms, and findings remain available.
-- Room recording and review remain available.
-- Saved media is added to the local queue.
-- Transfer progress does not advance.
-- Failed and pending items remain visible and retryable after online simulation returns.
+Saving a recording persists the video in app document storage, records its metadata, creates an idempotent queue entry bound to one inspection area, and immediately advances the technician to the next unfinished approved room. The queue is mounted above every authenticated screen rather than being owned by the Uploads tab.
 
-Reset Demo Data clears persisted demo state only after destructive confirmation.
+The foreground runner retries connection and 5xx failures with bounded exponential backoff and resumes interrupted entries when the app becomes active. It waits for backend confirmation, then retains the local recording as recoverable evidence. Never delete a local video solely because bytes were transferred.
 
-## Production direction
+Server authorization and approved-area state win conflicts, while device media remains recoverable. Native OS-level upload while the app is suspended or terminated is intentionally deferred; queued work resumes automatically when the app returns to the foreground.
 
-Production structured records will use SQLite tables for cached inspections, property areas, local media, upload queue, and sync operations. Repositories—not screens—own persistence.
+## Demo behavior
 
-The production algorithm remains: transactionally persist capture metadata and local URI; enqueue an idempotent operation; request a short-lived room-bound upload session when online; checkpoint resumable progress; register media against the same inspection area; wait for backend confirmation; and only then mark local media cleanup-eligible. Never delete a local video solely because bytes were transferred.
-
-Server authorization and approved-area state win conflicts, while device media remains recoverable. Native background upload is intentionally deferred.
+Demo Mode uses the same repository and persisted-queue boundary with simulated transfer and processing stages. Offline simulation leaves media pending and accessible. Reset Demo Data clears persisted demo state only after destructive confirmation.

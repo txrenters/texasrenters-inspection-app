@@ -7,6 +7,7 @@ const RECORDINGS_FOLDER = 'inspection-recordings';
 const FALLBACK_MEGABYTES_PER_SECOND = 0.66;
 
 type RecordingDraftInput = {
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   uri: string;
@@ -15,6 +16,7 @@ type RecordingDraftInput = {
 };
 
 export function buildRecordingDraft({
+  ownerUserId,
   inspectionId,
   roomId,
   uri,
@@ -25,6 +27,7 @@ export function buildRecordingDraft({
 
   return {
     id: `draft-${Date.now()}`,
+    ownerUserId,
     inspectionId,
     roomId,
     uri,

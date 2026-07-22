@@ -16,6 +16,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
+import { MediaProcessingService } from './media-processing.service';
 import type {
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -36,6 +37,13 @@ const allowedVideoMimeTypes = new Set([
   'video/3gpp',
   'video/x-matroska',
 ]);
+
+// Propertyware unit names vary ("A", "304", "Unit B"); label consistently.
+function formatUnitLabel(name: string) {
+  return /^(unit|apt|apartment|suite|ste|#)\b/i.test(name.trim())
+    ? name.trim()
+    : `Unit ${name.trim()}`;
+}
 
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
 
@@ -76,6 +84,9 @@ const technicianInspectionSummarySelect = {
   status: true,
   priority: true,
   internalNotes: true,
+  propertywareUnit: {
+    select: { id: true, name: true, bedrooms: true, bathrooms: true },
+  },
   propertywareBuilding: {
     select: {
       id: true,
@@ -112,16 +123,13 @@ const technicianInspectionContextSelect = {
       city: true,
       state: true,
       postalCode: true,
-      units: {
-        where: { isActive: true },
-        orderBy: { name: 'asc' as const },
-        take: 1,
-        select: { bedrooms: true, bathrooms: true },
-      },
     },
   },
   areas: {
-    orderBy: { propertyArea: { inspectionOrder: 'asc' as const } },
+    orderBy: [
+      { propertyArea: { floor: { sortOrder: 'asc' as const } } },
+      { propertyArea: { inspectionOrder: 'asc' as const } },
+    ],
     take: 100,
     select: technicianRoomSelect,
   },
@@ -144,6 +152,8 @@ export class TechnicianService {
     @Inject(FloorPlanStorageService) private readonly floorPlanStorage: FloorPlanStorageService,
     @Inject(InspectionMediaStorageService)
     private readonly mediaStorage: InspectionMediaStorageService,
+    @Inject(MediaProcessingService)
+    private readonly mediaProcessing: MediaProcessingService,
   ) {}
 
   async dashboard(user: AuthenticatedUser) {
@@ -282,7 +292,7 @@ export class TechnicianService {
         'ASSIGNED_INSPECTION_NOT_FOUND',
         'Assigned inspection was not found.',
       );
-    const property = this.mapProperty(record.propertywareBuilding);
+    const property = this.mapProperty(record.propertywareBuilding, record.propertywareUnit);
     const rooms = record.areas.map((room) => this.mapRoom(room));
     return {
       inspection: this.mapInspection(record, user.id),
@@ -336,6 +346,9 @@ export class TechnicianService {
       data: { status: InspectionStatus.PROCESSING, completedAt: new Date() },
       select: technicianInspectionSummarySelect,
     });
+    // If every recording finished processing before submission, the
+    // inspection is immediately ready for human review.
+    await this.mediaProcessing.advanceInspection(id);
     return this.mapInspection(updated, user.id);
   }
 
@@ -417,7 +430,10 @@ export class TechnicianService {
       relationLoadStrategy: 'join',
       where: { inspectionId },
       select: technicianRoomSelect,
-      orderBy: { propertyArea: { inspectionOrder: 'asc' } },
+      orderBy: [
+        { propertyArea: { floor: { sortOrder: 'asc' } } },
+        { propertyArea: { inspectionOrder: 'asc' } },
+      ],
       take: 100,
     });
     return rooms.map((room) => this.mapRoom(room));
@@ -574,7 +590,11 @@ export class TechnicianService {
           // A fresh recording also un-skips a previously skipped room.
           await tx.inspectionArea.update({
             where: { id: area.id },
-            data: { completionStatus: InspectionAreaCompletionStatus.RECORDED, skipReason: null },
+            data: {
+              completionStatus: InspectionAreaCompletionStatus.COMPLETED,
+              completedAt: new Date(),
+              skipReason: null,
+            },
           });
           return created;
         });
@@ -583,6 +603,8 @@ export class TechnicianService {
         throw error;
       }
       for (const key of replaced) await this.mediaStorage.delete(key).catch(() => undefined);
+      // Kick off transcription + AI analysis without delaying the upload response.
+      this.mediaProcessing.queue(record.id, user.organizationId);
       return this.mapUploadedMedia(record, area);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
@@ -642,7 +664,10 @@ export class TechnicianService {
           select: {
             propertyArea: { select: { name: true } },
             inspection: {
-              select: { propertywareBuilding: { select: { addressLine1: true } } },
+              select: {
+                propertywareBuilding: { select: { addressLine1: true } },
+                propertywareUnit: { select: { name: true } },
+              },
             },
           },
         },
@@ -655,8 +680,14 @@ export class TechnicianService {
       mediaId: record.id,
       inspectionId: record.inspectionId,
       roomId: record.inspectionAreaId,
-      propertyAddress:
+      propertyAddress: [
         record.inspectionArea.inspection.propertywareBuilding?.addressLine1 ?? 'Assigned property',
+        record.inspectionArea.inspection.propertywareUnit?.name
+          ? formatUnitLabel(record.inspectionArea.inspection.propertywareUnit.name)
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       roomName: record.inspectionArea.propertyArea.name,
       durationSeconds: record.durationSeconds,
       estimatedSizeMb: 0,
@@ -817,9 +848,11 @@ export class TechnicianService {
       assignedUserId: technicianId,
       status: this.mapInspectionStatus(record.status),
       priority: record.priority,
+      unitId: record.propertywareUnit?.id ?? null,
+      unitName: record.propertywareUnit?.name ?? null,
       roomIds: record.areas.map((area) => area.id),
       propertyNotes: record.internalNotes ?? '',
-      property: this.mapPropertySummary(record.propertywareBuilding),
+      property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {
         completed: completedAreas.length,
         total: requiredAreas.length,
@@ -870,10 +903,14 @@ export class TechnicianService {
     };
   }
 
-  private mapPropertySummary(property: TechnicianInspectionSummaryRecord['propertywareBuilding']) {
+  private mapPropertySummary(
+    property: TechnicianInspectionSummaryRecord['propertywareBuilding'],
+    unitName?: string | null,
+  ) {
+    const baseAddress = property?.addressLine1 ?? property?.name ?? 'Assigned property';
     return {
       id: property?.id ?? '',
-      address: property?.addressLine1 ?? property?.name ?? 'Assigned property',
+      address: unitName ? `${baseAddress} · ${formatUnitLabel(unitName)}` : baseAddress,
       cityStateZip: [property?.city, property?.state, property?.postalCode]
         .filter(Boolean)
         .join(', '),
@@ -882,23 +919,36 @@ export class TechnicianService {
   }
 
   private mapProperty(
-    property: Prisma.PropertywareBuildingGetPayload<{
-      select: (typeof technicianInspectionContextSelect)['propertywareBuilding']['select'];
-    }> | null,
+    property: {
+      id: string;
+      externalId: string;
+      externalPortfolioId: string;
+      name: string;
+      addressLine1: string | null;
+      city: string | null;
+      state: string | null;
+      postalCode: string | null;
+      units?: Array<{ bedrooms: number | null; bathrooms: number | null }>;
+    } | null,
+    // The inspection's actual unit. Without it (standalone property reads)
+    // bedroom/bathroom counts fall back to the building's first active unit.
+    unit?: { name: string; bedrooms: number | null; bathrooms: number | null } | null,
   ) {
     if (!property)
       throw new ApplicationError(404, 'ASSIGNED_PROPERTY_NOT_FOUND', 'Property was not found.');
-    const unit = property.units[0];
+    const unitInfo = unit ?? property.units?.[0] ?? null;
+    const baseAddress = property.addressLine1 ?? property.name;
     return {
       id: property.id,
       externalPropertyId: property.externalId,
       externalOwnerId: '',
       externalPortfolioId: property.externalPortfolioId,
       name: property.name,
-      address: property.addressLine1 ?? property.name,
+      address: unit?.name ? `${baseAddress} · ${formatUnitLabel(unit.name)}` : baseAddress,
+      unitName: unit?.name ?? null,
       cityStateZip: [property.city, property.state, property.postalCode].filter(Boolean).join(', '),
-      bedrooms: unit?.bedrooms ?? 0,
-      bathrooms: unit?.bathrooms ?? 0,
+      bedrooms: unitInfo?.bedrooms ?? 0,
+      bathrooms: unitInfo?.bathrooms ?? 0,
       floors: [],
       accessInstructions: '',
       notes: '',

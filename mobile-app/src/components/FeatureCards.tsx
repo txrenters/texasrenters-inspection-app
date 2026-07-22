@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Finding, Inspection, InspectionRoom, Property, UploadItem } from '../domain/models';
 import { AppButton, Card, ProgressBar, PropertyVisual, StatusBadge, formatStatus } from './ui';
 import { type AppColors, radius, spacing, typography, useThemedStyles } from '../theme';
+import { formatUnitName } from '../utils/unit-name';
 
 export function inspectionProgress(rooms: InspectionRoom[]) {
   const required = rooms.filter((room) => room.isRequired);
@@ -30,6 +31,7 @@ export function InspectionSummaryCard({
   const styles = useThemedStyles(createStyles);
   const progressValue = progress.total ? progress.completed / progress.total : 0;
   const uploadAttention = progress.hasFailedUpload;
+  const unitName = formatUnitName(inspection.unitName);
   const action =
     inspection.status === 'SCHEDULED'
       ? 'Start inspection'
@@ -46,10 +48,12 @@ export function InspectionSummaryCard({
       style={({ pressed }) => [styles.inspectionCard, pressed && styles.pressed]}
     >
       <View style={styles.inspectionHeader}>
-        <Text numberOfLines={2} style={styles.eyebrow}>
-          {formatStatus(inspection.type)} · {inspection.priority}
-        </Text>
-        <StatusBadge label={inspection.status} />
+        <View style={styles.summaryBadges}>
+          <StatusBadge label={inspection.type} tone="info" />
+          {unitName ? <StatusBadge label={unitName} tone="info" /> : null}
+          <StatusBadge label={inspection.status} />
+        </View>
+        <Text style={styles.eyebrow}>{formatStatus(inspection.priority)} priority</Text>
       </View>
       <View style={styles.inspectionTop}>
         <PropertyVisual tone={property.imageTone} compact />
@@ -279,6 +283,13 @@ export function formatDuration(seconds: number) {
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
+    summaryBadges: {
+      flex: 1,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: spacing.xs,
+    },
     inspectionCard: {
       backgroundColor: colors.surface,
       borderWidth: 1,

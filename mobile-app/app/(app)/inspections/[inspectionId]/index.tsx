@@ -15,6 +15,7 @@ import {
 } from '../../../../src/components/ui';
 import { useInspectionActions, useInspectionContext } from '../../../../src/features/queries';
 import { type AppColors, spacing, typography, useThemedStyles } from '../../../../src/theme';
+import { formatUnitName } from '../../../../src/utils/unit-name';
 
 export default function InspectionOverviewScreen() {
   const styles = useThemedStyles(createStyles);
@@ -25,6 +26,7 @@ export default function InspectionOverviewScreen() {
   if (!context.data)
     return <ErrorState message="Inspection unavailable" onRetry={() => void context.refetch()} />;
   const { inspection, property, rooms, pendingReviewCount } = context.data;
+  const unitName = formatUnitName(inspection.unitName ?? property.unitName);
   const progress = inspectionProgress(rooms);
   const required = rooms.filter((room) => room.isRequired).length;
   const pendingUploads = rooms.filter((room) => !['COMPLETED'].includes(room.uploadStatus)).length;
@@ -53,7 +55,7 @@ export default function InspectionOverviewScreen() {
   return (
     <AppScreen
       title={property.address}
-      subtitle={`${property.cityStateZip} · ${formatStatus(inspection.type)} inspection`}
+      subtitle={`${property.cityStateZip}${unitName ? ` · ${unitName}` : ''} · ${formatStatus(inspection.type)} inspection`}
       bottomAction={
         <AppButton
           label={primaryLabel}
@@ -93,11 +95,26 @@ export default function InspectionOverviewScreen() {
       {['SCHEDULED', 'IN_PROGRESS'].includes(inspection.status) ? (
         <Card>
           <SectionHeader title="How this inspection works" />
-          <Step number={1} text="Open the room checklist and record one video per room. You can also snap photos of details between takes." />
-          <Step number={2} text="Save each recording. It queues in the Uploads tab and uploads by itself — keep working while it transfers." />
-          <Step number={3} text="After upload, the video is transcribed and analyzed by AI automatically. Watch progress under Uploads." />
-          <Step number={4} text="Mark every required room complete (or skipped with a reason), then submit the inspection." />
-          <Step number={5} text="The TexasRenters team reviews the AI findings. Nothing is final until a person approves it." />
+          <Step
+            number={1}
+            text="Open the room checklist and record one video per room. Snap photos of defects anytime — even while recording."
+          />
+          <Step
+            number={2}
+            text="Save and queue the recording. The next unfinished room opens immediately while the upload runs independently."
+          />
+          <Step
+            number={3}
+            text="If the connection drops, the recording stays on this device and retries automatically when the app is active again."
+          />
+          <Step
+            number={4}
+            text="After upload, the narration is transcribed and AI prepares a condition summary and reviewable findings."
+          />
+          <Step
+            number={5}
+            text="Complete every required room (or skip with a reason), then submit. AI suggestions remain pending until a person reviews them."
+          />
         </Card>
       ) : null}
       <Card>
@@ -142,7 +159,7 @@ export default function InspectionOverviewScreen() {
           }
         />
         <AppButton
-          label="Review AI findings"
+          label="Review AI summary & findings"
           variant="outline"
           onPress={() =>
             router.push({

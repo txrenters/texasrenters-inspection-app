@@ -27,3 +27,9 @@ New inspections snapshot the property's approved master area list into `Inspecti
 Administrators create one of `MOVE_IN`, `OCCUPIED`, `BACK_TO_MARKET`, or `MOVE_OUT`. A later lifecycle inspection requires the completed move-in baseline for the same property/unit/lease. Back-to-market additionally follows an occupied inspection, and move-out follows back-to-market. Responses expose the stored baseline relationship so clients never guess which inspection supplies comparison evidence.
 
 Assigned technicians can read the latest approved plan metadata at `GET /api/v1/technician/properties/:propertyId/floor-plan` and its bytes at `GET /api/v1/technician/floor-plans/:floorPlanId/content`. Both routes require a current assignment to an inspection for that property. Private file responses are not cacheable. Draft plans and plans for unassigned properties are never exposed to the mobile client.
+
+## AI provider settings
+
+`GET /api/v1/admin/ai/settings` returns redacted organization routing, curated model choices, credential health, and application-observed monthly token usage. System administrators can change the active provider with `PATCH /api/v1/admin/ai/settings/routing`, update one provider with `PATCH /api/v1/admin/ai/providers/:provider`, and validate its configured credential with `POST /api/v1/admin/ai/providers/:provider/validate`.
+
+Provider keys are accepted only by the authenticated backend endpoint and are never returned. A configured `AI_CREDENTIALS_ENCRYPTION_KEY` is required before a key can be persisted. Environment-based Anthropic and OpenAI keys remain supported as deployment-level fallbacks. Standard model API keys do not expose an account credit balance, so the usage response reports observed tokens and an optional local monthly token budget without representing it as provider billing credit.

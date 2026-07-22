@@ -68,7 +68,10 @@ export default function PublicReportPage() {
       <div className="public-report-card">
         <header className="public-report-header">
           <p className="public-report-brand">TEXASRENTERS · INSPECTION REPORT</p>
-          <h1>{report.property.addressLine1 || report.property.name}</h1>
+          <h1>
+            {report.property.addressLine1 || report.property.name}
+            {report.property.unitName ? `, Unit ${report.property.unitName}` : ''}
+          </h1>
           <p>
             {[report.property.city, report.property.state, report.property.postalCode]
               .filter(Boolean)

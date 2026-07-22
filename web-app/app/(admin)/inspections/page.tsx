@@ -19,7 +19,8 @@ import { useInspections } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
 const INSPECTION_HEADERS = [
-  'Property / unit',
+  'Property',
+  'Unit',
   'Type',
   'Scheduled',
   'Priority',
@@ -163,10 +164,8 @@ export default function InspectionsPage() {
                     <Link className="table-link" href={`/inspections/${inspection.id}`}>
                       {inspection.propertywareBuilding?.name ?? 'Property snapshot'}
                     </Link>
-                    <small className="cell-note">
-                      {inspection.propertywareUnit?.name ?? 'Entire property'}
-                    </small>
                   </td>
+                  <td>{inspection.propertywareUnit?.name ?? 'Entire property'}</td>
                   <td>
                     <Badge value={inspection.inspectionType} />
                   </td>

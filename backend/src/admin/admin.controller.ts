@@ -10,6 +10,7 @@ import {
   Param,
   Optional,
   Patch,
+  ParseEnumPipe,
   Post,
   Query,
   Req,
@@ -18,6 +19,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { AiProvider } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@texasrenters/shared';
@@ -48,8 +50,12 @@ import {
   UnassignDto,
   UpdatePropertyAreaDto,
   UpdateAdminInspectionDto,
+  UpdateAiProviderDto,
+  UpdateAiRoutingDto,
+  UploadFloorPlanDto,
 } from './admin.dto';
 import { AdminService } from './admin.service';
+import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
@@ -68,6 +74,7 @@ const ADMIN_ROLES = [
 export class AdminController {
   constructor(
     private readonly service: AdminService,
+    private readonly aiSettings: AiProviderSettingsService,
     private readonly technicianProvisioning: TechnicianProvisioningService,
     private readonly floorPlans: FloorPlanAdminService,
     private readonly reportShares: ReportShareService,
@@ -120,9 +127,10 @@ export class AdminController {
   uploadFloorPlan(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,
+    @Body() body: UploadFloorPlanDto,
     @UploadedFile() file?: UploadedFloorPlan,
   ) {
-    return this.floorPlans.upload(request.user, id, file);
+    return this.floorPlans.upload(request.user, id, file, body.unitId);
   }
   @Get('floor-plans/:floorPlanId/content')
   @Header('Cache-Control', 'private, no-store')
@@ -329,6 +337,36 @@ export class AdminController {
 
   @Get('integrations/providers/status') providerStatus() {
     return this.service.providerStatus();
+  }
+
+  @Get('ai/settings')
+  aiProviderSettings(@Req() request: AuthenticatedRequest) {
+    return this.aiSettings.settings(request.user.organizationId);
+  }
+
+  @Patch('ai/settings/routing')
+  @Roles(UserRole.SYSTEM_ADMIN)
+  updateAiRouting(@Req() request: AuthenticatedRequest, @Body() body: UpdateAiRoutingDto) {
+    return this.aiSettings.setActiveProvider(request.user, body.activeProvider);
+  }
+
+  @Patch('ai/providers/:provider')
+  @Roles(UserRole.SYSTEM_ADMIN)
+  updateAiProvider(
+    @Req() request: AuthenticatedRequest,
+    @Param('provider', new ParseEnumPipe(AiProvider)) provider: AiProvider,
+    @Body() body: UpdateAiProviderDto,
+  ) {
+    return this.aiSettings.updateProvider(request.user, provider, body);
+  }
+
+  @Post('ai/providers/:provider/validate')
+  @Roles(UserRole.SYSTEM_ADMIN)
+  validateAiProvider(
+    @Req() request: AuthenticatedRequest,
+    @Param('provider', new ParseEnumPipe(AiProvider)) provider: AiProvider,
+  ) {
+    return this.aiSettings.validateProvider(request.user, provider);
   }
 
   @Get('cache/status')

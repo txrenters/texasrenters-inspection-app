@@ -653,6 +653,19 @@ export class AdminService {
           'INVALID_ACTIVE_UNIT',
           'Select an active unit belonging to this property.',
         );
+      if (!unit) {
+        // Multi-unit buildings must inspect a specific unit; "entire property"
+        // is only valid for buildings without active units.
+        const activeUnits = await tx.propertywareUnit.count({
+          where: { buildingId: property.id, organizationId: user.organizationId, isActive: true },
+        });
+        if (activeUnits > 0)
+          throw new ApplicationError(
+            422,
+            'UNIT_REQUIRED',
+            'This property has units. Select which unit this inspection covers.',
+          );
+      }
       if (input.leaseId && !unit)
         throw new ApplicationError(
           422,
@@ -693,19 +706,38 @@ export class AdminService {
         inspectionType: input.inspectionType,
         scheduledAt,
       });
-      const approvedAreas = await tx.propertyArea.findMany({
-        where: {
-          propertyId: property.id,
-          status: PropertyAreaStatus.APPROVED,
-        },
-        orderBy: { inspectionOrder: 'asc' },
-        select: { id: true },
-      });
+      // Prefer the unit's own approved layout; fall back to the building-level
+      // layout when the unit has none (identical-layout buildings share one
+      // building-level plan instead of duplicating it per unit).
+      const unitAreas = unit
+        ? await tx.propertyArea.findMany({
+            where: {
+              propertyId: property.id,
+              unitId: unit.id,
+              status: PropertyAreaStatus.APPROVED,
+            },
+            orderBy: { inspectionOrder: 'asc' },
+            select: { id: true },
+          })
+        : [];
+      const approvedAreas = unitAreas.length
+        ? unitAreas
+        : await tx.propertyArea.findMany({
+            where: {
+              propertyId: property.id,
+              unitId: null,
+              status: PropertyAreaStatus.APPROVED,
+            },
+            orderBy: { inspectionOrder: 'asc' },
+            select: { id: true },
+          });
       if (!approvedAreas.length)
         throw new ApplicationError(
           409,
           'NO_APPROVED_AREAS',
-          'Upload or define the property floor plan and approve its areas before creating an inspection.',
+          unit
+            ? 'Approve a floor plan for this unit (or a building-level plan) before creating an inspection.'
+            : 'Upload or define the property floor plan and approve its areas before creating an inspection.',
         );
       const duplicate = await tx.inspection.findFirst({
         where: {
@@ -723,25 +755,38 @@ export class AdminService {
           'DUPLICATE_INSPECTION',
           'An inspection already exists for this unit and schedule.',
         );
-      const inspection = await tx.inspection.create({
-        data: {
-          organizationId: user.organizationId,
-          propertywareBuildingId: property.id,
-          propertywareUnitId: unit?.id,
-          propertywareLeaseId: lease?.id,
-          inspectionType: input.inspectionType,
-          baselineInspectionId,
-          priority: input.priority,
-          internalNotes: input.internalNotes,
-          createdById: user.id,
-          scheduledAt,
-          propertySnapshot: this.propertySnapshot(property, unit),
-          leaseSnapshot: lease ? this.leaseSnapshot(lease) : Prisma.JsonNull,
-          areas: {
-            create: approvedAreas.map((area) => ({ propertyAreaId: area.id })),
+      let inspection;
+      try {
+        inspection = await tx.inspection.create({
+          data: {
+            organizationId: user.organizationId,
+            propertywareBuildingId: property.id,
+            propertywareUnitId: unit?.id,
+            propertywareLeaseId: lease?.id,
+            inspectionType: input.inspectionType,
+            baselineInspectionId,
+            priority: input.priority,
+            internalNotes: input.internalNotes,
+            createdById: user.id,
+            scheduledAt,
+            propertySnapshot: this.propertySnapshot(property, unit),
+            leaseSnapshot: lease ? this.leaseSnapshot(lease) : Prisma.JsonNull,
+            areas: {
+              create: approvedAreas.map((area) => ({ propertyAreaId: area.id })),
+            },
           },
-        },
-      });
+        });
+      } catch (error) {
+        // The partial unique index on (org, building, unit, scheduledAt) is the
+        // race-proof backstop behind the friendly findFirst check above.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
+          throw new ApplicationError(
+            409,
+            'DUPLICATE_INSPECTION',
+            'An inspection already exists for this unit and schedule.',
+          );
+        throw error;
+      }
       await this.audit(tx, user, 'INSPECTION_CREATED', inspection.id, {
         priority: input.priority,
         inspectionType: input.inspectionType,
@@ -1317,6 +1362,7 @@ export class AdminService {
         status: status(Boolean(process.env.DEEPGRAM_API_KEY || process.env.TRANSCRIPTION_API_KEY)),
       },
       { provider: 'Anthropic', status: status(Boolean(process.env.ANTHROPIC_API_KEY)) },
+      { provider: 'OpenAI', status: status(Boolean(process.env.OPENAI_API_KEY)) },
       {
         provider: 'Cloudflare Stream',
         status: status(

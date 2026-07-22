@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   CameraView,
-  type CameraMode,
   type CameraType,
   useCameraPermissions,
   useMicrophonePermissions,
 } from 'expo-camera';
 import * as DocumentPicker from 'expo-document-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Image, Linking, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton, ConfirmationModal } from '../../../../../../src/components/ui';
 import { environment } from '../../../../../../src/config/environment';
@@ -46,8 +45,12 @@ export default function RecordRoomScreen() {
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
   const snapshots = useDemoStore((state) => state.snapshots ?? []);
+  const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
   const roomSnapshots = snapshots.filter(
-    (snapshot) => snapshot.inspectionId === inspectionId && snapshot.roomId === areaId,
+    (snapshot) =>
+      snapshot.ownerUserId === ownerUserId &&
+      snapshot.inspectionId === inspectionId &&
+      snapshot.roomId === areaId,
   );
   const latestSnapshot = roomSnapshots[0];
   const cameraRef = useRef<CameraView>(null);
@@ -60,10 +63,8 @@ export default function RecordRoomScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [cameraReady, setCameraReady] = useState(false);
-  const [cameraMode, setCameraMode] = useState<CameraMode>('video');
   const [cameraActive, setCameraActive] = useState(true);
   const [cameraGeneration, setCameraGeneration] = useState(0);
-  const [snapshotRequested, setSnapshotRequested] = useState(false);
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -129,6 +130,7 @@ export default function RecordRoomScreen() {
     const stored = persistRecording(temporaryUri, inspectionId, areaId);
     setDraft(
       buildRecordingDraft({
+        ownerUserId,
         inspectionId,
         roomId: areaId,
         uri: stored.uri,
@@ -144,7 +146,7 @@ export default function RecordRoomScreen() {
 
   const beginRecording = async () => {
     const camera = cameraRef.current;
-    if (!camera || !cameraReady || cameraMode !== 'video' || !hasPermissions || recording) return;
+    if (!camera || !cameraReady || !hasPermissions || recording) return;
 
     cancelRequestedRef.current = false;
     secondsRef.current = 0;
@@ -156,7 +158,13 @@ export default function RecordRoomScreen() {
     setRecording(true);
 
     try {
-      const result = await camera.recordAsync({ maxDuration: MAX_RECORDING_SECONDS });
+      // iPhones default to HEVC (H.265), which browsers and Windows cannot
+      // play without a paid codec. Force H.264 so reviewers can watch the
+      // video anywhere. Android records H.264 by default.
+      const result = await camera.recordAsync({
+        maxDuration: MAX_RECORDING_SECONDS,
+        ...(Platform.OS === 'ios' ? { codec: 'avc1' as const } : {}),
+      });
       recordingSettledRef.current = true;
       clearRecordingTimers();
       if (!result || cancelRequestedRef.current || !mountedRef.current) return;
@@ -167,7 +175,6 @@ export default function RecordRoomScreen() {
           errorMessage(recordingError, 'The video could not be recorded. Please try again.'),
         );
         setCameraReady(false);
-        setCameraMode('video');
       }
     } finally {
       recordingSettledRef.current = true;
@@ -182,32 +189,28 @@ export default function RecordRoomScreen() {
   };
 
   const startRecording = () => {
-    if (!cameraReady || cameraMode !== 'video' || !hasPermissions || recording) return;
+    if (!cameraReady || !hasPermissions || recording) return;
     setError(null);
     setSnapshotMessage(null);
     void beginRecording();
   };
 
-  const captureSnapshot = async () => {
+  // Captures directly from the live preview — no camera-mode switching, so it
+  // works mid-recording too. Spotting a defect during the tour must not force
+  // the technician to stop the video.
+  const takeSnapshot = async () => {
     const camera = cameraRef.current;
-    if (
-      !camera ||
-      !cameraReady ||
-      cameraMode !== 'picture' ||
-      !hasPermissions ||
-      recording ||
-      capturingSnapshot
-    )
-      return;
+    if (!camera || !cameraReady || !hasPermissions || capturingSnapshot) return;
 
     setCapturingSnapshot(true);
     setError(null);
     setSnapshotMessage(null);
     try {
-      const captured = await camera.takePictureAsync({ quality: 0.82 });
+      const captured = await camera.takePictureAsync({ quality: 0.82, shutterSound: false });
       const stored = persistRoomSnapshot(captured.uri, inspectionId, areaId);
       addSnapshot(
         buildRoomSnapshot({
+          ownerUserId,
           inspectionId,
           roomId: areaId,
           uri: stored.uri,
@@ -216,31 +219,14 @@ export default function RecordRoomScreen() {
           sizeBytes: stored.sizeBytes,
         }),
       );
-      setSnapshotMessage('Snapshot saved to this room.');
+      setSnapshotMessage(
+        recording ? 'Snapshot saved — recording continues.' : 'Snapshot saved to this room.',
+      );
     } catch (snapshotError) {
       setError(errorMessage(snapshotError, 'The snapshot could not be saved. Please try again.'));
     } finally {
-      if (mountedRef.current) {
-        setCapturingSnapshot(false);
-        setCameraReady(false);
-        setCameraMode('video');
-      }
+      if (mountedRef.current) setCapturingSnapshot(false);
     }
-  };
-
-  useEffect(() => {
-    if (!snapshotRequested || !cameraReady || cameraMode !== 'picture') return;
-    setSnapshotRequested(false);
-    void captureSnapshot();
-  }, [cameraMode, cameraReady, snapshotRequested]);
-
-  const takeSnapshot = () => {
-    if (!cameraReady || cameraMode !== 'video' || !hasPermissions || recording) return;
-    setError(null);
-    setSnapshotMessage(null);
-    setSnapshotRequested(true);
-    setCameraReady(false);
-    setCameraMode('picture');
   };
 
   const stopRecording = () => {
@@ -259,7 +245,6 @@ export default function RecordRoomScreen() {
       setPaused(false);
       setCameraReady(false);
       setCameraActive(true);
-      setCameraMode('video');
       setCameraGeneration((value) => value + 1);
       setError('The camera could not finalize that video. Please record it again.');
     }, RECORDING_FINALIZE_TIMEOUT_MS);
@@ -306,12 +291,12 @@ export default function RecordRoomScreen() {
         <View style={styles.viewfinder}>
           {hasPermissions ? (
             <CameraView
-              key={`${cameraMode}-${cameraGeneration}`}
+              key={`video-${cameraGeneration}`}
               ref={cameraRef}
               active={cameraActive}
               enableTorch={torch && facing === 'back'}
               facing={facing}
-              mode={cameraMode}
+              mode="video"
               mute={false}
               onCameraReady={() => {
                 setCameraReady(true);
@@ -363,7 +348,9 @@ export default function RecordRoomScreen() {
           <Text style={styles.prompt}>• State the room name — your narration is transcribed.</Text>
           <Text style={styles.prompt}>• Show the entire room.</Text>
           <Text style={styles.prompt}>• Describe and approach visible defects.</Text>
-          <Text style={styles.prompt}>• Stop the video first if you want to snap a photo.</Text>
+          <Text style={styles.prompt}>
+            • Spot a defect? Snap a photo without stopping the video.
+          </Text>
           <Text style={styles.prompt}>• Stop before leaving this room.</Text>
         </View>
 
@@ -377,16 +364,10 @@ export default function RecordRoomScreen() {
           <AppButton
             accessibilityLabel={`Take snapshot for ${room.data?.name ?? 'this room'}`}
             compact
-            disabled={
-              !hasPermissions ||
-              !cameraReady ||
-              cameraMode !== 'video' ||
-              recording ||
-              snapshotRequested
-            }
+            disabled={!hasPermissions || !cameraReady || capturingSnapshot}
             label={capturingSnapshot ? 'Saving snapshot…' : 'Snap photo'}
             loading={capturingSnapshot}
-            onPress={takeSnapshot}
+            onPress={() => void takeSnapshot()}
             variant="outline"
           />
           <View style={styles.snapshotSummary}>
@@ -394,9 +375,7 @@ export default function RecordRoomScreen() {
               {roomSnapshots.length} {roomSnapshots.length === 1 ? 'snapshot' : 'snapshots'} saved
             </Text>
             <Text style={styles.snapshotHint}>
-              {recording
-                ? 'Stop the video to snap a photo.'
-                : 'Photos stay attached to this inspection room.'}
+              Snap as many as you need — even while recording.
             </Text>
           </View>
           {latestSnapshot ? (
@@ -440,13 +419,7 @@ export default function RecordRoomScreen() {
           <AppButton compact label="Cancel" onPress={() => setCancelOpen(true)} variant="ghost" />
           {!recording ? (
             <AppButton
-              disabled={
-                !hasPermissions ||
-                !cameraReady ||
-                cameraMode !== 'video' ||
-                snapshotRequested ||
-                capturingSnapshot
-              }
+              disabled={!hasPermissions || !cameraReady || capturingSnapshot}
               label={hasPermissions && !cameraReady ? 'Starting camera…' : 'Start recording'}
               onPress={() => void startRecording()}
             />

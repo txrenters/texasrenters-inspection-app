@@ -4,6 +4,7 @@ import type { AdminInspection } from '@texasrenters/shared';
 import { useEffect, useRef, useState } from 'react';
 
 import { useAdminMutations } from '@/lib/queries';
+import { Badge } from './ui';
 
 function localDateTime(value: string) {
   const date = new Date(value);
@@ -40,9 +41,41 @@ export function InspectionEditDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
+    <dialog
+      ref={ref}
+      className="dialog inspection-edit-dialog"
+      onCancel={onClose}
+      onClose={onClose}
+    >
       <form onSubmit={(event) => void submit(event)}>
-        <h2>Edit inspection</h2>
+        <div className="inspection-edit-heading">
+          <span className="inspection-edit-icon" aria-hidden>
+            <svg viewBox="0 0 24 24">
+              <path d="m4 16-.7 4.7L8 20l11-11-4-4L4 16Zm9-9 4 4" />
+            </svg>
+          </span>
+          <div>
+            <span className="dialog-eyebrow">Inspection settings</span>
+            <h2>Edit inspection</h2>
+            <p>Update operational details without changing the inspection’s audited identity.</p>
+          </div>
+        </div>
+
+        <div className="inspection-edit-context" aria-label="Fixed inspection context">
+          <div>
+            <span>Property</span>
+            <strong>{inspection.propertywareBuilding?.name ?? 'Property snapshot'}</strong>
+          </div>
+          <div>
+            <span>Scope</span>
+            <strong>{inspection.propertywareUnit?.name ?? 'Entire property'}</strong>
+          </div>
+          <div>
+            <span>Type</span>
+            <Badge value={inspection.inspectionType} />
+          </div>
+        </div>
+
         <div className="field">
           <label htmlFor="edit-inspection-schedule">Scheduled date and time</label>
           <input
@@ -52,8 +85,11 @@ export function InspectionEditDialog({
             value={scheduledAt}
             onChange={(event) => setScheduledAt(event.target.value)}
           />
+          <small className="field-help">
+            Controls when this inspection appears in the technician’s schedule.
+          </small>
         </div>
-        <div className="field" style={{ marginTop: 14 }}>
+        <div className="field inspection-edit-field">
           <label htmlFor="edit-inspection-priority">Priority</label>
           <select
             id="edit-inspection-priority"
@@ -63,15 +99,32 @@ export function InspectionEditDialog({
             <option value="STANDARD">Standard</option>
             <option value="HIGH">High</option>
           </select>
+          <small className="field-help">
+            Use High only when the inspection requires operational attention.
+          </small>
         </div>
-        <div className="field" style={{ marginTop: 14 }}>
-          <label htmlFor="edit-inspection-notes">Internal notes</label>
+        <div className="field inspection-edit-field">
+          <div className="field-label-row">
+            <label htmlFor="edit-inspection-notes">Technician instructions and internal notes</label>
+            <span>{internalNotes.length}/2000</span>
+          </div>
           <textarea
             id="edit-inspection-notes"
             value={internalNotes}
             maxLength={2000}
             onChange={(event) => setInternalNotes(event.target.value)}
           />
+          <small className="field-help">
+            Visible to authorized operations staff and the assigned technician in the mobile app.
+          </small>
+        </div>
+        <div className="inspection-edit-guidance">
+          <strong>Why can’t the property, lease, or type be changed?</strong>
+          <p>
+            Those values are snapshotted when the inspection is created and determine its approved
+            areas and lifecycle comparison. Cancel and recreate the inspection if its identity is
+            incorrect.
+          </p>
         </div>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
         <div className="form-actions">

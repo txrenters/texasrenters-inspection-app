@@ -7,6 +7,8 @@ import { EmptyState, ErrorState, LoadingState } from '../../../../src/components
 import { AppButton, Card, ProgressBar } from '../../../../src/components/ui';
 import { useRooms } from '../../../../src/features/queries';
 import { type AppColors, spacing, typography, useThemedStyles } from '../../../../src/theme';
+import { groupRoomsByFloor } from '../../../../src/utils/room-floor-groups';
+import { nextInspectionRoom } from '../../../../src/utils/room-workflow';
 
 export default function InspectionAreasScreen() {
   const styles = useThemedStyles(createStyles);
@@ -16,10 +18,10 @@ export default function InspectionAreasScreen() {
   if (query.isError)
     return <ErrorState message={query.error.message} onRetry={() => void query.refetch()} />;
   const roomList = query.data ?? [];
+  const floorGroups = groupRoomsByFloor(roomList);
+  const showFloorHeaders = floorGroups.length > 1;
   const progress = inspectionProgress(roomList);
-  const nextRoom = roomList.find(
-    (room) => room.isRequired && !['COMPLETED', 'SKIPPED'].includes(room.completionStatus),
-  );
+  const nextRoom = nextInspectionRoom(roomList);
   const openRoom = (roomId: string) =>
     router.push({
       pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
@@ -50,9 +52,25 @@ export default function InspectionAreasScreen() {
       </Card>
       {roomList.length ? (
         <View style={styles.list}>
-          {roomList.map((room) => (
-            <RoomCard key={room.id} room={room} onPress={() => openRoom(room.id)} />
-          ))}
+          {showFloorHeaders
+            ? floorGroups.map((group) => (
+                <View key={group.floorName} style={styles.floorSection}>
+                  <View style={styles.floorHeader}>
+                    <Text style={styles.floorTitle}>{group.floorName}</Text>
+                    <Text style={styles.floorCount}>
+                      {group.rooms.length} room{group.rooms.length === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  <View style={styles.floorRooms}>
+                    {group.rooms.map((room) => (
+                      <RoomCard key={room.id} room={room} onPress={() => openRoom(room.id)} />
+                    ))}
+                  </View>
+                </View>
+              ))
+            : roomList.map((room) => (
+                <RoomCard key={room.id} room={room} onPress={() => openRoom(room.id)} />
+              ))}
         </View>
       ) : (
         <EmptyState
@@ -67,6 +85,17 @@ export default function InspectionAreasScreen() {
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     list: { gap: spacing.md },
+    floorSection: { gap: spacing.sm },
+    floorHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+      paddingHorizontal: spacing.xs,
+    },
+    floorTitle: { ...typography.heading, color: colors.textPrimary },
+    floorCount: { ...typography.caption, color: colors.textSecondary },
+    floorRooms: { gap: spacing.md },
     progressTitle: { ...typography.heading, color: colors.textPrimary },
     progressHelp: { ...typography.caption, color: colors.textSecondary },
   });

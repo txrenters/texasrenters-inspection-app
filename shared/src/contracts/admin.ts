@@ -69,6 +69,9 @@ export interface AdminProperty {
 export interface AdminFloorPlan {
   id: string;
   propertyId: string;
+  /** Null = building-level plan shared by all units; set = one unit's plan. */
+  unitId?: string | null;
+  unit?: { id: string; name: string } | null;
   fileName: string;
   mimeType: 'application/pdf' | 'image/jpeg' | 'image/png';
   sizeBytes: number;
@@ -93,6 +96,9 @@ export interface AdminFloorPlanExtractionJob {
 export interface AdminPropertyArea {
   id: string;
   propertyId: string;
+  /** Null = building-level area shared by all units; set = one unit's area. */
+  unitId?: string | null;
+  unit?: { id: string; name: string } | null;
   name: string;
   inspectionOrder: number;
   isRequired: boolean;
@@ -215,6 +221,7 @@ export interface PublicInspectionReport {
   property: {
     name: string;
     addressLine1: string;
+    unitName?: string | null;
     city: string;
     state: string;
     postalCode: string;
@@ -308,6 +315,49 @@ export interface ProviderReadiness {
   provider: string;
   status: 'CONFIGURED' | 'NOT_CONFIGURED' | 'READY' | 'DEGRADED' | 'UNAVAILABLE' | 'ERROR';
   detail?: string;
+}
+
+export type AiProviderName = 'ANTHROPIC' | 'OPENAI';
+
+export interface AiModelOption {
+  id: string;
+  name: string;
+  tier: string;
+  /** Published per-1M-token pricing, e.g. "$3 in / $15 out". */
+  pricing?: string;
+  /** One-line guidance on when this model fits the inspection workload. */
+  description?: string;
+  /** The tier we suggest for TexasRenters' transcript/finding workload. */
+  recommended?: boolean;
+}
+
+export interface AiProviderConfiguration {
+  provider: AiProviderName;
+  displayName: string;
+  modelId: string;
+  models: AiModelOption[];
+  hasApiKey: boolean;
+  keySource: 'SETTINGS' | 'ENVIRONMENT' | 'NONE';
+  credentialStatus: 'NOT_CONFIGURED' | 'UNVERIFIED' | 'VALID' | 'INVALID';
+  lastValidatedAt: string | null;
+  monthlyTokenBudget: number | null;
+  balanceStatus: 'NOT_EXPOSED_BY_STANDARD_API_KEY';
+  usage: {
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    remainingBudgetTokens: number | null;
+    budgetPercentUsed: number | null;
+    lastUsedAt: string | null;
+  };
+}
+
+export interface AiSettings {
+  activeProvider: AiProviderName;
+  keyStorageAvailable: boolean;
+  usageWindow: { startsAt: string; endsAt: string };
+  providers: AiProviderConfiguration[];
 }
 
 export interface PropertywareSyncRun {

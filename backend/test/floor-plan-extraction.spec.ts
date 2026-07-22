@@ -1,4 +1,5 @@
 import { FloorPlanExtractionService } from '../src/admin/floor-plan-extraction.service';
+import { AiProvider } from '@prisma/client';
 
 describe('floor-plan extraction provider errors', () => {
   const originalFetch = global.fetch;
@@ -38,7 +39,7 @@ describe('floor-plan extraction provider errors', () => {
       status: 402,
       code: 'FLOOR_PLAN_AI_CREDITS_REQUIRED',
       message:
-        'AI extraction credits are unavailable. Add provider credits or enter the property areas manually.',
+        'The AI provider account has no remaining credits. Add credits with the provider, or switch the active provider in Settings.',
     });
   });
 
@@ -57,6 +58,56 @@ describe('floor-plan extraction provider errors', () => {
       message:
         'The extraction provider rejected this floor-plan request. Verify the file and configured model.',
     });
+  });
+
+  it('extracts validated areas with OpenAI and returns recorded token usage', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      providerResponse(200, {
+        output: [
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify([
+                  {
+                    floorName: 'Ground Floor',
+                    name: 'Living Room',
+                    inspectionOrder: 1,
+                    isRequired: true,
+                  },
+                ]),
+              },
+            ],
+          },
+        ],
+        usage: { input_tokens: 120, output_tokens: 30, total_tokens: 150 },
+      }),
+    ) as typeof fetch;
+
+    await expect(
+      new FloorPlanExtractionService().extract(jpegBytes(), 'image/jpeg', {
+        provider: AiProvider.OPENAI,
+        modelId: 'gpt-5.6-sol',
+        apiKey: 'private-openai-key',
+      }),
+    ).resolves.toEqual({
+      areas: [
+        {
+          floorName: 'Ground Floor',
+          name: 'Living Room',
+          inspectionOrder: 1,
+          isRequired: true,
+        },
+      ],
+      usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150 },
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/responses',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer private-openai-key' }),
+      }),
+    );
   });
 });
 
