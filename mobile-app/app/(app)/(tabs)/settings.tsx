@@ -1,5 +1,5 @@
 import { useState, type ComponentProps } from 'react';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { StyleSheet, Switch, Text, View } from 'react-native';
