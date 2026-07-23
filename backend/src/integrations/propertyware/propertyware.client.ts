@@ -57,7 +57,12 @@ export class PropertywareClient {
           record && typeof record === 'object' && 'id' in record
             ? String((record as { id: unknown }).id)
             : undefined;
-        validationErrors.push({ index, externalId, code: 'PROPERTYWARE_SCHEMA_ERROR' });
+        validationErrors.push({
+          index,
+          externalId,
+          code: 'PROPERTYWARE_SCHEMA_ERROR',
+          detail: summarizeSchemaIssues(parsed.error),
+        });
         return [];
       }
       if (query.includeDeactivated !== true && parsed.data.active !== true) return [];
@@ -122,6 +127,7 @@ export class PropertywareClient {
           index,
           externalId: record.id || undefined,
           code: 'PROPERTYWARE_SCHEMA_ERROR',
+          detail: summarizeSchemaIssues(parsed.error),
         });
         return [];
       }
@@ -215,3 +221,31 @@ export class PropertywareClient {
   }
 }
 import { performance } from 'node:perf_hooks';
+
+/**
+ * Produces a compact, PII-safe reason from a Zod validation failure: field
+ * paths plus type mismatches (e.g. "portfolioID: expected string, received
+ * null"). It intentionally reports the shape of the problem, never the record's
+ * data values.
+ */
+function summarizeSchemaIssues(error: { issues: readonly unknown[] }): string {
+  const parts = error.issues.slice(0, 6).map((raw) => {
+    const issue = raw as { path?: Array<string | number>; message?: string; errors?: unknown };
+    const path = (issue.path ?? []).map(String).join('.') || '(root)';
+    let message = issue.message ?? 'Invalid value';
+    // Union failures nest the concrete per-branch reasons; surface the first.
+    if (Array.isArray(issue.errors)) {
+      const inner = (issue.errors as unknown[])
+        .flat()
+        .map((entry) =>
+          entry && typeof entry === 'object' && 'message' in entry
+            ? String((entry as { message: unknown }).message)
+            : '',
+        )
+        .filter(Boolean);
+      if (inner.length) message = inner[0]!;
+    }
+    return `${path}: ${message}`;
+  });
+  return parts.join('; ');
+}

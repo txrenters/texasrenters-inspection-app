@@ -82,7 +82,10 @@ export class AdminService {
     });
     if (!profile?.isActive)
       throw new ApplicationError(403, 'ADMIN_ACCOUNT_DISABLED', 'Account is disabled.');
-    return profile;
+    // Effective permissions come from the authenticated principal. Apart from
+    // the protected SYSTEM_ADMIN bootstrap override, they are derived only from
+    // administrator-created custom roles.
+    return { ...profile, permissions: user.permissions };
   }
 
   async dashboard(user: AuthenticatedUser) {
@@ -1552,9 +1555,7 @@ export class AdminService {
     const where = {
       inspectionId,
       inspection: { organizationId: user.organizationId },
-      ...(query.reviewStatus
-        ? { reviewStatus: query.reviewStatus as FindingReviewStatus }
-        : {}),
+      ...(query.reviewStatus ? { reviewStatus: query.reviewStatus as FindingReviewStatus } : {}),
       ...(query.kind === 'SUMMARIES'
         ? { ...ROOM_SUMMARY_WHERE }
         : query.kind === 'DEFECTS'
@@ -1648,8 +1649,7 @@ export class AdminService {
         where: { id: findingId, inspection: { organizationId: user.organizationId } },
         select: { id: true, inspectionId: true, reviewStatus: true },
       });
-      if (!finding)
-        throw new ApplicationError(404, 'FINDING_NOT_FOUND', 'Finding was not found.');
+      if (!finding) throw new ApplicationError(404, 'FINDING_NOT_FOUND', 'Finding was not found.');
       const nextStatus =
         status === 'APPROVED' ? FindingReviewStatus.APPROVED : FindingReviewStatus.REJECTED;
       // Re-sending the same decision is a no-op so review clicks are idempotent.

@@ -32,9 +32,11 @@ import {
   useInspectionAudit,
   useInspectionFindings,
 } from '@/lib/queries';
+import { usePermissions } from '@/lib/auth';
 
 export default function InspectionDetailPage() {
   const id = useParams<{ inspectionId: string }>().inspectionId;
+  const permissions = usePermissions();
   const inspection = useInspection(id);
   const [assignmentPage, setAssignmentPage] = useState(1);
   const [auditPage, setAuditPage] = useState(1);
@@ -52,7 +54,13 @@ export default function InspectionDetailPage() {
   const [completing, setCompleting] = useState(false);
   const [sharing, setSharing] = useState(false);
   // Room condition summaries are informational and never gate completion.
-  const pendingFindings = useInspectionFindings(id, 1, 'PENDING_REVIEW', 'DEFECTS');
+  const pendingFindings = useInspectionFindings(
+    id,
+    1,
+    'PENDING_REVIEW',
+    'DEFECTS',
+    permissions.has('findings:read'),
+  );
 
   if (inspection.isLoading) return <LoadingState label="Loading inspection…" />;
   if (inspection.isError)
@@ -76,37 +84,49 @@ export default function InspectionDetailPage() {
         breadcrumbs={[{ label: 'Inspections', href: '/inspections' }, { label: 'Detail' }]}
         action={
           <div className="inspection-action-bar">
-            {!finalized ? (
+            {!finalized && permissions.has('inspections:manage') ? (
               <button className="button button-primary" onClick={() => setCompleting(true)}>
                 Complete inspection
               </button>
             ) : null}
-            {!finalized ? (
+            {!finalized && permissions.has('inspections:assign') ? (
               <button className="button button-secondary" onClick={() => setAssigning(true)}>
                 {current ? 'Reassign' : 'Assign technician'}
               </button>
             ) : null}
-            <button className="button button-secondary" onClick={() => setSharing(true)}>
-              Share report
-            </button>
-            {!finalized ? (
+            {permissions.has('reports:share') ? (
+              <button className="button button-secondary" onClick={() => setSharing(true)}>
+                Share report
+              </button>
+            ) : null}
+            {!finalized &&
+            (permissions.has('inspections:manage') ||
+              (current && permissions.has('inspections:assign'))) ? (
               <details className="inspection-action-menu">
                 <summary className="button button-secondary">More actions</summary>
                 <div className="inspection-action-menu-content">
-                  <button type="button" onClick={() => setEditing(true)}>
-                    <strong>Edit details</strong>
-                    <span>Update schedule, priority, or notes</span>
-                  </button>
-                  {current ? (
+                  {permissions.has('inspections:manage') ? (
+                    <button type="button" onClick={() => setEditing(true)}>
+                      <strong>Edit details</strong>
+                      <span>Update schedule, priority, or notes</span>
+                    </button>
+                  ) : null}
+                  {current && permissions.has('inspections:assign') ? (
                     <button type="button" onClick={() => setUnassigning(true)}>
                       <strong>Unassign technician</strong>
                       <span>Return this inspection to the assignment queue</span>
                     </button>
                   ) : null}
-                  <button className="menu-danger" type="button" onClick={() => setCancelling(true)}>
-                    <strong>Cancel inspection</strong>
-                    <span>Close the inspection without completion</span>
-                  </button>
+                  {permissions.has('inspections:manage') ? (
+                    <button
+                      className="menu-danger"
+                      type="button"
+                      onClick={() => setCancelling(true)}
+                    >
+                      <strong>Cancel inspection</strong>
+                      <span>Close the inspection without completion</span>
+                    </button>
+                  ) : null}
                 </div>
               </details>
             ) : null}
@@ -131,7 +151,11 @@ export default function InspectionDetailPage() {
           <div className="inspection-fact inspection-fact-primary">
             <dt>Assigned technician</dt>
             <dd>{current?.technician?.displayName ?? 'Not assigned'}</dd>
-            <small>{current ? 'Currently responsible for this inspection' : 'Requires assignment before field work'}</small>
+            <small>
+              {current
+                ? 'Currently responsible for this inspection'
+                : 'Requires assignment before field work'}
+            </small>
           </div>
           <div className="inspection-fact">
             <dt>Scheduled</dt>
@@ -200,16 +224,26 @@ export default function InspectionDetailPage() {
               >
                 {assignments.data.items.map((assignment) => (
                   <tr key={assignment.id}>
-                    <td><strong>{assignment.technician?.displayName ?? assignment.technicianId}</strong></td>
+                    <td>
+                      <strong>
+                        {assignment.technician?.displayName ?? assignment.technicianId}
+                      </strong>
+                    </td>
                     <td>{assignment.assignedBy?.displayName ?? assignment.assignedById}</td>
                     <td>{formatDate(assignment.assignedAt)}</td>
                     <td>{formatDate(assignment.endedAt)}</td>
-                    <td><Badge value={assignment.isCurrent ? 'CURRENT' : assignment.status} /></td>
+                    <td>
+                      <Badge value={assignment.isCurrent ? 'CURRENT' : assignment.status} />
+                    </td>
                     <td>{assignment.reason ?? '—'}</td>
                   </tr>
                 ))}
               </DataTable>
-              <Pagination page={assignmentPage} totalPages={assignments.data.totalPages} onPage={setAssignmentPage} />
+              <Pagination
+                page={assignmentPage}
+                totalPages={assignments.data.totalPages}
+                onPage={setAssignmentPage}
+              />
             </>
           ) : (
             <div className="compact-empty-state">No assignment history has been recorded.</div>
@@ -238,7 +272,11 @@ export default function InspectionDetailPage() {
                   </li>
                 ))}
               </ul>
-              <Pagination page={auditPage} totalPages={audit.data.totalPages} onPage={setAuditPage} />
+              <Pagination
+                page={auditPage}
+                totalPages={audit.data.totalPages}
+                onPage={setAuditPage}
+              />
             </>
           ) : (
             <div className="compact-empty-state">No audit activity has been recorded.</div>
@@ -249,9 +287,15 @@ export default function InspectionDetailPage() {
       {assigning ? (
         <AssignmentDialog inspectionId={id} current={current} onClose={() => setAssigning(false)} />
       ) : null}
-      {editing ? <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} /> : null}
-      {cancelling ? <InspectionCancelDialog inspectionId={id} onClose={() => setCancelling(false)} /> : null}
-      {unassigning ? <InspectionUnassignDialog inspectionId={id} onClose={() => setUnassigning(false)} /> : null}
+      {editing ? (
+        <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} />
+      ) : null}
+      {cancelling ? (
+        <InspectionCancelDialog inspectionId={id} onClose={() => setCancelling(false)} />
+      ) : null}
+      {unassigning ? (
+        <InspectionUnassignDialog inspectionId={id} onClose={() => setUnassigning(false)} />
+      ) : null}
       {completing ? (
         <InspectionCompleteDialog
           inspectionId={id}

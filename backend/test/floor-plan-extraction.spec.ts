@@ -108,6 +108,20 @@ describe('floor-plan extraction provider errors', () => {
         headers: expect.objectContaining({ authorization: 'Bearer private-openai-key' }),
       }),
     );
+    const request = (global.fetch as jest.Mock).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body)) as {
+      input: Array<{ content: Array<Record<string, unknown>> }>;
+    };
+    expect(body.input[0]?.content[0]).toMatchObject({
+      type: 'input_image',
+      detail: 'high',
+    });
+    expect(body.input[0]?.content[1]?.text).toEqual(
+      expect.stringContaining('scan every enclosed space again for omissions'),
+    );
+    expect(body.input[0]?.content[1]?.text).toEqual(
+      expect.stringContaining('Bathroom (unlabeled)'),
+    );
   });
 
   it('normalizes a multi-story provider response into reviewable draft areas', async () => {

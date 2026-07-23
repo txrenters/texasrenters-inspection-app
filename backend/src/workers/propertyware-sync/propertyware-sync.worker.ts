@@ -247,7 +247,9 @@ export class PropertywareSyncWorker {
         add('pagesFetched');
         add('recordsFetched', page.receivedCount ?? page.records.length);
         for (const validationError of page.validationErrors ?? []) {
-          add('recordsFailed');
+          // A record that fails schema validation is quarantined (skipped), not a
+          // processing failure — count it as a warning and record the concrete
+          // reason so it is diagnosable in the admin UI.
           add('warnings');
           await this.store.addError({
             runId,
@@ -255,7 +257,9 @@ export class PropertywareSyncWorker {
             externalId: validationError.externalId,
             pageOffset: page.offset + validationError.index,
             code: validationError.code,
-            message: `Propertyware ${entity} record failed schema validation and was skipped.`,
+            message: validationError.detail
+              ? `Propertyware ${entity} record was quarantined — ${validationError.detail}.`
+              : `Propertyware ${entity} record failed schema validation and was skipped.`,
             retryable: false,
           });
         }

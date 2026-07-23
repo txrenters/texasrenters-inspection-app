@@ -14,8 +14,10 @@ import {
 } from '@/components/ui';
 import { useProperty } from '@/lib/queries';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
+import { usePermissions } from '@/lib/auth';
 
 export default function PropertyDetailPage() {
+  const permissions = usePermissions();
   const id = useParams<{ propertyId: string }>().propertyId;
   const property = useProperty(id);
   if (property.isLoading) return <LoadingState />;
@@ -29,7 +31,7 @@ export default function PropertyDetailPage() {
         description={address(item)}
         breadcrumbs={[{ label: 'Properties', href: '/properties' }, { label: item.name }]}
         action={
-          item.isActive ? (
+          item.isActive && permissions.has('inspections:manage') ? (
             <Link className="button button-primary" href={`/inspections/new?propertyId=${item.id}`}>
               Create inspection
             </Link>
@@ -94,7 +96,7 @@ export default function PropertyDetailPage() {
           <p>No relevant active leases were returned.</p>
         )}
       </section>
-      <FloorPlanManager propertyId={item.id} />
+      <FloorPlanManager propertyId={item.id} canManage={permissions.has('properties:manage')} />
     </>
   );
 }

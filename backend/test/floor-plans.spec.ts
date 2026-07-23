@@ -10,6 +10,7 @@ const admin: AuthenticatedUser = {
   organizationId: '10000000-0000-4000-8000-000000000001',
   displayName: 'Property Admin',
   roles: [UserRole.PROPERTY_ADMIN],
+  permissions: [],
   mustChangePassword: false,
 };
 
@@ -168,6 +169,139 @@ describe('administrator floor plans', () => {
     expect(prisma.floorPlanExtractionJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ errorCode: 'FLOOR_PLAN_AI_CREDITS_REQUIRED' }),
+      }),
+    );
+  });
+
+  it('reports all detected areas and keeps new draft orders unique when approved areas exist', async () => {
+    const plan = {
+      id: '30000000-0000-4000-8000-000000000010',
+      propertyId: building.id,
+      unitId: null,
+      storageKey: 'private/plan.png',
+      fileName: 'plan.png',
+      mimeType: 'image/png',
+    };
+    const existing = [
+      {
+        name: 'Kitchen',
+        inspectionOrder: 1,
+        floor: { name: 'Ground Floor' },
+      },
+      {
+        name: 'Living Room',
+        inspectionOrder: 2,
+        floor: { name: 'Ground Floor' },
+      },
+    ];
+    const created = [
+      { id: 'area-foyer', name: 'Foyer', inspectionOrder: 3 },
+      { id: 'area-porch', name: 'Front Porch', inspectionOrder: 4 },
+    ];
+    const tx = {
+      propertyArea: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValueOnce(existing).mockResolvedValueOnce(created),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+      propertyFloor: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'floor-1', name: 'Ground Floor' }]),
+        create: jest.fn(),
+      },
+      floorPlanExtractionJob: { update: jest.fn().mockResolvedValue({ id: 'job-1' }) },
+      propertyFloorPlan: { update: jest.fn().mockResolvedValue(plan) },
+    };
+    const prisma = {
+      propertyFloorPlan: {
+        findFirst: jest.fn().mockResolvedValue(plan),
+        update: jest.fn().mockResolvedValue(plan),
+      },
+      floorPlanExtractionJob: {
+        create: jest.fn().mockResolvedValue({
+          id: 'job-1',
+          provider: 'openai',
+          modelId: 'test-model',
+        }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
+    const extraction = {
+      descriptor: jest.fn().mockReturnValue({
+        provider: 'openai',
+        modelId: 'test-model',
+        schemaVersion: '1',
+      }),
+      extract: jest.fn().mockResolvedValue({
+        areas: [
+          {
+            floorName: 'Ground Floor',
+            name: 'Kitchen',
+            inspectionOrder: 1,
+            isRequired: true,
+          },
+          {
+            floorName: 'Ground Floor',
+            name: 'Living Room',
+            inspectionOrder: 2,
+            isRequired: true,
+          },
+          {
+            floorName: 'Ground Floor',
+            name: 'Foyer',
+            inspectionOrder: 1,
+            isRequired: true,
+          },
+          {
+            floorName: 'Ground Floor',
+            name: 'Front Porch',
+            inspectionOrder: 4,
+            isRequired: false,
+          },
+        ],
+        usage: { inputTokens: 100, outputTokens: 40, totalTokens: 140 },
+      }),
+    };
+    const aiSettings = {
+      resolve: jest.fn().mockResolvedValue({
+        provider: 'OPENAI',
+        modelId: 'test-model',
+        apiKey: 'private-test-key',
+      }),
+      recordUsage: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      { get: jest.fn().mockResolvedValue(Buffer.from('plan')) } as never,
+      extraction as never,
+      aiSettings as never,
+    );
+
+    await expect(service.extract(admin, plan.id)).resolves.toMatchObject({
+      summary: {
+        detectedCount: 4,
+        createdCount: 2,
+        alreadyPresentCount: 2,
+      },
+      areas: created,
+    });
+    expect(tx.propertyArea.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ name: 'Foyer', inspectionOrder: 3 }),
+        expect.objectContaining({ name: 'Front Porch', inspectionOrder: 4 }),
+      ]),
+    });
+    expect(tx.floorPlanExtractionJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          output: expect.objectContaining({
+            summary: {
+              detectedCount: 4,
+              createdCount: 2,
+              alreadyPresentCount: 2,
+            },
+          }),
+        }),
       }),
     );
   });

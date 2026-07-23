@@ -10,6 +10,7 @@ const admin: AuthenticatedUser = {
   organizationId: '10000000-0000-4000-8000-000000000001',
   displayName: 'System Admin',
   roles: [UserRole.SYSTEM_ADMIN],
+  permissions: [],
   mustChangePassword: false,
 };
 
@@ -197,6 +198,7 @@ describe('technician payloads for unit inspections', () => {
     organizationId: admin.organizationId,
     displayName: 'Field Technician',
     roles: [UserRole.INSPECTION_TECHNICIAN],
+    permissions: [],
     mustChangePassword: false,
   };
 

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { apiBlob } from '@/lib/api';
+import { usePermissions } from '@/lib/auth';
 import { useAdminMutations, useInspectionFindings, useInspectionMedia } from '@/lib/queries';
 import type { AdminInspectionFinding } from '@texasrenters/shared';
 
@@ -102,11 +103,15 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
       ) : (
         <div className="inspection-empty-state">
           <span className="inspection-empty-icon" aria-hidden>
-            <svg viewBox="0 0 24 24"><path d="M4 6h11v12H4zM15 10l5-3v10l-5-3" /></svg>
+            <svg viewBox="0 0 24 24">
+              <path d="M4 6h11v12H4zM15 10l5-3v10l-5-3" />
+            </svg>
           </span>
           <div>
             <strong>No room recordings yet</strong>
-            <p>Videos will appear here after the technician records and uploads inspection areas.</p>
+            <p>
+              Videos will appear here after the technician records and uploads inspection areas.
+            </p>
           </div>
         </div>
       )}
@@ -197,8 +202,10 @@ function FindingReviewControls({
 }
 
 export function InspectionSummariesSection({ inspectionId }: { inspectionId: string }) {
+  const canReadFindings = usePermissions().has('findings:read');
   const [page, setPage] = useState(1);
-  const summaries = useInspectionFindings(inspectionId, page, '', 'SUMMARIES');
+  const summaries = useInspectionFindings(inspectionId, page, '', 'SUMMARIES', canReadFindings);
+  if (!canReadFindings) return null;
   return (
     <section className="panel section-gap inspection-section">
       <div className="panel-header">
@@ -236,7 +243,9 @@ export function InspectionSummariesSection({ inspectionId }: { inspectionId: str
       ) : (
         <div className="inspection-empty-state">
           <span className="inspection-empty-icon" aria-hidden>
-            <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg>
+            <svg viewBox="0 0 24 24">
+              <path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" />
+            </svg>
           </span>
           <div>
             <strong>No room summaries yet</strong>
@@ -249,9 +258,19 @@ export function InspectionSummariesSection({ inspectionId }: { inspectionId: str
 }
 
 export function InspectionFindingsSection({ inspectionId }: { inspectionId: string }) {
+  const canReadFindings = usePermissions().has('findings:read');
+  const canReviewFindings = usePermissions().has('findings:review');
   const [page, setPage] = useState(1);
   const [reviewStatus, setReviewStatus] = useState('');
-  const findings = useInspectionFindings(inspectionId, page, reviewStatus, 'DEFECTS');
+  const findings = useInspectionFindings(
+    inspectionId,
+    page,
+    reviewStatus,
+    'DEFECTS',
+    canReadFindings,
+  );
+  const isFilterPending = findings.isPlaceholderData;
+  if (!canReadFindings) return null;
   return (
     <section className="panel section-gap inspection-section">
       <div className="panel-header">
@@ -281,8 +300,8 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
           </select>
         </div>
       </div>
-      {findings.isLoading ? (
-        <LoadingState label="Loading findings…" />
+      {findings.isLoading || isFilterPending ? (
+        <LoadingState label={isFilterPending ? 'Filtering findings...' : 'Loading findings...'} />
       ) : findings.isError ? (
         <ErrorState error={findings.error} retry={() => void findings.refetch()} />
       ) : findings.data?.items.length ? (
@@ -310,7 +329,15 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
                   {finding.comparisonResult.replaceAll('_', ' ').toLowerCase()} · Confidence:{' '}
                   {Math.round(finding.confidence * 100)}%
                 </p>
-                <FindingReviewControls finding={finding} inspectionId={inspectionId} />
+                {canReviewFindings ? (
+                  <FindingReviewControls finding={finding} inspectionId={inspectionId} />
+                ) : finding.lastReview ? (
+                  <span className="media-meta">
+                    {finding.lastReview.reviewerName} · {formatDate(finding.lastReview.createdAt)}
+                  </span>
+                ) : (
+                  <span className="media-meta">Awaiting an authorized reviewer</span>
+                )}
               </li>
             ))}
           </ul>
@@ -319,10 +346,14 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
       ) : (
         <div className="inspection-empty-state">
           <span className="inspection-empty-icon" aria-hidden>
-            <svg viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 4.5 3 7.5 8 9 5-1.5 8-4.5 8-9V7l-8-4Zm-3 9 2 2 4-5" /></svg>
+            <svg viewBox="0 0 24 24">
+              <path d="M12 3 4 7v5c0 4.5 3 7.5 8 9 5-1.5 8-4.5 8-9V7l-8-4Zm-3 9 2 2 4-5" />
+            </svg>
           </span>
           <div>
-            <strong>{reviewStatus ? 'No findings match this filter' : 'No AI findings generated'}</strong>
+            <strong>
+              {reviewStatus ? 'No findings match this filter' : 'No AI findings generated'}
+            </strong>
             <p>
               {reviewStatus
                 ? 'Choose another review status to see available findings.'
@@ -368,8 +399,8 @@ export function InspectionCompleteDialog({
         </p>
         {pendingFindings > 0 ? (
           <p className="field-error">
-            {pendingFindings} AI finding{pendingFindings === 1 ? '' : 's'} still await human
-            review. Review them before completing.
+            {pendingFindings} AI finding{pendingFindings === 1 ? '' : 's'} still await human review.
+            Review them before completing.
           </p>
         ) : null}
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}

@@ -25,6 +25,7 @@ export function getPropertywareConfig(env: NodeJS.ProcessEnv = process.env): Pro
     syncEnabled: env.PROPERTYWARE_SYNC_ENABLED === 'true',
     incrementalSyncCron: env.PROPERTYWARE_INCREMENTAL_SYNC_CRON?.trim() || undefined,
     reconciliationCron: env.PROPERTYWARE_RECONCILIATION_CRON?.trim() || undefined,
+    schedulerOrganizationId: env.PROPERTYWARE_LOCAL_ORGANIZATION_ID?.trim() || undefined,
     initialSyncLookbackDays: integer(env.PROPERTYWARE_INITIAL_SYNC_LOOKBACK_DAYS, 30),
     cursorOverlapSeconds: integer(env.PROPERTYWARE_CURSOR_OVERLAP_SECONDS, 120),
     databaseConcurrency: Math.min(integer(env.PROPERTYWARE_DATABASE_CONCURRENCY, 4), 8),

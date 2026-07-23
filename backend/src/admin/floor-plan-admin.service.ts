@@ -175,13 +175,31 @@ export class FloorPlanAdminService {
           });
           const existing = await tx.propertyArea.findMany({
             where: { propertyId: plan.propertyId, unitId: plan.unitId },
-            select: { name: true, floor: { select: { name: true } } },
+            select: {
+              name: true,
+              inspectionOrder: true,
+              floor: { select: { name: true } },
+            },
           });
           const areaKey = (floorName: string, name: string) =>
             `${floorName.trim().toLowerCase()}|${name.trim().toLowerCase()}`;
           const seen = new Set(
             existing.map((area) => areaKey(area.floor?.name || 'Ground Floor', area.name)),
           );
+          const usedOrders = new Set(existing.map((area) => area.inspectionOrder));
+          let nextAvailableOrder =
+            existing.reduce((highest, area) => Math.max(highest, area.inspectionOrder), 0) + 1;
+          const reserveOrder = (preferred: number) => {
+            if (!usedOrders.has(preferred)) {
+              usedOrders.add(preferred);
+              return preferred;
+            }
+            while (usedOrders.has(nextAvailableOrder)) nextAvailableOrder += 1;
+            const reserved = nextAvailableOrder;
+            usedOrders.add(reserved);
+            nextAvailableOrder += 1;
+            return reserved;
+          };
           const fresh: typeof extracted = [];
           const skipped: Array<{ floorName: string; name: string }> = [];
           for (const suggestion of extracted) {
@@ -191,7 +209,10 @@ export class FloorPlanAdminService {
               continue;
             }
             seen.add(key);
-            fresh.push(suggestion);
+            fresh.push({
+              ...suggestion,
+              inspectionOrder: reserveOrder(suggestion.inspectionOrder),
+            });
           }
           // Resolve all floors in one read; create only the missing ones.
           const floors = await tx.propertyFloor.findMany({
@@ -236,10 +257,16 @@ export class FloorPlanAdminService {
                 orderBy: { inspectionOrder: 'asc' },
               })
             : [];
+          const summary = {
+            detectedCount: extracted.length,
+            createdCount: created.length,
+            alreadyPresentCount: skipped.length,
+          };
           const output = {
             suggestions: extracted,
             createdAreaIds: created.map((area) => area.id),
             skipped,
+            summary,
           };
           await tx.floorPlanExtractionJob.update({
             where: { id: job.id },
@@ -249,13 +276,15 @@ export class FloorPlanAdminService {
             where: { id: floorPlanId },
             data: { status: FloorPlanStatus.REVIEW_REQUIRED },
           });
-          return { ...job, status: 'COMPLETED', output, areas: created };
+          return { ...job, status: 'COMPLETED', output, summary, areas: created };
         },
         { maxWait: 10_000, timeout: 60_000 },
       );
       await this.audit(user, 'FLOOR_PLAN_EXTRACTED', 'PropertyFloorPlan', floorPlanId, {
         jobId: job.id,
+        detectedAreaCount: result.summary.detectedCount,
         draftAreaCount: result.areas.length,
+        existingAreaCount: result.summary.alreadyPresentCount,
       });
       await this.aiSettings
         .recordUsage(

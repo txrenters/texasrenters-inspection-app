@@ -38,7 +38,9 @@ export function PageHeader({
   );
 }
 
-export function Badge({ value }: { value: string }) {
+// `pulse` renders an animated live dot instead of the static glyph — use it for
+// states that represent active, in-progress work so it reads as "running now".
+export function Badge({ value, pulse = false }: { value: string; pulse?: boolean }) {
   const normalized = value.toLowerCase();
   const tone = /complete|ready|active|assigned/.test(normalized)
     ? 'success'
@@ -48,9 +50,19 @@ export function Badge({ value }: { value: string }) {
         ? 'warning'
         : 'info';
   return (
-    <span className={`badge badge-${tone}`}>
+    <span className={`badge badge-${tone}${pulse ? ' badge-live' : ''}`}>
       <span aria-hidden>
-        {tone === 'success' ? '✓' : tone === 'danger' ? '×' : tone === 'warning' ? '!' : '•'}
+        {pulse ? (
+          <span className="badge-pulse-dot" />
+        ) : tone === 'success' ? (
+          '✓'
+        ) : tone === 'danger' ? (
+          '×'
+        ) : tone === 'warning' ? (
+          '!'
+        ) : (
+          '•'
+        )}
       </span>
       {value.replaceAll('_', ' ')}
     </span>

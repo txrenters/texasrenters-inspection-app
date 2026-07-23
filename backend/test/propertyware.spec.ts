@@ -249,7 +249,12 @@ describe('Propertyware pagination and client', () => {
     expect(page.records).toHaveLength(1);
     expect(page.receivedCount).toBe(2);
     expect(page.validationErrors).toEqual([
-      { index: 1, externalId: '93002', code: 'PROPERTYWARE_SCHEMA_ERROR' },
+      {
+        index: 1,
+        externalId: '93002',
+        code: 'PROPERTYWARE_SCHEMA_ERROR',
+        detail: expect.stringContaining('portfolioID'),
+      },
     ]);
   });
 

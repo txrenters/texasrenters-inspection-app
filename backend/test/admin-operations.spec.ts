@@ -10,6 +10,7 @@ const user: AuthenticatedUser = {
   organizationId: '10000000-0000-4000-8000-000000000001',
   displayName: 'Property Admin',
   roles: [UserRole.PROPERTY_ADMIN],
+  permissions: [],
   mustChangePassword: false,
 };
 

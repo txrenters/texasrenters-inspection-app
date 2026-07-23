@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 
-import { AdminGuard, useAuth } from '@/lib/auth';
+import { AdminGuard, useAuth, usePermissions } from '@/lib/auth';
 import { ThemeSelector } from '@/lib/theme';
 
 type IconName =
@@ -13,39 +13,102 @@ type IconName =
   | 'inspections'
   | 'assignments'
   | 'technicians'
+  | 'users'
+  | 'roles'
   | 'sync'
   | 'providers'
   | 'settings'
   | 'profile';
 
+// A `permission` restricts an item to users who hold it (client-side gate only;
+// the backend re-checks every request).
 const sections: Array<{
   label: string;
-  items: Array<{ label: string; href: string; icon: IconName }>;
+  items: Array<{ label: string; href: string; icon: IconName; permission?: string }>;
 }> = [
-  { label: 'Overview', items: [{ label: 'Dashboard', href: '/dashboard', icon: 'dashboard' }] },
+  {
+    label: 'Overview',
+    items: [
+      {
+        label: 'Dashboard',
+        href: '/dashboard',
+        icon: 'dashboard',
+        permission: 'dashboard:read',
+      },
+    ],
+  },
   {
     label: 'Property management',
-    items: [{ label: 'Properties', href: '/properties', icon: 'properties' }],
+    items: [
+      {
+        label: 'Properties',
+        href: '/properties',
+        icon: 'properties',
+        permission: 'properties:read',
+      },
+    ],
   },
   {
     label: 'Inspection operations',
     items: [
-      { label: 'Inspections', href: '/inspections', icon: 'inspections' },
-      { label: 'Assignments', href: '/assignments', icon: 'assignments' },
+      {
+        label: 'Inspections',
+        href: '/inspections',
+        icon: 'inspections',
+        permission: 'inspections:read',
+      },
+      {
+        label: 'Assignments',
+        href: '/assignments',
+        icon: 'assignments',
+        permission: 'inspections:assign',
+      },
     ],
   },
-  { label: 'People', items: [{ label: 'Technicians', href: '/technicians', icon: 'technicians' }] },
+  {
+    label: 'People',
+    items: [
+      {
+        label: 'Technicians',
+        href: '/technicians',
+        icon: 'technicians',
+        permission: 'technicians:read',
+      },
+    ],
+  },
+  {
+    label: 'Access control',
+    items: [
+      { label: 'Users', href: '/users', icon: 'users', permission: 'users:read' },
+      { label: 'Roles', href: '/roles', icon: 'roles', permission: 'roles:read' },
+    ],
+  },
   {
     label: 'Integrations',
     items: [
-      { label: 'Propertyware', href: '/integrations/propertyware', icon: 'sync' },
-      { label: 'Providers', href: '/integrations/providers', icon: 'providers' },
+      {
+        label: 'Propertyware',
+        href: '/integrations/propertyware',
+        icon: 'sync',
+        permission: 'integrations:read',
+      },
+      {
+        label: 'Providers',
+        href: '/integrations/providers',
+        icon: 'providers',
+        permission: 'integrations:read',
+      },
     ],
   },
   {
     label: 'Administration',
     items: [
-      { label: 'Settings', href: '/settings', icon: 'settings' },
+      {
+        label: 'Settings',
+        href: '/settings',
+        icon: 'settings',
+        permission: 'integrations:read',
+      },
       { label: 'Profile', href: '/profile', icon: 'profile' },
     ],
   },
@@ -59,6 +122,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const auth = useAuth();
+  const { has } = usePermissions();
+  const visibleSections = sections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => !item.permission || has(item.permission)),
+    }))
+    .filter((section) => section.items.length > 0);
 
   useEffect(() => {
     setCollapsed(window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true');
@@ -103,7 +173,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
           </div>
           <nav aria-label="Primary navigation" className="primary-navigation">
-            {sections.map((section) => (
+            {visibleSections.map((section) => (
               <div className="nav-section" key={section.label}>
                 <p>{section.label}</p>
                 {section.items.map((item) => (
@@ -167,7 +237,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="avatar">{auth.profile?.displayName.slice(0, 2).toUpperCase()}</div>
                 <div className="user-identity">
                   <strong>{auth.profile?.displayName}</strong>
-                  <small>{auth.profile?.memberships[0]?.role.replaceAll('_', ' ')}</small>
+                  <small>
+                    {auth.profile?.memberships.some(({ role }) => role === 'SYSTEM_ADMIN')
+                      ? 'SYSTEM ADMIN'
+                      : 'CUSTOM ACCESS'}
+                  </small>
                 </div>
               </div>
               <button
@@ -192,10 +266,15 @@ function AppIcon({ name }: { name: IconName }) {
     properties: 'M4 21V6l8-3 8 3v15M8 9h2m4 0h2M8 13h2m4 0h2M8 17h2m4 0h2',
     inspections: 'M9 5h6m-7-2h8v4H8V3ZM6 5H4v16h16V5h-2M8 12l2 2 5-5',
     assignments: 'M7 7h11l-3-3m3 3-3 3M17 17H6l3 3m-3-3 3-3',
-    technicians: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m7-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.87m0-11.26a4 4 0 0 1 0 7.75',
+    technicians:
+      'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m7-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.87m0-11.26a4 4 0 0 1 0 7.75',
+    users:
+      'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm14 10v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
+    roles: 'M12 3 4 6v5c0 4.5 3 8 8 9 5-1 8-4.5 8-9V6l-8-3Zm-2 9 1.5 1.5L15 9',
     sync: 'M20 7h-5V2M4 17h5v5m10.5-9A8 8 0 0 0 6 6L4 7m.5 4A8 8 0 0 0 18 18l2-1',
     providers: 'm12 3 9 9-9 9-9-9 9-9Zm0 5v8m-4-4h8',
-    settings: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7.4-3.5 1.6 1.2-2 3.5-2-.8a8 8 0 0 1-2 1.2l-.3 2.1h-4l-.3-2.1a8 8 0 0 1-2-1.2l-2 .8-2-3.5L5.6 12A8 8 0 0 1 5.6 9L4 7.8l2-3.5 2 .8a8 8 0 0 1 2-1.2l.3-2.1h4l.3 2.1a8 8 0 0 1 2 1.2l2-.8 2 3.5L19.4 9a8 8 0 0 1 0 3Z',
+    settings:
+      'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7.4-3.5 1.6 1.2-2 3.5-2-.8a8 8 0 0 1-2 1.2l-.3 2.1h-4l-.3-2.1a8 8 0 0 1-2-1.2l-2 .8-2-3.5L5.6 12A8 8 0 0 1 5.6 9L4 7.8l2-3.5 2 .8a8 8 0 0 1 2-1.2l.3-2.1h4l.3 2.1a8 8 0 0 1 2 1.2l2-.8 2 3.5L19.4 9a8 8 0 0 1 0 3Z',
     profile: 'M20 21a8 8 0 0 0-16 0m8-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
   };
   return (

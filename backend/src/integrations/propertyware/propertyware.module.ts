@@ -2,13 +2,14 @@ import { Module } from '@nestjs/common';
 
 import { PropertywareReconciliationWorker } from '../../workers/propertyware-sync/propertyware-reconciliation.worker';
 import { PropertywareSyncCoordinator } from '../../workers/propertyware-sync/propertyware-sync.coordinator';
+import { PropertywareSyncScheduler } from '../../workers/propertyware-sync/propertyware-sync.scheduler';
 import {
   InMemoryPropertywareSyncStore,
   PrismaPropertywareSyncStore,
   PROPERTYWARE_SYNC_STORE,
 } from '../../workers/propertyware-sync/propertyware-sync.store';
 import { PropertywareSyncWorker } from '../../workers/propertyware-sync/propertyware-sync.worker';
-import { ApiAuthGuard, RolesGuard } from '../../common/auth';
+import { ApiAuthGuard, PermissionsGuard } from '../../common/auth';
 import { PropertywareClient } from './propertyware.client';
 import { PROPERTYWARE_CONFIG, getPropertywareConfig } from './propertyware.config';
 import {
@@ -37,8 +38,9 @@ import { PropertywareService } from './propertyware.service';
     PropertywareSyncWorker,
     PropertywareSyncCoordinator,
     PropertywareReconciliationWorker,
+    PropertywareSyncScheduler,
     ApiAuthGuard,
-    RolesGuard,
+    PermissionsGuard,
   ],
   exports: [PROPERTYWARE_SYNC_STORE, PropertywareSyncCoordinator],
 })

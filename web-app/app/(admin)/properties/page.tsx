@@ -35,6 +35,10 @@ export default function PropertiesPage() {
   const [portfolioId, setPortfolioId] = useState('');
   const [portfolioSearch, setPortfolioSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
+  const searchText = search.trim();
+  const appliedSearchText = debouncedSearch.trim();
+  const isSearchPending = searchText !== appliedSearchText;
+  const hasActiveFilters = Boolean(searchText || portfolioId);
   const properties = useProperties({
     page,
     pageSize: 20,
@@ -51,6 +55,12 @@ export default function PropertiesPage() {
         searchText: item.abbreviation ?? undefined,
       })),
     ) ?? [];
+  const resultLabel =
+    isSearchPending || properties.isPlaceholderData || properties.isFetching
+      ? 'Searching active properties...'
+      : properties.isLoading
+        ? 'Loading active properties...'
+        : `${(properties.data?.total ?? 0).toLocaleString()} active properties`;
   return (
     <>
       <PageHeader
@@ -58,11 +68,7 @@ export default function PropertiesPage() {
         description="Active normalized Propertyware properties available for inspections."
       />
       <FilterToolbar
-        resultLabel={
-          properties.isLoading
-            ? 'Loading active properties…'
-            : `${(properties.data?.total ?? 0).toLocaleString()} active properties`
-        }
+        resultLabel={resultLabel}
         onClear={
           search || portfolioId
             ? () => {
@@ -83,7 +89,7 @@ export default function PropertiesPage() {
               setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="Search properties…"
+            placeholder="Search properties..."
           />
         </div>
         <div className="field field-medium">
@@ -94,10 +100,10 @@ export default function PropertiesPage() {
             options={portfolioOptions}
             placeholder="All portfolios"
             clearLabel="All portfolios"
-            searchPlaceholder="Search portfolios…"
+            searchPlaceholder="Search portfolios..."
             emptyMessage="No active portfolio matches your search."
             optionsLabel="Portfolio options"
-            loadingMoreLabel="Loading more portfolios…"
+            loadingMoreLabel="Loading more portfolios..."
             moreHint="Scroll for more portfolios"
             disabled={portfolios.isLoading || portfolios.isError}
             hasMore={portfolios.hasNextPage}
@@ -111,18 +117,32 @@ export default function PropertiesPage() {
           />
         </div>
       </FilterToolbar>
-      {properties.isLoading ? (
-        <TableLoadingState headers={PROPERTY_HEADERS} label="Loading properties" />
+      {properties.isLoading || isSearchPending || properties.isPlaceholderData ? (
+        <TableLoadingState
+          headers={PROPERTY_HEADERS}
+          label={
+            isSearchPending || properties.isPlaceholderData
+              ? 'Searching properties'
+              : 'Loading properties'
+          }
+          rows={4}
+        />
       ) : properties.isError ? (
         <ErrorState error={properties.error} retry={() => void properties.refetch()} />
       ) : !properties.data?.items.length ? (
         <EmptyState
-          title="No synchronized properties"
-          description="Run and verify Propertyware synchronization before creating inspections."
+          title={hasActiveFilters ? 'No matching properties' : 'No synchronized properties'}
+          description={
+            hasActiveFilters
+              ? 'Try a different property name, address, city, or portfolio.'
+              : 'Run and verify Propertyware synchronization before creating inspections.'
+          }
           action={
-            <Link className="button button-primary" href="/integrations/propertyware">
-              Open Propertyware
-            </Link>
+            hasActiveFilters ? undefined : (
+              <Link className="button button-primary" href="/integrations/propertyware">
+                Open Propertyware
+              </Link>
+            )
           }
         />
       ) : (

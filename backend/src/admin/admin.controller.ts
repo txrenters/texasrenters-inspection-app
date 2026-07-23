@@ -22,9 +22,13 @@ import {
 import { AiProvider } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@texasrenters/shared';
 
-import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
+import {
+  ApiAuthGuard,
+  PermissionsGuard,
+  RequirePermissions,
+  type AuthenticatedRequest,
+} from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
@@ -60,16 +64,9 @@ import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admi
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 
-const ADMIN_ROLES = [
-  UserRole.SYSTEM_ADMIN,
-  UserRole.PROPERTY_ADMIN,
-  UserRole.INSPECTION_SUPERVISOR,
-];
-
 @ApiTags('Administrator application')
 @ApiBearerAuth()
-@UseGuards(ApiAuthGuard, RolesGuard)
-@Roles(...ADMIN_ROLES)
+@UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller('admin')
 export class AdminController {
   constructor(
@@ -87,29 +84,30 @@ export class AdminController {
   @Get('profile') profile(@Req() request: AuthenticatedRequest) {
     return this.service.profile(request.user);
   }
-  @Get('dashboard') dashboard(@Req() request: AuthenticatedRequest) {
+  @Get('dashboard')
+  @RequirePermissions('dashboard:read')
+  dashboard(@Req() request: AuthenticatedRequest) {
     return this.service.dashboard(request.user);
   }
 
-  @Get('portfolios') portfolios(
-    @Req() request: AuthenticatedRequest,
-    @Query() query: PortfolioListQueryDto,
-  ) {
+  @Get('portfolios')
+  @RequirePermissions('properties:read')
+  portfolios(@Req() request: AuthenticatedRequest, @Query() query: PortfolioListQueryDto) {
     return this.service.portfolios(request.user, query);
   }
-  @Get('properties') properties(
-    @Req() request: AuthenticatedRequest,
-    @Query() query: PropertyListQueryDto,
-  ) {
+  @Get('properties')
+  @RequirePermissions('properties:read')
+  properties(@Req() request: AuthenticatedRequest, @Query() query: PropertyListQueryDto) {
     return this.service.properties(request.user, query);
   }
-  @Get('properties/:propertyId') property(
-    @Req() request: AuthenticatedRequest,
-    @Param('propertyId') id: string,
-  ) {
+  @Get('properties/:propertyId')
+  @RequirePermissions('properties:read')
+  property(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
     return this.service.property(request.user, id);
   }
-  @Get('properties/:propertyId/units') units(
+  @Get('properties/:propertyId/units')
+  @RequirePermissions('properties:read')
+  units(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,
     @Query() query: UnitListQueryDto,
@@ -118,11 +116,12 @@ export class AdminController {
   }
 
   @Get('properties/:propertyId/floor-plans')
+  @RequirePermissions('properties:read')
   floorPlanList(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
     return this.floorPlans.list(request.user, id);
   }
   @Post('properties/:propertyId/floor-plans')
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('properties:manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20_000_000, files: 1 } }))
   uploadFloorPlan(
     @Req() request: AuthenticatedRequest,
@@ -133,6 +132,7 @@ export class AdminController {
     return this.floorPlans.upload(request.user, id, file, body.unitId);
   }
   @Get('floor-plans/:floorPlanId/content')
+  @RequirePermissions('properties:read')
   @Header('Cache-Control', 'private, no-store')
   async floorPlanContent(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
     const file = await this.floorPlans.content(request.user, id);
@@ -142,14 +142,17 @@ export class AdminController {
     });
   }
   @Post('floor-plans/:floorPlanId/extract')
+  @RequirePermissions('properties:manage')
   extractFloorPlan(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
     return this.floorPlans.extract(request.user, id);
   }
   @Get('properties/:propertyId/areas')
+  @RequirePermissions('properties:read')
   propertyAreas(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
     return this.floorPlans.areas(request.user, id);
   }
   @Post('properties/:propertyId/areas')
+  @RequirePermissions('properties:manage')
   createPropertyArea(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,
@@ -158,6 +161,7 @@ export class AdminController {
     return this.floorPlans.createArea(request.user, id, body);
   }
   @Post('properties/:propertyId/areas/fallback')
+  @RequirePermissions('properties:manage')
   createFallbackPropertyArea(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,
@@ -165,6 +169,7 @@ export class AdminController {
     return this.floorPlans.createFallbackArea(request.user, id);
   }
   @Patch('property-areas/:areaId')
+  @RequirePermissions('properties:manage')
   updatePropertyArea(
     @Req() request: AuthenticatedRequest,
     @Param('areaId') id: string,
@@ -173,10 +178,12 @@ export class AdminController {
     return this.floorPlans.updateArea(request.user, id, body);
   }
   @Delete('property-areas/:areaId')
+  @RequirePermissions('properties:manage')
   deletePropertyArea(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.deleteArea(request.user, id);
   }
   @Post('properties/:propertyId/areas/approve')
+  @RequirePermissions('properties:manage')
   approvePropertyAreas(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,
@@ -184,10 +191,14 @@ export class AdminController {
   ) {
     return this.floorPlans.approveAreas(request.user, id, body.areaIds);
   }
-  @Get('units/:unitId') unit(@Req() request: AuthenticatedRequest, @Param('unitId') id: string) {
+  @Get('units/:unitId')
+  @RequirePermissions('properties:read')
+  unit(@Req() request: AuthenticatedRequest, @Param('unitId') id: string) {
     return this.service.unit(request.user, id);
   }
-  @Get('units/:unitId/leases') leases(
+  @Get('units/:unitId/leases')
+  @RequirePermissions('properties:read')
+  leases(
     @Req() request: AuthenticatedRequest,
     @Param('unitId') id: string,
     @Query() query: LeaseListQueryDto,
@@ -195,31 +206,28 @@ export class AdminController {
     return this.service.leases(request.user, id, query);
   }
 
-  @Get('inspections') inspections(
-    @Req() request: AuthenticatedRequest,
-    @Query() query: InspectionListQueryDto,
-  ) {
+  @Get('inspections')
+  @RequirePermissions('inspections:read')
+  inspections(@Req() request: AuthenticatedRequest, @Query() query: InspectionListQueryDto) {
     return this.service.inspections(request.user, query);
   }
-  @Post('inspections') createInspection(
-    @Req() request: AuthenticatedRequest,
-    @Body() body: CreateAdminInspectionDto,
-  ) {
+  @Post('inspections')
+  @RequirePermissions('inspections:manage')
+  createInspection(@Req() request: AuthenticatedRequest, @Body() body: CreateAdminInspectionDto) {
     return this.service.createInspection(request.user, body);
   }
-  @Get('inspections/:inspectionId') inspection(
-    @Req() request: AuthenticatedRequest,
-    @Param('inspectionId') id: string,
-  ) {
+  @Get('inspections/:inspectionId')
+  @RequirePermissions('inspections:read')
+  inspection(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.service.inspection(request.user, id);
   }
-  @Get('inspections/:inspectionId/media') inspectionMedia(
-    @Req() request: AuthenticatedRequest,
-    @Param('inspectionId') id: string,
-  ) {
+  @Get('inspections/:inspectionId/media')
+  @RequirePermissions('inspections:read')
+  inspectionMedia(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.service.inspectionMedia(request.user, id);
   }
   @Get('media/:mediaId/content')
+  @RequirePermissions('inspections:read')
   @Header('Cache-Control', 'private, no-store')
   async mediaContent(@Req() request: AuthenticatedRequest, @Param('mediaId') id: string) {
     const file = await this.service.mediaContent(request.user, id);
@@ -228,75 +236,91 @@ export class AdminController {
       disposition: `inline; filename="${file.fileName}"`,
     });
   }
-  @Get('inspections/:inspectionId/findings') inspectionFindings(
+  @Get('inspections/:inspectionId/findings')
+  @RequirePermissions('inspections:read', 'findings:read')
+  inspectionFindings(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Query() query: AdminFindingsQueryDto,
   ) {
     return this.service.findings(request.user, id, query);
   }
-  @Post('findings/:findingId/approve') approveFinding(
+  @Post('findings/:findingId/approve')
+  @RequirePermissions('findings:review')
+  approveFinding(
     @Req() request: AuthenticatedRequest,
     @Param('findingId') id: string,
     @Body() body: FindingReviewDto,
   ) {
     return this.service.reviewFinding(request.user, id, 'APPROVED', body.reason);
   }
-  @Post('findings/:findingId/reject') rejectFinding(
+  @Post('findings/:findingId/reject')
+  @RequirePermissions('findings:review')
+  rejectFinding(
     @Req() request: AuthenticatedRequest,
     @Param('findingId') id: string,
     @Body() body: FindingRejectDto,
   ) {
     return this.service.reviewFinding(request.user, id, 'REJECTED', body.reason);
   }
-  @Post('inspections/:inspectionId/report-shares') createReportShare(
+  @Post('inspections/:inspectionId/report-shares')
+  @RequirePermissions('reports:share')
+  createReportShare(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Body() body: CreateReportShareDto,
   ) {
     return this.reportShares.createShare(request.user, id, body.recipientEmail);
   }
-  @Get('inspections/:inspectionId/report-shares') listReportShares(
-    @Req() request: AuthenticatedRequest,
-    @Param('inspectionId') id: string,
-  ) {
+  @Get('inspections/:inspectionId/report-shares')
+  @RequirePermissions('reports:share')
+  listReportShares(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.reportShares.listShares(request.user, id);
   }
-  @Delete('report-shares/:shareId') revokeReportShare(
-    @Req() request: AuthenticatedRequest,
-    @Param('shareId') id: string,
-  ) {
+  @Delete('report-shares/:shareId')
+  @RequirePermissions('reports:share')
+  revokeReportShare(@Req() request: AuthenticatedRequest, @Param('shareId') id: string) {
     return this.reportShares.revokeShare(request.user, id);
   }
-  @Get('inspections/:inspectionId/audit') inspectionAudit(
+  @Get('inspections/:inspectionId/audit')
+  @RequirePermissions('inspections:read')
+  inspectionAudit(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Query() query: AuditListQueryDto,
   ) {
     return this.service.inspectionAudit(request.user, id, query);
   }
-  @Patch('inspections/:inspectionId') updateInspection(
+  @Patch('inspections/:inspectionId')
+  @RequirePermissions('inspections:manage')
+  updateInspection(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Body() body: UpdateAdminInspectionDto,
   ) {
     return this.service.updateInspection(request.user, id, body);
   }
-  @Post('inspections/:inspectionId/assign') assign(
+  @Post('inspections/:inspectionId/assign')
+  @RequirePermissions('inspections:assign')
+  assign(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Body() body: AssignmentDto,
   ) {
     return this.service.assign(request.user, id, body);
   }
-  @Post('inspections/:inspectionId/reassign') reassign(
+  @Post('inspections/:inspectionId/reassign')
+  @RequirePermissions('inspections:assign')
+  reassign(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Body() body: AssignmentDto,
   ) {
     return this.service.reassign(request.user, id, body);
   }
-  @Post('inspections/:inspectionId/unassign') unassign(
+  @Post('inspections/:inspectionId/unassign')
+  @RequirePermissions('inspections:assign')
+  unassign(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Body() body: UnassignDto,
@@ -304,30 +328,29 @@ export class AdminController {
     return this.service.unassign(request.user, id, body);
   }
 
-  @Get('assignments') assignments(
-    @Req() request: AuthenticatedRequest,
-    @Query() query: AssignmentListQueryDto,
-  ) {
+  @Get('assignments')
+  @RequirePermissions('inspections:assign')
+  assignments(@Req() request: AuthenticatedRequest, @Query() query: AssignmentListQueryDto) {
     return this.service.assignments(request.user, query);
   }
-  @Get('technicians') technicians(
-    @Req() request: AuthenticatedRequest,
-    @Query() query: TechnicianListQueryDto,
-  ) {
+  @Get('technicians')
+  @RequirePermissions('technicians:read')
+  technicians(@Req() request: AuthenticatedRequest, @Query() query: TechnicianListQueryDto) {
     return this.service.technicians(request.user, query);
   }
   @Post('technicians')
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('technicians:provision')
   createTechnician(@Req() request: AuthenticatedRequest, @Body() body: CreateTechnicianDto) {
     return this.technicianProvisioning.create(request.user, body);
   }
-  @Get('technicians/:technicianId') technician(
-    @Req() request: AuthenticatedRequest,
-    @Param('technicianId') id: string,
-  ) {
+  @Get('technicians/:technicianId')
+  @RequirePermissions('technicians:read')
+  technician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
     return this.service.technician(request.user, id);
   }
-  @Patch('technicians/:technicianId/status') technicianStatus(
+  @Patch('technicians/:technicianId/status')
+  @RequirePermissions('technicians:manage')
+  technicianStatus(
     @Req() request: AuthenticatedRequest,
     @Param('technicianId') id: string,
     @Body() body: TechnicianStatusDto,
@@ -335,23 +358,26 @@ export class AdminController {
     return this.service.updateTechnicianStatus(request.user, id, body);
   }
 
-  @Get('integrations/providers/status') providerStatus() {
+  @Get('integrations/providers/status')
+  @RequirePermissions('integrations:read')
+  providerStatus() {
     return this.service.providerStatus();
   }
 
   @Get('ai/settings')
+  @RequirePermissions('integrations:read')
   aiProviderSettings(@Req() request: AuthenticatedRequest) {
     return this.aiSettings.settings(request.user.organizationId);
   }
 
   @Patch('ai/settings/routing')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('ai:configure')
   updateAiRouting(@Req() request: AuthenticatedRequest, @Body() body: UpdateAiRoutingDto) {
     return this.aiSettings.setActiveProvider(request.user, body.activeProvider);
   }
 
   @Patch('ai/providers/:provider')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('ai:configure')
   updateAiProvider(
     @Req() request: AuthenticatedRequest,
     @Param('provider', new ParseEnumPipe(AiProvider)) provider: AiProvider,
@@ -361,7 +387,7 @@ export class AdminController {
   }
 
   @Post('ai/providers/:provider/validate')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('ai:configure')
   validateAiProvider(
     @Req() request: AuthenticatedRequest,
     @Param('provider', new ParseEnumPipe(AiProvider)) provider: AiProvider,
@@ -370,19 +396,19 @@ export class AdminController {
   }
 
   @Get('cache/status')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('system:manage')
   cacheStatus() {
     return this.cache?.status() ?? { enabled: false, state: 'disabled' };
   }
 
   @Get('cache/metrics')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('system:manage')
   cacheMetrics() {
     return this.cache?.metricSnapshot() ?? { hits: 0, misses: 0, hitRatio: 0 };
   }
 
   @Post('cache/invalidate')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('system:manage')
   async invalidateCache(@Req() request: AuthenticatedRequest, @Body() body: CacheInvalidateDto) {
     const scope = body.resource === 'providerReadiness' ? 'global' : request.user.organizationId;
     await this.cacheInvalidation?.invalidate(body.resource, scope, {
@@ -393,7 +419,7 @@ export class AdminController {
   }
 
   @Post('cache/bump-namespace')
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @RequirePermissions('system:manage')
   async bumpCacheNamespace(@Req() request: AuthenticatedRequest, @Body() body: CacheNamespaceDto) {
     const scope = body.namespace === 'providerReadiness' ? 'global' : request.user.organizationId;
     await this.cacheInvalidation?.bump(body.namespace, scope);

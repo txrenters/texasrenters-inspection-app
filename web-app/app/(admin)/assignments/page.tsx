@@ -15,6 +15,7 @@ import {
   TableLoadingState,
   formatDate,
 } from '@/components/ui';
+import { usePermissions } from '@/lib/auth';
 import { useAssignments, useTechnicians } from '@/lib/queries';
 
 const ASSIGNMENT_HEADERS = [
@@ -29,31 +30,39 @@ const ASSIGNMENT_HEADERS = [
 ];
 
 export default function AssignmentsPage() {
+  const canAssign = usePermissions().has('inspections:assign');
   const [page, setPage] = useState(1);
   const [technicianId, setTechnicianId] = useState('');
   const [assignmentStatus, setAssignmentStatus] = useState('');
   const [creating, setCreating] = useState(false);
+  const hasActiveFilters = Boolean(technicianId || assignmentStatus);
   const assignments = useAssignments({ page, pageSize: 20, technicianId, assignmentStatus });
   const technicians = useTechnicians({ page: 1, pageSize: 100 });
+  const isFilterPending = assignments.isPlaceholderData;
+  const resultLabel =
+    isFilterPending || assignments.isFetching
+      ? 'Filtering assignment history...'
+      : assignments.isLoading
+        ? 'Loading assignment history...'
+        : `${(assignments.data?.total ?? 0).toLocaleString()} assignment records`;
+
   return (
     <>
       <PageHeader
         title="Assignments"
         description="Current and historical technician assignments. Reassignment never overwrites prior records."
         action={
-          <button className="button button-primary" onClick={() => setCreating(true)}>
-            Create assignment
-          </button>
+          canAssign ? (
+            <button className="button button-primary" onClick={() => setCreating(true)}>
+              Create assignment
+            </button>
+          ) : undefined
         }
       />
       <FilterToolbar
-        resultLabel={
-          assignments.isLoading
-            ? 'Loading assignment history…'
-            : `${(assignments.data?.total ?? 0).toLocaleString()} assignment records`
-        }
+        resultLabel={resultLabel}
         onClear={
-          technicianId || assignmentStatus
+          hasActiveFilters
             ? () => {
                 setTechnicianId('');
                 setAssignmentStatus('');
@@ -100,8 +109,12 @@ export default function AssignmentsPage() {
           </select>
         </div>
       </FilterToolbar>
-      {assignments.isLoading ? (
-        <TableLoadingState headers={ASSIGNMENT_HEADERS} label="Loading assignments" />
+      {assignments.isLoading || isFilterPending ? (
+        <TableLoadingState
+          headers={ASSIGNMENT_HEADERS}
+          label={isFilterPending ? 'Filtering assignments' : 'Loading assignments'}
+          rows={4}
+        />
       ) : assignments.isError ? (
         <ErrorState error={assignments.error} retry={() => void assignments.refetch()} />
       ) : !assignments.data?.items.length ? (
@@ -112,7 +125,9 @@ export default function AssignmentsPage() {
           description={
             assignmentStatus === 'UNASSIGNED'
               ? 'Every inspection currently has a technician assignment.'
-              : 'Assignment history will appear after an inspection is assigned.'
+              : hasActiveFilters
+                ? 'Adjust the filters to see matching assignment history.'
+                : 'Assignment history will appear after an inspection is assigned.'
           }
           action={
             <button className="button button-primary" onClick={() => setCreating(true)}>
@@ -137,9 +152,9 @@ export default function AssignmentsPage() {
                 <td>
                   {assignment.technician?.displayName ?? assignment.technicianId ?? 'Unassigned'}
                 </td>
-                <td>{assignment.assignedBy?.displayName ?? assignment.assignedById ?? '—'}</td>
-                <td>{assignment.assignedAt ? formatDate(assignment.assignedAt) : '—'}</td>
-                <td>{assignment.endedAt ? formatDate(assignment.endedAt) : '—'}</td>
+                <td>{assignment.assignedBy?.displayName ?? assignment.assignedById ?? '-'}</td>
+                <td>{assignment.assignedAt ? formatDate(assignment.assignedAt) : '-'}</td>
+                <td>{assignment.endedAt ? formatDate(assignment.endedAt) : '-'}</td>
                 <td>
                   <Badge
                     value={

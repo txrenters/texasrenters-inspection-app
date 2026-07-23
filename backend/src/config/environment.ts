@@ -63,6 +63,8 @@ const environmentSchema = z
     PROPERTYWARE_CLIENT_ID: z.string().optional(),
     PROPERTYWARE_CLIENT_SECRET: z.string().optional(),
     PROPERTYWARE_ORGANIZATION_ID: z.string().optional(),
+    // Internal organization (UUID) that scheduled syncs run for.
+    PROPERTYWARE_LOCAL_ORGANIZATION_ID: z.string().uuid().optional(),
     PROPERTYWARE_PORTFOLIO_REPORT_URL: z.string().url().optional(),
     PROPERTYWARE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
     PROPERTYWARE_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(500),

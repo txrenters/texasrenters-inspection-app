@@ -152,17 +152,54 @@ enum WebhookProcessingStatus {
 }
 
 model Organization {
-  id            String                    @id @default(uuid()) @db.Uuid
-  name          String
-  createdAt     DateTime                  @default(now())
-  updatedAt     DateTime                  @updatedAt
-  members       OrganizationMember[]
-  properties    Property[]
-  inspections   Inspection[]
-  auditLogs     AuditLog[]
-  aiSettings    OrganizationAiSettings?
-  aiProviders   AiProviderConfiguration[]
-  aiUsageEvents AiUsageEvent[]
+  id              String                    @id @default(uuid()) @db.Uuid
+  name            String
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  members         OrganizationMember[]
+  properties      Property[]
+  inspections     Inspection[]
+  auditLogs       AuditLog[]
+  aiSettings      OrganizationAiSettings?
+  aiProviders     AiProviderConfiguration[]
+  aiUsageEvents   AiUsageEvent[]
+  roles           Role[]
+  roleAssignments UserRoleAssignment[]
+}
+
+/// Fully admin-defined RBAC role. Not seeded — an organization composes any
+/// subset of the code-defined permission catalog into a named role. Permission
+/// keys are validated against the catalog in application code.
+model Role {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  name           String
+  description    String?
+  permissions    String[]             @default([])
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignments    UserRoleAssignment[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+/// Per-user grant of a custom Role, scoped to an organization. Effective
+/// permissions are the union of every assigned role's permissions.
+model UserRoleAssignment {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userProfileId  String       @db.Uuid
+  roleId         String       @db.Uuid
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userProfile    UserProfile  @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  role           Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, roleId])
+  @@index([organizationId])
+  @@index([roleId])
 }
 
 model OrganizationAiSettings {
@@ -217,6 +254,7 @@ model UserProfile {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   memberships        OrganizationMember[]
+  roleAssignments    UserRoleAssignment[]
   assignments        InspectionAssignment[]  @relation("AssignedTechnician")
   assignmentsCreated InspectionAssignment[]  @relation("AssignmentActor")
   assignmentsEnded   InspectionAssignment[]  @relation("AssignmentEndActor")

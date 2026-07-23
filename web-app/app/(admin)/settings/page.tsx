@@ -4,15 +4,18 @@ import type { AiProviderConfiguration, AiProviderName } from '@texasrenters/shar
 import { useEffect, useState } from 'react';
 
 import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/ui';
-import { useAuth } from '@/lib/auth';
+import { useAuth, usePermissions } from '@/lib/auth';
 import { useAiSettings, useAiSettingsMutations } from '@/lib/queries';
 
 export default function SettingsPage() {
   const { profile } = useAuth();
   const membership = profile?.memberships[0];
+  const accessLabel = profile?.memberships.some(({ role }) => role === 'SYSTEM_ADMIN')
+    ? 'SYSTEM ADMIN'
+    : 'CUSTOM RBAC ACCESS';
   const aiSettings = useAiSettings();
   const actions = useAiSettingsMutations();
-  const canManageSecrets = membership?.role === 'SYSTEM_ADMIN';
+  const canManageSecrets = usePermissions().has('ai:configure');
 
   return (
     <>
@@ -31,7 +34,7 @@ export default function SettingsPage() {
             </div>
             <div className="detail-item">
               <span>Your role</span>
-              <strong>{membership?.role.replaceAll('_', ' ') ?? 'Unavailable'}</strong>
+              <strong>{accessLabel}</strong>
             </div>
           </div>
         </section>
@@ -51,26 +54,11 @@ export default function SettingsPage() {
             <span className="section-eyebrow">AI operations</span>
             <h2 id="ai-settings-title">Provider routing and consumption</h2>
             <p>
-              Choose the provider used by new AI jobs and configure each provider independently.
-              For transcript summaries and finding extraction, the balanced tiers are recommended —
-              the premium flagships rarely improve results for this workload.
+              Choose the provider used by new AI jobs and configure each provider independently. For
+              transcript summaries and finding extraction, the balanced tiers are recommended — the
+              premium flagships rarely improve results for this workload.
             </p>
           </div>
-          {aiSettings.data ? (
-            <label className="active-provider-control">
-              <span>Active provider</span>
-              <select
-                value={aiSettings.data.activeProvider}
-                disabled={!canManageSecrets || actions.setActiveProvider.isPending}
-                onChange={(event) =>
-                  actions.setActiveProvider.mutate(event.target.value as AiProviderName)
-                }
-              >
-                <option value="ANTHROPIC">Anthropic</option>
-                <option value="OPENAI">OpenAI</option>
-              </select>
-            </label>
-          ) : null}
         </div>
 
         {aiSettings.isLoading ? (
@@ -85,6 +73,48 @@ export default function SettingsPage() {
                 configured on the backend. Existing environment keys continue to work.
               </div>
             ) : null}
+            <div className="ai-routing-control">
+              <div className="ai-routing-icon" aria-hidden>
+                <svg viewBox="0 0 24 24">
+                  <path d="M5 5h5a4 4 0 0 1 4 4v10M5 19h5a4 4 0 0 0 4-4V9m0 0 3-3m-3 3 3 3" />
+                </svg>
+              </div>
+              <div className="ai-routing-copy">
+                <span>Default provider routing</span>
+                <strong>
+                  New AI jobs use{' '}
+                  {aiSettings.data.activeProvider === 'OPENAI' ? 'OpenAI' : 'Anthropic'}
+                </strong>
+                <small>Existing jobs keep the provider and model recorded when they started.</small>
+              </div>
+              <div className="ai-provider-switch" role="group" aria-label="Active AI provider">
+                {(['ANTHROPIC', 'OPENAI'] as const).map((providerName) => {
+                  const selected = aiSettings.data?.activeProvider === providerName;
+                  return (
+                    <button
+                      key={providerName}
+                      className={selected ? 'is-selected' : ''}
+                      type="button"
+                      aria-pressed={selected}
+                      disabled={!canManageSecrets || actions.setActiveProvider.isPending}
+                      onClick={() => {
+                        if (!selected) actions.setActiveProvider.mutate(providerName);
+                      }}
+                    >
+                      <span className="ai-switch-mark" aria-hidden>
+                        {providerName === 'ANTHROPIC' ? 'A' : 'O'}
+                      </span>
+                      {providerName === 'ANTHROPIC' ? 'Anthropic' : 'OpenAI'}
+                      {selected ? (
+                        <span className="ai-switch-check" aria-hidden>
+                          ✓
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="ai-provider-grid">
               {aiSettings.data.providers.map((provider) => (
                 <AiProviderPanel
@@ -179,42 +209,52 @@ function AiProviderPanel({
   return (
     <article className={`panel ai-provider-panel${active ? ' is-active' : ''}`}>
       <div className="ai-provider-heading">
-        <div className="ai-provider-mark" aria-hidden>
-          {provider.provider === 'ANTHROPIC' ? 'A' : 'O'}
-        </div>
-        <div>
-          <div className="ai-provider-title-row">
-            <h3>{provider.displayName}</h3>
-            {active ? <Badge value="ACTIVE" /> : null}
+        <div className="ai-provider-identity">
+          <div className="ai-provider-mark" aria-hidden>
+            {provider.provider === 'ANTHROPIC' ? 'A' : 'O'}
           </div>
-          <p>
-            {(() => {
-              const selected = provider.models.find((model) => model.id === modelId);
-              return selected ? `${selected.name} · ${selected.tier}` : 'AI provider';
-            })()}
-          </p>
+          <div>
+            <div className="ai-provider-title-row">
+              <h3>{provider.displayName}</h3>
+              {active ? <Badge value="ACTIVE" /> : null}
+            </div>
+            <p>
+              {(() => {
+                const selected = provider.models.find((model) => model.id === modelId);
+                return selected ? `${selected.name} · ${selected.tier}` : 'AI provider';
+              })()}
+            </p>
+          </div>
         </div>
-        <Badge value={provider.credentialStatus} />
+        <div className="ai-credential-status">
+          <span>Credential</span>
+          <Badge value={provider.credentialStatus} />
+        </div>
       </div>
 
-      <div className="ai-usage-grid">
+      <div className="ai-subsection-heading">
         <div>
-          <span>Requests this month</span>
-          <strong>{provider.usage.requests.toLocaleString()}</strong>
+          <span>Usage</span>
+          <strong>This month</strong>
         </div>
-        <div>
+        <small>{provider.usage.requests.toLocaleString()} requests recorded</small>
+      </div>
+      <div className="ai-usage-grid">
+        <div className="ai-usage-primary">
           <span>Total tokens</span>
           <strong>{provider.usage.totalTokens.toLocaleString()}</strong>
+          <small>Processed by TexasRenters</small>
         </div>
         <div>
-          <span>Input / output</span>
-          <strong>
-            {provider.usage.inputTokens.toLocaleString()} /{' '}
-            {provider.usage.outputTokens.toLocaleString()}
-          </strong>
+          <span>Input tokens</span>
+          <strong>{provider.usage.inputTokens.toLocaleString()}</strong>
         </div>
         <div>
-          <span>Local budget remaining</span>
+          <span>Output tokens</span>
+          <strong>{provider.usage.outputTokens.toLocaleString()}</strong>
+        </div>
+        <div>
+          <span>Budget remaining</span>
           <strong>
             {provider.usage.remainingBudgetTokens === null
               ? 'Not set'
@@ -233,10 +273,20 @@ function AiProviderPanel({
         </div>
       ) : null}
 
+      <div className="ai-subsection-heading ai-configuration-heading">
+        <div>
+          <span>Configuration</span>
+          <strong>Model, budget, and credential</strong>
+        </div>
+      </div>
       <div className="ai-provider-form">
         <label className="ai-model-field">
           <span>Model</span>
-          <select value={modelId} disabled={!canManage} onChange={(e) => setModelId(e.target.value)}>
+          <select
+            value={modelId}
+            disabled={!canManage}
+            onChange={(e) => setModelId(e.target.value)}
+          >
             {provider.models.map((model) => (
               <option key={model.id} value={model.id}>
                 {model.name} — {model.tier}
@@ -280,7 +330,11 @@ function AiProviderPanel({
             autoComplete="new-password"
             value={apiKey}
             disabled={!canManage || !keyStorageAvailable || clearApiKey}
-            placeholder={provider.hasApiKey ? 'Configured — enter a new key to replace' : 'Enter provider API key'}
+            placeholder={
+              provider.hasApiKey
+                ? 'Configured — enter a new key to replace'
+                : 'Enter provider API key'
+            }
             onChange={(event) => setApiKey(event.target.value)}
           />
           <small>
@@ -301,38 +355,40 @@ function AiProviderPanel({
         ) : null}
       </div>
 
-      <div className="ai-provider-meta">
-        <span>Last validated: {formatDate(provider.lastValidatedAt)}</span>
-        <span>Last used: {formatDate(provider.usage.lastUsedAt)}</span>
-      </div>
       {message ? <div className={`alert alert-${message.tone}`}>{message.text}</div> : null}
-      <div className="form-actions ai-provider-actions">
-        <button
-          className="button button-secondary"
-          type="button"
-          disabled={!canManage || !provider.hasApiKey || pending !== null}
-          onClick={() => void run('validate', onValidate)}
-        >
-          {pending === 'validate' ? 'Checking…' : 'Test connection'}
-        </button>
-        <button
-          className="button button-primary"
-          type="button"
-          disabled={!canManage || pending !== null}
-          onClick={() =>
-            void run('save', () =>
-              onSave({
-                provider: provider.provider,
-                modelId,
-                apiKey: apiKey.trim() || undefined,
-                clearApiKey,
-                monthlyTokenBudget: budget ? Number(budget) : null,
-              }),
-            )
-          }
-        >
-          {pending === 'save' ? 'Saving…' : 'Save provider'}
-        </button>
+      <div className="ai-provider-footer">
+        <div className="ai-provider-meta">
+          <span>Validated {formatDate(provider.lastValidatedAt)}</span>
+          <span>Last used {formatDate(provider.usage.lastUsedAt)}</span>
+        </div>
+        <div className="form-actions ai-provider-actions">
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={!canManage || !provider.hasApiKey || pending !== null}
+            onClick={() => void run('validate', onValidate)}
+          >
+            {pending === 'validate' ? 'Checking…' : 'Test connection'}
+          </button>
+          <button
+            className="button button-primary"
+            type="button"
+            disabled={!canManage || pending !== null}
+            onClick={() =>
+              void run('save', () =>
+                onSave({
+                  provider: provider.provider,
+                  modelId,
+                  apiKey: apiKey.trim() || undefined,
+                  clearApiKey,
+                  monthlyTokenBudget: budget ? Number(budget) : null,
+                }),
+              )
+            }
+          >
+            {pending === 'save' ? 'Saving…' : 'Save changes'}
+          </button>
+        </div>
       </div>
     </article>
   );

@@ -15,6 +15,7 @@ import {
   TableLoadingState,
   formatDate,
 } from '@/components/ui';
+import { usePermissions } from '@/lib/auth';
 import { useInspections } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
@@ -30,12 +31,17 @@ const INSPECTION_HEADERS = [
 ];
 
 export default function InspectionsPage() {
+  const canManage = usePermissions().has('inspections:manage');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [inspectionType, setInspectionType] = useState('');
   const [unassignedOnly, setUnassignedOnly] = useState(false);
   const debouncedSearch = useDebouncedValue(search);
+  const searchText = search.trim();
+  const appliedSearchText = debouncedSearch.trim();
+  const isSearchPending = searchText !== appliedSearchText;
+  const hasActiveFilters = Boolean(searchText || status || inspectionType || unassignedOnly);
   const inspections = useInspections({
     page,
     pageSize: 20,
@@ -44,6 +50,13 @@ export default function InspectionsPage() {
     inspectionType,
     unassignedOnly: unassignedOnly || undefined,
   });
+  const isFilterPending = isSearchPending || inspections.isPlaceholderData;
+  const resultLabel =
+    isFilterPending || inspections.isFetching
+      ? 'Searching inspections...'
+      : inspections.isLoading
+        ? 'Loading inspections...'
+        : `${(inspections.data?.total ?? 0).toLocaleString()} inspections`;
 
   return (
     <>
@@ -51,19 +64,17 @@ export default function InspectionsPage() {
         title="Inspections"
         description="Schedule, assign, and monitor the complete property inspection lifecycle."
         action={
-          <Link className="button button-primary" href="/inspections/new">
-            Create inspection
-          </Link>
+          canManage ? (
+            <Link className="button button-primary" href="/inspections/new">
+              Create inspection
+            </Link>
+          ) : undefined
         }
       />
       <FilterToolbar
-        resultLabel={
-          inspections.isLoading
-            ? 'Loading inspections…'
-            : `${(inspections.data?.total ?? 0).toLocaleString()} inspections`
-        }
+        resultLabel={resultLabel}
         onClear={
-          search || status || inspectionType || unassignedOnly
+          hasActiveFilters
             ? () => {
                 setSearch('');
                 setStatus('');
@@ -83,7 +94,7 @@ export default function InspectionsPage() {
               setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="Search inspections…"
+            placeholder="Search inspections..."
           />
         </div>
         <div className="field field-compact">
@@ -139,14 +150,22 @@ export default function InspectionsPage() {
           Unassigned only
         </label>
       </FilterToolbar>
-      {inspections.isLoading ? (
-        <TableLoadingState headers={INSPECTION_HEADERS} label="Loading inspections" />
+      {inspections.isLoading || isFilterPending ? (
+        <TableLoadingState
+          headers={INSPECTION_HEADERS}
+          label={isFilterPending ? 'Searching inspections' : 'Loading inspections'}
+          rows={4}
+        />
       ) : inspections.isError ? (
         <ErrorState error={inspections.error} retry={() => void inspections.refetch()} />
       ) : !inspections.data?.items.length ? (
         <EmptyState
           title="No inspections found"
-          description="Adjust the filters or create the first inspection from an active synchronized property."
+          description={
+            hasActiveFilters
+              ? 'Adjust the filters to see matching inspections.'
+              : 'Create the first inspection from an active synchronized property.'
+          }
           action={
             <Link className="button button-primary" href="/inspections/new">
               Create inspection
@@ -179,7 +198,7 @@ export default function InspectionsPage() {
                   <td>
                     <Badge value={current ? 'ASSIGNED' : 'UNASSIGNED'} />
                   </td>
-                  <td>{current?.technician?.displayName ?? '—'}</td>
+                  <td>{current?.technician?.displayName ?? '-'}</td>
                 </tr>
               );
             })}

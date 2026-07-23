@@ -27,6 +27,19 @@ export class SupabaseAdminGateway {
   }
 
   async createTechnicianIdentity(email: string, password: string, displayName: string) {
+    return this.createIdentity(email, password, displayName, 'technician');
+  }
+
+  async createWebUserIdentity(email: string, password: string, displayName: string) {
+    return this.createIdentity(email, password, displayName, 'web user');
+  }
+
+  private async createIdentity(
+    email: string,
+    password: string,
+    displayName: string,
+    accountType: 'technician' | 'web user',
+  ) {
     const result = await this.admin().createUser({
       email,
       password,
@@ -37,8 +50,10 @@ export class SupabaseAdminGateway {
     if (result.error || !result.data.user)
       throw new ApplicationError(
         409,
-        'TECHNICIAN_IDENTITY_NOT_CREATED',
-        'A technician account could not be created for that email address.',
+        accountType === 'technician'
+          ? 'TECHNICIAN_IDENTITY_NOT_CREATED'
+          : 'USER_IDENTITY_NOT_CREATED',
+        `A ${accountType} account could not be created for that email address.`,
       );
     return { authUserId: result.data.user.id };
   }

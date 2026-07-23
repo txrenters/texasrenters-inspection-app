@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 
-import { ApiAuthGuard, RolesGuard } from '../common/auth';
+import { ApiAuthGuard, PermissionsGuard } from '../common/auth';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
+import { AccessController } from './access.controller';
+import { AccessService } from './access.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
@@ -18,9 +20,10 @@ import {
 
 @Module({
   imports: [RealtimeModule],
-  controllers: [AdminController, ReportsController],
+  controllers: [AdminController, AccessController, ReportsController],
   providers: [
     AdminService,
+    AccessService,
     AiProviderSettingsService,
     FloorPlanAdminService,
     FloorPlanExtractionService,
@@ -30,7 +33,7 @@ import {
     TechnicianProvisioningService,
     SupabaseAdminGateway,
     ApiAuthGuard,
-    RolesGuard,
+    PermissionsGuard,
   ],
 })
 export class AdminModule {}

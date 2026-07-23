@@ -14,10 +14,12 @@ import {
   TableLoadingState,
   formatDate,
 } from '@/components/ui';
+import { usePermissions } from '@/lib/auth';
 import { useAdminMutations, useAssignments, useTechnician } from '@/lib/queries';
 
 export default function TechnicianDetailPage() {
   const id = useParams<{ technicianId: string }>().technicianId;
+  const canManage = usePermissions().has('technicians:manage');
   const [assignmentPage, setAssignmentPage] = useState(1);
   const technician = useTechnician(id);
   const assignments = useAssignments({ technicianId: id, page: assignmentPage, pageSize: 20 });
@@ -38,13 +40,15 @@ export default function TechnicianDetailPage() {
         description={item.email}
         breadcrumbs={[{ label: 'Technicians', href: '/technicians' }, { label: item.displayName }]}
         action={
-          <button
-            className={`button ${item.isActive ? 'button-danger' : 'button-primary'}`}
-            onClick={() => void toggle()}
-            disabled={mutation.isPending}
-          >
-            {item.isActive ? 'Deactivate' : 'Activate'}
-          </button>
+          canManage ? (
+            <button
+              className={`button ${item.isActive ? 'button-danger' : 'button-primary'}`}
+              onClick={() => void toggle()}
+              disabled={mutation.isPending}
+            >
+              {item.isActive ? 'Deactivate' : 'Activate'}
+            </button>
+          ) : undefined
         }
       />
       {mutation.error ? (

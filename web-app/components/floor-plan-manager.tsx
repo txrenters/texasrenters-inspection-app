@@ -17,7 +17,13 @@ const EXTRACTION_STAGES = [
   'Validating draft areas for review',
 ] as const;
 
-export function FloorPlanManager({ propertyId }: { propertyId: string }) {
+export function FloorPlanManager({
+  propertyId,
+  canManage = false,
+}: {
+  propertyId: string;
+  canManage?: boolean;
+}) {
   const plans = useFloorPlans(propertyId);
   const areas = usePropertyAreas(propertyId);
   const units = useUnits(propertyId);
@@ -152,8 +158,16 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
     if (!latest) return;
     setMessage(undefined);
     try {
-      await actions.extractFloorPlan.mutateAsync({ propertyId, floorPlanId: latest.id });
-      setMessage(`${scopeLabel} area suggestions are ready for human review.`);
+      const result = await actions.extractFloorPlan.mutateAsync({
+        propertyId,
+        floorPlanId: latest.id,
+      });
+      const { detectedCount, createdCount, alreadyPresentCount } = result.summary;
+      setMessage(
+        `AI detected ${detectedCount} area${detectedCount === 1 ? '' : 's'}: ` +
+          `${createdCount} added as new draft${createdCount === 1 ? '' : 's'} and ` +
+          `${alreadyPresentCount} already present in this scope.`,
+      );
     } catch {
       // The mutation error is rendered in the workspace alert.
     }
@@ -258,48 +272,52 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
                 </dl>
               </div>
             ) : null}
-            <form onSubmit={(event) => void upload(event)} className="floor-plan-upload-section">
-              <div className="floor-plan-control-heading">
-                <div>
-                  <strong>{latest ? 'Replace source plan' : 'Upload source plan'}</strong>
-                  <span>
-                    {latest
-                      ? 'A replacement becomes the new visual source after upload.'
-                      : 'Add the visual source before defining inspection areas.'}
-                  </span>
+            {canManage ? (
+              <form onSubmit={(event) => void upload(event)} className="floor-plan-upload-section">
+                <div className="floor-plan-control-heading">
+                  <div>
+                    <strong>{latest ? 'Replace source plan' : 'Upload source plan'}</strong>
+                    <span>
+                      {latest
+                        ? 'A replacement becomes the new visual source after upload.'
+                        : 'Add the visual source before defining inspection areas.'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <label className="floor-plan-file-picker" htmlFor="floor-plan-file">
-                <input
-                  key={`${scope}-${fileInputVersion}`}
-                  id="floor-plan-file"
-                  type="file"
-                  accept="application/pdf,image/png,image/jpeg"
-                  onChange={(event) => setFile(event.target.files?.[0])}
-                />
-                <span className="floor-plan-file-picker-icon" aria-hidden>
-                  +
-                </span>
-                <span className="floor-plan-file-picker-copy">
-                  <strong>{file ? file.name : 'Choose a PDF, PNG, or JPEG'}</strong>
-                  <small>
-                    {file ? `${formatBytes(file.size)} selected` : 'Secure upload · 20 MB maximum'}
-                  </small>
-                </span>
-                <span className="floor-plan-file-picker-action">
-                  {file ? 'Change file' : 'Browse'}
-                </span>
-              </label>
-              {file ? (
-                <button
-                  className="button button-secondary floor-plan-upload-button"
-                  type="submit"
-                  disabled={actions.uploadFloorPlan.isPending}
-                >
-                  {actions.uploadFloorPlan.isPending ? 'Uploading…' : 'Upload securely'}
-                </button>
-              ) : null}
-            </form>
+                <label className="floor-plan-file-picker" htmlFor="floor-plan-file">
+                  <input
+                    key={`${scope}-${fileInputVersion}`}
+                    id="floor-plan-file"
+                    type="file"
+                    accept="application/pdf,image/png,image/jpeg"
+                    onChange={(event) => setFile(event.target.files?.[0])}
+                  />
+                  <span className="floor-plan-file-picker-icon" aria-hidden>
+                    +
+                  </span>
+                  <span className="floor-plan-file-picker-copy">
+                    <strong>{file ? file.name : 'Choose a PDF, PNG, or JPEG'}</strong>
+                    <small>
+                      {file
+                        ? `${formatBytes(file.size)} selected`
+                        : 'Secure upload · 20 MB maximum'}
+                    </small>
+                  </span>
+                  <span className="floor-plan-file-picker-action">
+                    {file ? 'Change file' : 'Browse'}
+                  </span>
+                </label>
+                {file ? (
+                  <button
+                    className="button button-secondary floor-plan-upload-button"
+                    type="submit"
+                    disabled={actions.uploadFloorPlan.isPending}
+                  >
+                    {actions.uploadFloorPlan.isPending ? 'Uploading…' : 'Upload securely'}
+                  </button>
+                ) : null}
+              </form>
+            ) : null}
 
             {latest ? (
               <div className="floor-plan-review-section">
@@ -315,24 +333,26 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
                   </span>
                 </div>
                 <div className="floor-plan-action-grid">
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void extract()}
-                    disabled={actions.extractFloorPlan.isPending}
-                  >
-                    {actions.extractFloorPlan.isPending ? (
-                      <>
-                        <span className="button-spinner" aria-hidden />
-                        Extracting…
-                      </>
-                    ) : (
-                      <>
-                        <span aria-hidden>✦</span>
-                        Extract areas with AI
-                      </>
-                    )}
-                  </button>
+                  {canManage ? (
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      onClick={() => void extract()}
+                      disabled={actions.extractFloorPlan.isPending}
+                    >
+                      {actions.extractFloorPlan.isPending ? (
+                        <>
+                          <span className="button-spinner" aria-hidden />
+                          Extracting…
+                        </>
+                      ) : (
+                        <>
+                          <span aria-hidden>✦</span>
+                          Extract areas with AI
+                        </>
+                      )}
+                    </button>
+                  ) : null}
                   <button
                     className="button button-primary"
                     type="button"
@@ -375,34 +395,38 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
             <h2>{scopeLabel} draft area review</h2>
             <p>Edit AI suggestions or add missing rooms before approval.</p>
           </div>
-          <button
-            className="button button-primary"
-            disabled={!drafts.length || actions.approvePropertyAreas.isPending}
-            onClick={() =>
-              actions.approvePropertyAreas.mutate({
+          {canManage ? (
+            <button
+              className="button button-primary"
+              disabled={!drafts.length || actions.approvePropertyAreas.isPending}
+              onClick={() =>
+                actions.approvePropertyAreas.mutate({
+                  propertyId,
+                  areaIds: drafts.map((area) => area.id),
+                })
+              }
+            >
+              {actions.approvePropertyAreas.isPending
+                ? 'Approving…'
+                : `Approve ${drafts.length || ''} draft${drafts.length === 1 ? '' : 's'}`}
+            </button>
+          ) : null}
+        </div>
+        {canManage ? (
+          <ManualAreaForm
+            key={scope}
+            floorNames={floorNames}
+            nextOrder={nextOrder}
+            submitting={actions.createPropertyArea.isPending}
+            onCreate={(input) =>
+              actions.createPropertyArea.mutateAsync({
                 propertyId,
-                areaIds: drafts.map((area) => area.id),
+                unitId: selectedUnitId ?? undefined,
+                ...input,
               })
             }
-          >
-            {actions.approvePropertyAreas.isPending
-              ? 'Approving…'
-              : `Approve ${drafts.length || ''} draft${drafts.length === 1 ? '' : 's'}`}
-          </button>
-        </div>
-        <ManualAreaForm
-          key={scope}
-          floorNames={floorNames}
-          nextOrder={nextOrder}
-          submitting={actions.createPropertyArea.isPending}
-          onCreate={(input) =>
-            actions.createPropertyArea.mutateAsync({
-              propertyId,
-              unitId: selectedUnitId ?? undefined,
-              ...input,
-            })
-          }
-        />
+          />
+        ) : null}
         {draftGroups.length ? (
           <div className="floor-area-groups">
             {draftGroups.map((group) => (
@@ -416,6 +440,7 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
                       floorNames={floorNames}
                       saving={actions.updatePropertyArea.isPending}
                       deleting={actions.deletePropertyArea.isPending}
+                      readOnly={!canManage}
                       onSave={(input) =>
                         actions.updatePropertyArea.mutateAsync({
                           propertyId,
@@ -878,6 +903,7 @@ function AreaReviewRow({
   floorNames,
   saving,
   deleting,
+  readOnly,
   onSave,
   onDelete,
 }: {
@@ -885,6 +911,7 @@ function AreaReviewRow({
   floorNames: string[];
   saving: boolean;
   deleting: boolean;
+  readOnly: boolean;
   onSave: (input: AreaInput) => Promise<unknown>;
   onDelete: () => Promise<unknown>;
 }) {
@@ -901,6 +928,7 @@ function AreaReviewRow({
           id={`floor-${area.id}`}
           list={floorOptionsId}
           value={floorName}
+          disabled={readOnly}
           onChange={(event) => setFloorName(event.target.value)}
         />
         <FloorOptions id={floorOptionsId} floorNames={floorNames} />
@@ -910,6 +938,7 @@ function AreaReviewRow({
         <input
           id={`area-${area.id}`}
           value={name}
+          disabled={readOnly}
           onChange={(event) => setName(event.target.value)}
         />
       </div>
@@ -920,6 +949,7 @@ function AreaReviewRow({
           type="number"
           min={1}
           value={inspectionOrder}
+          disabled={readOnly}
           onChange={(event) => setInspectionOrder(Number(event.target.value))}
         />
       </div>
@@ -927,28 +957,31 @@ function AreaReviewRow({
         <input
           type="checkbox"
           checked={isRequired}
+          disabled={readOnly}
           onChange={(event) => setIsRequired(event.target.checked)}
         />
         Required
       </label>
-      <div className="action-row">
-        <button
-          className="button button-secondary button-small"
-          disabled={saving || !floorName.trim() || !name.trim() || inspectionOrder < 1}
-          onClick={() =>
-            void onSave({ floorName, name, inspectionOrder, isRequired }).catch(() => undefined)
-          }
-        >
-          Save
-        </button>
-        <button
-          className="button button-danger button-small"
-          disabled={deleting}
-          onClick={() => void onDelete().catch(() => undefined)}
-        >
-          Remove
-        </button>
-      </div>
+      {!readOnly ? (
+        <div className="action-row">
+          <button
+            className="button button-secondary button-small"
+            disabled={saving || !floorName.trim() || !name.trim() || inspectionOrder < 1}
+            onClick={() =>
+              void onSave({ floorName, name, inspectionOrder, isRequired }).catch(() => undefined)
+            }
+          >
+            Save
+          </button>
+          <button
+            className="button button-danger button-small"
+            disabled={deleting}
+            onClick={() => void onDelete().catch(() => undefined)}
+          >
+            Remove
+          </button>
+        </div>
+      ) : null}
     </article>
   );
 }

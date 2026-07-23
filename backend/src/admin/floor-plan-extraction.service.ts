@@ -158,7 +158,14 @@ export class FloorPlanExtractionService {
     const file =
       mimeType === 'application/pdf'
         ? { type: 'input_file', filename: 'floor-plan.pdf', file_data: dataUrl }
-        : { type: 'input_image', image_url: dataUrl };
+        : {
+            type: 'input_image',
+            image_url: dataUrl,
+            // Floor plans contain small labels and fixture symbols. Explicit
+            // high-detail vision avoids the low-resolution "auto" path that
+            // can omit compact bathrooms, closets, and secondary rooms.
+            detail: 'high',
+          };
     return fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       signal,
@@ -263,12 +270,19 @@ export class FloorPlanExtractionService {
 
   private prompt() {
     return [
-      'Extract only clearly labeled inspectable areas from this residential floor plan.',
-      'The image or PDF may contain multiple stories; inspect the entire document and preserve visible labels such as First Floor and Second Floor.',
+      'Create a comprehensive inspection-area checklist from this residential floor plan.',
+      'Inspect the complete image or every PDF page, including every story, before answering.',
+      'Work exhaustively in two internal passes: first capture every visible room or exterior-area label, then scan every enclosed space again for omissions.',
+      'Include clearly labeled areas and confidently identifiable unlabeled inspectable rooms when standard architectural fixtures make the room type unambiguous (for example, a bathroom containing a toilet, sink, tub, or shower).',
+      'Give confidently identified unlabeled rooms a concise reviewable name such as "Bathroom (unlabeled)". Never infer a room from shape alone.',
+      'Preserve visible floor labels such as First Floor and Second Floor.',
       'Return one flat JSON array only. Every item must contain floorName (string), name (string), inspectionOrder (integer), and isRequired (boolean).',
-      'Keep distinct numbered room labels distinct. Do not return dimensions, stairs, open-to-below voids, or duplicate rooms.',
-      'Use labels visible in the plan. Do not invent rooms. Use Ground Floor only when no floor or story is stated.',
+      'Keep separate spaces separate even when they share a label; disambiguate them with a visible number or a stable positional suffix such as "(left)" and "(right)".',
+      'Do not return dimensions, wall labels, fireplaces, loose fixtures, open-to-below voids, or duplicate rooms.',
+      'Include hallways, landings, stairs, closets, utility/laundry rooms, garages, patios, porches, decks, and balconies when they are labeled or visually unambiguous enclosed inspection spaces.',
+      'Use Ground Floor only when no floor or story is stated.',
       'inspectionOrder must start at 1 and remain sequential across all floors. Garages, patios, porches, decks, and balconies may be optional; interior rooms are required.',
+      'Before returning JSON, verify that every visible text label and every unmistakable bathroom or utility space is represented exactly once.',
     ].join(' ');
   }
 

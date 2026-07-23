@@ -14,6 +14,8 @@ export interface PropertywareConfig {
   syncEnabled: boolean;
   incrementalSyncCron?: string;
   reconciliationCron?: string;
+  // Internal organization UUID that scheduled (automatic) syncs run for.
+  schedulerOrganizationId?: string;
   initialSyncLookbackDays: number;
   cursorOverlapSeconds: number;
   databaseConcurrency: number;
@@ -27,6 +29,8 @@ export interface PropertywarePage<T> {
     index: number;
     externalId?: string;
     code: 'PROPERTYWARE_SCHEMA_ERROR';
+    // Sanitized field-level reason (paths + type mismatches, never data values).
+    detail?: string;
   }>;
   totalCount?: number;
   offset: number;

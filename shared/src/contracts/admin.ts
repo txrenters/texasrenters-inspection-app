@@ -14,6 +14,47 @@ export interface AdminProfile {
   displayName: string;
   isActive: boolean;
   memberships: Array<{ role: string; organization: { id: string; name: string } }>;
+  // Effective permissions for the resolved organization. Except for the
+  // bootstrap SYSTEM_ADMIN principal, these come only from custom roles.
+  permissions: string[];
+}
+
+export interface AdminRoleSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  permissions: string[];
+  assignedUserCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminRole extends AdminRoleSummary {
+  assignedUsers: Array<{ id: string; displayName: string; email: string }>;
+}
+
+export interface AdminUserRoleRef {
+  id: string;
+  name: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  displayName: string;
+  isActive: boolean;
+  isSystemAdmin: boolean;
+  createdAt: string;
+  customRoles: AdminUserRoleRef[];
+}
+
+export interface AdminUserDetail extends AdminUser {
+  permissions: string[];
+}
+
+export interface CreatedUserAccount extends AdminUserDetail {
+  mustChangePassword: true;
+  temporaryPassword: string;
 }
 
 export interface AdminDashboard {
@@ -91,6 +132,19 @@ export interface AdminFloorPlanExtractionJob {
   errorCode?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AdminFloorPlanExtractionResult {
+  id: string;
+  status: 'COMPLETED';
+  provider: string;
+  modelId: string;
+  summary: {
+    detectedCount: number;
+    createdCount: number;
+    alreadyPresentCount: number;
+  };
+  areas: AdminPropertyArea[];
 }
 
 export interface AdminPropertyArea {

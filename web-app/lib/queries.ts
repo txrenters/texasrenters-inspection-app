@@ -8,14 +8,21 @@ import type {
   AdminInspectionFinding,
   AdminInspectionMedia,
   AdminReportShare,
+  AdminRole,
+  AdminRoleSummary,
+  AdminUser,
+  AdminUserDetail,
   AdminFloorPlan,
+  AdminFloorPlanExtractionResult,
   AdminPropertyArea,
   AdminPortfolio,
   AdminProperty,
   AdminTechnician,
   CreatedTechnicianAccount,
+  CreatedUserAccount,
   AdminUnit,
   AdminLease,
+  PermissionGroup,
   PropertywareSyncRun,
   PropertywareSyncError,
   ProviderReadiness,
@@ -54,6 +61,11 @@ export const keys = {
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   technicians: (query: object) => ['admin', 'technicians', query] as const,
   technician: (id: string) => ['admin', 'technician', id] as const,
+  users: (query: object) => ['admin', 'access', 'users', query] as const,
+  user: (id: string) => ['admin', 'access', 'user', id] as const,
+  roles: (query: object) => ['admin', 'access', 'roles', query] as const,
+  role: (id: string) => ['admin', 'access', 'role', id] as const,
+  permissionCatalog: ['admin', 'access', 'permissions'] as const,
   propertyware: ['admin', 'propertyware'] as const,
   syncRuns: ['admin', 'propertyware', 'runs'] as const,
   syncErrors: (runId: string, page: number) =>
@@ -179,6 +191,7 @@ export const useInspectionFindings = (
   page: number,
   reviewStatus = '',
   kind: 'ALL' | 'DEFECTS' | 'SUMMARIES' = 'ALL',
+  enabled = true,
 ) =>
   useQuery({
     queryKey: keys.inspectionFindings(id, page, reviewStatus, kind),
@@ -192,7 +205,7 @@ export const useInspectionFindings = (
         })}`,
         { signal },
       ),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && enabled,
     placeholderData: keepPreviousData,
   });
 export const useReportShares = (id: string) =>
@@ -209,6 +222,7 @@ export const useAssignments = (query: Record<string, string | number | boolean |
       api<Page<AdminAssignmentListItem>>(`/api/v1/admin/assignments${queryString(query)}`, {
         signal,
       }),
+    placeholderData: keepPreviousData,
   });
 export const useTechnicians = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({
@@ -223,16 +237,69 @@ export const useTechnician = (id: string) =>
     queryFn: ({ signal }) => api<AdminTechnician>(`/api/v1/admin/technicians/${id}`, { signal }),
     enabled: Boolean(id),
   });
+export const useUsers = (query: Record<string, string | number | boolean | undefined>) =>
+  useQuery({
+    queryKey: keys.users(query),
+    queryFn: ({ signal }) =>
+      api<Page<AdminUser>>(`/api/v1/admin/access/users${queryString(query)}`, { signal }),
+    placeholderData: keepPreviousData,
+  });
+export const useUser = (id: string) =>
+  useQuery({
+    queryKey: keys.user(id),
+    queryFn: ({ signal }) => api<AdminUserDetail>(`/api/v1/admin/access/users/${id}`, { signal }),
+    enabled: Boolean(id),
+  });
+export const useRoles = (query: Record<string, string | number | boolean | undefined>) =>
+  useQuery({
+    queryKey: keys.roles(query),
+    queryFn: ({ signal }) =>
+      api<Page<AdminRoleSummary>>(`/api/v1/admin/access/roles${queryString(query)}`, { signal }),
+    placeholderData: keepPreviousData,
+  });
+export const useRole = (id: string) =>
+  useQuery({
+    queryKey: keys.role(id),
+    queryFn: ({ signal }) => api<AdminRole>(`/api/v1/admin/access/roles/${id}`, { signal }),
+    enabled: Boolean(id),
+  });
+export const usePermissionCatalog = () =>
+  useQuery({
+    queryKey: keys.permissionCatalog,
+    queryFn: ({ signal }) =>
+      api<{ groups: PermissionGroup[]; keys: string[] }>('/api/v1/admin/access/permissions', {
+        signal,
+      }),
+    staleTime: 10 * 60 * 1000,
+  });
+export interface PropertywareSchedule {
+  enabled: boolean;
+  organizationConfigured: boolean;
+  jobs: Array<{
+    mode: 'incremental' | 'reconciliation';
+    cron: string | null;
+    scheduled: boolean;
+    nextRunAt: string | null;
+  }>;
+}
+export const useSyncSchedule = () =>
+  useQuery({
+    queryKey: ['admin', 'propertyware', 'schedule'] as const,
+    queryFn: ({ signal }) =>
+      api<PropertywareSchedule>('/api/v1/admin/integrations/propertyware/schedule', { signal }),
+  });
 export const usePropertywareStatus = () =>
   useQuery({
     queryKey: keys.propertyware,
     queryFn: ({ signal }) =>
       api<Record<string, unknown>>('/api/v1/admin/integrations/propertyware/status', { signal }),
-    refetchInterval: (query) =>
-      (query.state.data as { lastRun?: { status?: string } } | undefined)?.lastRun?.status ===
-      'RUNNING'
-        ? 5_000
-        : false,
+    refetchInterval: (query) => {
+      const status = (query.state.data as { lastRun?: { status?: string } } | undefined)?.lastRun
+        ?.status;
+      // Keep polling while a run is actively pending or running so the live
+      // indicator resolves on its own.
+      return status === 'RUNNING' || status === 'PENDING' ? 5_000 : false;
+    },
   });
 export const useSyncRuns = () =>
   useQuery({
@@ -244,7 +311,9 @@ export const useSyncRuns = () =>
       ),
     select: (data) => data.items,
     refetchInterval: (query) =>
-      query.state.data?.items.some((run) => run.status === 'RUNNING') ? 5_000 : false,
+      query.state.data?.items.some((run) => run.status === 'RUNNING' || run.status === 'PENDING')
+        ? 5_000
+        : false,
   });
 export const useSyncErrors = (runId: string, page: number) =>
   useQuery({
@@ -319,6 +388,72 @@ export function useAiSettingsMutations() {
   };
 }
 
+export function useAccessMutations() {
+  const client = useQueryClient();
+  const refreshUsers = (id?: string) => {
+    void client.invalidateQueries({ queryKey: ['admin', 'access', 'users'] });
+    if (id) void client.invalidateQueries({ queryKey: keys.user(id) });
+  };
+  const refreshRoles = (id?: string) => {
+    void client.invalidateQueries({ queryKey: ['admin', 'access', 'roles'] });
+    if (id) void client.invalidateQueries({ queryKey: keys.role(id) });
+  };
+  return {
+    createUser: useMutation({
+      mutationFn: (input: { email: string; displayName: string; roleIds: string[] }) =>
+        api<CreatedUserAccount>('/api/v1/admin/access/users', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: () => refreshUsers(),
+    }),
+    updateUserStatus: useMutation({
+      mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+        api<AdminUserDetail>(`/api/v1/admin/access/users/${id}/status`, {
+          method: 'PATCH',
+          body: JSON.stringify({ isActive }),
+        }),
+      onSuccess: (_data, variables) => refreshUsers(variables.id),
+    }),
+    setUserRoles: useMutation({
+      mutationFn: ({ id, roleIds }: { id: string; roleIds: string[] }) =>
+        api<AdminUserDetail>(`/api/v1/admin/access/users/${id}/roles`, {
+          method: 'PUT',
+          body: JSON.stringify({ roleIds }),
+        }),
+      onSuccess: (_data, variables) => refreshUsers(variables.id),
+    }),
+    createRole: useMutation({
+      mutationFn: (input: { name: string; description?: string; permissions: string[] }) =>
+        api<AdminRoleSummary>('/api/v1/admin/access/roles', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: () => refreshRoles(),
+    }),
+    updateRole: useMutation({
+      mutationFn: ({
+        id,
+        ...input
+      }: {
+        id: string;
+        name?: string;
+        description?: string;
+        permissions?: string[];
+      }) =>
+        api<AdminRoleSummary>(`/api/v1/admin/access/roles/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => refreshRoles(variables.id),
+    }),
+    deleteRole: useMutation({
+      mutationFn: (id: string) => api(`/api/v1/admin/access/roles/${id}`, { method: 'DELETE' }),
+      onSuccess: () => refreshRoles(),
+    }),
+  };
+}
+
 export function useAdminMutations() {
   const client = useQueryClient();
   const refreshInspection = (id?: string) => {
@@ -354,7 +489,10 @@ export function useAdminMutations() {
     }),
     extractFloorPlan: useMutation({
       mutationFn: (variables: { propertyId: string; floorPlanId: string }) =>
-        api(`/api/v1/admin/floor-plans/${variables.floorPlanId}/extract`, { method: 'POST' }),
+        api<AdminFloorPlanExtractionResult>(
+          `/api/v1/admin/floor-plans/${variables.floorPlanId}/extract`,
+          { method: 'POST' },
+        ),
       onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
     }),
     createPropertyArea: useMutation({
