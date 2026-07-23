@@ -22,6 +22,9 @@ export default function InspectionAreasScreen() {
   const showFloorHeaders = floorGroups.length > 1;
   const progress = inspectionProgress(roomList);
   const nextRoom = nextInspectionRoom(roomList);
+  // The checklist arrives pre-ordered by priority (floor, then inspection order);
+  // number it so technicians simply work top to bottom.
+  const sequence = new Map(roomList.map((room, index) => [room.id, index + 1]));
   const openRoom = (roomId: string) =>
     router.push({
       pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
@@ -30,7 +33,7 @@ export default function InspectionAreasScreen() {
   return (
     <AppScreen
       title="Room checklist"
-      subtitle="One approved room, one focused video"
+      subtitle="Follow the numbered sequence from top to bottom"
       refresh={{ onRefresh: () => query.refetch() }}
       bottomAction={
         nextRoom ? (
@@ -47,7 +50,8 @@ export default function InspectionAreasScreen() {
         </Text>
         <ProgressBar value={progress.value} />
         <Text style={styles.progressHelp}>
-          Recordings stay linked to the selected room. Stop before moving to another area.
+          The checklist is already ordered by priority — the highlighted room is up next. Recordings
+          stay linked to the selected room.
         </Text>
       </Card>
       {roomList.length ? (
@@ -63,13 +67,25 @@ export default function InspectionAreasScreen() {
                   </View>
                   <View style={styles.floorRooms}>
                     {group.rooms.map((room) => (
-                      <RoomCard key={room.id} room={room} onPress={() => openRoom(room.id)} />
+                      <RoomCard
+                        key={room.id}
+                        room={room}
+                        sequenceNumber={sequence.get(room.id)}
+                        isUpNext={room.id === nextRoom?.id}
+                        onPress={() => openRoom(room.id)}
+                      />
                     ))}
                   </View>
                 </View>
               ))
             : roomList.map((room) => (
-                <RoomCard key={room.id} room={room} onPress={() => openRoom(room.id)} />
+                <RoomCard
+                  key={room.id}
+                  room={room}
+                  sequenceNumber={sequence.get(room.id)}
+                  isUpNext={room.id === nextRoom?.id}
+                  onPress={() => openRoom(room.id)}
+                />
               ))}
         </View>
       ) : (

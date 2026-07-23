@@ -30,6 +30,7 @@ export class TechnicianFindingsQueryDto {
   @IsOptional()
   @IsIn(['PENDING_REVIEW', 'APPROVED', 'EDITED', 'REJECTED', 'REINSPECTION_REQUESTED'])
   reviewStatus?: string;
+  @IsOptional() @IsIn(['ALL', 'DEFECTS', 'SUMMARIES']) kind?: 'ALL' | 'DEFECTS' | 'SUMMARIES';
 }
 
 export class TechnicianReasonDto {

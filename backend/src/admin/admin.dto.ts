@@ -100,6 +100,8 @@ export class AdminFindingsQueryDto extends PaginationDto {
   @IsOptional()
   @IsIn(['PENDING_REVIEW', 'APPROVED', 'EDITED', 'REJECTED', 'REINSPECTION_REQUESTED'])
   reviewStatus?: string;
+  // DEFECTS = chargeable review queue; SUMMARIES = informational room summaries.
+  @IsOptional() @IsIn(['ALL', 'DEFECTS', 'SUMMARIES']) kind?: 'ALL' | 'DEFECTS' | 'SUMMARIES';
 }
 
 export class AssignmentDto {
@@ -143,7 +145,11 @@ export class UpdateAiProviderDto {
   @IsString() @MinLength(2) @MaxLength(120) modelId!: string;
   @IsOptional() @IsString() @MinLength(20) @MaxLength(500) apiKey?: string;
   @IsOptional() @IsBoolean() clearApiKey?: boolean;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(1_000) @Max(2_000_000_000)
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1_000)
+  @Max(2_000_000_000)
   monthlyTokenBudget?: number | null;
 }
 

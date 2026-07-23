@@ -109,6 +109,82 @@ describe('floor-plan extraction provider errors', () => {
       }),
     );
   });
+
+  it('normalizes a multi-story provider response into reviewable draft areas', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      providerResponse(200, {
+        output: [
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify({
+                  floors: [
+                    {
+                      name: 'First Floor',
+                      rooms: [
+                        {
+                          room_name: 'Living Room',
+                          required: 'yes',
+                          order: '4',
+                          bounding_box: { left: '80', top: 540, width: 300, height: 210 },
+                        },
+                        {
+                          room_name: 'Patio',
+                          required: 'optional',
+                          order: '5',
+                          bounds: [410, 540, 180, 190],
+                        },
+                      ],
+                    },
+                    {
+                      name: 'Second Floor',
+                      rooms: [
+                        { roomName: 'Bedroom 2', is_required: true, inspection_order: 1 },
+                        { roomName: 'Bedroom 2', is_required: true, inspection_order: 2 },
+                      ],
+                    },
+                  ],
+                }),
+              },
+            ],
+          },
+        ],
+        usage: { input_tokens: 200, output_tokens: 80, total_tokens: 280 },
+      }),
+    ) as typeof fetch;
+
+    await expect(
+      new FloorPlanExtractionService().extract(jpegBytes(), 'image/jpeg', {
+        provider: AiProvider.OPENAI,
+        modelId: 'gpt-5.6-sol',
+        apiKey: 'private-openai-key',
+      }),
+    ).resolves.toEqual({
+      areas: [
+        {
+          floorName: 'First Floor',
+          name: 'Living Room',
+          inspectionOrder: 1,
+          isRequired: true,
+        },
+        {
+          floorName: 'First Floor',
+          name: 'Patio',
+          inspectionOrder: 2,
+          isRequired: false,
+        },
+        {
+          floorName: 'Second Floor',
+          name: 'Bedroom 2',
+          inspectionOrder: 3,
+          isRequired: true,
+        },
+      ],
+      usage: { inputTokens: 200, outputTokens: 80, totalTokens: 280 },
+    });
+  });
 });
 
 function providerResponse(status: number, payload: unknown) {

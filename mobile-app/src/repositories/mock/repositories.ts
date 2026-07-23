@@ -123,6 +123,51 @@ export class MockInspectionRepository implements InspectionRepository {
     ).length;
     return { inspection, property, rooms: inspectionRooms, pendingReviewCount };
   }
+  async report(id: string) {
+    const context = await this.context(id);
+    const allFindings = Object.values(useDemoStore.getState().findings).filter(
+      (finding) => finding.inspectionId === id,
+    );
+    const reportRooms = context.rooms.map((room) => {
+      const roomFindings = allFindings.filter((finding) => finding.roomId === room.id);
+      return {
+        ...room,
+        summary:
+          roomFindings.find((finding) => finding.title === 'Room condition summary')
+            ?.observation ?? null,
+        findings: roomFindings
+          .filter((finding) => finding.title !== 'Room condition summary')
+          .map((finding) => ({
+            id: finding.id,
+            findingType: 'POSSIBLE_NEW_DAMAGE' as const,
+            title: finding.title,
+            category: finding.category,
+            severity: finding.severity,
+            comparisonResult: finding.comparisonResult,
+            confidence: finding.confidence,
+            description: finding.observation,
+            recommendedReview: finding.recommendedReview,
+            reviewStatus: finding.reviewStatus,
+          })),
+      };
+    });
+    const finished = reportRooms.filter((room) =>
+      ['COMPLETED', 'SKIPPED', 'RECORDING_SAVED'].includes(room.completionStatus),
+    );
+    return {
+      inspection: context.inspection,
+      property: context.property,
+      generatedAt: new Date().toISOString(),
+      rooms: reportRooms,
+      totals: {
+        rooms: reportRooms.length,
+        finishedRooms: finished.length,
+        summaries: reportRooms.filter((room) => room.summary).length,
+        defectFindings: reportRooms.reduce((sum, room) => sum + room.findings.length, 0),
+        pendingReviewCount: context.pendingReviewCount,
+      },
+    };
+  }
   async start(id: string) {
     return this.get(id);
   }

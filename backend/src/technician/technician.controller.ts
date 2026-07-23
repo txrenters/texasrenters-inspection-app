@@ -111,6 +111,12 @@ export class TechnicianController {
   ) {
     return this.service.findings(request.user, id, query);
   }
+  @Get('inspections/:inspectionId/report') report(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.service.report(request.user, id);
+  }
   @Get('properties/:propertyId') property(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,

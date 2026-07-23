@@ -1,7 +1,8 @@
 'use client';
 
 import type { AdminPropertyArea } from '@texasrenters/shared';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 
 import { apiBlob } from '@/lib/api';
 import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/lib/queries';
@@ -9,6 +10,12 @@ import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/
 import { Badge, ErrorState, LoadingState, formatDate } from './ui';
 
 const BUILDING_SCOPE = 'building-wide';
+const EXTRACTION_STAGES = [
+  'Reading labels across the full plan',
+  'Separating floors and stories',
+  'Building the room checklist',
+  'Validating draft areas for review',
+] as const;
 
 export function FloorPlanManager({ propertyId }: { propertyId: string }) {
   const plans = useFloorPlans(propertyId);
@@ -17,21 +24,22 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
   const actions = useAdminMutations();
   const [scope, setScope] = useState(BUILDING_SCOPE);
   const [file, setFile] = useState<File>();
+  const [fileInputVersion, setFileInputVersion] = useState(0);
   const [previewUrl, setPreviewUrl] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const [extractionSeconds, setExtractionSeconds] = useState(0);
+  const [isComparisonOpen, setIsComparisonOpen] = useState(false);
   const activeUnits = useMemo(
     () => units.data?.items.filter((unit) => unit.isActive) ?? [],
     [units.data?.items],
   );
   const selectedUnitId = scope === BUILDING_SCOPE ? null : scope;
   const scopedPlans = useMemo(
-    () =>
-      plans.data?.filter((plan) => (plan.unitId ?? null) === selectedUnitId) ?? [],
+    () => plans.data?.filter((plan) => (plan.unitId ?? null) === selectedUnitId) ?? [],
     [plans.data, selectedUnitId],
   );
   const scopedAreas = useMemo(
-    () =>
-      areas.data?.filter((area) => (area.unitId ?? null) === selectedUnitId) ?? [],
+    () => areas.data?.filter((area) => (area.unitId ?? null) === selectedUnitId) ?? [],
     [areas.data, selectedUnitId],
   );
   const latest = scopedPlans[0];
@@ -52,12 +60,14 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
   );
   const draftGroups = useMemo(() => groupAreasByFloor(drafts), [drafts]);
   const approvedGroups = useMemo(() => groupAreasByFloor(approved), [approved]);
+  const comparisonGroups = useMemo(() => groupAreasByFloor(scopedAreas), [scopedAreas]);
   const nextOrder =
     scopedAreas.reduce((highest, area) => Math.max(highest, area.inspectionOrder), 0) + 1;
   const scopeLabel =
     selectedUnitId === null
       ? 'Building-wide'
       : (activeUnits.find((unit) => unit.id === selectedUnitId)?.name ?? 'Selected unit');
+  const closeComparison = useCallback(() => setIsComparisonOpen(false), []);
 
   useEffect(() => {
     if (scope !== BUILDING_SCOPE && !activeUnits.some((unit) => unit.id === scope)) {
@@ -68,7 +78,21 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
   useEffect(() => {
     setFile(undefined);
     setMessage(undefined);
+    setIsComparisonOpen(false);
   }, [scope]);
+
+  useEffect(() => {
+    if (!actions.extractFloorPlan.isPending) {
+      setExtractionSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const updateElapsed = () =>
+      setExtractionSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1_000);
+    return () => window.clearInterval(timer);
+  }, [actions.extractFloorPlan.isPending]);
 
   useEffect(() => {
     if (!latest) {
@@ -117,6 +141,7 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
         unitId: selectedUnitId ?? undefined,
       });
       setFile(undefined);
+      setFileInputVersion((version) => version + 1);
       setMessage(`${scopeLabel} floor plan uploaded securely. Extract areas or add them manually.`);
     } catch {
       // The mutation error is rendered in the workspace alert.
@@ -159,80 +184,179 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
       </div>
 
       <div className="panel floor-plan-source">
-        <div className="panel-header">
+        <div className="panel-header floor-plan-source-heading">
           <div>
+            <span className="section-eyebrow">Inspection area source</span>
             <h2 id="floor-plan-heading">{scopeLabel} floor plan</h2>
-            <p>Use the latest plan in this scope as the source for its approved area list.</p>
+            <p>
+              Maintain the visual reference used to verify and approve this scope&apos;s inspection
+              areas.
+            </p>
           </div>
           {latest ? <Badge value={latest.status} /> : null}
         </div>
         <div className="floor-plan-grid">
-          <div className="floor-plan-preview">
-            {previewUrl && latest ? (
-              <object data={previewUrl} type={latest.mimeType} aria-label={latest.fileName}>
-                <a href={previewUrl} target="_blank" rel="noreferrer">
-                  Open {latest.fileName}
-                </a>
-              </object>
-            ) : (
-              <div className="floor-plan-empty">
-                <span aria-hidden>⌗</span>
-                <strong>No {scopeLabel.toLowerCase()} floor plan uploaded</strong>
-                <p>Upload a PDF, PNG, or JPEG up to 20 MB.</p>
+          <div className="floor-plan-preview-shell">
+            <div className="floor-plan-preview-toolbar">
+              <div>
+                <span className="floor-plan-preview-indicator" aria-hidden />
+                <strong>Plan preview</strong>
               </div>
-            )}
+              {previewUrl && latest ? (
+                <a href={previewUrl} target="_blank" rel="noreferrer">
+                  Open original
+                  <span aria-hidden>↗</span>
+                </a>
+              ) : null}
+            </div>
+            <div className="floor-plan-preview">
+              {previewUrl && latest ? (
+                <object data={previewUrl} type={latest.mimeType} aria-label={latest.fileName}>
+                  <a href={previewUrl} target="_blank" rel="noreferrer">
+                    Open {latest.fileName}
+                  </a>
+                </object>
+              ) : (
+                <div className="floor-plan-empty">
+                  <span aria-hidden>⌗</span>
+                  <strong>No {scopeLabel.toLowerCase()} floor plan uploaded</strong>
+                  <p>Upload a PDF, PNG, or JPEG up to 20 MB.</p>
+                </div>
+              )}
+            </div>
           </div>
           <div className="floor-plan-controls">
             {latest ? (
               <div className="floor-plan-file-card">
-                <strong>{latest.fileName}</strong>
-                <span>
-                  {formatBytes(latest.sizeBytes)} · uploaded {formatDate(latest.createdAt)}
-                </span>
-                {latest.extractionJobs?.[0] ? (
-                  <small>
-                    Latest extraction: {latest.extractionJobs[0].status.replaceAll('_', ' ')}
-                  </small>
-                ) : null}
+                <div className="floor-plan-file-card-heading">
+                  <span className="floor-plan-file-icon" aria-hidden>
+                    <svg viewBox="0 0 24 24">
+                      <path d="M7 3.75h6.4L18 8.35v11.9H7z" />
+                      <path d="M13.25 3.75v4.8H18M9.75 12h5.5M9.75 15.5h4" />
+                    </svg>
+                  </span>
+                  <div>
+                    <span>Current source file</span>
+                    <strong>{latest.fileName}</strong>
+                  </div>
+                </div>
+                <dl className="floor-plan-file-facts">
+                  <div>
+                    <dt>File size</dt>
+                    <dd>{formatBytes(latest.sizeBytes)}</dd>
+                  </div>
+                  <div>
+                    <dt>Uploaded</dt>
+                    <dd>{formatDate(latest.createdAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Extraction</dt>
+                    <dd>
+                      {latest.extractionJobs?.[0]?.status.replaceAll('_', ' ') ?? 'Not started'}
+                    </dd>
+                  </div>
+                </dl>
               </div>
             ) : null}
-            <form onSubmit={(event) => void upload(event)} className="stack">
-              <div className="field">
-                <label htmlFor="floor-plan-file">
-                  {latest ? `Replace ${scopeLabel.toLowerCase()} plan` : `Upload for ${scopeLabel}`}
-                </label>
+            <form onSubmit={(event) => void upload(event)} className="floor-plan-upload-section">
+              <div className="floor-plan-control-heading">
+                <div>
+                  <strong>{latest ? 'Replace source plan' : 'Upload source plan'}</strong>
+                  <span>
+                    {latest
+                      ? 'A replacement becomes the new visual source after upload.'
+                      : 'Add the visual source before defining inspection areas.'}
+                  </span>
+                </div>
+              </div>
+              <label className="floor-plan-file-picker" htmlFor="floor-plan-file">
                 <input
-                  key={scope}
+                  key={`${scope}-${fileInputVersion}`}
                   id="floor-plan-file"
                   type="file"
                   accept="application/pdf,image/png,image/jpeg"
                   onChange={(event) => setFile(event.target.files?.[0])}
                 />
-              </div>
-              <div className="action-row">
+                <span className="floor-plan-file-picker-icon" aria-hidden>
+                  +
+                </span>
+                <span className="floor-plan-file-picker-copy">
+                  <strong>{file ? file.name : 'Choose a PDF, PNG, or JPEG'}</strong>
+                  <small>
+                    {file ? `${formatBytes(file.size)} selected` : 'Secure upload · 20 MB maximum'}
+                  </small>
+                </span>
+                <span className="floor-plan-file-picker-action">
+                  {file ? 'Change file' : 'Browse'}
+                </span>
+              </label>
+              {file ? (
                 <button
-                  className="button button-primary"
+                  className="button button-secondary floor-plan-upload-button"
                   type="submit"
-                  disabled={!file || actions.uploadFloorPlan.isPending}
+                  disabled={actions.uploadFloorPlan.isPending}
                 >
                   {actions.uploadFloorPlan.isPending ? 'Uploading…' : 'Upload securely'}
                 </button>
-                {latest ? (
+              ) : null}
+            </form>
+
+            {latest ? (
+              <div className="floor-plan-review-section">
+                <div className="floor-plan-control-heading">
+                  <div>
+                    <strong>Area review workflow</strong>
+                    <span>
+                      Extract suggestions, compare them, then approve the final checklist.
+                    </span>
+                  </div>
+                  <span className="floor-plan-area-count">
+                    {scopedAreas.length} area{scopedAreas.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div className="floor-plan-action-grid">
                   <button
                     className="button button-secondary"
                     type="button"
                     onClick={() => void extract()}
-                    disabled={actions.extractFloorPlan.isPending || latest.status === 'PROCESSING'}
+                    disabled={actions.extractFloorPlan.isPending}
                   >
-                    {actions.extractFloorPlan.isPending ? 'Extracting…' : 'Extract areas with AI'}
+                    {actions.extractFloorPlan.isPending ? (
+                      <>
+                        <span className="button-spinner" aria-hidden />
+                        Extracting…
+                      </>
+                    ) : (
+                      <>
+                        <span aria-hidden>✦</span>
+                        Extract areas with AI
+                      </>
+                    )}
                   </button>
-                ) : null}
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    onClick={() => setIsComparisonOpen(true)}
+                    disabled={!scopedAreas.length || actions.extractFloorPlan.isPending}
+                    title={
+                      scopedAreas.length
+                        ? 'Compare the source plan with extracted areas'
+                        : 'Extract or define areas before comparing'
+                    }
+                  >
+                    Compare plan &amp; areas
+                    <span aria-hidden>→</span>
+                  </button>
+                </div>
+                <div className="floor-plan-review-note">
+                  <span aria-hidden>!</span>
+                  <p>
+                    AI suggestions remain drafts until an authorized administrator reviews and
+                    approves every area in this scope.
+                  </p>
+                </div>
               </div>
-            </form>
-            <div className="alert alert-warning">
-              AI suggestions remain drafts. An authorized administrator must review and approve
-              every area in this scope.
-            </div>
+            ) : null}
           </div>
         </div>
         {actionError ? (
@@ -345,7 +469,307 @@ export function FloorPlanManager({ propertyId }: { propertyId: string }) {
           </p>
         )}
       </div>
+      {actions.extractFloorPlan.isPending ? (
+        <ExtractionProgressModal elapsedSeconds={extractionSeconds} />
+      ) : null}
+      {isComparisonOpen && latest ? (
+        <FloorPlanComparisonModal
+          scopeLabel={scopeLabel}
+          previewUrl={previewUrl}
+          fileName={latest.fileName}
+          mimeType={latest.mimeType}
+          groups={comparisonGroups}
+          onClose={closeComparison}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function ExtractionProgressModal({ elapsedSeconds }: { elapsedSeconds: number }) {
+  const stageIndex = Math.min(Math.floor(elapsedSeconds / 8), EXTRACTION_STAGES.length - 1);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    const focusDialog = () => dialogRef.current?.focus();
+    const keepFocusInDialog = (event: FocusEvent) => {
+      if (dialogRef.current && !dialogRef.current.contains(event.target as Node)) {
+        focusDialog();
+      }
+    };
+    const lockKeyboardNavigation = (event: KeyboardEvent) => {
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        focusDialog();
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    focusDialog();
+    document.addEventListener('focusin', keepFocusInDialog);
+    document.addEventListener('keydown', lockKeyboardNavigation);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('focusin', keepFocusInDialog);
+      document.removeEventListener('keydown', lockKeyboardNavigation);
+      previouslyFocused?.focus();
+    };
+  }, []);
+
+  return createPortal(
+    <div className="floor-plan-extraction-backdrop">
+      <div
+        ref={dialogRef}
+        className="floor-plan-extraction-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="floor-plan-extraction-title"
+        aria-describedby="floor-plan-extraction-guidance"
+        tabIndex={-1}
+      >
+        <div
+          className="floor-plan-extraction-progress"
+          role="status"
+          aria-live="polite"
+          aria-label={`Floor-plan extraction in progress. ${EXTRACTION_STAGES[stageIndex]}.`}
+        >
+          <div className="floor-plan-extraction-orbit" aria-hidden>
+            <span />
+            <strong>AI</strong>
+          </div>
+          <div className="floor-plan-extraction-copy">
+            <div>
+              <strong id="floor-plan-extraction-title">Analyzing the complete floor plan</strong>
+              <span>{elapsedSeconds}s</span>
+            </div>
+            <p>{EXTRACTION_STAGES[stageIndex]}…</p>
+            <div className="floor-plan-extraction-track" aria-hidden>
+              <span />
+            </div>
+            <small id="floor-plan-extraction-guidance">
+              Multi-story plans can take up to a minute. Keep this page open.
+            </small>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function FloorPlanComparisonModal({
+  scopeLabel,
+  previewUrl,
+  fileName,
+  mimeType,
+  groups,
+  onClose,
+}: {
+  scopeLabel: string;
+  previewUrl?: string;
+  fileName: string;
+  mimeType: string;
+  groups: ReturnType<typeof groupAreasByFloor>;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const allAreas = groups.flatMap((group) => group.areas);
+  const draftCount = allAreas.filter((area) => area.status === 'DRAFT').length;
+  const approvedCount = allAreas.filter((area) => area.status === 'APPROVED').length;
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    const focusDialog = () => closeButtonRef.current?.focus();
+    const keepFocusInDialog = (event: FocusEvent) => {
+      if (dialogRef.current && !dialogRef.current.contains(event.target as Node)) {
+        focusDialog();
+      }
+    };
+    const handleKeyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button, a[href]')];
+      if (!focusable.length) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.body.style.overflow = 'hidden';
+    focusDialog();
+    document.addEventListener('focusin', keepFocusInDialog);
+    document.addEventListener('keydown', handleKeyboard);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('focusin', keepFocusInDialog);
+      document.removeEventListener('keydown', handleKeyboard);
+      previouslyFocused?.focus();
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="floor-plan-comparison-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        className="floor-plan-comparison-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="floor-plan-comparison-title"
+        tabIndex={-1}
+      >
+        <header className="floor-plan-comparison-header">
+          <div>
+            <span>Floor-plan review</span>
+            <h2 id="floor-plan-comparison-title">Compare plan and extracted areas</h2>
+            <p>{scopeLabel} · Verify every room before approving the area list.</p>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            className="floor-plan-comparison-close"
+            onClick={onClose}
+            aria-label="Close floor-plan comparison"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="floor-plan-comparison-content">
+          <section className="floor-plan-comparison-pane floor-plan-comparison-plan">
+            <div className="floor-plan-comparison-pane-header">
+              <div>
+                <span>Source floor plan</span>
+                <strong>{fileName}</strong>
+              </div>
+              {previewUrl ? (
+                <a href={previewUrl} target="_blank" rel="noreferrer">
+                  Open original
+                </a>
+              ) : null}
+            </div>
+            <div className="floor-plan-comparison-canvas">
+              {previewUrl ? (
+                <FloorPlanComparisonPreview
+                  previewUrl={previewUrl}
+                  mimeType={mimeType}
+                  fileName={fileName}
+                />
+              ) : (
+                <div className="floor-plan-comparison-unavailable">
+                  <strong>Preview unavailable</strong>
+                  <p>The floor plan could not be displayed in the comparison view.</p>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <aside className="floor-plan-comparison-pane floor-plan-comparison-areas">
+            <div className="floor-plan-comparison-pane-header">
+              <div>
+                <span>Extracted checklist</span>
+                <strong>
+                  {allAreas.length} area{allAreas.length === 1 ? '' : 's'} across {groups.length}{' '}
+                  floor{groups.length === 1 ? '' : 's'}
+                </strong>
+                <small>Review each extracted area against the source plan.</small>
+              </div>
+              <div className="floor-plan-comparison-counts" aria-label="Area review status">
+                <span>{draftCount} drafts</span>
+                <span>{approvedCount} approved</span>
+              </div>
+            </div>
+
+            <div className="floor-plan-comparison-list">
+              {groups.map((group) => (
+                <section key={group.key} className="floor-plan-comparison-floor">
+                  <header>
+                    <h3>{group.label}</h3>
+                    <span>{group.areas.length}</span>
+                  </header>
+                  <ol>
+                    {group.areas.map((area) => (
+                      <li key={area.id}>
+                        <div className="floor-plan-comparison-area-button">
+                          <span className="floor-plan-comparison-order">
+                            {area.inspectionOrder}
+                          </span>
+                          <span className="floor-plan-comparison-area-copy">
+                            <strong>{area.name}</strong>
+                            <small>{area.isRequired ? 'Required' : 'Optional'}</small>
+                          </span>
+                          <span
+                            className={`floor-plan-comparison-status is-${area.status.toLowerCase()}`}
+                          >
+                            {area.status.replaceAll('_', ' ')}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </section>
+              ))}
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function FloorPlanComparisonPreview({
+  previewUrl,
+  mimeType,
+  fileName,
+}: {
+  previewUrl: string;
+  mimeType: string;
+  fileName: string;
+}) {
+  if (!mimeType.startsWith('image/')) {
+    return (
+      <object data={previewUrl} type={mimeType} aria-label={fileName}>
+        <a href={previewUrl} target="_blank" rel="noreferrer">
+          Open {fileName}
+        </a>
+      </object>
+    );
+  }
+
+  return (
+    <div className="floor-plan-comparison-image-stage">
+      {/* Blob URLs require the native element and cannot use Next's image optimizer. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={previewUrl} alt={fileName} />
+    </div>
   );
 }
 
@@ -558,11 +982,14 @@ function groupAreasByFloor(areas: AdminPropertyArea[]) {
     }
   }
   return [...groups.values()]
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.label.localeCompare(right.label))
+    .sort(
+      (left, right) => left.sortOrder - right.sortOrder || left.label.localeCompare(right.label),
+    )
     .map((group) => ({
       ...group,
       areas: [...group.areas].sort(
-        (left, right) => left.inspectionOrder - right.inspectionOrder || left.name.localeCompare(right.name),
+        (left, right) =>
+          left.inspectionOrder - right.inspectionOrder || left.name.localeCompare(right.name),
       ),
     }));
 }

@@ -169,6 +169,42 @@ const inspectionContextSchema = z.object({
   rooms: z.array(roomSchema),
   pendingReviewCount: z.number(),
 });
+const reportSchema = z.object({
+  inspection: inspectionSchema,
+  property: propertySchema,
+  generatedAt: z.string(),
+  rooms: z.array(
+    roomSchema.extend({
+      summary: z.string().nullable(),
+      findings: z.array(
+        z.object({
+          id: z.string(),
+          findingType: z.enum([
+            'POSSIBLE_NEW_DAMAGE',
+            'EXISTING_CONDITION',
+            'MAINTENANCE',
+            'NO_CHANGE',
+          ]),
+          title: z.string(),
+          category: z.string(),
+          severity: findingSchema.shape.severity,
+          comparisonResult: z.string(),
+          confidence: z.number(),
+          description: z.string(),
+          recommendedReview: z.string(),
+          reviewStatus: findingSchema.shape.reviewStatus,
+        }),
+      ),
+    }),
+  ),
+  totals: z.object({
+    rooms: z.number(),
+    finishedRooms: z.number(),
+    summaries: z.number(),
+    defectFindings: z.number(),
+    pendingReviewCount: z.number(),
+  }),
+});
 const dashboardSchema = z.object({
   today: z.number(),
   inProgress: z.number(),
@@ -360,6 +396,11 @@ export class ApiInspectionRepository implements InspectionRepository {
       ...context.rooms.map((room) => storeApiRecord(`room:${room.id}`, roomSchema, room)),
     ]);
     return { ...context, rooms: context.rooms.map(withLocalRoomState) };
+  }
+  async report(id: string) {
+    return cachedApiRecord(`inspection-report:${id}`, reportSchema, () =>
+      getJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/report`),
+    );
   }
   async start(id: string) {
     return inspectionSchema.parse(

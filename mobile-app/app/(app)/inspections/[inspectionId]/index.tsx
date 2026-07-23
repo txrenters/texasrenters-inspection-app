@@ -46,10 +46,11 @@ export default function InspectionOverviewScreen() {
       await actions.complete.mutateAsync();
       return;
     }
-    router.push({
-      pathname: '/(app)/inspections/[inspectionId]/areas',
-      params: { inspectionId },
-    });
+    // Submitted inspections open the consolidated report; active ones open the checklist.
+    const pathname = ['PROCESSING', 'REVIEW_REQUIRED', 'COMPLETED'].includes(inspection.status)
+      ? '/(app)/inspections/[inspectionId]/report'
+      : '/(app)/inspections/[inspectionId]/areas';
+    router.push({ pathname, params: { inspectionId } });
   };
   const actionError = actions.start.error ?? actions.complete.error;
   return (
@@ -86,7 +87,7 @@ export default function InspectionOverviewScreen() {
         </Text>
         <Text style={styles.cardBody}>
           {inspection.type === 'MOVE_IN'
-            ? 'This inspection establishes the property condition baseline for the current occupancy lifecycle.'
+            ? 'Reminder: this move-in inspection becomes the baseline every future inspection of this property is compared against. Record each room thoroughly — what you capture here defines the documented starting condition.'
             : inspection.baselineScheduledAt
               ? `Compared with the move-in inspection completed ${new Date(inspection.baselineScheduledAt).toLocaleDateString()}.`
               : 'A completed move-in inspection is required as the comparison baseline.'}
@@ -164,6 +165,16 @@ export default function InspectionOverviewScreen() {
           onPress={() =>
             router.push({
               pathname: '/(app)/inspections/[inspectionId]/findings',
+              params: { inspectionId },
+            })
+          }
+        />
+        <AppButton
+          label="View consolidated report"
+          variant="outline"
+          onPress={() =>
+            router.push({
+              pathname: '/(app)/inspections/[inspectionId]/report',
               params: { inspectionId },
             })
           }

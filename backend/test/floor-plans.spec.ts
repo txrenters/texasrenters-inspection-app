@@ -78,7 +78,7 @@ describe('administrator floor plans', () => {
         size: bytes.length,
         buffer: bytes,
       }),
-    ).resolves.toBe(plan);
+    ).resolves.toMatchObject(plan);
 
     expect(storage.put).toHaveBeenCalledWith(
       expect.stringContaining(building.id),

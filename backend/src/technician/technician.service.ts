@@ -16,7 +16,11 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
-import { MediaProcessingService } from './media-processing.service';
+import {
+  MediaProcessingService,
+  ROOM_SUMMARY_TITLE,
+  ROOM_SUMMARY_WHERE,
+} from './media-processing.service';
 import type {
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -134,7 +138,12 @@ const technicianInspectionContextSelect = {
     select: technicianRoomSelect,
   },
   _count: {
-    select: { findings: { where: { reviewStatus: 'PENDING_REVIEW' } } },
+    // Informational room summaries never count as pending review work.
+    select: {
+      findings: {
+        where: { reviewStatus: 'PENDING_REVIEW', NOT: { ...ROOM_SUMMARY_WHERE } },
+      },
+    },
   },
 } satisfies Prisma.InspectionSelect;
 
@@ -704,6 +713,11 @@ export class TechnicianService {
     const where = {
       inspectionId,
       ...(query.reviewStatus ? { reviewStatus: query.reviewStatus as FindingReviewStatus } : {}),
+      ...(query.kind === 'SUMMARIES'
+        ? { ...ROOM_SUMMARY_WHERE }
+        : query.kind === 'DEFECTS'
+          ? { NOT: { ...ROOM_SUMMARY_WHERE } }
+          : {}),
     } satisfies Prisma.InspectionFindingWhereInput;
     const [records, total] = await Promise.all([
       this.prisma.inspectionFinding.findMany({
@@ -761,6 +775,84 @@ export class TechnicianService {
       pageSize: query.pageSize,
       total,
       totalPages: Math.ceil(total / query.pageSize),
+    };
+  }
+
+  async report(user: AuthenticatedUser, inspectionId: string) {
+    const record = await this.prisma.inspection.findFirst({
+      relationLoadStrategy: 'join',
+      where: {
+        id: inspectionId,
+        organizationId: user.organizationId,
+        status: visibleStatuses,
+        assignments: { some: { technicianId: user.id, isCurrent: true } },
+      },
+      select: technicianInspectionContextSelect,
+    });
+    if (!record)
+      throw new ApplicationError(
+        404,
+        'ASSIGNED_INSPECTION_NOT_FOUND',
+        'Assigned inspection was not found.',
+      );
+    const findings = await this.prisma.inspectionFinding.findMany({
+      where: { inspectionId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        propertyAreaId: true,
+        findingType: true,
+        title: true,
+        category: true,
+        severity: true,
+        comparisonResult: true,
+        confidence: true,
+        description: true,
+        recommendedReview: true,
+        reviewStatus: true,
+      },
+    });
+    const isSummary = (finding: (typeof findings)[number]) =>
+      finding.findingType === 'NO_CHANGE' && finding.title === ROOM_SUMMARY_TITLE;
+    const rooms = record.areas.map((area) => {
+      const room = this.mapRoom(area);
+      const roomFindings = findings.filter(
+        (finding) => finding.propertyAreaId === area.propertyAreaId,
+      );
+      const summary = roomFindings.find(isSummary);
+      const defects = roomFindings.filter((finding) => !isSummary(finding));
+      return {
+        ...room,
+        summary: summary?.description ?? null,
+        findings: defects.map((finding) => ({
+          id: finding.id,
+          findingType: finding.findingType,
+          title: finding.title,
+          category: finding.category,
+          severity: finding.severity,
+          comparisonResult: finding.comparisonResult,
+          confidence: finding.confidence,
+          description: finding.description,
+          recommendedReview: finding.recommendedReview,
+          reviewStatus: finding.reviewStatus,
+        })),
+      };
+    });
+    const finished = rooms.filter((room) =>
+      ['COMPLETED', 'SKIPPED', 'RECORDING_SAVED'].includes(room.completionStatus),
+    );
+    return {
+      inspection: this.mapInspection(record, user.id),
+      property: this.mapProperty(record.propertywareBuilding, record.propertywareUnit),
+      generatedAt: new Date().toISOString(),
+      rooms,
+      totals: {
+        rooms: rooms.length,
+        finishedRooms: finished.length,
+        summaries: rooms.filter((room) => room.summary).length,
+        defectFindings: rooms.reduce((sum, room) => sum + room.findings.length, 0),
+        pendingReviewCount: record._count.findings,
+      },
     };
   }
 

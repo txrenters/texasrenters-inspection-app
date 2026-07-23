@@ -134,6 +134,38 @@ export interface InspectionContext {
   pendingReviewCount: number;
 }
 
+export interface InspectionReportFinding {
+  id: string;
+  findingType: 'POSSIBLE_NEW_DAMAGE' | 'EXISTING_CONDITION' | 'MAINTENANCE' | 'NO_CHANGE';
+  title: string;
+  category: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  comparisonResult: string;
+  confidence: number;
+  description: string;
+  recommendedReview: string;
+  reviewStatus: FindingStatus;
+}
+
+export interface InspectionReportRoom extends InspectionRoom {
+  summary: string | null;
+  findings: InspectionReportFinding[];
+}
+
+export interface InspectionReport {
+  inspection: Inspection;
+  property: Property;
+  generatedAt: string;
+  rooms: InspectionReportRoom[];
+  totals: {
+    rooms: number;
+    finishedRooms: number;
+    summaries: number;
+    defectFindings: number;
+    pendingReviewCount: number;
+  };
+}
+
 export interface LocalMedia {
   id: string;
   ownerUserId?: string;

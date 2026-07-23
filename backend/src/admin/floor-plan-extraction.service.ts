@@ -9,7 +9,10 @@ import type { AiTokenUsage, ResolvedAiConfiguration } from './ai-provider-settin
 const anthropicResponseSchema = z.object({
   content: z.array(z.object({ type: z.string(), text: z.string().optional() })),
   usage: z
-    .object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative() })
+    .object({
+      input_tokens: z.number().int().nonnegative(),
+      output_tokens: z.number().int().nonnegative(),
+    })
     .optional(),
 });
 const openAiResponseSchema = z.object({
@@ -38,6 +41,8 @@ export interface FloorPlanExtractionResult {
   areas: ExtractedArea[];
   usage: AiTokenUsage;
 }
+
+type JsonObject = Record<string, unknown>;
 
 @Injectable()
 export class FloorPlanExtractionService {
@@ -77,13 +82,25 @@ export class FloorPlanExtractionService {
           'FLOOR_PLAN_EXTRACTION_EMPTY',
           'The AI model returned no text for this plan — its output limit was likely consumed. Retry, or select a more capable model in Settings.',
         );
-      const areas = floorPlanExtractionSchema.safeParse(JSON.parse(this.cleanJson(providerResult.text)));
-      if (!areas.success)
+      const areas = floorPlanExtractionSchema.safeParse(
+        normalizeExtractionCandidates(this.extractionCandidates(providerResult.text)),
+      );
+      if (!areas.success) {
+        this.logger.warn({
+          event: 'floor_plan_extraction_validation_failed',
+          provider: resolved.provider,
+          modelId: resolved.modelId,
+          issues: areas.error.issues.slice(0, 10).map((issue) => ({
+            code: issue.code,
+            path: issue.path.join('.'),
+          })),
+        });
         throw new ApplicationError(
           422,
           'INVALID_FLOOR_PLAN_EXTRACTION',
-          'The extracted floor-plan areas did not pass validation.',
+          'The AI returned incomplete floor-plan area data. Retry with a capable vision model, or add the missing areas manually.',
         );
+      }
       return { areas: areas.data, usage: providerResult.usage };
     } catch (error) {
       if (error instanceof ApplicationError) throw error;
@@ -191,19 +208,67 @@ export class FloorPlanExtractionService {
   }
 
   private cleanJson(text: string) {
-    const stripped = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    // Models occasionally wrap the array in prose; keep only the JSON array.
-    const start = stripped.indexOf('[');
-    const end = stripped.lastIndexOf(']');
-    return start >= 0 && end > start ? stripped.slice(start, end + 1) : stripped;
+    const stripped = text
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '');
+    const arrayStart = stripped.indexOf('[');
+    const arrayEnd = stripped.lastIndexOf(']');
+    const objectStart = stripped.indexOf('{');
+    const objectEnd = stripped.lastIndexOf('}');
+    if (arrayStart >= 0 && arrayEnd > arrayStart && (objectStart < 0 || arrayStart < objectStart))
+      return stripped.slice(arrayStart, arrayEnd + 1);
+    if (objectStart >= 0 && objectEnd > objectStart)
+      return stripped.slice(objectStart, objectEnd + 1);
+    return stripped;
+  }
+
+  private extractionCandidates(text: string) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(this.cleanJson(text));
+    } catch {
+      throw new ApplicationError(
+        422,
+        'INVALID_FLOOR_PLAN_EXTRACTION',
+        'The AI returned unreadable floor-plan area data. Retry with a capable vision model.',
+      );
+    }
+    if (Array.isArray(payload)) return payload;
+    const root = asObject(payload);
+    if (!root) return [payload];
+    const direct = firstArray(root, ['areas', 'rooms']);
+    if (direct) return direct;
+    const floors = firstArray(root, ['floors', 'levels', 'stories', 'storeys']);
+    if (!floors) return [payload];
+    return floors.flatMap((floor) => {
+      const floorObject = asObject(floor);
+      if (!floorObject) return [floor];
+      const floorName =
+        firstText(floorObject, ['floorName', 'floor_name', 'name', 'level', 'story', 'storey']) ??
+        'Ground Floor';
+      const areas = firstArray(floorObject, ['areas', 'rooms', 'spaces']);
+      if (!areas) return [floor];
+      return areas.map((area) => {
+        const areaObject = asObject(area);
+        if (!areaObject) return area;
+        return {
+          ...areaObject,
+          floorName:
+            firstText(areaObject, ['floorName', 'floor_name', 'floor', 'level']) ?? floorName,
+        };
+      });
+    });
   }
 
   private prompt() {
     return [
       'Extract only clearly labeled inspectable areas from this residential floor plan.',
-      'Return a JSON array only. Each item must contain floorName, name, inspectionOrder, and isRequired.',
-      'Use labels visible in the plan. Do not invent rooms. Use Ground Floor only when no floor is stated.',
-      'inspectionOrder must start at 1 and be sequential. Garages, patios, and balconies may be optional; interior rooms are required.',
+      'The image or PDF may contain multiple stories; inspect the entire document and preserve visible labels such as First Floor and Second Floor.',
+      'Return one flat JSON array only. Every item must contain floorName (string), name (string), inspectionOrder (integer), and isRequired (boolean).',
+      'Keep distinct numbered room labels distinct. Do not return dimensions, stairs, open-to-below voids, or duplicate rooms.',
+      'Use labels visible in the plan. Do not invent rooms. Use Ground Floor only when no floor or story is stated.',
+      'inspectionOrder must start at 1 and remain sequential across all floors. Garages, patios, porches, decks, and balconies may be optional; interior rooms are required.',
     ].join(' ');
   }
 
@@ -262,11 +327,85 @@ export class FloorPlanExtractionService {
       );
     // Provider diagnostics are logged for operators but never surfaced to the
     // client verbatim (they may leak upstream internals).
-    this.logger.warn(`${provider} extraction rejected (HTTP ${status}): ${providerMessage || 'no message'}`);
+    this.logger.warn(
+      `${provider} extraction rejected (HTTP ${status}): ${providerMessage || 'no message'}`,
+    );
     return new ApplicationError(
       422,
       'FLOOR_PLAN_AI_REQUEST_REJECTED',
       'The extraction provider rejected this floor-plan request. Verify the file and configured model.',
     );
   }
+}
+
+function normalizeExtractionCandidates(candidates: unknown[]) {
+  const normalized: unknown[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates.slice(0, 101)) {
+    const area = asObject(candidate);
+    if (!area) {
+      normalized.push(candidate);
+      continue;
+    }
+    const floorName =
+      firstText(area, ['floorName', 'floor_name', 'floor', 'level', 'story', 'storey']) ??
+      'Ground Floor';
+    const name = firstText(area, ['name', 'roomName', 'room_name', 'areaName', 'area_name']) ?? '';
+    const key = `${floorName.toLocaleLowerCase()}:${name.toLocaleLowerCase()}`;
+    if (name && seen.has(key)) continue;
+    if (name) seen.add(key);
+    normalized.push({
+      floorName,
+      name,
+      inspectionOrder: normalized.length + 1,
+      isRequired:
+        firstBoolean(area, ['isRequired', 'is_required', 'required']) ?? requiredByDefault(name),
+    });
+  }
+  return normalized;
+}
+
+function asObject(value: unknown): JsonObject | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
+function firstArray(value: JsonObject, keys: string[]) {
+  for (const key of keys) if (Array.isArray(value[key])) return value[key] as unknown[];
+  return undefined;
+}
+
+function firstText(value: JsonObject, keys: string[]) {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'string' && candidate.trim())
+      return candidate.trim().replace(/\s+/g, ' ');
+    const nested = asObject(candidate);
+    if (typeof nested?.name === 'string' && nested.name.trim())
+      return nested.name.trim().replace(/\s+/g, ' ');
+  }
+  return undefined;
+}
+
+function firstBoolean(value: JsonObject, keys: string[]) {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === 'boolean') return candidate;
+    if (
+      candidate === 1 ||
+      (typeof candidate === 'string' && /^(true|yes|required|1)$/i.test(candidate))
+    )
+      return true;
+    if (
+      candidate === 0 ||
+      (typeof candidate === 'string' && /^(false|no|optional|0)$/i.test(candidate))
+    )
+      return false;
+  }
+  return undefined;
+}
+
+function requiredByDefault(name: string) {
+  return !/\b(garage|patio|porch|deck|balcon(?:y|ies)|terrace|yard|carport)\b/i.test(name);
 }

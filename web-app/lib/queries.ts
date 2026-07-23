@@ -49,8 +49,8 @@ export const keys = {
     ['admin', 'inspection', id, 'audit', page] as const,
   inspectionMedia: (id: string) => ['admin', 'inspection', id, 'media'] as const,
   reportShares: (id: string) => ['admin', 'inspection', id, 'report-shares'] as const,
-  inspectionFindings: (id: string, page: number, reviewStatus: string) =>
-    ['admin', 'inspection', id, 'findings', page, reviewStatus] as const,
+  inspectionFindings: (id: string, page: number, reviewStatus: string, kind = 'ALL') =>
+    ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   technicians: (query: object) => ['admin', 'technicians', query] as const,
   technician: (id: string) => ['admin', 'technician', id] as const,
@@ -174,15 +174,21 @@ export const useInspectionMedia = (id: string) =>
       api<AdminInspectionMedia[]>(`/api/v1/admin/inspections/${id}/media`, { signal }),
     enabled: Boolean(id),
   });
-export const useInspectionFindings = (id: string, page: number, reviewStatus = '') =>
+export const useInspectionFindings = (
+  id: string,
+  page: number,
+  reviewStatus = '',
+  kind: 'ALL' | 'DEFECTS' | 'SUMMARIES' = 'ALL',
+) =>
   useQuery({
-    queryKey: keys.inspectionFindings(id, page, reviewStatus),
+    queryKey: keys.inspectionFindings(id, page, reviewStatus, kind),
     queryFn: ({ signal }) =>
       api<Page<AdminInspectionFinding>>(
         `/api/v1/admin/inspections/${id}/findings${queryString({
           page,
           pageSize: 20,
           reviewStatus: reviewStatus || undefined,
+          kind: kind === 'ALL' ? undefined : kind,
         })}`,
         { signal },
       ),
@@ -235,12 +241,10 @@ export const useSyncRuns = () =>
       api<Page<PropertywareSyncRun>>(
         '/api/v1/admin/integrations/propertyware/sync-runs?page=1&pageSize=25',
         { signal },
-    ),
+      ),
     select: (data) => data.items,
     refetchInterval: (query) =>
-      query.state.data?.items.some((run) => run.status === 'RUNNING')
-        ? 5_000
-        : false,
+      query.state.data?.items.some((run) => run.status === 'RUNNING') ? 5_000 : false,
   });
 export const useSyncErrors = (runId: string, page: number) =>
   useQuery({

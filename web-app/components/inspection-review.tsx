@@ -196,18 +196,72 @@ function FindingReviewControls({
   );
 }
 
+export function InspectionSummariesSection({ inspectionId }: { inspectionId: string }) {
+  const [page, setPage] = useState(1);
+  const summaries = useInspectionFindings(inspectionId, page, '', 'SUMMARIES');
+  return (
+    <section className="panel section-gap inspection-section">
+      <div className="panel-header">
+        <div>
+          <span className="section-kicker">Informational</span>
+          <h2>Room condition summaries</h2>
+          <p className="panel-description">
+            AI narration summaries per room. These are reference material only — they need no
+            approval and never lead to tenant charges.
+          </p>
+        </div>
+        {!summaries.isLoading && !summaries.isError ? (
+          <span className="section-count">{summaries.data?.total ?? 0} rooms</span>
+        ) : null}
+      </div>
+      {summaries.isLoading ? (
+        <LoadingState label="Loading room summaries…" />
+      ) : summaries.isError ? (
+        <ErrorState error={summaries.error} retry={() => void summaries.refetch()} />
+      ) : summaries.data?.items.length ? (
+        <>
+          <ul className="finding-list">
+            {summaries.data.items.map((summary) => (
+              <li key={summary.id} className="finding-card">
+                <header className="finding-card-header">
+                  <strong>{summary.roomName}</strong>
+                  <Badge value="SUMMARY" />
+                </header>
+                <p>{summary.description}</p>
+              </li>
+            ))}
+          </ul>
+          <Pagination page={page} totalPages={summaries.data.totalPages} onPage={setPage} />
+        </>
+      ) : (
+        <div className="inspection-empty-state">
+          <span className="inspection-empty-icon" aria-hidden>
+            <svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg>
+          </span>
+          <div>
+            <strong>No room summaries yet</strong>
+            <p>A condition summary appears for each room once its recording is processed.</p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function InspectionFindingsSection({ inspectionId }: { inspectionId: string }) {
   const [page, setPage] = useState(1);
   const [reviewStatus, setReviewStatus] = useState('');
-  const findings = useInspectionFindings(inspectionId, page, reviewStatus);
+  const findings = useInspectionFindings(inspectionId, page, reviewStatus, 'DEFECTS');
   return (
     <section className="panel section-gap inspection-section">
       <div className="panel-header">
         <div>
           <span className="section-kicker">Human oversight</span>
-          <h2>AI findings review</h2>
+          <h2>Findings review</h2>
           <p className="panel-description">
-            Suggestions remain pending until an authorized person approves or rejects them.
+            Review each finding to decide whether it should be charged to the tenant. Findings stay
+            pending until an authorized person approves or rejects them — the AI never decides
+            charges.
           </p>
         </div>
         <div className="finding-filter field">

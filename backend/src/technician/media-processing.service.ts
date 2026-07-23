@@ -19,9 +19,26 @@ import { PrismaService } from '../common/prisma.service';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 
-const PROMPT_VERSION = '1';
+const PROMPT_VERSION = '2';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
+
+/**
+ * Marker for the informational per-room AI summary. Summaries are context for
+ * reviewers, not chargeable findings: queries exclude them from the review
+ * queue and from every pending-review count/gate.
+ */
+export const ROOM_SUMMARY_TITLE = 'Room condition summary';
+
+/** Prisma where-fragment matching summary rows. */
+export const ROOM_SUMMARY_WHERE = { findingType: 'NO_CHANGE', title: ROOM_SUMMARY_TITLE } as const;
+
+// Biases the speech model toward inspection vocabulary; helps with accented
+// and non-native English narration. Language itself is auto-detected.
+const TRANSCRIPTION_DOMAIN_HINT =
+  'Property inspection walkthrough narrated by a field technician, possibly with a strong accent ' +
+  'or in a language other than English. Typical terms: room names, walls, flooring, ceiling, ' +
+  'plumbing, appliances, fixtures, damage, scratches, stains, leaks, mold, working condition.';
 
 const findingItemSchema = z.object({
   findingType: z.enum(['POSSIBLE_NEW_DAMAGE', 'EXISTING_CONDITION', 'MAINTENANCE', 'NO_CHANGE']),
@@ -169,7 +186,7 @@ export class MediaProcessingService implements OnModuleInit {
                   },
                 },
               },
-              inspection: { select: { inspectionType: true } },
+              inspection: { select: { inspectionType: true, baselineInspectionId: true } },
             },
           },
         },
@@ -278,7 +295,9 @@ export class MediaProcessingService implements OnModuleInit {
       ]);
       await this.prisma.transcriptionJob.update({
         where: { inspectionMediaId: media.id },
-        data: { status: TranscriptionStatus.COMPLETED, language: 'en' },
+        // Language is auto-detected by the provider and not reliably reported;
+        // never hardcode English — narrations may be in any language.
+        data: { status: TranscriptionStatus.COMPLETED, language: null },
       });
       await this.aiSettings.recordUsage(
         organizationId,
@@ -361,6 +380,8 @@ export class MediaProcessingService implements OnModuleInit {
       );
       form.append('model', model);
       form.append('response_format', 'json');
+      // No language parameter: let the model auto-detect (multilingual crews).
+      form.append('prompt', TRANSCRIPTION_DOMAIN_HINT);
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: { authorization: `Bearer ${apiKey}` },
@@ -405,7 +426,7 @@ export class MediaProcessingService implements OnModuleInit {
           floor: { name: string } | null;
           baselineConditions: Array<{ conditionSummary: string; knownDefects: unknown }>;
         };
-        inspection: { inspectionType: string };
+        inspection: { inspectionType: string; baselineInspectionId?: string | null };
       };
     },
     transcript: string,
@@ -429,7 +450,8 @@ export class MediaProcessingService implements OnModuleInit {
         // Nothing was said — record that as the summary without an AI call.
         items = [this.noNotableConditionSummary(media.inspectionArea.propertyArea.name)];
       } else {
-        const prompt = this.analysisPrompt(media, transcript);
+        const baselineContext = await this.baselineContext(media);
+        const prompt = this.analysisPrompt(media, transcript, baselineContext);
         const result =
           configuration.provider === AiProvider.ANTHROPIC
             ? await this.anthropicText(configuration.apiKey, configuration.modelId, prompt)
@@ -442,9 +464,10 @@ export class MediaProcessingService implements OnModuleInit {
             'INVALID_AI_FINDINGS',
             'The AI findings did not pass validation and were discarded.',
           );
-        items = parsed.data.length
-          ? parsed.data
-          : [this.noNotableConditionSummary(media.inspectionArea.propertyArea.name)];
+        items = this.ensureSummaryFirst(
+          parsed.data,
+          media.inspectionArea.propertyArea.name,
+        );
       }
       // Reprocessing replaces this recording's unreviewed suggestions instead
       // of stacking duplicates; human-reviewed findings are never touched.
@@ -497,6 +520,43 @@ export class MediaProcessingService implements OnModuleInit {
     }
   }
 
+  /**
+   * Baseline for comparisons comes from the linked move-in inspection (its
+   * room summary + human-approved findings for the same area). The legacy
+   * building-level baseline tables are the fallback.
+   */
+  private async baselineContext(media: {
+    inspectionArea: {
+      propertyArea: {
+        id: string;
+        baselineConditions: Array<{ conditionSummary: string; knownDefects: unknown }>;
+      };
+      inspection: { baselineInspectionId?: string | null };
+    };
+  }) {
+    const baselineInspectionId = media.inspectionArea.inspection.baselineInspectionId;
+    if (baselineInspectionId) {
+      const rows = await this.prisma.inspectionFinding.findMany({
+        where: {
+          inspectionId: baselineInspectionId,
+          propertyAreaId: media.inspectionArea.propertyArea.id,
+          OR: [{ ...ROOM_SUMMARY_WHERE }, { reviewStatus: FindingReviewStatus.APPROVED }],
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        select: { title: true, description: true, findingType: true },
+      });
+      if (rows.length)
+        return rows
+          .map((row) => `- [${row.findingType}] ${row.title}: ${row.description}`)
+          .join('\n');
+    }
+    const legacy = media.inspectionArea.propertyArea.baselineConditions[0];
+    return legacy
+      ? `- ${legacy.conditionSummary} Known defects: ${JSON.stringify(legacy.knownDefects)}`
+      : null;
+  }
+
   private analysisPrompt(
     media: {
       durationSeconds: number;
@@ -506,24 +566,33 @@ export class MediaProcessingService implements OnModuleInit {
           floor: { name: string } | null;
           baselineConditions: Array<{ conditionSummary: string; knownDefects: unknown }>;
         };
-        inspection: { inspectionType: string };
+        inspection: { inspectionType: string; baselineInspectionId?: string | null };
       };
     },
     transcript: string,
+    baselineContext: string | null,
   ) {
     const area = media.inspectionArea.propertyArea;
-    const baseline = area.baselineConditions[0];
+    const isMoveIn = media.inspectionArea.inspection.inspectionType === 'MOVE_IN';
     return [
       'You review property-inspection narrations for TexasRenters.',
       `Room: ${area.name}${area.floor ? ` (${area.floor.name})` : ''}.`,
       `Inspection type: ${media.inspectionArea.inspection.inspectionType}.`,
       `Video duration: ${media.durationSeconds} seconds.`,
-      baseline
-        ? `Move-in baseline: ${baseline.conditionSummary}. Known defects: ${JSON.stringify(baseline.knownDefects)}.`
-        : 'No move-in baseline is documented for this room.',
+      isMoveIn
+        ? 'This is a MOVE-IN inspection: what you extract becomes the baseline every future inspection of this room is compared against. Document the observed condition thoroughly.'
+        : baselineContext
+          ? `Move-in baseline for this room:\n${baselineContext}`
+          : 'No move-in baseline is documented for this room.',
       'Technician narration transcript follows between <transcript> tags.',
+      'The narration may be in any language, mixed languages, or heavily accented English —',
+      'interpret it faithfully and write every output field in clear English.',
       `<transcript>${transcript}</transcript>`,
-      'Extract observed condition findings as a JSON array only (no prose).',
+      'Return a JSON array only (no prose).',
+      `The FIRST item must always be a room summary: findingType NO_CHANGE, category "Room condition", title "${ROOM_SUMMARY_TITLE}",`,
+      'description = a 2-4 sentence English summary of the narrated room condition,',
+      'comparisonResult NO_MATERIAL_CHANGE (or INSUFFICIENT_DATA when the narration is unclear), severity LOW, possibleResponsibility UNDETERMINED.',
+      'After the summary, add one item per damage or maintenance issue the narration supports — none if none were narrated.',
       'Each item: findingType (POSSIBLE_NEW_DAMAGE|EXISTING_CONDITION|MAINTENANCE|NO_CHANGE),',
       'category (short noun, e.g. Walls, Plumbing), title, description,',
       'baselineCondition (what the baseline says about this item, or empty string),',
@@ -531,10 +600,20 @@ export class MediaProcessingService implements OnModuleInit {
       'videoTimestampStart and videoTimestampEnd (integer seconds within the duration; use 0 when unknown),',
       'severity (LOW|MEDIUM|HIGH), possibleResponsibility (TENANT_REVIEW_REQUIRED|OWNER_REVIEW_REQUIRED|UNDETERMINED),',
       'confidence (0-1), recommendedReview (one actionable sentence for the human reviewer).',
-      'Only report what the narration supports.',
-      'When no damage or maintenance issue is narrated, return one NO_CHANGE item titled "Room condition summary" that concisely summarizes the transcript.',
       'Findings are suggestions for human review; never state conclusions about charges or fault.',
     ].join('\n');
+  }
+
+  /** Guarantees exactly one summary row, always first. */
+  private ensureSummaryFirst(
+    items: z.infer<typeof analysisResponseSchema>,
+    roomName: string,
+  ): z.infer<typeof analysisResponseSchema> {
+    const isSummary = (item: z.infer<typeof findingItemSchema>) =>
+      item.findingType === 'NO_CHANGE' && item.title.trim().toLowerCase() === ROOM_SUMMARY_TITLE.toLowerCase();
+    const summaries = items.filter(isSummary).map((item) => ({ ...item, title: ROOM_SUMMARY_TITLE }));
+    const defects = items.filter((item) => !isSummary(item));
+    return [summaries[0] ?? this.noNotableConditionSummary(roomName), ...defects];
   }
 
   private async anthropicText(apiKey: string, modelId: string, prompt: string) {
@@ -620,7 +699,7 @@ export class MediaProcessingService implements OnModuleInit {
     return {
       findingType: 'NO_CHANGE',
       category: 'Room condition',
-      title: 'Room condition summary',
+      title: ROOM_SUMMARY_TITLE,
       description: `No specific damage or maintenance concern was identified in the ${roomName} narration.`,
       baselineCondition: '',
       comparisonResult: 'INSUFFICIENT_DATA',

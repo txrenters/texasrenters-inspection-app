@@ -101,6 +101,13 @@ export function useInspectionContext(id: string) {
     enabled: Boolean(id),
   });
 }
+export function useInspectionReport(id: string) {
+  return useQuery({
+    queryKey: [...queryKeys.inspection(id), 'report'],
+    queryFn: () => repositories.inspections.report(id),
+    enabled: Boolean(id),
+  });
+}
 export function useInspectionActions(id: string) {
   const client = useQueryClient();
   const refresh = () =>

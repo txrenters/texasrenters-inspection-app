@@ -12,6 +12,7 @@ import {
 import {
   InspectionCompleteDialog,
   InspectionFindingsSection,
+  InspectionSummariesSection,
   InspectionMediaSection,
 } from '@/components/inspection-review';
 import { ReportShareDialog } from '@/components/report-share-dialog';
@@ -50,7 +51,8 @@ export default function InspectionDetailPage() {
   const [unassigning, setUnassigning] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const pendingFindings = useInspectionFindings(id, 1, 'PENDING_REVIEW');
+  // Room condition summaries are informational and never gate completion.
+  const pendingFindings = useInspectionFindings(id, 1, 'PENDING_REVIEW', 'DEFECTS');
 
   if (inspection.isLoading) return <LoadingState label="Loading inspection…" />;
   if (inspection.isError)
@@ -170,6 +172,7 @@ export default function InspectionDetailPage() {
       </section>
 
       <InspectionMediaSection inspectionId={id} />
+      <InspectionSummariesSection inspectionId={id} />
       <InspectionFindingsSection inspectionId={id} />
 
       <div className="inspection-history-layout section-gap">

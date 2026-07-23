@@ -22,6 +22,8 @@ Neither client consumes raw Propertyware responses. Propertyware synchronization
 
 Administrators use organization-scoped routes under `/api/v1/admin` to list and upload private floor-plan files, request optional AI extraction, edit draft property areas, and explicitly approve those areas. Uploads accept PDF, PNG, or JPEG files up to 20 MB and validate both the declared media type and file signature. AI output is validated and always persists as `DRAFT`; it never becomes an inspection area without an authorized human approval.
 
+The admin comparison view displays the complete source plan beside the extracted checklist for human verification. It does not infer or persist room coordinates because vision-based spatial markers are not reliable enough to serve as review evidence.
+
 New inspections snapshot the property's approved master area list into `InspectionArea`. Inspection creation fails when the selected property has no approved areas, preventing an empty or invented mobile workflow.
 
 Administrators create one of `MOVE_IN`, `OCCUPIED`, `BACK_TO_MARKET`, or `MOVE_OUT`. A later lifecycle inspection requires the completed move-in baseline for the same property/unit/lease. Back-to-market additionally follows an occupied inspection, and move-out follows back-to-market. Responses expose the stored baseline relationship so clients never guess which inspection supplies comparison evidence.

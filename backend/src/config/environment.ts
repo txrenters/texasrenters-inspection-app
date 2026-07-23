@@ -6,6 +6,8 @@ const environmentSchema = z
     PORT: z.coerce.number().int().positive().default(3000),
     DATABASE_URL: z.string().optional(),
     DIRECT_URL: z.string().optional(),
+    DATABASE_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(10).default(5),
+    DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(60).default(10),
     DATABASE_WARMUP_ENABLED: z.enum(['true', 'false']).default('true'),
     SLOW_QUERY_WARNING_MS: z.coerce.number().int().positive().default(250),
     SLOW_REQUEST_WARNING_MS: z.coerce.number().int().positive().default(750),

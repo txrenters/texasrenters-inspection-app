@@ -6,6 +6,7 @@ import type {
   FloorPlanDocument,
   Inspection,
   InspectionContext,
+  InspectionReport,
   InspectionStatus,
   InspectionRoom,
   LocalMedia,
@@ -43,6 +44,7 @@ export interface InspectionRepository {
   list(filters?: { status?: InspectionStatus; search?: string }): Promise<Inspection[]>;
   get(id: string): Promise<Inspection>;
   context(id: string): Promise<InspectionContext>;
+  report(id: string): Promise<InspectionReport>;
   start(id: string): Promise<Inspection>;
   complete(id: string): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;

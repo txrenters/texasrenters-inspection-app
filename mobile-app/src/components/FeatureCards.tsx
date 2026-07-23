@@ -80,7 +80,17 @@ export function InspectionSummaryCard({
   );
 }
 
-export function RoomCard({ room, onPress }: { room: InspectionRoom; onPress: () => void }) {
+export function RoomCard({
+  room,
+  onPress,
+  sequenceNumber,
+  isUpNext = false,
+}: {
+  room: InspectionRoom;
+  onPress: () => void;
+  sequenceNumber?: number;
+  isUpNext?: boolean;
+}) {
   const styles = useThemedStyles(createStyles);
   const nextAction =
     room.uploadStatus === 'FAILED'
@@ -95,18 +105,29 @@ export function RoomCard({ room, onPress }: { room: InspectionRoom; onPress: () 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${nextAction} for ${room.name}`}
+      accessibilityLabel={`${isUpNext ? 'Up next: ' : ''}${nextAction} for ${room.name}`}
       onPress={onPress}
-      style={({ pressed }) => [styles.roomCard, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.roomCard,
+        isUpNext && styles.upNextCard,
+        pressed && styles.pressed,
+      ]}
     >
       <View style={styles.rowBetween}>
+        {sequenceNumber != null ? (
+          <View style={[styles.sequenceBadge, isUpNext && styles.sequenceBadgeActive]}>
+            <Text style={[styles.sequenceNumber, isUpNext && styles.sequenceNumberActive]}>
+              {sequenceNumber}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.flex}>
           <Text style={styles.cardTitle}>{room.name}</Text>
           <Text style={styles.cardBody}>
             {room.floorName} · {room.isRequired ? 'Required' : 'Optional'}
           </Text>
         </View>
-        <Text style={styles.chevron}>›</Text>
+        {isUpNext ? <StatusBadge label="UP NEXT" tone="info" /> : <Text style={styles.chevron}>›</Text>}
       </View>
       <View style={styles.statusGrid}>
         <StatusLine label="Baseline" value={room.baseline.condition} />
@@ -314,6 +335,19 @@ const createStyles = (colors: AppColors) =>
       padding: spacing.md,
       gap: spacing.md,
     },
+    upNextCard: { borderColor: colors.primary, borderWidth: 2 },
+    sequenceBadge: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surfaceMuted,
+      marginRight: spacing.sm,
+    },
+    sequenceBadgeActive: { backgroundColor: colors.primary },
+    sequenceNumber: { ...typography.caption, color: colors.textSecondary, fontWeight: '800' },
+    sequenceNumberActive: { color: colors.white },
     findingCard: {
       backgroundColor: colors.surface,
       borderWidth: 1,

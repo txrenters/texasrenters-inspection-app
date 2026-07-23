@@ -15,6 +15,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
+import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
 import type {
   AdminFindingsQueryDto,
   AssignmentDto,
@@ -1554,6 +1555,11 @@ export class AdminService {
       ...(query.reviewStatus
         ? { reviewStatus: query.reviewStatus as FindingReviewStatus }
         : {}),
+      ...(query.kind === 'SUMMARIES'
+        ? { ...ROOM_SUMMARY_WHERE }
+        : query.kind === 'DEFECTS'
+          ? { NOT: { ...ROOM_SUMMARY_WHERE } }
+          : {}),
     } satisfies Prisma.InspectionFindingWhereInput;
     const [records, total] = await Promise.all([
       this.prisma.inspectionFinding.findMany({
