@@ -24,6 +24,8 @@ const PROPERTY_HEADERS = [
   'Address',
   'Portfolio',
   'Units',
+  'Total area',
+  'Leases',
   'Inspections',
   'Status',
   'Last synced',
@@ -158,6 +160,15 @@ export default function PropertiesPage() {
                 <td>{address(property)}</td>
                 <td>{property.portfolio.name}</td>
                 <td className="numeric-cell">{property._count?.units ?? 0}</td>
+                <td>
+                  {property.totalArea?.label ?? 'Not provided'}
+                  {property.totalArea?.source === 'MANUAL' ? (
+                    <span className="cell-note">Manual</span>
+                  ) : property.totalArea?.derived ? (
+                    <span className="cell-note">Derived</span>
+                  ) : null}
+                </td>
+                <td>{property.leaseSummary?.summary ?? '—'}</td>
                 <td className="numeric-cell">{property._count?.inspections ?? 0}</td>
                 <td>
                   <Badge value={property.isActive ? 'ACTIVE' : 'INACTIVE'} />

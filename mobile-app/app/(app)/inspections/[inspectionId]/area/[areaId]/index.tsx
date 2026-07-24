@@ -14,6 +14,7 @@ import {
 } from '../../../../../../src/components/ui';
 import { isDemoMode } from '../../../../../../src/config/environment';
 import { useRoom, useRoomMedia, useUpdateRoom } from '../../../../../../src/features/queries';
+import { recordPetObservation } from '../../../../../../src/media/pet-observation';
 import {
   type AppColors,
   radius,
@@ -34,6 +35,12 @@ export default function RoomDetailsScreen() {
   const [note, setNote] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
+  const [petOpen, setPetOpen] = useState(false);
+  const [petSpecies, setPetSpecies] = useState('');
+  const [petLabel, setPetLabel] = useState('');
+  const [petNotes, setPetNotes] = useState('');
+  const [petSaving, setPetSaving] = useState(false);
+  const [petError, setPetError] = useState<string | null>(null);
   useEffect(() => setNote(room.data?.note ?? ''), [room.data?.note]);
   if (room.isLoading || media.isLoading) return <LoadingState label="Loading room baseline…" />;
   if (!room.data)
@@ -44,6 +51,41 @@ export default function RoomDetailsScreen() {
       ? 'RECORDING_SAVED'
       : room.data.completionStatus;
   const roomClosed = completionStatus === 'COMPLETED';
+  const recordAdditional = () =>
+    router.push({
+      pathname: '/(app)/inspections/[inspectionId]/area/[areaId]/record',
+      params: { inspectionId, areaId, recordingType: 'ADDITIONAL_ISSUE' },
+    });
+  const isOccupied = room.data?.inspectionType === 'OCCUPIED';
+  const submitPetObservation = async () => {
+    setPetError(null);
+    // In demo mode there is no backend session; treat it as a local success.
+    if (isDemoMode) {
+      Alert.alert('Pet logged', 'This evidence is represented locally in the frontend demo.');
+      setPetOpen(false);
+      setPetSpecies('');
+      setPetLabel('');
+      setPetNotes('');
+      return;
+    }
+    setPetSaving(true);
+    try {
+      await recordPetObservation({
+        inspectionId,
+        species: petSpecies.trim(),
+        temporaryLabel: petLabel.trim(),
+        notes: petNotes.trim() || undefined,
+      });
+      setPetOpen(false);
+      setPetSpecies('');
+      setPetLabel('');
+      setPetNotes('');
+    } catch (error) {
+      setPetError(error instanceof Error ? error.message : 'The pet observation could not be saved.');
+    } finally {
+      setPetSaving(false);
+    }
+  };
   const record = () => {
     const navigate = () =>
       router.push({
@@ -113,21 +155,29 @@ export default function RoomDetailsScreen() {
       <Card>
         <SectionHeader title="Current recordings" />
         {media.data?.length ? (
-          media.data.map((item) => (
-            <View key={item.id} style={styles.mediaRow}>
-              <View style={styles.play}>
-                <Text style={styles.playText}>▶</Text>
+          media.data.map((item) => {
+            const additional = item.recordingType === 'ADDITIONAL_ISSUE';
+            return (
+              <View key={item.id} style={styles.mediaRow}>
+                <View style={styles.play}>
+                  <Text style={styles.playText}>▶</Text>
+                </View>
+                <View style={styles.flex}>
+                  <Text style={styles.mediaTitle}>
+                    {additional ? (item.label ?? 'Additional clip') : 'Room video'}
+                  </Text>
+                  <Text style={styles.meta}>
+                    {formatDuration(item.durationSeconds)} ·{' '}
+                    {new Date(item.recordedAt).toLocaleString()}
+                  </Text>
+                </View>
+                <StatusBadge
+                  label={additional ? 'ADDITIONAL' : 'PRIMARY'}
+                  tone={additional ? 'info' : 'success'}
+                />
               </View>
-              <View style={styles.flex}>
-                <Text style={styles.mediaTitle}>Room video</Text>
-                <Text style={styles.meta}>
-                  {formatDuration(item.durationSeconds)} ·{' '}
-                  {new Date(item.recordedAt).toLocaleString()}
-                </Text>
-              </View>
-              <StatusBadge label="SAVED" tone="success" />
-            </View>
-          ))
+            );
+          })
         ) : (
           <Text style={styles.meta}>No recording saved for this room yet.</Text>
         )}
@@ -174,6 +224,14 @@ export default function RoomDetailsScreen() {
           />
         ) : null}
         <AppButton
+          label="Add additional video"
+          variant="outline"
+          onPress={recordAdditional}
+        />
+        {isOccupied ? (
+          <AppButton label="Log pet sighting" variant="outline" onPress={() => setPetOpen(true)} />
+        ) : null}
+        <AppButton
           label="Mark complete"
           variant="secondary"
           onPress={() => actions.complete.mutate()}
@@ -216,6 +274,44 @@ export default function RoomDetailsScreen() {
         {actions.skip.isError ? (
           <Text accessibilityRole="alert" style={styles.error}>
             {actions.skip.error.message}
+          </Text>
+        ) : null}
+      </ConfirmationModal>
+      <ConfirmationModal
+        visible={petOpen}
+        title="Log pet sighting"
+        message="Record evidence only. An administrator confirms whether it is a unique unauthorized pet and whether it is chargeable."
+        confirmLabel={petSaving ? 'Saving…' : 'Log pet'}
+        onCancel={() => setPetOpen(false)}
+        onConfirm={() => {
+          if (!petSaving && petSpecies.trim() && petLabel.trim()) void submitPetObservation();
+        }}
+      >
+        <TextInput
+          accessibilityLabel="Pet species"
+          value={petSpecies}
+          onChangeText={setPetSpecies}
+          placeholder="Species (e.g. Dog)"
+          style={styles.input}
+        />
+        <TextInput
+          accessibilityLabel="Temporary pet label"
+          value={petLabel}
+          onChangeText={setPetLabel}
+          placeholder="Temporary label (e.g. Brown dog)"
+          style={styles.input}
+        />
+        <TextInput
+          accessibilityLabel="Pet notes"
+          value={petNotes}
+          onChangeText={setPetNotes}
+          placeholder="Distinguishing characteristics, area seen, notes"
+          multiline
+          style={styles.input}
+        />
+        {petError ? (
+          <Text accessibilityRole="alert" style={styles.error}>
+            {petError}
           </Text>
         ) : null}
       </ConfirmationModal>

@@ -37,6 +37,7 @@ interface DemoState {
   saveMedia: (media: LocalMedia) => void;
   removeMedia: (id: string) => void;
   addSnapshot: (snapshot: RoomSnapshot) => void;
+  updateSnapshot: (id: string, update: Partial<RoomSnapshot>) => void;
   enqueueUpload: (item: UploadItem) => void;
   updateUpload: (id: string, update: Partial<UploadItem>) => void;
   removeUpload: (id: string) => void;
@@ -112,6 +113,12 @@ export const useDemoStore = create<DemoState>()(
             snapshot,
             ...(state.snapshots ?? []).filter((item) => item.id !== snapshot.id),
           ],
+        })),
+      updateSnapshot: (id, update) =>
+        set((state) => ({
+          snapshots: (state.snapshots ?? []).map((item) =>
+            item.id === id ? { ...item, ...update } : item,
+          ),
         })),
       enqueueUpload: (item) => set((state) => ({ uploads: [item, ...state.uploads] })),
       updateUpload: (id, update) =>

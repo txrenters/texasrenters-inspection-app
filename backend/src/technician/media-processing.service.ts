@@ -3,12 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional, type OnModuleInit } from '@nestjs/common';
 import {
   AiAnalysisStatus,
   AiProvider,
   FindingReviewStatus,
   InspectionStatus,
+  InspectionType,
   MediaProcessingStatus,
   TranscriptionStatus,
 } from '@prisma/client';
@@ -17,6 +18,7 @@ import { z } from 'zod';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
+import { ComparisonService } from '../admin/comparison.service';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 
 const PROMPT_VERSION = '2';
@@ -119,6 +121,7 @@ export class MediaProcessingService implements OnModuleInit {
     @Inject(InspectionMediaStorageService)
     private readonly storage: InspectionMediaStorageService,
     @Inject(AiProviderSettingsService) private readonly aiSettings: AiProviderSettingsService,
+    @Optional() @Inject(ComparisonService) private readonly comparison?: ComparisonService,
   ) {}
 
   /** Recover recordings that were uploaded before this pipeline existed or
@@ -717,7 +720,7 @@ export class MediaProcessingService implements OnModuleInit {
     const [inspection, unfinished] = await Promise.all([
       this.prisma.inspection.findUnique({
         where: { id: inspectionId },
-        select: { status: true },
+        select: { status: true, inspectionType: true },
       }),
       this.prisma.inspectionMedia.count({
         where: {
@@ -728,11 +731,29 @@ export class MediaProcessingService implements OnModuleInit {
         },
       }),
     ]);
-    if (inspection?.status === InspectionStatus.PROCESSING && unfinished === 0)
+    // Technician submission (TECHNICIAN_SUBMITTED) or a legacy PROCESSING state
+    // both mean "submitted, awaiting processing"; either advances to review once
+    // every recording has finished processing.
+    const advanceable: InspectionStatus[] = [
+      InspectionStatus.TECHNICIAN_SUBMITTED,
+      InspectionStatus.PROCESSING,
+    ];
+    if (inspection && advanceable.includes(inspection.status) && unfinished === 0) {
       await this.prisma.inspection.update({
         where: { id: inspectionId },
         data: { status: InspectionStatus.REVIEW_REQUIRED },
       });
+      // Now that move-out findings are ready, draft the move-in vs move-out
+      // comparison (spec §12). Best-effort: a failure never blocks review.
+      if (inspection.inspectionType === InspectionType.MOVE_OUT && this.comparison)
+        await this.comparison.generate(inspectionId).catch((error) => {
+          this.logger.warn(
+            `Comparison generation skipped for ${inspectionId}: ${
+              error instanceof Error ? error.message : 'unknown error'
+            }`,
+          );
+        });
+    }
   }
 
   private event(inspectionMediaId: string, eventType: string, payloadSummary: object) {

@@ -95,6 +95,15 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                 <code>{create.data.temporaryPassword}</code>
               </div>
             </div>
+            <div
+              className={`alert ${
+                create.data.emailDeliveryStatus === 'SENT' ? 'alert-success' : 'alert-warning'
+              }`}
+            >
+              {create.data.emailDeliveryStatus === 'SENT'
+                ? 'The mobile sign-in instructions were emailed to this technician.'
+                : 'Email delivery was unavailable. Share the temporary password through an approved private channel.'}
+            </div>
             <div className="form-actions">
               <button
                 className="button button-secondary"

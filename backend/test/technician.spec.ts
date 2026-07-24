@@ -354,7 +354,9 @@ describe('technician mobile data boundary', () => {
             propertywareBuilding: { addressLine1: '1 Main St' },
           },
           propertyArea: { name: 'Living Room' },
-          media: [{ id: 'media-1', providerMediaId: 'local-old-key' }],
+          media: [
+            { id: 'media-1', providerMediaId: 'local-old-key', recordingType: 'PRIMARY_AREA' },
+          ],
         }),
       },
       $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
@@ -390,7 +392,7 @@ describe('technician mobile data boundary', () => {
       'video/mp4',
     );
     expect(tx.inspectionMedia.deleteMany).toHaveBeenCalledWith({
-      where: { inspectionAreaId: 'area-1' },
+      where: { inspectionAreaId: 'area-1', recordingType: 'PRIMARY_AREA' },
     });
     expect(tx.inspectionArea.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -498,6 +500,125 @@ describe('technician mobile data boundary', () => {
       ),
     ).rejects.toMatchObject({ status: 415, code: 'ROOM_VIDEO_TYPE_UNSUPPORTED' });
     expect(storage.putFromFile).not.toHaveBeenCalled();
+  });
+
+  it('stores an additional labeled video without replacing the primary or completing the room', async () => {
+    const createdAt = new Date('2026-07-25T12:00:00.000Z');
+    const created = {
+      id: 'media-extra-1',
+      inspectionId: 'inspection-1',
+      inspectionAreaId: 'area-1',
+      durationSeconds: 20,
+      uploadStatus: 'UPLOADED',
+      processingStatus: 'PENDING',
+      recordingType: 'ADDITIONAL_ISSUE',
+      label: 'Water stain under sink',
+      createdAt,
+    };
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-1',
+          inspectionId: 'inspection-1',
+          propertyAreaId: 'parea-1',
+          inspection: {
+            organizationId: technician.organizationId,
+            propertyId: null,
+            propertywareBuilding: { addressLine1: '1 Main St' },
+          },
+          propertyArea: { name: 'Kitchen' },
+        }),
+        update: jest.fn(),
+      },
+      inspectionMedia: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue(created),
+      },
+    };
+    const storage = {
+      putFromFile: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      storage as never,
+      mediaProcessingDouble(),
+    );
+
+    await expect(
+      service.uploadAdditionalVideo(
+        technician,
+        'area-1',
+        {
+          idempotencyKey: 'extra-video-abc12345',
+          durationSeconds: 20,
+          label: 'Water stain under sink',
+          category: 'PLUMBING',
+        },
+        { path: 'C:/tmp/extra.mp4', mimetype: 'video/mp4', size: 100, originalname: 'e.mp4' },
+      ),
+    ).resolves.toMatchObject({
+      id: 'media-extra-1',
+      roomId: 'area-1',
+      recordingType: 'ADDITIONAL_ISSUE',
+      label: 'Water stain under sink',
+      status: 'COMPLETED',
+    });
+    expect(prisma.inspectionMedia.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          recordingType: 'ADDITIONAL_ISSUE',
+          label: 'Water stain under sink',
+          category: 'PLUMBING',
+        }),
+      }),
+    );
+    // The primary walkthrough invariant is untouched: no room completion.
+    expect(prisma.inspectionArea.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects an additional video whose related finding is not in the area', async () => {
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'area-1',
+          inspectionId: 'inspection-1',
+          propertyAreaId: 'parea-1',
+          inspection: {
+            organizationId: technician.organizationId,
+            propertyId: null,
+            propertywareBuilding: null,
+          },
+          propertyArea: { name: 'Kitchen' },
+        }),
+      },
+      inspectionMedia: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
+      inspectionFinding: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const storage = { putFromFile: jest.fn(), delete: jest.fn() };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      storage as never,
+      mediaProcessingDouble(),
+    );
+
+    await expect(
+      service.uploadAdditionalVideo(
+        technician,
+        'area-1',
+        {
+          idempotencyKey: 'extra-video-abc12345',
+          durationSeconds: 20,
+          label: 'Damage clip',
+          relatedFindingId: '00000000-0000-0000-0000-000000000000',
+        },
+        { path: 'C:/tmp/extra.mp4', mimetype: 'video/mp4', size: 100, originalname: 'e.mp4' },
+      ),
+    ).rejects.toMatchObject({ status: 422, code: 'FINDING_NOT_IN_AREA' });
+    expect(storage.putFromFile).not.toHaveBeenCalled();
+    expect(prisma.inspectionMedia.create).not.toHaveBeenCalled();
   });
 
   it('does not read plan bytes when the technician has no current property assignment', async () => {

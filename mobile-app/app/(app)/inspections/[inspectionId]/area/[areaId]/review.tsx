@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { AppScreen } from '../../../../../../src/components/AppScreen';
 import { formatDuration } from '../../../../../../src/components/FeatureCards';
 import { AppButton, Card, ConfirmationModal } from '../../../../../../src/components/ui';
+import type { AdditionalVideoCategory } from '../../../../../../src/domain/models';
 import {
   useInspection,
   useRoom,
@@ -24,6 +25,21 @@ import {
 } from '../../../../../../src/theme';
 import { nextInspectionRoom } from '../../../../../../src/utils/room-workflow';
 
+const ADDITIONAL_VIDEO_CATEGORIES: ReadonlyArray<{ value: AdditionalVideoCategory; label: string }> =
+  [
+    { value: 'ADDITIONAL_DAMAGE', label: 'Additional damage' },
+    { value: 'APPLIANCE_TEST', label: 'Appliance test' },
+    { value: 'PLUMBING', label: 'Plumbing' },
+    { value: 'ELECTRICAL', label: 'Electrical' },
+    { value: 'PEST', label: 'Pest' },
+    { value: 'PET_EVIDENCE', label: 'Pet evidence' },
+    { value: 'SAFETY', label: 'Safety' },
+    { value: 'EXTERIOR', label: 'Exterior' },
+    { value: 'FOLLOW_UP', label: 'Follow-up' },
+    { value: 'REINSPECTION', label: 'Re-inspection' },
+    { value: 'OTHER', label: 'Other' },
+  ];
+
 export default function RecordingReviewScreen() {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
@@ -39,7 +55,10 @@ export default function RecordingReviewScreen() {
   );
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const save = useSaveRecording();
+  const isAdditional = draft?.recordingType === 'ADDITIONAL_ISSUE';
   const [note, setNote] = useState(draft?.note ?? '');
+  const [label, setLabel] = useState(draft?.label ?? '');
+  const [category, setCategory] = useState<AdditionalVideoCategory | undefined>(draft?.category);
   const [discardOpen, setDiscardOpen] = useState(false);
   const playableUri = draft && !draft.uri.startsWith('mock://') ? draft.uri : null;
   const player = useVideoPlayer(playableUri, (videoPlayer) => {
@@ -61,12 +80,17 @@ export default function RecordingReviewScreen() {
       </AppScreen>
     );
   const nextRoom = nextInspectionRoom(rooms.data ?? [], areaId);
-  const saveForUpload = () =>
+  const trimmedLabel = label.trim();
+  const canSave = !isAdditional || trimmedLabel.length > 0;
+  const saveForUpload = () => {
+    if (!canSave) return;
     save.mutate(
       {
         input: {
           inspectionId,
           roomId: areaId,
+          recordingType: isAdditional ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
+          ...(isAdditional ? { label: trimmedLabel, category } : {}),
           propertyAddress: inspection.data?.property.address ?? 'Assigned property',
           roomName: room.data?.name ?? 'Room evidence',
           uri: draft.uri,
@@ -77,6 +101,15 @@ export default function RecordingReviewScreen() {
       },
       {
         onSuccess: () => {
+          // Additional clips never complete or advance the room — return to the
+          // room so the technician can keep recording the primary walkthrough.
+          if (isAdditional) {
+            router.replace({
+              pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
+              params: { inspectionId, areaId },
+            });
+            return;
+          }
           if (nextRoom) {
             router.replace({
               pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
@@ -91,15 +124,22 @@ export default function RecordingReviewScreen() {
         },
       },
     );
+  };
+  const bottomLabel = isAdditional
+    ? 'Save additional clip'
+    : nextRoom
+      ? `Save & continue to ${nextRoom.name}`
+      : 'Save & return to checklist';
   return (
     <AppScreen
-      title="Review recording"
+      title={isAdditional ? 'Review additional clip' : 'Review recording'}
       subtitle={`${room.data?.name ?? 'Room'} · Stored on this device`}
       bottomAction={
         <AppButton
-          label={nextRoom ? `Save & continue to ${nextRoom.name}` : 'Save & return to checklist'}
+          label={bottomLabel}
           onPress={saveForUpload}
           loading={save.isPending}
+          disabled={!canSave}
         />
       }
     >
@@ -130,6 +170,42 @@ export default function RecordingReviewScreen() {
         </View>
         <Meta label="Recorded" value={new Date(draft.recordedAt).toLocaleString()} />
       </Card>
+      {isAdditional ? (
+        <Card>
+          <Text style={styles.label}>CLIP LABEL</Text>
+          <TextInput
+            accessibilityLabel="Clip label"
+            value={label}
+            onChangeText={setLabel}
+            placeholder="e.g. Water stain under kitchen sink"
+            placeholderTextColor={colors.textSecondary}
+            maxLength={120}
+            style={styles.labelInput}
+          />
+          <Text style={styles.hint}>A short label is required so reviewers can find this clip.</Text>
+          <Text style={[styles.label, styles.categoryLabel]}>CATEGORY (OPTIONAL)</Text>
+          <View style={styles.categoryRow}>
+            {ADDITIONAL_VIDEO_CATEGORIES.map((option) => {
+              const selected = category === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  onPress={() => setCategory(selected ? undefined : option.value)}
+                  style={[styles.categoryChip, selected && styles.categoryChipSelected]}
+                >
+                  <Text
+                    style={[styles.categoryChipText, selected && styles.categoryChipTextSelected]}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Card>
+      ) : null}
       <Card>
         <Text style={styles.label}>TECHNICIAN NOTES</Text>
         <TextInput
@@ -215,8 +291,10 @@ const createStyles = (colors: AppColors) =>
     row: { flexDirection: 'row', gap: spacing.md },
     meta: { flex: 1, gap: spacing.xs },
     label: { ...typography.caption, color: colors.primary, fontWeight: '800' },
+    categoryLabel: { marginTop: spacing.md },
     value: { ...typography.body, color: colors.textPrimary },
     body: { ...typography.body, color: colors.textSecondary },
+    hint: { ...typography.caption, color: colors.textSecondary },
     input: {
       minHeight: 100,
       borderWidth: 1,
@@ -226,6 +304,25 @@ const createStyles = (colors: AppColors) =>
       color: colors.textPrimary,
       textAlignVertical: 'top',
     },
+    labelInput: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      padding: spacing.md,
+      color: colors.textPrimary,
+    },
+    categoryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+    categoryChip: {
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+      borderRadius: radius.round,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    categoryChipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+    categoryChipText: { ...typography.caption, color: colors.textSecondary },
+    categoryChipTextSelected: { color: colors.white, fontWeight: '700' },
     actions: { gap: spacing.sm },
     error: { ...typography.caption, color: colors.danger },
   });

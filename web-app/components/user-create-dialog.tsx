@@ -81,6 +81,15 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 <code>{create.data.temporaryPassword}</code>
               </div>
             </div>
+            <div
+              className={`alert ${
+                create.data.emailDeliveryStatus === 'SENT' ? 'alert-success' : 'alert-warning'
+              }`}
+            >
+              {create.data.emailDeliveryStatus === 'SENT'
+                ? 'The sign-in instructions were emailed to this user.'
+                : 'Email delivery was unavailable. Share the temporary password through an approved private channel.'}
+            </div>
             <div className="form-actions">
               <button
                 className="button button-secondary"

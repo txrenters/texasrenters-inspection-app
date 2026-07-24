@@ -1,4 +1,5 @@
 import type {
+  AddAreaInput,
   AuthRepository,
   FindingRepository,
   FloorPlanRepository,
@@ -192,6 +193,37 @@ export class MockInspectionRepository implements InspectionRepository {
       ),
     );
   }
+  async addArea(inspectionId: string, input: AddAreaInput) {
+    await mockDelay();
+    ensureMockAvailable();
+    const siblings = rooms.filter((room) => room.inspectionId === inspectionId);
+    const id = `mock-area-${siblings.length + 1}-${input.name.trim().replace(/\s+/g, '-').toLowerCase()}`;
+    const room: InspectionRoom = {
+      id,
+      inspectionId,
+      propertyAreaId: id,
+      name: input.name.trim(),
+      floorName: input.floorName?.trim() || 'Added areas',
+      order: siblings.length + 1,
+      isRequired: true,
+      inspectionType: siblings[0]?.inspectionType ?? 'MOVE_OUT',
+      baseline: {
+        summary: 'Technician-added area.',
+        condition: 'NOT_AVAILABLE',
+        existingDefects: [],
+        evidenceCount: 0,
+      },
+      completionStatus: 'NOT_STARTED',
+      uploadStatus: 'PENDING',
+      processingStatus: 'NOT_STARTED',
+      environment: input.environment,
+      category: input.category ?? null,
+      source: 'TECHNICIAN',
+      areaStatus: 'DRAFT',
+    };
+    rooms.push(room);
+    return room;
+  }
   async updateRoomNote(roomId: string, note: string) {
     useDemoStore.getState().updateRoom(roomId, { note });
     return this.room(roomId);
@@ -267,6 +299,10 @@ export class MockUploadRepository implements UploadRepository {
       mediaId: media.id,
       inspectionId: media.inspectionId,
       roomId: media.roomId,
+      recordingType: media.recordingType ?? ('PRIMARY_AREA' as const),
+      label: media.label,
+      category: media.category,
+      relatedFindingId: media.relatedFindingId,
       propertyAddress: media.propertyAddress ?? property.address,
       roomName: media.roomName ?? room.name,
       durationSeconds: media.durationSeconds,

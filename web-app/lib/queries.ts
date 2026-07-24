@@ -4,10 +4,18 @@ import type {
   AdminAssignmentListItem,
   AdminAuditEvent,
   AdminDashboard,
+  AdminCharge,
+  AdminChargeReport,
+  AdminChargeRule,
   AdminInspection,
+  AdminInspectionArea,
+  AdminInspectionComparison,
   AdminInspectionFinding,
   AdminInspectionMedia,
+  AdminInspectionPets,
+  AdminInspectionPhoto,
   AdminReportShare,
+  MergeInspectionAreasResult,
   AdminRole,
   AdminRoleSummary,
   AdminUser,
@@ -28,6 +36,7 @@ import type {
   ProviderReadiness,
   AiSettings,
   AiProviderName,
+  MailDeliveryResult,
 } from '@texasrenters/shared';
 import {
   keepPreviousData,
@@ -55,6 +64,13 @@ export const keys = {
   inspectionAudit: (id: string, page: number) =>
     ['admin', 'inspection', id, 'audit', page] as const,
   inspectionMedia: (id: string) => ['admin', 'inspection', id, 'media'] as const,
+  inspectionPhotos: (id: string) => ['admin', 'inspection', id, 'photos'] as const,
+  inspectionAreas: (id: string) => ['admin', 'inspection', id, 'areas'] as const,
+  inspectionComparison: (id: string) => ['admin', 'inspection', id, 'comparison'] as const,
+  inspectionPets: (id: string) => ['admin', 'inspection', id, 'pets'] as const,
+  inspectionCharges: (id: string) => ['admin', 'inspection', id, 'charges'] as const,
+  chargeReport: (id: string) => ['admin', 'inspection', id, 'charge-report'] as const,
+  chargeRules: ['admin', 'charge-rules'] as const,
   reportShares: (id: string) => ['admin', 'inspection', id, 'report-shares'] as const,
   inspectionFindings: (id: string, page: number, reviewStatus: string, kind = 'ALL') =>
     ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
@@ -186,6 +202,13 @@ export const useInspectionMedia = (id: string) =>
       api<AdminInspectionMedia[]>(`/api/v1/admin/inspections/${id}/media`, { signal }),
     enabled: Boolean(id),
   });
+export const useInspectionPhotos = (id: string) =>
+  useQuery({
+    queryKey: keys.inspectionPhotos(id),
+    queryFn: ({ signal }) =>
+      api<AdminInspectionPhoto[]>(`/api/v1/admin/inspections/${id}/photos`, { signal }),
+    enabled: Boolean(id),
+  });
 export const useInspectionFindings = (
   id: string,
   page: number,
@@ -214,6 +237,47 @@ export const useReportShares = (id: string) =>
     queryFn: ({ signal }) =>
       api<AdminReportShare[]>(`/api/v1/admin/inspections/${id}/report-shares`, { signal }),
     enabled: Boolean(id),
+  });
+export const useInspectionAreas = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.inspectionAreas(id),
+    queryFn: ({ signal }) =>
+      api<AdminInspectionArea[]>(`/api/v1/admin/inspections/${id}/areas`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+export const useInspectionComparison = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.inspectionComparison(id),
+    queryFn: ({ signal }) =>
+      api<AdminInspectionComparison | null>(`/api/v1/admin/inspections/${id}/comparison`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+export const useInspectionPets = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.inspectionPets(id),
+    queryFn: ({ signal }) =>
+      api<AdminInspectionPets>(`/api/v1/admin/inspections/${id}/pets`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+export const useInspectionCharges = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.inspectionCharges(id),
+    queryFn: ({ signal }) =>
+      api<AdminCharge[]>(`/api/v1/admin/inspections/${id}/charges`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+export const useChargeReport = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.chargeReport(id),
+    queryFn: ({ signal }) =>
+      api<AdminChargeReport>(`/api/v1/admin/inspections/${id}/charge-report`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+export const useChargeRules = (enabled = true) =>
+  useQuery({
+    queryKey: keys.chargeRules,
+    queryFn: ({ signal }) => api<AdminChargeRule[]>('/api/v1/admin/charge-rules', { signal }),
+    enabled,
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({
@@ -339,6 +403,15 @@ export const useProviders = () =>
       ),
   });
 
+export const useTestMail = () =>
+  useMutation({
+    mutationFn: (recipientEmail: string) =>
+      api<MailDeliveryResult>('/api/v1/admin/integrations/mail/test', {
+        method: 'POST',
+        body: JSON.stringify({ recipientEmail }),
+      }),
+  });
+
 export const useAiSettings = () =>
   useQuery({
     queryKey: keys.aiSettings,
@@ -462,6 +535,19 @@ export function useAdminMutations() {
     void client.invalidateQueries({ queryKey: keys.dashboard });
     if (id) void client.invalidateQueries({ queryKey: keys.inspection(id) });
   };
+  // A workflow action (finalize / TBD / follow-up / merge) also changes the
+  // audit trail and area list for the open inspection.
+  const refreshWorkflow = (id: string) => {
+    refreshInspection(id);
+    void client.invalidateQueries({ queryKey: ['admin', 'inspection', id, 'audit'] });
+    void client.invalidateQueries({ queryKey: keys.inspectionAreas(id) });
+  };
+  // A pet/charge action changes the pet review, charge list, and the report.
+  const refreshCharges = (id: string) => {
+    void client.invalidateQueries({ queryKey: keys.inspectionPets(id) });
+    void client.invalidateQueries({ queryKey: keys.inspectionCharges(id) });
+    void client.invalidateQueries({ queryKey: keys.chargeReport(id) });
+  };
   const refreshFloorPlan = (propertyId: string) => {
     void client.invalidateQueries({ queryKey: keys.floorPlans(propertyId) });
     void client.invalidateQueries({ queryKey: keys.propertyAreas(propertyId) });
@@ -554,6 +640,21 @@ export function useAdminMutations() {
         }),
       onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
     }),
+    rejectPropertyArea: useMutation({
+      mutationFn: (variables: { propertyId: string; areaId: string; reason?: string }) =>
+        api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}/reject`, {
+          method: 'POST',
+          body: JSON.stringify({ reason: variables.reason }),
+        }),
+      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+    }),
+    archivePropertyArea: useMutation({
+      mutationFn: (variables: { propertyId: string; areaId: string }) =>
+        api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}/archive`, {
+          method: 'POST',
+        }),
+      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+    }),
     createTechnician: useMutation({
       mutationFn: (input: { email: string; displayName: string }) =>
         api<CreatedTechnicianAccount>('/api/v1/admin/technicians', {
@@ -590,6 +691,187 @@ export function useAdminMutations() {
           body: JSON.stringify(input),
         }),
       onSuccess: (_data, variables) => refreshInspection(variables.id),
+    }),
+    finalizeInspection: useMutation({
+      mutationFn: ({ id, overrideReason }: { id: string; overrideReason?: string }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/finalize`, {
+          method: 'POST',
+          body: JSON.stringify(overrideReason ? { overrideReason } : {}),
+        }),
+      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+    }),
+    markInspectionTbd: useMutation({
+      mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/mark-tbd`, {
+          method: 'POST',
+          body: JSON.stringify(reason ? { reason } : {}),
+        }),
+      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+    }),
+    requireInspectionFollowUp: useMutation({
+      mutationFn: ({
+        id,
+        ...input
+      }: {
+        id: string;
+        dueAt?: string;
+        tasks?: string;
+        reason?: string;
+      }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/require-follow-up`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+    }),
+    markInspectionUnderReview: useMutation({
+      mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/under-review`, {
+          method: 'POST',
+          body: JSON.stringify(reason ? { reason } : {}),
+        }),
+      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+    }),
+    mergeInspectionAreas: useMutation({
+      mutationFn: ({
+        id,
+        ...input
+      }: {
+        id: string;
+        sourceAreaId: string;
+        targetAreaId: string;
+        reason?: string;
+      }) =>
+        api<MergeInspectionAreasResult>(`/api/v1/admin/inspections/${id}/merge-areas`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => {
+        refreshWorkflow(variables.id);
+        void client.invalidateQueries({ queryKey: keys.inspectionMedia(variables.id) });
+        void client.invalidateQueries({ queryKey: keys.inspectionPhotos(variables.id) });
+        void client.invalidateQueries({
+          queryKey: ['admin', 'inspection', variables.id, 'findings'],
+        });
+      },
+    }),
+    generateComparison: useMutation({
+      mutationFn: ({ id }: { id: string }) =>
+        api<AdminInspectionComparison>(`/api/v1/admin/inspections/${id}/comparison/generate`, {
+          method: 'POST',
+        }),
+      onSuccess: (_data, variables) =>
+        client.invalidateQueries({ queryKey: keys.inspectionComparison(variables.id) }),
+    }),
+    reviewComparison: useMutation({
+      mutationFn: ({
+        comparisonId,
+        decision,
+        note,
+      }: {
+        inspectionId: string;
+        comparisonId: string;
+        decision: 'APPROVED' | 'REJECTED';
+        note?: string;
+      }) =>
+        api<AdminInspectionComparison>(`/api/v1/admin/comparisons/${comparisonId}/review`, {
+          method: 'POST',
+          body: JSON.stringify({ decision, note }),
+        }),
+      onSuccess: (_data, variables) =>
+        client.invalidateQueries({ queryKey: keys.inspectionComparison(variables.inspectionId) }),
+    }),
+    overrideAreaComparison: useMutation({
+      mutationFn: ({
+        areaComparisonId,
+        classification,
+        reason,
+      }: {
+        inspectionId: string;
+        areaComparisonId: string;
+        classification: string;
+        reason?: string;
+      }) =>
+        api<AdminInspectionComparison>(
+          `/api/v1/admin/area-comparisons/${areaComparisonId}/override`,
+          { method: 'POST', body: JSON.stringify({ classification, reason }) },
+        ),
+      onSuccess: (_data, variables) =>
+        client.invalidateQueries({ queryKey: keys.inspectionComparison(variables.inspectionId) }),
+    }),
+    upsertChargeRule: useMutation({
+      mutationFn: (input: { amount: number; code?: string; isActive?: boolean }) =>
+        api<AdminChargeRule>('/api/v1/admin/charge-rules', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: () => client.invalidateQueries({ queryKey: keys.chargeRules }),
+    }),
+    generatePetCandidates: useMutation({
+      mutationFn: ({ id }: { id: string }) =>
+        api<AdminInspectionPets>(`/api/v1/admin/inspections/${id}/pets/generate`, {
+          method: 'POST',
+        }),
+      onSuccess: (_data, variables) => refreshCharges(variables.id),
+    }),
+    reviewPetCandidate: useMutation({
+      mutationFn: ({
+        candidateId,
+        ...input
+      }: {
+        inspectionId: string;
+        candidateId: string;
+        reviewStatus: string;
+        authorizationStatus?: string;
+        note?: string;
+      }) =>
+        api<AdminInspectionPets>(`/api/v1/admin/pet-candidates/${candidateId}/review`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => refreshCharges(variables.inspectionId),
+    }),
+    generateCharges: useMutation({
+      mutationFn: ({ id }: { id: string }) =>
+        api<AdminCharge[]>(`/api/v1/admin/inspections/${id}/charges/generate`, { method: 'POST' }),
+      onSuccess: (_data, variables) => refreshCharges(variables.id),
+    }),
+    createCharge: useMutation({
+      mutationFn: ({
+        id,
+        ...input
+      }: {
+        id: string;
+        description: string;
+        unitAmount: number;
+        chargeCode?: string;
+        propertyAreaId?: string;
+        findingId?: string;
+        quantity?: number;
+        reason?: string;
+      }) =>
+        api<AdminCharge>(`/api/v1/admin/inspections/${id}/charges`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => refreshCharges(variables.id),
+    }),
+    reviewCharge: useMutation({
+      mutationFn: ({
+        chargeId,
+        ...input
+      }: {
+        inspectionId: string;
+        chargeId: string;
+        decision: 'APPROVE' | 'REJECT' | 'ADJUST' | 'WAIVE';
+        approvedAmount?: number;
+        reason?: string;
+      }) =>
+        api<AdminCharge>(`/api/v1/admin/charges/${chargeId}/review`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => refreshCharges(variables.inspectionId),
     }),
     createReportShare: useMutation({
       mutationFn: ({

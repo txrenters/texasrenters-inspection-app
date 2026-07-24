@@ -1,4 +1,5 @@
 import type {
+  AreaEnvironment,
   DashboardSummary,
   DemoRole,
   DemoUser,
@@ -16,6 +17,14 @@ import type {
   UnitSummary,
   UploadItem,
 } from '../domain/models';
+
+export interface AddAreaInput {
+  name: string;
+  environment: AreaEnvironment;
+  category?: string;
+  floorName?: string;
+  notes?: string;
+}
 
 export interface AuthRepository {
   listDemoUsers(): Promise<DemoUser[]>;
@@ -49,6 +58,7 @@ export interface InspectionRepository {
   complete(id: string): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
+  addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;

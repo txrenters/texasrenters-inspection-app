@@ -11,6 +11,7 @@ import {
   storeApiRecord,
 } from '../../storage/offline-record-cache';
 import type {
+  AddAreaInput,
   AuthRepository,
   CatalogRepository,
   FindingRepository,
@@ -97,6 +98,11 @@ const roomSchema = z.object({
   ]),
   note: z.string().optional(),
   skipReason: z.string().optional(),
+  // Defaults keep older cached rooms (pre-Phase-2) parseable.
+  environment: z.enum(['INDOOR', 'OUTDOOR', 'SEMI_OUTDOOR']).default('INDOOR'),
+  category: z.string().nullable().optional(),
+  source: z.string().default('AI_FLOOR_PLAN'),
+  areaStatus: z.enum(['DRAFT', 'APPROVED', 'REJECTED']).default('APPROVED'),
 });
 const findingSchema = z.object({
   id: z.string(),
@@ -427,6 +433,17 @@ export class ApiInspectionRepository implements InspectionRepository {
       ),
     );
   }
+  async addArea(inspectionId: string, input: AddAreaInput) {
+    return withLocalRoomState(
+      roomSchema.parse(
+        await writeJson(
+          `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/areas`,
+          'POST',
+          input,
+        ),
+      ),
+    );
+  }
   async updateRoomNote(roomId: string, note: string) {
     return roomSchema.parse(
       await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/note`, 'PATCH', {
@@ -483,6 +500,9 @@ export class ApiMediaRepository implements MediaRepository {
       inspectionId: string;
       inspectionAreaId: string;
       durationSeconds: number;
+      recordingType?: 'PRIMARY_AREA' | 'ADDITIONAL_ISSUE';
+      label?: string | null;
+      category?: string | null;
       createdAt: string;
     }>;
     try {
@@ -493,6 +513,9 @@ export class ApiMediaRepository implements MediaRepository {
             inspectionId: z.string(),
             inspectionAreaId: z.string(),
             durationSeconds: z.number(),
+            recordingType: z.enum(['PRIMARY_AREA', 'ADDITIONAL_ISSUE']).optional(),
+            label: z.string().nullish(),
+            category: z.string().nullish(),
             createdAt: z.string(),
           }),
         )
@@ -505,6 +528,9 @@ export class ApiMediaRepository implements MediaRepository {
       id: record.id,
       inspectionId: record.inspectionId,
       roomId: record.inspectionAreaId,
+      recordingType: record.recordingType ?? 'PRIMARY_AREA',
+      label: record.label ?? undefined,
+      category: (record.category ?? undefined) as LocalMedia['category'],
       uri: '',
       durationSeconds: record.durationSeconds,
       estimatedSizeMb: 0,
@@ -559,6 +585,10 @@ export class ApiUploadRepository implements UploadRepository {
       mediaId: media.id,
       inspectionId: media.inspectionId,
       roomId: media.roomId,
+      recordingType: media.recordingType ?? 'PRIMARY_AREA',
+      label: media.label,
+      category: media.category,
+      relatedFindingId: media.relatedFindingId,
       propertyAddress: media.propertyAddress ?? 'Assigned property',
       roomName: media.roomName ?? 'Room evidence',
       durationSeconds: media.durationSeconds,
@@ -649,23 +679,35 @@ export class ApiUploadRepository implements UploadRepository {
       if (!baseUrl)
         throw new Error('The TexasRenters API URL is not configured for this app build.');
       store.updateUpload(pending.id, { status: 'UPLOADING', progress: 0, lastError: undefined });
+      // Additional labeled clips post to a separate endpoint that keeps the
+      // primary walkthrough intact and carries the label/category metadata.
+      const isAdditional = pending.recordingType === 'ADDITIONAL_ISSUE';
+      const endpoint = isAdditional
+        ? `/api/v1/technician/rooms/${encodeURIComponent(pending.roomId)}/videos`
+        : `/api/v1/technician/rooms/${encodeURIComponent(pending.roomId)}/media`;
+      const parameters: Record<string, string> = {
+        // The media id is stable across retries, so the backend can
+        // deduplicate re-sent recordings.
+        idempotencyKey: media.id,
+        durationSeconds: String(Math.max(1, Math.round(media.durationSeconds))),
+      };
+      if (isAdditional) {
+        parameters.label = (pending.label ?? media.label ?? 'Additional clip').slice(0, 120);
+        if (pending.category ?? media.category)
+          parameters.category = (pending.category ?? media.category) as string;
+        if (pending.relatedFindingId ?? media.relatedFindingId)
+          parameters.relatedFindingId = (pending.relatedFindingId ??
+            media.relatedFindingId) as string;
+      }
       const task = LegacyFileSystem.createUploadTask(
-        resolveApiUrl(
-          baseUrl,
-          `/api/v1/technician/rooms/${encodeURIComponent(pending.roomId)}/media`,
-        ),
+        resolveApiUrl(baseUrl, endpoint),
         media.uri,
         {
           httpMethod: 'POST',
           uploadType: LegacyFileSystem.FileSystemUploadType.MULTIPART,
           fieldName: 'file',
           mimeType: 'video/mp4',
-          parameters: {
-            // The media id is stable across retries, so the backend can
-            // deduplicate re-sent recordings.
-            idempotencyKey: media.id,
-            durationSeconds: String(Math.max(1, Math.round(media.durationSeconds))),
-          },
+          parameters,
           headers: { authorization: `Bearer ${data.session.access_token}` },
         },
         (progress) => {

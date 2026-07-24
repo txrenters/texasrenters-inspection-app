@@ -47,6 +47,23 @@ export default function PropertyDetailPage() {
             <strong>{item.portfolio.name}</strong>
           </div>
           <div className="detail-item">
+            <span>Total area</span>
+            <strong>{item.totalArea?.label ?? 'Not provided'}</strong>
+            <small>
+              {item.totalArea?.source === 'PROPERTYWARE_BUILDING'
+                ? 'From Propertyware'
+                : item.totalArea?.source === 'MANUAL'
+                  ? 'Entered manually'
+                  : item.totalArea?.derived
+                    ? 'Derived from units'
+                    : 'No reliable value'}
+            </small>
+          </div>
+          <div className="detail-item">
+            <span>Lease summary</span>
+            <strong>{item.leaseSummary?.summary ?? 'No relevant lease'}</strong>
+          </div>
+          <div className="detail-item">
             <span>Source status</span>
             <strong>{item.sourceStatus ?? 'Not provided'}</strong>
           </div>
@@ -64,16 +81,19 @@ export default function PropertyDetailPage() {
         <div className="panel-header">
           <h2>Active units</h2>
         </div>
-        <DataTable headers={['Unit', 'Bedrooms', 'Bathrooms', 'Status', 'Last synchronized']}>
+        <DataTable
+          headers={['Unit', 'Bedrooms', 'Bathrooms', 'Lease status', 'Scheduled move-out', 'Status']}
+        >
           {item.units?.map((unit) => (
             <tr key={unit.id}>
               <td>{unit.name}</td>
               <td>{unit.bedrooms ?? 'Not provided'}</td>
               <td>{unit.bathrooms ?? 'Not provided'}</td>
+              <td>{unit.leaseStatus ?? 'No relevant lease'}</td>
+              <td>{unit.scheduledMoveOutDate ? formatDate(unit.scheduledMoveOutDate) : '—'}</td>
               <td>
                 <Badge value={unit.isActive ? 'ACTIVE' : 'INACTIVE'} />
               </td>
-              <td>{formatDate(unit.lastSyncedAt)}</td>
             </tr>
           ))}
         </DataTable>

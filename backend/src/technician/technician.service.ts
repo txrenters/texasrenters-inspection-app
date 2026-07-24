@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
 import { Inject, Injectable } from '@nestjs/common';
@@ -8,6 +9,8 @@ import {
   InspectionType,
   MediaProcessingStatus,
   MediaUploadStatus,
+  PropertyAreaStatus,
+  VideoRecordingType,
 } from '@prisma/client';
 import type { FindingReviewStatus, Prisma } from '@prisma/client';
 
@@ -22,9 +25,12 @@ import {
   ROOM_SUMMARY_WHERE,
 } from './media-processing.service';
 import type {
+  TechnicianAdditionalVideoDto,
+  TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
   TechnicianMediaUploadDto,
+  TechnicianPhotoUploadDto,
 } from './technician.dto';
 
 export interface UploadedRoomVideo {
@@ -41,6 +47,38 @@ const allowedVideoMimeTypes = new Set([
   'video/3gpp',
   'video/x-matroska',
 ]);
+
+const allowedImageMimeTypes = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
+
+function imageExtension(mimeType: string) {
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'image/webp') return '.webp';
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') return '.heic';
+  return '.jpg';
+}
+
+const photoSelect = {
+  id: true,
+  inspectionAreaId: true,
+  findingId: true,
+  captureType: true,
+  sequenceNumber: true,
+  label: true,
+  notes: true,
+  mimeType: true,
+  width: true,
+  height: true,
+  capturedAt: true,
+  capturedBy: { select: { displayName: true } },
+} satisfies Prisma.InspectionPhotoSelect;
+
+type TechnicianPhotoRecord = Prisma.InspectionPhotoGetPayload<{ select: typeof photoSelect }>;
 
 // Propertyware unit names vary ("A", "304", "Unit B"); label consistently.
 function formatUnitLabel(name: string) {
@@ -64,6 +102,10 @@ const technicianRoomSelect = {
       name: true,
       inspectionOrder: true,
       isRequired: true,
+      environment: true,
+      category: true,
+      source: true,
+      status: true,
       floor: { select: { name: true } },
       baselineConditions: {
         orderBy: { baselineInspection: { inspectedAt: 'desc' as const } },
@@ -350,9 +392,12 @@ export class TechnicianService {
         'REQUIRED_ROOMS_INCOMPLETE',
         'Complete or provide an authorized skip reason for every required room.',
       );
+    // Technician submission is NOT completion (spec §11): only a human
+    // administrator finalizes. Record the submission and let the AI pipeline
+    // advance it to REVIEW_REQUIRED once processing finishes.
     const updated = await this.prisma.inspection.update({
       where: { id },
-      data: { status: InspectionStatus.PROCESSING, completedAt: new Date() },
+      data: { status: InspectionStatus.TECHNICIAN_SUBMITTED, submittedAt: new Date() },
       select: technicianInspectionSummarySelect,
     });
     // If every recording finished processing before submission, the
@@ -448,6 +493,120 @@ export class TechnicianService {
     return rooms.map((room) => this.mapRoom(room));
   }
 
+  /**
+   * Technician-created inspection area (missed room, mislabeled room, or an
+   * outdoor/exterior target not on the floor plan). It is created as a DRAFT
+   * PropertyArea with source TECHNICIAN — evidence can be captured immediately,
+   * but an administrator must still approve it. The technician can never
+   * self-approve.
+   */
+  async createArea(user: AuthenticatedUser, inspectionId: string, input: TechnicianCreateAreaDto) {
+    const inspection = await this.assignedInspection(user, inspectionId);
+    const building = inspection.propertywareBuilding;
+    if (!building)
+      throw new ApplicationError(
+        422,
+        'INSPECTION_HAS_NO_PROPERTY',
+        'This inspection is not linked to a property, so an area cannot be added.',
+      );
+    const buildingId = building.id;
+    const unitId = inspection.propertywareUnit?.id ?? null;
+    const name = input.name.trim();
+    const floorName = input.floorName?.trim() || 'Added areas';
+
+    // Bridge the Propertyware building to an internal Property row (shared id).
+    await this.prisma.property.upsert({
+      where: { id: buildingId },
+      update: {},
+      create: {
+        id: buildingId,
+        organizationId: user.organizationId,
+        name: building.name,
+        addressLine1: building.addressLine1 || 'Address not provided',
+        city: building.city || 'Not provided',
+        state: building.state || 'TX',
+        postalCode: building.postalCode || 'Not provided',
+      },
+    });
+
+    const duplicate = await this.prisma.propertyArea.findFirst({
+      where: {
+        propertyId: buildingId,
+        unitId,
+        name: { equals: name, mode: 'insensitive' },
+        floor: { name: { equals: floorName, mode: 'insensitive' } },
+      },
+      select: { id: true },
+    });
+    if (duplicate)
+      throw new ApplicationError(
+        409,
+        'DUPLICATE_AREA',
+        'An area with this name already exists on that floor.',
+      );
+
+    const highest = await this.prisma.propertyArea.aggregate({
+      where: { propertyId: buildingId, unitId },
+      _max: { inspectionOrder: true },
+    });
+    const nextOrder = (highest._max.inspectionOrder ?? 0) + 1;
+
+    const floor =
+      (await this.prisma.propertyFloor.findFirst({
+        where: { propertyId: buildingId, unitId, name: { equals: floorName, mode: 'insensitive' } },
+        select: { id: true },
+      })) ??
+      (await this.prisma.propertyFloor.create({
+        data: { propertyId: buildingId, unitId, name: floorName, sortOrder: nextOrder },
+        select: { id: true },
+      }));
+
+    const roomId = await this.prisma.$transaction(async (tx) => {
+      const area = await tx.propertyArea.create({
+        data: {
+          propertyId: buildingId,
+          unitId,
+          floorId: floor.id,
+          name,
+          inspectionOrder: nextOrder,
+          isRequired: true,
+          source: 'TECHNICIAN',
+          status: PropertyAreaStatus.DRAFT,
+          environment: input.environment,
+          category: input.category ?? null,
+          notes: input.notes?.trim() || null,
+          createdById: user.id,
+        },
+        select: { id: true },
+      });
+      const inspectionArea = await tx.inspectionArea.create({
+        data: {
+          inspectionId,
+          propertyAreaId: area.id,
+          completionStatus: InspectionAreaCompletionStatus.PENDING,
+        },
+        select: { id: true },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'TECHNICIAN_AREA_ADDED',
+          entityType: 'PropertyArea',
+          entityId: area.id,
+          metadata: { inspectionId, environment: input.environment, category: input.category ?? null },
+        },
+      });
+      return inspectionArea.id;
+    });
+
+    const room = await this.prisma.inspectionArea.findUniqueOrThrow({
+      where: { id: roomId },
+      select: technicianRoomSelect,
+    });
+    return this.mapRoom(room);
+  }
+
   async room(user: AuthenticatedUser, id: string) {
     const room = await this.assignedRoom(user, id);
     return this.mapRoom(room);
@@ -501,13 +660,17 @@ export class TechnicianService {
     await this.assignedRoom(user, roomId);
     return this.prisma.inspectionMedia.findMany({
       where: { inspectionAreaId: roomId, technicianId: user.id },
-      orderBy: { createdAt: 'desc' },
+      // Primary walkthrough first, then additional labeled clips.
+      orderBy: [{ recordingType: 'asc' }, { createdAt: 'desc' }],
       take: 100,
       select: {
         id: true,
         inspectionId: true,
         inspectionAreaId: true,
         durationSeconds: true,
+        recordingType: true,
+        label: true,
+        category: true,
         createdAt: true,
       },
     });
@@ -550,7 +713,7 @@ export class TechnicianService {
             },
           },
           propertyArea: { select: { name: true } },
-          media: { select: { id: true, providerMediaId: true } },
+          media: { select: { id: true, providerMediaId: true, recordingType: true } },
         },
       });
       if (!area)
@@ -574,13 +737,18 @@ export class TechnicianService {
         );
 
       await this.mediaStorage.putFromFile(providerMediaId, file.path, file.mimetype);
-      const replaced = area.media.map((item) => item.providerMediaId);
+      // Only the previous PRIMARY video is replaced; additional videos are kept.
+      const replaced = area.media
+        .filter((item) => item.recordingType === VideoRecordingType.PRIMARY_AREA)
+        .map((item) => item.providerMediaId);
       let record;
       try {
         record = await this.prisma.$transaction(async (tx) => {
-          // Exactly one video per room: registering a new recording replaces
-          // any earlier one for this area.
-          await tx.inspectionMedia.deleteMany({ where: { inspectionAreaId: area.id } });
+          // Exactly one PRIMARY video per room: a new walkthrough replaces the
+          // earlier primary one, but never the additional labeled videos.
+          await tx.inspectionMedia.deleteMany({
+            where: { inspectionAreaId: area.id, recordingType: VideoRecordingType.PRIMARY_AREA },
+          });
           const created = await tx.inspectionMedia.create({
             data: {
               organizationId: area.inspection.organizationId,
@@ -592,6 +760,8 @@ export class TechnicianService {
               providerMediaId,
               mimeType: file.mimetype,
               durationSeconds: dto.durationSeconds,
+              recordingType: VideoRecordingType.PRIMARY_AREA,
+              captureGuidelineVersion: dto.captureGuidelineVersion ?? null,
               uploadStatus: MediaUploadStatus.UPLOADED,
               processingStatus: MediaProcessingStatus.PENDING,
             },
@@ -620,6 +790,307 @@ export class TechnicianService {
     }
   }
 
+  /**
+   * An additional labeled video for an area (extra damage, appliance test, pest
+   * or pet evidence, etc.). It never replaces the primary walkthrough and does
+   * not complete the area, but it is transcribed/analyzed independently and is
+   * part of the inspection's evidence. Idempotent by the client's key.
+   */
+  async uploadAdditionalVideo(
+    user: AuthenticatedUser,
+    roomId: string,
+    dto: TechnicianAdditionalVideoDto,
+    file?: UploadedRoomVideo,
+  ) {
+    try {
+      if (!file)
+        throw new ApplicationError(400, 'ROOM_VIDEO_FILE_REQUIRED', 'A video file is required.');
+      if (!allowedVideoMimeTypes.has(file.mimetype))
+        throw new ApplicationError(
+          415,
+          'ROOM_VIDEO_TYPE_UNSUPPORTED',
+          'Only room-video recordings (mp4, mov, webm) can be uploaded.',
+        );
+      const area = await this.prisma.inspectionArea.findFirst({
+        where: {
+          id: roomId,
+          inspection: {
+            organizationId: user.organizationId,
+            status: visibleStatuses,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+        select: {
+          id: true,
+          inspectionId: true,
+          propertyAreaId: true,
+          inspection: {
+            select: {
+              organizationId: true,
+              propertyId: true,
+              propertywareBuilding: { select: { addressLine1: true } },
+            },
+          },
+          propertyArea: { select: { name: true } },
+        },
+      });
+      if (!area)
+        throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
+
+      const providerMediaId = `local-${dto.idempotencyKey}`;
+      const existing = await this.prisma.inspectionMedia.findUnique({
+        where: { providerMediaId },
+        select: { id: true },
+      });
+      if (existing) {
+        const stored = await this.prisma.inspectionMedia.findUniqueOrThrow({
+          where: { id: existing.id },
+        });
+        return this.mapUploadedMedia(stored, area);
+      }
+
+      if (dto.relatedFindingId) {
+        const finding = await this.prisma.inspectionFinding.findFirst({
+          where: {
+            id: dto.relatedFindingId,
+            inspectionId: area.inspectionId,
+            propertyAreaId: area.propertyAreaId,
+          },
+          select: { id: true },
+        });
+        if (!finding)
+          throw new ApplicationError(
+            422,
+            'FINDING_NOT_IN_AREA',
+            'The related finding does not belong to this area.',
+          );
+      }
+
+      await this.mediaStorage.putFromFile(providerMediaId, file.path, file.mimetype);
+      let record;
+      try {
+        record = await this.prisma.inspectionMedia.create({
+          data: {
+            organizationId: area.inspection.organizationId,
+            propertyId: area.inspection.propertyId,
+            inspectionId: area.inspectionId,
+            inspectionAreaId: area.id,
+            technicianId: user.id,
+            provider: 'local',
+            providerMediaId,
+            mimeType: file.mimetype,
+            durationSeconds: dto.durationSeconds,
+            recordingType: VideoRecordingType.ADDITIONAL_ISSUE,
+            label: dto.label.trim(),
+            category: dto.category ?? null,
+            relatedFindingId: dto.relatedFindingId ?? null,
+            captureGuidelineVersion: dto.captureGuidelineVersion ?? null,
+            uploadStatus: MediaUploadStatus.UPLOADED,
+            processingStatus: MediaProcessingStatus.PENDING,
+          },
+        });
+      } catch (error) {
+        await this.mediaStorage.delete(providerMediaId).catch(() => undefined);
+        throw error;
+      }
+      // Transcribe/analyze independently; the area's completion is unaffected.
+      this.mediaProcessing.queue(record.id, user.organizationId);
+      return this.mapUploadedMedia(record, area);
+    } finally {
+      if (file) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Photo evidence for an area. Unlike the single primary video, an area may
+   * hold many photos across capture types; photos never enter the video
+   * transcription/AI pipeline. Idempotent by the client's key.
+   */
+  async uploadPhoto(
+    user: AuthenticatedUser,
+    roomId: string,
+    dto: TechnicianPhotoUploadDto,
+    file?: UploadedRoomVideo,
+  ) {
+    try {
+      if (!file)
+        throw new ApplicationError(400, 'PHOTO_FILE_REQUIRED', 'A photo file is required.');
+      if (!allowedImageMimeTypes.has(file.mimetype))
+        throw new ApplicationError(
+          415,
+          'PHOTO_TYPE_UNSUPPORTED',
+          'Only photos (jpeg, png, webp, heic) can be uploaded.',
+        );
+      const area = await this.prisma.inspectionArea.findFirst({
+        where: {
+          id: roomId,
+          inspection: {
+            organizationId: user.organizationId,
+            status: visibleStatuses,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+        select: { id: true, inspectionId: true, propertyAreaId: true },
+      });
+      if (!area)
+        throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
+
+      // Retried uploads reuse the client key and return the stored photo.
+      const existing = await this.prisma.inspectionPhoto.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+        select: { id: true, inspectionAreaId: true },
+      });
+      if (existing) {
+        if (existing.inspectionAreaId !== area.id)
+          throw new ApplicationError(
+            409,
+            'PHOTO_KEY_CONFLICT',
+            'This photo key was already used for another area.',
+          );
+        return this.mapPhoto(
+          await this.prisma.inspectionPhoto.findUniqueOrThrow({
+            where: { id: existing.id },
+            select: photoSelect,
+          }),
+        );
+      }
+
+      if (dto.findingId) {
+        const finding = await this.prisma.inspectionFinding.findFirst({
+          where: {
+            id: dto.findingId,
+            inspectionId: area.inspectionId,
+            propertyAreaId: area.propertyAreaId,
+          },
+          select: { id: true },
+        });
+        if (!finding)
+          throw new ApplicationError(
+            422,
+            'FINDING_NOT_IN_AREA',
+            'The related finding does not belong to this area.',
+          );
+      }
+
+      const id = randomUUID();
+      const storageKey = `${user.organizationId}/${area.inspectionId}/${area.id}/photos/${id}${imageExtension(file.mimetype)}`;
+      await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
+      let record: TechnicianPhotoRecord;
+      try {
+        record = await this.prisma.inspectionPhoto.create({
+          data: {
+            id,
+            organizationId: user.organizationId,
+            inspectionId: area.inspectionId,
+            inspectionAreaId: area.id,
+            findingId: dto.findingId ?? null,
+            capturedById: user.id,
+            provider: 'local',
+            storageKey,
+            captureType: dto.captureType,
+            sequenceNumber: dto.sequenceNumber ?? 0,
+            label: dto.label?.trim() || null,
+            notes: dto.notes?.trim() || null,
+            mimeType: file.mimetype,
+            width: dto.width ?? null,
+            height: dto.height ?? null,
+            sizeBytes: file.size,
+            idempotencyKey: dto.idempotencyKey,
+          },
+          select: photoSelect,
+        });
+      } catch (error) {
+        await this.mediaStorage.delete(storageKey).catch(() => undefined);
+        throw error;
+      }
+      return this.mapPhoto(record);
+    } finally {
+      if (file) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  async listPhotos(user: AuthenticatedUser, roomId: string) {
+    await this.assignedRoom(user, roomId);
+    const photos = await this.prisma.inspectionPhoto.findMany({
+      where: { inspectionAreaId: roomId },
+      orderBy: [{ captureType: 'asc' }, { sequenceNumber: 'asc' }, { createdAt: 'asc' }],
+      take: 200,
+      select: photoSelect,
+    });
+    return photos.map((photo) => this.mapPhoto(photo));
+  }
+
+  async deletePhoto(user: AuthenticatedUser, photoId: string) {
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: {
+        id: photoId,
+        capturedById: user.id,
+        inspectionArea: {
+          inspection: {
+            organizationId: user.organizationId,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+      },
+      select: {
+        id: true,
+        storageKey: true,
+        inspectionArea: { select: { inspection: { select: { status: true } } } },
+      },
+    });
+    if (!photo) throw new ApplicationError(404, 'PHOTO_NOT_FOUND', 'Photo was not found.');
+    // Evidence is only deletable before the inspection is finalized.
+    const status = photo.inspectionArea.inspection.status;
+    if (status === InspectionStatus.COMPLETED || status === InspectionStatus.CANCELLED)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Photos cannot be deleted after the inspection is finalized.',
+      );
+    await this.prisma.inspectionPhoto.delete({ where: { id: photoId } });
+    await this.mediaStorage.delete(photo.storageKey).catch(() => undefined);
+    return { deleted: true };
+  }
+
+  async photoContent(user: AuthenticatedUser, photoId: string) {
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: {
+        id: photoId,
+        inspectionArea: {
+          inspection: {
+            organizationId: user.organizationId,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+      },
+      select: { id: true, storageKey: true, mimeType: true },
+    });
+    if (!photo) throw new ApplicationError(404, 'PHOTO_NOT_FOUND', 'Photo was not found.');
+    return {
+      bytes: await this.mediaStorage.get(photo.storageKey),
+      mimeType: photo.mimeType,
+      fileName: `photo-${photo.id}`,
+    };
+  }
+
+  private mapPhoto(record: TechnicianPhotoRecord) {
+    return {
+      id: record.id,
+      roomId: record.inspectionAreaId,
+      findingId: record.findingId,
+      captureType: record.captureType,
+      sequenceNumber: record.sequenceNumber,
+      label: record.label,
+      notes: record.notes,
+      mimeType: record.mimeType,
+      width: record.width,
+      height: record.height,
+      capturedByName: record.capturedBy?.displayName ?? null,
+      capturedAt: record.capturedAt.toISOString(),
+      contentPath: `/api/v1/technician/photos/${record.id}/content`,
+    };
+  }
+
   private mapUploadedMedia(
     record: {
       id: string;
@@ -629,6 +1100,8 @@ export class TechnicianService {
       uploadStatus: MediaUploadStatus;
       processingStatus: MediaProcessingStatus;
       createdAt: Date;
+      recordingType?: VideoRecordingType;
+      label?: string | null;
     },
     area: {
       inspection: { propertywareBuilding: { addressLine1: string | null } | null };
@@ -644,6 +1117,8 @@ export class TechnicianService {
       roomName: area.propertyArea.name,
       durationSeconds: record.durationSeconds,
       estimatedSizeMb: 0,
+      recordingType: record.recordingType ?? VideoRecordingType.PRIMARY_AREA,
+      label: record.label ?? null,
       status: this.mapUploadStatus(record.uploadStatus),
       progress: record.uploadStatus === MediaUploadStatus.UPLOADED ? 1 : 0,
       processingStatus: this.mapProcessingStatus(record.processingStatus),
@@ -967,6 +1442,10 @@ export class TechnicianService {
       floorName: record.propertyArea.floor?.name ?? 'Property',
       order: record.propertyArea.inspectionOrder,
       isRequired: record.propertyArea.isRequired,
+      environment: record.propertyArea.environment,
+      category: record.propertyArea.category ?? null,
+      source: record.propertyArea.source,
+      areaStatus: record.propertyArea.status,
       inspectionType: record.inspection.inspectionType,
       baseline: {
         summary: establishesBaseline
@@ -1051,9 +1530,14 @@ export class TechnicianService {
   private mapInspectionStatus(status: InspectionStatus) {
     if (status === InspectionStatus.SCHEDULED) return 'SCHEDULED';
     if (status === InspectionStatus.IN_PROGRESS) return 'IN_PROGRESS';
+    if (status === InspectionStatus.TECHNICIAN_SUBMITTED) return 'TECHNICIAN_SUBMITTED';
     if (status === InspectionStatus.PROCESSING) return 'PROCESSING';
     if (status === InspectionStatus.REVIEW_REQUIRED) return 'REVIEW_REQUIRED';
+    if (status === InspectionStatus.UNDER_REVIEW) return 'UNDER_REVIEW';
+    if (status === InspectionStatus.TBD) return 'TBD';
+    if (status === InspectionStatus.FOLLOW_UP_REQUIRED) return 'FOLLOW_UP_REQUIRED';
     if (status === InspectionStatus.COMPLETED) return 'COMPLETED';
+    if (status === InspectionStatus.CANCELLED) return 'CANCELLED';
     throw new ApplicationError(500, 'INVALID_INSPECTION_STATUS', 'Invalid inspection status.');
   }
   private mapRoomStatus(status: InspectionAreaCompletionStatus) {

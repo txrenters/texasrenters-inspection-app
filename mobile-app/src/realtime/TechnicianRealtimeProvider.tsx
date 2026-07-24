@@ -11,6 +11,7 @@ import { getSupabaseClient } from '../auth/supabase';
 import { environment, isDemoMode, resolveEasProjectId } from '../config/environment';
 import { queryKeys } from '../features/queries';
 import { requestJson } from '../repositories/api/repositories';
+import { loadNotifications } from './notifications';
 import { pushDeviceStorage } from './push-device-storage';
 
 type NotificationsModule = typeof ExpoNotifications;
@@ -20,8 +21,6 @@ interface InspectionChangedEvent {
   kind: 'ASSIGNED' | 'REASSIGNED' | 'UNASSIGNED' | 'CANCELLED' | 'UPDATED';
   occurredAt: string;
 }
-
-let notificationHandlerConfigured = false;
 
 export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
@@ -159,22 +158,4 @@ async function notifyNewAssignment(inspectionId: string) {
     },
     trigger: null,
   });
-}
-
-async function loadNotifications() {
-  if (!['ios', 'android'].includes(Platform.OS) || Constants.executionEnvironment === 'storeClient')
-    return null;
-  const Notifications = await import('expo-notifications');
-  if (!notificationHandlerConfigured) {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-        shouldShowBanner: true,
-        shouldShowList: true,
-      }),
-    });
-    notificationHandlerConfigured = true;
-  }
-  return Notifications;
 }

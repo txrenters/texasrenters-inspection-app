@@ -2,7 +2,16 @@ import type { InspectionType } from '@texasrenters/shared';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
 export type InspectionStatus =
-  'SCHEDULED' | 'IN_PROGRESS' | 'PROCESSING' | 'REVIEW_REQUIRED' | 'COMPLETED' | 'CANCELLED';
+  | 'SCHEDULED'
+  | 'IN_PROGRESS'
+  | 'TECHNICIAN_SUBMITTED'
+  | 'PROCESSING'
+  | 'REVIEW_REQUIRED'
+  | 'UNDER_REVIEW'
+  | 'TBD'
+  | 'FOLLOW_UP_REQUIRED'
+  | 'COMPLETED'
+  | 'CANCELLED';
 export type Priority = 'STANDARD' | 'HIGH';
 export type RoomCompletionStatus = 'NOT_STARTED' | 'RECORDING_SAVED' | 'COMPLETED' | 'SKIPPED';
 export type UploadStatus = 'PENDING' | 'UPLOADING' | 'PAUSED' | 'FAILED' | 'COMPLETED';
@@ -90,6 +99,9 @@ export interface BaselineCondition {
   evidenceCount: number;
 }
 
+export type AreaEnvironment = 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
+export type AreaApprovalStatus = 'DRAFT' | 'APPROVED' | 'REJECTED';
+
 export interface InspectionRoom {
   id: string;
   inspectionId: string;
@@ -106,6 +118,12 @@ export interface InspectionRoom {
   reviewStatus?: FindingStatus;
   note?: string;
   skipReason?: string;
+  // Area classification and provenance (Phase 2). Optional so pre-Phase-2 mock
+  // data stays valid; the API always populates them (schema defaults).
+  environment?: AreaEnvironment;
+  category?: string | null;
+  source?: string; // AI_FLOOR_PLAN | MANUAL | MANUAL_FALLBACK | TECHNICIAN
+  areaStatus?: AreaApprovalStatus; // DRAFT technician areas await admin approval
 }
 
 export interface Inspection {
@@ -166,11 +184,32 @@ export interface InspectionReport {
   };
 }
 
+export type VideoRecordingType = 'PRIMARY_AREA' | 'ADDITIONAL_ISSUE';
+
+export type AdditionalVideoCategory =
+  | 'ADDITIONAL_DAMAGE'
+  | 'APPLIANCE_TEST'
+  | 'PLUMBING'
+  | 'ELECTRICAL'
+  | 'PEST'
+  | 'PET_EVIDENCE'
+  | 'SAFETY'
+  | 'EXTERIOR'
+  | 'FOLLOW_UP'
+  | 'REINSPECTION'
+  | 'OTHER';
+
 export interface LocalMedia {
   id: string;
   ownerUserId?: string;
   inspectionId: string;
   roomId: string;
+  // Primary walkthrough by default; additional labeled clips carry their own
+  // label/category and never replace the primary video for the area.
+  recordingType?: VideoRecordingType;
+  label?: string;
+  category?: AdditionalVideoCategory;
+  relatedFindingId?: string;
   propertyAddress?: string;
   roomName?: string;
   uri: string;
@@ -179,6 +218,9 @@ export interface LocalMedia {
   recordedAt: string;
   note: string;
 }
+
+export type PhotoCaptureType = 'AREA_OVERVIEW' | 'FINDING_DETAIL' | 'SUPPORTING_EVIDENCE';
+export type PhotoUploadStatus = 'PENDING' | 'UPLOADING' | 'UPLOADED' | 'FAILED';
 
 export interface RoomSnapshot {
   id: string;
@@ -190,6 +232,9 @@ export interface RoomSnapshot {
   height: number;
   sizeBytes?: number;
   capturedAt: string;
+  captureType?: PhotoCaptureType;
+  uploadStatus?: PhotoUploadStatus;
+  serverPhotoId?: string;
 }
 
 export interface UploadItem {
@@ -198,6 +243,10 @@ export interface UploadItem {
   mediaId: string;
   inspectionId: string;
   roomId: string;
+  recordingType?: VideoRecordingType;
+  label?: string;
+  category?: AdditionalVideoCategory;
+  relatedFindingId?: string;
   propertyAddress: string;
   roomName: string;
   durationSeconds: number;

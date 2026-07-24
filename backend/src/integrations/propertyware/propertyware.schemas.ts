@@ -76,6 +76,10 @@ const propertywarePropertyBaseSchema = z
 
 export const propertywareBuildingSchema = propertywarePropertyBaseSchema.extend({
   propertyType: z.string().optional().nullable(),
+  // Verified building-level total area, its unit label, and category.
+  totalArea: z.number().optional().nullable(),
+  areaUnits: z.string().optional().nullable(),
+  category: z.string().optional().nullable(),
 });
 
 export const propertywareUnitSchema = propertywarePropertyBaseSchema.extend({
@@ -168,6 +172,9 @@ export const normalizedPropertywareRecordSchema = z.discriminatedUnion('entityTy
     name: z.string().min(1),
     abbreviation: z.string().optional(),
     propertyType: z.string().optional(),
+    totalArea: z.number().int().nonnegative().optional(),
+    areaUnits: z.string().optional(),
+    category: z.string().optional(),
   }),
   normalizedBaseSchema.merge(normalizedAddressSchema).extend({
     entityType: z.literal('units'),

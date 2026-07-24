@@ -105,9 +105,9 @@ export function ReportShareDialog({
     <dialog ref={ref} className="dialog dialog-wide" onCancel={onClose} onClose={onClose}>
       <h2>Share inspection report</h2>
       <p>
-        Anyone with a link can view a read-only report of this inspection: room status and
-        findings that a reviewer approved. Internal notes and pending AI output are never
-        included. Links expire after 30 days and can be revoked at any time.
+        Anyone with a link can view a read-only report of this inspection: room status and findings
+        that a reviewer approved. Internal notes and pending AI output are never included. Links
+        expire after 30 days and can be revoked at any time.
       </p>
       <form onSubmit={(event) => void submit(event)} className="share-create-form">
         <div className="field share-email-field">
@@ -126,6 +126,20 @@ export function ReportShareDialog({
       </form>
       {createReportShare.error ? (
         <p className="field-error">{createReportShare.error.message}</p>
+      ) : null}
+      {createReportShare.data?.emailDeliveryStatus ? (
+        <div
+          className={`alert ${
+            createReportShare.data.emailDeliveryStatus === 'SENT'
+              ? 'alert-success'
+              : 'alert-warning'
+          }`}
+          role="status"
+        >
+          {createReportShare.data.emailDeliveryStatus === 'SENT'
+            ? 'The report link was emailed successfully.'
+            : 'The report link was created, but email delivery was unavailable. You can still copy the link below.'}
+        </div>
       ) : null}
       {shares.isLoading ? (
         <LoadingState label="Loading report links…" />

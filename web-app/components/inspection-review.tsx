@@ -4,8 +4,13 @@ import { useEffect, useRef, useState } from 'react';
 
 import { apiBlob } from '@/lib/api';
 import { usePermissions } from '@/lib/auth';
-import { useAdminMutations, useInspectionFindings, useInspectionMedia } from '@/lib/queries';
-import type { AdminInspectionFinding } from '@texasrenters/shared';
+import {
+  useAdminMutations,
+  useInspectionFindings,
+  useInspectionMedia,
+  useInspectionPhotos,
+} from '@/lib/queries';
+import type { AdminInspectionFinding, AdminInspectionPhoto } from '@texasrenters/shared';
 
 import { Badge, ErrorState, LoadingState, Pagination, formatDate } from './ui';
 
@@ -13,6 +18,14 @@ function formatSeconds(total: number) {
   const minutes = Math.floor(total / 60);
   const seconds = Math.round(total % 60);
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatCategory(value: string) {
+  return value
+    .toLowerCase()
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 function RoomVideoPlayer({ contentPath, label }: { contentPath: string; label: string }) {
@@ -87,9 +100,26 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
                 <div>
                   <strong>{item.roomName}</strong>
                   {item.floorName ? <span className="media-meta"> · {item.floorName}</span> : null}
+                  <span
+                    className={
+                      item.recordingType === 'ADDITIONAL_ISSUE'
+                        ? 'recording-type-chip recording-type-chip--extra'
+                        : 'recording-type-chip'
+                    }
+                  >
+                    {item.recordingType === 'ADDITIONAL_ISSUE' ? 'Additional' : 'Primary'}
+                  </span>
                 </div>
                 <Badge value={item.uploadStatus} />
               </header>
+              {item.recordingType === 'ADDITIONAL_ISSUE' && (item.label || item.category) ? (
+                <p className="media-card-label">
+                  {item.label}
+                  {item.category ? (
+                    <span className="media-meta"> · {formatCategory(item.category)}</span>
+                  ) : null}
+                </p>
+              ) : null}
               <RoomVideoPlayer contentPath={item.contentPath} label={item.roomName} />
               <footer className="media-card-footer">
                 <span className="media-meta">
@@ -112,6 +142,99 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
             <p>
               Videos will appear here after the technician records and uploads inspection areas.
             </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const PHOTO_CAPTURE_LABELS: Record<string, string> = {
+  AREA_OVERVIEW: 'Area overview',
+  FINDING_DETAIL: 'Finding close-up',
+  SUPPORTING_EVIDENCE: 'Supporting',
+};
+
+function PhotoThumb({ photo }: { photo: AdminInspectionPhoto }) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let revoked = false;
+    let created: string | null = null;
+    void apiBlob(photo.contentPath)
+      .then((blob) => {
+        if (revoked) return;
+        created = URL.createObjectURL(blob);
+        setObjectUrl(created);
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load photo.'));
+    return () => {
+      revoked = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [photo.contentPath]);
+  return (
+    <figure className="inspection-photo">
+      {objectUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={objectUrl} alt={photo.label ?? PHOTO_CAPTURE_LABELS[photo.captureType] ?? 'Inspection photo'} />
+      ) : error ? (
+        <div className="inspection-photo-status">{error}</div>
+      ) : (
+        <div className="inspection-photo-status">Loading…</div>
+      )}
+      <figcaption>
+        <Badge value={photo.captureType} />
+        {photo.label ? <span className="media-meta"> {photo.label}</span> : null}
+      </figcaption>
+    </figure>
+  );
+}
+
+export function InspectionPhotosSection({ inspectionId }: { inspectionId: string }) {
+  const photos = useInspectionPhotos(inspectionId);
+  const byRoom = new Map<string, AdminInspectionPhoto[]>();
+  for (const photo of photos.data ?? []) {
+    const list = byRoom.get(photo.roomName) ?? [];
+    list.push(photo);
+    byRoom.set(photo.roomName, list);
+  }
+  return (
+    <section className="panel section-gap inspection-section">
+      <div className="panel-header">
+        <div>
+          <span className="section-kicker">Inspection evidence</span>
+          <h2>Area photos</h2>
+          <p className="panel-description">
+            Overview and close-up snapshots captured by the technician.
+          </p>
+        </div>
+        {!photos.isLoading && !photos.isError ? (
+          <span className="section-count">{photos.data?.length ?? 0} photos</span>
+        ) : null}
+      </div>
+      {photos.isLoading ? (
+        <LoadingState label="Loading photos…" />
+      ) : photos.isError ? (
+        <ErrorState error={photos.error} retry={() => void photos.refetch()} />
+      ) : photos.data?.length ? (
+        <div className="photo-room-groups">
+          {[...byRoom.entries()].map(([roomName, roomPhotos]) => (
+            <div key={roomName} className="photo-room-group">
+              <h3>{roomName}</h3>
+              <div className="photo-grid">
+                {roomPhotos.map((photo) => (
+                  <PhotoThumb key={photo.id} photo={photo} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="inspection-empty-state">
+          <div>
+            <strong>No photos yet</strong>
+            <p>Photos appear here once the technician captures area or finding snapshots.</p>
           </div>
         </div>
       )}
@@ -376,7 +499,11 @@ export function InspectionCompleteDialog({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const mutation = useAdminMutations().updateInspection;
+  const mutation = useAdminMutations().finalizeInspection;
+  const [overrideReason, setOverrideReason] = useState('');
+  // Finalization is a human-only decision (spec §11). Unresolved required review
+  // items block it unless the administrator documents an override.
+  const needsOverride = pendingFindings > 0;
 
   useEffect(() => {
     ref.current?.showModal();
@@ -385,24 +512,40 @@ export function InspectionCompleteDialog({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    await mutation.mutateAsync({ id: inspectionId, status: 'COMPLETED' });
+    await mutation.mutateAsync({
+      id: inspectionId,
+      overrideReason: overrideReason.trim() || undefined,
+    });
     onClose();
   }
 
   return (
     <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
       <form onSubmit={(event) => void submit(event)}>
-        <h2>Complete inspection</h2>
+        <h2>Finalize inspection</h2>
         <p>
-          Completing finalizes this inspection. It can no longer be edited, assigned, or cancelled
+          Finalizing completes this inspection. It can no longer be edited, assigned, or cancelled
           afterwards.
         </p>
-        {pendingFindings > 0 ? (
+        {needsOverride ? (
           <p className="field-error">
             {pendingFindings} AI finding{pendingFindings === 1 ? '' : 's'} still await human review.
-            Review them before completing.
+            Resolve them, or document an override reason to finalize anyway.
           </p>
         ) : null}
+        <label className="field">
+          <span>Override reason{needsOverride ? '' : ' (optional)'}</span>
+          <textarea
+            value={overrideReason}
+            onChange={(event) => setOverrideReason(event.target.value)}
+            rows={2}
+            placeholder={
+              needsOverride
+                ? 'Required — explain why the inspection is being finalized with items outstanding'
+                : 'Only needed to finalize while items are still outstanding'
+            }
+          />
+        </label>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
         <div className="form-actions">
           <button type="button" className="button button-secondary" onClick={onClose}>
@@ -410,9 +553,9 @@ export function InspectionCompleteDialog({
           </button>
           <button
             className="button button-primary"
-            disabled={mutation.isPending || pendingFindings > 0}
+            disabled={mutation.isPending || (needsOverride && !overrideReason.trim())}
           >
-            {mutation.isPending ? 'Completing…' : 'Complete inspection'}
+            {mutation.isPending ? 'Finalizing…' : 'Finalize inspection'}
           </button>
         </div>
       </form>

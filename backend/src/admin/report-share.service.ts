@@ -1,17 +1,21 @@
 import { randomBytes } from 'node:crypto';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { FindingReviewStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { MailService } from '../mail/mail.service';
 
 const SHARE_LIFETIME_DAYS = 30;
 
 @Injectable()
 export class ReportShareService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional() @Inject(MailService) private readonly mailer?: MailService,
+  ) {}
 
   async createShare(user: AuthenticatedUser, inspectionId: string, recipientEmail?: string) {
     const inspection = await this.prisma.inspection.findFirst({
@@ -49,7 +53,19 @@ export class ReportShareService {
       });
       return created;
     });
-    return this.mapShare(share);
+    const delivery = share.recipientEmail
+      ? await this.mailer?.sendReportShare({
+          to: share.recipientEmail,
+          reportUrl: this.reportUrl(share.token),
+          expiresAt: share.expiresAt,
+        })
+      : undefined;
+    return {
+      ...this.mapShare(share),
+      ...(share.recipientEmail
+        ? { emailDeliveryStatus: delivery?.status ?? ('NOT_CONFIGURED' as const) }
+        : {}),
+    };
   }
 
   async listShares(user: AuthenticatedUser, inspectionId: string) {
@@ -202,5 +218,10 @@ export class ReportShareService {
       revokedAt: share.revokedAt,
       createdAt: share.createdAt,
     };
+  }
+
+  private reportUrl(token: string) {
+    const origin = (process.env.WEB_APP_ORIGIN ?? 'http://localhost:5454').replace(/\/$/, '');
+    return `${origin}/report/${token}`;
   }
 }

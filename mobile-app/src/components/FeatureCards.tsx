@@ -1,9 +1,12 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { Finding, Inspection, InspectionRoom, Property, UploadItem } from '../domain/models';
 import { AppButton, Card, ProgressBar, PropertyVisual, StatusBadge, formatStatus } from './ui';
-import { type AppColors, radius, spacing, typography, useThemedStyles } from '../theme';
+import { type AppColors, radius, spacing, typography, useAppTheme, useThemedStyles } from '../theme';
 import { formatUnitName } from '../utils/unit-name';
+import { inspectionUrgency } from '../utils/inspection-alerts';
+import { usePulse } from './motion';
 
 export function inspectionProgress(rooms: InspectionRoom[]) {
   const required = rooms.filter((room) => room.isRequired);
@@ -29,31 +32,66 @@ export function InspectionSummaryCard({
   onPress: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
+  const { colors } = useAppTheme();
   const progressValue = progress.total ? progress.completed / progress.total : 0;
   const uploadAttention = progress.hasFailedUpload;
   const unitName = formatUnitName(inspection.unitName);
+  const urgency = inspectionUrgency(inspection);
+  const isOverdue = urgency === 'overdue';
+  const pulse = usePulse(isOverdue);
   const action =
     inspection.status === 'SCHEDULED'
       ? 'Start inspection'
       : inspection.status === 'COMPLETED'
         ? 'View report'
-        : ['PROCESSING', 'REVIEW_REQUIRED'].includes(inspection.status)
+        : [
+              'TECHNICIAN_SUBMITTED',
+              'PROCESSING',
+              'REVIEW_REQUIRED',
+              'UNDER_REVIEW',
+              'TBD',
+              'FOLLOW_UP_REQUIRED',
+            ].includes(inspection.status)
           ? 'View submitted inspection'
           : 'Continue inspection';
+  const accessibilityLabel = isOverdue
+    ? `Overdue: ${action} at ${property.address}`
+    : `${action} at ${property.address}`;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${action} at ${property.address}`}
+      accessibilityLabel={accessibilityLabel}
       onPress={onPress}
-      style={({ pressed }) => [styles.inspectionCard, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.inspectionCard,
+        isOverdue && styles.overdueCard,
+        pressed && styles.pressed,
+      ]}
     >
+      {isOverdue ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.overdueRing,
+            { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) },
+          ]}
+        />
+      ) : null}
       <View style={styles.inspectionHeader}>
         <View style={styles.summaryBadges}>
           <StatusBadge label={inspection.type} tone="info" />
           {unitName ? <StatusBadge label={unitName} tone="info" /> : null}
-          <StatusBadge label={inspection.status} />
+          {urgency === 'overdue' ? (
+            <StatusBadge label="OVERDUE" tone="danger" />
+          ) : urgency === 'due_soon' ? (
+            <StatusBadge label="DUE SOON" tone="warning" />
+          ) : (
+            <StatusBadge label={inspection.status} />
+          )}
         </View>
-        <Text style={styles.eyebrow}>{formatStatus(inspection.priority)} priority</Text>
+        <Text style={[styles.eyebrow, isOverdue && { color: colors.danger }]}>
+          {formatStatus(inspection.priority)} priority
+        </Text>
       </View>
       <View style={styles.inspectionTop}>
         <PropertyVisual tone={property.imageTone} compact />
@@ -288,6 +326,58 @@ export function FindingSummaryCard({
   );
 }
 
+/**
+ * Screen-level banner warning about overdue (and, failing that, due-soon)
+ * inspections. Overdue takes priority and reads as danger; due-soon reads as a
+ * softer warning. Renders nothing when there is nothing to warn about.
+ */
+export function InspectionAlertBanner({
+  overdueCount,
+  dueSoonCount,
+  onPress,
+}: {
+  overdueCount: number;
+  dueSoonCount: number;
+  onPress?: () => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  const { colors } = useAppTheme();
+  const pulse = usePulse(overdueCount > 0);
+  if (overdueCount === 0 && dueSoonCount === 0) return null;
+  const overdue = overdueCount > 0;
+  const message = overdue
+    ? `${overdueCount} inspection${overdueCount === 1 ? '' : 's'} overdue — start ${overdueCount === 1 ? 'it' : 'them'} now.`
+    : `${dueSoonCount} inspection${dueSoonCount === 1 ? '' : 's'} due soon.`;
+  return (
+    <Pressable
+      accessibilityRole={onPress ? 'button' : 'summary'}
+      accessibilityLabel={message}
+      onPress={onPress}
+      style={[styles.alertBanner, overdue ? styles.alertBannerDanger : styles.alertBannerWarning]}
+    >
+      <Animated.View style={{ opacity: overdue ? pulse : 1 }}>
+        <Ionicons
+          name={overdue ? 'alert-circle' : 'time-outline'}
+          size={20}
+          color={overdue ? colors.danger : colors.warning}
+        />
+      </Animated.View>
+      <Text
+        style={[styles.alertBannerText, { color: overdue ? colors.danger : colors.warning }]}
+      >
+        {message}
+      </Text>
+      {onPress ? (
+        <Ionicons
+          name="chevron-forward"
+          size={18}
+          color={overdue ? colors.danger : colors.warning}
+        />
+      ) : null}
+    </Pressable>
+  );
+}
+
 export function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
@@ -319,6 +409,38 @@ const createStyles = (colors: AppColors) =>
       padding: spacing.md,
       gap: spacing.md,
     },
+    overdueCard: {
+      borderColor: colors.danger,
+      backgroundColor: colors.dangerSoft,
+    },
+    overdueRing: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      borderRadius: radius.lg,
+      borderWidth: 2,
+      borderColor: colors.danger,
+    },
+    alertBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      paddingVertical: spacing.sm,
+      paddingHorizontal: spacing.md,
+    },
+    alertBannerDanger: {
+      backgroundColor: colors.dangerSoft,
+      borderColor: colors.danger,
+    },
+    alertBannerWarning: {
+      backgroundColor: colors.warningSoft,
+      borderColor: colors.warning,
+    },
+    alertBannerText: { ...typography.label, flex: 1 },
     inspectionHeader: {
       minWidth: 0,
       flexDirection: 'row',

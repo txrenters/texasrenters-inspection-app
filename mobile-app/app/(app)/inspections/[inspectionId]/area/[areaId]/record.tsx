@@ -7,10 +7,10 @@ import {
 } from 'expo-camera';
 import * as DocumentPicker from 'expo-document-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Image, Linking, Platform, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AppButton, ConfirmationModal } from '../../../../../../src/components/ui';
-import { environment } from '../../../../../../src/config/environment';
+import { environment, isDemoMode } from '../../../../../../src/config/environment';
 import { useInspection, useProperty, useRoom } from '../../../../../../src/features/queries';
 import {
   buildRecordingDraft,
@@ -20,6 +20,9 @@ import {
   buildRoomSnapshot,
   persistRoomSnapshot,
 } from '../../../../../../src/media/local-snapshots';
+import { uploadRoomPhoto } from '../../../../../../src/media/photo-upload';
+import { videoStepsForEnvironment } from '../../../../../../src/utils/video-capture-guide';
+import type { PhotoCaptureType, RoomSnapshot } from '../../../../../../src/domain/models';
 import { useDemoStore } from '../../../../../../src/stores/demo.store';
 import {
   type AppColors,
@@ -33,17 +36,45 @@ const MAX_RECORDING_SECONDS = 10 * 60;
 const RECORDING_STOP_GRACE_MS = 1_500;
 const RECORDING_FINALIZE_TIMEOUT_MS = 6_000;
 
+const CAPTURE_TYPE_OPTIONS: ReadonlyArray<{ value: PhotoCaptureType; label: string }> = [
+  { value: 'AREA_OVERVIEW', label: 'Area overview' },
+  { value: 'FINDING_DETAIL', label: 'Finding close-up' },
+  { value: 'SUPPORTING_EVIDENCE', label: 'Supporting' },
+];
+const CAPTURE_TYPE_LABELS: Record<PhotoCaptureType, string> = {
+  AREA_OVERVIEW: 'area overview',
+  FINDING_DETAIL: 'finding close-up',
+  SUPPORTING_EVIDENCE: 'supporting photo',
+};
+// Snapshot guidance shown before/during capture (spec §8).
+const PHOTO_GUIDANCE = [
+  'Take a complete view of the whole wall, room, fixture, or outdoor area first.',
+  'Then take a focused close-up of each identified issue.',
+  'Include enough surrounding context to show where the issue is located.',
+  'Take additional angles when one image does not show the full condition.',
+  'Avoid blurry, dark, obstructed, or extremely zoomed images.',
+  'Include a scale reference when the size of the damage matters.',
+  'Avoid photographing unrelated personal information where possible.',
+];
+
 export default function RecordRoomScreen() {
   const styles = useThemedStyles(createStyles);
-  const { inspectionId = '', areaId = '' } = useLocalSearchParams<{
+  const {
+    inspectionId = '',
+    areaId = '',
+    recordingType: recordingTypeParam,
+  } = useLocalSearchParams<{
     inspectionId: string;
     areaId: string;
+    recordingType?: string;
   }>();
+  const isAdditionalVideo = recordingTypeParam === 'ADDITIONAL_ISSUE';
   const room = useRoom(areaId);
   const inspection = useInspection(inspectionId);
   const property = useProperty(inspection.data?.propertyId ?? '');
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
+  const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
   const snapshots = useDemoStore((state) => state.snapshots ?? []);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
   const roomSnapshots = snapshots.filter(
@@ -53,6 +84,10 @@ export default function RecordRoomScreen() {
       snapshot.roomId === areaId,
   );
   const latestSnapshot = roomSnapshots[0];
+  const failedPhotos = roomSnapshots.filter((snapshot) => snapshot.uploadStatus === 'FAILED');
+  const videoSteps = videoStepsForEnvironment(room.data?.environment);
+  const isOutdoorArea =
+    room.data?.environment === 'OUTDOOR' || room.data?.environment === 'SEMI_OUTDOOR';
   const cameraRef = useRef<CameraView>(null);
   const secondsRef = useRef(0);
   const cancelRequestedRef = useRef(false);
@@ -73,6 +108,9 @@ export default function RecordRoomScreen() {
   const [torch, setTorch] = useState(false);
   const [facing, setFacing] = useState<CameraType>('back');
   const [capturingSnapshot, setCapturingSnapshot] = useState(false);
+  const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [videoGuideOpen, setVideoGuideOpen] = useState(false);
   const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -136,6 +174,7 @@ export default function RecordRoomScreen() {
         uri: stored.uri,
         durationSeconds: duration,
         sizeBytes: stored.sizeBytes,
+        recordingType: isAdditionalVideo ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
       }),
     );
     router.replace({
@@ -198,6 +237,29 @@ export default function RecordRoomScreen() {
   // Captures directly from the live preview — no camera-mode switching, so it
   // works mid-recording too. Spotting a defect during the tour must not force
   // the technician to stop the video.
+  const uploadSnapshot = async (snapshot: RoomSnapshot) => {
+    // In demo mode there is no backend session; treat the local save as final.
+    if (isDemoMode) {
+      updateSnapshot(snapshot.id, { uploadStatus: 'UPLOADED' });
+      return;
+    }
+    updateSnapshot(snapshot.id, { uploadStatus: 'UPLOADING' });
+    try {
+      const uploaded = await uploadRoomPhoto({
+        roomId: areaId,
+        uri: snapshot.uri,
+        captureType: snapshot.captureType ?? 'AREA_OVERVIEW',
+        idempotencyKey: snapshot.id,
+        width: snapshot.width,
+        height: snapshot.height,
+      });
+      updateSnapshot(snapshot.id, { uploadStatus: 'UPLOADED', serverPhotoId: uploaded.id });
+    } catch {
+      // The photo stays on the device and can be retried; never lost.
+      updateSnapshot(snapshot.id, { uploadStatus: 'FAILED' });
+    }
+  };
+
   const takeSnapshot = async () => {
     const camera = cameraRef.current;
     if (!camera || !cameraReady || !hasPermissions || capturingSnapshot) return;
@@ -208,20 +270,23 @@ export default function RecordRoomScreen() {
     try {
       const captured = await camera.takePictureAsync({ quality: 0.82, shutterSound: false });
       const stored = persistRoomSnapshot(captured.uri, inspectionId, areaId);
-      addSnapshot(
-        buildRoomSnapshot({
-          ownerUserId,
-          inspectionId,
-          roomId: areaId,
-          uri: stored.uri,
-          width: captured.width,
-          height: captured.height,
-          sizeBytes: stored.sizeBytes,
-        }),
-      );
+      const snapshot = buildRoomSnapshot({
+        ownerUserId,
+        inspectionId,
+        roomId: areaId,
+        uri: stored.uri,
+        width: captured.width,
+        height: captured.height,
+        sizeBytes: stored.sizeBytes,
+        captureType,
+      });
+      addSnapshot(snapshot);
       setSnapshotMessage(
-        recording ? 'Snapshot saved — recording continues.' : 'Snapshot saved to this room.',
+        recording
+          ? `${CAPTURE_TYPE_LABELS[captureType]} saved — recording continues.`
+          : `${CAPTURE_TYPE_LABELS[captureType]} saved.`,
       );
+      void uploadSnapshot(snapshot);
     } catch (snapshotError) {
       setError(errorMessage(snapshotError, 'The snapshot could not be saved. Please try again.'));
     } finally {
@@ -343,15 +408,37 @@ export default function RecordRoomScreen() {
           </View>
         </View>
 
+        {isAdditionalVideo ? (
+          <View style={styles.additionalBanner}>
+            <Text style={styles.additionalBannerTitle}>Additional labeled clip</Text>
+            <Text style={styles.additionalBannerText}>
+              This extra recording is saved alongside the room’s primary walkthrough — it does not
+              replace it. You’ll add a label after recording.
+            </Text>
+          </View>
+        ) : null}
+
         <View style={styles.prompts}>
           <Text style={styles.promptTitle}>Capture guidance</Text>
-          <Text style={styles.prompt}>• State the room name — your narration is transcribed.</Text>
-          <Text style={styles.prompt}>• Show the entire room.</Text>
-          <Text style={styles.prompt}>• Describe and approach visible defects.</Text>
-          <Text style={styles.prompt}>
-            • Spot a defect? Snap a photo without stopping the video.
-          </Text>
-          <Text style={styles.prompt}>• Stop before leaving this room.</Text>
+          {isAdditionalVideo ? (
+            <>
+              <Text style={styles.prompt}>• Focus on the single issue this clip documents.</Text>
+              <Text style={styles.prompt}>• Narrate what the reviewer is looking at.</Text>
+              <Text style={styles.prompt}>• Include enough surroundings to show the location.</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.prompt}>
+                • State the room name — your narration is transcribed.
+              </Text>
+              <Text style={styles.prompt}>• Show the entire room.</Text>
+              <Text style={styles.prompt}>• Describe and approach visible defects.</Text>
+              <Text style={styles.prompt}>
+                • Spot a defect? Snap a photo without stopping the video.
+              </Text>
+              <Text style={styles.prompt}>• Stop before leaving this room.</Text>
+            </>
+          )}
         </View>
 
         {error ? (
@@ -360,38 +447,92 @@ export default function RecordRoomScreen() {
           </Text>
         ) : null}
 
+        <AppButton
+          compact
+          variant="ghost"
+          label="Recording guide"
+          onPress={() => setVideoGuideOpen(true)}
+        />
+
+        <View style={styles.captureTypeRow}>
+          {CAPTURE_TYPE_OPTIONS.map((option) => (
+            <Pressable
+              key={option.value}
+              accessibilityRole="button"
+              accessibilityState={{ selected: captureType === option.value }}
+              onPress={() => setCaptureType(option.value)}
+              style={[styles.captureChip, captureType === option.value && styles.captureChipSelected]}
+            >
+              <Text
+                style={[
+                  styles.captureChipText,
+                  captureType === option.value && styles.captureChipTextSelected,
+                ]}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
         <View style={styles.snapshotRow}>
           <AppButton
-            accessibilityLabel={`Take snapshot for ${room.data?.name ?? 'this room'}`}
+            accessibilityLabel={`Take ${CAPTURE_TYPE_LABELS[captureType]} for ${room.data?.name ?? 'this room'}`}
             compact
             disabled={!hasPermissions || !cameraReady || capturingSnapshot}
-            label={capturingSnapshot ? 'Saving snapshot…' : 'Snap photo'}
+            label={capturingSnapshot ? 'Saving…' : `Take ${CAPTURE_TYPE_LABELS[captureType]}`}
             loading={capturingSnapshot}
             onPress={() => void takeSnapshot()}
             variant="outline"
           />
+          <AppButton
+            compact
+            label="How to photograph"
+            onPress={() => setGuideOpen(true)}
+            variant="ghost"
+          />
           <View style={styles.snapshotSummary}>
             <Text style={styles.snapshotCount}>
-              {roomSnapshots.length} {roomSnapshots.length === 1 ? 'snapshot' : 'snapshots'} saved
+              {roomSnapshots.length} {roomSnapshots.length === 1 ? 'photo' : 'photos'} saved
             </Text>
-            <Text style={styles.snapshotHint}>
-              Snap as many as you need — even while recording.
-            </Text>
+            <Text style={styles.snapshotHint}>Overview first, then close-ups — even mid-recording.</Text>
           </View>
           {latestSnapshot ? (
             <Image
-              accessibilityLabel="Latest saved room snapshot"
+              accessibilityLabel="Latest saved photo"
               source={{ uri: latestSnapshot.uri }}
               style={styles.snapshotThumbnail}
             />
           ) : null}
         </View>
 
+        {failedPhotos.length ? (
+          <View style={styles.retryRow}>
+            <Text style={styles.retryText}>
+              {failedPhotos.length} photo{failedPhotos.length === 1 ? '' : 's'} still to upload.
+            </Text>
+            <AppButton
+              compact
+              label="Retry uploads"
+              variant="ghost"
+              onPress={() => failedPhotos.forEach((photo) => void uploadSnapshot(photo))}
+            />
+          </View>
+        ) : null}
+
         {snapshotMessage ? (
           <Text accessibilityLiveRegion="polite" style={styles.snapshotMessage}>
             {snapshotMessage}
           </Text>
         ) : null}
+
+        <PhotoGuidanceModal visible={guideOpen} onClose={() => setGuideOpen(false)} />
+        <VideoGuideModal
+          visible={videoGuideOpen}
+          onClose={() => setVideoGuideOpen(false)}
+          title={isOutdoorArea ? 'Outdoor recording guide' : 'Indoor recording guide'}
+          steps={videoSteps}
+        />
 
         <View style={styles.toolRow}>
           <AppButton
@@ -481,6 +622,60 @@ const corner = {
   borderColor: 'rgba(255,255,255,0.75)',
 };
 
+function VideoGuideModal({
+  visible,
+  onClose,
+  title,
+  steps,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  title: string;
+  steps: readonly string[];
+}) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.guideBackdrop}>
+        <View style={styles.guideSheet}>
+          <Text style={styles.guideTitle}>{title}</Text>
+          <ScrollView contentContainerStyle={styles.guideList}>
+            {steps.map((line, index) => (
+              <View key={index} style={styles.guideItem}>
+                <Text style={styles.guideBullet}>{index + 1}.</Text>
+                <Text style={styles.guideText}>{line}</Text>
+              </View>
+            ))}
+          </ScrollView>
+          <AppButton label="Start when ready" onPress={onClose} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function PhotoGuidanceModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.guideBackdrop}>
+        <View style={styles.guideSheet}>
+          <Text style={styles.guideTitle}>How to photograph</Text>
+          <ScrollView contentContainerStyle={styles.guideList}>
+            {PHOTO_GUIDANCE.map((line, index) => (
+              <View key={index} style={styles.guideItem}>
+                <Text style={styles.guideBullet}>{index + 1}.</Text>
+                <Text style={styles.guideText}>{line}</Text>
+              </View>
+            ))}
+          </ScrollView>
+          <AppButton label="Got it" onPress={onClose} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     root: { flex: 1, backgroundColor: '#0C1615' },
@@ -559,6 +754,16 @@ const createStyles = (colors: AppColors) =>
     },
     promptTitle: { ...typography.label, color: colors.white },
     prompt: { ...typography.caption, color: '#D7E2E0' },
+    additionalBanner: {
+      borderRadius: radius.md,
+      padding: spacing.md,
+      gap: spacing.xs,
+      backgroundColor: 'rgba(245,158,11,0.18)',
+      borderWidth: 1,
+      borderColor: 'rgba(245,158,11,0.5)',
+    },
+    additionalBannerTitle: { ...typography.label, color: '#FFE0A6' },
+    additionalBannerText: { ...typography.caption, color: '#F5E7CE' },
     error: { ...typography.caption, color: '#FFB4B4', textAlign: 'center' },
     snapshotRow: {
       minHeight: 68,
@@ -580,6 +785,39 @@ const createStyles = (colors: AppColors) =>
       borderColor: 'rgba(255,255,255,0.45)',
     },
     snapshotMessage: { ...typography.caption, color: '#B9E1CE', textAlign: 'center' },
+    captureTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+    captureChip: {
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.35)',
+      borderRadius: radius.round,
+      paddingHorizontal: spacing.md,
+      paddingVertical: 6,
+      backgroundColor: 'rgba(255,255,255,0.06)',
+    },
+    captureChipSelected: { borderColor: colors.white, backgroundColor: 'rgba(255,255,255,0.22)' },
+    captureChipText: { ...typography.caption, color: '#D7E2E0' },
+    captureChipTextSelected: { color: colors.white, fontWeight: '800' },
+    retryRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
+    retryText: { ...typography.caption, color: '#FFD9A8' },
+    guideBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.55)' },
+    guideSheet: {
+      maxHeight: '80%',
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: radius.lg,
+      borderTopRightRadius: radius.lg,
+      padding: spacing.lg,
+      gap: spacing.sm,
+    },
+    guideTitle: { ...typography.title, color: colors.textPrimary },
+    guideList: { gap: spacing.sm, paddingBottom: spacing.sm },
+    guideItem: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' },
+    guideBullet: { ...typography.body, color: colors.primary, fontWeight: '800' },
+    guideText: { ...typography.body, color: colors.textPrimary, flex: 1 },
     toolRow: {
       flexDirection: 'row',
       alignItems: 'center',

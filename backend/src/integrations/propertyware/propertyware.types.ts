@@ -82,6 +82,9 @@ export interface NormalizedBuilding extends NormalizedAddress {
   name: string;
   abbreviation?: string;
   propertyType?: string;
+  totalArea?: number;
+  areaUnits?: string;
+  category?: string;
   isActive: boolean;
   sourceStatus: string;
   sourceCreatedAt?: string;

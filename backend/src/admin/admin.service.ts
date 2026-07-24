@@ -3,9 +3,11 @@ import {
   FindingReviewStatus,
   InspectionStatus,
   InspectionType,
+  MediaProcessingStatus,
   Prisma,
   PropertyAreaStatus,
   UserRole,
+  VideoRecordingType,
 } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -13,6 +15,7 @@ import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { MailService } from '../mail/mail.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
@@ -22,8 +25,13 @@ import type {
   AssignmentListQueryDto,
   AuditListQueryDto,
   CreateAdminInspectionDto,
+  FinalizeInspectionDto,
+  InspectionFollowUpDto,
   InspectionListQueryDto,
+  InspectionTbdDto,
+  InspectionUnderReviewDto,
   LeaseListQueryDto,
+  MergeInspectionAreasDto,
   PortfolioListQueryDto,
   PaginationDto,
   PropertyListQueryDto,
@@ -37,8 +45,29 @@ import type {
 const ACTIVE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.SCHEDULED,
   InspectionStatus.IN_PROGRESS,
+  InspectionStatus.TECHNICIAN_SUBMITTED,
   InspectionStatus.PROCESSING,
   InspectionStatus.REVIEW_REQUIRED,
+  InspectionStatus.UNDER_REVIEW,
+  InspectionStatus.TBD,
+  InspectionStatus.FOLLOW_UP_REQUIRED,
+];
+
+// An inspection can no longer transition once finalized or cancelled.
+const FROZEN_INSPECTION_STATUSES: InspectionStatus[] = [
+  InspectionStatus.COMPLETED,
+  InspectionStatus.CANCELLED,
+];
+
+// Finalization / TBD / follow-up review actions are only valid after the
+// technician has submitted the inspection.
+const REVIEWABLE_INSPECTION_STATUSES: InspectionStatus[] = [
+  InspectionStatus.TECHNICIAN_SUBMITTED,
+  InspectionStatus.PROCESSING,
+  InspectionStatus.REVIEW_REQUIRED,
+  InspectionStatus.UNDER_REVIEW,
+  InspectionStatus.TBD,
+  InspectionStatus.FOLLOW_UP_REQUIRED,
 ];
 
 const ADMIN_TRANSACTION_OPTIONS = {
@@ -63,6 +92,7 @@ export class AdminService {
     @Optional()
     @Inject(InspectionMediaStorageService)
     private readonly mediaStorage?: InspectionMediaStorageService,
+    @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 
   async profile(user: AuthenticatedUser) {
@@ -280,13 +310,114 @@ export class AdminService {
           sourceStatus: true,
           isActive: true,
           lastSyncedAt: true,
+          updatedAt: true,
+          totalArea: true,
+          areaUnits: true,
+          category: true,
+          manualTotalArea: true,
+          manualAreaUnit: true,
           portfolio: { select: { id: true, name: true, externalId: true } },
+          units: { where: { isActive: true }, select: { id: true } },
+          leases: {
+            where: { isActive: true },
+            select: { unitId: true, sourceStatus: true, scheduledMoveOutDate: true },
+          },
           _count: { select: { units: true, inspections: true } },
         },
       }),
       this.prisma.propertywareBuilding.count({ where }),
     ]);
-    return this.page(items, total, query);
+    const shaped = items.map(({ units, leases, ...building }) => ({
+      ...building,
+      totalArea: this.buildingTotalArea(building),
+      leaseSummary: this.leaseSummary(units, leases),
+    }));
+    return this.page(shaped, total, query);
+  }
+
+  // Normalizes a Propertyware area unit label to a compact display form.
+  private normalizeAreaUnit(unit: string | null): string | null {
+    if (!unit) return null;
+    return /sq\s*\.?\s*ft|square\s*feet/i.test(unit) ? 'sq ft' : unit.trim();
+  }
+
+  private formatArea(value: number, unit: string | null): string {
+    return `${value.toLocaleString('en-US')} ${this.normalizeAreaUnit(unit) ?? 'sq ft'}`;
+  }
+
+  /**
+   * Resolves a building's total area with an explicit source. A verified
+   * Propertyware total takes precedence; an administrator manual value is the
+   * fallback; otherwise the area is "Not provided" (never a guessed value).
+   */
+  private buildingTotalArea(building: {
+    totalArea: number | null;
+    areaUnits: string | null;
+    manualTotalArea: number | null;
+    manualAreaUnit: string | null;
+    lastSyncedAt: Date;
+    updatedAt: Date;
+  }) {
+    if (building.totalArea && building.totalArea > 0)
+      return {
+        value: building.totalArea,
+        unit: this.normalizeAreaUnit(building.areaUnits) ?? 'sq ft',
+        source: 'PROPERTYWARE_BUILDING' as const,
+        derived: false,
+        updatedAt: building.lastSyncedAt.toISOString(),
+        label: this.formatArea(building.totalArea, building.areaUnits),
+      };
+    if (building.manualTotalArea && building.manualTotalArea > 0)
+      return {
+        value: building.manualTotalArea,
+        unit: this.normalizeAreaUnit(building.manualAreaUnit) ?? 'sq ft',
+        source: 'MANUAL' as const,
+        derived: false,
+        updatedAt: building.updatedAt.toISOString(),
+        label: this.formatArea(building.manualTotalArea, building.manualAreaUnit),
+      };
+    return {
+      value: null,
+      unit: null,
+      source: 'UNKNOWN' as const,
+      derived: false,
+      updatedAt: null,
+      label: 'Not provided',
+    };
+  }
+
+  /**
+   * Summarizes lease posture across a building's active units. Vacancy is
+   * derived (an active unit with no active lease); statuses are passed through
+   * from Propertyware and never invented.
+   */
+  private leaseSummary(
+    units: Array<{ id: string }>,
+    leases: Array<{
+      unitId: string;
+      sourceStatus: string | null;
+      scheduledMoveOutDate: Date | null;
+    }>,
+  ) {
+    const activeLeaseCount = leases.length;
+    const scheduledMoveOutCount = leases.filter((lease) => lease.scheduledMoveOutDate).length;
+    const leasedUnitIds = new Set(leases.map((lease) => lease.unitId));
+    const vacantUnitCount = units.filter((unit) => !leasedUnitIds.has(unit.id)).length;
+    const parts: string[] = [];
+    if (activeLeaseCount)
+      parts.push(`${activeLeaseCount} active lease${activeLeaseCount === 1 ? '' : 's'}`);
+    if (scheduledMoveOutCount)
+      parts.push(
+        `${scheduledMoveOutCount} scheduled move-out${scheduledMoveOutCount === 1 ? '' : 's'}`,
+      );
+    if (vacantUnitCount)
+      parts.push(`${vacantUnitCount} vacant unit${vacantUnitCount === 1 ? '' : 's'}`);
+    return {
+      activeLeaseCount,
+      scheduledMoveOutCount,
+      vacantUnitCount,
+      summary: parts.length ? parts.join(' · ') : 'No relevant lease',
+    };
   }
 
   async property(user: AuthenticatedUser, id: string) {
@@ -314,6 +445,12 @@ export class AdminService {
         sourceStatus: true,
         isActive: true,
         lastSyncedAt: true,
+        updatedAt: true,
+        totalArea: true,
+        areaUnits: true,
+        category: true,
+        manualTotalArea: true,
+        manualAreaUnit: true,
         portfolio: { select: { id: true, externalId: true, name: true } },
         units: {
           where: { isActive: true },
@@ -336,6 +473,7 @@ export class AdminService {
           select: {
             id: true,
             externalId: true,
+            unitId: true,
             leaseName: true,
             sourceStatus: true,
             startDate: true,
@@ -346,7 +484,55 @@ export class AdminService {
       },
     });
     if (!property) throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'Property was not found.');
-    return property;
+    const { totalArea, areaUnits, category, manualTotalArea, manualAreaUnit, updatedAt, ...rest } =
+      property;
+    // The relevant lease for a unit is its active lease; a unit with none reads
+    // "No relevant lease" (null) rather than an invented status.
+    const relevantLease = new Map(property.leases.map((lease) => [lease.unitId, lease]));
+    return {
+      ...rest,
+      category,
+      totalArea: this.buildingTotalArea({
+        totalArea,
+        areaUnits,
+        manualTotalArea,
+        manualAreaUnit,
+        lastSyncedAt: property.lastSyncedAt,
+        updatedAt,
+      }),
+      leaseSummary: this.leaseSummary(
+        property.units,
+        property.leases.map((lease) => ({
+          unitId: lease.unitId,
+          sourceStatus: lease.sourceStatus,
+          scheduledMoveOutDate: lease.scheduledMoveOutDate,
+        })),
+      ),
+      units: property.units.map((unit) => ({
+        ...unit,
+        leaseStatus: relevantLease.get(unit.id)?.sourceStatus ?? null,
+        scheduledMoveOutDate: relevantLease.get(unit.id)?.scheduledMoveOutDate ?? null,
+      })),
+    };
+  }
+
+  async propertyLeaseSummary(user: AuthenticatedUser, id: string) {
+    const property = await this.property(user, id);
+    return {
+      propertyId: id,
+      ...property.leaseSummary,
+      units: property.units.map((unit) => ({
+        id: unit.id,
+        name: unit.name,
+        leaseStatus: unit.leaseStatus,
+        scheduledMoveOutDate: unit.scheduledMoveOutDate,
+      })),
+    };
+  }
+
+  async propertyAreaSummary(user: AuthenticatedUser, id: string) {
+    const property = await this.property(user, id);
+    return { propertyId: id, totalArea: property.totalArea, category: property.category ?? null };
   }
 
   async units(user: AuthenticatedUser, propertyId: string, query: UnitListQueryDto) {
@@ -573,6 +759,18 @@ export class AdminService {
         },
         priority: true,
         scheduledAt: true,
+        startedAt: true,
+        submittedAt: true,
+        completedAt: true,
+        finalizedAt: true,
+        finalizedBy: { select: { id: true, displayName: true } },
+        completionBlockedReason: true,
+        tbdReason: true,
+        followUpRequired: true,
+        followUpDueAt: true,
+        followUpTasks: true,
+        parentInspectionId: true,
+        inspectionRound: true,
         createdAt: true,
         updatedAt: true,
         internalNotes: true,
@@ -621,6 +819,9 @@ export class AdminService {
         orderBy: { createdAt: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
+        // Metadata may contain sensitive reasons; the audit list exposes only the
+        // action and timestamp. Human-readable reasons live on the inspection
+        // detail (tbdReason / completionBlockedReason / follow-up tasks).
         select: { id: true, action: true, createdAt: true },
       }),
       this.prisma.auditLog.count({ where }),
@@ -864,7 +1065,6 @@ export class AdminService {
           internalNotes: input.internalNotes,
           status: input.status as InspectionStatus | undefined,
           cancelledAt: input.status === 'CANCELLED' ? new Date() : undefined,
-          completedAt: input.status === 'COMPLETED' ? new Date() : undefined,
           cancellationReason: input.cancellationReason,
         },
       });
@@ -888,11 +1088,7 @@ export class AdminService {
       await this.audit(
         tx,
         user,
-        input.status === 'CANCELLED'
-          ? 'INSPECTION_CANCELLED'
-          : input.status === 'COMPLETED'
-            ? 'INSPECTION_COMPLETED'
-            : 'INSPECTION_UPDATED',
+        input.status === 'CANCELLED' ? 'INSPECTION_CANCELLED' : 'INSPECTION_UPDATED',
         id,
         { ...input, closedAssignmentId: current?.id },
       );
@@ -903,6 +1099,330 @@ export class AdminService {
       organizationId: user.organizationId,
     });
     return updated;
+  }
+
+  /**
+   * Finalize (complete) an inspection — a human-only decision (spec §11).
+   * Blocked while required review items remain (findings pending review or media
+   * still processing) unless a documented override reason is supplied, which is
+   * recorded in the audit trail. Only a principal with `inspections:finalize`
+   * reaches this method (enforced by the controller guard).
+   */
+  async finalizeInspection(user: AuthenticatedUser, id: string, input: FinalizeInspectionDto) {
+    const existing = await this.requireInspection(user.organizationId, id);
+    this.assertReviewable(existing.status);
+    const [pendingFindings, unfinishedMedia] = await Promise.all([
+      this.prisma.inspectionFinding.count({
+        where: { inspectionId: id, reviewStatus: FindingReviewStatus.PENDING_REVIEW },
+      }),
+      this.prisma.inspectionMedia.count({
+        where: {
+          inspectionId: id,
+          processingStatus: {
+            in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING],
+          },
+        },
+      }),
+    ]);
+    const blockers = pendingFindings + unfinishedMedia;
+    if (blockers > 0 && !input.overrideReason)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_HAS_UNRESOLVED_ITEMS',
+        `${pendingFindings} finding(s) awaiting review and ${unfinishedMedia} recording(s) still processing. Resolve them or document an override to finalize.`,
+      );
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspection.update({
+        where: { id },
+        data: {
+          status: InspectionStatus.COMPLETED,
+          completedAt: new Date(),
+          finalizedAt: new Date(),
+          finalizedById: user.id,
+          // Finalization clears any pending-finalization hold.
+          completionBlockedReason: null,
+          tbdReason: null,
+          followUpRequired: false,
+        },
+      });
+      await this.audit(tx, user, 'INSPECTION_FINALIZED', id, {
+        pendingFindings,
+        unfinishedMedia,
+        override: blockers > 0,
+        overrideReason: input.overrideReason ?? null,
+      });
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return this.inspection(user, id);
+  }
+
+  /** Mark an inspection TBD / pending-finalization with an optional reason. */
+  async markInspectionTbd(user: AuthenticatedUser, id: string, input: InspectionTbdDto) {
+    await this.transitionReview(user, id, {
+      status: InspectionStatus.TBD,
+      action: 'INSPECTION_MARKED_TBD',
+      data: {
+        tbdReason: input.reason ?? null,
+        completionBlockedReason: input.reason ?? 'Pending administrator determination.',
+      },
+      metadata: { reason: input.reason ?? null },
+    });
+    return this.inspection(user, id);
+  }
+
+  /** Require a follow-up inspection with an optional planned date and tasks. */
+  async requireInspectionFollowUp(
+    user: AuthenticatedUser,
+    id: string,
+    input: InspectionFollowUpDto,
+  ) {
+    await this.transitionReview(user, id, {
+      status: InspectionStatus.FOLLOW_UP_REQUIRED,
+      action: 'INSPECTION_FOLLOW_UP_REQUIRED',
+      data: {
+        followUpRequired: true,
+        followUpDueAt: input.dueAt ? new Date(input.dueAt) : null,
+        followUpTasks: input.tasks ?? null,
+        completionBlockedReason: input.reason ?? 'Follow-up inspection required.',
+      },
+      metadata: { dueAt: input.dueAt ?? null, tasks: input.tasks ?? null, reason: input.reason ?? null },
+    });
+    return this.inspection(user, id);
+  }
+
+  /** Move an inspection into administrator review / request more evidence. */
+  async markInspectionUnderReview(
+    user: AuthenticatedUser,
+    id: string,
+    input: InspectionUnderReviewDto,
+  ) {
+    await this.transitionReview(user, id, {
+      status: InspectionStatus.UNDER_REVIEW,
+      action: 'INSPECTION_UNDER_REVIEW',
+      data: { completionBlockedReason: input.reason ?? null },
+      metadata: { reason: input.reason ?? null },
+    });
+    return this.inspection(user, id);
+  }
+
+  /** Inspection areas for the workflow merge UI. */
+  async inspectionAreas(user: AuthenticatedUser, id: string) {
+    await this.requireInspection(user.organizationId, id);
+    const areas = await this.prisma.inspectionArea.findMany({
+      where: { inspectionId: id },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        completionStatus: true,
+        propertyArea: {
+          select: {
+            id: true,
+            name: true,
+            environment: true,
+            floor: { select: { name: true } },
+          },
+        },
+        _count: { select: { media: true, photos: true } },
+      },
+    });
+    return areas.map((area) => ({
+      id: area.id,
+      propertyAreaId: area.propertyArea.id,
+      name: area.propertyArea.name,
+      floorName: area.propertyArea.floor?.name ?? null,
+      environment: area.propertyArea.environment,
+      completionStatus: area.completionStatus,
+      mediaCount: area._count.media,
+      photoCount: area._count.photos,
+    }));
+  }
+
+  /**
+   * Merge a duplicate inspection area into another within the SAME inspection
+   * (spec §16). All evidence is preserved: media, photos, upload sessions, and
+   * status history are reassigned to the target area, and the source area's
+   * findings (keyed by property area) are repointed to the target's property
+   * area. To honour the one-primary-video-per-area invariant, a source primary
+   * walkthrough is demoted to an additional labeled clip when the target already
+   * has a primary. The source room name is preserved as an alias so future
+   * comparisons can still match it. Never merges across inspections.
+   */
+  async mergeInspectionAreas(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    input: MergeInspectionAreasDto,
+  ) {
+    if (input.sourceAreaId === input.targetAreaId)
+      throw new ApplicationError(
+        422,
+        'INVALID_MERGE',
+        'Choose two different areas to merge.',
+      );
+    const inspection = await this.requireInspection(user.organizationId, inspectionId);
+    if (FROZEN_INSPECTION_STATUSES.includes(inspection.status))
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'A completed or cancelled inspection cannot be changed.',
+      );
+    const summary = await this.prisma.$transaction(async (tx) => {
+      const areaSelect = {
+        id: true,
+        propertyAreaId: true,
+        propertyArea: { select: { name: true } },
+      } satisfies Prisma.InspectionAreaSelect;
+      const [source, target] = await Promise.all([
+        tx.inspectionArea.findFirst({
+          where: { id: input.sourceAreaId, inspectionId },
+          select: areaSelect,
+        }),
+        tx.inspectionArea.findFirst({
+          where: { id: input.targetAreaId, inspectionId },
+          select: areaSelect,
+        }),
+      ]);
+      if (!source || !target)
+        throw new ApplicationError(
+          404,
+          'AREA_NOT_FOUND',
+          'Both areas must belong to this inspection.',
+        );
+
+      // Preserve the one-PRIMARY_AREA-video-per-area invariant. A source area has
+      // at most one primary (partial unique index); keep it as the target's
+      // primary only if the target has none, otherwise demote it to an extra.
+      const targetPrimaries = await tx.inspectionMedia.count({
+        where: { inspectionAreaId: target.id, recordingType: VideoRecordingType.PRIMARY_AREA },
+      });
+      const sourcePrimaries = await tx.inspectionMedia.findMany({
+        where: { inspectionAreaId: source.id, recordingType: VideoRecordingType.PRIMARY_AREA },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      const keepPrimaryIds =
+        targetPrimaries === 0 ? sourcePrimaries.slice(0, 1).map((m) => m.id) : [];
+      const demoteIds = sourcePrimaries
+        .filter((m) => !keepPrimaryIds.includes(m.id))
+        .map((m) => m.id);
+      if (demoteIds.length)
+        await tx.inspectionMedia.updateMany({
+          where: { id: { in: demoteIds } },
+          data: {
+            recordingType: VideoRecordingType.ADDITIONAL_ISSUE,
+            label: `Merged from ${source.propertyArea.name}`,
+          },
+        });
+
+      const [movedMedia, movedPhotos] = await Promise.all([
+        tx.inspectionMedia.updateMany({
+          where: { inspectionAreaId: source.id },
+          data: { inspectionAreaId: target.id },
+        }),
+        tx.inspectionPhoto.updateMany({
+          where: { inspectionAreaId: source.id },
+          data: { inspectionAreaId: target.id },
+        }),
+      ]);
+      await tx.mediaUploadSession.updateMany({
+        where: { inspectionAreaId: source.id },
+        data: { inspectionAreaId: target.id },
+      });
+      await tx.inspectionAreaStatusHistory.updateMany({
+        where: { inspectionAreaId: source.id },
+        data: { inspectionAreaId: target.id },
+      });
+      // Findings link to the catalog area by propertyAreaId; repoint only this
+      // inspection's findings for the merged source area.
+      const movedFindings = await tx.inspectionFinding.updateMany({
+        where: { inspectionId, propertyAreaId: source.propertyAreaId },
+        data: { propertyAreaId: target.propertyAreaId },
+      });
+
+      // Preserve the source room name as an alias of the target catalog area so
+      // renamed/duplicate rooms match in future comparisons. Check first — a
+      // duplicate insert would abort the whole transaction.
+      if (source.propertyArea.name && source.propertyArea.name !== target.propertyArea.name) {
+        const existingAlias = await tx.propertyAreaAlias.findFirst({
+          where: { propertyAreaId: target.propertyAreaId, alias: source.propertyArea.name },
+          select: { id: true },
+        });
+        if (!existingAlias)
+          await tx.propertyAreaAlias.create({
+            data: {
+              propertyAreaId: target.propertyAreaId,
+              alias: source.propertyArea.name,
+              createdById: user.id,
+            },
+          });
+      }
+
+      await tx.inspectionArea.delete({ where: { id: source.id } });
+      const result = {
+        movedMedia: movedMedia.count,
+        movedPhotos: movedPhotos.count,
+        movedFindings: movedFindings.count,
+        demotedPrimaries: demoteIds.length,
+      };
+      await this.audit(tx, user, 'INSPECTION_AREAS_MERGED', inspectionId, {
+        sourceAreaId: source.id,
+        targetAreaId: target.id,
+        sourcePropertyAreaId: source.propertyAreaId,
+        targetPropertyAreaId: target.propertyAreaId,
+        sourceName: source.propertyArea.name,
+        targetName: target.propertyArea.name,
+        ...result,
+        reason: input.reason ?? null,
+      });
+      return result;
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return { ...summary, areas: await this.inspectionAreas(user, inspectionId) };
+  }
+
+  private assertReviewable(status: InspectionStatus) {
+    if (FROZEN_INSPECTION_STATUSES.includes(status))
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'A completed or cancelled inspection cannot be changed.',
+      );
+    if (!REVIEWABLE_INSPECTION_STATUSES.includes(status))
+      throw new ApplicationError(
+        409,
+        'INSPECTION_NOT_REVIEWABLE',
+        'Only an inspection the technician has submitted can enter the review workflow.',
+      );
+  }
+
+  private async transitionReview(
+    user: AuthenticatedUser,
+    id: string,
+    opts: {
+      status: InspectionStatus;
+      action: string;
+      data: Prisma.InspectionUpdateInput;
+      metadata: object;
+    },
+  ) {
+    const existing = await this.requireInspection(user.organizationId, id);
+    this.assertReviewable(existing.status);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspection.update({
+        where: { id },
+        data: { status: opts.status, ...opts.data },
+      });
+      await this.audit(tx, user, opts.action, id, opts.metadata);
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
   }
 
   async assign(user: AuthenticatedUser, inspectionId: string, input: AssignmentDto) {
@@ -1384,6 +1904,11 @@ export class AdminService {
         status: status(cacheStatus?.enabled ?? false, cacheStatus?.state === 'connected'),
         detail: cacheStatus?.state ?? 'disabled',
       },
+      this.mailer?.readiness() ?? {
+        provider: 'Mailer',
+        status: 'NOT_CONFIGURED' as const,
+        detail: 'Microsoft Graph mail service is unavailable.',
+      },
     ];
   }
 
@@ -1495,13 +2020,17 @@ export class AdminService {
     const records = await this.prisma.inspectionMedia.findMany({
       relationLoadStrategy: 'join',
       where: { inspectionId, organizationId: user.organizationId },
-      orderBy: { createdAt: 'asc' },
       take: 100,
+      // Primary walkthrough first, then additional labeled videos.
+      orderBy: [{ inspectionAreaId: 'asc' }, { recordingType: 'asc' }, { createdAt: 'asc' }],
       select: {
         id: true,
         inspectionAreaId: true,
         mimeType: true,
         durationSeconds: true,
+        recordingType: true,
+        label: true,
+        category: true,
         uploadStatus: true,
         processingStatus: true,
         createdAt: true,
@@ -1523,6 +2052,9 @@ export class AdminService {
       technicianName: record.technician.displayName,
       mimeType: record.mimeType,
       durationSeconds: record.durationSeconds,
+      recordingType: record.recordingType,
+      label: record.label,
+      category: record.category,
       uploadStatus: record.uploadStatus,
       processingStatus: record.processingStatus,
       createdAt: record.createdAt,
@@ -1547,6 +2079,72 @@ export class AdminService {
       bytes: await this.mediaStorage.get(record.providerMediaId),
       mimeType: record.mimeType,
       fileName: `room-video-${record.id}.mp4`,
+    };
+  }
+
+  async inspectionPhotos(user: AuthenticatedUser, inspectionId: string) {
+    await this.requireInspection(user.organizationId, inspectionId);
+    const records = await this.prisma.inspectionPhoto.findMany({
+      relationLoadStrategy: 'join',
+      where: { inspectionId, organizationId: user.organizationId },
+      orderBy: [
+        { inspectionAreaId: 'asc' },
+        { captureType: 'asc' },
+        { sequenceNumber: 'asc' },
+        { createdAt: 'asc' },
+      ],
+      take: 500,
+      select: {
+        id: true,
+        inspectionAreaId: true,
+        findingId: true,
+        captureType: true,
+        sequenceNumber: true,
+        label: true,
+        notes: true,
+        mimeType: true,
+        width: true,
+        height: true,
+        capturedAt: true,
+        capturedBy: { select: { displayName: true } },
+        inspectionArea: { select: { propertyArea: { select: { name: true } } } },
+      },
+    });
+    return records.map((record) => ({
+      id: record.id,
+      roomId: record.inspectionAreaId,
+      roomName: record.inspectionArea.propertyArea.name,
+      findingId: record.findingId,
+      captureType: record.captureType,
+      sequenceNumber: record.sequenceNumber,
+      label: record.label,
+      notes: record.notes,
+      mimeType: record.mimeType,
+      width: record.width,
+      height: record.height,
+      capturedByName: record.capturedBy.displayName,
+      capturedAt: record.capturedAt.toISOString(),
+      contentPath: `/api/v1/admin/photos/${record.id}/content`,
+    }));
+  }
+
+  async photoContent(user: AuthenticatedUser, photoId: string) {
+    if (!this.mediaStorage)
+      throw new ApplicationError(
+        503,
+        'INSPECTION_MEDIA_STORAGE_NOT_CONFIGURED',
+        'Inspection media storage is not configured.',
+      );
+    const record = await this.prisma.inspectionPhoto.findFirst({
+      where: { id: photoId, organizationId: user.organizationId },
+      select: { id: true, storageKey: true, mimeType: true },
+    });
+    if (!record)
+      throw new ApplicationError(404, 'INSPECTION_PHOTO_NOT_FOUND', 'Photo was not found.');
+    return {
+      bytes: await this.mediaStorage.get(record.storageKey),
+      mimeType: record.mimeType,
+      fileName: `photo-${record.id}`,
     };
   }
 

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DemoRole, FindingStatus, InspectionStatus } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
+import type { AddAreaInput } from '../repositories/contracts';
 
 // Socket events, push notifications, app foreground, and mutations are the primary refresh paths.
 // This minute-level poll is only a bounded safety net when realtime delivery is interrupted.
@@ -193,6 +194,19 @@ export function useFinding(id: string, inspectionId?: string) {
     queryKey: [...queryKeys.finding(id), inspectionId ?? ''],
     queryFn: () => repositories.findings.get(id, inspectionId),
     enabled: Boolean(id),
+  });
+}
+
+export function useAddArea(inspectionId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddAreaInput) => repositories.inspections.addArea(inspectionId, input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.rooms(inspectionId) });
+      void client.invalidateQueries({
+        queryKey: [...queryKeys.inspection(inspectionId), 'context'],
+      });
+    },
   });
 }
 

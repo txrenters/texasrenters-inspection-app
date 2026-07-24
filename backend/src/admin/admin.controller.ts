@@ -32,24 +32,38 @@ import {
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
+import { MailService } from '../mail/mail.service';
 import {
   AdminFindingsQueryDto,
   AssignmentDto,
   ApprovePropertyAreasDto,
+  AreaComparisonOverrideDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
+  ChargeReviewDto,
+  ChargeRuleDto,
+  ComparisonReviewDto,
   CreateAdminInspectionDto,
+  CreateChargeDto,
+  PetCandidateReviewDto,
   CreatePropertyAreaDto,
   CreateReportShareDto,
   CreateTechnicianDto,
+  FinalizeInspectionDto,
   FindingRejectDto,
   FindingReviewDto,
+  InspectionFollowUpDto,
   InspectionListQueryDto,
+  InspectionTbdDto,
+  InspectionUnderReviewDto,
   LeaseListQueryDto,
+  MergeInspectionAreasDto,
   PortfolioListQueryDto,
   PropertyListQueryDto,
+  RejectPropertyAreaDto,
   TechnicianListQueryDto,
   TechnicianStatusDto,
+  TestMailDto,
   UnitListQueryDto,
   UnassignDto,
   UpdatePropertyAreaDto,
@@ -60,9 +74,12 @@ import {
 } from './admin.dto';
 import { AdminService } from './admin.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
+import { ChargeService } from './charge.service';
+import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
+import type { ComparisonClassification } from '@prisma/client';
 
 @ApiTags('Administrator application')
 @ApiBearerAuth()
@@ -75,6 +92,9 @@ export class AdminController {
     private readonly technicianProvisioning: TechnicianProvisioningService,
     private readonly floorPlans: FloorPlanAdminService,
     private readonly reportShares: ReportShareService,
+    private readonly comparison: ComparisonService,
+    private readonly charges: ChargeService,
+    private readonly mailer: MailService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -104,6 +124,16 @@ export class AdminController {
   @RequirePermissions('properties:read')
   property(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
     return this.service.property(request.user, id);
+  }
+  @Get('properties/:propertyId/lease-summary')
+  @RequirePermissions('properties:read')
+  leaseSummary(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
+    return this.service.propertyLeaseSummary(request.user, id);
+  }
+  @Get('properties/:propertyId/area-summary')
+  @RequirePermissions('properties:read')
+  areaSummary(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
+    return this.service.propertyAreaSummary(request.user, id);
   }
   @Get('properties/:propertyId/units')
   @RequirePermissions('properties:read')
@@ -182,6 +212,20 @@ export class AdminController {
   deletePropertyArea(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.deleteArea(request.user, id);
   }
+  @Post('property-areas/:areaId/reject')
+  @RequirePermissions('properties:manage')
+  rejectPropertyArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('areaId') id: string,
+    @Body() body: RejectPropertyAreaDto,
+  ) {
+    return this.floorPlans.rejectArea(request.user, id, body.reason);
+  }
+  @Post('property-areas/:areaId/archive')
+  @RequirePermissions('properties:manage')
+  archivePropertyArea(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
+    return this.floorPlans.archiveArea(request.user, id);
+  }
   @Post('properties/:propertyId/areas/approve')
   @RequirePermissions('properties:manage')
   approvePropertyAreas(
@@ -231,6 +275,21 @@ export class AdminController {
   @Header('Cache-Control', 'private, no-store')
   async mediaContent(@Req() request: AuthenticatedRequest, @Param('mediaId') id: string) {
     const file = await this.service.mediaContent(request.user, id);
+    return new StreamableFile(file.bytes, {
+      type: file.mimeType,
+      disposition: `inline; filename="${file.fileName}"`,
+    });
+  }
+  @Get('inspections/:inspectionId/photos')
+  @RequirePermissions('inspections:read')
+  inspectionPhotos(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.service.inspectionPhotos(request.user, id);
+  }
+  @Get('photos/:photoId/content')
+  @RequirePermissions('inspections:read')
+  @Header('Cache-Control', 'private, no-store')
+  async photoContent(@Req() request: AuthenticatedRequest, @Param('photoId') id: string) {
+    const file = await this.service.photoContent(request.user, id);
     return new StreamableFile(file.bytes, {
       type: file.mimeType,
       disposition: `inline; filename="${file.fileName}"`,
@@ -300,6 +359,157 @@ export class AdminController {
   ) {
     return this.service.updateInspection(request.user, id, body);
   }
+  @Post('inspections/:inspectionId/finalize')
+  @RequirePermissions('inspections:finalize')
+  finalizeInspection(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: FinalizeInspectionDto,
+  ) {
+    return this.service.finalizeInspection(request.user, id, body);
+  }
+  @Post('inspections/:inspectionId/mark-tbd')
+  @RequirePermissions('inspections:manage')
+  markInspectionTbd(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: InspectionTbdDto,
+  ) {
+    return this.service.markInspectionTbd(request.user, id, body);
+  }
+  @Post('inspections/:inspectionId/require-follow-up')
+  @RequirePermissions('inspections:manage')
+  requireInspectionFollowUp(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: InspectionFollowUpDto,
+  ) {
+    return this.service.requireInspectionFollowUp(request.user, id, body);
+  }
+  @Post('inspections/:inspectionId/under-review')
+  @RequirePermissions('inspections:manage')
+  markInspectionUnderReview(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: InspectionUnderReviewDto,
+  ) {
+    return this.service.markInspectionUnderReview(request.user, id, body);
+  }
+  @Get('inspections/:inspectionId/areas')
+  @RequirePermissions('inspections:read')
+  inspectionAreas(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.service.inspectionAreas(request.user, id);
+  }
+  @Post('inspections/:inspectionId/merge-areas')
+  @RequirePermissions('inspections:manage')
+  mergeInspectionAreas(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: MergeInspectionAreasDto,
+  ) {
+    return this.service.mergeInspectionAreas(request.user, id, body);
+  }
+  @Get('inspections/:inspectionId/comparison')
+  @RequirePermissions('inspections:read')
+  inspectionComparison(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.comparison.get(request.user, id);
+  }
+  @Post('inspections/:inspectionId/comparison/generate')
+  @RequirePermissions('inspections:manage')
+  generateInspectionComparison(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.comparison.generate(id, {
+      organizationId: request.user.organizationId,
+      userId: request.user.id,
+    });
+  }
+  @Post('comparisons/:comparisonId/review')
+  @RequirePermissions('comparisons:review')
+  reviewComparison(
+    @Req() request: AuthenticatedRequest,
+    @Param('comparisonId') id: string,
+    @Body() body: ComparisonReviewDto,
+  ) {
+    return this.comparison.review(request.user, id, body.decision, body.note);
+  }
+  @Post('area-comparisons/:areaComparisonId/override')
+  @RequirePermissions('comparisons:review')
+  overrideAreaComparison(
+    @Req() request: AuthenticatedRequest,
+    @Param('areaComparisonId') id: string,
+    @Body() body: AreaComparisonOverrideDto,
+  ) {
+    return this.comparison.overrideArea(
+      request.user,
+      id,
+      body.classification as ComparisonClassification,
+      body.reason,
+    );
+  }
+  @Get('charge-rules')
+  @RequirePermissions('charges:review')
+  chargeRules(@Req() request: AuthenticatedRequest) {
+    return this.charges.listRules(request.user);
+  }
+  @Post('charge-rules')
+  @RequirePermissions('charges:configure')
+  upsertChargeRule(@Req() request: AuthenticatedRequest, @Body() body: ChargeRuleDto) {
+    return this.charges.upsertRule(request.user, body);
+  }
+  @Get('inspections/:inspectionId/pets')
+  @RequirePermissions('charges:review')
+  inspectionPets(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.charges.listPets(request.user, id);
+  }
+  @Post('inspections/:inspectionId/pets/generate')
+  @RequirePermissions('charges:review')
+  generatePetCandidates(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.charges.generateCandidates(request.user, id);
+  }
+  @Post('pet-candidates/:candidateId/review')
+  @RequirePermissions('charges:review')
+  reviewPetCandidate(
+    @Req() request: AuthenticatedRequest,
+    @Param('candidateId') id: string,
+    @Body() body: PetCandidateReviewDto,
+  ) {
+    return this.charges.reviewCandidate(request.user, id, body);
+  }
+  @Get('inspections/:inspectionId/charges')
+  @RequirePermissions('charges:review')
+  inspectionCharges(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.charges.listCharges(request.user, id);
+  }
+  @Post('inspections/:inspectionId/charges/generate')
+  @RequirePermissions('charges:review')
+  generateCharges(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.charges.generateCharges(request.user, id);
+  }
+  @Post('inspections/:inspectionId/charges')
+  @RequirePermissions('charges:review')
+  createCharge(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: CreateChargeDto,
+  ) {
+    return this.charges.createCharge(request.user, id, body);
+  }
+  @Post('charges/:chargeId/review')
+  @RequirePermissions('charges:review')
+  reviewCharge(
+    @Req() request: AuthenticatedRequest,
+    @Param('chargeId') id: string,
+    @Body() body: ChargeReviewDto,
+  ) {
+    return this.charges.reviewCharge(request.user, id, body);
+  }
+  @Get('inspections/:inspectionId/charge-report')
+  @RequirePermissions('charges:review')
+  chargeReport(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.charges.report(request.user, id);
+  }
   @Post('inspections/:inspectionId/assign')
   @RequirePermissions('inspections:assign')
   assign(
@@ -362,6 +572,12 @@ export class AdminController {
   @RequirePermissions('integrations:read')
   providerStatus() {
     return this.service.providerStatus();
+  }
+
+  @Post('integrations/mail/test')
+  @RequirePermissions('integrations:manage')
+  testMail(@Body() body: TestMailDto) {
+    return this.mailer.sendTest(body.recipientEmail.trim().toLowerCase());
   }
 
   @Get('ai/settings')

@@ -12,9 +12,16 @@ import {
 import {
   InspectionCompleteDialog,
   InspectionFindingsSection,
+  InspectionPhotosSection,
   InspectionSummariesSection,
   InspectionMediaSection,
 } from '@/components/inspection-review';
+import { InspectionChargesPanel } from '@/components/inspection-charges';
+import { InspectionComparisonPanel } from '@/components/inspection-comparison';
+import {
+  InspectionAreasPanel,
+  InspectionWorkflowPanel,
+} from '@/components/inspection-workflow';
 import { ReportShareDialog } from '@/components/report-share-dialog';
 import {
   Badge,
@@ -84,11 +91,6 @@ export default function InspectionDetailPage() {
         breadcrumbs={[{ label: 'Inspections', href: '/inspections' }, { label: 'Detail' }]}
         action={
           <div className="inspection-action-bar">
-            {!finalized && permissions.has('inspections:manage') ? (
-              <button className="button button-primary" onClick={() => setCompleting(true)}>
-                Complete inspection
-              </button>
-            ) : null}
             {!finalized && permissions.has('inspections:assign') ? (
               <button className="button button-secondary" onClick={() => setAssigning(true)}>
                 {current ? 'Reassign' : 'Assign technician'}
@@ -195,9 +197,19 @@ export default function InspectionDetailPage() {
         ) : null}
       </section>
 
+      <InspectionWorkflowPanel inspection={item} onFinalize={() => setCompleting(true)} />
+
       <InspectionMediaSection inspectionId={id} />
+      <InspectionPhotosSection inspectionId={id} />
       <InspectionSummariesSection inspectionId={id} />
       <InspectionFindingsSection inspectionId={id} />
+      {item.inspectionType === 'MOVE_OUT' ? (
+        <InspectionComparisonPanel inspectionId={id} />
+      ) : null}
+      {item.inspectionType === 'OCCUPIED' || item.inspectionType === 'MOVE_OUT' ? (
+        <InspectionChargesPanel inspectionId={id} inspectionType={item.inspectionType} />
+      ) : null}
+      <InspectionAreasPanel inspectionId={id} />
 
       <div className="inspection-history-layout section-gap">
         <section className="panel inspection-history-panel">

@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { MailService } from '../mail/mail.service';
 import type { CreateTechnicianDto } from './admin.dto';
 
 @Injectable()
@@ -82,6 +83,7 @@ export class TechnicianProvisioningService {
     @Optional()
     @Inject(CacheInvalidationService)
     private readonly cacheInvalidation?: CacheInvalidationService,
+    @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 
   async create(user: AuthenticatedUser, input: CreateTechnicianDto) {
@@ -179,6 +181,12 @@ export class TechnicianProvisioningService {
         organizationId: user.organizationId,
         technicianId: profile.id,
       });
+      const delivery = await this.mailer?.sendAccountInvitation({
+        to: email,
+        displayName,
+        temporaryPassword,
+        application: 'mobile',
+      });
       return {
         id: profile.id,
         email: profile.email,
@@ -187,6 +195,7 @@ export class TechnicianProvisioningService {
         createdAt: profile.createdAt,
         mustChangePassword: true,
         temporaryPassword,
+        emailDeliveryStatus: delivery?.status ?? ('NOT_CONFIGURED' as const),
       };
     } catch (error) {
       await this.identities.deleteIdentity(identity.authUserId).catch(() => undefined);

@@ -1,0 +1,396 @@
+'use client';
+
+import type { AdminInspection } from '@texasrenters/shared';
+import { useEffect, useRef, useState } from 'react';
+
+import { Badge, ErrorState, LoadingState, formatDate } from '@/components/ui';
+import { usePermissions } from '@/lib/auth';
+import { useAdminMutations, useInspectionAreas } from '@/lib/queries';
+
+const REVIEWABLE: ReadonlyArray<AdminInspection['status']> = [
+  'TECHNICIAN_SUBMITTED',
+  'PROCESSING',
+  'REVIEW_REQUIRED',
+  'UNDER_REVIEW',
+  'TBD',
+  'FOLLOW_UP_REQUIRED',
+];
+
+type WorkflowAction = 'tbd' | 'follow-up' | 'under-review';
+
+/**
+ * Administrator review workflow (spec §11/§16): the current lifecycle state plus
+ * the human-only transitions — finalize, mark TBD, require a follow-up, or send
+ * back for review. Technician submission never finalizes; only these actions do.
+ */
+export function InspectionWorkflowPanel({
+  inspection,
+  onFinalize,
+}: {
+  inspection: AdminInspection;
+  onFinalize: () => void;
+}) {
+  const permissions = usePermissions();
+  const [action, setAction] = useState<WorkflowAction | null>(null);
+  const canManage = permissions.has('inspections:manage');
+  const canFinalize = permissions.has('inspections:finalize');
+  const reviewable = REVIEWABLE.includes(inspection.status);
+  const finalized = inspection.status === 'COMPLETED' || inspection.status === 'CANCELLED';
+
+  return (
+    <section className="panel inspection-workflow-panel" aria-labelledby="inspection-workflow-title">
+      <div className="panel-header">
+        <div>
+          <span className="section-kicker">Review workflow</span>
+          <h2 id="inspection-workflow-title">Finalization &amp; follow-up</h2>
+          <p className="panel-description">
+            Submitting is not completing — an administrator finalizes, defers, or requests a
+            follow-up.
+          </p>
+        </div>
+        <Badge value={inspection.status} />
+      </div>
+
+      <dl className="workflow-facts">
+        <div className="workflow-fact">
+          <dt>Technician submitted</dt>
+          <dd>{inspection.submittedAt ? formatDate(inspection.submittedAt) : 'Not yet submitted'}</dd>
+        </div>
+        {inspection.finalizedAt ? (
+          <div className="workflow-fact">
+            <dt>Finalized</dt>
+            <dd>
+              {formatDate(inspection.finalizedAt)}
+              {inspection.finalizedBy ? ` · ${inspection.finalizedBy.displayName}` : ''}
+            </dd>
+          </div>
+        ) : null}
+        {inspection.status === 'FOLLOW_UP_REQUIRED' ? (
+          <div className="workflow-fact workflow-fact-wide">
+            <dt>Follow-up</dt>
+            <dd>
+              {inspection.followUpDueAt
+                ? `Due ${formatDate(inspection.followUpDueAt)}`
+                : 'No date set'}
+              {inspection.followUpTasks ? ` — ${inspection.followUpTasks}` : ''}
+            </dd>
+          </div>
+        ) : null}
+        {inspection.completionBlockedReason ? (
+          <div className="workflow-fact workflow-fact-wide">
+            <dt>{inspection.status === 'TBD' ? 'Pending reason' : 'On hold'}</dt>
+            <dd>{inspection.tbdReason ?? inspection.completionBlockedReason}</dd>
+          </div>
+        ) : null}
+      </dl>
+
+      {finalized ? (
+        <p className="workflow-frozen">
+          This inspection is {inspection.status.toLowerCase()} and can no longer transition.
+        </p>
+      ) : !reviewable ? (
+        <p className="workflow-frozen">
+          Review actions unlock once the technician submits the inspection.
+        </p>
+      ) : (
+        <div className="workflow-actions">
+          {canFinalize ? (
+            <button type="button" className="button button-primary" onClick={onFinalize}>
+              Finalize inspection
+            </button>
+          ) : null}
+          {canManage ? (
+            <>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setAction('under-review')}
+              >
+                Request more evidence
+              </button>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setAction('follow-up')}
+              >
+                Require follow-up
+              </button>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={() => setAction('tbd')}
+              >
+                Mark TBD
+              </button>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {action ? (
+        <WorkflowActionDialog
+          inspectionId={inspection.id}
+          action={action}
+          onClose={() => setAction(null)}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+const ACTION_COPY: Record<
+  WorkflowAction,
+  { title: string; description: string; confirm: string }
+> = {
+  tbd: {
+    title: 'Mark inspection TBD',
+    description:
+      'Defer finalization while the outcome is undetermined (another area, management review, or an owner/tenant response).',
+    confirm: 'Mark TBD',
+  },
+  'follow-up': {
+    title: 'Require a follow-up inspection',
+    description: 'Record a planned date and the tasks or areas the follow-up must cover.',
+    confirm: 'Require follow-up',
+  },
+  'under-review': {
+    title: 'Send back for review',
+    description: 'Move the inspection into administrator review and note what evidence is needed.',
+    confirm: 'Move to review',
+  },
+};
+
+function WorkflowActionDialog({
+  inspectionId,
+  action,
+  onClose,
+}: {
+  inspectionId: string;
+  action: WorkflowAction;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const mutations = useAdminMutations();
+  const [reason, setReason] = useState('');
+  const [dueAt, setDueAt] = useState('');
+  const [tasks, setTasks] = useState('');
+  const copy = ACTION_COPY[action];
+  const mutation =
+    action === 'tbd'
+      ? mutations.markInspectionTbd
+      : action === 'follow-up'
+        ? mutations.requireInspectionFollowUp
+        : mutations.markInspectionUnderReview;
+
+  useEffect(() => {
+    ref.current?.showModal();
+    return () => ref.current?.close();
+  }, []);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (action === 'follow-up') {
+      await mutations.requireInspectionFollowUp.mutateAsync({
+        id: inspectionId,
+        dueAt: dueAt ? new Date(dueAt).toISOString() : undefined,
+        tasks: tasks.trim() || undefined,
+        reason: reason.trim() || undefined,
+      });
+    } else if (action === 'tbd') {
+      await mutations.markInspectionTbd.mutateAsync({
+        id: inspectionId,
+        reason: reason.trim() || undefined,
+      });
+    } else {
+      await mutations.markInspectionUnderReview.mutateAsync({
+        id: inspectionId,
+        reason: reason.trim() || undefined,
+      });
+    }
+    onClose();
+  }
+
+  return (
+    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
+      <form onSubmit={(event) => void submit(event)}>
+        <h2>{copy.title}</h2>
+        <p>{copy.description}</p>
+        {action === 'follow-up' ? (
+          <>
+            <label className="field">
+              <span>Planned date (optional)</span>
+              <input type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Tasks / areas to cover (optional)</span>
+              <textarea value={tasks} onChange={(event) => setTasks(event.target.value)} rows={2} />
+            </label>
+          </>
+        ) : null}
+        <label className="field">
+          <span>Reason (optional)</span>
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
+        </label>
+        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+        <div className="form-actions">
+          <button type="button" className="button button-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="button button-primary" disabled={mutation.isPending}>
+            {mutation.isPending ? 'Saving…' : copy.confirm}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
+/**
+ * Areas of the inspection, with an administrator control to merge a duplicate
+ * area into another (spec §16). All evidence is preserved and reassigned.
+ */
+export function InspectionAreasPanel({ inspectionId }: { inspectionId: string }) {
+  const permissions = usePermissions();
+  const areas = useInspectionAreas(inspectionId);
+  const [merging, setMerging] = useState(false);
+  const canMerge = permissions.has('inspections:manage');
+
+  return (
+    <section className="panel inspection-areas-panel" aria-labelledby="inspection-areas-title">
+      <div className="panel-header">
+        <div>
+          <span className="section-kicker">Areas</span>
+          <h2 id="inspection-areas-title">Inspection areas</h2>
+          <p className="panel-description">Rooms and outdoor areas captured for this inspection.</p>
+        </div>
+        {canMerge && (areas.data?.length ?? 0) >= 2 ? (
+          <button type="button" className="button button-secondary" onClick={() => setMerging(true)}>
+            Merge duplicates
+          </button>
+        ) : null}
+      </div>
+
+      {areas.isLoading ? (
+        <LoadingState label="Loading areas…" />
+      ) : areas.isError ? (
+        <ErrorState error={areas.error} retry={() => void areas.refetch()} />
+      ) : areas.data?.length ? (
+        <ul className="area-list">
+          {areas.data.map((area) => (
+            <li key={area.id} className="area-list-item">
+              <div>
+                <strong>{area.name}</strong>
+                {area.floorName ? <span className="area-meta"> · {area.floorName}</span> : null}
+              </div>
+              <div className="area-list-meta">
+                <Badge value={area.environment} />
+                <Badge value={area.completionStatus} />
+                <span className="area-meta">
+                  {area.mediaCount} video{area.mediaCount === 1 ? '' : 's'} · {area.photoCount} photo
+                  {area.photoCount === 1 ? '' : 's'}
+                </span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="compact-empty-state">No areas have been captured for this inspection.</div>
+      )}
+
+      {merging && areas.data ? (
+        <MergeAreasDialog
+          inspectionId={inspectionId}
+          areas={areas.data}
+          onClose={() => setMerging(false)}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function MergeAreasDialog({
+  inspectionId,
+  areas,
+  onClose,
+}: {
+  inspectionId: string;
+  areas: NonNullable<ReturnType<typeof useInspectionAreas>['data']>;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const mutation = useAdminMutations().mergeInspectionAreas;
+  const [sourceAreaId, setSourceAreaId] = useState('');
+  const [targetAreaId, setTargetAreaId] = useState('');
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    ref.current?.showModal();
+    return () => ref.current?.close();
+  }, []);
+
+  const valid = sourceAreaId && targetAreaId && sourceAreaId !== targetAreaId;
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!valid) return;
+    await mutation.mutateAsync({
+      id: inspectionId,
+      sourceAreaId,
+      targetAreaId,
+      reason: reason.trim() || undefined,
+    });
+    onClose();
+  }
+
+  return (
+    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
+      <form onSubmit={(event) => void submit(event)}>
+        <h2>Merge duplicate areas</h2>
+        <p>
+          The source area&apos;s videos, photos, and findings move into the target area, and the
+          source area is removed. This cannot be undone.
+        </p>
+        <label className="field">
+          <span>Source area (merged away)</span>
+          <select value={sourceAreaId} onChange={(event) => setSourceAreaId(event.target.value)}>
+            <option value="">Select an area…</option>
+            {areas.map((area) => (
+              <option key={area.id} value={area.id}>
+                {area.name}
+                {area.floorName ? ` · ${area.floorName}` : ''} ({area.mediaCount}v/{area.photoCount}
+                p)
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Target area (kept)</span>
+          <select value={targetAreaId} onChange={(event) => setTargetAreaId(event.target.value)}>
+            <option value="">Select an area…</option>
+            {areas
+              .filter((area) => area.id !== sourceAreaId)
+              .map((area) => (
+                <option key={area.id} value={area.id}>
+                  {area.name}
+                  {area.floorName ? ` · ${area.floorName}` : ''}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Reason (optional)</span>
+          <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
+        </label>
+        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+        <div className="form-actions">
+          <button type="button" className="button button-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="button button-primary" disabled={!valid || mutation.isPending}>
+            {mutation.isPending ? 'Merging…' : 'Merge areas'}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}

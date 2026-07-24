@@ -60,6 +60,10 @@ export function mapBuilding(raw: RawPropertywareBuilding): NormalizedBuilding {
     name: raw.name.trim(),
     abbreviation: value(raw.abbreviation),
     propertyType: value(raw.propertyType) ?? value(raw.type),
+    // Only carry a positive area; Propertyware reports 0 when unset.
+    totalArea: raw.totalArea != null && raw.totalArea > 0 ? Math.round(raw.totalArea) : undefined,
+    areaUnits: value(raw.areaUnits),
+    category: value(raw.category),
     isActive: raw.active,
     sourceStatus: raw.status ?? (raw.active ? 'Active' : 'Inactive'),
     ...address(raw.address),

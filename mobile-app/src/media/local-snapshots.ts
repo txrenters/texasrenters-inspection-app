@@ -1,7 +1,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
-import type { RoomSnapshot } from '../domain/models';
+import type { PhotoCaptureType, RoomSnapshot } from '../domain/models';
 
 const SNAPSHOTS_FOLDER = 'inspection-snapshots';
 
@@ -13,6 +13,7 @@ type RoomSnapshotInput = {
   width: number;
   height: number;
   sizeBytes?: number;
+  captureType?: PhotoCaptureType;
 };
 
 export function buildRoomSnapshot({
@@ -23,8 +24,10 @@ export function buildRoomSnapshot({
   width,
   height,
   sizeBytes,
+  captureType = 'AREA_OVERVIEW',
 }: RoomSnapshotInput): RoomSnapshot {
   return {
+    // Doubles as the upload idempotency key (matches ^[A-Za-z0-9_-]{8,128}$).
     id: `snapshot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     ownerUserId,
     inspectionId,
@@ -34,6 +37,8 @@ export function buildRoomSnapshot({
     height: Math.max(1, Math.round(height)),
     sizeBytes: sizeBytes && sizeBytes > 0 ? sizeBytes : undefined,
     capturedAt: new Date().toISOString(),
+    captureType,
+    uploadStatus: 'PENDING',
   };
 }
 

@@ -59,6 +59,11 @@ const propertyAreaResponseSelect = {
   isRequired: true,
   status: true,
   source: true,
+  environment: true,
+  category: true,
+  notes: true,
+  archivedAt: true,
+  createdBy: { select: { id: true, displayName: true } },
   floor: { select: { id: true, name: true, sortOrder: true } },
   _count: { select: { inspectionAreas: true } },
 } satisfies Prisma.PropertyAreaSelect;
@@ -317,7 +322,8 @@ export class FloorPlanAdminService {
   async areas(user: AuthenticatedUser, buildingId: string) {
     await this.requireBuilding(user.organizationId, buildingId);
     return this.prisma.propertyArea.findMany({
-      where: { propertyId: buildingId },
+      // Archived areas are hidden from the active list but retain their media.
+      where: { propertyId: buildingId, archivedAt: null },
       select: propertyAreaResponseSelect,
       orderBy: [{ inspectionOrder: 'asc' }, { name: 'asc' }],
     });
@@ -345,6 +351,10 @@ export class FloorPlanAdminService {
         isRequired: input.isRequired,
         source: 'MANUAL',
         status: PropertyAreaStatus.DRAFT,
+        createdById: user.id,
+        ...(input.environment ? { environment: input.environment } : {}),
+        ...(input.category ? { category: input.category } : {}),
+        ...(input.notes?.trim() ? { notes: input.notes.trim() } : {}),
       },
       select: propertyAreaResponseSelect,
     });
@@ -434,9 +444,41 @@ export class FloorPlanAdminService {
         ...(input.floorName ? { floorId: floor?.id } : {}),
         ...(input.inspectionOrder ? { inspectionOrder: input.inspectionOrder } : {}),
         ...(input.isRequired === undefined ? {} : { isRequired: input.isRequired }),
+        ...(input.environment ? { environment: input.environment } : {}),
+        ...(input.category ? { category: input.category } : {}),
+        ...(input.notes === undefined ? {} : { notes: input.notes.trim() || null }),
       },
       select: propertyAreaResponseSelect,
     });
+  }
+
+  /** Rejects a pending area without deleting any evidence already captured. */
+  async rejectArea(user: AuthenticatedUser, areaId: string, reason?: string) {
+    const area = await this.requireArea(user.organizationId, areaId);
+    const updated = await this.prisma.propertyArea.update({
+      where: { id: areaId },
+      data: { status: PropertyAreaStatus.REJECTED },
+      select: propertyAreaResponseSelect,
+    });
+    await this.audit(user, 'PROPERTY_AREA_REJECTED', 'PropertyArea', areaId, {
+      propertywareBuildingId: area.propertyId,
+      reason: reason?.trim() || null,
+    });
+    return updated;
+  }
+
+  /** Soft-archives an area (hidden from active lists; media/findings retained). */
+  async archiveArea(user: AuthenticatedUser, areaId: string) {
+    const area = await this.requireArea(user.organizationId, areaId);
+    const updated = await this.prisma.propertyArea.update({
+      where: { id: areaId },
+      data: { archivedAt: new Date() },
+      select: propertyAreaResponseSelect,
+    });
+    await this.audit(user, 'PROPERTY_AREA_ARCHIVED', 'PropertyArea', areaId, {
+      propertywareBuildingId: area.propertyId,
+    });
+    return updated;
   }
 
   async deleteArea(user: AuthenticatedUser, areaId: string) {

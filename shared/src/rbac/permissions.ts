@@ -17,11 +17,15 @@ export const PERMISSION_KEYS = [
   'inspections:read',
   'inspections:manage',
   'inspections:assign',
+  'inspections:finalize',
   'technicians:read',
   'technicians:manage',
   'technicians:provision',
   'findings:read',
   'findings:review',
+  'comparisons:review',
+  'charges:configure',
+  'charges:review',
   'reports:share',
   'integrations:read',
   'integrations:manage',
@@ -119,12 +123,19 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
       {
         key: 'inspections:manage',
         label: 'Manage inspections',
-        description: 'Create, edit, complete, and cancel inspections.',
+        description:
+          'Edit and cancel inspections; mark TBD, request follow-ups, and merge duplicate areas.',
       },
       {
         key: 'inspections:assign',
         label: 'Assign technicians',
         description: 'Assign or reassign technicians to inspections.',
+      },
+      {
+        key: 'inspections:finalize',
+        label: 'Finalize inspections',
+        description:
+          'Complete (finalize) an inspection. Human-only decision that closes the review workflow.',
       },
     ],
   },
@@ -162,6 +173,23 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'findings:review',
         label: 'Review findings',
         description: 'Approve or reject findings that decide tenant charges.',
+      },
+      {
+        key: 'comparisons:review',
+        label: 'Review comparisons',
+        description:
+          'Approve, reject, or override move-in vs move-out comparison classifications.',
+      },
+      {
+        key: 'charges:configure',
+        label: 'Configure charge rules',
+        description: 'Set configurable charge rules such as the unauthorized-pet amount.',
+      },
+      {
+        key: 'charges:review',
+        label: 'Review charges',
+        description:
+          'Review pet candidates and approve, reject, adjust, or waive proposed tenant charges.',
       },
     ],
   },

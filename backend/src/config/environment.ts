@@ -38,6 +38,18 @@ const environmentSchema = z
     CORS_ORIGINS: z.string().optional(),
     MOBILE_APP_ORIGIN: z.string().url().optional(),
     WEB_APP_ORIGIN: z.string().url().optional(),
+    MICROSOFT_GRAPH_TENANT_ID: z.string().optional(),
+    MICROSOFT_GRAPH_CLIENT_ID: z.string().optional(),
+    MICROSOFT_GRAPH_CLIENT_SECRET: z.string().optional(),
+    MICROSOFT_GRAPH_BASE_URL: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().url().default('https://graph.microsoft.com'),
+    ),
+    MAIL_FROM_ADDRESS: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().email().optional(),
+    ),
+    MAIL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
     USE_MOCK_AUTH: z.enum(['true', 'false']).default('false'),
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_JWT_SECRET: z.string().optional(),

@@ -441,6 +441,12 @@ export function FloorPlanManager({
                       saving={actions.updatePropertyArea.isPending}
                       deleting={actions.deletePropertyArea.isPending}
                       readOnly={!canManage}
+                      onReject={() =>
+                        actions.rejectPropertyArea.mutateAsync({ propertyId, areaId: area.id })
+                      }
+                      onArchive={() =>
+                        actions.archivePropertyArea.mutateAsync({ propertyId, areaId: area.id })
+                      }
                       onSave={(input) =>
                         actions.updatePropertyArea.mutateAsync({
                           propertyId,
@@ -906,6 +912,8 @@ function AreaReviewRow({
   readOnly,
   onSave,
   onDelete,
+  onReject,
+  onArchive,
 }: {
   area: AdminPropertyArea;
   floorNames: string[];
@@ -914,7 +922,12 @@ function AreaReviewRow({
   readOnly: boolean;
   onSave: (input: AreaInput) => Promise<unknown>;
   onDelete: () => Promise<unknown>;
+  onReject: () => Promise<unknown>;
+  onArchive: () => Promise<unknown>;
 }) {
+  const environmentLabel = area.environment
+    ? area.environment.replace('_', '-').toLowerCase()
+    : null;
   const [floorName, setFloorName] = useState(area.floor?.name ?? '');
   const [name, setName] = useState(area.name);
   const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
@@ -941,6 +954,11 @@ function AreaReviewRow({
           disabled={readOnly}
           onChange={(event) => setName(event.target.value)}
         />
+        <small className="cell-note">
+          {environmentLabel ? `${environmentLabel} · ` : ''}
+          {area.source === 'TECHNICIAN' ? 'Technician-added' : area.source.toLowerCase()}
+          {area.createdBy ? ` · by ${area.createdBy.displayName}` : ''}
+        </small>
       </div>
       <div className="field area-order-field">
         <label htmlFor={`order-${area.id}`}>Order</label>
@@ -972,6 +990,22 @@ function AreaReviewRow({
             }
           >
             Save
+          </button>
+          {area.status === 'DRAFT' ? (
+            <button
+              className="button button-secondary button-small"
+              disabled={saving}
+              onClick={() => void onReject().catch(() => undefined)}
+            >
+              Reject
+            </button>
+          ) : null}
+          <button
+            className="button button-secondary button-small"
+            disabled={saving}
+            onClick={() => void onArchive().catch(() => undefined)}
+          >
+            Archive
           </button>
           <button
             className="button button-danger button-small"

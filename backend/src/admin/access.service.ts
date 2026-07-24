@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
 
 import {
@@ -12,6 +12,7 @@ import {
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { MailService } from '../mail/mail.service';
 import type {
   AccessListQueryDto,
   CreateRoleDto,
@@ -38,6 +39,7 @@ export class AccessService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SupabaseAdminGateway) private readonly identities: SupabaseAdminGateway,
+    @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 
   // The permission catalog is code-defined and identical for every org; there
@@ -299,7 +301,21 @@ export class AccessService {
         return created.id;
       });
       const detail = this.mapUserDetail(await this.requireUser(user, profileId));
-      return { ...detail, mustChangePassword: true as const, temporaryPassword };
+      const delivery = await this.mailer?.sendAccountInvitation({
+        to: email,
+        displayName,
+        temporaryPassword,
+        application: 'web',
+        loginUrl: process.env.WEB_APP_ORIGIN
+          ? `${process.env.WEB_APP_ORIGIN.replace(/\/$/, '')}/login`
+          : undefined,
+      });
+      return {
+        ...detail,
+        mustChangePassword: true as const,
+        temporaryPassword,
+        emailDeliveryStatus: delivery?.status ?? ('NOT_CONFIGURED' as const),
+      };
     } catch (error) {
       await this.identities.deleteIdentity(identity.authUserId).catch(() => undefined);
       await this.prisma.userProfile
