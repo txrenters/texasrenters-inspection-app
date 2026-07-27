@@ -168,7 +168,16 @@ export default function PropertiesPage() {
                     <span className="cell-note">Derived</span>
                   ) : null}
                 </td>
-                <td>{property.leaseSummary?.summary ?? '—'}</td>
+                <td>
+                  {property.leaseSummary?.summary ?? '—'}
+                  {property.leaseSummary?.leaseDataAvailable === false ? (
+                    <span className="cell-note is-warning">Not synchronized</span>
+                  ) : property.leaseSummary?.nextLeaseEndDate ? (
+                    <span className="cell-note">
+                      Next ends {formatDate(property.leaseSummary.nextLeaseEndDate)}
+                    </span>
+                  ) : null}
+                </td>
                 <td className="numeric-cell">{property._count?.inspections ?? 0}</td>
                 <td>
                   <Badge value={property.isActive ? 'ACTIVE' : 'INACTIVE'} />

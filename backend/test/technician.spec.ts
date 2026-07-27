@@ -355,7 +355,13 @@ describe('technician mobile data boundary', () => {
           },
           propertyArea: { name: 'Living Room' },
           media: [
-            { id: 'media-1', providerMediaId: 'local-old-key', recordingType: 'PRIMARY_AREA' },
+            // Pre-migration row: storageKey was backfilled from providerMediaId.
+            {
+              id: 'media-1',
+              providerMediaId: 'local-old-key',
+              storageKey: 'local-old-key',
+              recordingType: 'PRIMARY_AREA',
+            },
           ],
         }),
       },
@@ -363,6 +369,7 @@ describe('technician mobile data boundary', () => {
     };
     const storage = {
       putFromFile: jest.fn().mockResolvedValue(undefined),
+      providerName: () => 'local',
       delete: jest.fn().mockResolvedValue(undefined),
     };
     const service = new TechnicianService(
@@ -386,8 +393,12 @@ describe('technician mobile data boundary', () => {
       status: 'COMPLETED',
       progress: 1,
     });
+    // The object key is tenant-scoped and independent of providerMediaId, so the
+    // storage backend can change without rewriting media identity.
     expect(storage.putFromFile).toHaveBeenCalledWith(
-      'local-local-media-abc12345',
+      expect.stringMatching(
+        new RegExp(`^${technician.organizationId}/inspection-1/area-1/videos/[0-9a-f-]{36}\\.mp4$`),
+      ),
       'C:/tmp/upload.mp4',
       'video/mp4',
     );
@@ -433,7 +444,7 @@ describe('technician mobile data boundary', () => {
       inspectionMedia: { findUniqueOrThrow: jest.fn().mockResolvedValue(record) },
       $transaction: jest.fn(),
     };
-    const storage = { putFromFile: jest.fn(), delete: jest.fn() };
+    const storage = { putFromFile: jest.fn(), delete: jest.fn(), providerName: () => 'local' };
     const service = new TechnicianService(
       prisma as never,
       {} as never,
@@ -470,7 +481,7 @@ describe('technician mobile data boundary', () => {
         }),
       },
     };
-    const storage = { putFromFile: jest.fn(), delete: jest.fn() };
+    const storage = { putFromFile: jest.fn(), delete: jest.fn(), providerName: () => 'local' };
     const service = new TechnicianService(
       prisma as never,
       {} as never,
@@ -537,6 +548,7 @@ describe('technician mobile data boundary', () => {
     };
     const storage = {
       putFromFile: jest.fn().mockResolvedValue(undefined),
+      providerName: () => 'local',
       delete: jest.fn().mockResolvedValue(undefined),
     };
     const service = new TechnicianService(
@@ -596,7 +608,7 @@ describe('technician mobile data boundary', () => {
       inspectionMedia: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
       inspectionFinding: { findFirst: jest.fn().mockResolvedValue(null) },
     };
-    const storage = { putFromFile: jest.fn(), delete: jest.fn() };
+    const storage = { putFromFile: jest.fn(), delete: jest.fn(), providerName: () => 'local' };
     const service = new TechnicianService(
       prisma as never,
       {} as never,

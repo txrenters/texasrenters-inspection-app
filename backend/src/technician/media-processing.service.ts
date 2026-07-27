@@ -19,6 +19,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { ComparisonService } from '../admin/comparison.service';
+import { thumbnailKeyFor } from '../common/object-storage';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 
 const PROMPT_VERSION = '2';
@@ -172,6 +173,7 @@ export class MediaProcessingService implements OnModuleInit {
           id: true,
           inspectionId: true,
           providerMediaId: true,
+          storageKey: true,
           mimeType: true,
           durationSeconds: true,
           processingStatus: true,
@@ -256,6 +258,7 @@ export class MediaProcessingService implements OnModuleInit {
     media: {
       id: string;
       providerMediaId: string;
+      storageKey: string;
       mimeType: string;
       durationSeconds: number;
     },
@@ -280,7 +283,10 @@ export class MediaProcessingService implements OnModuleInit {
       update: { status: TranscriptionStatus.RUNNING, provider: 'openai' },
     });
     try {
-      const video = await this.storage.get(media.providerMediaId);
+      const video = await this.storage.get(media.storageKey);
+      // Generated here because the video bytes are already in memory for audio
+      // extraction; fetching them again just for a poster frame would be wasteful.
+      await this.generateThumbnail(video, media.mimeType, media.storageKey);
       const audio = await this.extractAudio(video, media.mimeType);
       const transcript = await this.requestTranscription(configuration.apiKey, audio);
       await this.prisma.$transaction([
@@ -324,6 +330,57 @@ export class MediaProcessingService implements OnModuleInit {
    * usually far larger, but its mono audio track is tiny. Extract it with
    * ffmpeg, falling back to the raw video only when it is small enough.
    */
+  /**
+   * Writes a poster frame beside the video so reviewers see a preview without
+   * downloading it. Best-effort by design: a missing thumbnail degrades to a
+   * blank poster, so no failure here may interrupt transcription or analysis.
+   */
+  private async generateThumbnail(video: Buffer, mimeType: string, storageKey: string) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ffmpegPath = require('ffmpeg-static') as string | null;
+    if (!ffmpegPath) return;
+    const directory = await mkdtemp(join(tmpdir(), 'txr-thumb-'));
+    const input = join(directory, mimeType === 'video/quicktime' ? 'input.mov' : 'input.mp4');
+    const output = join(directory, 'thumb.jpg');
+    try {
+      await writeFile(input, video);
+      // Seek a second in to skip a black or blurry opening frame; clips shorter
+      // than that fall back to the very first frame.
+      const grab = (seekSeconds: number) =>
+        new Promise<boolean>((resolvePromise) => {
+          const child = spawn(ffmpegPath, [
+            '-y',
+            '-ss',
+            String(seekSeconds),
+            '-i',
+            input,
+            '-frames:v',
+            '1',
+            '-vf',
+            'scale=640:-2',
+            '-q:v',
+            '3',
+            output,
+          ]);
+          child.on('error', () => resolvePromise(false));
+          child.on('exit', (code) => resolvePromise(code === 0));
+        });
+      if (!(await grab(1)) && !(await grab(0))) {
+        this.logger.warn(`Thumbnail extraction failed for ${storageKey}`);
+        return;
+      }
+      await this.storage.putFromFile(thumbnailKeyFor(storageKey), output, 'image/jpeg');
+    } catch (error) {
+      this.logger.warn(
+        `Thumbnail generation skipped for ${storageKey}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
   private async extractAudio(video: Buffer, mimeType: string) {
     const directory = await mkdtemp(join(tmpdir(), 'txr-media-'));
     const input = join(directory, mimeType === 'video/quicktime' ? 'input.mov' : 'input.mp4');

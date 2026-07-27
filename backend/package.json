@@ -38,6 +38,8 @@
     "propertyware:verify:db": "ts-node src/integrations/propertyware/propertyware.cli.ts verify-db"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1095.0",
+    "@aws-sdk/s3-request-presigner": "^3.1095.0",
     "@nestjs/common": "11.1.28",
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "11.1.28",

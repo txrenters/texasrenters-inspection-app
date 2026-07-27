@@ -66,6 +66,7 @@ import {
   TestMailDto,
   UnitListQueryDto,
   UnassignDto,
+  UpdateAreaMarkerDto,
   UpdatePropertyAreaDto,
   UpdateAdminInspectionDto,
   UpdateAiProviderDto,
@@ -176,6 +177,11 @@ export class AdminController {
   extractFloorPlan(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
     return this.floorPlans.extract(request.user, id);
   }
+  @Post('floor-plans/:floorPlanId/retry-missing-markers')
+  @RequirePermissions('properties:manage')
+  retryMissingMarkers(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
+    return this.floorPlans.retryMissingMarkers(request.user, id);
+  }
   @Get('properties/:propertyId/areas')
   @RequirePermissions('properties:read')
   propertyAreas(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
@@ -206,6 +212,15 @@ export class AdminController {
     @Body() body: UpdatePropertyAreaDto,
   ) {
     return this.floorPlans.updateArea(request.user, id, body);
+  }
+  @Patch('property-areas/:areaId/marker')
+  @RequirePermissions('properties:manage')
+  updateAreaMarker(
+    @Req() request: AuthenticatedRequest,
+    @Param('areaId') id: string,
+    @Body() body: UpdateAreaMarkerDto,
+  ) {
+    return this.floorPlans.updateAreaMarker(request.user, id, body);
   }
   @Delete('property-areas/:areaId')
   @RequirePermissions('properties:manage')
@@ -279,6 +294,11 @@ export class AdminController {
       type: file.mimeType,
       disposition: `inline; filename="${file.fileName}"`,
     });
+  }
+  @Get('media/:mediaId/playback')
+  @RequirePermissions('inspections:read')
+  mediaPlayback(@Req() request: AuthenticatedRequest, @Param('mediaId') id: string) {
+    return this.service.mediaPlaybackUrl(request.user, id);
   }
   @Get('inspections/:inspectionId/photos')
   @RequirePermissions('inspections:read')

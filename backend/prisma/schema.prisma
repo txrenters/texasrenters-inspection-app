@@ -392,6 +392,7 @@ model UserProfile {
   pushDevices          MobilePushDevice[]
   reportShares         InspectionReportShare[]
   createdAreas         PropertyArea[]          @relation("AreaCreatedBy")
+  markerUpdatedAreas   PropertyArea[]          @relation("AreaMarkerUpdatedBy")
   areaAliases          PropertyAreaAlias[]     @relation("AreaAliasCreatedBy")
   photos               InspectionPhoto[]
   finalizedInspections Inspection[]            @relation("InspectionFinalizedBy")
@@ -458,6 +459,8 @@ model PropertyFloorPlan {
   property       Property                 @relation(fields: [propertyId], references: [id])
   unit           PropertywareUnit?        @relation("UnitFloorPlans", fields: [unitId], references: [id], onDelete: Restrict)
   extractionJobs FloorPlanExtractionJob[]
+  // Areas whose marker coordinates belong to this specific plan version.
+  markedAreas    PropertyArea[]           @relation("AreaSourceFloorPlan")
 
   @@index([propertyId, unitId])
 }
@@ -513,12 +516,31 @@ model PropertyArea {
   createdById        String?                 @db.Uuid
   // Soft archive; archived areas drop out of active lists but retain media.
   archivedAt         DateTime?
+  // Spatial marker (normalized 0..1 relative to the source image/page). Nullable:
+  // legacy/manual areas may have no marker. Coordinates belong to a specific plan
+  // version (sourceFloorPlanId) so a replaced plan never silently reuses them.
+  markerX            Decimal?                @db.Decimal(6, 5)
+  markerY            Decimal?                @db.Decimal(6, 5)
+  // AI_EXTRACTED | DETERMINISTIC_EXTRACTED | ADMIN_ADJUSTED | ADMIN_PLACED | UNKNOWN
+  markerSource       String?
+  markerConfidence   Decimal?                @db.Decimal(4, 3)
+  markerUpdatedById  String?                 @db.Uuid
+  markerUpdatedAt    DateTime?
+  sourceFloorPlanId  String?                 @db.Uuid
+  sourcePageNumber   Int?
+  // Optional normalized bounding box (extensible; unused for point markers).
+  boundingBoxX       Decimal?                @db.Decimal(6, 5)
+  boundingBoxY       Decimal?                @db.Decimal(6, 5)
+  boundingBoxWidth   Decimal?                @db.Decimal(6, 5)
+  boundingBoxHeight  Decimal?                @db.Decimal(6, 5)
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   property           Property                @relation(fields: [propertyId], references: [id])
   unit               PropertywareUnit?       @relation("UnitAreas", fields: [unitId], references: [id], onDelete: Restrict)
   floor              PropertyFloor?          @relation(fields: [floorId], references: [id])
   createdBy          UserProfile?            @relation("AreaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  markerUpdatedBy    UserProfile?            @relation("AreaMarkerUpdatedBy", fields: [markerUpdatedById], references: [id], onDelete: SetNull)
+  sourceFloorPlan    PropertyFloorPlan?      @relation("AreaSourceFloorPlan", fields: [sourceFloorPlanId], references: [id], onDelete: SetNull)
   inspectionAreas    InspectionArea[]
   baselineConditions BaselineAreaCondition[]
   findings           InspectionFinding[]
@@ -1001,7 +1023,12 @@ model InspectionMedia {
   inspectionAreaId        String                 @db.Uuid
   technicianId            String                 @db.Uuid
   provider                String
+  // Provider-side identity, and the client idempotency key for retried uploads.
   providerMediaId         String                 @unique
+  // Where the bytes live in the storage bucket. Kept separate from
+  // providerMediaId so the storage backend can change without rewriting
+  // identity, and so keys can be tenant-scoped like photos and floor plans.
+  storageKey              String
   mimeType                String
   durationSeconds         Int
   // PRIMARY_AREA is the one required room walkthrough (one per area, enforced by

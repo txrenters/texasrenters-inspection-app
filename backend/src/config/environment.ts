@@ -63,8 +63,17 @@ const environmentSchema = z
     TRANSCRIPTION_PROVIDER: z.literal('mock').default('mock'),
     AI_ANALYSIS_PROVIDER: z.literal('mock').default('mock'),
     JOB_QUEUE_PROVIDER: z.literal('memory').default('memory'),
-    FLOOR_PLAN_STORAGE_PROVIDER: z.enum(['local', 'supabase']).default('local'),
+    // Validated so a typo cannot silently fall back to `local`, which is the
+    // container's ephemeral disk and loses every upload on redeploy.
+    FLOOR_PLAN_STORAGE_PROVIDER: z.enum(['local', 'supabase', 'r2']).default('local'),
     FLOOR_PLAN_STORAGE_BUCKET: z.string().default('floor-plans'),
+    INSPECTION_MEDIA_STORAGE_PROVIDER: z.enum(['local', 'supabase', 'r2']).default('local'),
+    INSPECTION_MEDIA_STORAGE_BUCKET: z.string().default('inspection-media'),
+    WEBHOOK_SIGNING_SECRET: z.string().optional(),
+    // Cloudflare R2 (S3-compatible). Required only when a provider is set to r2.
+    R2_ACCOUNT_ID: z.string().optional(),
+    R2_ACCESS_KEY_ID: z.string().optional(),
+    R2_SECRET_ACCESS_KEY: z.string().optional(),
     PROPERTYWARE_PROVIDER: z.enum(['mock', 'live']).default('mock'),
     PROPERTYWARE_STORE: z.enum(['memory', 'prisma']).default('memory'),
     PROPERTYWARE_BASE_URL: z

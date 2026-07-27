@@ -10,10 +10,17 @@ import {
   VideoRecordingType,
 } from '@prisma/client';
 
+import {
+  LEASE_EXPIRING_SOON_DAYS,
+  daysUntilLeaseEnd,
+  leaseExpiryStatus,
+} from '@texasrenters/shared';
+
 import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
+import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
@@ -320,7 +327,12 @@ export class AdminService {
           units: { where: { isActive: true }, select: { id: true } },
           leases: {
             where: { isActive: true },
-            select: { unitId: true, sourceStatus: true, scheduledMoveOutDate: true },
+            select: {
+              unitId: true,
+              sourceStatus: true,
+              scheduledMoveOutDate: true,
+              endDate: true,
+            },
           },
           _count: { select: { units: true, inspections: true } },
         },
@@ -390,6 +402,9 @@ export class AdminService {
    * Summarizes lease posture across a building's active units. Vacancy is
    * derived (an active unit with no active lease); statuses are passed through
    * from Propertyware and never invented.
+   *
+   * Term end (`endDate`) and scheduled move-out are counted separately and
+   * never substituted for one another — see the shared lease-expiry module.
    */
   private leaseSummary(
     units: Array<{ id: string }>,
@@ -397,15 +412,34 @@ export class AdminService {
       unitId: string;
       sourceStatus: string | null;
       scheduledMoveOutDate: Date | null;
+      endDate?: Date | null;
     }>,
   ) {
+    const now = new Date();
     const activeLeaseCount = leases.length;
     const scheduledMoveOutCount = leases.filter((lease) => lease.scheduledMoveOutDate).length;
     const leasedUnitIds = new Set(leases.map((lease) => lease.unitId));
     const vacantUnitCount = units.filter((unit) => !leasedUnitIds.has(unit.id)).length;
+    const expiringSoonCount = leases.filter(
+      (lease) => leaseExpiryStatus(lease.endDate ?? null, now) === 'EXPIRING_SOON',
+    ).length;
+    // Earliest end still ahead of us; a lease already past its term is not an
+    // upcoming date and would be misleading here.
+    const upcomingEnds = leases
+      .map((lease) => lease.endDate ?? null)
+      .filter((end): end is Date => Boolean(end) && (daysUntilLeaseEnd(end, now) ?? -1) >= 0)
+      .sort((left, right) => left.getTime() - right.getTime());
+
+    // Vacancy — and therefore "no relevant lease" — is only meaningful once
+    // units exist to compare against. With none synced we know nothing about
+    // this property's leases, and must not imply that it has none.
+    const leaseDataAvailable = units.length > 0;
+
     const parts: string[] = [];
     if (activeLeaseCount)
       parts.push(`${activeLeaseCount} active lease${activeLeaseCount === 1 ? '' : 's'}`);
+    if (expiringSoonCount)
+      parts.push(`${expiringSoonCount} ending within ${LEASE_EXPIRING_SOON_DAYS} days`);
     if (scheduledMoveOutCount)
       parts.push(
         `${scheduledMoveOutCount} scheduled move-out${scheduledMoveOutCount === 1 ? '' : 's'}`,
@@ -416,7 +450,14 @@ export class AdminService {
       activeLeaseCount,
       scheduledMoveOutCount,
       vacantUnitCount,
-      summary: parts.length ? parts.join(' · ') : 'No relevant lease',
+      expiringSoonCount,
+      leaseDataAvailable,
+      nextLeaseEndDate: upcomingEnds[0] ?? null,
+      summary: leaseDataAvailable
+        ? parts.length
+          ? parts.join(' · ')
+          : 'No relevant lease'
+        : 'Lease data not synchronized',
     };
   }
 
@@ -506,12 +547,14 @@ export class AdminService {
           unitId: lease.unitId,
           sourceStatus: lease.sourceStatus,
           scheduledMoveOutDate: lease.scheduledMoveOutDate,
+          endDate: lease.endDate,
         })),
       ),
       units: property.units.map((unit) => ({
         ...unit,
         leaseStatus: relevantLease.get(unit.id)?.sourceStatus ?? null,
         scheduledMoveOutDate: relevantLease.get(unit.id)?.scheduledMoveOutDate ?? null,
+        leaseEndDate: relevantLease.get(unit.id)?.endDate ?? null,
       })),
     };
   }
@@ -526,6 +569,8 @@ export class AdminService {
         name: unit.name,
         leaseStatus: unit.leaseStatus,
         scheduledMoveOutDate: unit.scheduledMoveOutDate,
+        leaseEndDate: unit.leaseEndDate,
+        daysUntilLeaseEnd: daysUntilLeaseEnd(unit.leaseEndDate),
       })),
     };
   }
@@ -2026,6 +2071,7 @@ export class AdminService {
       select: {
         id: true,
         inspectionAreaId: true,
+        storageKey: true,
         mimeType: true,
         durationSeconds: true,
         recordingType: true,
@@ -2043,7 +2089,17 @@ export class AdminService {
         technician: { select: { displayName: true } },
       },
     });
-    return records.map((record) => ({
+    // Poster frames are signed in parallel; for R2 this is local crypto with no
+    // network round trip. A video still being processed has none yet, so the
+    // player simply renders without a poster.
+    const thumbnailUrls = await Promise.all(
+      records.map((record) =>
+        this.mediaStorage
+          ? this.mediaStorage.signedUrl(thumbnailKeyFor(record.storageKey)).catch(() => null)
+          : Promise.resolve(null),
+      ),
+    );
+    return records.map((record, index) => ({
       id: record.id,
       roomId: record.inspectionAreaId,
       roomName: record.inspectionArea.propertyArea.name,
@@ -2059,6 +2115,7 @@ export class AdminService {
       processingStatus: record.processingStatus,
       createdAt: record.createdAt,
       contentPath: `/api/v1/admin/media/${record.id}/content`,
+      thumbnailUrl: thumbnailUrls[index],
     }));
   }
 
@@ -2071,14 +2128,44 @@ export class AdminService {
       );
     const record = await this.prisma.inspectionMedia.findFirst({
       where: { id: mediaId, organizationId: user.organizationId },
-      select: { id: true, providerMediaId: true, mimeType: true },
+      select: { id: true, providerMediaId: true, storageKey: true, mimeType: true },
     });
     if (!record)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Room video not found.');
     return {
-      bytes: await this.mediaStorage.get(record.providerMediaId),
+      bytes: await this.mediaStorage.get(record.storageKey),
       mimeType: record.mimeType,
       fileName: `room-video-${record.id}.mp4`,
+    };
+  }
+
+  /**
+   * A short-lived URL the browser can stream directly from the storage CDN.
+   * Direct streaming supports range requests, so reviewers can seek without
+   * downloading the whole file, and the API never proxies video bytes.
+   *
+   * Returns `{ url: null }` for the local backend, where the caller must fall
+   * back to the byte-proxying content endpoint.
+   */
+  async mediaPlaybackUrl(user: AuthenticatedUser, mediaId: string) {
+    if (!this.mediaStorage)
+      throw new ApplicationError(
+        503,
+        'INSPECTION_MEDIA_STORAGE_NOT_CONFIGURED',
+        'Inspection media storage is not configured.',
+      );
+    const record = await this.prisma.inspectionMedia.findFirst({
+      where: { id: mediaId, organizationId: user.organizationId },
+      select: { id: true, storageKey: true, mimeType: true },
+    });
+    if (!record)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Room video not found.');
+    const expiresInSeconds = 900;
+    const url = await this.mediaStorage.signedUrl(record.storageKey, expiresInSeconds);
+    return {
+      url,
+      mimeType: record.mimeType,
+      expiresAt: url ? new Date(Date.now() + expiresInSeconds * 1000).toISOString() : null,
     };
   }
 

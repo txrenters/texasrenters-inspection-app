@@ -38,6 +38,7 @@ import type {
   AiProviderName,
   MailDeliveryResult,
 } from '@texasrenters/shared';
+import { allPropertywareEntities } from '@texasrenters/shared';
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -632,6 +633,36 @@ export function useAdminMutations() {
         api(`/api/v1/admin/property-areas/${variables.areaId}`, { method: 'DELETE' }),
       onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
     }),
+    // Re-runs extraction to fill in coordinates for areas that have none. Adds
+    // marker data only — never changes names, ordering, or approval status.
+    retryMissingMarkers: useMutation({
+      mutationFn: (variables: { propertyId: string; floorPlanId: string }) =>
+        api<{ updated: number; unmatched: number }>(
+          `/api/v1/admin/floor-plans/${variables.floorPlanId}/retry-missing-markers`,
+          { method: 'POST' },
+        ),
+      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+    }),
+    // Marker placement/adjustment. Never changes area approval status; reuses the
+    // floor-plan invalidator (floor-plans + property-areas only).
+    updateAreaMarker: useMutation({
+      mutationFn: (variables: {
+        propertyId: string;
+        areaId: string;
+        x: number;
+        y: number;
+        pageNumber?: number;
+      }) =>
+        api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}/marker`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            x: variables.x,
+            y: variables.y,
+            ...(variables.pageNumber ? { pageNumber: variables.pageNumber } : {}),
+          }),
+        }),
+      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+    }),
     approvePropertyAreas: useMutation({
       mutationFn: ({ propertyId, areaIds }: { propertyId: string; areaIds: string[] }) =>
         api<AdminPropertyArea[]>(`/api/v1/admin/properties/${propertyId}/areas/approve`, {
@@ -985,12 +1016,16 @@ export function useAdminMutations() {
       },
     }),
     sync: useMutation({
+      // Every entity, derived from the shared catalog list rather than a local
+      // literal: a hardcoded ['portfolios','buildings'] here previously meant
+      // units and leases never synced, while the button still promised the
+      // complete catalog.
       mutationFn: (mode: 'initial' | 'incremental' | 'reconcile') =>
         api(
           `/api/v1/admin/integrations/propertyware/${mode === 'reconcile' ? 'reconcile' : `sync/${mode}`}`,
           {
             method: 'POST',
-            body: JSON.stringify({ entities: ['portfolios', 'buildings'] }),
+            body: JSON.stringify({ entities: allPropertywareEntities() }),
           },
         ),
       onSuccess: () => {

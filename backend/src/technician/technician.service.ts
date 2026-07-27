@@ -63,6 +63,26 @@ function imageExtension(mimeType: string) {
   return '.jpg';
 }
 
+function videoExtension(mimeType: string) {
+  if (mimeType === 'video/quicktime') return '.mov';
+  if (mimeType === 'video/webm') return '.webm';
+  return '.mp4';
+}
+
+/**
+ * Tenant-scoped object key for a room video, matching the photo convention. The
+ * key is independent of `providerMediaId` so the storage backend can change
+ * without touching media identity or the client's idempotency key.
+ */
+function videoStorageKey(
+  organizationId: string,
+  inspectionId: string,
+  areaId: string,
+  mimeType: string,
+) {
+  return `${organizationId}/${inspectionId}/${areaId}/videos/${randomUUID()}${videoExtension(mimeType)}`;
+}
+
 const photoSelect = {
   id: true,
   inspectionAreaId: true,
@@ -713,7 +733,9 @@ export class TechnicianService {
             },
           },
           propertyArea: { select: { name: true } },
-          media: { select: { id: true, providerMediaId: true, recordingType: true } },
+          media: {
+            select: { id: true, providerMediaId: true, storageKey: true, recordingType: true },
+          },
         },
       });
       if (!area)
@@ -736,11 +758,17 @@ export class TechnicianService {
           'This room is completed. Its video can no longer be replaced.',
         );
 
-      await this.mediaStorage.putFromFile(providerMediaId, file.path, file.mimetype);
+      const storageKey = videoStorageKey(
+        area.inspection.organizationId,
+        area.inspectionId,
+        area.id,
+        file.mimetype,
+      );
+      await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
       // Only the previous PRIMARY video is replaced; additional videos are kept.
       const replaced = area.media
         .filter((item) => item.recordingType === VideoRecordingType.PRIMARY_AREA)
-        .map((item) => item.providerMediaId);
+        .map((item) => item.storageKey);
       let record;
       try {
         record = await this.prisma.$transaction(async (tx) => {
@@ -756,8 +784,9 @@ export class TechnicianService {
               inspectionId: area.inspectionId,
               inspectionAreaId: area.id,
               technicianId: user.id,
-              provider: 'local',
+              provider: this.mediaStorage.providerName(),
               providerMediaId,
+              storageKey,
               mimeType: file.mimetype,
               durationSeconds: dto.durationSeconds,
               recordingType: VideoRecordingType.PRIMARY_AREA,
@@ -778,7 +807,7 @@ export class TechnicianService {
           return created;
         });
       } catch (error) {
-        await this.mediaStorage.delete(providerMediaId).catch(() => undefined);
+        await this.mediaStorage.delete(storageKey).catch(() => undefined);
         throw error;
       }
       for (const key of replaced) await this.mediaStorage.delete(key).catch(() => undefined);
@@ -866,7 +895,13 @@ export class TechnicianService {
           );
       }
 
-      await this.mediaStorage.putFromFile(providerMediaId, file.path, file.mimetype);
+      const storageKey = videoStorageKey(
+        area.inspection.organizationId,
+        area.inspectionId,
+        area.id,
+        file.mimetype,
+      );
+      await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
       let record;
       try {
         record = await this.prisma.inspectionMedia.create({
@@ -876,8 +911,9 @@ export class TechnicianService {
             inspectionId: area.inspectionId,
             inspectionAreaId: area.id,
             technicianId: user.id,
-            provider: 'local',
+            provider: this.mediaStorage.providerName(),
             providerMediaId,
+            storageKey,
             mimeType: file.mimetype,
             durationSeconds: dto.durationSeconds,
             recordingType: VideoRecordingType.ADDITIONAL_ISSUE,
@@ -890,7 +926,7 @@ export class TechnicianService {
           },
         });
       } catch (error) {
-        await this.mediaStorage.delete(providerMediaId).catch(() => undefined);
+        await this.mediaStorage.delete(storageKey).catch(() => undefined);
         throw error;
       }
       // Transcribe/analyze independently; the area's completion is unaffected.

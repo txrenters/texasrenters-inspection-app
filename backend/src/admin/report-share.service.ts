@@ -1,20 +1,44 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { FindingReviewStatus } from '@prisma/client';
+import { FindingReviewStatus, PhotoCaptureType, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
+import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
+import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MailService } from '../mail/mail.service';
 
 const SHARE_LIFETIME_DAYS = 30;
+
+const MAX_REPORT_PHOTOS = 300;
+
+/**
+ * Which photos a homeowner may see.
+ *
+ * An area overview with no finding attached is neutral evidence. Anything tied
+ * to a finding is only safe once that finding is APPROVED — otherwise the
+ * report would leak pending or rejected AI output. Both clauses are needed:
+ * `findingId: null` alone would re-expose a detail photo if its rejected
+ * finding were ever deleted (the relation is onDelete: SetNull).
+ */
+const HOMEOWNER_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
+  OR: [
+    { captureType: PhotoCaptureType.AREA_OVERVIEW, findingId: null },
+    { finding: { reviewStatus: FindingReviewStatus.APPROVED } },
+  ],
+};
 
 @Injectable()
 export class ReportShareService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
+    @Optional()
+    @Inject(InspectionMediaStorageService)
+    private readonly mediaStorage?: InspectionMediaStorageService,
   ) {}
 
   async createShare(user: AuthenticatedUser, inspectionId: string, recipientEmail?: string) {
@@ -106,22 +130,14 @@ export class ReportShareService {
 
   /**
    * Public, unauthenticated report for homeowners. Contains only reviewed
-   * material: room completion and APPROVED findings. Internal notes,
-   * technician identities, pending AI output, and identifiers stay private.
+   * material: room completion, APPROVED findings, and photos that pass
+   * HOMEOWNER_VISIBLE_PHOTO. Internal notes, technician identities, pending AI
+   * output, and identifiers stay private.
    */
   async publicReport(token: string) {
-    const share = await this.prisma.inspectionReportShare.findUnique({
-      where: { token },
-      select: { inspectionId: true, expiresAt: true, revokedAt: true },
-    });
-    if (!share || share.revokedAt || share.expiresAt < new Date())
-      throw new ApplicationError(
-        404,
-        'REPORT_NOT_AVAILABLE',
-        'This report link is invalid, expired, or has been revoked.',
-      );
+    const inspectionId = await this.resolveShare(token);
     const inspection = await this.prisma.inspection.findUnique({
-      where: { id: share.inspectionId },
+      where: { id: inspectionId },
       select: {
         inspectionType: true,
         status: true,
@@ -136,10 +152,24 @@ export class ReportShareService {
           take: 100,
           select: {
             id: true,
+            propertyAreaId: true,
             completionStatus: true,
             skipReason: true,
             completedAt: true,
             propertyArea: { select: { name: true, floor: { select: { name: true } } } },
+            photos: {
+              where: HOMEOWNER_VISIBLE_PHOTO,
+              orderBy: [{ captureType: 'asc' }, { sequenceNumber: 'asc' }, { capturedAt: 'asc' }],
+              take: MAX_REPORT_PHOTOS,
+              select: {
+                id: true,
+                label: true,
+                notes: true,
+                capturedAt: true,
+                width: true,
+                height: true,
+              },
+            },
           },
         },
         findings: {
@@ -148,6 +178,7 @@ export class ReportShareService {
           take: 200,
           select: {
             id: true,
+            propertyAreaId: true,
             title: true,
             description: true,
             category: true,
@@ -162,7 +193,13 @@ export class ReportShareService {
     if (!inspection)
       throw new ApplicationError(404, 'REPORT_NOT_AVAILABLE', 'This report is not available.');
     const building = inspection.propertywareBuilding;
+    // Findings carry the catalog area id; rooms are per-inspection areas. Map
+    // one to the other so the view model can group without guessing by name.
+    const roomIdByPropertyArea = new Map(
+      inspection.areas.map((area) => [area.propertyAreaId, area.id]),
+    );
     return {
+      brand: this.brand(),
       property: {
         name: building?.name ?? 'Property',
         addressLine1: building?.addressLine1 ?? '',
@@ -187,6 +224,7 @@ export class ReportShareService {
       })),
       findings: inspection.findings.map((finding) => ({
         id: finding.id,
+        roomId: roomIdByPropertyArea.get(finding.propertyAreaId) ?? null,
         roomName: finding.propertyArea.name,
         title: finding.title,
         description: finding.description,
@@ -195,7 +233,88 @@ export class ReportShareService {
         comparisonResult: finding.comparisonResult,
         baselineCondition: finding.baselineCondition,
       })),
+      photos: inspection.areas.flatMap((area) =>
+        area.photos.map((photo) => ({
+          id: photo.id,
+          roomId: area.id,
+          label: photo.label,
+          notes: photo.notes,
+          capturedAt: photo.capturedAt,
+          width: photo.width,
+          height: photo.height,
+          contentPath: `/api/v1/reports/${encodeURIComponent(token)}/photos/${photo.id}`,
+        })),
+      ),
       generatedAt: new Date(),
+    };
+  }
+
+  /**
+   * Photo bytes for a shared report. The share token is the only credential, so
+   * the photo must belong to that share's inspection *and* independently pass
+   * the same visibility rule — a valid token for one inspection must never read
+   * another's evidence, and must never reach an unapproved finding's photo.
+   */
+  async publicPhoto(token: string, photoId: string, width?: number) {
+    const inspectionId = await this.resolveShare(token);
+    if (!this.mediaStorage)
+      throw new ApplicationError(
+        503,
+        'INSPECTION_MEDIA_STORAGE_NOT_CONFIGURED',
+        'Inspection media storage is not configured.',
+      );
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: { id: photoId, inspectionId, AND: HOMEOWNER_VISIBLE_PHOTO },
+      select: { id: true, storageKey: true, mimeType: true },
+    });
+    if (!photo)
+      throw new ApplicationError(404, 'REPORT_PHOTO_NOT_FOUND', 'This photo is not available.');
+    if (width === undefined || !isAllowedPhotoWidth(width))
+      return { bytes: await this.mediaStorage.get(photo.storageKey), mimeType: photo.mimeType };
+    return { bytes: await this.resizedPhoto(photo.storageKey, width), mimeType: 'image/jpeg' };
+  }
+
+  /**
+   * A width-limited copy, cached beside the original under a derived key so the
+   * re-encode happens once per photo rather than once per view. A cache write
+   * that fails is not an error — the caller still gets the resized bytes.
+   */
+  private async resizedPhoto(storageKey: string, width: number) {
+    const variantKey = resizedPhotoKeyFor(storageKey, width);
+    try {
+      return await this.mediaStorage!.get(variantKey);
+    } catch {
+      // Not generated yet.
+    }
+    const original = await this.mediaStorage!.get(storageKey);
+    const resized = await resizeImage(original, width);
+    await this.mediaStorage!.putBytes(variantKey, resized, 'image/jpeg').catch(() => undefined);
+    return resized;
+  }
+
+  /** Resolves a share token to its inspection, or 404s indistinguishably. */
+  private async resolveShare(token: string) {
+    const share = await this.prisma.inspectionReportShare.findUnique({
+      where: { token },
+      select: { inspectionId: true, expiresAt: true, revokedAt: true },
+    });
+    if (!share || share.revokedAt || share.expiresAt < new Date())
+      throw new ApplicationError(
+        404,
+        'REPORT_NOT_AVAILABLE',
+        'This report link is invalid, expired, or has been revoked.',
+      );
+    return share.inspectionId;
+  }
+
+  /** Letterhead. Deployment-level branding; every field is env-overridable. */
+  private brand() {
+    return {
+      name: process.env.REPORT_BRAND_NAME ?? 'TexasRenters.com',
+      addressLine1: process.env.REPORT_BRAND_ADDRESS_LINE1 ?? null,
+      addressLine2: process.env.REPORT_BRAND_ADDRESS_LINE2 ?? null,
+      phone: process.env.REPORT_BRAND_PHONE ?? null,
+      email: process.env.REPORT_BRAND_EMAIL ?? null,
     };
   }
 

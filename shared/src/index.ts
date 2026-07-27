@@ -2,5 +2,8 @@ export * from './contracts/index.js';
 export * from './enums/index.js';
 export * from './http/api-url.js';
 export * from './rbac/permissions.js';
+export * from './integrations/propertyware-entities.js';
+export * from './leases/lease-expiry.js';
+export * from './report/report-view.js';
 export * from './schemas/finding.js';
 export * from './schemas/floor-plan.js';

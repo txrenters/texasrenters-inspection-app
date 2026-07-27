@@ -299,6 +299,8 @@ describe('administrator floor plans', () => {
               detectedCount: 4,
               createdCount: 2,
               alreadyPresentCount: 2,
+              // Neither created area carried a spatial marker in this fixture.
+              markerWarnings: 2,
             },
           }),
         }),
@@ -386,7 +388,16 @@ describe('administrator floor plans', () => {
       {} as never,
     );
 
-    await expect(service.createFallbackArea(admin, building.id)).resolves.toBe(fallback);
+    // The area is returned through the marker-aware DTO mapper, so compare by
+    // shape rather than identity. A fallback area carries no spatial marker.
+    await expect(service.createFallbackArea(admin, building.id)).resolves.toMatchObject({
+      id: fallback.id,
+      propertyId: fallback.propertyId,
+      name: 'Entire property',
+      status: 'APPROVED',
+      marker: null,
+      boundingBox: null,
+    });
 
     expect(tx.propertyArea.create).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -7,7 +7,11 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import type { CreatePropertyAreaDto, UpdatePropertyAreaDto } from './admin.dto';
+import type {
+  CreatePropertyAreaDto,
+  UpdateAreaMarkerDto,
+  UpdatePropertyAreaDto,
+} from './admin.dto';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
@@ -63,10 +67,84 @@ const propertyAreaResponseSelect = {
   category: true,
   notes: true,
   archivedAt: true,
+  markerX: true,
+  markerY: true,
+  markerSource: true,
+  markerConfidence: true,
+  markerUpdatedAt: true,
+  sourceFloorPlanId: true,
+  sourcePageNumber: true,
+  boundingBoxX: true,
+  boundingBoxY: true,
+  boundingBoxWidth: true,
+  boundingBoxHeight: true,
   createdBy: { select: { id: true, displayName: true } },
   floor: { select: { id: true, name: true, sortOrder: true } },
   _count: { select: { inspectionAreas: true } },
 } satisfies Prisma.PropertyAreaSelect;
+
+type PropertyAreaRow = Prisma.PropertyAreaGetPayload<{ select: typeof propertyAreaResponseSelect }>;
+
+/** Case/whitespace-insensitive identity for an area within a plan. */
+function areaKey(floorName: string, name: string) {
+  return `${floorName.trim().toLowerCase()}|${name.trim().toLowerCase()}`;
+}
+
+// Nullish-safe: a column may arrive as null (Prisma) or undefined (partial row).
+function num(value: Prisma.Decimal | null | undefined): number | null {
+  return value === null || value === undefined ? null : Number(value);
+}
+
+/**
+ * Shapes a selected area row into the web DTO. Decimal coordinates become plain
+ * numbers, and marker/bounding-box columns collapse into nested objects. Raw AI
+ * payloads/prompts/provider settings are never part of this row, so nothing
+ * sensitive is exposed.
+ */
+function mapArea(row: PropertyAreaRow) {
+  const markerX = num(row.markerX);
+  const markerY = num(row.markerY);
+  const hasMarker = markerX !== null && markerY !== null;
+  const bboxX = num(row.boundingBoxX);
+  const bboxY = num(row.boundingBoxY);
+  const bboxWidth = num(row.boundingBoxWidth);
+  const bboxHeight = num(row.boundingBoxHeight);
+  const bbox =
+    bboxX !== null && bboxY !== null && bboxWidth !== null && bboxHeight !== null
+      ? { x: bboxX, y: bboxY, width: bboxWidth, height: bboxHeight }
+      : null;
+  return {
+    id: row.id,
+    propertyId: row.propertyId,
+    unitId: row.unitId,
+    unit: row.unit,
+    name: row.name,
+    inspectionOrder: row.inspectionOrder,
+    isRequired: row.isRequired,
+    status: row.status,
+    source: row.source,
+    environment: row.environment,
+    category: row.category,
+    notes: row.notes,
+    archivedAt: row.archivedAt,
+    createdBy: row.createdBy,
+    floor: row.floor,
+    _count: row._count,
+    sourceFloorPlanId: row.sourceFloorPlanId,
+    sourcePageNumber: row.sourcePageNumber,
+    marker: hasMarker
+      ? {
+          available: true as const,
+          x: markerX,
+          y: markerY,
+          source: row.markerSource ?? null,
+          confidence: num(row.markerConfidence),
+          updatedAt: row.markerUpdatedAt ?? null,
+        }
+      : null,
+    boundingBox: bbox,
+  };
+}
 
 @Injectable()
 export class FloorPlanAdminService {
@@ -186,8 +264,6 @@ export class FloorPlanAdminService {
               floor: { select: { name: true } },
             },
           });
-          const areaKey = (floorName: string, name: string) =>
-            `${floorName.trim().toLowerCase()}|${name.trim().toLowerCase()}`;
           const seen = new Set(
             existing.map((area) => areaKey(area.floor?.name || 'Ground Floor', area.name)),
           );
@@ -253,6 +329,17 @@ export class FloorPlanAdminService {
             isRequired: suggestion.isRequired,
             source: 'AI_FLOOR_PLAN',
             status: PropertyAreaStatus.DRAFT,
+            // Spatial marker (if the model returned a valid one), tied to THIS plan
+            // version so a replaced plan never silently reuses old coordinates.
+            markerX: suggestion.marker?.x ?? null,
+            markerY: suggestion.marker?.y ?? null,
+            markerSource: suggestion.marker ? 'AI_EXTRACTED' : null,
+            markerConfidence: suggestion.marker?.confidence ?? null,
+            boundingBoxX: suggestion.boundingBox?.x ?? null,
+            boundingBoxY: suggestion.boundingBox?.y ?? null,
+            boundingBoxWidth: suggestion.boundingBox?.width ?? null,
+            boundingBoxHeight: suggestion.boundingBox?.height ?? null,
+            sourceFloorPlanId: floorPlanId,
           }));
           if (areaRows.length) await tx.propertyArea.createMany({ data: areaRows });
           const created = areaRows.length
@@ -266,6 +353,8 @@ export class FloorPlanAdminService {
             detectedCount: extracted.length,
             createdCount: created.length,
             alreadyPresentCount: skipped.length,
+            // Areas whose marker was missing or invalid (mapping warning, §5).
+            markerWarnings: fresh.filter((suggestion) => !suggestion.marker).length,
           };
           const output = {
             suggestions: extracted,
@@ -281,7 +370,7 @@ export class FloorPlanAdminService {
             where: { id: floorPlanId },
             data: { status: FloorPlanStatus.REVIEW_REQUIRED },
           });
-          return { ...job, status: 'COMPLETED', output, summary, areas: created };
+          return { ...job, status: 'COMPLETED', output, summary, areas: created.map(mapArea) };
         },
         { maxWait: 10_000, timeout: 60_000 },
       );
@@ -319,14 +408,92 @@ export class FloorPlanAdminService {
     }
   }
 
+  /**
+   * Backfills spatial markers for areas that already exist without coordinates —
+   * typically extracted before marker support (schema v1). Re-runs extraction and
+   * matches suggestions to existing areas by floor + name, writing **only**
+   * marker/bounding-box columns. Names, order, required flags, and approval
+   * status are never modified, and areas that already have a marker for this plan
+   * are left untouched.
+   */
+  async retryMissingMarkers(user: AuthenticatedUser, floorPlanId: string) {
+    const plan = await this.requirePlan(user.organizationId, floorPlanId);
+    const candidates = await this.prisma.propertyArea.findMany({
+      where: {
+        propertyId: plan.propertyId,
+        unitId: plan.unitId,
+        archivedAt: null,
+        OR: [{ markerX: null }, { markerY: null }, { sourceFloorPlanId: { not: floorPlanId } }],
+      },
+      select: { id: true, name: true, floor: { select: { name: true } } },
+    });
+    if (!candidates.length)
+      return { matched: 0, updated: 0, unmatched: 0, areas: await this.areas(user, plan.propertyId) };
+
+    const configuration = await this.aiSettings.resolve(user.organizationId);
+    const extractionResult = await this.extraction.extract(
+      await this.storage.get(plan.storageKey),
+      plan.mimeType,
+      configuration,
+    );
+    const suggestionByKey = new Map(
+      extractionResult.areas
+        .filter((suggestion) => suggestion.marker)
+        .map((suggestion) => [areaKey(suggestion.floorName, suggestion.name), suggestion]),
+    );
+
+    let updated = 0;
+    for (const area of candidates) {
+      const suggestion = suggestionByKey.get(areaKey(area.floor?.name || 'Ground Floor', area.name));
+      if (!suggestion?.marker) continue;
+      await this.prisma.propertyArea.update({
+        where: { id: area.id },
+        data: {
+          markerX: suggestion.marker.x,
+          markerY: suggestion.marker.y,
+          markerSource: 'AI_EXTRACTED',
+          markerConfidence: suggestion.marker.confidence ?? null,
+          boundingBoxX: suggestion.boundingBox?.x ?? null,
+          boundingBoxY: suggestion.boundingBox?.y ?? null,
+          boundingBoxWidth: suggestion.boundingBox?.width ?? null,
+          boundingBoxHeight: suggestion.boundingBox?.height ?? null,
+          sourceFloorPlanId: floorPlanId,
+          // NOTE: name, inspectionOrder, isRequired and status are never written.
+        },
+      });
+      updated += 1;
+    }
+    await this.audit(user, 'AREA_MARKER_GENERATED', 'PropertyFloorPlan', floorPlanId, {
+      candidateCount: candidates.length,
+      updated,
+      unmatched: candidates.length - updated,
+    });
+    await this.aiSettings
+      .recordUsage(
+        user.organizationId,
+        configuration,
+        'FLOOR_PLAN_EXTRACTION',
+        extractionResult.usage,
+        floorPlanId,
+      )
+      .catch(() => undefined);
+    return {
+      matched: updated,
+      updated,
+      unmatched: candidates.length - updated,
+      areas: await this.areas(user, plan.propertyId),
+    };
+  }
+
   async areas(user: AuthenticatedUser, buildingId: string) {
     await this.requireBuilding(user.organizationId, buildingId);
-    return this.prisma.propertyArea.findMany({
+    const rows = await this.prisma.propertyArea.findMany({
       // Archived areas are hidden from the active list but retain their media.
       where: { propertyId: buildingId, archivedAt: null },
       select: propertyAreaResponseSelect,
       orderBy: [{ inspectionOrder: 'asc' }, { name: 'asc' }],
     });
+    return rows.map(mapArea);
   }
 
   async createArea(user: AuthenticatedUser, buildingId: string, input: CreatePropertyAreaDto) {
@@ -362,7 +529,7 @@ export class FloorPlanAdminService {
       propertywareBuildingId: buildingId,
       unitId,
     });
-    return area;
+    return mapArea(area);
   }
 
   async createFallbackArea(user: AuthenticatedUser, buildingId: string) {
@@ -375,7 +542,7 @@ export class FloorPlanAdminService {
         where: { propertyId: buildingId, status: PropertyAreaStatus.APPROVED },
         select: propertyAreaResponseSelect,
       });
-      if (approved) return approved;
+      if (approved) return mapArea(approved);
 
       const existing = await tx.propertyArea.findFirst({
         where: {
@@ -418,7 +585,7 @@ export class FloorPlanAdminService {
           metadata: { areaId: area.id, reason: 'FLOOR_PLAN_AREAS_UNAVAILABLE' },
         },
       });
-      return area;
+      return mapArea(area);
     });
   }
 
@@ -437,7 +604,7 @@ export class FloorPlanAdminService {
           input.inspectionOrder ?? area.inspectionOrder,
         )
       : area.floor;
-    return this.prisma.propertyArea.update({
+    const updated = await this.prisma.propertyArea.update({
       where: { id: areaId },
       data: {
         ...(input.name ? { name } : {}),
@@ -450,6 +617,7 @@ export class FloorPlanAdminService {
       },
       select: propertyAreaResponseSelect,
     });
+    return mapArea(updated);
   }
 
   /** Rejects a pending area without deleting any evidence already captured. */
@@ -464,7 +632,7 @@ export class FloorPlanAdminService {
       propertywareBuildingId: area.propertyId,
       reason: reason?.trim() || null,
     });
-    return updated;
+    return mapArea(updated);
   }
 
   /** Soft-archives an area (hidden from active lists; media/findings retained). */
@@ -478,7 +646,59 @@ export class FloorPlanAdminService {
     await this.audit(user, 'PROPERTY_AREA_ARCHIVED', 'PropertyArea', areaId, {
       propertywareBuildingId: area.propertyId,
     });
-    return updated;
+    return mapArea(updated);
+  }
+
+  /**
+   * Places or adjusts an area's spatial marker (normalized 0..1). Marker edits
+   * are a DRAFT suggestion an administrator confirms — they never change approval
+   * status. Coordinates are stamped with the current plan version so a replaced
+   * plan never silently inherits them. Always audited.
+   */
+  async updateAreaMarker(user: AuthenticatedUser, areaId: string, input: UpdateAreaMarkerDto) {
+    const area = await this.requireArea(user.organizationId, areaId);
+    // Keep the marker's own plan version; for a legacy/manual area with none,
+    // bind it to the latest plan in the area's scope so it renders on that plan.
+    let sourceFloorPlanId = area.sourceFloorPlanId;
+    if (!sourceFloorPlanId) {
+      const latestPlan = await this.prisma.propertyFloorPlan.findFirst({
+        where: { propertyId: area.propertyId, unitId: area.unitId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      sourceFloorPlanId = latestPlan?.id ?? null;
+    }
+    const hadMarker = area.markerX !== null && area.markerY !== null;
+    const previous = hadMarker ? { x: Number(area.markerX), y: Number(area.markerY) } : null;
+    const updated = await this.prisma.propertyArea.update({
+      where: { id: areaId },
+      data: {
+        markerX: input.x,
+        markerY: input.y,
+        // Human placement carries no model confidence.
+        markerSource: hadMarker ? 'ADMIN_ADJUSTED' : 'ADMIN_PLACED',
+        markerConfidence: null,
+        markerUpdatedById: user.id,
+        markerUpdatedAt: new Date(),
+        sourceFloorPlanId,
+        ...(input.pageNumber !== undefined ? { sourcePageNumber: input.pageNumber } : {}),
+        // NOTE: `status` is intentionally never written here.
+      },
+      select: propertyAreaResponseSelect,
+    });
+    await this.audit(
+      user,
+      hadMarker ? 'AREA_MARKER_MOVED' : 'AREA_MARKER_PLACED',
+      'PropertyArea',
+      areaId,
+      {
+        propertywareBuildingId: area.propertyId,
+        previous,
+        next: { x: input.x, y: input.y },
+        sourceFloorPlanId,
+      },
+    );
+    return mapArea(updated);
   }
 
   async deleteArea(user: AuthenticatedUser, areaId: string) {

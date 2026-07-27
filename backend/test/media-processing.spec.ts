@@ -1,5 +1,6 @@
 import { AiProvider } from '@prisma/client';
 
+import { thumbnailKeyFor } from '../src/common/object-storage';
 import {
   MediaProcessingService,
   analysisResponseSchema,
@@ -22,6 +23,39 @@ const FINDING = {
   confidence: 0.82,
   recommendedReview: 'Compare the scuff against move-in photos before approving.',
 };
+
+describe('video poster frames', () => {
+  it('derives a thumbnail key beside the video so no column can drift out of sync', () => {
+    expect(thumbnailKeyFor('org-1/insp-1/area-1/videos/abc.mp4')).toBe(
+      'org-1/insp-1/area-1/videos/abc.mp4.thumb.jpg',
+    );
+    // Legacy pre-migration keys have no extension and must still work.
+    expect(thumbnailKeyFor('local-media-123')).toBe('local-media-123.thumb.jpg');
+  });
+
+  it('never lets a thumbnail failure interrupt transcription', async () => {
+    const storage = {
+      get: jest.fn().mockResolvedValue(Buffer.from('video-bytes')),
+      // Simulates ffmpeg producing nothing / the upload failing.
+      putFromFile: jest.fn().mockRejectedValue(new Error('thumbnail upload failed')),
+      providerName: () => 'r2',
+    };
+    const service = new MediaProcessingService(
+      {} as never,
+      storage as never,
+      {} as never,
+      undefined,
+    );
+    // The generator is deliberately private: assert it swallows failures rather
+    // than propagating them into the processing pipeline.
+    const generate = (
+      service as unknown as {
+        generateThumbnail: (v: Buffer, m: string, k: string) => Promise<void>;
+      }
+    ).generateThumbnail.bind(service);
+    await expect(generate(Buffer.from('x'), 'video/mp4', 'key-1')).resolves.toBeUndefined();
+  });
+});
 
 describe('media processing pipeline', () => {
   it('extracts JSON arrays from fenced or prose-wrapped model output', () => {

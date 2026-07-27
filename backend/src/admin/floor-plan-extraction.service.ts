@@ -53,7 +53,9 @@ export class FloorPlanExtractionService {
     return {
       provider: resolved.provider.toLowerCase(),
       modelId: resolved.modelId,
-      schemaVersion: '1',
+      // v2 adds normalized marker/bounding-box coordinates. Legacy jobs stay v1
+      // (no markers) and their areas remain valid + support manual placement.
+      schemaVersion: '2',
     };
   }
 
@@ -277,8 +279,10 @@ export class FloorPlanExtractionService {
       'Give confidently identified unlabeled rooms a concise reviewable name such as "Bathroom (unlabeled)". Never infer a room from shape alone.',
       'Preserve visible floor labels such as First Floor and Second Floor.',
       'Return one flat JSON array only. Every item must contain floorName (string), name (string), inspectionOrder (integer), and isRequired (boolean).',
+      'Also include a marker object {"x":number,"y":number} giving the approximate centre of the room as fractions of the FULL source image: x is the fraction from the left edge (0 = left, 1 = right) and y is the fraction from the top edge (0 = top, 1 = bottom); both between 0 and 1. Optionally include boundingBox {"x","y","width","height"} as the same normalized fractions of the whole image.',
+      'Coordinates are relative to the original image or the specific PDF page only. Never draw on or return an annotated image, and never return pixel coordinates. Omit the marker for any room you cannot place confidently.',
       'Keep separate spaces separate even when they share a label; disambiguate them with a visible number or a stable positional suffix such as "(left)" and "(right)".',
-      'Do not return dimensions, wall labels, fireplaces, loose fixtures, open-to-below voids, or duplicate rooms.',
+      'Do not return dimensions, wall labels, fireplaces, loose fixtures, open-to-below voids, or duplicate rooms. Marker and boundingBox coordinates are the only spatial data to include.',
       'Include hallways, landings, stairs, closets, utility/laundry rooms, garages, patios, porches, decks, and balconies when they are labeled or visually unambiguous enclosed inspection spaces.',
       'Use Ground Floor only when no floor or story is stated.',
       'inspectionOrder must start at 1 and remain sequential across all floors. Garages, patios, porches, decks, and balconies may be optional; interior rooms are required.',
@@ -368,15 +372,51 @@ function normalizeExtractionCandidates(candidates: unknown[]) {
     const key = `${floorName.toLocaleLowerCase()}:${name.toLocaleLowerCase()}`;
     if (name && seen.has(key)) continue;
     if (name) seen.add(key);
+    const marker = readMarker(area);
+    const boundingBox = readBoundingBox(area);
     normalized.push({
       floorName,
       name,
       inspectionOrder: normalized.length + 1,
       isRequired:
         firstBoolean(area, ['isRequired', 'is_required', 'required']) ?? requiredByDefault(name),
+      ...(marker ? { marker } : {}),
+      ...(boundingBox ? { boundingBox } : {}),
     });
   }
   return normalized;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Reads an approximate room-centre marker from a candidate. Only real numbers are
+ * accepted (never coerced) so a null/string coordinate is dropped rather than
+ * silently becoming 0. Out-of-range values are rejected later by the Zod schema.
+ */
+function readMarker(area: JsonObject) {
+  const source =
+    asObject(area.marker) ?? asObject(area.centroid) ?? asObject(area.center) ?? asObject(area.point);
+  if (!source) return undefined;
+  const x = readNumber(source.x);
+  const y = readNumber(source.y);
+  if (x === undefined || y === undefined) return undefined;
+  const confidence = readNumber(source.confidence);
+  return confidence === undefined ? { x, y } : { x, y, confidence };
+}
+
+function readBoundingBox(area: JsonObject) {
+  const source = asObject(area.boundingBox) ?? asObject(area.bbox) ?? asObject(area.bounding_box);
+  if (!source) return undefined;
+  const x = readNumber(source.x);
+  const y = readNumber(source.y);
+  const width = readNumber(source.width ?? source.w);
+  const height = readNumber(source.height ?? source.h);
+  if (x === undefined || y === undefined || width === undefined || height === undefined)
+    return undefined;
+  return { x, y, width, height };
 }
 
 function asObject(value: unknown): JsonObject | null {

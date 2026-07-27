@@ -105,7 +105,21 @@ export interface PropertyLeaseSummary {
   activeLeaseCount: number;
   scheduledMoveOutCount: number;
   vacantUnitCount: number;
-  summary: string; // compact, e.g. "3 active leases · 1 scheduled move-out · 2 vacant units"
+  /** Active leases whose term ends within LEASE_EXPIRING_SOON_DAYS. */
+  expiringSoonCount: number;
+  /**
+   * False when no units have synced for this property, so no lease conclusion
+   * can be drawn. Absent data is not the same as a known absence of leases, and
+   * the two must never read alike.
+   */
+  leaseDataAvailable: boolean;
+  /**
+   * Earliest upcoming lease end across the property's active leases, or null
+   * when none has an end date. Derived from the lease term (`endDate`), which
+   * is a different signal from a tenant's scheduled move-out.
+   */
+  nextLeaseEndDate?: string | null;
+  summary: string; // compact, e.g. "3 active leases · 1 ending within 60 days · 2 vacant units"
 }
 
 export interface AdminProperty {
@@ -165,11 +179,37 @@ export interface AdminFloorPlanExtractionResult {
     detectedCount: number;
     createdCount: number;
     alreadyPresentCount: number;
+    /** Areas whose spatial marker was missing or invalid (needs manual placement). */
+    markerWarnings?: number;
   };
   areas: AdminPropertyArea[];
 }
 
 export type AreaEnvironment = 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
+
+export type MarkerSource =
+  | 'AI_EXTRACTED'
+  | 'DETERMINISTIC_EXTRACTED'
+  | 'ADMIN_ADJUSTED'
+  | 'ADMIN_PLACED'
+  | 'UNKNOWN';
+
+/** Spatial marker for an area — normalized 0..1 fractions of the source image/page. */
+export interface AdminAreaMarker {
+  available: true;
+  x: number;
+  y: number;
+  source?: MarkerSource | string | null;
+  confidence?: number | null;
+  updatedAt?: string | null;
+}
+
+export interface AdminAreaBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export interface AdminPropertyArea {
   id: string;
@@ -189,6 +229,12 @@ export interface AdminPropertyArea {
   createdBy?: { id: string; displayName: string } | null;
   floor?: { id: string; name: string; sortOrder: number } | null;
   _count?: { inspectionAreas: number };
+  /** The plan version these marker coordinates belong to (null = legacy/manual). */
+  sourceFloorPlanId?: string | null;
+  sourcePageNumber?: number | null;
+  /** Null when the area has no marker for the current plan version. */
+  marker?: AdminAreaMarker | null;
+  boundingBox?: AdminAreaBoundingBox | null;
 }
 
 export interface AdminUnit {
@@ -202,6 +248,8 @@ export interface AdminUnit {
   // Relevant (active) lease status for this unit, or null when none applies.
   leaseStatus?: string | null;
   scheduledMoveOutDate?: string | null;
+  /** End of the lease term. Distinct from a scheduled move-out. */
+  leaseEndDate?: string | null;
 }
 
 export interface AdminLease {
@@ -516,7 +564,33 @@ export interface AdminReportShare {
   emailDeliveryStatus?: MailDeliveryStatus;
 }
 
+/** Letterhead block. Deployment-level branding, not per-organization. */
+export interface PublicReportBrand {
+  name: string;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  phone?: string | null;
+  email?: string | null;
+}
+
+/**
+ * A homeowner-visible photo. Only area overviews and photos attached to an
+ * APPROVED finding are ever included, so nothing here reveals pending or
+ * rejected AI output. `contentPath` is capability-scoped by the share token.
+ */
+export interface PublicReportPhoto {
+  id: string;
+  roomId: string;
+  label?: string | null;
+  notes?: string | null;
+  capturedAt: string;
+  width?: number | null;
+  height?: number | null;
+  contentPath: string;
+}
+
 export interface PublicInspectionReport {
+  brand: PublicReportBrand;
   property: {
     name: string;
     addressLine1: string;
@@ -541,6 +615,8 @@ export interface PublicInspectionReport {
   }>;
   findings: Array<{
     id: string;
+    /** InspectionArea id, so findings group under their room. Null if the room was removed. */
+    roomId?: string | null;
     roomName: string;
     title: string;
     description: string;
@@ -549,6 +625,7 @@ export interface PublicInspectionReport {
     comparisonResult: string;
     baselineCondition: string;
   }>;
+  photos: PublicReportPhoto[];
   generatedAt: string;
 }
 
@@ -585,6 +662,8 @@ export interface AdminInspectionMedia {
   processingStatus: string;
   createdAt: string;
   contentPath: string;
+  /** Signed poster-frame URL; null until processing has generated one. */
+  thumbnailUrl?: string | null;
 }
 
 export interface AdminInspectionFinding {

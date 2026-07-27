@@ -7,6 +7,8 @@ import { createPortal } from 'react-dom';
 import { apiBlob } from '@/lib/api';
 import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/lib/queries';
 
+import { FloorPlanCanvas } from './floor-plan/FloorPlanCanvas';
+import { FloorPlanChecklist } from './floor-plan/FloorPlanChecklist';
 import { Badge, ErrorState, LoadingState, formatDate } from './ui';
 
 const BUILDING_SCOPE = 'building-wide';
@@ -509,6 +511,9 @@ export function FloorPlanManager({
           previewUrl={previewUrl}
           fileName={latest.fileName}
           mimeType={latest.mimeType}
+          planId={latest.id}
+          propertyId={propertyId}
+          canManage={canManage}
           groups={comparisonGroups}
           onClose={closeComparison}
         />
@@ -597,6 +602,9 @@ function FloorPlanComparisonModal({
   previewUrl,
   fileName,
   mimeType,
+  planId,
+  propertyId,
+  canManage,
   groups,
   onClose,
 }: {
@@ -604,6 +612,9 @@ function FloorPlanComparisonModal({
   previewUrl?: string;
   fileName: string;
   mimeType: string;
+  planId: string;
+  propertyId: string;
+  canManage: boolean;
   groups: ReturnType<typeof groupAreasByFloor>;
   onClose: () => void;
 }) {
@@ -612,6 +623,80 @@ function FloorPlanComparisonModal({
   const allAreas = groups.flatMap((group) => group.areas);
   const draftCount = allAreas.filter((area) => area.status === 'DRAFT').length;
   const approvedCount = allAreas.filter((area) => area.status === 'APPROVED').length;
+  // Image plans and (rasterized) PDF pages both support the marker overlay.
+  const supportsMarkers = mimeType.startsWith('image/') || mimeType === 'application/pdf';
+  const isPdfPlan = mimeType === 'application/pdf';
+
+  // Cross-pane marker state (single source of truth). Selection and marker
+  // adjustment are separate from area approval — neither changes area status.
+  const markerMutation = useAdminMutations().updateAreaMarker;
+  const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null);
+  const [showAllMarkers, setShowAllMarkers] = useState(false);
+  const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
+  const [draftMarker, setDraftMarker] = useState<{ x: number; y: number } | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
+  const backfill = useAdminMutations().retryMissingMarkers;
+  const selectedArea = allAreas.find((area) => area.id === selectedAreaId) ?? null;
+  // Areas with no usable marker for the plan currently displayed.
+  const missingMarkerCount = allAreas.filter(
+    (area) => !area.marker || area.sourceFloorPlanId !== planId,
+  ).length;
+
+  const selectArea = (id: string) => {
+    setSelectedAreaId(id);
+    setFocusNonce((nonce) => nonce + 1);
+    if (editingAreaId && editingAreaId !== id) {
+      setEditingAreaId(null);
+      setDraftMarker(null);
+      setSaveError(null);
+    }
+  };
+  const startEdit = (id: string) => {
+    const area = allAreas.find((item) => item.id === id);
+    setSelectedAreaId(id);
+    setEditingAreaId(id);
+    setSaveError(null);
+    setDraftMarker(
+      area?.marker && area.sourceFloorPlanId === planId
+        ? { x: area.marker.x, y: area.marker.y }
+        : null,
+    );
+    setFocusNonce((nonce) => nonce + 1);
+  };
+  const cancelEdit = () => {
+    setEditingAreaId(null);
+    setDraftMarker(null);
+    setSaveError(null);
+  };
+  const saveMarker = (id: string) => {
+    if (!draftMarker) return;
+    setSaveError(null);
+    markerMutation.mutate(
+      {
+        propertyId,
+        areaId: id,
+        x: draftMarker.x,
+        y: draftMarker.y,
+        // PDF coordinates are relative to the page being viewed.
+        ...(isPdfPlan ? { pageNumber } : {}),
+      },
+      {
+        onSuccess: () => {
+          setEditingAreaId(null);
+          setDraftMarker(null);
+        },
+        onError: (error) =>
+          setSaveError(
+            error instanceof Error && error.message
+              ? error.message
+              : 'Unable to save marker position. Your previous position has not been changed.',
+          ),
+      },
+    );
+  };
 
   useEffect(() => {
     const previouslyFocused =
@@ -708,10 +793,26 @@ function FloorPlanComparisonModal({
             </div>
             <div className="floor-plan-comparison-canvas">
               {previewUrl ? (
-                <FloorPlanComparisonPreview
+                <FloorPlanCanvas
                   previewUrl={previewUrl}
-                  mimeType={mimeType}
                   fileName={fileName}
+                  mimeType={mimeType}
+                  planId={planId}
+                  areas={allAreas}
+                  selectedAreaId={selectedAreaId}
+                  showAllMarkers={showAllMarkers}
+                  editingAreaId={editingAreaId}
+                  draftMarker={draftMarker}
+                  focusNonce={focusNonce}
+                  onSelectArea={selectArea}
+                  onDraftChange={setDraftMarker}
+                  pageNumber={pageNumber}
+                  onPageChange={(page) => {
+                    setPageNumber(page);
+                    // A selection on another page is no longer meaningful.
+                    setSelectedAreaId(null);
+                    cancelEdit();
+                  }}
                 />
               ) : (
                 <div className="floor-plan-comparison-unavailable">
@@ -738,36 +839,65 @@ function FloorPlanComparisonModal({
               </div>
             </div>
 
-            <div className="floor-plan-comparison-list">
-              {groups.map((group) => (
-                <section key={group.key} className="floor-plan-comparison-floor">
-                  <header>
-                    <h3>{group.label}</h3>
-                    <span>{group.areas.length}</span>
-                  </header>
-                  <ol>
-                    {group.areas.map((area) => (
-                      <li key={area.id}>
-                        <div className="floor-plan-comparison-area-button">
-                          <span className="floor-plan-comparison-order">
-                            {area.inspectionOrder}
-                          </span>
-                          <span className="floor-plan-comparison-area-copy">
-                            <strong>{area.name}</strong>
-                            <small>{area.isRequired ? 'Required' : 'Optional'}</small>
-                          </span>
-                          <span
-                            className={`floor-plan-comparison-status is-${area.status.toLowerCase()}`}
-                          >
-                            {area.status.replaceAll('_', ' ')}
-                          </span>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              ))}
-            </div>
+            {canManage && supportsMarkers && missingMarkerCount > 0 ? (
+              <div className="fp-backfill">
+                <span>
+                  {missingMarkerCount} area{missingMarkerCount === 1 ? '' : 's'} without a marker.
+                </span>
+                <button
+                  type="button"
+                  className="button button-secondary button-small"
+                  disabled={backfill.isPending}
+                  onClick={() => {
+                    setBackfillMessage(null);
+                    backfill.mutate(
+                      { propertyId, floorPlanId: planId },
+                      {
+                        onSuccess: (result) =>
+                          setBackfillMessage(
+                            `Added ${result.updated} marker${result.updated === 1 ? '' : 's'}` +
+                              (result.unmatched
+                                ? `; ${result.unmatched} still need manual placement.`
+                                : '.'),
+                          ),
+                        onError: () =>
+                          setBackfillMessage(
+                            'Unable to backfill markers. Existing areas were not changed.',
+                          ),
+                      },
+                    );
+                  }}
+                >
+                  {backfill.isPending ? 'Backfilling…' : 'Backfill missing markers'}
+                </button>
+              </div>
+            ) : null}
+            {backfillMessage ? (
+              <p className="fp-backfill-result" aria-live="polite">
+                {backfillMessage}
+              </p>
+            ) : null}
+
+            <p className="visually-hidden" aria-live="polite">
+              {selectedArea ? `${selectedArea.name} selected` : ''}
+            </p>
+            <FloorPlanChecklist
+              groups={groups}
+              planId={planId}
+              selectedAreaId={selectedAreaId}
+              editingAreaId={editingAreaId}
+              hasDraft={draftMarker !== null}
+              canManage={canManage}
+              showAllMarkers={showAllMarkers}
+              supportsMarkers={supportsMarkers}
+              saving={markerMutation.isPending}
+              saveError={saveError}
+              onSelectArea={selectArea}
+              onToggleShowAll={() => setShowAllMarkers((value) => !value)}
+              onStartEdit={startEdit}
+              onCancelEdit={cancelEdit}
+              onSaveMarker={saveMarker}
+            />
           </aside>
         </div>
       </div>
@@ -776,33 +906,6 @@ function FloorPlanComparisonModal({
   );
 }
 
-function FloorPlanComparisonPreview({
-  previewUrl,
-  mimeType,
-  fileName,
-}: {
-  previewUrl: string;
-  mimeType: string;
-  fileName: string;
-}) {
-  if (!mimeType.startsWith('image/')) {
-    return (
-      <object data={previewUrl} type={mimeType} aria-label={fileName}>
-        <a href={previewUrl} target="_blank" rel="noreferrer">
-          Open {fileName}
-        </a>
-      </object>
-    );
-  }
-
-  return (
-    <div className="floor-plan-comparison-image-stage">
-      {/* Blob URLs require the native element and cannot use Next's image optimizer. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={previewUrl} alt={fileName} />
-    </div>
-  );
-}
 
 function ScopeButton({
   label,

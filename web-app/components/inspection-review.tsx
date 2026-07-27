@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { apiBlob } from '@/lib/api';
+import { api, apiBlob } from '@/lib/api';
 import { usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,
@@ -28,8 +28,19 @@ function formatCategory(value: string) {
     .join(' ');
 }
 
-function RoomVideoPlayer({ contentPath, label }: { contentPath: string; label: string }) {
+function RoomVideoPlayer({
+  mediaId,
+  contentPath,
+  label,
+  thumbnailUrl,
+}: {
+  mediaId: string;
+  contentPath: string;
+  label: string;
+  thumbnailUrl?: string | null;
+}) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +55,16 @@ function RoomVideoPlayer({ contentPath, label }: { contentPath: string; label: s
     setLoading(true);
     setError(null);
     try {
+      // Prefer a signed URL straight from the storage CDN: it supports range
+      // requests, so reviewers can seek without downloading the whole file.
+      // Local-disk storage returns no URL, so fall back to proxied bytes.
+      const playback = await api<{ url: string | null }>(
+        `/api/v1/admin/media/${mediaId}/playback`,
+      ).catch(() => ({ url: null }));
+      if (playback.url) {
+        setStreamUrl(playback.url);
+        return;
+      }
       const blob = await apiBlob(contentPath);
       setObjectUrl(URL.createObjectURL(blob));
     } catch (cause) {
@@ -53,14 +74,26 @@ function RoomVideoPlayer({ contentPath, label }: { contentPath: string; label: s
     }
   }
 
-  if (objectUrl)
+  const source = streamUrl ?? objectUrl;
+  if (source)
     return (
-      <video className="room-video-player" controls preload="metadata" src={objectUrl}>
+      <video
+        className="room-video-player"
+        controls
+        preload="metadata"
+        poster={thumbnailUrl ?? undefined}
+        src={source}
+      >
         Your browser cannot play this recording.
       </video>
     );
   return (
     <div className="room-video-placeholder">
+      {thumbnailUrl ? (
+        // Poster frame so the room is recognisable before loading the video.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img className="room-video-poster" src={thumbnailUrl} alt={`${label} preview`} />
+      ) : null}
       <button
         type="button"
         className="button button-secondary"
@@ -120,7 +153,12 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
                   ) : null}
                 </p>
               ) : null}
-              <RoomVideoPlayer contentPath={item.contentPath} label={item.roomName} />
+              <RoomVideoPlayer
+                mediaId={item.id}
+                contentPath={item.contentPath}
+                label={item.roomName}
+                thumbnailUrl={item.thumbnailUrl}
+              />
               <footer className="media-card-footer">
                 <span className="media-meta">
                   {formatSeconds(item.durationSeconds)} · {item.technicianName} ·{' '}

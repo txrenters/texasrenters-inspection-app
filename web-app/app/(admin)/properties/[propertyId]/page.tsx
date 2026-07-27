@@ -15,6 +15,23 @@ import {
 import { useProperty } from '@/lib/queries';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { usePermissions } from '@/lib/auth';
+import { leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
+
+/**
+ * A lease's term end, with how near it is. `endDate` answers "when does this
+ * lease end" for renewal planning; a scheduled move-out is a separate column
+ * because it answers a different question and the two can disagree.
+ */
+function LeaseEnd({ endDate }: { endDate?: string | null }) {
+  if (!endDate) return <>—</>;
+  const status = leaseExpiryStatus(endDate);
+  return (
+    <span className={`lease-end is-${status.toLowerCase().replace('_', '-')}`}>
+      {formatDate(endDate)}
+      <small>{leaseExpiryLabel(endDate)}</small>
+    </span>
+  );
+}
 
 export default function PropertyDetailPage() {
   const permissions = usePermissions();
@@ -61,7 +78,20 @@ export default function PropertyDetailPage() {
           </div>
           <div className="detail-item">
             <span>Lease summary</span>
-            <strong>{item.leaseSummary?.summary ?? 'No relevant lease'}</strong>
+            <strong>{item.leaseSummary?.summary ?? 'Lease data not synchronized'}</strong>
+            {item.leaseSummary?.leaseDataAvailable === false ? (
+              // Never let missing data read as "this property has no lease".
+              <small className="detail-warning">
+                No units have synchronized for this property, so lease status is unknown
+              </small>
+            ) : item.leaseSummary?.nextLeaseEndDate ? (
+              <small>
+                Next lease ends {formatDate(item.leaseSummary.nextLeaseEndDate)} ·{' '}
+                {leaseExpiryLabel(item.leaseSummary.nextLeaseEndDate).toLowerCase()}
+              </small>
+            ) : (
+              <small>No upcoming lease end date</small>
+            )}
           </div>
           <div className="detail-item">
             <span>Source status</span>
@@ -82,7 +112,15 @@ export default function PropertyDetailPage() {
           <h2>Active units</h2>
         </div>
         <DataTable
-          headers={['Unit', 'Bedrooms', 'Bathrooms', 'Lease status', 'Scheduled move-out', 'Status']}
+          headers={[
+            'Unit',
+            'Bedrooms',
+            'Bathrooms',
+            'Lease status',
+            'Lease ends',
+            'Scheduled move-out',
+            'Status',
+          ]}
         >
           {item.units?.map((unit) => (
             <tr key={unit.id}>
@@ -90,6 +128,9 @@ export default function PropertyDetailPage() {
               <td>{unit.bedrooms ?? 'Not provided'}</td>
               <td>{unit.bathrooms ?? 'Not provided'}</td>
               <td>{unit.leaseStatus ?? 'No relevant lease'}</td>
+              <td>
+                <LeaseEnd endDate={unit.leaseEndDate} />
+              </td>
               <td>{unit.scheduledMoveOutDate ? formatDate(unit.scheduledMoveOutDate) : '—'}</td>
               <td>
                 <Badge value={unit.isActive ? 'ACTIVE' : 'INACTIVE'} />
@@ -103,11 +144,15 @@ export default function PropertyDetailPage() {
           <h2>Relevant leases</h2>
         </div>
         {item.leases?.length ? (
-          <DataTable headers={['Lease', 'Status', 'Scheduled move-out']}>
+          <DataTable headers={['Lease', 'Status', 'Term start', 'Term ends', 'Scheduled move-out']}>
             {item.leases.map((lease) => (
               <tr key={lease.id}>
                 <td>{lease.leaseName ?? lease.externalId}</td>
                 <td>{lease.sourceStatus ?? 'Not provided'}</td>
+                <td>{lease.startDate ? formatDate(lease.startDate) : '—'}</td>
+                <td>
+                  <LeaseEnd endDate={lease.endDate} />
+                </td>
                 <td>{formatDate(lease.scheduledMoveOutDate)}</td>
               </tr>
             ))}
