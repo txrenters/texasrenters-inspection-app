@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { MailService } from '../mail/mail.service';
 import type { CreateTechnicianDto } from './admin.dto';
 
 @Injectable()
@@ -27,6 +28,19 @@ export class SupabaseAdminGateway {
   }
 
   async createTechnicianIdentity(email: string, password: string, displayName: string) {
+    return this.createIdentity(email, password, displayName, 'technician');
+  }
+
+  async createWebUserIdentity(email: string, password: string, displayName: string) {
+    return this.createIdentity(email, password, displayName, 'web user');
+  }
+
+  private async createIdentity(
+    email: string,
+    password: string,
+    displayName: string,
+    accountType: 'technician' | 'web user',
+  ) {
     const result = await this.admin().createUser({
       email,
       password,
@@ -37,8 +51,10 @@ export class SupabaseAdminGateway {
     if (result.error || !result.data.user)
       throw new ApplicationError(
         409,
-        'TECHNICIAN_IDENTITY_NOT_CREATED',
-        'A technician account could not be created for that email address.',
+        accountType === 'technician'
+          ? 'TECHNICIAN_IDENTITY_NOT_CREATED'
+          : 'USER_IDENTITY_NOT_CREATED',
+        `A ${accountType} account could not be created for that email address.`,
       );
     return { authUserId: result.data.user.id };
   }
@@ -67,6 +83,7 @@ export class TechnicianProvisioningService {
     @Optional()
     @Inject(CacheInvalidationService)
     private readonly cacheInvalidation?: CacheInvalidationService,
+    @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 
   async create(user: AuthenticatedUser, input: CreateTechnicianDto) {
@@ -164,6 +181,12 @@ export class TechnicianProvisioningService {
         organizationId: user.organizationId,
         technicianId: profile.id,
       });
+      const delivery = await this.mailer?.sendAccountInvitation({
+        to: email,
+        displayName,
+        temporaryPassword,
+        application: 'mobile',
+      });
       return {
         id: profile.id,
         email: profile.email,
@@ -172,6 +195,7 @@ export class TechnicianProvisioningService {
         createdAt: profile.createdAt,
         mustChangePassword: true,
         temporaryPassword,
+        emailDeliveryStatus: delivery?.status ?? ('NOT_CONFIGURED' as const),
       };
     } catch (error) {
       await this.identities.deleteIdentity(identity.authUserId).catch(() => undefined);

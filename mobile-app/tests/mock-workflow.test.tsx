@@ -53,13 +53,19 @@ describe('mock-first application', () => {
     expect(await repositories.auth.listDemoUsers()).toHaveLength(3);
   });
 
-  it('provides dashboard-ready mock data and five inspections', async () => {
+  it('provides dashboard-ready mock data and unit-disambiguated duplex inspections', async () => {
     const dashboard = await repositories.inspections.dashboard();
     const inspections = await repositories.inspections.list();
-    expect(inspections).toHaveLength(5);
+    expect(inspections).toHaveLength(6);
     expect(dashboard.assignments).toHaveLength(2);
     expect(dashboard.inProgress).toBe(2);
     expect(dashboard.completed).toBe(2);
+    const willow = inspections.filter((item) => item.propertyId === 'property-willow-creek');
+    expect(willow.map((item) => item.property.address)).toEqual([
+      '772 Willow Creek Road',
+      '772 Willow Creek Road',
+    ]);
+    expect(willow.map((item) => item.unitName)).toEqual(['A', 'B']);
   });
 
   it('renders the technician dashboard from mock repositories', async () => {
@@ -111,7 +117,7 @@ describe('mock-first application', () => {
     ).toHaveLength(2);
     expect(
       inspections.filter((item) => matchesInspectionFilter(item.status, 'SCHEDULED')),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   it('renders room status and invokes room navigation', async () => {

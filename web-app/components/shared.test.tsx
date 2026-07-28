@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { FilterToolbar, LoadingState, TableLoadingState } from './ui';
+import { FilterToolbar, LoadingState, TableLoadingState } from './shared';
 
 describe('LoadingState', () => {
   it('announces the current loading task and exposes a busy container', () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
 import { Inject, Injectable } from '@nestjs/common';
@@ -8,6 +9,8 @@ import {
   InspectionType,
   MediaProcessingStatus,
   MediaUploadStatus,
+  PropertyAreaStatus,
+  VideoRecordingType,
 } from '@prisma/client';
 import type { FindingReviewStatus, Prisma } from '@prisma/client';
 
@@ -16,10 +19,18 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
+import {
+  MediaProcessingService,
+  ROOM_SUMMARY_TITLE,
+  ROOM_SUMMARY_WHERE,
+} from './media-processing.service';
 import type {
+  TechnicianAdditionalVideoDto,
+  TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
   TechnicianMediaUploadDto,
+  TechnicianPhotoUploadDto,
 } from './technician.dto';
 
 export interface UploadedRoomVideo {
@@ -37,6 +48,82 @@ const allowedVideoMimeTypes = new Set([
   'video/x-matroska',
 ]);
 
+const allowedImageMimeTypes = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
+
+function imageExtension(mimeType: string) {
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'image/webp') return '.webp';
+  if (mimeType === 'image/heic' || mimeType === 'image/heif') return '.heic';
+  return '.jpg';
+}
+
+function videoExtension(mimeType: string) {
+  if (mimeType === 'video/quicktime') return '.mov';
+  if (mimeType === 'video/webm') return '.webm';
+  return '.mp4';
+}
+
+/**
+ * Tenant-scoped object key for a room video, matching the photo convention. The
+ * key is independent of `providerMediaId` so the storage backend can change
+ * without touching media identity or the client's idempotency key.
+ */
+function videoStorageKey(
+  organizationId: string,
+  inspectionId: string,
+  areaId: string,
+  mimeType: string,
+) {
+  return `${organizationId}/${inspectionId}/${areaId}/videos/${randomUUID()}${videoExtension(mimeType)}`;
+}
+
+function captureSummaryFromDto(dto: TechnicianMediaUploadDto): Prisma.InputJsonValue {
+  return {
+    coverageStatus: dto.coverageStatus ?? 'INCOMPLETE',
+    sensorConfidence: dto.sensorConfidence ?? 'UNAVAILABLE',
+    clockwiseRotationDegrees: dto.clockwiseRotationDegrees ?? 0,
+    counterClockwiseRotationDegrees: dto.counterClockwiseRotationDegrees ?? 0,
+    startHeadingDegrees: dto.startHeadingDegrees ?? null,
+    endHeadingDegrees: dto.endHeadingDegrees ?? null,
+    returnedToStart: dto.returnedToStart ?? false,
+    sensorSupported: dto.sensorSupported ?? false,
+    manualConfirmation: dto.manualConfirmation ?? false,
+    evidenceComplete: dto.evidenceComplete ?? false,
+    snapshotCount: dto.snapshotCount ?? 0,
+    findingMarkerCount: dto.findingMarkerCount ?? 0,
+  };
+}
+
+const photoSelect = {
+  id: true,
+  inspectionAreaId: true,
+  findingId: true,
+  captureType: true,
+  sequenceNumber: true,
+  label: true,
+  notes: true,
+  mimeType: true,
+  width: true,
+  height: true,
+  capturedAt: true,
+  capturedBy: { select: { displayName: true } },
+} satisfies Prisma.InspectionPhotoSelect;
+
+type TechnicianPhotoRecord = Prisma.InspectionPhotoGetPayload<{ select: typeof photoSelect }>;
+
+// Propertyware unit names vary ("A", "304", "Unit B"); label consistently.
+function formatUnitLabel(name: string) {
+  return /^(unit|apt|apartment|suite|ste|#)\b/i.test(name.trim())
+    ? name.trim()
+    : `Unit ${name.trim()}`;
+}
+
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
 
 const technicianRoomSelect = {
@@ -52,6 +139,10 @@ const technicianRoomSelect = {
       name: true,
       inspectionOrder: true,
       isRequired: true,
+      environment: true,
+      category: true,
+      source: true,
+      status: true,
       floor: { select: { name: true } },
       baselineConditions: {
         orderBy: { baselineInspection: { inspectedAt: 'desc' as const } },
@@ -76,6 +167,9 @@ const technicianInspectionSummarySelect = {
   status: true,
   priority: true,
   internalNotes: true,
+  propertywareUnit: {
+    select: { id: true, name: true, bedrooms: true, bathrooms: true },
+  },
   propertywareBuilding: {
     select: {
       id: true,
@@ -112,21 +206,23 @@ const technicianInspectionContextSelect = {
       city: true,
       state: true,
       postalCode: true,
-      units: {
-        where: { isActive: true },
-        orderBy: { name: 'asc' as const },
-        take: 1,
-        select: { bedrooms: true, bathrooms: true },
-      },
     },
   },
   areas: {
-    orderBy: { propertyArea: { inspectionOrder: 'asc' as const } },
+    orderBy: [
+      { propertyArea: { floor: { sortOrder: 'asc' as const } } },
+      { propertyArea: { inspectionOrder: 'asc' as const } },
+    ],
     take: 100,
     select: technicianRoomSelect,
   },
   _count: {
-    select: { findings: { where: { reviewStatus: 'PENDING_REVIEW' } } },
+    // Informational room summaries never count as pending review work.
+    select: {
+      findings: {
+        where: { reviewStatus: 'PENDING_REVIEW', NOT: { ...ROOM_SUMMARY_WHERE } },
+      },
+    },
   },
 } satisfies Prisma.InspectionSelect;
 
@@ -144,6 +240,8 @@ export class TechnicianService {
     @Inject(FloorPlanStorageService) private readonly floorPlanStorage: FloorPlanStorageService,
     @Inject(InspectionMediaStorageService)
     private readonly mediaStorage: InspectionMediaStorageService,
+    @Inject(MediaProcessingService)
+    private readonly mediaProcessing: MediaProcessingService,
   ) {}
 
   async dashboard(user: AuthenticatedUser) {
@@ -282,7 +380,7 @@ export class TechnicianService {
         'ASSIGNED_INSPECTION_NOT_FOUND',
         'Assigned inspection was not found.',
       );
-    const property = this.mapProperty(record.propertywareBuilding);
+    const property = this.mapProperty(record.propertywareBuilding, record.propertywareUnit);
     const rooms = record.areas.map((room) => this.mapRoom(room));
     return {
       inspection: this.mapInspection(record, user.id),
@@ -331,11 +429,17 @@ export class TechnicianService {
         'REQUIRED_ROOMS_INCOMPLETE',
         'Complete or provide an authorized skip reason for every required room.',
       );
+    // Technician submission is NOT completion (spec §11): only a human
+    // administrator finalizes. Record the submission and let the AI pipeline
+    // advance it to REVIEW_REQUIRED once processing finishes.
     const updated = await this.prisma.inspection.update({
       where: { id },
-      data: { status: InspectionStatus.PROCESSING, completedAt: new Date() },
+      data: { status: InspectionStatus.TECHNICIAN_SUBMITTED, submittedAt: new Date() },
       select: technicianInspectionSummarySelect,
     });
+    // If every recording finished processing before submission, the
+    // inspection is immediately ready for human review.
+    await this.mediaProcessing.advanceInspection(id);
     return this.mapInspection(updated, user.id);
   }
 
@@ -417,10 +521,127 @@ export class TechnicianService {
       relationLoadStrategy: 'join',
       where: { inspectionId },
       select: technicianRoomSelect,
-      orderBy: { propertyArea: { inspectionOrder: 'asc' } },
+      orderBy: [
+        { propertyArea: { floor: { sortOrder: 'asc' } } },
+        { propertyArea: { inspectionOrder: 'asc' } },
+      ],
       take: 100,
     });
     return rooms.map((room) => this.mapRoom(room));
+  }
+
+  /**
+   * Technician-created inspection area (missed room, mislabeled room, or an
+   * outdoor/exterior target not on the floor plan). It is created as a DRAFT
+   * PropertyArea with source TECHNICIAN — evidence can be captured immediately,
+   * but an administrator must still approve it. The technician can never
+   * self-approve.
+   */
+  async createArea(user: AuthenticatedUser, inspectionId: string, input: TechnicianCreateAreaDto) {
+    const inspection = await this.assignedInspection(user, inspectionId);
+    const building = inspection.propertywareBuilding;
+    if (!building)
+      throw new ApplicationError(
+        422,
+        'INSPECTION_HAS_NO_PROPERTY',
+        'This inspection is not linked to a property, so an area cannot be added.',
+      );
+    const buildingId = building.id;
+    const unitId = inspection.propertywareUnit?.id ?? null;
+    const name = input.name.trim();
+    const floorName = input.floorName?.trim() || 'Added areas';
+
+    // Bridge the Propertyware building to an internal Property row (shared id).
+    await this.prisma.property.upsert({
+      where: { id: buildingId },
+      update: {},
+      create: {
+        id: buildingId,
+        organizationId: user.organizationId,
+        name: building.name,
+        addressLine1: building.addressLine1 || 'Address not provided',
+        city: building.city || 'Not provided',
+        state: building.state || 'TX',
+        postalCode: building.postalCode || 'Not provided',
+      },
+    });
+
+    const duplicate = await this.prisma.propertyArea.findFirst({
+      where: {
+        propertyId: buildingId,
+        unitId,
+        name: { equals: name, mode: 'insensitive' },
+        floor: { name: { equals: floorName, mode: 'insensitive' } },
+      },
+      select: { id: true },
+    });
+    if (duplicate)
+      throw new ApplicationError(
+        409,
+        'DUPLICATE_AREA',
+        'An area with this name already exists on that floor.',
+      );
+
+    const highest = await this.prisma.propertyArea.aggregate({
+      where: { propertyId: buildingId, unitId },
+      _max: { inspectionOrder: true },
+    });
+    const nextOrder = (highest._max.inspectionOrder ?? 0) + 1;
+
+    const floor =
+      (await this.prisma.propertyFloor.findFirst({
+        where: { propertyId: buildingId, unitId, name: { equals: floorName, mode: 'insensitive' } },
+        select: { id: true },
+      })) ??
+      (await this.prisma.propertyFloor.create({
+        data: { propertyId: buildingId, unitId, name: floorName, sortOrder: nextOrder },
+        select: { id: true },
+      }));
+
+    const roomId = await this.prisma.$transaction(async (tx) => {
+      const area = await tx.propertyArea.create({
+        data: {
+          propertyId: buildingId,
+          unitId,
+          floorId: floor.id,
+          name,
+          inspectionOrder: nextOrder,
+          isRequired: true,
+          source: 'TECHNICIAN',
+          status: PropertyAreaStatus.DRAFT,
+          environment: input.environment,
+          category: input.category ?? null,
+          notes: input.notes?.trim() || null,
+          createdById: user.id,
+        },
+        select: { id: true },
+      });
+      const inspectionArea = await tx.inspectionArea.create({
+        data: {
+          inspectionId,
+          propertyAreaId: area.id,
+          completionStatus: InspectionAreaCompletionStatus.PENDING,
+        },
+        select: { id: true },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'TECHNICIAN_AREA_ADDED',
+          entityType: 'PropertyArea',
+          entityId: area.id,
+          metadata: { inspectionId, environment: input.environment, category: input.category ?? null },
+        },
+      });
+      return inspectionArea.id;
+    });
+
+    const room = await this.prisma.inspectionArea.findUniqueOrThrow({
+      where: { id: roomId },
+      select: technicianRoomSelect,
+    });
+    return this.mapRoom(room);
   }
 
   async room(user: AuthenticatedUser, id: string) {
@@ -476,13 +697,17 @@ export class TechnicianService {
     await this.assignedRoom(user, roomId);
     return this.prisma.inspectionMedia.findMany({
       where: { inspectionAreaId: roomId, technicianId: user.id },
-      orderBy: { createdAt: 'desc' },
+      // Primary walkthrough first, then additional labeled clips.
+      orderBy: [{ recordingType: 'asc' }, { createdAt: 'desc' }],
       take: 100,
       select: {
         id: true,
         inspectionId: true,
         inspectionAreaId: true,
         durationSeconds: true,
+        recordingType: true,
+        label: true,
+        category: true,
         createdAt: true,
       },
     });
@@ -525,7 +750,9 @@ export class TechnicianService {
             },
           },
           propertyArea: { select: { name: true } },
-          media: { select: { id: true, providerMediaId: true } },
+          media: {
+            select: { id: true, providerMediaId: true, storageKey: true, recordingType: true },
+          },
         },
       });
       if (!area)
@@ -548,14 +775,25 @@ export class TechnicianService {
           'This room is completed. Its video can no longer be replaced.',
         );
 
-      await this.mediaStorage.putFromFile(providerMediaId, file.path, file.mimetype);
-      const replaced = area.media.map((item) => item.providerMediaId);
+      const storageKey = videoStorageKey(
+        area.inspection.organizationId,
+        area.inspectionId,
+        area.id,
+        file.mimetype,
+      );
+      await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
+      // Only the previous PRIMARY video is replaced; additional videos are kept.
+      const replaced = area.media
+        .filter((item) => item.recordingType === VideoRecordingType.PRIMARY_AREA)
+        .map((item) => item.storageKey);
       let record;
       try {
         record = await this.prisma.$transaction(async (tx) => {
-          // Exactly one video per room: registering a new recording replaces
-          // any earlier one for this area.
-          await tx.inspectionMedia.deleteMany({ where: { inspectionAreaId: area.id } });
+          // Exactly one PRIMARY video per room: a new walkthrough replaces the
+          // earlier primary one, but never the additional labeled videos.
+          await tx.inspectionMedia.deleteMany({
+            where: { inspectionAreaId: area.id, recordingType: VideoRecordingType.PRIMARY_AREA },
+          });
           const created = await tx.inspectionMedia.create({
             data: {
               organizationId: area.inspection.organizationId,
@@ -563,10 +801,16 @@ export class TechnicianService {
               inspectionId: area.inspectionId,
               inspectionAreaId: area.id,
               technicianId: user.id,
-              provider: 'local',
+              provider: this.mediaStorage.providerName(),
               providerMediaId,
+              storageKey,
               mimeType: file.mimetype,
               durationSeconds: dto.durationSeconds,
+              recordingType: VideoRecordingType.PRIMARY_AREA,
+              captureGuidelineVersion: dto.captureGuidelineVersion ?? null,
+              captureSessionId: dto.captureSessionId ?? null,
+              capturePolicyVersion: dto.capturePolicyVersion ?? null,
+              captureSummary: dto.captureSessionId ? captureSummaryFromDto(dto) : undefined,
               uploadStatus: MediaUploadStatus.UPLOADED,
               processingStatus: MediaProcessingStatus.PENDING,
             },
@@ -574,19 +818,341 @@ export class TechnicianService {
           // A fresh recording also un-skips a previously skipped room.
           await tx.inspectionArea.update({
             where: { id: area.id },
-            data: { completionStatus: InspectionAreaCompletionStatus.RECORDED, skipReason: null },
+            data: {
+              completionStatus: InspectionAreaCompletionStatus.COMPLETED,
+              completedAt: new Date(),
+              skipReason: null,
+            },
           });
           return created;
         });
       } catch (error) {
-        await this.mediaStorage.delete(providerMediaId).catch(() => undefined);
+        await this.mediaStorage.delete(storageKey).catch(() => undefined);
         throw error;
       }
       for (const key of replaced) await this.mediaStorage.delete(key).catch(() => undefined);
+      // Kick off transcription + AI analysis without delaying the upload response.
+      this.mediaProcessing.queue(record.id, user.organizationId);
       return this.mapUploadedMedia(record, area);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * An additional labeled video for an area (extra damage, appliance test, pest
+   * or pet evidence, etc.). It never replaces the primary walkthrough and does
+   * not complete the area, but it is transcribed/analyzed independently and is
+   * part of the inspection's evidence. Idempotent by the client's key.
+   */
+  async uploadAdditionalVideo(
+    user: AuthenticatedUser,
+    roomId: string,
+    dto: TechnicianAdditionalVideoDto,
+    file?: UploadedRoomVideo,
+  ) {
+    try {
+      if (!file)
+        throw new ApplicationError(400, 'ROOM_VIDEO_FILE_REQUIRED', 'A video file is required.');
+      if (!allowedVideoMimeTypes.has(file.mimetype))
+        throw new ApplicationError(
+          415,
+          'ROOM_VIDEO_TYPE_UNSUPPORTED',
+          'Only room-video recordings (mp4, mov, webm) can be uploaded.',
+        );
+      const area = await this.prisma.inspectionArea.findFirst({
+        where: {
+          id: roomId,
+          inspection: {
+            organizationId: user.organizationId,
+            status: visibleStatuses,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+        select: {
+          id: true,
+          inspectionId: true,
+          propertyAreaId: true,
+          inspection: {
+            select: {
+              organizationId: true,
+              propertyId: true,
+              propertywareBuilding: { select: { addressLine1: true } },
+            },
+          },
+          propertyArea: { select: { name: true } },
+        },
+      });
+      if (!area)
+        throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
+
+      const providerMediaId = `local-${dto.idempotencyKey}`;
+      const existing = await this.prisma.inspectionMedia.findUnique({
+        where: { providerMediaId },
+        select: { id: true },
+      });
+      if (existing) {
+        const stored = await this.prisma.inspectionMedia.findUniqueOrThrow({
+          where: { id: existing.id },
+        });
+        return this.mapUploadedMedia(stored, area);
+      }
+
+      if (dto.relatedFindingId) {
+        const finding = await this.prisma.inspectionFinding.findFirst({
+          where: {
+            id: dto.relatedFindingId,
+            inspectionId: area.inspectionId,
+            propertyAreaId: area.propertyAreaId,
+          },
+          select: { id: true },
+        });
+        if (!finding)
+          throw new ApplicationError(
+            422,
+            'FINDING_NOT_IN_AREA',
+            'The related finding does not belong to this area.',
+          );
+      }
+
+      const storageKey = videoStorageKey(
+        area.inspection.organizationId,
+        area.inspectionId,
+        area.id,
+        file.mimetype,
+      );
+      await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
+      let record;
+      try {
+        record = await this.prisma.inspectionMedia.create({
+          data: {
+            organizationId: area.inspection.organizationId,
+            propertyId: area.inspection.propertyId,
+            inspectionId: area.inspectionId,
+            inspectionAreaId: area.id,
+            technicianId: user.id,
+            provider: this.mediaStorage.providerName(),
+            providerMediaId,
+            storageKey,
+            mimeType: file.mimetype,
+            durationSeconds: dto.durationSeconds,
+            recordingType: VideoRecordingType.ADDITIONAL_ISSUE,
+            label: dto.label.trim(),
+            category: dto.category ?? null,
+            relatedFindingId: dto.relatedFindingId ?? null,
+            captureGuidelineVersion: dto.captureGuidelineVersion ?? null,
+            uploadStatus: MediaUploadStatus.UPLOADED,
+            processingStatus: MediaProcessingStatus.PENDING,
+          },
+        });
+      } catch (error) {
+        await this.mediaStorage.delete(storageKey).catch(() => undefined);
+        throw error;
+      }
+      // Transcribe/analyze independently; the area's completion is unaffected.
+      this.mediaProcessing.queue(record.id, user.organizationId);
+      return this.mapUploadedMedia(record, area);
+    } finally {
+      if (file) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Photo evidence for an area. Unlike the single primary video, an area may
+   * hold many photos across capture types; photos never enter the video
+   * transcription/AI pipeline. Idempotent by the client's key.
+   */
+  async uploadPhoto(
+    user: AuthenticatedUser,
+    roomId: string,
+    dto: TechnicianPhotoUploadDto,
+    file?: UploadedRoomVideo,
+  ) {
+    try {
+      if (!file)
+        throw new ApplicationError(400, 'PHOTO_FILE_REQUIRED', 'A photo file is required.');
+      if (!allowedImageMimeTypes.has(file.mimetype))
+        throw new ApplicationError(
+          415,
+          'PHOTO_TYPE_UNSUPPORTED',
+          'Only photos (jpeg, png, webp, heic) can be uploaded.',
+        );
+      const area = await this.prisma.inspectionArea.findFirst({
+        where: {
+          id: roomId,
+          inspection: {
+            organizationId: user.organizationId,
+            status: visibleStatuses,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+        select: { id: true, inspectionId: true, propertyAreaId: true },
+      });
+      if (!area)
+        throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
+
+      // Retried uploads reuse the client key and return the stored photo.
+      const existing = await this.prisma.inspectionPhoto.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+        select: { id: true, inspectionAreaId: true },
+      });
+      if (existing) {
+        if (existing.inspectionAreaId !== area.id)
+          throw new ApplicationError(
+            409,
+            'PHOTO_KEY_CONFLICT',
+            'This photo key was already used for another area.',
+          );
+        return this.mapPhoto(
+          await this.prisma.inspectionPhoto.findUniqueOrThrow({
+            where: { id: existing.id },
+            select: photoSelect,
+          }),
+        );
+      }
+
+      if (dto.findingId) {
+        const finding = await this.prisma.inspectionFinding.findFirst({
+          where: {
+            id: dto.findingId,
+            inspectionId: area.inspectionId,
+            propertyAreaId: area.propertyAreaId,
+          },
+          select: { id: true },
+        });
+        if (!finding)
+          throw new ApplicationError(
+            422,
+            'FINDING_NOT_IN_AREA',
+            'The related finding does not belong to this area.',
+          );
+      }
+
+      const id = randomUUID();
+      const storageKey = `${user.organizationId}/${area.inspectionId}/${area.id}/photos/${id}${imageExtension(file.mimetype)}`;
+      await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
+      let record: TechnicianPhotoRecord;
+      try {
+        record = await this.prisma.inspectionPhoto.create({
+          data: {
+            id,
+            organizationId: user.organizationId,
+            inspectionId: area.inspectionId,
+            inspectionAreaId: area.id,
+            findingId: dto.findingId ?? null,
+            capturedById: user.id,
+            provider: 'local',
+            storageKey,
+            captureType: dto.captureType,
+            sequenceNumber: dto.sequenceNumber ?? 0,
+            label: dto.label?.trim() || null,
+            notes: dto.notes?.trim() || null,
+            mimeType: file.mimetype,
+            width: dto.width ?? null,
+            height: dto.height ?? null,
+            sizeBytes: file.size,
+            idempotencyKey: dto.idempotencyKey,
+            metadata:
+              dto.recordingSessionId || dto.videoTimestampMs !== undefined || dto.captureSource
+                ? {
+                    recordingSessionId: dto.recordingSessionId,
+                    videoTimestampMs: dto.videoTimestampMs,
+                    captureSource: dto.captureSource,
+                  }
+                : undefined,
+          },
+          select: photoSelect,
+        });
+      } catch (error) {
+        await this.mediaStorage.delete(storageKey).catch(() => undefined);
+        throw error;
+      }
+      return this.mapPhoto(record);
+    } finally {
+      if (file) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  async listPhotos(user: AuthenticatedUser, roomId: string) {
+    await this.assignedRoom(user, roomId);
+    const photos = await this.prisma.inspectionPhoto.findMany({
+      where: { inspectionAreaId: roomId },
+      orderBy: [{ captureType: 'asc' }, { sequenceNumber: 'asc' }, { createdAt: 'asc' }],
+      take: 200,
+      select: photoSelect,
+    });
+    return photos.map((photo) => this.mapPhoto(photo));
+  }
+
+  async deletePhoto(user: AuthenticatedUser, photoId: string) {
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: {
+        id: photoId,
+        capturedById: user.id,
+        inspectionArea: {
+          inspection: {
+            organizationId: user.organizationId,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+      },
+      select: {
+        id: true,
+        storageKey: true,
+        inspectionArea: { select: { inspection: { select: { status: true } } } },
+      },
+    });
+    if (!photo) throw new ApplicationError(404, 'PHOTO_NOT_FOUND', 'Photo was not found.');
+    // Evidence is only deletable before the inspection is finalized.
+    const status = photo.inspectionArea.inspection.status;
+    if (status === InspectionStatus.COMPLETED || status === InspectionStatus.CANCELLED)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Photos cannot be deleted after the inspection is finalized.',
+      );
+    await this.prisma.inspectionPhoto.delete({ where: { id: photoId } });
+    await this.mediaStorage.delete(photo.storageKey).catch(() => undefined);
+    return { deleted: true };
+  }
+
+  async photoContent(user: AuthenticatedUser, photoId: string) {
+    const photo = await this.prisma.inspectionPhoto.findFirst({
+      where: {
+        id: photoId,
+        inspectionArea: {
+          inspection: {
+            organizationId: user.organizationId,
+            assignments: { some: { technicianId: user.id, isCurrent: true } },
+          },
+        },
+      },
+      select: { id: true, storageKey: true, mimeType: true },
+    });
+    if (!photo) throw new ApplicationError(404, 'PHOTO_NOT_FOUND', 'Photo was not found.');
+    return {
+      bytes: await this.mediaStorage.get(photo.storageKey),
+      mimeType: photo.mimeType,
+      fileName: `photo-${photo.id}`,
+    };
+  }
+
+  private mapPhoto(record: TechnicianPhotoRecord) {
+    return {
+      id: record.id,
+      roomId: record.inspectionAreaId,
+      findingId: record.findingId,
+      captureType: record.captureType,
+      sequenceNumber: record.sequenceNumber,
+      label: record.label,
+      notes: record.notes,
+      mimeType: record.mimeType,
+      width: record.width,
+      height: record.height,
+      capturedByName: record.capturedBy?.displayName ?? null,
+      capturedAt: record.capturedAt.toISOString(),
+      contentPath: `/api/v1/technician/photos/${record.id}/content`,
+    };
   }
 
   private mapUploadedMedia(
@@ -598,6 +1164,8 @@ export class TechnicianService {
       uploadStatus: MediaUploadStatus;
       processingStatus: MediaProcessingStatus;
       createdAt: Date;
+      recordingType?: VideoRecordingType;
+      label?: string | null;
     },
     area: {
       inspection: { propertywareBuilding: { addressLine1: string | null } | null };
@@ -613,6 +1181,8 @@ export class TechnicianService {
       roomName: area.propertyArea.name,
       durationSeconds: record.durationSeconds,
       estimatedSizeMb: 0,
+      recordingType: record.recordingType ?? VideoRecordingType.PRIMARY_AREA,
+      label: record.label ?? null,
       status: this.mapUploadStatus(record.uploadStatus),
       progress: record.uploadStatus === MediaUploadStatus.UPLOADED ? 1 : 0,
       processingStatus: this.mapProcessingStatus(record.processingStatus),
@@ -642,7 +1212,10 @@ export class TechnicianService {
           select: {
             propertyArea: { select: { name: true } },
             inspection: {
-              select: { propertywareBuilding: { select: { addressLine1: true } } },
+              select: {
+                propertywareBuilding: { select: { addressLine1: true } },
+                propertywareUnit: { select: { name: true } },
+              },
             },
           },
         },
@@ -655,8 +1228,14 @@ export class TechnicianService {
       mediaId: record.id,
       inspectionId: record.inspectionId,
       roomId: record.inspectionAreaId,
-      propertyAddress:
+      propertyAddress: [
         record.inspectionArea.inspection.propertywareBuilding?.addressLine1 ?? 'Assigned property',
+        record.inspectionArea.inspection.propertywareUnit?.name
+          ? formatUnitLabel(record.inspectionArea.inspection.propertywareUnit.name)
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       roomName: record.inspectionArea.propertyArea.name,
       durationSeconds: record.durationSeconds,
       estimatedSizeMb: 0,
@@ -673,6 +1252,11 @@ export class TechnicianService {
     const where = {
       inspectionId,
       ...(query.reviewStatus ? { reviewStatus: query.reviewStatus as FindingReviewStatus } : {}),
+      ...(query.kind === 'SUMMARIES'
+        ? { ...ROOM_SUMMARY_WHERE }
+        : query.kind === 'DEFECTS'
+          ? { NOT: { ...ROOM_SUMMARY_WHERE } }
+          : {}),
     } satisfies Prisma.InspectionFindingWhereInput;
     const [records, total] = await Promise.all([
       this.prisma.inspectionFinding.findMany({
@@ -730,6 +1314,84 @@ export class TechnicianService {
       pageSize: query.pageSize,
       total,
       totalPages: Math.ceil(total / query.pageSize),
+    };
+  }
+
+  async report(user: AuthenticatedUser, inspectionId: string) {
+    const record = await this.prisma.inspection.findFirst({
+      relationLoadStrategy: 'join',
+      where: {
+        id: inspectionId,
+        organizationId: user.organizationId,
+        status: visibleStatuses,
+        assignments: { some: { technicianId: user.id, isCurrent: true } },
+      },
+      select: technicianInspectionContextSelect,
+    });
+    if (!record)
+      throw new ApplicationError(
+        404,
+        'ASSIGNED_INSPECTION_NOT_FOUND',
+        'Assigned inspection was not found.',
+      );
+    const findings = await this.prisma.inspectionFinding.findMany({
+      where: { inspectionId },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        propertyAreaId: true,
+        findingType: true,
+        title: true,
+        category: true,
+        severity: true,
+        comparisonResult: true,
+        confidence: true,
+        description: true,
+        recommendedReview: true,
+        reviewStatus: true,
+      },
+    });
+    const isSummary = (finding: (typeof findings)[number]) =>
+      finding.findingType === 'NO_CHANGE' && finding.title === ROOM_SUMMARY_TITLE;
+    const rooms = record.areas.map((area) => {
+      const room = this.mapRoom(area);
+      const roomFindings = findings.filter(
+        (finding) => finding.propertyAreaId === area.propertyAreaId,
+      );
+      const summary = roomFindings.find(isSummary);
+      const defects = roomFindings.filter((finding) => !isSummary(finding));
+      return {
+        ...room,
+        summary: summary?.description ?? null,
+        findings: defects.map((finding) => ({
+          id: finding.id,
+          findingType: finding.findingType,
+          title: finding.title,
+          category: finding.category,
+          severity: finding.severity,
+          comparisonResult: finding.comparisonResult,
+          confidence: finding.confidence,
+          description: finding.description,
+          recommendedReview: finding.recommendedReview,
+          reviewStatus: finding.reviewStatus,
+        })),
+      };
+    });
+    const finished = rooms.filter((room) =>
+      ['COMPLETED', 'SKIPPED', 'RECORDING_SAVED'].includes(room.completionStatus),
+    );
+    return {
+      inspection: this.mapInspection(record, user.id),
+      property: this.mapProperty(record.propertywareBuilding, record.propertywareUnit),
+      generatedAt: new Date().toISOString(),
+      rooms,
+      totals: {
+        rooms: rooms.length,
+        finishedRooms: finished.length,
+        summaries: rooms.filter((room) => room.summary).length,
+        defectFindings: rooms.reduce((sum, room) => sum + room.findings.length, 0),
+        pendingReviewCount: record._count.findings,
+      },
     };
   }
 
@@ -817,9 +1479,11 @@ export class TechnicianService {
       assignedUserId: technicianId,
       status: this.mapInspectionStatus(record.status),
       priority: record.priority,
+      unitId: record.propertywareUnit?.id ?? null,
+      unitName: record.propertywareUnit?.name ?? null,
       roomIds: record.areas.map((area) => area.id),
       propertyNotes: record.internalNotes ?? '',
-      property: this.mapPropertySummary(record.propertywareBuilding),
+      property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {
         completed: completedAreas.length,
         total: requiredAreas.length,
@@ -842,6 +1506,10 @@ export class TechnicianService {
       floorName: record.propertyArea.floor?.name ?? 'Property',
       order: record.propertyArea.inspectionOrder,
       isRequired: record.propertyArea.isRequired,
+      environment: record.propertyArea.environment,
+      category: record.propertyArea.category ?? null,
+      source: record.propertyArea.source,
+      areaStatus: record.propertyArea.status,
       inspectionType: record.inspection.inspectionType,
       baseline: {
         summary: establishesBaseline
@@ -870,10 +1538,14 @@ export class TechnicianService {
     };
   }
 
-  private mapPropertySummary(property: TechnicianInspectionSummaryRecord['propertywareBuilding']) {
+  private mapPropertySummary(
+    property: TechnicianInspectionSummaryRecord['propertywareBuilding'],
+    unitName?: string | null,
+  ) {
+    const baseAddress = property?.addressLine1 ?? property?.name ?? 'Assigned property';
     return {
       id: property?.id ?? '',
-      address: property?.addressLine1 ?? property?.name ?? 'Assigned property',
+      address: unitName ? `${baseAddress} · ${formatUnitLabel(unitName)}` : baseAddress,
       cityStateZip: [property?.city, property?.state, property?.postalCode]
         .filter(Boolean)
         .join(', '),
@@ -882,23 +1554,36 @@ export class TechnicianService {
   }
 
   private mapProperty(
-    property: Prisma.PropertywareBuildingGetPayload<{
-      select: (typeof technicianInspectionContextSelect)['propertywareBuilding']['select'];
-    }> | null,
+    property: {
+      id: string;
+      externalId: string;
+      externalPortfolioId: string;
+      name: string;
+      addressLine1: string | null;
+      city: string | null;
+      state: string | null;
+      postalCode: string | null;
+      units?: Array<{ bedrooms: number | null; bathrooms: number | null }>;
+    } | null,
+    // The inspection's actual unit. Without it (standalone property reads)
+    // bedroom/bathroom counts fall back to the building's first active unit.
+    unit?: { name: string; bedrooms: number | null; bathrooms: number | null } | null,
   ) {
     if (!property)
       throw new ApplicationError(404, 'ASSIGNED_PROPERTY_NOT_FOUND', 'Property was not found.');
-    const unit = property.units[0];
+    const unitInfo = unit ?? property.units?.[0] ?? null;
+    const baseAddress = property.addressLine1 ?? property.name;
     return {
       id: property.id,
       externalPropertyId: property.externalId,
       externalOwnerId: '',
       externalPortfolioId: property.externalPortfolioId,
       name: property.name,
-      address: property.addressLine1 ?? property.name,
+      address: unit?.name ? `${baseAddress} · ${formatUnitLabel(unit.name)}` : baseAddress,
+      unitName: unit?.name ?? null,
       cityStateZip: [property.city, property.state, property.postalCode].filter(Boolean).join(', '),
-      bedrooms: unit?.bedrooms ?? 0,
-      bathrooms: unit?.bathrooms ?? 0,
+      bedrooms: unitInfo?.bedrooms ?? 0,
+      bathrooms: unitInfo?.bathrooms ?? 0,
       floors: [],
       accessInstructions: '',
       notes: '',
@@ -909,9 +1594,14 @@ export class TechnicianService {
   private mapInspectionStatus(status: InspectionStatus) {
     if (status === InspectionStatus.SCHEDULED) return 'SCHEDULED';
     if (status === InspectionStatus.IN_PROGRESS) return 'IN_PROGRESS';
+    if (status === InspectionStatus.TECHNICIAN_SUBMITTED) return 'TECHNICIAN_SUBMITTED';
     if (status === InspectionStatus.PROCESSING) return 'PROCESSING';
     if (status === InspectionStatus.REVIEW_REQUIRED) return 'REVIEW_REQUIRED';
+    if (status === InspectionStatus.UNDER_REVIEW) return 'UNDER_REVIEW';
+    if (status === InspectionStatus.TBD) return 'TBD';
+    if (status === InspectionStatus.FOLLOW_UP_REQUIRED) return 'FOLLOW_UP_REQUIRED';
     if (status === InspectionStatus.COMPLETED) return 'COMPLETED';
+    if (status === InspectionStatus.CANCELLED) return 'CANCELLED';
     throw new ApplicationError(500, 'INVALID_INSPECTION_STATUS', 'Invalid inspection status.');
   }
   private mapRoomStatus(status: InspectionAreaCompletionStatus) {

@@ -1,20 +1,28 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
+import { UserPlusIcon } from 'lucide-react';
+
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Alert } from '@/components/ui/alert';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useAdminMutations } from '@/lib/queries';
 
 export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [copied, setCopied] = useState(false);
   const create = useAdminMutations().createTechnician;
-
-  useEffect(() => {
-    dialogRef.current?.showModal();
-    return () => dialogRef.current?.close();
-  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -26,52 +34,38 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  function handleCancel(event: React.SyntheticEvent<HTMLDialogElement>) {
-    if (create.isPending) {
-      event.preventDefault();
-      return;
-    }
+  function handleClose() {
+    // Never abandon an in-flight account creation.
+    if (create.isPending) return;
     onClose();
   }
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="dialog technician-dialog"
-      aria-labelledby="create-technician-title"
-      aria-describedby="create-technician-description"
-      onCancel={handleCancel}
-      onClose={onClose}
-    >
-      <div className="dialog-heading">
-        <div className="dialog-heading-copy">
-          <span className="dialog-icon" aria-hidden>
-            <svg viewBox="0 0 24 24" role="presentation">
-              <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0M19 7v6m-3-3h6" />
-            </svg>
-          </span>
-          <div>
-            <span className="dialog-eyebrow">Technician access</span>
-            <h2 id="create-technician-title">Create technician account</h2>
-            <p id="create-technician-description">
-              Generate secure mobile access with a one-time temporary password.
-            </p>
+    <Dialog open onOpenChange={(next) => (next ? undefined : handleClose())}>
+      <DialogContent
+        className="sm:max-w-2xl"
+        // Creating an account is not cancellable midway, so Escape and an
+        // outside click are both blocked while the mutation is in flight —
+        // preserving the guard the native dialog's onCancel provided.
+        showCloseButton={!create.isPending}
+        onEscapeKeyDown={(event) => create.isPending && event.preventDefault()}
+        onPointerDownOutside={(event) => create.isPending && event.preventDefault()}
+      >
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 text-primary" aria-hidden>
+              <UserPlusIcon className="size-5" />
+            </span>
+            <div className="grid gap-1">
+              <DialogTitle>Create technician account</DialogTitle>
+              <DialogDescription>
+                Generate secure mobile access with a one-time temporary password.
+              </DialogDescription>
+            </div>
           </div>
-        </div>
-        <button
-          className="dialog-close"
-          type="button"
-          aria-label="Close create technician dialog"
-          disabled={create.isPending}
-          onClick={onClose}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden>
-            <path d="m6 6 12 12M18 6 6 18" />
-          </svg>
-        </button>
-      </div>
+        </DialogHeader>
 
-      <div className="dialog-content">
+        <div className="grid gap-4">
         {create.data ? (
           <div className="credential-card" role="status" aria-live="polite">
             <div className="credential-success-heading">
@@ -95,9 +89,18 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                 <code>{create.data.temporaryPassword}</code>
               </div>
             </div>
-            <div className="form-actions">
+            <div
+              className={`alert ${
+                create.data.emailDeliveryStatus === 'SENT' ? 'alert-success' : 'alert-warning'
+              }`}
+            >
+              {create.data.emailDeliveryStatus === 'SENT'
+                ? 'The mobile sign-in instructions were emailed to this technician.'
+                : 'Email delivery was unavailable. Share the temporary password through an approved private channel.'}
+            </div>
+            <DialogFooter>
               <button
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 type="button"
                 onClick={() => {
                   void navigator.clipboard
@@ -108,17 +111,17 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
               >
                 {copied ? 'Password copied' : 'Copy temporary password'}
               </button>
-              <button className="button button-primary" type="button" onClick={onClose}>
+              <button className={buttonVariants({ variant: 'primary' })} type="button" onClick={onClose}>
                 Done
               </button>
-            </div>
+            </DialogFooter>
           </div>
         ) : (
           <form onSubmit={(event) => void submit(event)}>
             <div className="form-grid">
-              <div className="field">
-                <label htmlFor="technician-name">Full name</label>
-                <input
+              <Field>
+                <FieldLabel htmlFor="technician-name">Full name</FieldLabel>
+                <Input
                   id="technician-name"
                   autoFocus
                   required
@@ -129,10 +132,10 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                 />
-              </div>
-              <div className="field">
-                <label htmlFor="technician-email">Work email</label>
-                <input
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="technician-email">Work email</FieldLabel>
+                <Input
                   id="technician-email"
                   required
                   type="email"
@@ -142,7 +145,7 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                 />
-              </div>
+              </Field>
             </div>
             <div className="temporary-password-note">
               <span aria-hidden>
@@ -156,13 +159,13 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
               </p>
             </div>
             {create.error ? (
-              <div className="alert alert-danger" role="alert">
+              <Alert variant="destructive" role="alert">
                 {create.error.message}
-              </div>
+              </Alert>
             ) : null}
-            <div className="form-actions dialog-actions">
+            <DialogFooter>
               <button
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 type="button"
                 disabled={create.isPending}
                 onClick={onClose}
@@ -170,16 +173,17 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                 Cancel
               </button>
               <button
-                className="button button-primary"
+                className={buttonVariants({ variant: 'primary' })}
                 type="submit"
                 disabled={create.isPending || !displayName.trim() || !email.trim()}
               >
                 {create.isPending ? 'Creating…' : 'Create account'}
               </button>
-            </div>
+            </DialogFooter>
           </form>
         )}
-      </div>
-    </dialog>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

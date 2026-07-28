@@ -14,9 +14,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@texasrenters/shared';
 
-import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../../common/auth';
+import {
+  ApiAuthGuard,
+  PermissionsGuard,
+  RequirePermissions,
+  type AuthenticatedRequest,
+} from '../../common/auth';
 import { ApplicationError } from '../../common/errors';
 import { CacheService } from '../../cache/cache.service';
 import {
@@ -30,22 +34,24 @@ import {
   type PropertywareSyncStore,
 } from '../../workers/propertyware-sync/propertyware-sync.store';
 import { PropertywareSyncCoordinator } from '../../workers/propertyware-sync/propertyware-sync.coordinator';
+import { PropertywareSyncScheduler } from '../../workers/propertyware-sync/propertyware-sync.scheduler';
 
 @ApiTags('Propertyware integration')
 @ApiBearerAuth()
-@UseGuards(ApiAuthGuard, RolesGuard)
+@UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller(['integrations/propertyware', 'admin/integrations/propertyware'])
 export class PropertywareIntegrationController {
   private readonly requests = new Map<string, number[]>();
   constructor(
     @Inject(PropertywareSyncCoordinator) private readonly coordinator: PropertywareSyncCoordinator,
     @Inject(PROPERTYWARE_SYNC_STORE) private readonly store: PropertywareSyncStore,
+    @Inject(PropertywareSyncScheduler) private readonly scheduler: PropertywareSyncScheduler,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
   ) {}
 
   @Post('sync')
   @HttpCode(202)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:manage')
   sync(@Req() request: AuthenticatedRequest, @Body() body: PropertywareSyncRequestDto) {
     this.assertRateLimit(request.user.id);
     return this.coordinator.enqueue({
@@ -58,7 +64,7 @@ export class PropertywareIntegrationController {
 
   @Post('sync/initial')
   @HttpCode(202)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:manage')
   initial(@Req() request: AuthenticatedRequest, @Body() body: PropertywareSyncRequestDto) {
     this.assertRateLimit(request.user.id);
     return this.coordinator.enqueue({
@@ -71,7 +77,7 @@ export class PropertywareIntegrationController {
 
   @Post('sync/incremental')
   @HttpCode(202)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:manage')
   incremental(@Req() request: AuthenticatedRequest, @Body() body: PropertywareSyncRequestDto) {
     this.assertRateLimit(request.user.id);
     return this.coordinator.enqueue({
@@ -84,7 +90,7 @@ export class PropertywareIntegrationController {
 
   @Post('reconcile')
   @HttpCode(202)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:manage')
   reconcile(@Req() request: AuthenticatedRequest, @Body() body: PropertywareSyncRequestDto) {
     this.assertRateLimit(request.user.id);
     return this.coordinator.enqueue({
@@ -96,13 +102,13 @@ export class PropertywareIntegrationController {
   }
 
   @Get('sync-runs')
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:read')
   runs(@Req() request: AuthenticatedRequest, @Query() query: PropertywareSyncRunQueryDto) {
     return this.store.listRunsPage(request.user.organizationId, query);
   }
 
   @Get('sync-runs/:syncRunId')
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:read')
   async run(@Req() request: AuthenticatedRequest, @Param('syncRunId') id: string) {
     const run = (await this.store.getRun(id)) as { organizationId?: string } | null;
     if (!run || run.organizationId !== request.user.organizationId)
@@ -113,7 +119,7 @@ export class PropertywareIntegrationController {
   }
 
   @Get('sync-runs/:syncRunId/errors')
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:read')
   errors(
     @Req() request: AuthenticatedRequest,
     @Param('syncRunId') id: string,
@@ -122,8 +128,15 @@ export class PropertywareIntegrationController {
     return this.store.listErrorsPage(request.user.organizationId, id, query);
   }
 
+  @Get('schedule')
+  @RequirePermissions('integrations:read')
+  schedule() {
+    // The automatic schedule is process-level configuration, not org-scoped.
+    return this.scheduler.describe();
+  }
+
   @Get('status')
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
+  @RequirePermissions('integrations:read')
   status(@Req() request: AuthenticatedRequest) {
     return this.cache
       ? this.cache.getOrLoad({
@@ -151,7 +164,8 @@ export class PropertywareIntegrationController {
 
 @ApiTags('Property catalog')
 @ApiBearerAuth()
-@UseGuards(ApiAuthGuard, RolesGuard)
+@UseGuards(ApiAuthGuard, PermissionsGuard)
+@RequirePermissions('properties:read')
 @Controller()
 export class PropertywareCatalogController {
   constructor(@Inject(PROPERTYWARE_SYNC_STORE) private readonly store: PropertywareSyncStore) {}

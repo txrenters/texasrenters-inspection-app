@@ -2,6 +2,9 @@
 
 import Link from 'next/link';
 import { useEffect, useState, type FormEvent } from 'react';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
 
 import { api } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
@@ -55,34 +58,34 @@ export default function ResetPasswordPage() {
         {done ? (
           <>
             <div className="auth-success">Your password was updated.</div>
-            <Link className="button button-primary" href="/login">
+            <Link className={buttonVariants({ variant: 'primary' })} href="/login">
               Continue to sign in
             </Link>
           </>
         ) : (
           <form className="stack" onSubmit={(event) => void submit(event)}>
-            <div className="field">
-              <label htmlFor="password">New password</label>
-              <input
+            <Field>
+              <FieldLabel htmlFor="password">New password</FieldLabel>
+              <Input
                 id="password"
                 type="password"
                 autoComplete="new-password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
-            </div>
-            <div className="field">
-              <label htmlFor="password-confirmation">Confirm new password</label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="password-confirmation">Confirm new password</FieldLabel>
+              <Input
                 id="password-confirmation"
                 type="password"
                 autoComplete="new-password"
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
               />
-            </div>
+            </Field>
             {error ? <div className="auth-error">{error}</div> : null}
-            <button className="button button-primary">Update password</button>
+            <button className={buttonVariants({ variant: 'primary' })}>Update password</button>
           </form>
         )}
       </section>

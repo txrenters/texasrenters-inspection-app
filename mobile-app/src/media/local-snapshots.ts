@@ -1,29 +1,46 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
-import type { RoomSnapshot } from '../domain/models';
+import type { PhotoCaptureType, RoomSnapshot } from '../domain/models';
+import type { SnapshotCaptureSource } from '../capture/guided-capture';
 
 const SNAPSHOTS_FOLDER = 'inspection-snapshots';
 
 type RoomSnapshotInput = {
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   uri: string;
   width: number;
   height: number;
   sizeBytes?: number;
+  captureType?: PhotoCaptureType;
+  recordingSessionId?: string;
+  videoTimestampMs?: number;
+  captureSource?: SnapshotCaptureSource;
+  sequenceNumber?: number;
+  findingId?: string;
 };
 
 export function buildRoomSnapshot({
+  ownerUserId,
   inspectionId,
   roomId,
   uri,
   width,
   height,
   sizeBytes,
+  captureType = 'AREA_OVERVIEW',
+  recordingSessionId,
+  videoTimestampMs,
+  captureSource = 'SEPARATE_PHOTO_CAPTURE',
+  sequenceNumber,
+  findingId,
 }: RoomSnapshotInput): RoomSnapshot {
   return {
+    // Doubles as the upload idempotency key (matches ^[A-Za-z0-9_-]{8,128}$).
     id: `snapshot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    ownerUserId,
     inspectionId,
     roomId,
     uri,
@@ -31,6 +48,13 @@ export function buildRoomSnapshot({
     height: Math.max(1, Math.round(height)),
     sizeBytes: sizeBytes && sizeBytes > 0 ? sizeBytes : undefined,
     capturedAt: new Date().toISOString(),
+    captureType,
+    recordingSessionId,
+    videoTimestampMs,
+    captureSource,
+    sequenceNumber,
+    findingId,
+    uploadStatus: 'PENDING',
   };
 }
 

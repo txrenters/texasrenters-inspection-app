@@ -15,6 +15,7 @@ import {
 } from '../../../../src/components/ui';
 import { useInspectionActions, useInspectionContext } from '../../../../src/features/queries';
 import { type AppColors, spacing, typography, useThemedStyles } from '../../../../src/theme';
+import { formatUnitName } from '../../../../src/utils/unit-name';
 
 export default function InspectionOverviewScreen() {
   const styles = useThemedStyles(createStyles);
@@ -25,6 +26,7 @@ export default function InspectionOverviewScreen() {
   if (!context.data)
     return <ErrorState message="Inspection unavailable" onRetry={() => void context.refetch()} />;
   const { inspection, property, rooms, pendingReviewCount } = context.data;
+  const unitName = formatUnitName(inspection.unitName ?? property.unitName);
   const progress = inspectionProgress(rooms);
   const required = rooms.filter((room) => room.isRequired).length;
   const pendingUploads = rooms.filter((room) => !['COMPLETED'].includes(room.uploadStatus)).length;
@@ -44,16 +46,17 @@ export default function InspectionOverviewScreen() {
       await actions.complete.mutateAsync();
       return;
     }
-    router.push({
-      pathname: '/(app)/inspections/[inspectionId]/areas',
-      params: { inspectionId },
-    });
+    // Submitted inspections open the consolidated report; active ones open the checklist.
+    const pathname = ['PROCESSING', 'REVIEW_REQUIRED', 'COMPLETED'].includes(inspection.status)
+      ? '/(app)/inspections/[inspectionId]/report'
+      : '/(app)/inspections/[inspectionId]/areas';
+    router.push({ pathname, params: { inspectionId } });
   };
   const actionError = actions.start.error ?? actions.complete.error;
   return (
     <AppScreen
       title={property.address}
-      subtitle={`${property.cityStateZip} · ${formatStatus(inspection.type)} inspection`}
+      subtitle={`${property.cityStateZip}${unitName ? ` · ${unitName}` : ''} · ${formatStatus(inspection.type)} inspection`}
       bottomAction={
         <AppButton
           label={primaryLabel}
@@ -63,7 +66,11 @@ export default function InspectionOverviewScreen() {
       }
     >
       <PropertyVisual tone={property.imageTone} />
-      {actionError ? <Text style={styles.actionError}>{actionError.message}</Text> : null}
+      {actionError ? (
+        <Text style={styles.actionError}>
+          {actionError instanceof Error ? actionError.message : 'The action could not be completed.'}
+        </Text>
+      ) : null}
       <View style={styles.statusRow}>
         <StatusBadge label={inspection.type} tone="info" />
         <StatusBadge label={inspection.status} />
@@ -84,12 +91,37 @@ export default function InspectionOverviewScreen() {
         </Text>
         <Text style={styles.cardBody}>
           {inspection.type === 'MOVE_IN'
-            ? 'This inspection establishes the property condition baseline for the current occupancy lifecycle.'
+            ? 'Reminder: this move-in inspection becomes the baseline every future inspection of this property is compared against. Record each room thoroughly — what you capture here defines the documented starting condition.'
             : inspection.baselineScheduledAt
               ? `Compared with the move-in inspection completed ${new Date(inspection.baselineScheduledAt).toLocaleDateString()}.`
               : 'A completed move-in inspection is required as the comparison baseline.'}
         </Text>
       </Card>
+      {['SCHEDULED', 'IN_PROGRESS'].includes(inspection.status) ? (
+        <Card>
+          <SectionHeader title="How this inspection works" />
+          <Step
+            number={1}
+            text="Open the room checklist and record one video per room. Snap photos of defects anytime — even while recording."
+          />
+          <Step
+            number={2}
+            text="Save and queue the recording. The next unfinished room opens immediately while the upload runs independently."
+          />
+          <Step
+            number={3}
+            text="If the connection drops, the recording stays on this device and retries automatically when the app is active again."
+          />
+          <Step
+            number={4}
+            text="After upload, the narration is transcribed and AI prepares a condition summary and reviewable findings."
+          />
+          <Step
+            number={5}
+            text="Complete every required room (or skip with a reason), then submit. AI suggestions remain pending until a person reviews them."
+          />
+        </Card>
+      ) : null}
       <Card>
         <SectionHeader title="Inspection progress" />
         <ProgressBar
@@ -132,11 +164,21 @@ export default function InspectionOverviewScreen() {
           }
         />
         <AppButton
-          label="Review AI findings"
+          label="Review AI summary & findings"
           variant="outline"
           onPress={() =>
             router.push({
               pathname: '/(app)/inspections/[inspectionId]/findings',
+              params: { inspectionId },
+            })
+          }
+        />
+        <AppButton
+          label="View consolidated report"
+          variant="outline"
+          onPress={() =>
+            router.push({
+              pathname: '/(app)/inspections/[inspectionId]/report',
               params: { inspectionId },
             })
           }
@@ -152,6 +194,18 @@ function Metric({ value, label }: { value: number; label: string }) {
     <View style={styles.metric}>
       <Text style={styles.metricValue}>{value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function Step({ number, text }: { number: number; text: string }) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <View style={styles.step}>
+      <View style={styles.stepBadge}>
+        <Text style={styles.stepNumber}>{number}</Text>
+      </View>
+      <Text style={styles.stepText}>{text}</Text>
     </View>
   );
 }
@@ -184,4 +238,16 @@ const createStyles = (colors: AppColors) =>
     cardBody: { ...typography.body, color: colors.textPrimary },
     actions: { gap: spacing.sm },
     actionError: { ...typography.caption, color: colors.danger },
+    step: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+    stepBadge: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+      marginTop: 2,
+    },
+    stepNumber: { ...typography.caption, color: colors.primary, fontWeight: '800' },
+    stepText: { ...typography.caption, color: colors.textSecondary, flex: 1 },
   });

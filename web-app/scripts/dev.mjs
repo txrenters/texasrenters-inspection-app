@@ -50,7 +50,7 @@ if (listening) {
   }
 } else {
   const nextBin = require.resolve('next/dist/bin/next');
-  const child = spawn(process.execPath, [nextBin, 'dev', '--port', String(port)], {
+  const child = spawn(process.execPath, [nextBin, 'dev', '--turbopack', '--port', String(port)], {
     env: process.env,
     stdio: 'inherit',
   });

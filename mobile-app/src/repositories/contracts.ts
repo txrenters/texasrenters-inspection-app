@@ -1,4 +1,5 @@
 import type {
+  AreaEnvironment,
   DashboardSummary,
   DemoRole,
   DemoUser,
@@ -6,6 +7,7 @@ import type {
   FloorPlanDocument,
   Inspection,
   InspectionContext,
+  InspectionReport,
   InspectionStatus,
   InspectionRoom,
   LocalMedia,
@@ -15,6 +17,14 @@ import type {
   UnitSummary,
   UploadItem,
 } from '../domain/models';
+
+export interface AddAreaInput {
+  name: string;
+  environment: AreaEnvironment;
+  category?: string;
+  floorName?: string;
+  notes?: string;
+}
 
 export interface AuthRepository {
   listDemoUsers(): Promise<DemoUser[]>;
@@ -43,10 +53,12 @@ export interface InspectionRepository {
   list(filters?: { status?: InspectionStatus; search?: string }): Promise<Inspection[]>;
   get(id: string): Promise<Inspection>;
   context(id: string): Promise<InspectionContext>;
+  report(id: string): Promise<InspectionReport>;
   start(id: string): Promise<Inspection>;
   complete(id: string): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
+  addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
@@ -70,7 +82,7 @@ export interface UploadRepository {
   retry(id: string): Promise<void>;
   retryProcessing(id: string): Promise<void>;
   remove(id: string): Promise<void>;
-  tick(): Promise<void>;
+  tick(): Promise<boolean>;
 }
 
 export interface FindingRepository {

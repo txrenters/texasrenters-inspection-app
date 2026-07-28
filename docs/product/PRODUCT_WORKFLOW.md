@@ -9,9 +9,9 @@
 5. Move-in captures the initial property condition. Every later lifecycle inspection is linked to and compared against that immutable move-in baseline.
 6. The technician grants camera and microphone access, records one room-specific video, and stops before leaving the room.
 7. The recording is moved from temporary camera cache into durable app document storage. Recording Review provides local playback, duration, size, timestamp, and notes.
-8. Save Locally creates one media record and one simulated queue item bound to that inspection room. Cloud upload is not yet connected.
-9. Online simulation advances transfer progress; offline simulation keeps media pending and accessible.
-10. After transfer, processing advances through video processing, transcription, analysis, baseline comparison, finding preparation, and ready for review.
+8. Save & queue creates one durable media record and one idempotent queue item bound to that inspection room, then immediately advances the technician to the next unfinished approved room.
+9. The foreground queue uploads independently of the current screen. Offline recordings remain accessible in SQLite-backed device state and retry automatically with bounded backoff when connectivity returns.
+10. After backend confirmation, processing transcribes the room video, stores the protected transcript, generates a concise condition summary and findings against the baseline, and marks every AI result `PENDING_REVIEW`.
 11. Findings are grouped by room and remain `PENDING_REVIEW` until an authorized human action.
 12. Approve requires confirmation. Reject and reinspection require reasons. Edit records reviewer context.
 13. Review actions never authorize a tenant charge or decide legal responsibility.

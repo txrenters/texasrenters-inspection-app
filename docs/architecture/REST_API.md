@@ -22,8 +22,16 @@ Neither client consumes raw Propertyware responses. Propertyware synchronization
 
 Administrators use organization-scoped routes under `/api/v1/admin` to list and upload private floor-plan files, request optional AI extraction, edit draft property areas, and explicitly approve those areas. Uploads accept PDF, PNG, or JPEG files up to 20 MB and validate both the declared media type and file signature. AI output is validated and always persists as `DRAFT`; it never becomes an inspection area without an authorized human approval.
 
+The admin comparison view displays the complete source plan beside the extracted checklist for human verification. It does not infer or persist room coordinates because vision-based spatial markers are not reliable enough to serve as review evidence.
+
 New inspections snapshot the property's approved master area list into `InspectionArea`. Inspection creation fails when the selected property has no approved areas, preventing an empty or invented mobile workflow.
 
 Administrators create one of `MOVE_IN`, `OCCUPIED`, `BACK_TO_MARKET`, or `MOVE_OUT`. A later lifecycle inspection requires the completed move-in baseline for the same property/unit/lease. Back-to-market additionally follows an occupied inspection, and move-out follows back-to-market. Responses expose the stored baseline relationship so clients never guess which inspection supplies comparison evidence.
 
 Assigned technicians can read the latest approved plan metadata at `GET /api/v1/technician/properties/:propertyId/floor-plan` and its bytes at `GET /api/v1/technician/floor-plans/:floorPlanId/content`. Both routes require a current assignment to an inspection for that property. Private file responses are not cacheable. Draft plans and plans for unassigned properties are never exposed to the mobile client.
+
+## AI provider settings
+
+`GET /api/v1/admin/ai/settings` returns redacted organization routing, curated model choices, credential health, and application-observed monthly token usage. System administrators can change the active provider with `PATCH /api/v1/admin/ai/settings/routing`, update one provider with `PATCH /api/v1/admin/ai/providers/:provider`, and validate its configured credential with `POST /api/v1/admin/ai/providers/:provider/validate`.
+
+Provider keys are accepted only by the authenticated backend endpoint and are never returned. A configured `AI_CREDENTIALS_ENCRYPTION_KEY` is required before a key can be persisted. Environment-based Anthropic and OpenAI keys remain supported as deployment-level fallbacks. Standard model API keys do not expose an account credit balance, so the usage response reports observed tokens and an optional local monthly token budget without representing it as provider billing credit.

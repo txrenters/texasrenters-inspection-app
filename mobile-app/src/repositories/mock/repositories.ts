@@ -1,4 +1,5 @@
 import type {
+  AddAreaInput,
   AuthRepository,
   FindingRepository,
   FloorPlanRepository,
@@ -123,6 +124,51 @@ export class MockInspectionRepository implements InspectionRepository {
     ).length;
     return { inspection, property, rooms: inspectionRooms, pendingReviewCount };
   }
+  async report(id: string) {
+    const context = await this.context(id);
+    const allFindings = Object.values(useDemoStore.getState().findings).filter(
+      (finding) => finding.inspectionId === id,
+    );
+    const reportRooms = context.rooms.map((room) => {
+      const roomFindings = allFindings.filter((finding) => finding.roomId === room.id);
+      return {
+        ...room,
+        summary:
+          roomFindings.find((finding) => finding.title === 'Room condition summary')
+            ?.observation ?? null,
+        findings: roomFindings
+          .filter((finding) => finding.title !== 'Room condition summary')
+          .map((finding) => ({
+            id: finding.id,
+            findingType: 'POSSIBLE_NEW_DAMAGE' as const,
+            title: finding.title,
+            category: finding.category,
+            severity: finding.severity,
+            comparisonResult: finding.comparisonResult,
+            confidence: finding.confidence,
+            description: finding.observation,
+            recommendedReview: finding.recommendedReview,
+            reviewStatus: finding.reviewStatus,
+          })),
+      };
+    });
+    const finished = reportRooms.filter((room) =>
+      ['COMPLETED', 'SKIPPED', 'RECORDING_SAVED'].includes(room.completionStatus),
+    );
+    return {
+      inspection: context.inspection,
+      property: context.property,
+      generatedAt: new Date().toISOString(),
+      rooms: reportRooms,
+      totals: {
+        rooms: reportRooms.length,
+        finishedRooms: finished.length,
+        summaries: reportRooms.filter((room) => room.summary).length,
+        defectFindings: reportRooms.reduce((sum, room) => sum + room.findings.length, 0),
+        pendingReviewCount: context.pendingReviewCount,
+      },
+    };
+  }
   async start(id: string) {
     return this.get(id);
   }
@@ -146,6 +192,37 @@ export class MockInspectionRepository implements InspectionRepository {
         'Room',
       ),
     );
+  }
+  async addArea(inspectionId: string, input: AddAreaInput) {
+    await mockDelay();
+    ensureMockAvailable();
+    const siblings = rooms.filter((room) => room.inspectionId === inspectionId);
+    const id = `mock-area-${siblings.length + 1}-${input.name.trim().replace(/\s+/g, '-').toLowerCase()}`;
+    const room: InspectionRoom = {
+      id,
+      inspectionId,
+      propertyAreaId: id,
+      name: input.name.trim(),
+      floorName: input.floorName?.trim() || 'Added areas',
+      order: siblings.length + 1,
+      isRequired: true,
+      inspectionType: siblings[0]?.inspectionType ?? 'MOVE_OUT',
+      baseline: {
+        summary: 'Technician-added area.',
+        condition: 'NOT_AVAILABLE',
+        existingDefects: [],
+        evidenceCount: 0,
+      },
+      completionStatus: 'NOT_STARTED',
+      uploadStatus: 'PENDING',
+      processingStatus: 'NOT_STARTED',
+      environment: input.environment,
+      category: input.category ?? null,
+      source: 'TECHNICIAN',
+      areaStatus: 'DRAFT',
+    };
+    rooms.push(room);
+    return room;
   }
   async updateRoomNote(roomId: string, note: string) {
     useDemoStore.getState().updateRoom(roomId, { note });
@@ -222,6 +299,10 @@ export class MockUploadRepository implements UploadRepository {
       mediaId: media.id,
       inspectionId: media.inspectionId,
       roomId: media.roomId,
+      recordingType: media.recordingType ?? ('PRIMARY_AREA' as const),
+      label: media.label,
+      category: media.category,
+      relatedFindingId: media.relatedFindingId,
       propertyAddress: media.propertyAddress ?? property.address,
       roomName: media.roomName ?? room.name,
       durationSeconds: media.durationSeconds,
@@ -231,6 +312,8 @@ export class MockUploadRepository implements UploadRepository {
       processingStatus: 'NOT_STARTED' as const,
       processingProgress: 0,
       createdAt: new Date().toISOString(),
+      operationId: `upload:${media.id}`,
+      __sync: { state: 'OFFLINE_PENDING' as const, operationId: `upload:${media.id}` },
     };
     useDemoStore.getState().enqueueUpload(item);
     return item;
@@ -259,6 +342,7 @@ export class MockUploadRepository implements UploadRepository {
   }
   async tick() {
     useDemoStore.getState().tickUploads();
+    return true;
   }
 }
 

@@ -6,6 +6,8 @@ const environmentSchema = z
     PORT: z.coerce.number().int().positive().default(3000),
     DATABASE_URL: z.string().optional(),
     DIRECT_URL: z.string().optional(),
+    DATABASE_CONNECTION_LIMIT: z.coerce.number().int().min(1).max(10).default(5),
+    DATABASE_POOL_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(60).default(10),
     DATABASE_WARMUP_ENABLED: z.enum(['true', 'false']).default('true'),
     SLOW_QUERY_WARNING_MS: z.coerce.number().int().positive().default(250),
     SLOW_REQUEST_WARNING_MS: z.coerce.number().int().positive().default(750),
@@ -36,17 +38,42 @@ const environmentSchema = z
     CORS_ORIGINS: z.string().optional(),
     MOBILE_APP_ORIGIN: z.string().url().optional(),
     WEB_APP_ORIGIN: z.string().url().optional(),
+    MICROSOFT_GRAPH_TENANT_ID: z.string().optional(),
+    MICROSOFT_GRAPH_CLIENT_ID: z.string().optional(),
+    MICROSOFT_GRAPH_CLIENT_SECRET: z.string().optional(),
+    MICROSOFT_GRAPH_BASE_URL: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().url().default('https://graph.microsoft.com'),
+    ),
+    MAIL_FROM_ADDRESS: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.string().email().optional(),
+    ),
+    MAIL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
     USE_MOCK_AUTH: z.enum(['true', 'false']).default('false'),
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_JWT_SECRET: z.string().optional(),
-    FLOOR_PLAN_EXTRACTION_PROVIDER: z.enum(['disabled', 'mock', 'anthropic']).default('disabled'),
+    FLOOR_PLAN_EXTRACTION_PROVIDER: z
+      .enum(['disabled', 'mock', 'anthropic', 'openai'])
+      .default('disabled'),
     ANTHROPIC_FLOOR_PLAN_MODEL: z.string().optional(),
+    OPENAI_FLOOR_PLAN_MODEL: z.string().optional(),
+    AI_CREDENTIALS_ENCRYPTION_KEY: z.string().optional(),
     VIDEO_PLATFORM_PROVIDER: z.literal('mock').default('mock'),
     TRANSCRIPTION_PROVIDER: z.literal('mock').default('mock'),
     AI_ANALYSIS_PROVIDER: z.literal('mock').default('mock'),
     JOB_QUEUE_PROVIDER: z.literal('memory').default('memory'),
-    FLOOR_PLAN_STORAGE_PROVIDER: z.enum(['local', 'supabase']).default('local'),
+    // Validated so a typo cannot silently fall back to `local`, which is the
+    // container's ephemeral disk and loses every upload on redeploy.
+    FLOOR_PLAN_STORAGE_PROVIDER: z.enum(['local', 'supabase', 'r2']).default('local'),
     FLOOR_PLAN_STORAGE_BUCKET: z.string().default('floor-plans'),
+    INSPECTION_MEDIA_STORAGE_PROVIDER: z.enum(['local', 'supabase', 'r2']).default('local'),
+    INSPECTION_MEDIA_STORAGE_BUCKET: z.string().default('inspection-media'),
+    WEBHOOK_SIGNING_SECRET: z.string().optional(),
+    // Cloudflare R2 (S3-compatible). Required only when a provider is set to r2.
+    R2_ACCOUNT_ID: z.string().optional(),
+    R2_ACCESS_KEY_ID: z.string().optional(),
+    R2_SECRET_ACCESS_KEY: z.string().optional(),
     PROPERTYWARE_PROVIDER: z.enum(['mock', 'live']).default('mock'),
     PROPERTYWARE_STORE: z.enum(['memory', 'prisma']).default('memory'),
     PROPERTYWARE_BASE_URL: z
@@ -57,6 +84,8 @@ const environmentSchema = z
     PROPERTYWARE_CLIENT_ID: z.string().optional(),
     PROPERTYWARE_CLIENT_SECRET: z.string().optional(),
     PROPERTYWARE_ORGANIZATION_ID: z.string().optional(),
+    // Internal organization (UUID) that scheduled syncs run for.
+    PROPERTYWARE_LOCAL_ORGANIZATION_ID: z.string().uuid().optional(),
     PROPERTYWARE_PORTFOLIO_REPORT_URL: z.string().url().optional(),
     PROPERTYWARE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
     PROPERTYWARE_PAGE_SIZE: z.coerce.number().int().min(1).max(500).default(500),

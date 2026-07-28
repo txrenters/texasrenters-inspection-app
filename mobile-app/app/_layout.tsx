@@ -1,3 +1,6 @@
+import '../global.css';
+
+import { PortalHost } from '@rn-primitives/portal';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
@@ -8,6 +11,10 @@ export default function RootLayout() {
   return (
     <AppProviders>
       <RootNavigator />
+      {/* One host for the whole app. Portalled overlays (Dialog, Select,
+          Dropdown Menu) mount here so they render above navigation instead of
+          being clipped by a screen's own stacking context. */}
+      <PortalHost />
     </AppProviders>
   );
 }

@@ -76,6 +76,10 @@ const propertywarePropertyBaseSchema = z
 
 export const propertywareBuildingSchema = propertywarePropertyBaseSchema.extend({
   propertyType: z.string().optional().nullable(),
+  // Verified building-level total area, its unit label, and category.
+  totalArea: z.number().optional().nullable(),
+  areaUnits: z.string().optional().nullable(),
+  category: z.string().optional().nullable(),
 });
 
 export const propertywareUnitSchema = propertywarePropertyBaseSchema.extend({
@@ -97,9 +101,12 @@ export const propertywareLeaseContactSchema = z
 export const propertywareLeaseSchema = z
   .object({
     id: propertywareIdSchema,
-    portfolioID: propertywareIdSchema,
+    // The REST API always supplies portfolio and unit. The published-report
+    // fallback exposes only building-level identifiers, so both are optional
+    // here and the portfolio is resolved from the building at persist time.
+    portfolioID: propertywareIdSchema.optional().nullable(),
     buildingID: propertywareIdSchema,
-    unitID: propertywareIdSchema,
+    unitID: propertywareIdSchema.optional().nullable(),
     idNumber: propertywareIdSchema.optional().nullable(),
     leaseName: z.string().optional().nullable(),
     active: z.boolean(),
@@ -116,6 +123,28 @@ export const propertywareLeaseSchema = z
     lastModifiedDateTime: optionalDateTime,
   })
   .passthrough();
+
+/**
+ * The published Propertyware lease report (a saved report rendered as JSON).
+ * Columns are positional, so the indices below are the contract — see
+ * PROPERTYWARE_LEASE_REPORT_COLUMNS for what each one holds.
+ */
+export const propertywareLeaseReportSchema = z.object({
+  totalCount: z.number().int().nonnegative(),
+  columns: z.array(z.object({ index: z.string(), dataType: z.string(), label: z.string() })),
+  records: z.array(
+    z
+      .object({
+        '0': z.string(), // Status
+        '4': z.string(), // Lease Name
+        '5': z.string(), // Start Date (MM/DD/YYYY)
+        '6': z.string(), // End Date
+        '7': z.string(), // Notice Given Date
+        '9': z.string(), // Building Entity ID
+      })
+      .passthrough(),
+  ),
+});
 
 export const propertywareSchemas = {
   portfolios: propertywarePortfolioSchema,
@@ -168,6 +197,9 @@ export const normalizedPropertywareRecordSchema = z.discriminatedUnion('entityTy
     name: z.string().min(1),
     abbreviation: z.string().optional(),
     propertyType: z.string().optional(),
+    totalArea: z.number().int().nonnegative().optional(),
+    areaUnits: z.string().optional(),
+    category: z.string().optional(),
   }),
   normalizedBaseSchema.merge(normalizedAddressSchema).extend({
     entityType: z.literal('units'),
@@ -184,9 +216,11 @@ export const normalizedPropertywareRecordSchema = z.discriminatedUnion('entityTy
   }),
   normalizedBaseSchema.extend({
     entityType: z.literal('leases'),
-    portfolioExternalId: z.string().min(1),
+    // Report-sourced leases carry only a building; the portfolio is resolved
+    // from it and the unit link is left empty. REST leases supply both.
+    portfolioExternalId: z.string().min(1).optional(),
     buildingExternalId: z.string().min(1),
-    unitExternalId: z.string().min(1),
+    unitExternalId: z.string().min(1).optional(),
     idNumber: z.string().optional(),
     leaseName: z.string().optional(),
     startDate: z.string().optional(),

@@ -8,7 +8,10 @@ const configuredApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || nul
 // On networks with wireless client isolation the phone can never reach the dev
 // machine's LAN IP; `adb reverse tcp:3000 tcp:3000` tunnels localhost over USB
 // instead, so this flag keeps localhost as the primary API host on-device.
-const adbReverseEnabled = process.env.EXPO_PUBLIC_USE_ADB_REVERSE === 'true';
+// adb reverse exists only on Android — on iOS "localhost" is the phone itself,
+// so the preference must never apply there (use Expo tunnel mode instead).
+const adbReverseEnabled =
+  process.env.EXPO_PUBLIC_USE_ADB_REVERSE === 'true' && Platform.OS === 'android';
 const apiBaseUrls = resolveDeviceApiBaseUrls(
   configuredApiBaseUrl,
   Constants.expoConfig?.hostUri,

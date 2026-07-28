@@ -11,13 +11,69 @@ import {
   PageHeader,
   TableLoadingState,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { buttonVariants } from '@/components/ui/button';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Alert } from '@/components/ui/alert';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,
   usePropertywareStatus,
   useSyncErrors,
   useSyncRuns,
+  useSyncSchedule,
 } from '@/lib/queries';
+
+// Turns a cron expression into a short human summary for the common cases we
+// document; falls back to the raw expression for anything custom.
+function describeCron(cron: string | null): string {
+  if (!cron) return 'Not configured';
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length === 5) {
+    const [minute, hour, dom, month, dow] = parts;
+    const pad = (value: string) => value.padStart(2, '0');
+    if (dom === '*' && month === '*' && dow === '*') {
+      if (/^\d+$/.test(minute) && /^\d+$/.test(hour))
+        return `Every day at ${pad(hour)}:${pad(minute)}`;
+      const everyHours = hour.match(/^\*\/(\d+)$/);
+      if (everyHours && minute === '0') return `Every ${everyHours[1]} hours`;
+    }
+    if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dom === '1' && month === '*' && dow === '*')
+      return `Monthly on the 1st at ${pad(hour)}:${pad(minute)}`;
+  }
+  return cron;
+}
+
+type SyncMode = 'initial' | 'incremental' | 'reconcile';
+
+// Each mode touches the catalog differently, so the confirmation says which.
+const SYNC_MODE_EFFECT: Record<SyncMode, string> = {
+  initial:
+    'Imports the complete active catalog from Propertyware. This is the heaviest run and can take a while on a large portfolio.',
+  incremental: 'Retrieves only records changed since the last successful sync.',
+  reconcile:
+    'Compares local records against Propertyware and flags anything that no longer matches. Nothing is written back to Propertyware.',
+};
+
+const MODE_LABELS: Record<string, string> = {
+  incremental: 'Incremental sync',
+  reconciliation: 'Reconcile catalog',
+};
+
+// Statuses that represent active, in-progress work — these get the live pulse.
+const ACTIVE_STATUSES = new Set(['RUNNING', 'PENDING']);
+const isActiveStatus = (status?: string | null) => Boolean(status && ACTIVE_STATUSES.has(status));
 
 const SYNC_RUN_HEADERS = [
   'Type',
@@ -60,9 +116,13 @@ type PropertywareStatus = {
 };
 
 export default function PropertywarePage() {
+  const canManage = usePermissions().has('integrations:manage');
   const [errorPage, setErrorPage] = useState(1);
+  const [pendingMode, setPendingMode] = useState<SyncMode | null>(null);
   const status = usePropertywareStatus();
+  const schedule = useSyncSchedule();
   const runs = useSyncRuns();
+  const lastRunForMode = (mode: string) => runs.data?.find((run) => run.syncType === mode) ?? null;
   const latestRunId = runs.data?.[0]?.id ?? '';
   const errors = useSyncErrors(latestRunId, errorPage);
   const mutation = useAdminMutations().sync;
@@ -70,11 +130,14 @@ export default function PropertywarePage() {
   const latestRun = integration?.lastRun ?? runs.data?.[0];
   const cursors = integration?.cursors ?? [];
   const unresolvedErrors = integration?.unresolvedErrors ?? 0;
-  const isRunning = latestRun?.status === 'RUNNING' || mutation.isPending;
+  const isRunning = isActiveStatus(latestRun?.status) || mutation.isPending;
 
-  async function sync(mode: 'initial' | 'incremental' | 'reconcile') {
-    if (!window.confirm(`Start a ${mode} Propertyware synchronization?`)) return;
-    await mutation.mutateAsync(mode);
+  // One controlled dialog serves all three buttons: they differ only by mode, so
+  // holding the pending mode in state avoids three near-identical dialogs.
+  async function sync() {
+    if (!pendingMode) return;
+    await mutation.mutateAsync(pendingMode);
+    setPendingMode(null);
   }
 
   return (
@@ -84,65 +147,171 @@ export default function PropertywarePage() {
         description="Read-only catalog synchronization and operational health. Credentials are never displayed in the browser."
       />
 
-      <section className="panel integration-control-panel">
-        <div className="panel-header integration-control-heading">
+      <AlertDialog onOpenChange={(open) => !open && setPendingMode(null)} open={pendingMode !== null}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start a {pendingMode} synchronization?</AlertDialogTitle>
+            <AlertDialogDescription>{pendingMode ? SYNC_MODE_EFFECT[pendingMode] : ''}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'primary' })}
+              onClick={() => void sync()}
+            >
+              Start sync
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section>
+        <CardHeader className="p-0 pb-4">
           <div>
-            <span className="section-kicker">Operational controls</span>
-            <h2>Synchronization</h2>
-            <p className="panel-description">
-              Import active portfolios and properties, retrieve recent changes, or verify that
-              local records still match Propertyware.
-            </p>
+            <span className="block text-xs font-semibold text-muted-foreground">Operational controls</span>
+            <CardTitle className="text-[17px]">Synchronization</CardTitle>
+            <CardDescription>
+              Import active portfolios and properties, retrieve recent changes, or verify that local
+              records still match Propertyware.
+            </CardDescription>
           </div>
-          <Badge value={isRunning ? 'RUNNING' : status.isError ? 'ERROR' : 'CONNECTED'} />
-        </div>
-        <div className="sync-action-grid">
+          <Badge
+            value={isRunning ? 'RUNNING' : status.isError ? 'ERROR' : 'CONNECTED'}
+            pulse={isRunning}
+          />
+        </CardHeader>
+        <div className="sync-action-grid" aria-label="Manual synchronization actions">
           <button
             className="sync-action"
-            disabled={mutation.isPending}
-            onClick={() => void sync('initial')}
+            disabled={!canManage || mutation.isPending}
+            onClick={() => setPendingMode('initial')}
           >
             <strong>Initial sync</strong>
             <span>Import the complete active catalog</span>
           </button>
           <button
             className="sync-action sync-action-primary"
-            disabled={mutation.isPending}
-            onClick={() => void sync('incremental')}
+            disabled={!canManage || mutation.isPending}
+            onClick={() => setPendingMode('incremental')}
           >
             <strong>Incremental sync</strong>
             <span>Retrieve only recent source changes</span>
           </button>
           <button
             className="sync-action"
-            disabled={mutation.isPending}
-            onClick={() => void sync('reconcile')}
+            disabled={!canManage || mutation.isPending}
+            onClick={() => setPendingMode('reconcile')}
           >
             <strong>Reconcile catalog</strong>
             <span>Validate active and deactivated records</span>
           </button>
         </div>
+        {!canManage ? (
+          <p className="text-[13px] text-muted-foreground">You have read-only integration access.</p>
+        ) : null}
         {mutation.error ? (
-          <div className="alert alert-danger" role="alert">
+          <Alert variant="destructive" role="alert">
             {mutation.error.message}
-          </div>
+          </Alert>
         ) : null}
         {mutation.isSuccess ? (
-          <div className="alert alert-success" role="status">
+          <Alert variant="success" role="status">
             Synchronization was queued. Status updates automatically.
-          </div>
+          </Alert>
         ) : null}
       </section>
+      </Card>
 
-      <section className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
-            <span className="section-kicker">Integration health</span>
-            <h2>Latest source activity</h2>
-            <p className="panel-description">A readable summary of the latest synchronization state.</p>
+            <span className="block text-xs font-semibold text-muted-foreground">Automation</span>
+            <CardTitle className="text-[17px]">Automatic schedule</CardTitle>
+            <CardDescription>
+              When enabled, these syncs run on their own — no manual trigger needed.
+            </CardDescription>
           </div>
-          <span className="source-chip">{integration?.provider === 'mock' ? 'Mock source' : 'Live API'}</span>
-        </div>
+          {schedule.data ? (
+            <Badge value={schedule.data.enabled ? 'AUTOMATIC ON' : 'AUTOMATIC OFF'} />
+          ) : null}
+        </CardHeader>
+        {schedule.isLoading ? (
+          <LoadingState label="Checking the automatic schedule…" />
+        ) : schedule.isError ? (
+          <ErrorState error={schedule.error} retry={() => void schedule.refetch()} />
+        ) : schedule.data ? (
+          <>
+            {schedule.data.enabled && !schedule.data.organizationConfigured ? (
+              <Alert variant="warning" role="status">
+                Automatic sync is enabled but no organization is configured
+                (PROPERTYWARE_LOCAL_ORGANIZATION_ID), so nothing will run yet.
+              </Alert>
+            ) : null}
+            {!schedule.data.enabled ? (
+              <Alert variant="warning" role="status">
+                Automatic sync is turned off (PROPERTYWARE_SYNC_ENABLED). The cadence below applies
+                once it is enabled.
+              </Alert>
+            ) : null}
+            <DataTable
+              headers={['Sync', 'Cadence', 'Next run', 'Last run']}
+              label="Automatic Propertyware sync schedule"
+            >
+              {schedule.data.jobs.map((job) => {
+                const last = lastRunForMode(job.mode);
+                return (
+                  <TableRow key={job.mode}>
+                    <TableCell>
+                      <strong>{MODE_LABELS[job.mode] ?? job.mode}</strong>
+                    </TableCell>
+                    <TableCell>
+                      {describeCron(job.cron)}
+                      {job.cron ? <div className="cell-note">{job.cron}</div> : null}
+                    </TableCell>
+                    <TableCell>
+                      {job.scheduled && job.nextRunAt ? (
+                        formatDate(job.nextRunAt)
+                      ) : (
+                        <span className="text-[13px] text-muted-foreground">Not scheduled</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {last ? (
+                        <>
+                          <Badge value={last.status} pulse={isActiveStatus(last.status)} />
+                          <div className="cell-note">
+                            {formatDate(last.completedAt ?? last.startedAt)}
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-[13px] text-muted-foreground">No runs yet</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </DataTable>
+          </>
+        ) : null}
+      </section>
+      </Card>
+
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
+          <div>
+            <span className="block text-xs font-semibold text-muted-foreground">Integration health</span>
+            <CardTitle className="text-[17px]">Latest source activity</CardTitle>
+            <CardDescription>
+              A readable summary of the latest synchronization state.
+            </CardDescription>
+          </div>
+          <span className="source-chip">
+            {integration?.provider === 'mock' ? 'Mock source' : 'Live API'}
+          </span>
+        </CardHeader>
         {status.isLoading ? (
           <LoadingState label="Checking Propertyware health…" />
         ) : status.isError ? (
@@ -152,8 +321,14 @@ export default function PropertywarePage() {
             <div className="integration-health-grid">
               <article>
                 <span>Last run</span>
-                {latestRun?.status ? <Badge value={latestRun.status} /> : <strong>Not started</strong>}
-                <small>{latestRun?.syncType?.replaceAll('_', ' ') ?? 'No synchronization type'}</small>
+                {latestRun?.status ? (
+                  <Badge value={latestRun.status} pulse={isActiveStatus(latestRun.status)} />
+                ) : (
+                  <strong>Not started</strong>
+                )}
+                <small>
+                  {latestRun?.syncType?.replaceAll('_', ' ') ?? 'No synchronization type'}
+                </small>
               </article>
               <article>
                 <span>Records fetched</span>
@@ -168,7 +343,9 @@ export default function PropertywarePage() {
               <article className={unresolvedErrors ? 'health-attention' : undefined}>
                 <span>Unresolved errors</span>
                 <strong>{unresolvedErrors.toLocaleString()}</strong>
-                <small>{(latestRun?.recordsFailed ?? 0).toLocaleString()} failed in latest run</small>
+                <small>
+                  {(latestRun?.recordsFailed ?? 0).toLocaleString()} failed in latest run
+                </small>
               </article>
             </div>
 
@@ -186,12 +363,20 @@ export default function PropertywarePage() {
                   label="Propertyware synchronization cursors"
                 >
                   {cursors.map((cursor, index) => (
-                    <tr key={`${cursor.entityType ?? 'entity'}-${index}`}>
-                      <td><strong className="entity-name">{cursor.entityType ?? 'Unknown entity'}</strong></td>
-                      <td>{formatDate(cursor.lastSuccessfulSyncAt ?? cursor.cursor)}</td>
-                      <td>{formatDate(cursor.lastFullReconciliationAt)}</td>
-                      <td><span className="cursor-value">{cursor.lastSuccessfulCursor ?? cursor.cursor ?? 'Not available'}</span></td>
-                    </tr>
+                    <TableRow key={`${cursor.entityType ?? 'entity'}-${index}`}>
+                      <TableCell>
+                        <strong className="entity-name">
+                          {cursor.entityType ?? 'Unknown entity'}
+                        </strong>
+                      </TableCell>
+                      <TableCell>{formatDate(cursor.lastSuccessfulSyncAt ?? cursor.cursor)}</TableCell>
+                      <TableCell>{formatDate(cursor.lastFullReconciliationAt)}</TableCell>
+                      <TableCell>
+                        <span className="cursor-value">
+                          {cursor.lastSuccessfulCursor ?? cursor.cursor ?? 'Not available'}
+                        </span>
+                      </TableCell>
+                    </TableRow>
                   ))}
                 </DataTable>
               ) : (
@@ -201,14 +386,18 @@ export default function PropertywarePage() {
           </>
         )}
       </section>
+      </Card>
 
-      <section className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
-            <h2>Recent sync runs</h2>
-            <p className="panel-description">Audit history and record-level outcomes for recent jobs.</p>
+            <CardTitle className="text-[17px]">Recent sync runs</CardTitle>
+            <CardDescription>
+              Audit history and record-level outcomes for recent jobs.
+            </CardDescription>
           </div>
-        </div>
+        </CardHeader>
         {runs.isLoading ? (
           <TableLoadingState headers={SYNC_RUN_HEADERS} rows={5} label="Loading sync history" />
         ) : runs.isError ? (
@@ -216,31 +405,39 @@ export default function PropertywarePage() {
         ) : runs.data?.length ? (
           <DataTable headers={SYNC_RUN_HEADERS} label="Recent Propertyware synchronization runs">
             {runs.data.map((run) => (
-              <tr key={run.id}>
-                <td><strong>{run.syncType}</strong></td>
-                <td><Badge value={run.status} /></td>
-                <td>{formatDate(run.startedAt)}</td>
-                <td>{formatDate(run.completedAt)}</td>
-                <td className="numeric-cell">{run.recordsFetched}</td>
-                <td className="numeric-cell">{run.recordsCreated}</td>
-                <td className="numeric-cell">{run.recordsUpdated}</td>
-                <td className="numeric-cell">{run.recordsFailed}</td>
-                <td className="numeric-cell">{run.warnings}</td>
-              </tr>
+              <TableRow key={run.id}>
+                <TableCell>
+                  <strong>{run.syncType}</strong>
+                </TableCell>
+                <TableCell>
+                  <Badge value={run.status} pulse={isActiveStatus(run.status)} />
+                </TableCell>
+                <TableCell>{formatDate(run.startedAt)}</TableCell>
+                <TableCell>{formatDate(run.completedAt)}</TableCell>
+                <TableCell className="numeric-cell">{run.recordsFetched}</TableCell>
+                <TableCell className="numeric-cell">{run.recordsCreated}</TableCell>
+                <TableCell className="numeric-cell">{run.recordsUpdated}</TableCell>
+                <TableCell className="numeric-cell">{run.recordsFailed}</TableCell>
+                <TableCell className="numeric-cell">{run.warnings}</TableCell>
+              </TableRow>
             ))}
           </DataTable>
         ) : (
           <div className="compact-empty-state">No synchronization runs have been recorded.</div>
         )}
       </section>
+      </Card>
 
-      <section className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
-            <h2>Latest run errors</h2>
-            <p className="panel-description">Sanitized integration failures that may require attention.</p>
+            <CardTitle className="text-[17px]">Latest run errors</CardTitle>
+            <CardDescription>
+              Sanitized integration failures that may require attention.
+            </CardDescription>
           </div>
-        </div>
+        </CardHeader>
         {!latestRunId || (runs.isLoading && !runs.data) ? (
           <div className="compact-empty-state">No synchronization run is available.</div>
         ) : errors.isLoading ? (
@@ -258,22 +455,33 @@ export default function PropertywarePage() {
               label="Latest Propertyware synchronization errors"
             >
               {errors.data.items.map((error) => (
-                <tr key={error.id}>
-                  <td><strong className="entity-name">{error.entityType}</strong></td>
-                  <td><span className="error-code">{error.errorCode}</span></td>
-                  <td className="message-cell">{error.sanitizedMessage}</td>
-                  <td>{error.retryable ? <Badge value="RETRYABLE" /> : 'No'}</td>
-                  <td>{formatDate(error.createdAt)}</td>
-                  <td>{error.resolvedAt ? formatDate(error.resolvedAt) : 'Unresolved'}</td>
-                </tr>
+                <TableRow key={error.id}>
+                  <TableCell>
+                    <strong className="entity-name">{error.entityType}</strong>
+                  </TableCell>
+                  <TableCell>
+                    <span className="error-code">{error.errorCode}</span>
+                  </TableCell>
+                  <TableCell className="message-cell">{error.sanitizedMessage}</TableCell>
+                  <TableCell>{error.retryable ? <Badge value="RETRYABLE" /> : 'No'}</TableCell>
+                  <TableCell>{formatDate(error.createdAt)}</TableCell>
+                  <TableCell>{error.resolvedAt ? formatDate(error.resolvedAt) : 'Unresolved'}</TableCell>
+                </TableRow>
               ))}
             </DataTable>
-            <Pagination page={errorPage} totalPages={errors.data.totalPages} onPage={setErrorPage} />
+            <Pagination
+              page={errorPage}
+              totalPages={errors.data.totalPages}
+              onPage={setErrorPage}
+            />
           </>
         ) : (
-          <div className="compact-success-state">The latest synchronization run has no recorded errors.</div>
+          <div className="compact-success-state">
+            The latest synchronization run has no recorded errors.
+          </div>
         )}
       </section>
+      </Card>
     </>
   );
 }

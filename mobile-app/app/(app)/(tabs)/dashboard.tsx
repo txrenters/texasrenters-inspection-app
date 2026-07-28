@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppScreen } from '../../../src/components/AppScreen';
 import { ConnectedInspectionCard } from '../../../src/components/ConnectedInspectionCard';
+import { InspectionAlertBanner } from '../../../src/components/FeatureCards';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
 import {
   InitialsAvatar,
@@ -12,12 +13,14 @@ import {
   StatCard,
 } from '../../../src/components/ui';
 import { useCurrentUser, useDashboard } from '../../../src/features/queries';
+import { useInspectionAlerts } from '../../../src/features/useInspectionAlerts';
 import { type AppColors, radius, spacing, typography, useThemedStyles } from '../../../src/theme';
 
 export default function DashboardScreen() {
   const styles = useThemedStyles(createStyles);
   const user = useCurrentUser();
   const dashboard = useDashboard();
+  const alerts = useInspectionAlerts();
   if (user.isLoading || dashboard.isLoading)
     return <LoadingState label="Building today’s route…" />;
   if (dashboard.isError)
@@ -74,6 +77,11 @@ export default function DashboardScreen() {
             <Text style={styles.link}>View all</Text>
           </Pressable>
         }
+      />
+      <InspectionAlertBanner
+        overdueCount={alerts.overdueCount}
+        dueSoonCount={alerts.dueSoonCount}
+        onPress={() => router.push('/(app)/(tabs)/inspections')}
       />
       <View style={styles.list}>
         {dashboard.data?.assignments.length ? (

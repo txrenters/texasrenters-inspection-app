@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -7,7 +7,6 @@ import { UploadProgressCard } from '../../../src/components/FeatureCards';
 import { EmptyState, ErrorState, LoadingState } from '../../../src/components/ScreenStates';
 import { Card, ConfirmationModal, SectionHeader, StatusBadge } from '../../../src/components/ui';
 import { useUploadActions, useUploads } from '../../../src/features/queries';
-import { repositories } from '../../../src/repositories';
 import { useDemoStore } from '../../../src/stores/demo.store';
 import { type AppColors, spacing, typography, useThemedStyles } from '../../../src/theme';
 
@@ -29,29 +28,6 @@ export default function UploadQueueScreen() {
     }
   }, [refetchUploads]);
 
-  useEffect(() => {
-    let stopped = false;
-    let tickInProgress = false;
-
-    const updateQueue = async () => {
-      if (tickInProgress) return;
-      tickInProgress = true;
-      try {
-        await repositories.uploads.tick();
-        if (!stopped) await refetchUploads();
-      } finally {
-        tickInProgress = false;
-      }
-    };
-
-    const timer = setInterval(() => {
-      void updateQueue();
-    }, 850);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [refetchUploads]);
   if (uploads.isLoading) return <LoadingState label="Opening local upload queue…" />;
   if (uploads.isError)
     return <ErrorState message={uploads.error.message} onRetry={() => void uploads.refetch()} />;
@@ -65,10 +41,17 @@ export default function UploadQueueScreen() {
   return (
     <AppScreen
       title="Upload center"
-      subtitle="Local media, transfer progress, and AI processing"
+      subtitle="Saved videos upload automatically while you keep inspecting"
       eyebrow="MEDIA PIPELINE"
       refresh={{ refreshing: isRefreshing, onRefresh: () => void refreshUploads() }}
     >
+      <Card muted>
+        <Text style={styles.body}>
+          Room videos you save are queued here and upload on their own — you can keep inspecting.
+          After upload, each video is transcribed and analyzed by AI, and the results go to the
+          TexasRenters team for review.
+        </Text>
+      </Card>
       {!isOnline ? (
         <Card muted>
           <View style={styles.row}>
@@ -76,7 +59,8 @@ export default function UploadQueueScreen() {
             <View style={styles.flex}>
               <Text style={styles.cardTitle}>Uploads are waiting</Text>
               <Text style={styles.body}>
-                Offline simulation is active. Videos remain safely queued on this device.
+                This device is offline. Videos remain safely queued and resume when the connection
+                returns.
               </Text>
             </View>
           </View>
@@ -128,7 +112,7 @@ export default function UploadQueueScreen() {
       <ConfirmationModal
         visible={Boolean(removeId)}
         title="Remove this queue item?"
-        message="The demo queue record will be removed. Local source media is retained for recovery."
+        message="The queue entry is removed, but the recorded video stays on this device until you re-save it."
         confirmLabel="Remove"
         destructive
         onCancel={() => setRemoveId(null)}

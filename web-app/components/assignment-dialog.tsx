@@ -1,9 +1,30 @@
 'use client';
 
 import type { AdminAssignment } from '@texasrenters/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useAdminMutations, useTechnicians } from '@/lib/queries';
+
+// Radix Select rejects an empty string as an item value; the "nothing
+// selected" row uses a sentinel translated back to '' at the boundary.
+const NONE = '__none__';
 
 export function AssignmentDialog({
   inspectionId,
@@ -14,17 +35,11 @@ export function AssignmentDialog({
   current?: AdminAssignment;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [technicianId, setTechnicianId] = useState('');
   const [reason, setReason] = useState('');
   const technicians = useTechnicians({ page: 1, pageSize: 100, active: true });
   const mutations = useAdminMutations();
   const mutation = current ? mutations.reassign : mutations.assign;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -38,42 +53,44 @@ export function AssignmentDialog({
   }
 
   return (
-    <dialog
-      ref={ref}
-      className="dialog"
-      onCancel={onClose}
-      onClose={onClose}
-      aria-labelledby="assignment-title"
-    >
-      <form onSubmit={(event) => void submit(event)}>
-        <h2 id="assignment-title">{current ? 'Reassign inspection' : 'Assign inspection'}</h2>
-        {current ? (
-          <p>
-            Currently assigned to <strong>{current.technician?.displayName}</strong>. The previous
-            assignment remains in history.
-          </p>
-        ) : (
-          <p>Select an active inspection technician.</p>
-        )}
-        <div className="field">
-          <label htmlFor="technician">Technician</label>
-          <select
-            id="technician"
-            required
-            value={technicianId}
-            onChange={(event) => setTechnicianId(event.target.value)}
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>{current ? 'Reassign inspection' : 'Assign inspection'}</DialogTitle>
+            <DialogDescription>
+              {current ? (
+                <>
+                  Currently assigned to <strong>{current.technician?.displayName}</strong>. The
+                  previous assignment remains in history.
+                </>
+              ) : (
+                'Select an active inspection technician.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+        <Field>
+          <FieldLabel htmlFor="technician">Technician</FieldLabel>
+          <Select
+            onValueChange={(next) => setTechnicianId(next === NONE ? '' : next)}
+            value={technicianId || NONE}
           >
-            <option value="">Select technician</option>
-            {technicians.data?.items
-              .filter((item) => item.id !== current?.technicianId)
-              .map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.displayName} · {item.workload?.current ?? 0} current
-                </option>
-              ))}
-          </select>
-        </div>
-        <div className="field" style={{ marginTop: 14 }}>
+            <SelectTrigger id="technician">
+              <SelectValue placeholder="Select technician" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Select technician</SelectItem>
+              {technicians.data?.items
+                .filter((item) => item.id !== current?.technicianId)
+                .map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.displayName} · {item.workload?.current ?? 0} current
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field className="mt-3.5">
           <label htmlFor="reason">Reason or note</label>
           <textarea
             id="reason"
@@ -81,21 +98,22 @@ export function AssignmentDialog({
             onChange={(event) => setReason(event.target.value)}
             placeholder={current ? 'Reason for reassignment' : 'Optional assignment note'}
           />
-        </div>
+        </Field>
         {mutation.error ? (
-          <p className="field-error" role="alert">
+          <FieldError>
             {mutation.error.message}
-          </p>
+          </FieldError>
         ) : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button button-primary" disabled={!technicianId || mutation.isPending}>
-            {mutation.isPending ? 'Saving…' : current ? 'Reassign' : 'Assign'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button className={buttonVariants({ variant: 'primary' })} disabled={!technicianId || mutation.isPending}>
+              {mutation.isPending ? 'Saving…' : current ? 'Reassign' : 'Assign'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

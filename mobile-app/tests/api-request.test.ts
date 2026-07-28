@@ -14,15 +14,20 @@ import {
   ApiFloorPlanRepository,
   ApiFindingRepository,
   ApiInspectionRepository,
+  ApiMediaRepository,
+  ApiUploadRepository,
   requestJson,
 } from '../src/repositories/api/repositories';
+import { useDemoStore } from '../src/stores/demo.store';
 
 describe('mobile API fallback requests', () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
+    useDemoStore.getState().resetDemoData();
+    useDemoStore.getState().selectUser('technician-1');
     mockGetSession.mockResolvedValue({
-      data: { session: { access_token: 'test-access-token' } },
+      data: { session: { access_token: 'test-access-token', user: { id: 'technician-1' } } },
     });
   });
 
@@ -77,8 +82,12 @@ describe('mobile API fallback requests', () => {
   it('loads inspection overview data from one context endpoint', async () => {
     const fetchMock = jest.fn().mockResolvedValue(
       response(200, {
-        inspection: inspection('inspection-1'),
-        property: property('property-1'),
+        inspection: {
+          ...inspection('inspection-1'),
+          unitId: 'unit-1',
+          unitName: 'Unit A',
+        },
+        property: { ...property('property-1'), unitName: 'Unit A' },
         rooms: [],
         pendingReviewCount: 0,
       }),
@@ -86,12 +95,71 @@ describe('mobile API fallback requests', () => {
     global.fetch = fetchMock as typeof fetch;
 
     await expect(new ApiInspectionRepository().context('inspection-1')).resolves.toMatchObject({
+      inspection: { unitId: 'unit-1', unitName: 'Unit A' },
+      property: { unitName: 'Unit A' },
       pendingReviewCount: 0,
       rooms: [],
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       'https://mobile-tunnel.exp.direct/api/v1/technician/inspections/inspection-1/context',
+    );
+  });
+
+  it('reopens cached room data when the API becomes unreachable', async () => {
+    const repository = new ApiInspectionRepository();
+    global.fetch = jest.fn().mockResolvedValueOnce(
+      response(200, {
+        inspection: inspection('inspection-offline'),
+        property: property('property-1'),
+        rooms: [room('room-offline', 'inspection-offline')],
+        pendingReviewCount: 0,
+      }),
+    ) as typeof fetch;
+    await repository.context('inspection-offline');
+
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
+    await expect(repository.rooms('inspection-offline')).resolves.toMatchObject([
+      { id: 'room-offline', name: 'Dining Room' },
+    ]);
+  });
+
+  it('never exposes one technician cache to another signed-in user', async () => {
+    const repository = new ApiInspectionRepository();
+    global.fetch = jest.fn().mockResolvedValueOnce(
+      response(200, {
+        inspection: inspection('inspection-private-cache'),
+        property: property('property-1'),
+        rooms: [room('private-room', 'inspection-private-cache')],
+        pendingReviewCount: 0,
+      }),
+    ) as typeof fetch;
+    await repository.context('inspection-private-cache');
+
+    mockGetSession.mockResolvedValue({
+      data: { session: { access_token: 'other-token', user: { id: 'technician-2' } } },
+    });
+    global.fetch = jest.fn().mockRejectedValue(new Error('offline')) as typeof fetch;
+
+    await expect(repository.rooms('inspection-private-cache')).rejects.toThrow(
+      'Cannot connect to the TexasRenters API',
+    );
+  });
+
+  it('binds local recordings and queue entries to the active technician', async () => {
+    const media = await new ApiMediaRepository().save({
+      inspectionId: 'inspection-1',
+      roomId: 'room-1',
+      uri: 'file:///recording.mp4',
+      durationSeconds: 10,
+      estimatedSizeMb: 2,
+      note: '',
+    });
+    expect(media.ownerUserId).toBe('technician-1');
+
+    useDemoStore.getState().selectUser('technician-2');
+    await expect(new ApiUploadRepository().enqueue(media)).rejects.toThrow(
+      'different technician session',
     );
   });
 
@@ -155,6 +223,28 @@ function inspection(id: string) {
       imageTone: 'teal',
     },
     progress: { completed: 0, total: 0, hasFailedUpload: false },
+  };
+}
+
+function room(id: string, inspectionId: string) {
+  return {
+    id,
+    inspectionId,
+    propertyAreaId: `property-area-${id}`,
+    name: 'Dining Room',
+    floorName: 'Ground Floor',
+    order: 1,
+    isRequired: true,
+    inspectionType: 'MOVE_IN',
+    baseline: {
+      summary: 'Initial inspection',
+      condition: 'NOT_AVAILABLE',
+      existingDefects: [],
+      evidenceCount: 0,
+    },
+    completionStatus: 'NOT_STARTED',
+    uploadStatus: 'PENDING',
+    processingStatus: 'NOT_STARTED',
   };
 }
 

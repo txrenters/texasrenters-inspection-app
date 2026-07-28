@@ -4,12 +4,23 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { ApplicationError } from '../src/common/errors';
 import { FloorPlanAdminService } from '../src/admin/floor-plan-admin.service';
 
+/**
+ * Extraction is started, not awaited — the request returns a job id and the
+ * work continues on the microtask queue. Draining it lets a test observe the
+ * outcome the client would later poll for.
+ */
+async function flushBackgroundWork() {
+  for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
   authUserId: 'auth-admin',
   organizationId: '10000000-0000-4000-8000-000000000001',
   displayName: 'Property Admin',
   roles: [UserRole.PROPERTY_ADMIN],
+  permissions: [],
   mustChangePassword: false,
 };
 
@@ -32,7 +43,12 @@ describe('administrator floor plans', () => {
       propertyFloorPlan: { create: jest.fn() },
     };
     const storage = { put: jest.fn(), delete: jest.fn() };
-    const service = new FloorPlanAdminService(prisma as never, storage as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(
       service.upload(admin, building.id, {
@@ -58,7 +74,12 @@ describe('administrator floor plans', () => {
       put: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
     };
-    const service = new FloorPlanAdminService(prisma as never, storage as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
     const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 
     await expect(
@@ -68,7 +89,7 @@ describe('administrator floor plans', () => {
         size: bytes.length,
         buffer: bytes,
       }),
-    ).resolves.toBe(plan);
+    ).resolves.toMatchObject(plan);
 
     expect(storage.put).toHaveBeenCalledWith(
       expect.stringContaining(building.id),
@@ -85,7 +106,12 @@ describe('administrator floor plans', () => {
       propertyFloorPlan: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const storage = { get: jest.fn() };
-    const service = new FloorPlanAdminService(prisma as never, storage as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(
       service.content(admin, '30000000-0000-4000-8000-000000000099'),
@@ -123,6 +149,8 @@ describe('administrator floor plans', () => {
           .mockRejectedValueOnce(new Error('status update unavailable')),
       },
       floorPlanExtractionJob: {
+        // No extraction already running for this plan.
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'job-1' }),
         update: jest.fn().mockRejectedValue(new Error('job update unavailable')),
       },
@@ -140,12 +168,164 @@ describe('administrator floor plans', () => {
       prisma as never,
       storage as never,
       extraction as never,
+      {
+        resolve: jest.fn().mockResolvedValue({
+          provider: 'ANTHROPIC',
+          modelId: 'test-model',
+          apiKey: 'private-test-key',
+        }),
+      } as never,
     );
 
-    await expect(service.extract(admin, 'plan-1')).rejects.toBe(providerError);
+    // Extraction runs outside the request now, so starting it resolves with the
+    // job to poll and the provider failure is recorded on that job instead of
+    // being thrown at the caller.
+    await expect(service.extract(admin, 'plan-1')).resolves.toMatchObject({
+      jobId: 'job-1',
+      status: 'RUNNING',
+    });
+    await flushBackgroundWork();
+
+    // The actionable provider code still survives, even though the bookkeeping
+    // writes themselves fail — that was the point of this test.
     expect(prisma.floorPlanExtractionJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ errorCode: 'FLOOR_PLAN_AI_CREDITS_REQUIRED' }),
+      }),
+    );
+  });
+
+  it('reports all detected areas and keeps new draft orders unique when approved areas exist', async () => {
+    const plan = {
+      id: '30000000-0000-4000-8000-000000000010',
+      propertyId: building.id,
+      unitId: null,
+      storageKey: 'private/plan.png',
+      fileName: 'plan.png',
+      mimeType: 'image/png',
+    };
+    const existing = [
+      {
+        name: 'Kitchen',
+        inspectionOrder: 1,
+        floor: { name: 'Ground Floor' },
+      },
+      {
+        name: 'Living Room',
+        inspectionOrder: 2,
+        floor: { name: 'Ground Floor' },
+      },
+    ];
+    const created = [
+      { id: 'area-foyer', name: 'Foyer', inspectionOrder: 3 },
+      { id: 'area-porch', name: 'Front Porch', inspectionOrder: 4 },
+    ];
+    const tx = {
+      propertyArea: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValueOnce(existing).mockResolvedValueOnce(created),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+      propertyFloor: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'floor-1', name: 'Ground Floor' }]),
+        create: jest.fn(),
+      },
+      floorPlanExtractionJob: { update: jest.fn().mockResolvedValue({ id: 'job-1' }) },
+      propertyFloorPlan: { update: jest.fn().mockResolvedValue(plan) },
+    };
+    const prisma = {
+      propertyFloorPlan: {
+        findFirst: jest.fn().mockResolvedValue(plan),
+        update: jest.fn().mockResolvedValue(plan),
+      },
+      floorPlanExtractionJob: {
+        // No extraction already running for this plan.
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'job-1',
+          provider: 'openai',
+          modelId: 'test-model',
+        }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
+    const extraction = {
+      descriptor: jest.fn().mockReturnValue({
+        provider: 'openai',
+        modelId: 'test-model',
+        schemaVersion: '1',
+      }),
+      extract: jest.fn().mockResolvedValue({
+        areas: [
+          {
+            floorName: 'Ground Floor',
+            name: 'Kitchen',
+            inspectionOrder: 1,
+            isRequired: true,
+          },
+          {
+            floorName: 'Ground Floor',
+            name: 'Living Room',
+            inspectionOrder: 2,
+            isRequired: true,
+          },
+          {
+            floorName: 'Ground Floor',
+            name: 'Foyer',
+            inspectionOrder: 1,
+            isRequired: true,
+          },
+          {
+            floorName: 'Ground Floor',
+            name: 'Front Porch',
+            inspectionOrder: 4,
+            isRequired: false,
+          },
+        ],
+        usage: { inputTokens: 100, outputTokens: 40, totalTokens: 140 },
+      }),
+    };
+    const aiSettings = {
+      resolve: jest.fn().mockResolvedValue({
+        provider: 'OPENAI',
+        modelId: 'test-model',
+        apiKey: 'private-test-key',
+      }),
+      recordUsage: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      { get: jest.fn().mockResolvedValue(Buffer.from('plan')) } as never,
+      extraction as never,
+      aiSettings as never,
+    );
+
+    // Starting extraction returns the job to poll; the outcome lands on the job.
+    await expect(service.extract(admin, plan.id)).resolves.toMatchObject({
+      status: 'RUNNING',
+    });
+    await flushBackgroundWork();
+
+    expect(tx.propertyArea.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ name: 'Foyer', inspectionOrder: 3 }),
+        expect.objectContaining({ name: 'Front Porch', inspectionOrder: 4 }),
+      ]),
+    });
+    expect(tx.floorPlanExtractionJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          output: expect.objectContaining({
+            summary: {
+              detectedCount: 4,
+              createdCount: 2,
+              alreadyPresentCount: 2,
+              // Neither created area carried a spatial marker in this fixture.
+              markerWarnings: 2,
+            },
+          }),
+        }),
       }),
     );
   });
@@ -171,7 +351,12 @@ describe('administrator floor plans', () => {
       },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new FloorPlanAdminService(prisma as never, {} as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
     jest.spyOn(service, 'areas').mockResolvedValue([]);
 
     await service.approveAreas(admin, building.id, areaIds);
@@ -218,9 +403,23 @@ describe('administrator floor plans', () => {
       },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new FloorPlanAdminService(prisma as never, {} as never, {} as never);
+    const service = new FloorPlanAdminService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
 
-    await expect(service.createFallbackArea(admin, building.id)).resolves.toBe(fallback);
+    // The area is returned through the marker-aware DTO mapper, so compare by
+    // shape rather than identity. A fallback area carries no spatial marker.
+    await expect(service.createFallbackArea(admin, building.id)).resolves.toMatchObject({
+      id: fallback.id,
+      propertyId: fallback.propertyId,
+      name: 'Entire property',
+      status: 'APPROVED',
+      marker: null,
+      boundingBox: null,
+    });
 
     expect(tx.propertyArea.create).toHaveBeenCalledWith(
       expect.objectContaining({

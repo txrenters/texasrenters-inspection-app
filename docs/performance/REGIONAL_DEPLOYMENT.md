@@ -10,8 +10,8 @@ Run the NestJS backend as a persistent service in the same cloud region as the p
 
 The service must:
 
-- use the Supabase session pooler on port 5432 for persistent runtime traffic;
-- reserve `DIRECT_URL` for Prisma administrative and migration operations;
+- use the Supabase transaction pooler on port 6543 with Prisma PgBouncer mode for runtime traffic;
+- reserve the session-pooler `DIRECT_URL` on port 5432 for Prisma administrative and migration operations;
 - start only after Prisma connects and a warm-up `SELECT 1` succeeds;
 - expose `/api/v1/health` for liveness and `/api/v1/health/database` plus readiness for database status;
 - handle termination through Nest shutdown hooks so Prisma disconnects cleanly;

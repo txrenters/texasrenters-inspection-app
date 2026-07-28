@@ -40,11 +40,47 @@ enum PropertyAreaStatus {
   REJECTED
 }
 
+enum AreaEnvironment {
+  INDOOR
+  OUTDOOR
+  SEMI_OUTDOOR
+}
+
+enum AreaCategory {
+  INDOOR_ROOM
+  HALLWAY
+  STAIRWAY
+  CLOSET
+  UTILITY
+  GARAGE
+  ATTIC
+  BASEMENT
+  BALCONY
+  PATIO
+  PORCH
+  DRIVEWAY
+  YARD
+  EXTERIOR_WALL
+  ROOF
+  PERIMETER_FENCE
+  GATE
+  POOL
+  SHED
+  OTHER_OUTDOOR
+  OTHER
+}
+
 enum InspectionStatus {
   SCHEDULED
   IN_PROGRESS
+  // Technician has submitted required areas; NOT the same as COMPLETED.
+  TECHNICIAN_SUBMITTED
   PROCESSING
   REVIEW_REQUIRED
+  // Administrator review states before human finalization.
+  UNDER_REVIEW
+  TBD
+  FOLLOW_UP_REQUIRED
   COMPLETED
   CANCELLED
 }
@@ -81,6 +117,31 @@ enum MediaProcessingStatus {
   FAILED
 }
 
+enum PhotoCaptureType {
+  AREA_OVERVIEW
+  WALL_OVERVIEW
+  FINDING_CONTEXT
+  FINDING_CLOSE_UP
+  SUPPORTING_ANGLE
+  SCALE_REFERENCE
+  SERIAL_OR_LABEL
+  VIDEO_FRAME_SNAPSHOT
+  OTHER
+  FINDING_DETAIL
+  SUPPORTING_EVIDENCE
+}
+
+enum VideoRecordingType {
+  PRIMARY_AREA
+  ADDITIONAL_ISSUE
+}
+
+enum PhotoStorageStatus {
+  PENDING
+  UPLOADED
+  FAILED
+}
+
 enum TranscriptionStatus {
   PENDING
   RUNNING
@@ -93,6 +154,17 @@ enum AiAnalysisStatus {
   RUNNING
   COMPLETED
   FAILED
+}
+
+enum AiProvider {
+  ANTHROPIC
+  OPENAI
+}
+
+enum AiCredentialStatus {
+  UNVERIFIED
+  VALID
+  INVALID
 }
 
 enum FindingReviewStatus {
@@ -140,32 +212,198 @@ enum WebhookProcessingStatus {
   IGNORED_DUPLICATE
 }
 
+// Move-in vs move-out comparison (spec §12). A comparison is a draft until a
+// human reviews it; AI may assist but never finalizes.
+enum ComparisonStatus {
+  DRAFT
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum ComparisonClassification {
+  UNCHANGED
+  IMPROVED
+  NEW_DAMAGE
+  WORSENED
+  RESOLVED
+  MISSING_BASELINE
+  MISSING_MOVE_OUT_EVIDENCE
+  NOT_COMPARABLE
+  REQUIRES_REVIEW
+}
+
+// How a move-out area was matched to its move-in counterpart. Deterministic
+// methods are tried before any AI assistance.
+enum ComparisonMatchMethod {
+  LOCAL_AREA_ID
+  APPROVED_ALIAS
+  NORMALIZED_NAME
+  AREA_CATEGORY
+  CONFIGURED_MAPPING
+  AI_SUGGESTED
+  MANUAL
+  UNMATCHED
+}
+
+// Pet observation review (spec §13). Uniqueness/evidence is one determination;
+// authorization is a separate one. A charge applies only to a UNIQUE_PET that a
+// reviewer has confirmed UNAUTHORIZED.
+enum PetReviewStatus {
+  PENDING_REVIEW
+  UNIQUE_PET
+  DUPLICATE
+  INSUFFICIENT_EVIDENCE
+}
+
+enum PetAuthorizationStatus {
+  UNKNOWN
+  AUTHORIZED
+  UNAUTHORIZED
+}
+
+// Charge lifecycle (spec §14). A charge is a recommendation until a human
+// approves/rejects/adjusts/waives it — AI/system never finalizes.
+enum ChargeStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  ADJUSTED
+  WAIVED
+}
+
+enum ChargeCalculationType {
+  PER_UNIQUE_ENTITY
+  FLAT
+  PER_UNIT
+}
+
+// Who originated a charge — kept distinct so the report can separate an AI
+// suggestion from a technician observation from an administrator decision.
+enum ChargeSource {
+  AI_SUGGESTED
+  TECHNICIAN
+  SYSTEM
+  ADMINISTRATOR
+}
+
 model Organization {
-  id          String               @id @default(uuid()) @db.Uuid
-  name        String
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
-  members     OrganizationMember[]
-  properties  Property[]
-  inspections Inspection[]
-  auditLogs   AuditLog[]
+  id              String                    @id @default(uuid()) @db.Uuid
+  name            String
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  members         OrganizationMember[]
+  properties      Property[]
+  inspections     Inspection[]
+  auditLogs       AuditLog[]
+  aiSettings      OrganizationAiSettings?
+  aiProviders     AiProviderConfiguration[]
+  aiUsageEvents   AiUsageEvent[]
+  roles           Role[]
+  roleAssignments UserRoleAssignment[]
+}
+
+/// Fully admin-defined RBAC role. Not seeded — an organization composes any
+/// subset of the code-defined permission catalog into a named role. Permission
+/// keys are validated against the catalog in application code.
+model Role {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  name           String
+  description    String?
+  permissions    String[]             @default([])
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignments    UserRoleAssignment[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+/// Per-user grant of a custom Role, scoped to an organization. Effective
+/// permissions are the union of every assigned role's permissions.
+model UserRoleAssignment {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userProfileId  String       @db.Uuid
+  roleId         String       @db.Uuid
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userProfile    UserProfile  @relation(fields: [userProfileId], references: [id], onDelete: Cascade)
+  role           Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userProfileId, roleId])
+  @@index([organizationId])
+  @@index([roleId])
+}
+
+model OrganizationAiSettings {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @unique @db.Uuid
+  activeProvider AiProvider   @default(ANTHROPIC)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model AiProviderConfiguration {
+  id                 String             @id @default(uuid()) @db.Uuid
+  organizationId     String             @db.Uuid
+  provider           AiProvider
+  modelId            String
+  encryptedApiKey    String?
+  credentialStatus   AiCredentialStatus @default(UNVERIFIED)
+  lastValidatedAt    DateTime?
+  monthlyTokenBudget Int?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@index([provider, credentialStatus])
+}
+
+model AiUsageEvent {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  provider       AiProvider
+  modelId        String
+  operation      String
+  sourceId       String?      @db.Uuid
+  inputTokens    Int          @default(0)
+  outputTokens   Int          @default(0)
+  totalTokens    Int          @default(0)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, provider, createdAt])
+  @@index([sourceId])
 }
 
 model UserProfile {
-  id                 String                 @id @default(uuid()) @db.Uuid
-  authUserId         String                 @unique
-  email              String                 @unique
-  displayName        String
-  isActive           Boolean                @default(true)
-  createdAt          DateTime               @default(now())
-  updatedAt          DateTime               @updatedAt
-  memberships        OrganizationMember[]
-  assignments        InspectionAssignment[] @relation("AssignedTechnician")
-  assignmentsCreated InspectionAssignment[] @relation("AssignmentActor")
-  assignmentsEnded   InspectionAssignment[] @relation("AssignmentEndActor")
-  media              InspectionMedia[]
-  reviews            FindingReview[]
-  pushDevices        MobilePushDevice[]
+  id                   String                  @id @default(uuid()) @db.Uuid
+  authUserId           String                  @unique
+  email                String                  @unique
+  displayName          String
+  isActive             Boolean                 @default(true)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  memberships          OrganizationMember[]
+  roleAssignments      UserRoleAssignment[]
+  assignments          InspectionAssignment[]  @relation("AssignedTechnician")
+  assignmentsCreated   InspectionAssignment[]  @relation("AssignmentActor")
+  assignmentsEnded     InspectionAssignment[]  @relation("AssignmentEndActor")
+  media                InspectionMedia[]
+  reviews              FindingReview[]
+  pushDevices          MobilePushDevice[]
+  reportShares         InspectionReportShare[]
+  createdAreas         PropertyArea[]          @relation("AreaCreatedBy")
+  markerUpdatedAreas   PropertyArea[]          @relation("AreaMarkerUpdatedBy")
+  areaAliases          PropertyAreaAlias[]     @relation("AreaAliasCreatedBy")
+  photos               InspectionPhoto[]
+  finalizedInspections Inspection[]            @relation("InspectionFinalizedBy")
 }
 
 model MobilePushDevice {
@@ -216,6 +454,9 @@ model Property {
 model PropertyFloorPlan {
   id             String                   @id @default(uuid()) @db.Uuid
   propertyId     String                   @db.Uuid
+  // Null = plan for the whole building (single-family or shared layout).
+  // Set = plan for one specific unit of a multi-unit building.
+  unitId         String?                  @db.Uuid
   fileName       String
   mimeType       String
   storageKey     String
@@ -224,7 +465,12 @@ model PropertyFloorPlan {
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
   property       Property                 @relation(fields: [propertyId], references: [id])
+  unit           PropertywareUnit?        @relation("UnitFloorPlans", fields: [unitId], references: [id], onDelete: Restrict)
   extractionJobs FloorPlanExtractionJob[]
+  // Areas whose marker coordinates belong to this specific plan version.
+  markedAreas    PropertyArea[]           @relation("AreaSourceFloorPlan")
+
+  @@index([propertyId, unitId])
 }
 
 model FloorPlanExtractionJob {
@@ -244,37 +490,90 @@ model FloorPlanExtractionJob {
 }
 
 model PropertyFloor {
-  id         String         @id @default(uuid()) @db.Uuid
-  propertyId String         @db.Uuid
+  id         String            @id @default(uuid()) @db.Uuid
+  propertyId String            @db.Uuid
+  unitId     String?           @db.Uuid
   name       String
   sortOrder  Int
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
-  property   Property       @relation(fields: [propertyId], references: [id])
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  property   Property          @relation(fields: [propertyId], references: [id])
+  unit       PropertywareUnit? @relation("UnitFloors", fields: [unitId], references: [id], onDelete: Restrict)
   areas      PropertyArea[]
 
-  @@unique([propertyId, name])
+  // The database index is created NULLS NOT DISTINCT so building-level floor
+  // names (unitId null) stay unique among themselves.
+  @@unique([propertyId, unitId, name])
 }
 
 model PropertyArea {
   id                 String                  @id @default(uuid()) @db.Uuid
   propertyId         String                  @db.Uuid
+  unitId             String?                 @db.Uuid
   floorId            String?                 @db.Uuid
   name               String
   inspectionOrder    Int
   isRequired         Boolean                 @default(true)
   status             PropertyAreaStatus      @default(DRAFT)
+  // Provenance: AI_FLOOR_PLAN | MANUAL | MANUAL_FALLBACK (admin) | TECHNICIAN.
   source             String                  @default("MANUAL")
+  // Indoor/outdoor classification and a finer category for outdoor targets.
+  environment        AreaEnvironment         @default(INDOOR)
+  category           AreaCategory?
+  notes              String?
+  createdById        String?                 @db.Uuid
+  // Soft archive; archived areas drop out of active lists but retain media.
+  archivedAt         DateTime?
+  // Spatial marker (normalized 0..1 relative to the source image/page). Nullable:
+  // legacy/manual areas may have no marker. Coordinates belong to a specific plan
+  // version (sourceFloorPlanId) so a replaced plan never silently reuses them.
+  markerX            Decimal?                @db.Decimal(6, 5)
+  markerY            Decimal?                @db.Decimal(6, 5)
+  // AI_EXTRACTED | DETERMINISTIC_EXTRACTED | ADMIN_ADJUSTED | ADMIN_PLACED | UNKNOWN
+  markerSource       String?
+  markerConfidence   Decimal?                @db.Decimal(4, 3)
+  markerUpdatedById  String?                 @db.Uuid
+  markerUpdatedAt    DateTime?
+  sourceFloorPlanId  String?                 @db.Uuid
+  sourcePageNumber   Int?
+  // Optional normalized bounding box (extensible; unused for point markers).
+  boundingBoxX       Decimal?                @db.Decimal(6, 5)
+  boundingBoxY       Decimal?                @db.Decimal(6, 5)
+  boundingBoxWidth   Decimal?                @db.Decimal(6, 5)
+  boundingBoxHeight  Decimal?                @db.Decimal(6, 5)
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   property           Property                @relation(fields: [propertyId], references: [id])
+  unit               PropertywareUnit?       @relation("UnitAreas", fields: [unitId], references: [id], onDelete: Restrict)
   floor              PropertyFloor?          @relation(fields: [floorId], references: [id])
+  createdBy          UserProfile?            @relation("AreaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  markerUpdatedBy    UserProfile?            @relation("AreaMarkerUpdatedBy", fields: [markerUpdatedById], references: [id], onDelete: SetNull)
+  sourceFloorPlan    PropertyFloorPlan?      @relation("AreaSourceFloorPlan", fields: [sourceFloorPlanId], references: [id], onDelete: SetNull)
   inspectionAreas    InspectionArea[]
   baselineConditions BaselineAreaCondition[]
   findings           InspectionFinding[]
+  aliases            PropertyAreaAlias[]
 
-  @@unique([propertyId, floorId, name])
-  @@index([propertyId, floorId, inspectionOrder])
+  // The database index is created NULLS NOT DISTINCT so building-level areas
+  // (unitId null) stay unique among themselves.
+  @@unique([propertyId, unitId, floorId, name])
+  @@index([propertyId, unitId, floorId, inspectionOrder])
+}
+
+/// Prior/alternate names for an area (rename and merge history). Used to keep
+/// evidence associated after a rename and to match areas during move-in vs
+/// move-out comparison.
+model PropertyAreaAlias {
+  id             String       @id @default(uuid()) @db.Uuid
+  propertyAreaId String       @db.Uuid
+  alias          String
+  createdById    String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  propertyArea   PropertyArea @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
+  createdBy      UserProfile? @relation("AreaAliasCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([propertyAreaId, alias])
+  @@index([propertyAreaId])
 }
 
 model BaselineInspection {
@@ -314,43 +613,61 @@ model BaselineMedia {
 }
 
 model Inspection {
-  id                     String                 @id @default(uuid()) @db.Uuid
-  organizationId         String                 @db.Uuid
-  propertyId             String?                @db.Uuid
-  propertywareBuildingId String?                @db.Uuid
-  propertywareUnitId     String?                @db.Uuid
-  propertywareLeaseId    String?                @db.Uuid
-  inspectionType         InspectionType
-  baselineInspectionId   String?                @db.Uuid
-  priority               String                 @default("STANDARD")
-  internalNotes          String?
-  createdById            String?                @db.Uuid
-  status                 InspectionStatus       @default(SCHEDULED)
-  scheduledAt            DateTime
-  startedAt              DateTime?
-  completedAt            DateTime?
-  cancelledAt            DateTime?
-  cancellationReason     String?
-  propertySnapshot       Json?
-  leaseSnapshot          Json?
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
-  organization           Organization           @relation(fields: [organizationId], references: [id])
-  property               Property?              @relation(fields: [propertyId], references: [id])
-  propertywareBuilding   PropertywareBuilding?  @relation(fields: [propertywareBuildingId], references: [id])
-  propertywareUnit       PropertywareUnit?      @relation(fields: [propertywareUnitId], references: [id])
-  propertywareLease      PropertywareLease?     @relation(fields: [propertywareLeaseId], references: [id])
-  baselineInspection     Inspection?            @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
-  comparisonInspections  Inspection[]           @relation("InspectionLifecycleBaseline")
-  assignments            InspectionAssignment[]
-  areas                  InspectionArea[]
-  findings               InspectionFinding[]
+  id                      String                  @id @default(uuid()) @db.Uuid
+  organizationId          String                  @db.Uuid
+  propertyId              String?                 @db.Uuid
+  propertywareBuildingId  String?                 @db.Uuid
+  propertywareUnitId      String?                 @db.Uuid
+  propertywareLeaseId     String?                 @db.Uuid
+  inspectionType          InspectionType
+  baselineInspectionId    String?                 @db.Uuid
+  priority                String                  @default("STANDARD")
+  internalNotes           String?
+  createdById             String?                 @db.Uuid
+  status                  InspectionStatus        @default(SCHEDULED)
+  scheduledAt             DateTime
+  startedAt               DateTime?
+  // Technician submission (≠ completion). Only a human administrator finalizes.
+  submittedAt             DateTime?
+  completedAt             DateTime?
+  finalizedAt             DateTime?
+  finalizedById           String?                 @db.Uuid
+  // Pending-finalization / follow-up workflow (spec §11).
+  completionBlockedReason String?
+  tbdReason               String?
+  followUpRequired        Boolean                 @default(false)
+  followUpDueAt           DateTime?
+  followUpTasks           String?
+  // A follow-up inspection points back at the inspection it continues.
+  parentInspectionId      String?                 @db.Uuid
+  inspectionRound         Int                     @default(1)
+  cancelledAt             DateTime?
+  cancellationReason      String?
+  propertySnapshot        Json?
+  leaseSnapshot           Json?
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
+  organization            Organization            @relation(fields: [organizationId], references: [id])
+  property                Property?               @relation(fields: [propertyId], references: [id])
+  propertywareBuilding    PropertywareBuilding?   @relation(fields: [propertywareBuildingId], references: [id])
+  propertywareUnit        PropertywareUnit?       @relation(fields: [propertywareUnitId], references: [id])
+  propertywareLease       PropertywareLease?      @relation(fields: [propertywareLeaseId], references: [id])
+  baselineInspection      Inspection?             @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
+  comparisonInspections   Inspection[]            @relation("InspectionLifecycleBaseline")
+  parentInspection        Inspection?             @relation("InspectionFollowUp", fields: [parentInspectionId], references: [id], onDelete: Restrict)
+  followUpInspections     Inspection[]            @relation("InspectionFollowUp")
+  finalizedBy             UserProfile?            @relation("InspectionFinalizedBy", fields: [finalizedById], references: [id])
+  assignments             InspectionAssignment[]
+  areas                   InspectionArea[]
+  findings                InspectionFinding[]
+  reportShares            InspectionReportShare[]
 
   @@index([organizationId, status, scheduledAt])
   @@index([organizationId, scheduledAt(sort: Desc)])
   @@index([propertywareBuildingId, scheduledAt])
   @@index([propertywareUnitId, scheduledAt])
   @@index([baselineInspectionId])
+  @@index([parentInspectionId])
   @@index([organizationId, propertywareBuildingId, propertywareUnitId, propertywareLeaseId, inspectionType, scheduledAt])
 }
 
@@ -438,6 +755,14 @@ model PropertywareBuilding {
   postalCode          String?
   country             String?
   sourceStatus        String?
+  // Verified Propertyware building fields: totalArea (numeric), areaUnits
+  // (e.g. "Sq Ft"), and category (e.g. "RESIDENTIAL").
+  totalArea           Int?
+  areaUnits           String?
+  category            String?
+  // Administrator override used when Propertyware provides no total area.
+  manualTotalArea     Int?
+  manualAreaUnit      String?
   isActive            Boolean               @default(true)
   sourceCreatedAt     DateTime?
   sourceUpdatedAt     DateTime?
@@ -496,6 +821,9 @@ model PropertywareUnit {
   portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
   leases              PropertywareLease[]
   inspections         Inspection[]
+  floorPlans          PropertyFloorPlan[]   @relation("UnitFloorPlans")
+  floors              PropertyFloor[]       @relation("UnitFloors")
+  areas               PropertyArea[]        @relation("UnitAreas")
 
   @@unique([organizationId, sourceSystem, externalId])
   @@index([organizationId, buildingId, isActive])
@@ -509,10 +837,15 @@ model PropertywareLease {
   sourceSystem         String                @default("propertyware")
   portfolioId          String                @db.Uuid
   buildingId           String                @db.Uuid
-  unitId               String                @db.Uuid
+  // Nullable because a lease can arrive from the published Propertyware report
+  // fallback, which exposes only building-level identifiers. REST-sourced
+  // leases always carry a unit; report-sourced ones attach to the building.
+  unitId               String?               @db.Uuid
   externalPortfolioId  String
   externalBuildingId   String
-  externalUnitId       String
+  externalUnitId       String?
+  // 'rest' | 'report' — which Propertyware surface this record came from.
+  sourceFeed           String                @default("rest")
   idNumber             String?
   leaseName            String?
   sourceStatus         String?
@@ -536,7 +869,7 @@ model PropertywareLease {
   updatedAt            DateTime              @updatedAt
   portfolio            PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
   building             PropertywareBuilding  @relation(fields: [buildingId], references: [id])
-  unit                 PropertywareUnit      @relation(fields: [unitId], references: [id])
+  unit                 PropertywareUnit?     @relation(fields: [unitId], references: [id])
   inspections          Inspection[]
 
   @@unique([organizationId, sourceSystem, externalId])
@@ -676,6 +1009,7 @@ model InspectionArea {
   inspection       Inspection                     @relation(fields: [inspectionId], references: [id])
   propertyArea     PropertyArea                   @relation(fields: [propertyAreaId], references: [id])
   media            InspectionMedia[]
+  photos           InspectionPhoto[]
   statusHistory    InspectionAreaStatusHistory[]
   uploadSessions   MediaUploadSession[]
 
@@ -695,28 +1029,85 @@ model InspectionAreaStatusHistory {
 }
 
 model InspectionMedia {
-  id               String                 @id @default(uuid()) @db.Uuid
-  organizationId   String                 @db.Uuid
-  propertyId       String?                @db.Uuid
-  inspectionId     String                 @db.Uuid
-  inspectionAreaId String                 @db.Uuid
-  technicianId     String                 @db.Uuid
-  provider         String
-  providerMediaId  String                 @unique
-  mimeType         String
-  durationSeconds  Int
-  uploadStatus     MediaUploadStatus      @default(PENDING)
-  processingStatus MediaProcessingStatus  @default(PENDING)
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
-  inspectionArea   InspectionArea         @relation(fields: [inspectionAreaId], references: [id])
-  technician       UserProfile            @relation(fields: [technicianId], references: [id])
-  processingEvents MediaProcessingEvent[]
-  transcriptionJob TranscriptionJob?
-  aiJobs           AiAnalysisJob[]
-  findings         InspectionFinding[]
+  id                      String                 @id @default(uuid()) @db.Uuid
+  organizationId          String                 @db.Uuid
+  propertyId              String?                @db.Uuid
+  inspectionId            String                 @db.Uuid
+  inspectionAreaId        String                 @db.Uuid
+  technicianId            String                 @db.Uuid
+  provider                String
+  // Provider-side identity, and the client idempotency key for retried uploads.
+  providerMediaId         String                 @unique
+  // Where the bytes live in the storage bucket. Kept separate from
+  // providerMediaId so the storage backend can change without rewriting
+  // identity, and so keys can be tenant-scoped like photos and floor plans.
+  storageKey              String
+  mimeType                String
+  durationSeconds         Int
+  // PRIMARY_AREA is the one required room walkthrough (one per area, enforced by
+  // a partial unique index); ADDITIONAL_ISSUE videos are extra labeled clips.
+  recordingType           VideoRecordingType     @default(PRIMARY_AREA)
+  label                   String?
+  category                String?
+  // Optional link to a finding (validated in app code; no Prisma relation to
+  // avoid a second media↔finding relation). Plain FK enforced in the migration.
+  relatedFindingId        String?                @db.Uuid
+  captureGuidelineVersion String?
+  captureSessionId         String?                @unique
+  capturePolicyVersion     String?
+  // Summarized capture metrics only. Raw motion samples stay on the device.
+  captureSummary           Json?
+  uploadStatus            MediaUploadStatus      @default(PENDING)
+  processingStatus        MediaProcessingStatus  @default(PENDING)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+  inspectionArea          InspectionArea         @relation(fields: [inspectionAreaId], references: [id])
+  technician              UserProfile            @relation(fields: [technicianId], references: [id])
+  processingEvents        MediaProcessingEvent[]
+  transcriptionJob        TranscriptionJob?
+  aiJobs                  AiAnalysisJob[]
+  findings                InspectionFinding[]
 
-  @@unique([inspectionAreaId])
+  // One PRIMARY_AREA video per area is enforced by a partial unique index in the
+  // migration; the plain index here supports lookups by area.
+  @@index([inspectionAreaId])
+}
+
+/// Photo evidence for an area. Unlike the single primary video, an area (and a
+/// finding) may have many photos, each tagged with a capture type. Photos never
+/// enter the video transcription/AI pipeline.
+model InspectionPhoto {
+  id               String             @id @default(uuid()) @db.Uuid
+  organizationId   String             @db.Uuid
+  inspectionId     String             @db.Uuid
+  inspectionAreaId String             @db.Uuid
+  findingId        String?            @db.Uuid
+  capturedById     String             @db.Uuid
+  provider         String             @default("local")
+  storageKey       String             @unique
+  thumbnailKey     String?
+  captureType      PhotoCaptureType   @default(AREA_OVERVIEW)
+  sequenceNumber   Int                @default(0)
+  label            String?
+  notes            String?
+  mimeType         String
+  storageStatus    PhotoStorageStatus @default(UPLOADED)
+  width            Int?
+  height           Int?
+  sizeBytes        Int?
+  idempotencyKey   String?            @unique
+  localFileId      String?
+  metadata         Json?
+  capturedAt       DateTime           @default(now())
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  inspectionArea   InspectionArea     @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
+  finding          InspectionFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
+  capturedBy       UserProfile        @relation(fields: [capturedById], references: [id])
+
+  @@index([inspectionAreaId, captureType, sequenceNumber])
+  @@index([inspectionId])
+  @@index([findingId])
 }
 
 model MediaUploadSession {
@@ -811,8 +1202,26 @@ model InspectionFinding {
   inspectionMedia        InspectionMedia              @relation(fields: [inspectionMediaId], references: [id])
   aiAnalysisJob          AiAnalysisJob?               @relation(fields: [aiAnalysisJobId], references: [id])
   reviews                FindingReview[]
+  photos                 InspectionPhoto[]
 
   @@index([inspectionId, reviewStatus])
+}
+
+model InspectionReportShare {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  inspectionId   String      @db.Uuid
+  createdById    String      @db.Uuid
+  token          String      @unique
+  recipientEmail String?
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  inspection     Inspection  @relation(fields: [inspectionId], references: [id])
+  createdBy      UserProfile @relation(fields: [createdById], references: [id])
+
+  @@index([inspectionId])
 }
 
 model FindingReview {
@@ -826,6 +1235,166 @@ model FindingReview {
   updatedAt   DateTime            @updatedAt
   finding     InspectionFinding   @relation(fields: [findingId], references: [id])
   reviewer    UserProfile         @relation(fields: [reviewerId], references: [id])
+}
+
+/// Move-in vs move-out comparison for one move-out inspection (spec §12). External
+/// links (organization, move-in/move-out inspections, reviewer) are plain FK
+/// columns enforced in the migration — no Prisma relations — to avoid adding
+/// back-relations across many models. The comparison is a draft until a human
+/// approves it; AI may assist but never finalizes.
+model InspectionComparison {
+  id                  String                     @id @default(uuid()) @db.Uuid
+  organizationId      String                     @db.Uuid
+  moveOutInspectionId String                     @unique @db.Uuid
+  moveInInspectionId  String                     @db.Uuid
+  status              ComparisonStatus           @default(DRAFT)
+  overallCondition    ComparisonClassification   @default(REQUIRES_REVIEW)
+  version             Int                        @default(1)
+  // DETERMINISTIC or AI_ASSISTED; records how the draft was generated.
+  generator           String                     @default("DETERMINISTIC")
+  requiresReviewCount Int                        @default(0)
+  summary             String?
+  reviewedById        String?                    @db.Uuid
+  reviewedAt          DateTime?
+  reviewNote          String?
+  metadata            Json?
+  generatedAt         DateTime                   @default(now())
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  areaComparisons     InspectionAreaComparison[]
+
+  @@index([organizationId])
+  @@index([moveInInspectionId])
+}
+
+/// Per-area result within a comparison. Move-in/move-out areas are referenced by
+/// catalog property-area id; either side may be null when an area exists on only
+/// one inspection. Administrators can override the classification with an audit
+/// trail (originalClassification + overriddenBy).
+model InspectionAreaComparison {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  comparisonId           String                    @db.Uuid
+  moveInPropertyAreaId   String?                   @db.Uuid
+  moveOutPropertyAreaId  String?                   @db.Uuid
+  areaName               String
+  floorName              String?
+  classification         ComparisonClassification
+  matchMethod            ComparisonMatchMethod     @default(UNMATCHED)
+  matchConfidence        Float                     @default(0)
+  requiresReview         Boolean                   @default(false)
+  summary                String?
+  originalClassification ComparisonClassification?
+  overriddenById         String?                   @db.Uuid
+  overriddenAt           DateTime?
+  overrideReason         String?
+  metadata               Json?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  comparison             InspectionComparison      @relation(fields: [comparisonId], references: [id], onDelete: Cascade)
+
+  @@index([comparisonId])
+}
+
+/// Configurable charge rule (spec §13/§14). The $25 unauthorized-pet amount is
+/// stored here, never hard-coded, and applies only while `isActive`.
+model ChargeRule {
+  id              String                @id @default(uuid()) @db.Uuid
+  organizationId  String                @db.Uuid
+  code            String
+  description     String?
+  amount          Decimal               @db.Decimal(10, 2)
+  currency        String                @default("USD")
+  calculationType ChargeCalculationType @default(PER_UNIQUE_ENTITY)
+  effectiveFrom   DateTime              @default(now())
+  effectiveTo     DateTime?
+  isActive        Boolean               @default(true)
+  createdById     String?               @db.Uuid
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+}
+
+/// A technician's raw pet observation during an occupied inspection. Evidence
+/// only — the technician never determines uniqueness, authorization, or charges.
+model PetObservation {
+  id                    String        @id @default(uuid()) @db.Uuid
+  organizationId        String        @db.Uuid
+  inspectionId          String        @db.Uuid
+  propertyAreaId        String?       @db.Uuid
+  petCandidateId        String?       @db.Uuid
+  temporaryLabel        String
+  species               String
+  description           String?
+  characteristics       String?
+  notes                 String?
+  photoIds              String[]      @db.Uuid
+  mediaIds              String[]      @db.Uuid
+  possibleDuplicateOfId String?       @db.Uuid
+  recordedById          String?       @db.Uuid
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  petCandidate          PetCandidate? @relation(fields: [petCandidateId], references: [id], onDelete: SetNull)
+
+  @@index([inspectionId])
+  @@index([petCandidateId])
+}
+
+/// A deduplicated unique animal grouped from one or more observations. A reviewer
+/// confirms uniqueness and authorization; a charge applies only to a UNIQUE_PET
+/// that is UNAUTHORIZED.
+model PetCandidate {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  organizationId      String                 @db.Uuid
+  inspectionId        String                 @db.Uuid
+  species             String
+  label               String
+  description         String?
+  reviewStatus        PetReviewStatus        @default(PENDING_REVIEW)
+  authorizationStatus PetAuthorizationStatus @default(UNKNOWN)
+  observationCount    Int                    @default(0)
+  reviewedById        String?                @db.Uuid
+  reviewedAt          DateTime?
+  reviewNote          String?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  observations        PetObservation[]
+  charges             Charge[]
+
+  @@index([inspectionId])
+}
+
+/// A proposed or decided charge (spec §14). Amounts are Decimal money. A charge
+/// is only ever finalized (APPROVED/REJECTED/ADJUSTED/WAIVED) by a human — the
+/// generator drafts, it never approves.
+model Charge {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  inspectionId   String        @db.Uuid
+  chargeCode     String
+  description    String
+  propertyAreaId String?       @db.Uuid
+  findingId      String?       @db.Uuid
+  petCandidateId String?       @db.Uuid
+  quantity       Int           @default(1)
+  unitAmount     Decimal       @db.Decimal(10, 2)
+  proposedAmount Decimal       @db.Decimal(10, 2)
+  approvedAmount Decimal?      @db.Decimal(10, 2)
+  currency       String        @default("USD")
+  status         ChargeStatus  @default(DRAFT)
+  source         ChargeSource  @default(SYSTEM)
+  reason         String?
+  evidenceRefs   Json?
+  reviewedById   String?       @db.Uuid
+  reviewedAt     DateTime?
+  createdById    String?       @db.Uuid
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  petCandidate   PetCandidate? @relation(fields: [petCandidateId], references: [id], onDelete: SetNull)
+
+  @@index([inspectionId, status])
+  @@index([petCandidateId])
 }
 
 model AuditLog {

@@ -18,10 +18,7 @@ jest.mock('expo-file-system/legacy', () => ({
   FileSystemUploadType: { MULTIPART: 'multipart' },
 }));
 
-import {
-  ApiMediaRepository,
-  ApiUploadRepository,
-} from '../src/repositories/api/repositories';
+import { ApiMediaRepository, ApiUploadRepository } from '../src/repositories/api/repositories';
 import { useDemoStore } from '../src/stores/demo.store';
 
 const flushQueue = async () => {
@@ -31,16 +28,17 @@ const flushQueue = async () => {
 describe('live-data room recording upload', () => {
   beforeEach(() => {
     useDemoStore.getState().resetDemoData();
+    useDemoStore.getState().selectUser('technician-1');
     jest.clearAllMocks();
     mockGetSession.mockResolvedValue({
-      data: { session: { access_token: 'test-access-token' } },
+      data: { session: { access_token: 'test-access-token', user: { id: 'technician-1' } } },
     });
     mockGetInfoAsync.mockResolvedValue({ exists: true });
     mockCreateUploadTask.mockReturnValue({ uploadAsync: mockUploadAsync });
     mockUploadAsync.mockResolvedValue({ status: 201, body: '{}' });
   });
 
-  it('saves locally, uploads to the backend, then hands ownership to the server', async () => {
+  it('saves locally, uploads to the backend, and retains a recoverable local copy', async () => {
     const mediaRepository = new ApiMediaRepository();
     const uploadRepository = new ApiUploadRepository();
     const media = await mediaRepository.save({
@@ -69,11 +67,12 @@ describe('live-data room recording upload', () => {
     expect(options.parameters.idempotencyKey).toBe(media.id);
     expect(options.parameters.durationSeconds).toBe('12');
     expect(options.headers.authorization).toBe('Bearer test-access-token');
-    // Server owns the recording now: the local queue entry and media are gone.
+    // Backend confirmation removes the queue entry, but the durable local file
+    // remains recoverable until an explicit retention policy cleans it up.
     expect(
       useDemoStore.getState().uploads.filter((item) => item.id.startsWith('local-upload-')),
     ).toHaveLength(0);
-    expect(useDemoStore.getState().media.filter((item) => item.id === media.id)).toHaveLength(0);
+    expect(useDemoStore.getState().media.filter((item) => item.id === media.id)).toHaveLength(1);
   });
 
   it('marks the queue entry FAILED when the backend rejects the upload', async () => {
@@ -156,9 +155,12 @@ describe('live-data room recording upload', () => {
     });
     const upload = await uploadRepository.enqueue(media);
     await flushQueue();
+    expect(useDemoStore.getState().uploads.find((item) => item.id === upload.id)?.status).toBe(
+      'PENDING',
+    );
     expect(
-      useDemoStore.getState().uploads.find((item) => item.id === upload.id)?.status,
-    ).toBe('FAILED');
+      useDemoStore.getState().uploads.find((item) => item.id === upload.id)?.nextAttemptAt,
+    ).toBeDefined();
 
     await uploadRepository.retry(upload.id);
     await flushQueue();

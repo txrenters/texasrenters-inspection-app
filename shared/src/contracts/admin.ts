@@ -14,6 +14,48 @@ export interface AdminProfile {
   displayName: string;
   isActive: boolean;
   memberships: Array<{ role: string; organization: { id: string; name: string } }>;
+  // Effective permissions for the resolved organization. Except for the
+  // bootstrap SYSTEM_ADMIN principal, these come only from custom roles.
+  permissions: string[];
+}
+
+export interface AdminRoleSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  permissions: string[];
+  assignedUserCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminRole extends AdminRoleSummary {
+  assignedUsers: Array<{ id: string; displayName: string; email: string }>;
+}
+
+export interface AdminUserRoleRef {
+  id: string;
+  name: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  displayName: string;
+  isActive: boolean;
+  isSystemAdmin: boolean;
+  createdAt: string;
+  customRoles: AdminUserRoleRef[];
+}
+
+export interface AdminUserDetail extends AdminUser {
+  permissions: string[];
+}
+
+export interface CreatedUserAccount extends AdminUserDetail {
+  mustChangePassword: true;
+  temporaryPassword: string;
+  emailDeliveryStatus: MailDeliveryStatus;
 }
 
 export interface AdminDashboard {
@@ -47,6 +89,39 @@ export interface AdminPortfolio {
   lastSyncedAt: string;
 }
 
+export type TotalAreaSource =
+  'PROPERTYWARE_BUILDING' | 'PROPERTYWARE_UNITS_SUM' | 'MANUAL' | 'UNKNOWN';
+
+export interface PropertyTotalArea {
+  value: number | null;
+  unit: string | null; // normalized, e.g. "sq ft"
+  source: TotalAreaSource;
+  derived: boolean; // true when summed from parts rather than a reported total
+  updatedAt: string | null;
+  label: string; // display-ready, e.g. "2,450 sq ft" or "Not provided"
+}
+
+export interface PropertyLeaseSummary {
+  activeLeaseCount: number;
+  scheduledMoveOutCount: number;
+  vacantUnitCount: number;
+  /** Active leases whose term ends within LEASE_EXPIRING_SOON_DAYS. */
+  expiringSoonCount: number;
+  /**
+   * False when no units have synced for this property, so no lease conclusion
+   * can be drawn. Absent data is not the same as a known absence of leases, and
+   * the two must never read alike.
+   */
+  leaseDataAvailable: boolean;
+  /**
+   * Earliest upcoming lease end across the property's active leases, or null
+   * when none has an end date. Derived from the lease term (`endDate`), which
+   * is a different signal from a tenant's scheduled move-out.
+   */
+  nextLeaseEndDate?: string | null;
+  summary: string; // compact, e.g. "3 active leases · 1 ending within 60 days · 2 vacant units"
+}
+
 export interface AdminProperty {
   id: string;
   externalId: string;
@@ -60,6 +135,8 @@ export interface AdminProperty {
   isActive: boolean;
   lastSyncedAt: string;
   portfolio: { id: string; name: string; externalId: string };
+  totalArea?: PropertyTotalArea;
+  leaseSummary?: PropertyLeaseSummary;
   _count?: { units: number; inspections: number };
   units?: AdminUnit[];
   leases?: AdminLease[];
@@ -69,6 +146,9 @@ export interface AdminProperty {
 export interface AdminFloorPlan {
   id: string;
   propertyId: string;
+  /** Null = building-level plan shared by all units; set = one unit's plan. */
+  unitId?: string | null;
+  unit?: { id: string; name: string } | null;
   fileName: string;
   mimeType: 'application/pdf' | 'image/jpeg' | 'image/png';
   sizeBytes: number;
@@ -90,16 +170,100 @@ export interface AdminFloorPlanExtractionJob {
   updatedAt: string;
 }
 
+export interface AdminFloorPlanExtractionSummary {
+  detectedCount: number;
+  createdCount: number;
+  alreadyPresentCount: number;
+  /** Areas whose spatial marker was missing or invalid (needs manual placement). */
+  markerWarnings?: number;
+}
+
+export interface AdminFloorPlanExtractionResult {
+  id: string;
+  status: 'COMPLETED';
+  provider: string;
+  modelId: string;
+  summary: AdminFloorPlanExtractionSummary;
+  areas: AdminPropertyArea[];
+}
+
+/** Extraction runs outside the request; the client polls this until it settles. */
+export interface AdminFloorPlanExtractionStarted {
+  jobId: string;
+  status: 'RUNNING';
+}
+
+export interface AdminFloorPlanExtractionJob {
+  id: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  errorCode?: string | null;
+  summary?: AdminFloorPlanExtractionSummary | null;
+}
+
+export type AreaEnvironment = 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
+
+export type MarkerSource =
+  | 'AI_EXTRACTED'
+  | 'DETERMINISTIC_EXTRACTED'
+  | 'ADMIN_ADJUSTED'
+  | 'ADMIN_PLACED'
+  | 'UNKNOWN';
+
+/** Spatial marker for an area — normalized 0..1 fractions of the source image/page. */
+export interface AdminAreaMarker {
+  available: true;
+  x: number;
+  y: number;
+  source?: MarkerSource | string | null;
+  confidence?: number | null;
+  updatedAt?: string | null;
+}
+
+export interface AdminAreaBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface AdminPropertyArea {
   id: string;
   propertyId: string;
+  /** Server revision used to reject stale reads and conflicting edits. */
+  updatedAt: string;
+  /** Null = building-level area shared by all units; set = one unit's area. */
+  unitId?: string | null;
+  unit?: { id: string; name: string } | null;
   name: string;
   inspectionOrder: number;
   isRequired: boolean;
   status: 'DRAFT' | 'APPROVED' | 'REJECTED';
   source: string;
+  environment?: AreaEnvironment;
+  category?: string | null;
+  notes?: string | null;
+  archivedAt?: string | null;
+  createdBy?: { id: string; displayName: string } | null;
   floor?: { id: string; name: string; sortOrder: number } | null;
   _count?: { inspectionAreas: number };
+  /** The plan version these marker coordinates belong to (null = legacy/manual). */
+  sourceFloorPlanId?: string | null;
+  sourcePageNumber?: number | null;
+  /** Null when the area has no marker for the current plan version. */
+  marker?: AdminAreaMarker | null;
+  boundingBox?: AdminAreaBoundingBox | null;
+}
+
+export interface AdminDeleteResult {
+  id: string;
+  deleted: true;
+  deletedAt: string;
+}
+
+export interface AdminBulkDeleteResult {
+  ids: string[];
+  deleted: number;
+  deletedAt: string;
 }
 
 export interface AdminUnit {
@@ -110,6 +274,11 @@ export interface AdminUnit {
   bedrooms?: number | null;
   bathrooms?: number | null;
   lastSyncedAt: string;
+  // Relevant (active) lease status for this unit, or null when none applies.
+  leaseStatus?: string | null;
+  scheduledMoveOutDate?: string | null;
+  /** End of the lease term. Distinct from a scheduled move-out. */
+  leaseEndDate?: string | null;
 }
 
 export interface AdminLease {
@@ -166,9 +335,21 @@ export interface AdminAssignmentListItem {
   };
 }
 
+export type AdminInspectionStatus =
+  | 'SCHEDULED'
+  | 'IN_PROGRESS'
+  | 'TECHNICIAN_SUBMITTED'
+  | 'PROCESSING'
+  | 'REVIEW_REQUIRED'
+  | 'UNDER_REVIEW'
+  | 'TBD'
+  | 'FOLLOW_UP_REQUIRED'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
 export interface AdminInspection {
   id: string;
-  status: string;
+  status: AdminInspectionStatus;
   inspectionType: InspectionType;
   baselineInspectionId?: string | null;
   baselineInspection?: {
@@ -179,6 +360,18 @@ export interface AdminInspection {
   } | null;
   priority: string;
   scheduledAt: string;
+  startedAt?: string | null;
+  submittedAt?: string | null;
+  completedAt?: string | null;
+  finalizedAt?: string | null;
+  finalizedBy?: { id: string; displayName: string } | null;
+  completionBlockedReason?: string | null;
+  tbdReason?: string | null;
+  followUpRequired?: boolean;
+  followUpDueAt?: string | null;
+  followUpTasks?: string | null;
+  parentInspectionId?: string | null;
+  inspectionRound?: number;
   createdAt: string;
   updatedAt: string;
   internalNotes?: string | null;
@@ -194,10 +387,292 @@ export interface AdminInspection {
   audit?: Array<{ id: string; action: string; metadata?: unknown; createdAt: string }>;
 }
 
+export type ComparisonClassification =
+  | 'UNCHANGED'
+  | 'IMPROVED'
+  | 'NEW_DAMAGE'
+  | 'WORSENED'
+  | 'RESOLVED'
+  | 'MISSING_BASELINE'
+  | 'MISSING_MOVE_OUT_EVIDENCE'
+  | 'NOT_COMPARABLE'
+  | 'REQUIRES_REVIEW';
+
+export type ComparisonStatus = 'DRAFT' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED';
+
+export type ComparisonMatchMethod =
+  | 'LOCAL_AREA_ID'
+  | 'APPROVED_ALIAS'
+  | 'NORMALIZED_NAME'
+  | 'AREA_CATEGORY'
+  | 'CONFIGURED_MAPPING'
+  | 'AI_SUGGESTED'
+  | 'MANUAL'
+  | 'UNMATCHED';
+
+export interface AdminAreaComparison {
+  id: string;
+  areaName: string;
+  floorName?: string | null;
+  classification: ComparisonClassification;
+  matchMethod: ComparisonMatchMethod;
+  matchConfidence: number;
+  requiresReview: boolean;
+  summary?: string | null;
+  originalClassification?: ComparisonClassification | null;
+  overriddenAt?: string | null;
+  overrideReason?: string | null;
+}
+
+/** Move-in vs move-out comparison for a move-out inspection (spec §12). */
+export interface AdminInspectionComparison {
+  id: string;
+  moveOutInspectionId: string;
+  moveInInspectionId: string;
+  status: ComparisonStatus;
+  overallCondition: ComparisonClassification;
+  version: number;
+  generator: string;
+  requiresReviewCount: number;
+  summary?: string | null;
+  reviewedByName?: string | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+  generatedAt: string;
+  areas: AdminAreaComparison[];
+}
+
+export type ChargeStatus =
+  | 'DRAFT'
+  | 'PENDING_REVIEW'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'ADJUSTED'
+  | 'WAIVED';
+export type ChargeSource = 'AI_SUGGESTED' | 'TECHNICIAN' | 'SYSTEM' | 'ADMINISTRATOR';
+export type PetReviewStatus = 'PENDING_REVIEW' | 'UNIQUE_PET' | 'DUPLICATE' | 'INSUFFICIENT_EVIDENCE';
+export type PetAuthorizationStatus = 'UNKNOWN' | 'AUTHORIZED' | 'UNAUTHORIZED';
+
+export interface AdminChargeRule {
+  id: string;
+  code: string;
+  description?: string | null;
+  amount: number;
+  currency: string;
+  calculationType: string;
+  isActive: boolean;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+}
+
+export interface AdminCharge {
+  id: string;
+  inspectionId: string;
+  chargeCode: string;
+  description: string;
+  propertyAreaId?: string | null;
+  findingId?: string | null;
+  petCandidateId?: string | null;
+  quantity: number;
+  unitAmount: number;
+  proposedAmount: number;
+  approvedAmount?: number | null;
+  currency: string;
+  status: ChargeStatus;
+  source: ChargeSource;
+  reason?: string | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+}
+
+export interface AdminPetCandidate {
+  id: string;
+  species: string;
+  label: string;
+  description?: string | null;
+  reviewStatus: PetReviewStatus;
+  authorizationStatus: PetAuthorizationStatus;
+  observationCount: number;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+}
+
+export interface AdminPetObservation {
+  id: string;
+  petCandidateId?: string | null;
+  temporaryLabel: string;
+  species: string;
+  description?: string | null;
+  characteristics?: string | null;
+  notes?: string | null;
+  propertyAreaId?: string | null;
+  photoIds: string[];
+  mediaIds: string[];
+  possibleDuplicateOfId?: string | null;
+}
+
+export interface AdminInspectionPets {
+  candidates: AdminPetCandidate[];
+  observations: AdminPetObservation[];
+}
+
+/** Charge comparison report (spec §14) — export-ready structured data. */
+export interface AdminChargeReport {
+  property: {
+    name: string;
+    address?: string | null;
+    cityState?: string | null;
+    unit?: string | null;
+    lease?: string | null;
+    scheduledMoveOut?: string | null;
+  };
+  inspection: { id: string; status: string; type: InspectionType; scheduledAt: string };
+  comparison: {
+    status: ComparisonStatus;
+    overallCondition: ComparisonClassification;
+    areas: Array<{ areaName: string; classification: ComparisonClassification; requiresReview: boolean }>;
+  } | null;
+  newOrWorsenedFindings: Array<{
+    id: string;
+    area: string;
+    title: string;
+    severity: string;
+    reviewStatus: string;
+  }>;
+  existingConditionExclusions: Array<{ id: string; area: string; title: string }>;
+  petReview: Array<{
+    id: string;
+    label: string;
+    species: string;
+    reviewStatus: PetReviewStatus;
+    authorizationStatus: PetAuthorizationStatus;
+    observationCount: number;
+  }>;
+  charges: { proposed: AdminCharge[]; approved: AdminCharge[]; rejected: AdminCharge[] };
+  rule: AdminChargeRule | null;
+  totals: { currency: string; proposedTotal: number; approvedTotal: number };
+}
+
+/** An inspection area shown in the workflow (used by the merge UI). */
+export interface AdminInspectionArea {
+  id: string;
+  propertyAreaId: string;
+  name: string;
+  floorName?: string | null;
+  environment: 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
+  completionStatus: string;
+  mediaCount: number;
+  photoCount: number;
+}
+
+/** Result of merging two inspection areas. */
+export interface MergeInspectionAreasResult {
+  movedMedia: number;
+  movedPhotos: number;
+  movedFindings: number;
+  demotedPrimaries: number;
+  areas: AdminInspectionArea[];
+}
+
 export interface AdminAuditEvent {
   id: string;
   action: string;
   createdAt: string;
+}
+
+export interface AdminReportShare {
+  id: string;
+  inspectionId: string;
+  token: string;
+  sharePath: string;
+  recipientEmail?: string | null;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdAt: string;
+  /** Present on creation when the backend attempted SMTP delivery. */
+  emailDeliveryStatus?: MailDeliveryStatus;
+}
+
+/** Letterhead block. Deployment-level branding, not per-organization. */
+export interface PublicReportBrand {
+  name: string;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  phone?: string | null;
+  email?: string | null;
+}
+
+/**
+ * A homeowner-visible photo. Only area overviews and photos attached to an
+ * APPROVED finding are ever included, so nothing here reveals pending or
+ * rejected AI output. `contentPath` is capability-scoped by the share token.
+ */
+export interface PublicReportPhoto {
+  id: string;
+  roomId: string;
+  label?: string | null;
+  notes?: string | null;
+  capturedAt: string;
+  width?: number | null;
+  height?: number | null;
+  contentPath: string;
+}
+
+export interface PublicInspectionReport {
+  brand: PublicReportBrand;
+  property: {
+    name: string;
+    addressLine1: string;
+    unitName?: string | null;
+    city: string;
+    state: string;
+    postalCode: string;
+  };
+  inspection: {
+    type: string;
+    status: string;
+    scheduledAt: string;
+    completedAt?: string | null;
+  };
+  rooms: Array<{
+    id: string;
+    name: string;
+    floorName?: string | null;
+    completionStatus: string;
+    skipReason?: string | null;
+    completedAt?: string | null;
+  }>;
+  findings: Array<{
+    id: string;
+    /** InspectionArea id, so findings group under their room. Null if the room was removed. */
+    roomId?: string | null;
+    roomName: string;
+    title: string;
+    description: string;
+    category: string;
+    severity: string;
+    comparisonResult: string;
+    baselineCondition: string;
+  }>;
+  photos: PublicReportPhoto[];
+  generatedAt: string;
+}
+
+export interface AdminInspectionPhoto {
+  id: string;
+  roomId: string;
+  roomName: string;
+  findingId?: string | null;
+  captureType: 'AREA_OVERVIEW' | 'FINDING_DETAIL' | 'SUPPORTING_EVIDENCE';
+  sequenceNumber: number;
+  label?: string | null;
+  notes?: string | null;
+  mimeType: string;
+  width?: number | null;
+  height?: number | null;
+  capturedByName: string;
+  capturedAt: string;
+  contentPath: string;
 }
 
 export interface AdminInspectionMedia {
@@ -209,10 +684,15 @@ export interface AdminInspectionMedia {
   technicianName: string;
   mimeType: string;
   durationSeconds: number;
+  recordingType: 'PRIMARY_AREA' | 'ADDITIONAL_ISSUE';
+  label?: string | null;
+  category?: string | null;
   uploadStatus: string;
   processingStatus: string;
   createdAt: string;
   contentPath: string;
+  /** Signed poster-frame URL; null until processing has generated one. */
+  thumbnailUrl?: string | null;
 }
 
 export interface AdminInspectionFinding {
@@ -256,12 +736,63 @@ export interface AdminTechnician {
 export interface CreatedTechnicianAccount extends AdminTechnician {
   mustChangePassword: true;
   temporaryPassword: string;
+  emailDeliveryStatus: MailDeliveryStatus;
+}
+
+export type MailDeliveryStatus = 'SENT' | 'NOT_CONFIGURED' | 'FAILED';
+
+export interface MailDeliveryResult {
+  status: MailDeliveryStatus;
+  message: string;
 }
 
 export interface ProviderReadiness {
   provider: string;
   status: 'CONFIGURED' | 'NOT_CONFIGURED' | 'READY' | 'DEGRADED' | 'UNAVAILABLE' | 'ERROR';
   detail?: string;
+}
+
+export type AiProviderName = 'ANTHROPIC' | 'OPENAI';
+
+export interface AiModelOption {
+  id: string;
+  name: string;
+  tier: string;
+  /** Published per-1M-token pricing, e.g. "$3 in / $15 out". */
+  pricing?: string;
+  /** One-line guidance on when this model fits the inspection workload. */
+  description?: string;
+  /** The tier we suggest for TexasRenters' transcript/finding workload. */
+  recommended?: boolean;
+}
+
+export interface AiProviderConfiguration {
+  provider: AiProviderName;
+  displayName: string;
+  modelId: string;
+  models: AiModelOption[];
+  hasApiKey: boolean;
+  keySource: 'SETTINGS' | 'ENVIRONMENT' | 'NONE';
+  credentialStatus: 'NOT_CONFIGURED' | 'UNVERIFIED' | 'VALID' | 'INVALID';
+  lastValidatedAt: string | null;
+  monthlyTokenBudget: number | null;
+  balanceStatus: 'NOT_EXPOSED_BY_STANDARD_API_KEY';
+  usage: {
+    requests: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    remainingBudgetTokens: number | null;
+    budgetPercentUsed: number | null;
+    lastUsedAt: string | null;
+  };
+}
+
+export interface AiSettings {
+  activeProvider: AiProviderName;
+  keyStorageAvailable: boolean;
+  usageWindow: { startsAt: string; endsAt: string };
+  providers: AiProviderConfiguration[];
 }
 
 export interface PropertywareSyncRun {

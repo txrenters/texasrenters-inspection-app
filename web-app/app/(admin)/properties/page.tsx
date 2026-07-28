@@ -2,6 +2,10 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
 
 import { SearchableSelect } from '@/components/searchable-select';
 import {
@@ -15,7 +19,7 @@ import {
   TableLoadingState,
   address,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { usePortfolios, useProperties } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
@@ -24,6 +28,8 @@ const PROPERTY_HEADERS = [
   'Address',
   'Portfolio',
   'Units',
+  'Total area',
+  'Leases',
   'Inspections',
   'Status',
   'Last synced',
@@ -35,6 +41,10 @@ export default function PropertiesPage() {
   const [portfolioId, setPortfolioId] = useState('');
   const [portfolioSearch, setPortfolioSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
+  const searchText = search.trim();
+  const appliedSearchText = debouncedSearch.trim();
+  const isSearchPending = searchText !== appliedSearchText;
+  const hasActiveFilters = Boolean(searchText || portfolioId);
   const properties = useProperties({
     page,
     pageSize: 20,
@@ -51,6 +61,12 @@ export default function PropertiesPage() {
         searchText: item.abbreviation ?? undefined,
       })),
     ) ?? [];
+  const resultLabel =
+    isSearchPending || properties.isPlaceholderData || properties.isFetching
+      ? 'Searching active properties...'
+      : properties.isLoading
+        ? 'Loading active properties...'
+        : `${(properties.data?.total ?? 0).toLocaleString()} active properties`;
   return (
     <>
       <PageHeader
@@ -58,11 +74,7 @@ export default function PropertiesPage() {
         description="Active normalized Propertyware properties available for inspections."
       />
       <FilterToolbar
-        resultLabel={
-          properties.isLoading
-            ? 'Loading active properties…'
-            : `${(properties.data?.total ?? 0).toLocaleString()} active properties`
-        }
+        resultLabel={resultLabel}
         onClear={
           search || portfolioId
             ? () => {
@@ -74,30 +86,30 @@ export default function PropertiesPage() {
             : undefined
         }
       >
-        <div className="field field-grow">
-          <label htmlFor="search">Search name or address</label>
-          <input
+        <Field className="flex-1">
+          <FieldLabel htmlFor="search">Search name or address</FieldLabel>
+          <Input
             id="search"
             value={search}
             onChange={(event) => {
               setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="Search properties…"
+            placeholder="Search properties..."
           />
-        </div>
-        <div className="field field-medium">
-          <label htmlFor="portfolio">Portfolio</label>
+        </Field>
+        <Field className="w-[min(280px,100%)]">
+          <FieldLabel htmlFor="portfolio">Portfolio</FieldLabel>
           <SearchableSelect
             id="portfolio"
             value={portfolioId}
             options={portfolioOptions}
             placeholder="All portfolios"
             clearLabel="All portfolios"
-            searchPlaceholder="Search portfolios…"
+            searchPlaceholder="Search portfolios..."
             emptyMessage="No active portfolio matches your search."
             optionsLabel="Portfolio options"
-            loadingMoreLabel="Loading more portfolios…"
+            loadingMoreLabel="Loading more portfolios..."
             moreHint="Scroll for more portfolios"
             disabled={portfolios.isLoading || portfolios.isError}
             hasMore={portfolios.hasNextPage}
@@ -109,41 +121,73 @@ export default function PropertiesPage() {
               setPage(1);
             }}
           />
-        </div>
+        </Field>
       </FilterToolbar>
-      {properties.isLoading ? (
-        <TableLoadingState headers={PROPERTY_HEADERS} label="Loading properties" />
+      {properties.isLoading || isSearchPending || properties.isPlaceholderData ? (
+        <TableLoadingState
+          headers={PROPERTY_HEADERS}
+          label={
+            isSearchPending || properties.isPlaceholderData
+              ? 'Searching properties'
+              : 'Loading properties'
+          }
+          rows={4}
+        />
       ) : properties.isError ? (
         <ErrorState error={properties.error} retry={() => void properties.refetch()} />
       ) : !properties.data?.items.length ? (
         <EmptyState
-          title="No synchronized properties"
-          description="Run and verify Propertyware synchronization before creating inspections."
+          title={hasActiveFilters ? 'No matching properties' : 'No synchronized properties'}
+          description={
+            hasActiveFilters
+              ? 'Try a different property name, address, city, or portfolio.'
+              : 'Run and verify Propertyware synchronization before creating inspections.'
+          }
           action={
-            <Link className="button button-primary" href="/integrations/propertyware">
-              Open Propertyware
-            </Link>
+            hasActiveFilters ? undefined : (
+              <Link className={buttonVariants({ variant: 'primary' })} href="/integrations/propertyware">
+                Open Propertyware
+              </Link>
+            )
           }
         />
       ) : (
         <>
           <DataTable headers={PROPERTY_HEADERS} label="Active synchronized properties">
             {properties.data.items.map((property) => (
-              <tr key={property.id}>
-                <td>
-                  <Link className="table-link" href={`/properties/${property.id}`}>
+              <TableRow key={property.id}>
+                <TableCell>
+                  <Link className="font-semibold text-primary" href={`/properties/${property.id}`}>
                     {property.name}
                   </Link>
-                </td>
-                <td>{address(property)}</td>
-                <td>{property.portfolio.name}</td>
-                <td className="numeric-cell">{property._count?.units ?? 0}</td>
-                <td className="numeric-cell">{property._count?.inspections ?? 0}</td>
-                <td>
+                </TableCell>
+                <TableCell>{address(property)}</TableCell>
+                <TableCell>{property.portfolio.name}</TableCell>
+                <TableCell className="numeric-cell">{property._count?.units ?? 0}</TableCell>
+                <TableCell>
+                  {property.totalArea?.label ?? 'Not provided'}
+                  {property.totalArea?.source === 'MANUAL' ? (
+                    <span className="cell-note">Manual</span>
+                  ) : property.totalArea?.derived ? (
+                    <span className="cell-note">Derived</span>
+                  ) : null}
+                </TableCell>
+                <TableCell>
+                  {property.leaseSummary?.summary ?? '—'}
+                  {property.leaseSummary?.leaseDataAvailable === false ? (
+                    <span className="cell-note is-warning">Not synchronized</span>
+                  ) : property.leaseSummary?.nextLeaseEndDate ? (
+                    <span className="cell-note">
+                      Next ends {formatDate(property.leaseSummary.nextLeaseEndDate)}
+                    </span>
+                  ) : null}
+                </TableCell>
+                <TableCell className="numeric-cell">{property._count?.inspections ?? 0}</TableCell>
+                <TableCell>
                   <Badge value={property.isActive ? 'ACTIVE' : 'INACTIVE'} />
-                </td>
-                <td>{formatDate(property.lastSyncedAt)}</td>
-              </tr>
+                </TableCell>
+                <TableCell>{formatDate(property.lastSyncedAt)}</TableCell>
+              </TableRow>
             ))}
           </DataTable>
           <Pagination page={page} totalPages={properties.data.totalPages} onPage={setPage} />

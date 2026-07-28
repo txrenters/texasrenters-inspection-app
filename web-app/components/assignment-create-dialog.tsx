@@ -1,13 +1,33 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useAdminMutations, useInspections, useTechnicians } from '@/lib/queries';
 
 const assignableStatuses = new Set(['SCHEDULED', 'IN_PROGRESS', 'PROCESSING', 'REVIEW_REQUIRED']);
 
+// Radix Select rejects an empty string as an item value; the "nothing
+// selected" row uses a sentinel translated back to '' at the boundary.
+const NONE = '__none__';
+
 export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [inspectionId, setInspectionId] = useState('');
   const [technicianId, setTechnicianId] = useState('');
   const [reason, setReason] = useState('');
@@ -18,11 +38,6 @@ export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
     () => inspections.data?.items.filter((item) => assignableStatuses.has(item.status)) ?? [],
     [inspections.data?.items],
   );
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -36,61 +51,66 @@ export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <dialog
-      ref={ref}
-      className="dialog"
-      onCancel={onClose}
-      onClose={onClose}
-      aria-labelledby="new-assignment-title"
-    >
-      <form onSubmit={(event) => void submit(event)}>
-        <h2 id="new-assignment-title">Create assignment</h2>
-        <p>Select an unassigned inspection and an active technician.</p>
-        <div className="field">
-          <label htmlFor="assignment-inspection">Inspection</label>
-          <select
-            id="assignment-inspection"
-            required
-            value={inspectionId}
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Create assignment</DialogTitle>
+            <DialogDescription>
+              Select an unassigned inspection and an active technician.
+            </DialogDescription>
+          </DialogHeader>
+        <Field>
+          <FieldLabel htmlFor="assignment-inspection">Inspection</FieldLabel>
+          <Select
             disabled={inspections.isLoading}
-            onChange={(event) => setInspectionId(event.target.value)}
+            onValueChange={(next) => setInspectionId(next === NONE ? '' : next)}
+            value={inspectionId || NONE}
           >
-            <option value="">Select inspection</option>
-            {assignableInspections.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.propertywareBuilding?.name ?? 'Property'}
-                {item.propertywareUnit?.name ? ` · ${item.propertywareUnit.name}` : ''}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="assignment-inspection">
+              <SelectValue placeholder="Select inspection" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Select inspection</SelectItem>
+              {assignableInspections.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.propertywareBuilding?.name ?? 'Property'}
+                  {item.propertywareUnit?.name ? ` · ${item.propertywareUnit.name}` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {inspections.isError ? (
-            <span className="field-error">{inspections.error.message}</span>
+            <FieldError>{inspections.error.message}</FieldError>
           ) : null}
           {!inspections.isLoading && !inspections.isError && !assignableInspections.length ? (
             <small>No active unassigned inspections are available.</small>
           ) : null}
-        </div>
-        <div className="field" style={{ marginTop: 14 }}>
+        </Field>
+        <Field className="mt-3.5">
           <label htmlFor="assignment-new-technician">Technician</label>
-          <select
-            id="assignment-new-technician"
-            required
-            value={technicianId}
+          <Select
             disabled={technicians.isLoading}
-            onChange={(event) => setTechnicianId(event.target.value)}
+            onValueChange={(next) => setTechnicianId(next === NONE ? '' : next)}
+            value={technicianId || NONE}
           >
-            <option value="">Select technician</option>
-            {technicians.data?.items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.displayName} · {item.workload?.current ?? 0} current
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="assignment-new-technician">
+              <SelectValue placeholder="Select technician" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Select technician</SelectItem>
+              {technicians.data?.items.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.displayName} · {item.workload?.current ?? 0} current
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {technicians.isError ? (
-            <span className="field-error">{technicians.error.message}</span>
+            <FieldError>{technicians.error.message}</FieldError>
           ) : null}
-        </div>
-        <div className="field" style={{ marginTop: 14 }}>
+        </Field>
+        <Field className="mt-3.5">
           <label htmlFor="assignment-new-reason">Assignment note</label>
           <textarea
             id="assignment-new-reason"
@@ -99,24 +119,25 @@ export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
             onChange={(event) => setReason(event.target.value)}
             placeholder="Optional operational context"
           />
-        </div>
+        </Field>
         {mutation.error ? (
-          <p className="field-error" role="alert">
+          <FieldError>
             {mutation.error.message}
-          </p>
+          </FieldError>
         ) : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button button-primary"
-            disabled={!inspectionId || !technicianId || mutation.isPending}
-          >
-            {mutation.isPending ? 'Assigning…' : 'Create assignment'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              className={buttonVariants({ variant: 'primary' })}
+              disabled={!inspectionId || !technicianId || mutation.isPending}
+            >
+              {mutation.isPending ? 'Assigning…' : 'Create assignment'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

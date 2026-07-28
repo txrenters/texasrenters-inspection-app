@@ -1,4 +1,4 @@
-import { UserRole } from '@texasrenters/shared';
+﻿import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { AdminService } from '../src/admin/admin.service';
@@ -10,6 +10,7 @@ const user: AuthenticatedUser = {
   organizationId: '10000000-0000-4000-8000-000000000001',
   displayName: 'Property Admin',
   roles: [UserRole.PROPERTY_ADMIN],
+  permissions: [],
   mustChangePassword: false,
 };
 
@@ -136,7 +137,7 @@ describe('administrator inspection operations', () => {
     const created = { id: 'inspection-1', status: 'SCHEDULED' };
     const tx = {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-      propertywareUnit: { findFirst: jest.fn() },
+      propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: {
         findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }, { id: 'area-2' }]),
@@ -148,7 +149,10 @@ describe('administrator inspection operations', () => {
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+      inspection: { findFirst: jest.fn().mockResolvedValue({ ...created, assignments: [] }) },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
     const service = new AdminService(prisma as never);
 
     await service.createInspection(user, {
@@ -196,7 +200,7 @@ describe('administrator inspection operations', () => {
     };
     const tx = {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-      propertywareUnit: { findFirst: jest.fn() },
+      propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn() },
       inspection: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
@@ -231,7 +235,7 @@ describe('administrator inspection operations', () => {
     };
     const tx = {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-      propertywareUnit: { findFirst: jest.fn() },
+      propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
       inspection: {
@@ -240,7 +244,12 @@ describe('administrator inspection operations', () => {
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'occupied-1', assignments: [] }),
+      },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
     const service = new AdminService(prisma as never);
 
     await service.createInspection(user, {
@@ -279,7 +288,7 @@ describe('administrator inspection operations', () => {
       };
       const tx = {
         propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
-        propertywareUnit: { findFirst: jest.fn() },
+        propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
         propertywareLease: { findFirst: jest.fn() },
         propertyArea: { findMany: jest.fn() },
         inspection: {

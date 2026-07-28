@@ -32,4 +32,26 @@ describe('local room snapshot metadata', () => {
     expect(snapshot.height).toBe(1);
     expect(snapshot.sizeBytes).toBeUndefined();
   });
+
+  it('preserves capture-session provenance without changing room ownership', () => {
+    const snapshot = buildRoomSnapshot({
+      inspectionId: 'inspection-oak',
+      roomId: 'room-oak-1',
+      uri: 'file:///snapshot.jpg',
+      width: 1280,
+      height: 720,
+      captureType: 'FINDING_CONTEXT',
+      recordingSessionId: 'capture-session-1',
+      videoTimestampMs: 12_000,
+      captureSource: 'VIDEO_FRAME_EXTRACTION',
+      sequenceNumber: 2,
+      findingId: 'finding-1',
+    });
+
+    expect(snapshot.recordingSessionId).toBe('capture-session-1');
+    expect(snapshot.videoTimestampMs).toBe(12_000);
+    expect(snapshot.captureSource).toBe('VIDEO_FRAME_EXTRACTION');
+    expect(snapshot.sequenceNumber).toBe(2);
+    expect(snapshot.findingId).toBe('finding-1');
+  });
 });

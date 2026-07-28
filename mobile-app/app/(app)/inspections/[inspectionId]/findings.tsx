@@ -7,7 +7,7 @@ import { FindingSummaryCard } from '../../../../src/components/FeatureCards';
 import { EmptyState, ErrorState, LoadingState } from '../../../../src/components/ScreenStates';
 import { FilterChip, SectionHeader } from '../../../../src/components/ui';
 import type { FindingStatus } from '../../../../src/domain/models';
-import { matchesFindingFilter, useFindings } from '../../../../src/features/queries';
+import { matchesFindingFilter, useFindings, useRooms } from '../../../../src/features/queries';
 import { spacing } from '../../../../src/theme';
 
 const filters: Array<{ label: string; value: FindingStatus | 'ALL' }> = [
@@ -21,7 +21,16 @@ const filters: Array<{ label: string; value: FindingStatus | 'ALL' }> = [
 export default function FindingsScreen() {
   const { inspectionId = '' } = useLocalSearchParams<{ inspectionId: string }>();
   const [filter, setFilter] = useState<FindingStatus | 'ALL'>('PENDING_REVIEW');
-  const query = useFindings(inspectionId);
+  const rooms = useRooms(inspectionId);
+  const processing = Boolean(
+    rooms.data?.some(
+      (room) =>
+        room.processingStatus !== 'NOT_STARTED' &&
+        room.processingStatus !== 'READY_FOR_REVIEW' &&
+        room.processingStatus !== 'FAILED',
+    ),
+  );
+  const query = useFindings(inspectionId, processing);
   const grouped = useMemo(() => {
     const visible =
       query.data?.filter((finding) => matchesFindingFilter(finding.reviewStatus, filter)) ?? [];
@@ -74,8 +83,12 @@ export default function FindingsScreen() {
         ))
       ) : (
         <EmptyState
-          title="No findings in this view"
-          message="Choose another filter or wait for room processing to finish."
+          title={processing ? 'AI summary is processing' : 'No findings in this view'}
+          message={
+            processing
+              ? 'The room video is safely uploaded. Its transcript and condition summary will appear here automatically.'
+              : 'Choose another filter or record and upload a room video first.'
+          }
         />
       )}
     </AppScreen>

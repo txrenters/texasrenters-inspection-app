@@ -1,11 +1,20 @@
 import type { InspectionType } from '@texasrenters/shared';
+import type {
+  GuidedCaptureSummary,
+  SnapshotCaptureSource,
+} from '../capture/guided-capture';
+import type { EntitySyncMetadata } from '@texasrenters/shared';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
 export type InspectionStatus =
   | 'SCHEDULED'
   | 'IN_PROGRESS'
+  | 'TECHNICIAN_SUBMITTED'
   | 'PROCESSING'
   | 'REVIEW_REQUIRED'
+  | 'UNDER_REVIEW'
+  | 'TBD'
+  | 'FOLLOW_UP_REQUIRED'
   | 'COMPLETED'
   | 'CANCELLED';
 export type Priority = 'STANDARD' | 'HIGH';
@@ -39,6 +48,7 @@ export interface Property {
   externalPortfolioId: string;
   name: string;
   address: string;
+  unitName?: string | null;
   cityStateZip: string;
   bedrooms: number;
   bathrooms: number;
@@ -94,6 +104,9 @@ export interface BaselineCondition {
   evidenceCount: number;
 }
 
+export type AreaEnvironment = 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
+export type AreaApprovalStatus = 'DRAFT' | 'APPROVED' | 'REJECTED';
+
 export interface InspectionRoom {
   id: string;
   inspectionId: string;
@@ -110,12 +123,22 @@ export interface InspectionRoom {
   reviewStatus?: FindingStatus;
   note?: string;
   skipReason?: string;
+  // Area classification and provenance (Phase 2). Optional so pre-Phase-2 mock
+  // data stays valid; the API always populates them (schema defaults).
+  environment?: AreaEnvironment;
+  category?: string | null;
+  source?: string; // AI_FLOOR_PLAN | MANUAL | MANUAL_FALLBACK | TECHNICIAN
+  areaStatus?: AreaApprovalStatus; // DRAFT technician areas await admin approval
+  updatedAt?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface Inspection {
   id: string;
   externalInspectionId: string;
   propertyId: string;
+  unitId?: string | null;
+  unitName?: string | null;
   type: InspectionType;
   baselineInspectionId?: string | null;
   baselineScheduledAt?: string;
@@ -127,6 +150,8 @@ export interface Inspection {
   propertyNotes: string;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };
+  updatedAt?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface InspectionContext {
@@ -136,10 +161,64 @@ export interface InspectionContext {
   pendingReviewCount: number;
 }
 
+export interface InspectionReportFinding {
+  id: string;
+  findingType: 'POSSIBLE_NEW_DAMAGE' | 'EXISTING_CONDITION' | 'MAINTENANCE' | 'NO_CHANGE';
+  title: string;
+  category: string;
+  severity: 'LOW' | 'MEDIUM' | 'HIGH';
+  comparisonResult: string;
+  confidence: number;
+  description: string;
+  recommendedReview: string;
+  reviewStatus: FindingStatus;
+}
+
+export interface InspectionReportRoom extends InspectionRoom {
+  summary: string | null;
+  findings: InspectionReportFinding[];
+}
+
+export interface InspectionReport {
+  inspection: Inspection;
+  property: Property;
+  generatedAt: string;
+  rooms: InspectionReportRoom[];
+  totals: {
+    rooms: number;
+    finishedRooms: number;
+    summaries: number;
+    defectFindings: number;
+    pendingReviewCount: number;
+  };
+}
+
+export type VideoRecordingType = 'PRIMARY_AREA' | 'ADDITIONAL_ISSUE';
+
+export type AdditionalVideoCategory =
+  | 'ADDITIONAL_DAMAGE'
+  | 'APPLIANCE_TEST'
+  | 'PLUMBING'
+  | 'ELECTRICAL'
+  | 'PEST'
+  | 'PET_EVIDENCE'
+  | 'SAFETY'
+  | 'EXTERIOR'
+  | 'FOLLOW_UP'
+  | 'REINSPECTION'
+  | 'OTHER';
+
 export interface LocalMedia {
   id: string;
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
+  // Primary walkthrough by default; additional labeled clips carry their own
+  // label/category and never replace the primary video for the area.
+  recordingType?: VideoRecordingType;
+  label?: string;
+  category?: AdditionalVideoCategory;
+  relatedFindingId?: string;
   propertyAddress?: string;
   roomName?: string;
   uri: string;
@@ -147,10 +226,27 @@ export interface LocalMedia {
   estimatedSizeMb: number;
   recordedAt: string;
   note: string;
+  captureSummary?: GuidedCaptureSummary;
 }
+
+export type PhotoCaptureType =
+  | 'AREA_OVERVIEW'
+  | 'WALL_OVERVIEW'
+  | 'FINDING_CONTEXT'
+  | 'FINDING_CLOSE_UP'
+  | 'SUPPORTING_ANGLE'
+  | 'SCALE_REFERENCE'
+  | 'SERIAL_OR_LABEL'
+  | 'VIDEO_FRAME_SNAPSHOT'
+  | 'OTHER'
+  // Retained so offline drafts created by earlier releases still deserialize.
+  | 'FINDING_DETAIL'
+  | 'SUPPORTING_EVIDENCE';
+export type PhotoUploadStatus = 'PENDING' | 'UPLOADING' | 'UPLOADED' | 'FAILED';
 
 export interface RoomSnapshot {
   id: string;
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   uri: string;
@@ -158,13 +254,26 @@ export interface RoomSnapshot {
   height: number;
   sizeBytes?: number;
   capturedAt: string;
+  captureType?: PhotoCaptureType;
+  recordingSessionId?: string;
+  videoTimestampMs?: number;
+  captureSource?: SnapshotCaptureSource;
+  sequenceNumber?: number;
+  findingId?: string;
+  uploadStatus?: PhotoUploadStatus;
+  serverPhotoId?: string;
 }
 
 export interface UploadItem {
   id: string;
+  ownerUserId?: string;
   mediaId: string;
   inspectionId: string;
   roomId: string;
+  recordingType?: VideoRecordingType;
+  label?: string;
+  category?: AdditionalVideoCategory;
+  relatedFindingId?: string;
   propertyAddress: string;
   roomName: string;
   durationSeconds: number;
@@ -172,9 +281,13 @@ export interface UploadItem {
   status: UploadStatus;
   progress: number;
   lastError?: string;
+  attemptCount?: number;
+  nextAttemptAt?: string;
   processingStatus: ProcessingStatus;
   processingProgress: number;
   createdAt: string;
+  operationId?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface Finding {
@@ -186,7 +299,13 @@ export interface Finding {
   category: string;
   severity: 'LOW' | 'MEDIUM' | 'HIGH';
   comparisonResult:
-    'POSSIBLE_NEW_DAMAGE' | 'EXISTING_CONDITION' | 'INSUFFICIENT_EVIDENCE' | 'NORMAL_WEAR';
+    | 'POSSIBLE_NEW_DAMAGE'
+    | 'EXISTING_CONDITION'
+    | 'NO_MATERIAL_CHANGE'
+    | 'NORMAL_WEAR'
+    | 'OWNER_MAINTENANCE'
+    | 'MISSING_EVIDENCE'
+    | 'INSUFFICIENT_DATA';
   confidence: number;
   videoTimestampStart: number;
   videoTimestampEnd: number;
@@ -196,6 +315,8 @@ export interface Finding {
   recommendedReview: string;
   reviewStatus: FindingStatus;
   reviewerNotes?: string;
+  updatedAt?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface DashboardSummary {

@@ -83,6 +83,20 @@ describe('mobile environment', () => {
     ]);
   });
 
+  it('never prefers localhost on iOS — adb reverse does not exist there', () => {
+    // The call site gates the flag by platform; an iOS device with the flag
+    // off must resolve to the Metro LAN host, not the phone's own localhost.
+    expect(
+      resolveDeviceApiBaseUrls(
+        'http://localhost:3000/api/v1',
+        '192.168.123.44:8081',
+        'ios',
+        'http://192.168.123.44:3000/api/v1',
+        false,
+      ),
+    ).toEqual(['http://192.168.123.44:3000/api/v1']);
+  });
+
   it('rejects public fallbacks and does not alter production API URLs', () => {
     expect(
       resolveDeviceApiBaseUrls(

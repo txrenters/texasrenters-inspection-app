@@ -9,7 +9,7 @@ import { typography, useAppTheme } from '../../../../src/theme';
 
 export default function PropertyScreen() {
   const { colors } = useAppTheme();
-  const { propertyId = '', inspectionId = 'inspection-oak' } = useLocalSearchParams<{
+  const { propertyId = '', inspectionId } = useLocalSearchParams<{
     propertyId: string;
     inspectionId?: string;
   }>();

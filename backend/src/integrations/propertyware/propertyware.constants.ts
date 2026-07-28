@@ -1,3 +1,8 @@
+import {
+  PROPERTYWARE_ENTITIES,
+  type PropertywareEntity as PropertywareEntityName,
+} from '@texasrenters/shared';
+
 export const PROPERTYWARE_SOURCE_SYSTEM = 'propertyware';
 
 export const PROPERTYWARE_AUTH_HEADERS = {
@@ -13,8 +18,9 @@ export const PROPERTYWARE_ENDPOINTS = {
   leases: '/leases',
 } as const;
 
-export const PROPERTYWARE_ENTITIES = ['portfolios', 'buildings', 'units', 'leases'] as const;
-export type PropertywareEntity = (typeof PROPERTYWARE_ENTITIES)[number];
+// Re-exported from shared so the API's validation list and the web app's
+// request list can never drift apart again.
+export { PROPERTYWARE_ENTITIES, type PropertywareEntity } from '@texasrenters/shared';
 
-export const PROPERTYWARE_ENTITY_ORDER: readonly PropertywareEntity[] = PROPERTYWARE_ENTITIES;
+export const PROPERTYWARE_ENTITY_ORDER: readonly PropertywareEntityName[] = PROPERTYWARE_ENTITIES;
 export const PROPERTYWARE_MAX_PAGE_SIZE = 500;

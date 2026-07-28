@@ -10,7 +10,9 @@ import { io, type Socket } from 'socket.io-client';
 import { getSupabaseClient } from '../auth/supabase';
 import { environment, isDemoMode, resolveEasProjectId } from '../config/environment';
 import { queryKeys } from '../features/queries';
+import { verifyQueries } from '../features/state-consistency';
 import { requestJson } from '../repositories/api/repositories';
+import { loadNotifications } from './notifications';
 import { pushDeviceStorage } from './push-device-storage';
 
 type NotificationsModule = typeof ExpoNotifications;
@@ -20,8 +22,6 @@ interface InspectionChangedEvent {
   kind: 'ASSIGNED' | 'REASSIGNED' | 'UNASSIGNED' | 'CANCELLED' | 'UPDATED';
   occurredAt: string;
 }
-
-let notificationHandlerConfigured = false;
 
 export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
   const queryClient = useQueryClient();
@@ -34,10 +34,7 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
     let notificationResponse: { remove(): void } | undefined;
 
     const refreshAssignments = () => {
-      void Promise.allSettled([
-        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
-        queryClient.invalidateQueries({ queryKey: ['inspections'] }),
-      ]);
+      void verifyQueries(queryClient, [queryKeys.dashboard, queryKeys.inspectionsRoot]);
     };
 
     const connect = async () => {
@@ -59,9 +56,7 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       socket.on('technician:ready', refreshAssignments);
       socket.on('inspection:changed', (event: InspectionChangedEvent) => {
         refreshAssignments();
-        void queryClient
-          .invalidateQueries({ queryKey: queryKeys.inspection(event.inspectionId) })
-          .catch(() => undefined);
+        void verifyQueries(queryClient, [queryKeys.inspection(event.inspectionId)]);
         if (event.kind === 'ASSIGNED' && !registeredPushToken)
           void notifyNewAssignment(event.inspectionId).catch(() => undefined);
       });
@@ -159,22 +154,4 @@ async function notifyNewAssignment(inspectionId: string) {
     },
     trigger: null,
   });
-}
-
-async function loadNotifications() {
-  if (!['ios', 'android'].includes(Platform.OS) || Constants.executionEnvironment === 'storeClient')
-    return null;
-  const Notifications = await import('expo-notifications');
-  if (!notificationHandlerConfigured) {
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-        shouldShowBanner: true,
-        shouldShowList: true,
-      }),
-    });
-    notificationHandlerConfigured = true;
-  }
-  return Notifications;
 }

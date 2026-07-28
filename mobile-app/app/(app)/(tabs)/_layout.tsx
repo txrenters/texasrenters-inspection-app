@@ -4,6 +4,7 @@ import { Tabs } from 'expo-router';
 import { StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useInspectionAlerts } from '../../../src/features/useInspectionAlerts';
 import { type AppColors, useAppTheme, useThemedStyles } from '../../../src/theme';
 
 const icons: Record<
@@ -19,6 +20,7 @@ const icons: Record<
 export default function TabsLayout() {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
+  const { overdueCount, alertCount } = useInspectionAlerts();
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Tabs
@@ -35,7 +37,19 @@ export default function TabsLayout() {
           },
         })}
       >
-        <Tabs.Screen name="dashboard" options={{ title: 'Home' }} />
+        <Tabs.Screen
+          name="dashboard"
+          options={{
+            title: 'Home',
+            // Alert the technician to overdue/due-soon inspections from any tab.
+            tabBarBadge: alertCount > 0 ? alertCount : undefined,
+            tabBarBadgeStyle: {
+              backgroundColor: overdueCount > 0 ? colors.danger : colors.warning,
+              color: colors.surface,
+              fontSize: 11,
+            },
+          }}
+        />
         <Tabs.Screen name="inspections" options={{ title: 'Inspections' }} />
         <Tabs.Screen name="uploads" options={{ title: 'Uploads' }} />
         <Tabs.Screen name="settings" options={{ title: 'Settings' }} />

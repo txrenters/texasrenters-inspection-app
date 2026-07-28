@@ -1,32 +1,41 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
-import type { LocalMedia } from '../domain/models';
+import type { LocalMedia, VideoRecordingType } from '../domain/models';
+import type { GuidedCaptureSummary } from '../capture/guided-capture';
 
 const RECORDINGS_FOLDER = 'inspection-recordings';
 const FALLBACK_MEGABYTES_PER_SECOND = 0.66;
 
 type RecordingDraftInput = {
+  ownerUserId?: string;
   inspectionId: string;
   roomId: string;
   uri: string;
   durationSeconds: number;
   sizeBytes?: number;
+  recordingType?: VideoRecordingType;
+  captureSummary?: GuidedCaptureSummary;
 };
 
 export function buildRecordingDraft({
+  ownerUserId,
   inspectionId,
   roomId,
   uri,
   durationSeconds,
   sizeBytes,
+  recordingType = 'PRIMARY_AREA',
+  captureSummary,
 }: RecordingDraftInput): LocalMedia {
   const normalizedDuration = Math.max(1, Math.round(durationSeconds));
 
   return {
     id: `draft-${Date.now()}`,
+    ownerUserId,
     inspectionId,
     roomId,
+    recordingType,
     uri,
     durationSeconds: normalizedDuration,
     estimatedSizeMb:
@@ -35,6 +44,7 @@ export function buildRecordingDraft({
         : normalizedDuration * FALLBACK_MEGABYTES_PER_SECOND,
     recordedAt: new Date().toISOString(),
     note: '',
+    captureSummary,
   };
 }
 

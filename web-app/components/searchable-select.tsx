@@ -1,6 +1,18 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Check, ChevronsUpDown } from 'lucide-react';
+import { useEffect, useMemo, useState, type UIEvent } from 'react';
+
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
 
 export type SearchableSelectOption = {
   value: string;
@@ -8,6 +20,20 @@ export type SearchableSelectOption = {
   searchText?: string;
 };
 
+/**
+ * Combobox, built on the shadcn Popover + Command pair.
+ *
+ * The previous implementation was a hand-built listbox whose single `<input>`
+ * had to serve as both the selected-value display and the search box — which is
+ * what produced the doubled, overlapping label on the trigger. Splitting those
+ * into a trigger button plus a popover-owned search field fixes it, and Command
+ * supplies the roving focus, type-ahead and Escape handling that were previously
+ * maintained by hand.
+ *
+ * Filtering stays server-driven when `onSearch` is supplied: Command's built-in
+ * matcher is switched off in that case so it cannot hide rows the server just
+ * returned.
+ */
 export function SearchableSelect({
   id,
   value,
@@ -45,13 +71,10 @@ export function SearchableSelect({
   onSearch?: (query: string) => void;
   onLoadMore?: () => void;
 }) {
-  const listboxId = useId();
-  const rootRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [activeIndex, setActiveIndex] = useState(0);
   const [selectedCache, setSelectedCache] = useState<SearchableSelectOption>();
+
   const availableOptions = useMemo(
     () => (clearLabel ? [{ value: '', label: clearLabel }, ...options] : options),
     [clearLabel, options],
@@ -60,161 +83,97 @@ export function SearchableSelect({
     availableOptions.find((option) => option.value === value) ??
     (selectedCache?.value === value ? selectedCache : undefined) ??
     (selectedOption?.value === value ? selectedOption : undefined);
-  const matches = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    if (!normalized) return availableOptions;
-    return availableOptions.filter((option) =>
-      `${option.label} ${option.searchText ?? ''}`.toLocaleLowerCase().includes(normalized),
-    );
-  }, [availableOptions, query]);
-  const visibleOptions = matches;
 
+  // Remember the chosen option: a server-driven search can drop it out of
+  // `options` on the next keystroke, and the trigger still has to show its label.
   useEffect(() => {
-    function closeOnOutsideClick(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-        setQuery('');
-        onSearch?.('');
-      }
-    }
-    document.addEventListener('pointerdown', closeOnOutsideClick);
-    return () => document.removeEventListener('pointerdown', closeOnOutsideClick);
-  }, [onSearch]);
+    const match = availableOptions.find((option) => option.value === value);
+    if (match) setSelectedCache(match);
+  }, [availableOptions, value]);
 
-  useEffect(() => setActiveIndex(0), [query]);
-
+  // Debounced server search, unchanged from the previous implementation.
   useEffect(() => {
     if (!open || !onSearch) return;
     const timer = window.setTimeout(() => onSearch(query.trim()), 300);
     return () => window.clearTimeout(timer);
-  }, [onSearch, open, query]);
+  }, [open, onSearch, query]);
 
-  function select(option: SearchableSelectOption) {
-    setSelectedCache(option);
-    onChange(option.value);
-    setOpen(false);
-    setQuery('');
-    onSearch?.('');
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    // Reset on close so reopening starts from the full list rather than the
+    // last query's narrowed results.
+    if (!next) {
+      setQuery('');
+      onSearch?.('');
+    }
   }
 
-  function openMenu() {
-    if (disabled) return;
-    setOpen(true);
-    setQuery('');
-    onSearch?.('');
+  // Reads the scrolling element from the event rather than a ref: CommandList
+  // owns its own inner sizer, so a forwarded ref does not reliably land on the
+  // node that actually scrolls.
+  function handleScroll(event: UIEvent<HTMLDivElement>) {
+    if (!hasMore || loadingMore || !onLoadMore) return;
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 24) onLoadMore();
   }
 
   return (
-    <div ref={rootRef} className="searchable-select">
-      <div className={`searchable-select-control${open ? ' is-open' : ''}`}>
-        <svg
-          className="searchable-select-search-icon"
-          aria-hidden
-          viewBox="0 0 24 24"
-          width="18"
-          height="18"
-        >
-          <circle cx="11" cy="11" r="6.5" />
-          <path d="m16 16 4 4" />
-        </svg>
-        <input
-          ref={inputRef}
-          id={id}
-          type="text"
-          role="combobox"
-          autoComplete="off"
-          aria-autocomplete="list"
-          aria-expanded={open}
-          aria-controls={listboxId}
-          aria-activedescendant={
-            open && visibleOptions[activeIndex] ? `${listboxId}-option-${activeIndex}` : undefined
-          }
-          disabled={disabled}
-          placeholder={open ? searchPlaceholder : placeholder}
-          value={open ? query : (selected?.label ?? '')}
-          onFocus={openMenu}
-          onChange={(event) => {
-            setOpen(true);
-            setQuery(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              if (!open) openMenu();
-              else setActiveIndex((index) => Math.min(index + 1, visibleOptions.length - 1));
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              setActiveIndex((index) => Math.max(index - 1, 0));
-            } else if (event.key === 'Enter' && open && visibleOptions[activeIndex]) {
-              event.preventDefault();
-              select(visibleOptions[activeIndex]);
-            } else if (event.key === 'Escape') {
-              setOpen(false);
-              setQuery('');
-            }
-          }}
-        />
+    <Popover onOpenChange={handleOpenChange} open={open}>
+      <PopoverTrigger asChild>
         <button
-          type="button"
-          className="searchable-select-toggle"
-          aria-label={open ? `Close ${optionsLabel}` : `Open ${optionsLabel}`}
+          aria-expanded={open}
+          className={cn(
+            'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none',
+            'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+            selected ? 'text-foreground' : 'text-muted-foreground',
+          )}
           disabled={disabled}
-          tabIndex={-1}
-          onClick={() => {
-            if (open) {
-              setOpen(false);
-              setQuery('');
-              onSearch?.('');
-            } else {
-              openMenu();
-              inputRef.current?.focus();
-            }
-          }}
+          id={id}
+          role="combobox"
+          type="button"
         >
-          <svg aria-hidden viewBox="0 0 20 20" width="18" height="18">
-            <path d="m5 7.5 5 5 5-5" />
-          </svg>
+          <span className="truncate">{selected?.label ?? placeholder}</span>
+          <ChevronsUpDown aria-hidden className="size-4 shrink-0 opacity-50" />
         </button>
-      </div>
-      {open ? (
-        <div
-          className="searchable-select-menu"
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-            if (nearBottom && hasMore && !loadingMore) onLoadMore?.();
-          }}
-        >
-          <div id={listboxId} role="listbox" aria-label={optionsLabel}>
-            {visibleOptions.map((option, index) => (
-              <button
-                key={option.value}
-                id={`${listboxId}-option-${index}`}
-                type="button"
-                role="option"
-                aria-selected={option.value === value}
-                className={`searchable-select-option${index === activeIndex ? ' is-active' : ''}`}
-                onPointerMove={() => setActiveIndex(index)}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => select(option)}
-              >
-                <span>{option.label}</span>
-                {option.value === value ? <span aria-hidden>✓</span> : null}
-              </button>
-            ))}
-          </div>
-          {!visibleOptions.length ? (
-            <p className="searchable-select-empty">{emptyMessage}</p>
-          ) : null}
-          {loadingMore ? (
-            <p className="searchable-select-hint" role="status">
-              {loadingMoreLabel}
-            </p>
-          ) : hasMore ? (
-            <p className="searchable-select-hint">{moreHint}</p>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
+        <Command shouldFilter={!onSearch}>
+          <CommandInput
+            onValueChange={setQuery}
+            placeholder={searchPlaceholder}
+            value={query}
+          />
+          <CommandList onScroll={handleScroll}>
+            <CommandEmpty>{emptyMessage}</CommandEmpty>
+            <CommandGroup heading={optionsLabel}>
+              {availableOptions.map((option) => (
+                <CommandItem
+                  key={option.value || '__clear__'}
+                  onSelect={() => {
+                    onChange(option.value);
+                    handleOpenChange(false);
+                  }}
+                  value={`${option.label} ${option.searchText ?? ''}`.trim()}
+                >
+                  <Check
+                    aria-hidden
+                    className={cn('size-4', option.value === value ? 'opacity-100' : 'opacity-0')}
+                  />
+                  <span className="truncate">{option.label}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            {loadingMore ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground" role="status">
+                {loadingMoreLabel}
+              </p>
+            ) : hasMore ? (
+              <p className="px-3 py-2 text-xs text-muted-foreground">{moreHint}</p>
+            ) : null}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

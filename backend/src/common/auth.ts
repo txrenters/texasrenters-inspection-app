@@ -12,7 +12,7 @@ import { Reflector } from '@nestjs/core';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Request } from 'express';
 
-import { UserRole } from '@texasrenters/shared';
+import { type PermissionKey, resolveEffectivePermissions, UserRole } from '@texasrenters/shared';
 
 import { PrismaService } from './prisma.service';
 
@@ -22,6 +22,10 @@ export interface AuthenticatedUser {
   organizationId: string;
   displayName: string;
   roles: UserRole[];
+  // Effective permissions for the resolved org. SYSTEM_ADMIN is the protected
+  // bootstrap principal; every other web user receives permissions only from
+  // administrator-created custom roles.
+  permissions: PermissionKey[];
   mustChangePassword: boolean;
 }
 
@@ -49,6 +53,9 @@ export async function authenticateApplicationUser(
       displayName: true,
       isActive: true,
       memberships: { select: { organizationId: true, role: true } },
+      roleAssignments: {
+        select: { organizationId: true, role: { select: { permissions: true } } },
+      },
     },
   });
   if (!profile?.isActive) throw new UnauthorizedException('No active application profile.');
@@ -58,62 +65,81 @@ export async function authenticateApplicationUser(
   if (memberships.length === 0)
     throw new UnauthorizedException('No active organization membership.');
   const organizationId = requestedOrganization ?? memberships[0]!.organizationId;
+  const roles = memberships
+    .filter((membership) => membership.organizationId === organizationId)
+    .map((membership) => membership.role as UserRole);
+  const customRolePermissions = (profile.roleAssignments ?? [])
+    .filter((assignment) => assignment.organizationId === organizationId)
+    .flatMap((assignment) => assignment.role.permissions);
   return {
     id: profile.id,
     authUserId: claims.sub,
     organizationId,
     displayName: profile.displayName,
-    roles: memberships
-      .filter((membership) => membership.organizationId === organizationId)
-      .map((membership) => membership.role as UserRole),
+    roles,
+    permissions: resolveEffectivePermissions(roles, customRolePermissions),
     mustChangePassword: claims.app_metadata?.must_change_password === true,
   };
 }
 
+function mockUser(user: Omit<AuthenticatedUser, 'permissions'>): AuthenticatedUser {
+  return { ...user, permissions: resolveEffectivePermissions(user.roles, []) };
+}
+
 export const MOCK_USERS: Record<string, AuthenticatedUser> = {
-  '10000000-0000-4000-8000-000000000002': {
+  '10000000-0000-4000-8000-000000000002': mockUser({
     id: '10000000-0000-4000-8000-000000000002',
     authUserId: '10000000-0000-4000-8000-000000000002',
     organizationId: '10000000-0000-4000-8000-000000000001',
     displayName: 'System Admin',
     roles: [UserRole.SYSTEM_ADMIN],
     mustChangePassword: false,
-  },
-  '10000000-0000-4000-8000-000000000003': {
+  }),
+  '10000000-0000-4000-8000-000000000003': mockUser({
     id: '10000000-0000-4000-8000-000000000003',
     authUserId: '10000000-0000-4000-8000-000000000003',
     organizationId: '10000000-0000-4000-8000-000000000001',
     displayName: 'Property Admin',
     roles: [UserRole.PROPERTY_ADMIN],
     mustChangePassword: false,
-  },
-  '10000000-0000-4000-8000-000000000004': {
+  }),
+  '10000000-0000-4000-8000-000000000004': mockUser({
     id: '10000000-0000-4000-8000-000000000004',
     authUserId: '10000000-0000-4000-8000-000000000004',
     organizationId: '10000000-0000-4000-8000-000000000001',
     displayName: 'Taylor Technician',
     roles: [UserRole.INSPECTION_TECHNICIAN],
     mustChangePassword: false,
-  },
-  '10000000-0000-4000-8000-000000000005': {
+  }),
+  '10000000-0000-4000-8000-000000000005': mockUser({
     id: '10000000-0000-4000-8000-000000000005',
     authUserId: '10000000-0000-4000-8000-000000000005',
     organizationId: '10000000-0000-4000-8000-000000000001',
     displayName: 'Riley Reviewer',
     roles: [UserRole.CONDITION_REVIEWER],
     mustChangePassword: false,
-  },
-  '10000000-0000-4000-8000-000000000006': {
+  }),
+  '10000000-0000-4000-8000-000000000006': mockUser({
     id: '10000000-0000-4000-8000-000000000006',
     authUserId: '10000000-0000-4000-8000-000000000006',
     organizationId: '10000000-0000-4000-8000-000000000001',
     displayName: 'Casey Approver',
     roles: [UserRole.CHARGE_APPROVER],
     mustChangePassword: false,
-  },
+  }),
 };
 
 export const Roles = (...roles: UserRole[]) => SetMetadata('roles', roles);
+
+export const PERMISSIONS_METADATA_KEY = 'permissions';
+/**
+ * Requires the authenticated user to hold ALL listed permissions. Enforced by
+ * {@link PermissionsGuard}. Permissions are computed per organization from the
+ * user's assigned custom roles, with the protected SYSTEM_ADMIN bootstrap
+ * override.
+ */
+export const RequirePermissions = (...permissions: PermissionKey[]) =>
+  SetMetadata(PERMISSIONS_METADATA_KEY, permissions);
 
 @Injectable()
 export class ApiAuthGuard implements CanActivate {
@@ -263,5 +289,29 @@ export class RolesGuard implements CanActivate {
     if (request.user.mustChangePassword)
       throw new ForbiddenException('A password change is required before using the application.');
     return required.some((role) => request.user.roles.includes(role));
+  }
+}
+
+/**
+ * Authorizes routes annotated with {@link RequirePermissions}. The user must
+ * hold every listed permission (AND semantics). Runs after {@link ApiAuthGuard}
+ * so `request.user` is populated.
+ */
+@Injectable()
+export class PermissionsGuard implements CanActivate {
+  constructor(@Inject(Reflector) private readonly reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const required = this.reflector.getAllAndOverride<PermissionKey[]>(PERMISSIONS_METADATA_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!required?.length) return true;
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    if (request.user.mustChangePassword)
+      throw new ForbiddenException('A password change is required before using the application.');
+    const held = new Set(request.user.permissions);
+    if (required.every((permission) => held.has(permission))) return true;
+    throw new ForbiddenException('You do not have permission to perform this action.');
   }
 }

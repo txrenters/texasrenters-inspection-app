@@ -2,6 +2,9 @@
 
 import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
 
 import { supabase } from '@/lib/supabase';
 
@@ -31,18 +34,18 @@ export default function ForgotPasswordPage() {
           </div>
         ) : (
           <form className="stack" onSubmit={(event) => void submit(event)}>
-            <div className="field">
-              <label htmlFor="email">Email address</label>
-              <input
+            <Field>
+              <FieldLabel htmlFor="email">Email address</FieldLabel>
+              <Input
                 id="email"
                 type="email"
                 required
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
               />
-            </div>
+            </Field>
             {error ? <div className="auth-error">{error}</div> : null}
-            <button className="button button-primary">Send reset link</button>
+            <button className={buttonVariants({ variant: 'primary' })}>Send reset link</button>
           </form>
         )}
         <Link className="auth-back" href="/login">

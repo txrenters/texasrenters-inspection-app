@@ -6,6 +6,9 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
+import { Input } from '@/components/ui/input';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import { buttonVariants } from '@/components/ui/button';
 
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
@@ -65,28 +68,28 @@ export default function LoginPage() {
           <p>Sign in to manage properties, inspections, assignments, and integrations.</p>
         </div>
         <form onSubmit={submit} className="stack" noValidate>
-          <div className="field">
-            <label htmlFor="email">Email address</label>
-            <input id="email" autoComplete="email" {...form.register('email')} />
+          <Field>
+            <FieldLabel htmlFor="email">Email address</FieldLabel>
+            <Input id="email" autoComplete="email" {...form.register('email')} />
             {form.formState.errors.email ? (
-              <span className="field-error">{form.formState.errors.email.message}</span>
+              <FieldError>{form.formState.errors.email.message}</FieldError>
             ) : null}
-          </div>
-          <div className="field">
+          </Field>
+          <Field>
             <div className="label-line">
-              <label htmlFor="password">Password</label>
+              <FieldLabel htmlFor="password">Password</FieldLabel>
               <Link href="/forgot-password">Forgot password?</Link>
             </div>
-            <input
+            <Input
               id="password"
               type="password"
               autoComplete="current-password"
               {...form.register('password')}
             />
             {form.formState.errors.password ? (
-              <span className="field-error">{form.formState.errors.password.message}</span>
+              <FieldError>{form.formState.errors.password.message}</FieldError>
             ) : null}
-          </div>
+          </Field>
           {error ? (
             <div className="auth-error" role="alert">
               <strong>{errorTitle}</strong>
@@ -94,7 +97,7 @@ export default function LoginPage() {
             </div>
           ) : null}
           <button
-            className="button button-primary"
+            className={buttonVariants({ variant: 'primary' })}
             disabled={form.formState.isSubmitting}
             type="submit"
           >

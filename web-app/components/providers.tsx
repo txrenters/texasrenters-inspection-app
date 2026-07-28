@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 
 import { AuthProvider } from '@/lib/auth';
+import { reconcileServerState } from '@/lib/state-consistency';
 import { ThemeProvider } from '@/lib/theme';
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -16,7 +17,9 @@ export function Providers({ children }: { children: ReactNode }) {
             gcTime: 10 * 60_000,
             retry: 1,
             refetchOnWindowFocus: false,
+            structuralSharing: reconcileServerState,
           },
+          mutations: { retry: false },
         },
       }),
   );

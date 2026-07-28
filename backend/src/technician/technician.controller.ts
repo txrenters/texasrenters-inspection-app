@@ -23,14 +23,20 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@texasrenters/shared';
 import { diskStorage } from 'multer';
 
+import { ChargeService } from '../admin/charge.service';
+import { PetObservationDto } from '../admin/admin.dto';
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
 import { MobilePushService } from '../realtime/mobile-push.service';
+import { MediaProcessingService } from './media-processing.service';
 import {
   MobilePushDeviceDto,
   RemoveMobilePushDeviceDto,
+  TechnicianAdditionalVideoDto,
+  TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianMediaUploadDto,
   TechnicianNoteDto,
+  TechnicianPhotoUploadDto,
   TechnicianInspectionListQueryDto,
   TechnicianReasonDto,
 } from './technician.dto';
@@ -45,6 +51,8 @@ export class TechnicianController {
   constructor(
     private readonly service: TechnicianService,
     private readonly mobilePush: MobilePushService,
+    private readonly mediaProcessing: MediaProcessingService,
+    private readonly charges: ChargeService,
   ) {}
 
   @Post('notification-devices')
@@ -102,12 +110,38 @@ export class TechnicianController {
   ) {
     return this.service.rooms(request.user, id);
   }
+  @Post('inspections/:inspectionId/areas') createArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: TechnicianCreateAreaDto,
+  ) {
+    return this.service.createArea(request.user, id, body);
+  }
+  @Post('inspections/:inspectionId/pet-observations') recordPetObservation(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: PetObservationDto,
+  ) {
+    // Technicians record pet evidence only; uniqueness/authorization/charges are
+    // an administrator's decision (spec §13).
+    return this.charges.recordObservation(
+      { organizationId: request.user.organizationId, userId: request.user.id },
+      id,
+      body,
+    );
+  }
   @Get('inspections/:inspectionId/findings') findings(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
     @Query() query: TechnicianFindingsQueryDto,
   ) {
     return this.service.findings(request.user, id, query);
+  }
+  @Get('inspections/:inspectionId/report') report(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.service.report(request.user, id);
   }
   @Get('properties/:propertyId') property(
     @Req() request: AuthenticatedRequest,
@@ -172,7 +206,64 @@ export class TechnicianController {
   ) {
     return this.service.uploadRoomMedia(request.user, id, body, file);
   }
+  @Post('rooms/:roomId/videos')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({ destination: tmpdir() }),
+      limits: { fileSize: 2_000_000_000, files: 1 },
+    }),
+  )
+  uploadAdditionalVideo(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+    @Body() body: TechnicianAdditionalVideoDto,
+    @UploadedFile() file?: UploadedRoomVideo,
+  ) {
+    return this.service.uploadAdditionalVideo(request.user, id, body, file);
+  }
+  @Get('rooms/:roomId/photos') photos(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+  ) {
+    return this.service.listPhotos(request.user, id);
+  }
+  @Post('rooms/:roomId/photos')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({ destination: tmpdir() }),
+      limits: { fileSize: 30_000_000, files: 1 },
+    }),
+  )
+  uploadPhoto(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+    @Body() body: TechnicianPhotoUploadDto,
+    @UploadedFile() file?: UploadedRoomVideo,
+  ) {
+    return this.service.uploadPhoto(request.user, id, body, file);
+  }
+  @Delete('photos/:photoId') deletePhoto(
+    @Req() request: AuthenticatedRequest,
+    @Param('photoId') id: string,
+  ) {
+    return this.service.deletePhoto(request.user, id);
+  }
+  @Get('photos/:photoId/content')
+  @Header('Cache-Control', 'private, no-store')
+  async photoContent(@Req() request: AuthenticatedRequest, @Param('photoId') id: string) {
+    const file = await this.service.photoContent(request.user, id);
+    return new StreamableFile(file.bytes, {
+      type: file.mimeType,
+      disposition: `inline; filename="${file.fileName}"`,
+    });
+  }
   @Get('uploads') uploads(@Req() request: AuthenticatedRequest) {
     return this.service.uploads(request.user);
+  }
+  @Post('media/:mediaId/reprocess') reprocessMedia(
+    @Req() request: AuthenticatedRequest,
+    @Param('mediaId') id: string,
+  ) {
+    return this.mediaProcessing.reprocess(request.user.organizationId, request.user.id, id);
   }
 }

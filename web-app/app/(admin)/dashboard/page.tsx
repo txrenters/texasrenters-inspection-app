@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { buttonVariants } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 import {
   Badge,
@@ -9,7 +11,7 @@ import {
   MetricCard,
   PageHeader,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { useDashboard } from '@/lib/queries';
 
 export default function DashboardPage() {
@@ -60,7 +62,7 @@ export default function DashboardPage() {
         title="Operations dashboard"
         description="Live inspection, assignment, synchronization, and provider readiness."
         action={
-          <Link className="button button-primary" href="/inspections/new">
+          <Link className={buttonVariants({ variant: 'primary' })} href="/inspections/new">
             Create inspection
           </Link>
         }
@@ -69,7 +71,7 @@ export default function DashboardPage() {
       <section className="dashboard-section" aria-labelledby="catalog-overview-title">
         <div className="section-heading-row">
           <div>
-            <span className="section-kicker">Synchronized catalog</span>
+            <span className="block text-xs font-semibold text-muted-foreground">Synchronized catalog</span>
             <h2 id="catalog-overview-title">Portfolio coverage</h2>
           </div>
           <Link className="text-action" href="/properties">
@@ -86,7 +88,7 @@ export default function DashboardPage() {
       <section className="dashboard-section" aria-labelledby="inspection-overview-title">
         <div className="section-heading-row">
           <div>
-            <span className="section-kicker">Inspection workflow</span>
+            <span className="block text-xs font-semibold text-muted-foreground">Inspection workflow</span>
             <h2 id="inspection-overview-title">Current operations</h2>
           </div>
           <Link className="text-action" href="/inspections">
@@ -101,40 +103,43 @@ export default function DashboardPage() {
       </section>
 
       <div className="dashboard-grid">
-        <section className="panel">
-          <div className="panel-header">
-            <h2>Propertyware synchronization</h2>
-            <Link className="table-link" href="/integrations/propertyware">
+        <Card className="p-[22px] max-[560px]:p-4" asChild>
+          <section>
+          <CardHeader className="p-0 pb-4">
+            <CardTitle className="text-[17px]">Propertyware synchronization</CardTitle>
+            <Link className="font-semibold text-primary" href="/integrations/propertyware">
               View integration
             </Link>
-          </div>
+          </CardHeader>
           {data.lastSync ? (
-            <div className="detail-grid">
-              <div className="detail-item">
+            <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
+              <div className="rounded-xl bg-background p-3.5">
                 <span>Status</span>
                 <Badge value={data.lastSync.status} />
               </div>
-              <div className="detail-item">
+              <div className="rounded-xl bg-background p-3.5">
                 <span>Type</span>
                 <strong>{data.lastSync.syncType}</strong>
               </div>
-              <div className="detail-item">
+              <div className="rounded-xl bg-background p-3.5">
                 <span>Completed</span>
                 <strong>{formatDate(data.lastSync.completedAt)}</strong>
               </div>
             </div>
           ) : (
-            <p className="supporting-copy">No successful synchronization has been recorded.</p>
+            <p className="mb-0">No successful synchronization has been recorded.</p>
           )}
-        </section>
+          </section>
+        </Card>
 
-        <section className="panel">
-          <div className="panel-header">
-            <h2>Provider readiness</h2>
-            <Link className="table-link" href="/integrations/providers">
+        <Card className="p-[22px] max-[560px]:p-4" asChild>
+          <section>
+          <CardHeader className="p-0 pb-4">
+            <CardTitle className="text-[17px]">Provider readiness</CardTitle>
+            <Link className="font-semibold text-primary" href="/integrations/providers">
               View all
             </Link>
-          </div>
+          </CardHeader>
           <div className="readiness-list">
             {data.providerReadiness.map((provider) => (
               <div className="readiness-row" key={provider.provider}>
@@ -146,17 +151,19 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
-        </section>
+          </section>
+        </Card>
       </div>
 
-      <section className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
-            <h2>Warnings and errors</h2>
-            <p className="panel-description">Grouped by source and error message to reduce repetition.</p>
+            <CardTitle className="text-[17px]">Warnings and errors</CardTitle>
+            <CardDescription>Grouped by source and error message to reduce repetition.</CardDescription>
           </div>
           {groupedErrors.length ? <span className="issue-total">{groupedErrors.length} issues</span> : null}
-        </div>
+        </CardHeader>
         {groupedErrors.length ? (
           <ul className="issue-list">
             {groupedErrors.map((error) => (
@@ -176,7 +183,8 @@ export default function DashboardPage() {
         ) : (
           <div className="compact-success-state">No unresolved synchronization errors.</div>
         )}
-      </section>
+        </section>
+      </Card>
     </>
   );
 }

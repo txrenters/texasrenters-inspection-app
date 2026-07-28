@@ -1,4 +1,5 @@
 import { FloorPlanExtractionService } from '../src/admin/floor-plan-extraction.service';
+import { AiProvider } from '@prisma/client';
 
 describe('floor-plan extraction provider errors', () => {
   const originalFetch = global.fetch;
@@ -38,7 +39,7 @@ describe('floor-plan extraction provider errors', () => {
       status: 402,
       code: 'FLOOR_PLAN_AI_CREDITS_REQUIRED',
       message:
-        'AI extraction credits are unavailable. Add provider credits or enter the property areas manually.',
+        'The AI provider account has no remaining credits. Add credits with the provider, or switch the active provider in Settings.',
     });
   });
 
@@ -56,6 +57,146 @@ describe('floor-plan extraction provider errors', () => {
       code: 'FLOOR_PLAN_AI_REQUEST_REJECTED',
       message:
         'The extraction provider rejected this floor-plan request. Verify the file and configured model.',
+    });
+  });
+
+  it('extracts validated areas with OpenAI and returns recorded token usage', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      providerResponse(200, {
+        output: [
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify([
+                  {
+                    floorName: 'Ground Floor',
+                    name: 'Living Room',
+                    inspectionOrder: 1,
+                    isRequired: true,
+                  },
+                ]),
+              },
+            ],
+          },
+        ],
+        usage: { input_tokens: 120, output_tokens: 30, total_tokens: 150 },
+      }),
+    ) as typeof fetch;
+
+    await expect(
+      new FloorPlanExtractionService().extract(jpegBytes(), 'image/jpeg', {
+        provider: AiProvider.OPENAI,
+        modelId: 'gpt-5.6-sol',
+        apiKey: 'private-openai-key',
+      }),
+    ).resolves.toEqual({
+      areas: [
+        {
+          floorName: 'Ground Floor',
+          name: 'Living Room',
+          inspectionOrder: 1,
+          isRequired: true,
+        },
+      ],
+      usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150 },
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/responses',
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: 'Bearer private-openai-key' }),
+      }),
+    );
+    const request = (global.fetch as jest.Mock).mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body)) as {
+      input: Array<{ content: Array<Record<string, unknown>> }>;
+    };
+    expect(body.input[0]?.content[0]).toMatchObject({
+      type: 'input_image',
+      detail: 'high',
+    });
+    expect(body.input[0]?.content[1]?.text).toEqual(
+      expect.stringContaining('scan every enclosed space again for omissions'),
+    );
+    expect(body.input[0]?.content[1]?.text).toEqual(
+      expect.stringContaining('Bathroom (unlabeled)'),
+    );
+  });
+
+  it('normalizes a multi-story provider response into reviewable draft areas', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      providerResponse(200, {
+        output: [
+          {
+            type: 'message',
+            content: [
+              {
+                type: 'output_text',
+                text: JSON.stringify({
+                  floors: [
+                    {
+                      name: 'First Floor',
+                      rooms: [
+                        {
+                          room_name: 'Living Room',
+                          required: 'yes',
+                          order: '4',
+                          bounding_box: { left: '80', top: 540, width: 300, height: 210 },
+                        },
+                        {
+                          room_name: 'Patio',
+                          required: 'optional',
+                          order: '5',
+                          bounds: [410, 540, 180, 190],
+                        },
+                      ],
+                    },
+                    {
+                      name: 'Second Floor',
+                      rooms: [
+                        { roomName: 'Bedroom 2', is_required: true, inspection_order: 1 },
+                        { roomName: 'Bedroom 2', is_required: true, inspection_order: 2 },
+                      ],
+                    },
+                  ],
+                }),
+              },
+            ],
+          },
+        ],
+        usage: { input_tokens: 200, output_tokens: 80, total_tokens: 280 },
+      }),
+    ) as typeof fetch;
+
+    await expect(
+      new FloorPlanExtractionService().extract(jpegBytes(), 'image/jpeg', {
+        provider: AiProvider.OPENAI,
+        modelId: 'gpt-5.6-sol',
+        apiKey: 'private-openai-key',
+      }),
+    ).resolves.toEqual({
+      areas: [
+        {
+          floorName: 'First Floor',
+          name: 'Living Room',
+          inspectionOrder: 1,
+          isRequired: true,
+        },
+        {
+          floorName: 'First Floor',
+          name: 'Patio',
+          inspectionOrder: 2,
+          isRequired: false,
+        },
+        {
+          floorName: 'Second Floor',
+          name: 'Bedroom 2',
+          inspectionOrder: 3,
+          isRequired: true,
+        },
+      ],
+      usage: { inputTokens: 200, outputTokens: 80, totalTokens: 280 },
     });
   });
 });
