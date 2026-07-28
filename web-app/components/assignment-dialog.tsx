@@ -1,7 +1,16 @@
 'use client';
 
 import type { AdminAssignment } from '@texasrenters/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useAdminMutations, useTechnicians } from '@/lib/queries';
 
@@ -14,17 +23,11 @@ export function AssignmentDialog({
   current?: AdminAssignment;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [technicianId, setTechnicianId] = useState('');
   const [reason, setReason] = useState('');
   const technicians = useTechnicians({ page: 1, pageSize: 100, active: true });
   const mutations = useAdminMutations();
   const mutation = current ? mutations.reassign : mutations.assign;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -38,23 +41,22 @@ export function AssignmentDialog({
   }
 
   return (
-    <dialog
-      ref={ref}
-      className="dialog"
-      onCancel={onClose}
-      onClose={onClose}
-      aria-labelledby="assignment-title"
-    >
-      <form onSubmit={(event) => void submit(event)}>
-        <h2 id="assignment-title">{current ? 'Reassign inspection' : 'Assign inspection'}</h2>
-        {current ? (
-          <p>
-            Currently assigned to <strong>{current.technician?.displayName}</strong>. The previous
-            assignment remains in history.
-          </p>
-        ) : (
-          <p>Select an active inspection technician.</p>
-        )}
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>{current ? 'Reassign inspection' : 'Assign inspection'}</DialogTitle>
+            <DialogDescription>
+              {current ? (
+                <>
+                  Currently assigned to <strong>{current.technician?.displayName}</strong>. The
+                  previous assignment remains in history.
+                </>
+              ) : (
+                'Select an active inspection technician.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
         <div className="field">
           <label htmlFor="technician">Technician</label>
           <select
@@ -87,15 +89,16 @@ export function AssignmentDialog({
             {mutation.error.message}
           </p>
         ) : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button button-primary" disabled={!technicianId || mutation.isPending}>
-            {mutation.isPending ? 'Saving…' : current ? 'Reassign' : 'Assign'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button className={buttonVariants({ variant: 'primary' })} disabled={!technicianId || mutation.isPending}>
+              {mutation.isPending ? 'Saving…' : current ? 'Reassign' : 'Assign'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

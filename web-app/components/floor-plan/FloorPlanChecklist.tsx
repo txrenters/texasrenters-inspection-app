@@ -1,5 +1,6 @@
 import type { AdminPropertyArea } from '@texasrenters/shared';
 import { useEffect, useMemo, useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 export interface AreaFloorGroup {
   key: string;
@@ -165,7 +166,7 @@ export function FloorPlanChecklist({
               {selectedMarkerStatus.key !== 'missing' ? (
                 <button
                   type="button"
-                  className="button button-secondary button-small"
+                  className={buttonVariants({ variant: 'secondary', size: 'small' })}
                   disabled={Boolean(editingAreaId)}
                   onClick={() => onFocusArea(selectedArea.id)}
                 >
@@ -175,7 +176,7 @@ export function FloorPlanChecklist({
               {canManage && !editingAreaId ? (
                 <button
                   type="button"
-                  className="button button-primary button-small"
+                  className={buttonVariants({ variant: 'primary', size: 'small' })}
                   onClick={() => onStartEdit(selectedArea.id)}
                 >
                   {selectedMarkerStatus.key === 'missing' ? 'Place marker' : 'Adjust marker'}
@@ -288,7 +289,7 @@ export function FloorPlanChecklist({
           <div>
             <button
               type="button"
-              className="button button-secondary button-small"
+              className={buttonVariants({ variant: 'secondary', size: 'small' })}
               disabled={saving}
               onClick={onCancelEdit}
             >
@@ -296,7 +297,7 @@ export function FloorPlanChecklist({
             </button>
             <button
               type="button"
-              className="button button-primary button-small"
+              className={buttonVariants({ variant: 'primary', size: 'small' })}
               disabled={saving || !hasDraft}
               onClick={() => onSaveMarker(selectedArea.id)}
             >

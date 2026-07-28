@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import type { AdminRoleSummary } from '@texasrenters/shared';
 
@@ -12,7 +13,7 @@ import {
   PageHeader,
   Pagination,
   TableLoadingState,
-} from '@/components/ui';
+} from '@/components/shared';
 import { RoleEditorDialog } from '@/components/role-editor-dialog';
 import { usePermissions } from '@/lib/auth';
 import { formatPermission } from '@/lib/access';
@@ -46,7 +47,7 @@ export default function RolesPage() {
         description="Fully customizable permission sets. Compose roles from the permission catalog, then assign them to users."
         action={
           canManage ? (
-            <button className="button button-primary" onClick={() => setCreating(true)}>
+            <button className={buttonVariants({ variant: 'primary' })} onClick={() => setCreating(true)}>
               Create role
             </button>
           ) : undefined
@@ -101,11 +102,11 @@ export default function RolesPage() {
                 <td>
                   {canManage ? (
                     <div className="action-row">
-                      <button className="button button-secondary" onClick={() => setEditing(role)}>
+                      <button className={buttonVariants({ variant: 'secondary' })} onClick={() => setEditing(role)}>
                         Edit
                       </button>
                       <button
-                        className="button button-danger"
+                        className={buttonVariants({ variant: 'danger' })}
                         disabled={deleteRole.isPending}
                         onClick={() => void remove(role)}
                       >

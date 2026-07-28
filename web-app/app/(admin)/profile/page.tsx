@@ -1,6 +1,7 @@
 'use client';
 
-import { Badge, PageHeader } from '@/components/ui';
+import { Badge, PageHeader } from '@/components/shared';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/lib/auth';
 
 export default function ProfilePage() {
@@ -11,20 +12,23 @@ export default function ProfilePage() {
         title="Profile"
         description="Your authenticated administrator identity and organization memberships."
       />
-      <section className="panel">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section>
         <div className="profile-heading">
           <div className="profile-avatar">{profile?.displayName.slice(0, 2).toUpperCase()}</div>
           <div>
-            <h2>{profile?.displayName}</h2>
+            <CardTitle className="text-[17px]">{profile?.displayName}</CardTitle>
             <p>{profile?.email}</p>
             <Badge value={profile?.isActive ? 'ACTIVE' : 'INACTIVE'} />
           </div>
         </div>
-      </section>
-      <section className="panel section-gap">
-        <div className="panel-header">
-          <h2>Memberships</h2>
-        </div>
+        </section>
+      </Card>
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
+          <CardTitle className="text-[17px]">Memberships</CardTitle>
+        </CardHeader>
         <div className="stack">
           {profile?.memberships.map((membership) => (
             <div
@@ -39,7 +43,8 @@ export default function ProfilePage() {
             </div>
           ))}
         </div>
-      </section>
+        </section>
+      </Card>
     </>
   );
 }

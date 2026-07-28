@@ -1,10 +1,30 @@
 'use client';
 
 import type { AdminInspection } from '@texasrenters/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { PencilIcon } from 'lucide-react';
+
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 import { useAdminMutations } from '@/lib/queries';
-import { Badge } from './ui';
+import { Badge } from './shared';
 
 function localDateTime(value: string) {
   const date = new Date(value);
@@ -18,16 +38,10 @@ export function InspectionEditDialog({
   inspection: AdminInspection;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [scheduledAt, setScheduledAt] = useState(() => localDateTime(inspection.scheduledAt));
   const [priority, setPriority] = useState(inspection.priority);
   const [internalNotes, setInternalNotes] = useState(inspection.internalNotes ?? '');
   const mutation = useAdminMutations().updateInspection;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -41,25 +55,23 @@ export function InspectionEditDialog({
   }
 
   return (
-    <dialog
-      ref={ref}
-      className="dialog inspection-edit-dialog"
-      onCancel={onClose}
-      onClose={onClose}
-    >
-      <form onSubmit={(event) => void submit(event)}>
-        <div className="inspection-edit-heading">
-          <span className="inspection-edit-icon" aria-hidden>
-            <svg viewBox="0 0 24 24">
-              <path d="m4 16-.7 4.7L8 20l11-11-4-4L4 16Zm9-9 4 4" />
-            </svg>
-          </span>
-          <div>
-            <span className="dialog-eyebrow">Inspection settings</span>
-            <h2>Edit inspection</h2>
-            <p>Update operational details without changing the inspection’s audited identity.</p>
-          </div>
-        </div>
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-2xl">
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 text-primary" aria-hidden>
+                <PencilIcon className="size-5" />
+              </span>
+              <div className="grid gap-1">
+                <DialogTitle>Edit inspection</DialogTitle>
+                <DialogDescription>
+                  Update operational details without changing the inspection&rsquo;s audited
+                  identity.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
 
         <div className="inspection-edit-context" aria-label="Fixed inspection context">
           <div>
@@ -127,16 +139,17 @@ export function InspectionEditDialog({
           </p>
         </div>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button button-primary" disabled={!scheduledAt || mutation.isPending}>
-            {mutation.isPending ? 'Saving…' : 'Save changes'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button className={buttonVariants({ variant: 'primary' })} disabled={!scheduledAt || mutation.isPending}>
+              {mutation.isPending ? 'Saving…' : 'Save changes'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -147,14 +160,8 @@ export function InspectionCancelDialog({
   inspectionId: string;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [reason, setReason] = useState('');
   const mutation = useAdminMutations().updateInspection;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -167,35 +174,43 @@ export function InspectionCancelDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>Cancel inspection</h2>
-        <p>Cancellation closes the current technician assignment but preserves its history.</p>
-        <div className="field">
-          <label htmlFor="cancel-inspection-reason">Cancellation reason</label>
-          <textarea
-            id="cancel-inspection-reason"
-            required
-            minLength={2}
-            maxLength={500}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </div>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Keep inspection
-          </button>
-          <button
-            className="button button-primary"
-            disabled={reason.trim().length < 2 || mutation.isPending}
-          >
-            {mutation.isPending ? 'Cancelling…' : 'Cancel inspection'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+    <AlertDialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <AlertDialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel inspection</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cancellation closes the current technician assignment but preserves its history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="field">
+            <label htmlFor="cancel-inspection-reason">Cancellation reason</label>
+            <textarea
+              id="cancel-inspection-reason"
+              required
+              minLength={2}
+              maxLength={500}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </div>
+          {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button" onClick={onClose}>
+              Keep inspection
+            </AlertDialogCancel>
+            {/* Submits the form rather than closing, so the reason is validated
+                first; AlertDialogAction would close on click. */}
+            <button
+              className={buttonVariants({ variant: 'danger' })}
+              disabled={reason.trim().length < 2 || mutation.isPending}
+            >
+              {mutation.isPending ? 'Cancelling…' : 'Cancel inspection'}
+            </button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -206,14 +221,8 @@ export function InspectionUnassignDialog({
   inspectionId: string;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [reason, setReason] = useState('');
   const mutation = useAdminMutations().unassign;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -222,36 +231,41 @@ export function InspectionUnassignDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>Unassign technician</h2>
-        <p>
-          The assignment remains in history and the inspection becomes available for reassignment.
-        </p>
-        <div className="field">
-          <label htmlFor="unassign-inspection-reason">Reason</label>
-          <textarea
-            id="unassign-inspection-reason"
-            required
-            minLength={2}
-            maxLength={500}
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-          />
-        </div>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Keep assignment
-          </button>
-          <button
-            className="button button-primary"
-            disabled={reason.trim().length < 2 || mutation.isPending}
-          >
-            {mutation.isPending ? 'Unassigning…' : 'Unassign technician'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+    <AlertDialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <AlertDialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unassign technician</AlertDialogTitle>
+            <AlertDialogDescription>
+              The assignment remains in history and the inspection becomes available for
+              reassignment.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="field">
+            <label htmlFor="unassign-inspection-reason">Reason</label>
+            <textarea
+              id="unassign-inspection-reason"
+              required
+              minLength={2}
+              maxLength={500}
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          </div>
+          {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button" onClick={onClose}>
+              Keep assignment
+            </AlertDialogCancel>
+            <button
+              className={buttonVariants({ variant: 'danger' })}
+              disabled={reason.trim().length < 2 || mutation.isPending}
+            >
+              {mutation.isPending ? 'Unassigning…' : 'Unassign technician'}
+            </button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

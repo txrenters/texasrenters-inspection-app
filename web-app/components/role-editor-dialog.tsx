@@ -1,6 +1,15 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import type { AdminRoleSummary } from '@texasrenters/shared';
 
@@ -13,7 +22,6 @@ export function RoleEditorDialog({
   role?: AdminRoleSummary | null;
   onClose: () => void;
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const catalog = usePermissionCatalog();
   const { createRole, updateRole } = useAccessMutations();
   const editing = Boolean(role);
@@ -22,11 +30,6 @@ export function RoleEditorDialog({
   const [name, setName] = useState(role?.name ?? '');
   const [description, setDescription] = useState(role?.description ?? '');
   const [permissions, setPermissions] = useState<Set<string>>(new Set(role?.permissions ?? []));
-
-  useEffect(() => {
-    dialogRef.current?.showModal();
-    return () => dialogRef.current?.close();
-  }, []);
 
   function toggle(key: string) {
     setPermissions((current) => {
@@ -54,25 +57,17 @@ export function RoleEditorDialog({
   }
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="dialog"
-      aria-labelledby="role-editor-title"
-      onCancel={onClose}
-      onClose={onClose}
-    >
-      <form onSubmit={(event) => void submit(event)}>
-        <div className="dialog-heading">
-          <div>
-            <span className="dialog-eyebrow">Access control</span>
-            <h2 id="role-editor-title">{editing ? 'Edit role' : 'Create role'}</h2>
-            <p>
-              Compose a role from any permissions below. Roles are fully custom — nothing is granted
-              until you assign this role to a user.
-            </p>
-          </div>
-        </div>
-        <div className="dialog-content">
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-3xl">
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>{editing ? 'Edit role' : 'Create role'}</DialogTitle>
+            <DialogDescription>
+              Compose a role from any permissions below. Roles are fully custom — nothing is
+              granted until you assign this role to a user.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
           <div className="form-grid">
             <div className="field">
               <label htmlFor="role-name">Role name</label>
@@ -134,9 +129,9 @@ export function RoleEditorDialog({
               {mutation.error.message}
             </div>
           ) : null}
-          <div className="form-actions dialog-actions">
+          <DialogFooter>
             <button
-              className="button button-secondary"
+              className={buttonVariants({ variant: 'secondary' })}
               type="button"
               disabled={mutation.isPending}
               onClick={onClose}
@@ -144,15 +139,16 @@ export function RoleEditorDialog({
               Cancel
             </button>
             <button
-              className="button button-primary"
+              className={buttonVariants({ variant: 'primary' })}
               type="submit"
               disabled={mutation.isPending || !name.trim()}
             >
               {mutation.isPending ? 'Saving…' : editing ? 'Save role' : 'Create role'}
             </button>
+          </DialogFooter>
           </div>
-        </div>
-      </form>
-    </dialog>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

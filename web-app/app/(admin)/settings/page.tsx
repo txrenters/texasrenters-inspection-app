@@ -1,9 +1,11 @@
 'use client';
 
 import type { AiProviderConfiguration, AiProviderName } from '@texasrenters/shared';
+import { Card, CardTitle } from '@/components/ui/card';
 import { useEffect, useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
-import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/ui';
+import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/shared';
 import { useAuth, usePermissions } from '@/lib/auth';
 import { useAiSettings, useAiSettingsMutations } from '@/lib/queries';
 
@@ -24,9 +26,10 @@ export default function SettingsPage() {
         description="Organization controls, AI routing, usage visibility, and operating safeguards."
       />
       <div className="dashboard-grid settings-overview-grid">
-        <section className="panel">
+        <Card className="p-[22px] max-[560px]:p-4 min-h-[178px]" asChild>
+          <section>
           <span className="section-eyebrow">Organization</span>
-          <h2>{membership?.organization.name ?? 'Unavailable'}</h2>
+          <CardTitle className="text-[17px]">{membership?.organization.name ?? 'Unavailable'}</CardTitle>
           <div className="detail-grid compact-grid">
             <div className="detail-item">
               <span>Organization ID</span>
@@ -37,15 +40,18 @@ export default function SettingsPage() {
               <strong>{accessLabel}</strong>
             </div>
           </div>
-        </section>
-        <section className="panel settings-boundary-panel">
+          </section>
+        </Card>
+        <Card className="p-[22px] max-[560px]:p-4 min-h-[178px]" asChild>
+          <section className="settings-boundary-panel">
           <span className="section-eyebrow">Security boundary</span>
-          <h2>Credentials stay on the backend</h2>
+          <CardTitle className="text-[17px]">Credentials stay on the backend</CardTitle>
           <p>
             Provider keys are encrypted before persistence and are never returned to the browser,
             audit log, or frontend bundle.
           </p>
-        </section>
+          </section>
+        </Card>
       </div>
 
       <section className="settings-section section-gap" aria-labelledby="ai-settings-title">
@@ -138,16 +144,18 @@ export default function SettingsPage() {
         ) : null}
       </section>
 
-      <section className="panel section-gap">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section className="section-gap">
         <span className="section-eyebrow">Governance</span>
-        <h2>Human review safeguards</h2>
+        <CardTitle className="text-[17px]">Human review safeguards</CardTitle>
         <ul className="plain-list">
           <li>AI room tags remain drafts until an authorized person approves them.</li>
           <li>AI findings remain pending review until an authorized person reviews them.</li>
           <li>AI does not approve tenant charges or decide legal responsibility.</li>
           <li>One video belongs to exactly one approved room and one inspection area.</li>
         </ul>
-      </section>
+        </section>
+      </Card>
     </>
   );
 }
@@ -363,7 +371,7 @@ function AiProviderPanel({
         </div>
         <div className="form-actions ai-provider-actions">
           <button
-            className="button button-secondary"
+            className={buttonVariants({ variant: 'secondary' })}
             type="button"
             disabled={!canManage || !provider.hasApiKey || pending !== null}
             onClick={() => void run('validate', onValidate)}
@@ -371,7 +379,7 @@ function AiProviderPanel({
             {pending === 'validate' ? 'Checking…' : 'Test connection'}
           </button>
           <button
-            className="button button-primary"
+            className={buttonVariants({ variant: 'primary' })}
             type="button"
             disabled={!canManage || pending !== null}
             onClick={() =>

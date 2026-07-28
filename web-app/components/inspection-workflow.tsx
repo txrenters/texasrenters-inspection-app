@@ -1,9 +1,27 @@
 'use client';
 
 import type { AdminInspection } from '@texasrenters/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
-import { Badge, ErrorState, LoadingState, formatDate } from '@/components/ui';
+import { Badge, ErrorState, LoadingState, formatDate } from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import { useAdminMutations, useInspectionAreas } from '@/lib/queries';
 
@@ -95,7 +113,7 @@ export function InspectionWorkflowPanel({
       ) : (
         <div className="workflow-actions">
           {canFinalize ? (
-            <button type="button" className="button button-primary" onClick={onFinalize}>
+            <button type="button" className={buttonVariants({ variant: 'primary' })} onClick={onFinalize}>
               Finalize inspection
             </button>
           ) : null}
@@ -103,21 +121,21 @@ export function InspectionWorkflowPanel({
             <>
               <button
                 type="button"
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 onClick={() => setAction('under-review')}
               >
                 Request more evidence
               </button>
               <button
                 type="button"
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 onClick={() => setAction('follow-up')}
               >
                 Require follow-up
               </button>
               <button
                 type="button"
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 onClick={() => setAction('tbd')}
               >
                 Mark TBD
@@ -169,7 +187,6 @@ function WorkflowActionDialog({
   action: WorkflowAction;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const mutations = useAdminMutations();
   const [reason, setReason] = useState('');
   const [dueAt, setDueAt] = useState('');
@@ -181,11 +198,6 @@ function WorkflowActionDialog({
       : action === 'follow-up'
         ? mutations.requireInspectionFollowUp
         : mutations.markInspectionUnderReview;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -211,10 +223,13 @@ function WorkflowActionDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>{copy.title}</h2>
-        <p>{copy.description}</p>
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>{copy.title}</DialogTitle>
+            <DialogDescription>{copy.description}</DialogDescription>
+          </DialogHeader>
         {action === 'follow-up' ? (
           <>
             <label className="field">
@@ -232,16 +247,17 @@ function WorkflowActionDialog({
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button button-primary" disabled={mutation.isPending}>
-            {mutation.isPending ? 'Saving…' : copy.confirm}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button className={buttonVariants({ variant: 'primary' })} disabled={mutation.isPending}>
+              {mutation.isPending ? 'Saving…' : copy.confirm}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -264,7 +280,7 @@ export function InspectionAreasPanel({ inspectionId }: { inspectionId: string })
           <p className="panel-description">Rooms and outdoor areas captured for this inspection.</p>
         </div>
         {canMerge && (areas.data?.length ?? 0) >= 2 ? (
-          <button type="button" className="button button-secondary" onClick={() => setMerging(true)}>
+          <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setMerging(true)}>
             Merge duplicates
           </button>
         ) : null}
@@ -317,16 +333,10 @@ function MergeAreasDialog({
   areas: NonNullable<ReturnType<typeof useInspectionAreas>['data']>;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const mutation = useAdminMutations().mergeInspectionAreas;
   const [sourceAreaId, setSourceAreaId] = useState('');
   const [targetAreaId, setTargetAreaId] = useState('');
   const [reason, setReason] = useState('');
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   const valid = sourceAreaId && targetAreaId && sourceAreaId !== targetAreaId;
 
@@ -343,13 +353,16 @@ function MergeAreasDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>Merge duplicate areas</h2>
-        <p>
-          The source area&apos;s videos, photos, and findings move into the target area, and the
-          source area is removed. This cannot be undone.
-        </p>
+    <AlertDialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <AlertDialogContent className="sm:max-w-lg">
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Merge duplicate areas</AlertDialogTitle>
+            <AlertDialogDescription>
+              The source area&apos;s videos, photos, and findings move into the target area, and
+              the source area is removed. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
         <label className="field">
           <span>Source area (merged away)</span>
           <select value={sourceAreaId} onChange={(event) => setSourceAreaId(event.target.value)}>
@@ -382,15 +395,18 @@ function MergeAreasDialog({
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button button-primary" disabled={!valid || mutation.isPending}>
-            {mutation.isPending ? 'Merging…' : 'Merge areas'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button" onClick={onClose}>
+              Cancel
+            </AlertDialogCancel>
+            {/* Submits the form so the source/target selection is validated;
+                AlertDialogAction would close before that runs. */}
+            <button className={buttonVariants({ variant: 'danger' })} disabled={!valid || mutation.isPending}>
+              {mutation.isPending ? 'Merging…' : 'Merge areas'}
+            </button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import {
   Badge,
@@ -12,7 +13,7 @@ import {
   PageHeader,
   Pagination,
   TableLoadingState,
-} from '@/components/ui';
+} from '@/components/shared';
 import { UserCreateDialog } from '@/components/user-create-dialog';
 import { usePermissions } from '@/lib/auth';
 import { useUsers } from '@/lib/queries';
@@ -51,7 +52,7 @@ export default function UsersPage() {
         description="Provision web accounts and assign fully customizable roles. New users have no access until a role is assigned."
         action={
           canManage ? (
-            <button className="button button-primary" onClick={() => setCreating(true)}>
+            <button className={buttonVariants({ variant: 'primary' })} onClick={() => setCreating(true)}>
               Create user
             </button>
           ) : undefined

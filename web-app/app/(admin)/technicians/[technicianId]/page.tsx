@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 
 import {
   Badge,
@@ -13,7 +15,7 @@ import {
   PageHeader,
   TableLoadingState,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import { useAdminMutations, useAssignments, useTechnician } from '@/lib/queries';
 
@@ -42,7 +44,7 @@ export default function TechnicianDetailPage() {
         action={
           canManage ? (
             <button
-              className={`button ${item.isActive ? 'button-danger' : 'button-primary'}`}
+              className={buttonVariants({ variant: item.isActive ? 'danger' : 'primary' })}
               onClick={() => void toggle()}
               disabled={mutation.isPending}
             >
@@ -56,7 +58,8 @@ export default function TechnicianDetailPage() {
           {mutation.error.message}
         </div>
       ) : null}
-      <section className="panel">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section>
         <div className="detail-grid">
           <div className="detail-item">
             <span>Status</span>
@@ -71,11 +74,13 @@ export default function TechnicianDetailPage() {
             <strong>{formatDate(item.createdAt)}</strong>
           </div>
         </div>
-      </section>
-      <section className="panel section-gap">
-        <div className="panel-header">
-          <h2>Assignment history</h2>
-        </div>
+        </section>
+      </Card>
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
+          <CardTitle className="text-[17px]">Assignment history</CardTitle>
+        </CardHeader>
         {assignments.isLoading ? (
           <TableLoadingState
             headers={['Inspection', 'Assigned', 'Ended', 'Status', 'Reason']}
@@ -112,7 +117,8 @@ export default function TechnicianDetailPage() {
         ) : (
           <p>No assignment history.</p>
         )}
-      </section>
+        </section>
+      </Card>
     </>
   );
 }

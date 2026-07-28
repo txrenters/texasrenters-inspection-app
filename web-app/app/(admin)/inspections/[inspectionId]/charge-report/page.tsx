@@ -3,8 +3,9 @@
 import type { AdminCharge } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { buttonVariants } from '@/components/ui/button';
 
-import { Badge, ErrorState, LoadingState, formatDate } from '@/components/ui';
+import { Badge, ErrorState, LoadingState, formatDate } from '@/components/shared';
 import { useChargeReport } from '@/lib/queries';
 
 function money(amount: number | null | undefined, currency = 'USD') {
@@ -55,10 +56,10 @@ export default function ChargeReportPage() {
   return (
     <div className="charge-report">
       <div className="charge-report-toolbar">
-        <Link className="button button-secondary" href={`/inspections/${id}`}>
+        <Link className={buttonVariants({ variant: 'secondary' })} href={`/inspections/${id}`}>
           ← Back to inspection
         </Link>
-        <button type="button" className="button button-primary" onClick={() => window.print()}>
+        <button type="button" className={buttonVariants({ variant: 'primary' })} onClick={() => window.print()}>
           Print
         </button>
       </div>

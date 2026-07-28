@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
+import { buttonVariants } from '@/components/ui/button';
 
 import { useAuth } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
@@ -94,7 +95,7 @@ export default function LoginPage() {
             </div>
           ) : null}
           <button
-            className="button button-primary"
+            className={buttonVariants({ variant: 'primary' })}
             disabled={form.formState.isSubmitting}
             type="submit"
           >

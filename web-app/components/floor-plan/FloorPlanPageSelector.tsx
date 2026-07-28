@@ -1,3 +1,4 @@
+import { buttonVariants } from '@/components/ui/button';
 interface FloorPlanPageSelectorProps {
   pageNumber: number;
   pageCount: number;
@@ -15,7 +16,7 @@ export function FloorPlanPageSelector({
     <div className="fp-page-selector" role="group" aria-label="Floor plan page">
       <button
         type="button"
-        className="button button-secondary button-small"
+        className={buttonVariants({ variant: 'secondary', size: 'small' })}
         onClick={() => onChange(pageNumber - 1)}
         disabled={pageNumber <= 1}
         aria-label="Previous page"
@@ -27,7 +28,7 @@ export function FloorPlanPageSelector({
       </span>
       <button
         type="button"
-        className="button button-secondary button-small"
+        className={buttonVariants({ variant: 'secondary', size: 'small' })}
         onClick={() => onChange(pageNumber + 1)}
         disabled={pageNumber >= pageCount}
         aria-label="Next page"

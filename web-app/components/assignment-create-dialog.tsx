@@ -1,13 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useAdminMutations, useInspections, useTechnicians } from '@/lib/queries';
 
 const assignableStatuses = new Set(['SCHEDULED', 'IN_PROGRESS', 'PROCESSING', 'REVIEW_REQUIRED']);
 
 export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [inspectionId, setInspectionId] = useState('');
   const [technicianId, setTechnicianId] = useState('');
   const [reason, setReason] = useState('');
@@ -18,11 +26,6 @@ export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
     () => inspections.data?.items.filter((item) => assignableStatuses.has(item.status)) ?? [],
     [inspections.data?.items],
   );
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -36,16 +39,15 @@ export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <dialog
-      ref={ref}
-      className="dialog"
-      onCancel={onClose}
-      onClose={onClose}
-      aria-labelledby="new-assignment-title"
-    >
-      <form onSubmit={(event) => void submit(event)}>
-        <h2 id="new-assignment-title">Create assignment</h2>
-        <p>Select an unassigned inspection and an active technician.</p>
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Create assignment</DialogTitle>
+            <DialogDescription>
+              Select an unassigned inspection and an active technician.
+            </DialogDescription>
+          </DialogHeader>
         <div className="field">
           <label htmlFor="assignment-inspection">Inspection</label>
           <select
@@ -105,18 +107,19 @@ export function AssignmentCreateDialog({ onClose }: { onClose: () => void }) {
             {mutation.error.message}
           </p>
         ) : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button button-primary"
-            disabled={!inspectionId || !technicianId || mutation.isPending}
-          >
-            {mutation.isPending ? 'Assigning…' : 'Create assignment'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              className={buttonVariants({ variant: 'primary' })}
+              disabled={!inspectionId || !technicianId || mutation.isPending}
+            >
+              {mutation.isPending ? 'Assigning…' : 'Create assignment'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

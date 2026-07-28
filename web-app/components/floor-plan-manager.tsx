@@ -3,6 +3,8 @@
 import type { AdminPropertyArea } from '@texasrenters/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 import { apiBlob } from '@/lib/api';
 import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/lib/queries';
@@ -10,7 +12,7 @@ import { entitySyncMetadata } from '@/lib/state-consistency';
 
 import { FloorPlanCanvas } from './floor-plan/FloorPlanCanvas';
 import { FloorPlanChecklist, getMarkerStatus } from './floor-plan/FloorPlanChecklist';
-import { Badge, ErrorState, LoadingState, formatDate } from './ui';
+import { Badge, ErrorState, LoadingState, formatDate } from './shared';
 
 const BUILDING_SCOPE = 'building-wide';
 /** How often the extraction job is polled once started. */
@@ -443,7 +445,7 @@ export function FloorPlanManager({
                 ) : null}
                 {file ? (
                   <button
-                    className="button button-secondary floor-plan-upload-button"
+                    className={cn(buttonVariants({ variant: 'secondary' }), 'floor-plan-upload-button')}
                     type="submit"
                     disabled={actions.uploadFloorPlan.isPending}
                   >
@@ -491,7 +493,12 @@ export function FloorPlanManager({
                 <div className="floor-plan-action-grid">
                   {canManage ? (
                     <button
-                      className="button button-secondary"
+                      // Full width and a 44px hit target, previously supplied by
+                      // `.floor-plan-action-grid .button`.
+                      className={cn(
+                        buttonVariants({ variant: 'secondary' }),
+                        'w-full min-h-11 justify-center',
+                      )}
                       type="button"
                       onClick={() => void extract()}
                       disabled={isExtracting}
@@ -510,7 +517,12 @@ export function FloorPlanManager({
                     </button>
                   ) : null}
                   <button
-                    className="button button-primary"
+                    // Primary action spreads its label and chevron apart, as
+                    // `.floor-plan-action-grid .button-primary` used to.
+                    className={cn(
+                      buttonVariants({ variant: 'primary' }),
+                      'w-full min-h-11 justify-between',
+                    )}
                     type="button"
                     onClick={() => setIsComparisonOpen(true)}
                     disabled={!scopedAreas.length || isExtracting}
@@ -561,7 +573,7 @@ export function FloorPlanManager({
           </div>
           {canManage ? (
             <button
-              className="button button-primary"
+              className={buttonVariants({ variant: 'primary' })}
               disabled={!drafts.length || actions.approvePropertyAreas.isPending}
               onClick={() =>
                 actions.approvePropertyAreas.mutate({
@@ -613,7 +625,7 @@ export function FloorPlanManager({
             </span>
             {selectedCount ? (
               <button
-                className="button button-danger button-small"
+                className={buttonVariants({ variant: 'danger', size: 'small' })}
                 disabled={actions.deletePropertyAreas.isPending}
                 onClick={() => void deleteSelected()}
               >
@@ -1055,7 +1067,7 @@ function FloorPlanComparisonModal({
             ) : null}
             <button
               type="button"
-              className="button button-secondary button-small fp-review-panel-toggle"
+              className={cn(buttonVariants({ variant: 'secondary', size: 'small' }), 'fp-review-panel-toggle')}
               aria-pressed={isReviewPanelOpen}
               disabled={Boolean(editingAreaId)}
               onClick={() => setIsReviewPanelOpen((value) => !value)}
@@ -1162,7 +1174,7 @@ function FloorPlanComparisonModal({
                 </span>
                 <button
                   type="button"
-                  className="button button-secondary button-small"
+                  className={buttonVariants({ variant: 'secondary', size: 'small' })}
                   disabled={backfill.isPending}
                   onClick={() => {
                     setBackfillMessage(null);
@@ -1341,7 +1353,7 @@ function ManualAreaForm({
         Required
       </label>
       <button
-        className="button button-secondary"
+        className={buttonVariants({ variant: 'secondary' })}
         disabled={!floorName.trim() || !name.trim() || submitting}
       >
         Add draft area
@@ -1483,7 +1495,7 @@ function AreaReviewRow({
       {!readOnly ? (
         <div className="action-row">
           <button
-            className="button button-secondary button-small"
+            className={buttonVariants({ variant: 'secondary', size: 'small' })}
             disabled={
               saving ||
               hasExternalConflict ||
@@ -1505,7 +1517,7 @@ function AreaReviewRow({
           </button>
           {area.status === 'DRAFT' ? (
             <button
-              className="button button-secondary button-small"
+              className={buttonVariants({ variant: 'secondary', size: 'small' })}
               disabled={saving}
               onClick={() => void onReject().catch(() => undefined)}
             >
@@ -1513,14 +1525,14 @@ function AreaReviewRow({
             </button>
           ) : null}
           <button
-            className="button button-secondary button-small"
+            className={buttonVariants({ variant: 'secondary', size: 'small' })}
             disabled={saving}
             onClick={() => void onArchive().catch(() => undefined)}
           >
             Archive
           </button>
           <button
-            className="button button-danger button-small"
+            className={buttonVariants({ variant: 'danger', size: 'small' })}
             disabled={deleting}
             onClick={() => void onDelete().catch(() => undefined)}
           >

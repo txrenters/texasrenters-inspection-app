@@ -1,11 +1,22 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Sheet,
+  SheetBody,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 
 import { useAdminMutations, useReportShares } from '@/lib/queries';
 import type { AdminReportShare } from '@texasrenters/shared';
 
-import { Badge, ErrorState, LoadingState, formatDate } from './ui';
+import { Badge, ErrorState, LoadingState, formatDate } from './shared';
 
 function shareUrl(share: AdminReportShare) {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -52,17 +63,17 @@ function ShareRow({ share, inspectionId }: { share: AdminReportShare; inspection
       <div className="action-row">
         {state === 'ACTIVE' ? (
           <>
-            <button type="button" className="button button-secondary" onClick={() => void copy()}>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => void copy()}>
               {copied ? 'Copied!' : 'Copy link'}
             </button>
             {mailto ? (
-              <a className="button button-secondary" href={mailto}>
+              <a className={buttonVariants({ variant: 'secondary' })} href={mailto}>
                 Email link
               </a>
             ) : null}
             <button
               type="button"
-              className="button button-danger"
+              className={buttonVariants({ variant: 'danger' })}
               disabled={revokeReportShare.isPending}
               onClick={() => revokeReportShare.mutate({ id: share.id, inspectionId })}
             >
@@ -82,15 +93,9 @@ export function ReportShareDialog({
   inspectionId: string;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [email, setEmail] = useState('');
   const shares = useReportShares(inspectionId);
   const { createReportShare } = useAdminMutations();
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -102,13 +107,17 @@ export function ReportShareDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog dialog-wide" onCancel={onClose} onClose={onClose}>
-      <h2>Share inspection report</h2>
-      <p>
-        Anyone with a link can view a read-only report of this inspection: room status and findings
-        that a reviewer approved. Internal notes and pending AI output are never included. Links
-        expire after 30 days and can be revoked at any time.
-      </p>
+    <Sheet open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <SheetContent side="right" className="sm:max-w-2xl">
+        <SheetHeader>
+          <SheetTitle>Share inspection report</SheetTitle>
+          <SheetDescription>
+            Anyone with a link can view a read-only report of this inspection: room status and
+            findings that a reviewer approved. Internal notes and pending AI output are never
+            included. Links expire after 30 days and can be revoked at any time.
+          </SheetDescription>
+        </SheetHeader>
+        <SheetBody className="grid gap-4">
       <form onSubmit={(event) => void submit(event)} className="share-create-form">
         <div className="field share-email-field">
           <label htmlFor="report-share-email">Homeowner email (optional)</label>
@@ -120,7 +129,7 @@ export function ReportShareDialog({
             onChange={(event) => setEmail(event.target.value)}
           />
         </div>
-        <button className="button button-primary" disabled={createReportShare.isPending}>
+        <button className={buttonVariants({ variant: 'primary' })} disabled={createReportShare.isPending}>
           {createReportShare.isPending ? 'Creating…' : 'Create link'}
         </button>
       </form>
@@ -154,11 +163,11 @@ export function ReportShareDialog({
       ) : (
         <p className="media-meta">No report links have been created for this inspection yet.</p>
       )}
-      <div className="form-actions">
-        <button type="button" className="button button-secondary" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    </dialog>
+        </SheetBody>
+        <SheetFooter>
+          <SheetClose className={buttonVariants({ variant: 'secondary' })}>Close</SheetClose>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }

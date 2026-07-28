@@ -14,6 +14,7 @@ import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
+import { AreaEvidenceService } from './area-evidence.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
 import {
@@ -27,6 +28,7 @@ import {
   providers: [
     AdminService,
     AccessService,
+    AreaEvidenceService,
     AiProviderSettingsService,
     ChargeService,
     ComparisonService,

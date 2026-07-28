@@ -1,8 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 
-import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/ui';
+import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import { useProviders, useTestMail } from '@/lib/queries';
 
@@ -43,13 +45,18 @@ export default function ProvidersPage() {
         <>
           <div className="provider-grid">
             {providers.data?.providers.map((provider) => (
-              <article className="panel provider-card" key={provider.provider}>
+              <Card className="p-5" key={provider.provider} asChild>
+                <article>
                 <div className="provider-symbol" aria-hidden>
                   ◇
                 </div>
                 <Badge value={provider.status} />
-                <h2>{provider.provider}</h2>
-                <p>{descriptions[provider.provider] ?? 'External service provider.'}</p>
+                {/* Margins and 17px sizing previously came from `.provider-card h2`
+                    and `.panel h2`, both of which die with the class. */}
+                <CardTitle className="mt-3 mb-1.5 text-[17px]">{provider.provider}</CardTitle>
+                <CardDescription>
+                  {descriptions[provider.provider] ?? 'External service provider.'}
+                </CardDescription>
                 {provider.detail ? (
                   <div className="alert alert-warning">{provider.detail}</div>
                 ) : null}
@@ -70,7 +77,7 @@ export default function ProvidersPage() {
                       />
                     </div>
                     <button
-                      className="button button-secondary"
+                      className={buttonVariants({ variant: 'secondary' })}
                       disabled={testMail.isPending || !testRecipient.trim()}
                     >
                       {testMail.isPending ? 'Sending…' : 'Send test email'}
@@ -90,7 +97,8 @@ export default function ProvidersPage() {
                     ) : null}
                   </form>
                 ) : null}
-              </article>
+                </article>
+              </Card>
             ))}
           </div>
           <p className="footnote">Last checked {formatDate(providers.data?.checkedAt)}</p>

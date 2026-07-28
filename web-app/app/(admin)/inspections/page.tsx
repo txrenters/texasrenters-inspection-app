@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { InspectionType } from '@texasrenters/shared';
+import { buttonVariants } from '@/components/ui/button';
 
 import {
   Badge,
@@ -14,7 +15,7 @@ import {
   Pagination,
   TableLoadingState,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import { useInspections } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -65,7 +66,7 @@ export default function InspectionsPage() {
         description="Schedule, assign, and monitor the complete property inspection lifecycle."
         action={
           canManage ? (
-            <Link className="button button-primary" href="/inspections/new">
+            <Link className={buttonVariants({ variant: 'primary' })} href="/inspections/new">
               Create inspection
             </Link>
           ) : undefined
@@ -167,7 +168,7 @@ export default function InspectionsPage() {
               : 'Create the first inspection from an active synchronized property.'
           }
           action={
-            <Link className="button button-primary" href="/inspections/new">
+            <Link className={buttonVariants({ variant: 'primary' })} href="/inspections/new">
               Create inspection
             </Link>
           }

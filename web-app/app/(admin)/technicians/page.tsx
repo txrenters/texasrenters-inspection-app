@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import {
   Badge,
@@ -12,7 +13,7 @@ import {
   PageHeader,
   Pagination,
   TableLoadingState,
-} from '@/components/ui';
+} from '@/components/shared';
 import { TechnicianCreateDialog } from '@/components/technician-create-dialog';
 import { usePermissions } from '@/lib/auth';
 import { useTechnicians } from '@/lib/queries';
@@ -60,7 +61,7 @@ export default function TechniciansPage() {
         description="Provision mobile accounts and manage assigned inspection workloads."
         action={
           canProvision ? (
-            <button className="button button-primary" onClick={() => setCreating(true)}>
+            <button className={buttonVariants({ variant: 'primary' })} onClick={() => setCreating(true)}>
               Create technician
             </button>
           ) : undefined

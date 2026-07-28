@@ -20,7 +20,8 @@ import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
-import { thumbnailKeyFor } from '../common/object-storage';
+import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
+import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
@@ -2223,7 +2224,16 @@ export class AdminService {
     }));
   }
 
-  async photoContent(user: AuthenticatedUser, photoId: string) {
+  /**
+   * Photo bytes for the administrator UI.
+   *
+   * `width` requests a bounded variant (see ALLOWED_PHOTO_WIDTHS), cached
+   * beside the original under a derived key so the re-encode happens once per
+   * photo rather than once per view. Galleries must always ask for a width:
+   * loading originals for every thumbnail is what made the evidence page
+   * download tens of megabytes before showing anything.
+   */
+  async photoContent(user: AuthenticatedUser, photoId: string, width?: number) {
     if (!this.mediaStorage)
       throw new ApplicationError(
         503,
@@ -2236,11 +2246,28 @@ export class AdminService {
     });
     if (!record)
       throw new ApplicationError(404, 'INSPECTION_PHOTO_NOT_FOUND', 'Photo was not found.');
-    return {
-      bytes: await this.mediaStorage.get(record.storageKey),
-      mimeType: record.mimeType,
-      fileName: `photo-${record.id}`,
-    };
+    if (width === undefined || !isAllowedPhotoWidth(width))
+      return {
+        bytes: await this.mediaStorage.get(record.storageKey),
+        mimeType: record.mimeType,
+        fileName: `photo-${record.id}`,
+      };
+    const variantKey = resizedPhotoKeyFor(record.storageKey, width);
+    try {
+      return {
+        bytes: await this.mediaStorage.get(variantKey),
+        mimeType: 'image/jpeg',
+        fileName: `photo-${record.id}-w${width}`,
+      };
+    } catch {
+      // Not generated yet.
+    }
+    const original = await this.mediaStorage.get(record.storageKey);
+    const resized = await resizeImage(original, width);
+    // A failed cache write must not fail the request; the bytes are already in
+    // hand and the next view simply re-encodes.
+    await this.mediaStorage.putBytes(variantKey, resized, 'image/jpeg').catch(() => undefined);
+    return { bytes: resized, mimeType: 'image/jpeg', fileName: `photo-${record.id}-w${width}` };
   }
 
   async findings(user: AuthenticatedUser, inspectionId: string, query: AdminFindingsQueryDto) {

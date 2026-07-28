@@ -1,3 +1,4 @@
+import { buttonVariants } from '@/components/ui/button';
 interface FloorPlanZoomControlsProps {
   zoom: number;
   hasSelection: boolean;
@@ -19,7 +20,7 @@ export function FloorPlanZoomControls({
     <div className="fp-zoom-controls" role="group" aria-label="Floor plan zoom controls">
       <button
         type="button"
-        className="button button-secondary button-small"
+        className={buttonVariants({ variant: 'secondary', size: 'small' })}
         onClick={onZoomOut}
         aria-label="Zoom out"
       >
@@ -30,7 +31,7 @@ export function FloorPlanZoomControls({
       </span>
       <button
         type="button"
-        className="button button-secondary button-small"
+        className={buttonVariants({ variant: 'secondary', size: 'small' })}
         onClick={onZoomIn}
         aria-label="Zoom in"
       >
@@ -38,7 +39,7 @@ export function FloorPlanZoomControls({
       </button>
       <button
         type="button"
-        className="button button-secondary button-small"
+        className={buttonVariants({ variant: 'secondary', size: 'small' })}
         onClick={onReset}
         title="Fit the complete source plan in the viewport"
       >
@@ -46,7 +47,7 @@ export function FloorPlanZoomControls({
       </button>
       <button
         type="button"
-        className="button button-secondary button-small"
+        className={buttonVariants({ variant: 'secondary', size: 'small' })}
         onClick={onFocusSelected}
         disabled={!hasSelection}
       >

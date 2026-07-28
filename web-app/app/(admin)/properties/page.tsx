@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import { SearchableSelect } from '@/components/searchable-select';
 import {
@@ -15,7 +16,7 @@ import {
   TableLoadingState,
   address,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { usePortfolios, useProperties } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
@@ -141,7 +142,7 @@ export default function PropertiesPage() {
           }
           action={
             hasActiveFilters ? undefined : (
-              <Link className="button button-primary" href="/integrations/propertyware">
+              <Link className={buttonVariants({ variant: 'primary' })} href="/integrations/propertyware">
                 Open Propertyware
               </Link>
             )

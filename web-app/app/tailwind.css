@@ -1,0 +1,67 @@
+/**
+ * Tailwind v4 entry, deliberately assembled by layer.
+ *
+ * Preflight is **omitted**. The application still ships ~6,000 lines of bespoke
+ * CSS across 490 class selectors; Tailwind's reset would strip their borders,
+ * heading margins and list styling all at once and break every screen before a
+ * single one had been migrated. It gets imported at the end of the migration,
+ * once the legacy stylesheet is gone.
+ *
+ * `minimal-reset` below supplies only the two things Tailwind utilities cannot
+ * work without: border-box sizing and a default border style, since `border`
+ * sets width alone and relies on preflight for `border-style: solid`.
+ */
+@layer theme, base, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+
+/* Dark mode is driven by the existing theme toggle, which stamps
+   data-theme on the root element — not by shadcn's default `.dark` class. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--color-border, currentColor);
+  }
+}
+
+/**
+ * shadcn tokens mapped onto the existing brand palette rather than its default
+ * neutral scale, so migrated components match the screens around them from the
+ * first commit. Values come straight from globals.css: --blue #1d4492 is the
+ * primary, --green #85c43f the accent.
+ */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--blue);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--text);
+  --color-accent: var(--green);
+  --color-accent-foreground: #10240a;
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--text-2);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--blue);
+  --color-surface-subtle: var(--surface-subtle);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}

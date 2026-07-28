@@ -1,6 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 import { api, apiBlob } from '@/lib/api';
 import { usePermissions } from '@/lib/auth';
@@ -12,7 +22,7 @@ import {
 } from '@/lib/queries';
 import type { AdminInspectionFinding, AdminInspectionPhoto } from '@texasrenters/shared';
 
-import { Badge, ErrorState, LoadingState, Pagination, formatDate } from './ui';
+import { Badge, ErrorState, LoadingState, Pagination, formatDate } from './shared';
 
 function formatSeconds(total: number) {
   const minutes = Math.floor(total / 60);
@@ -96,7 +106,7 @@ function RoomVideoPlayer({
       ) : null}
       <button
         type="button"
-        className="button button-secondary"
+        className={buttonVariants({ variant: 'secondary' })}
         onClick={() => void load()}
         disabled={loading}
       >
@@ -316,7 +326,7 @@ function FindingReviewControls({
         <div className="action-row">
           <button
             type="button"
-            className="button button-secondary"
+            className={buttonVariants({ variant: 'secondary' })}
             onClick={() => setRejecting(false)}
             disabled={busy}
           >
@@ -324,7 +334,7 @@ function FindingReviewControls({
           </button>
           <button
             type="button"
-            className="button button-danger"
+            className={buttonVariants({ variant: 'danger' })}
             disabled={reason.trim().length < 2 || busy}
             onClick={() =>
               void rejectFinding
@@ -343,7 +353,7 @@ function FindingReviewControls({
     <div className="action-row">
       <button
         type="button"
-        className="button button-primary"
+        className={buttonVariants({ variant: 'primary' })}
         disabled={busy}
         onClick={() => void approveFinding.mutateAsync({ id: finding.id, inspectionId })}
       >
@@ -351,7 +361,7 @@ function FindingReviewControls({
       </button>
       <button
         type="button"
-        className="button button-secondary"
+        className={buttonVariants({ variant: 'secondary' })}
         disabled={busy}
         onClick={() => setRejecting(true)}
       >
@@ -536,17 +546,11 @@ export function InspectionCompleteDialog({
   pendingFindings: number;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const mutation = useAdminMutations().finalizeInspection;
   const [overrideReason, setOverrideReason] = useState('');
   // Finalization is a human-only decision (spec §11). Unresolved required review
   // items block it unless the administrator documents an override.
   const needsOverride = pendingFindings > 0;
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -558,13 +562,16 @@ export function InspectionCompleteDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>Finalize inspection</h2>
-        <p>
-          Finalizing completes this inspection. It can no longer be edited, assigned, or cancelled
-          afterwards.
-        </p>
+    <AlertDialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <AlertDialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Finalize inspection</AlertDialogTitle>
+            <AlertDialogDescription>
+              Finalizing completes this inspection. It can no longer be edited, assigned, or
+              cancelled afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
         {needsOverride ? (
           <p className="field-error">
             {pendingFindings} AI finding{pendingFindings === 1 ? '' : 's'} still await human review.
@@ -585,18 +592,22 @@ export function InspectionCompleteDialog({
           />
         </label>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Keep open
-          </button>
-          <button
-            className="button button-primary"
-            disabled={mutation.isPending || (needsOverride && !overrideReason.trim())}
-          >
-            {mutation.isPending ? 'Finalizing…' : 'Finalize inspection'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button" onClick={onClose}>
+              Keep open
+            </AlertDialogCancel>
+            {/* Form submit, not AlertDialogAction: finalizing with outstanding
+                findings requires a documented override, and Action would close
+                before that validation ran. */}
+            <button
+              className={buttonVariants({ variant: 'danger' })}
+              disabled={mutation.isPending || (needsOverride && !overrideReason.trim())}
+            >
+              {mutation.isPending ? 'Finalizing…' : 'Finalize inspection'}
+            </button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

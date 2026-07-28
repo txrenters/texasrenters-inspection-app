@@ -1,22 +1,25 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 import { useAccessMutations, useRoles } from '@/lib/queries';
 
 export function UserCreateDialog({ onClose }: { onClose: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [roleIds, setRoleIds] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
   const create = useAccessMutations().createUser;
   const roles = useRoles({ page: 1, pageSize: 100 });
-
-  useEffect(() => {
-    dialogRef.current?.showModal();
-    return () => dialogRef.current?.close();
-  }, []);
 
   const toggle = (set: Set<string>, apply: (next: Set<string>) => void, value: string) => {
     const next = new Set(set);
@@ -40,24 +43,16 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="dialog"
-      aria-labelledby="create-user-title"
-      onCancel={onClose}
-      onClose={onClose}
-    >
-      <div className="dialog-heading">
-        <div>
-          <span className="dialog-eyebrow">User management</span>
-          <h2 id="create-user-title">Create user</h2>
-          <p>
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Create user</DialogTitle>
+          <DialogDescription>
             Provision a web account with a one-time temporary password. Access is defined entirely
             by the roles you assign.
-          </p>
-        </div>
-      </div>
-      <div className="dialog-content">
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
         {create.data ? (
           <div className="credential-card" role="status" aria-live="polite">
             <div className="credential-success-heading">
@@ -90,9 +85,9 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 ? 'The sign-in instructions were emailed to this user.'
                 : 'Email delivery was unavailable. Share the temporary password through an approved private channel.'}
             </div>
-            <div className="form-actions">
+            <DialogFooter>
               <button
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 type="button"
                 onClick={() =>
                   void navigator.clipboard
@@ -103,10 +98,10 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
               >
                 {copied ? 'Password copied' : 'Copy temporary password'}
               </button>
-              <button className="button button-primary" type="button" onClick={onClose}>
+              <button className={buttonVariants({ variant: 'primary' })} type="button" onClick={onClose}>
                 Done
               </button>
-            </div>
+            </DialogFooter>
           </div>
         ) : (
           <form onSubmit={(event) => void submit(event)}>
@@ -178,9 +173,9 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 {create.error.message}
               </div>
             ) : null}
-            <div className="form-actions dialog-actions">
+            <DialogFooter>
               <button
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 type="button"
                 disabled={create.isPending}
                 onClick={onClose}
@@ -188,7 +183,7 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 Cancel
               </button>
               <button
-                className="button button-primary"
+                className={buttonVariants({ variant: 'primary' })}
                 type="submit"
                 disabled={
                   create.isPending || !displayName.trim() || !email.trim() || roleIds.size === 0
@@ -196,10 +191,11 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
               >
                 {create.isPending ? 'Creating…' : 'Create user'}
               </button>
-            </div>
+            </DialogFooter>
           </form>
         )}
-      </div>
-    </dialog>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

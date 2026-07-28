@@ -6,9 +6,19 @@ import type {
   AdminPetCandidate,
 } from '@texasrenters/shared';
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 
-import { ErrorState, LoadingState } from '@/components/ui';
+import { ErrorState, LoadingState } from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,
@@ -71,7 +81,7 @@ export function InspectionChargesPanel({
             auto-approved.
           </p>
         </div>
-        <Link className="button button-secondary" href={`/inspections/${inspectionId}/charge-report`}>
+        <Link className={buttonVariants({ variant: 'secondary' })} href={`/inspections/${inspectionId}/charge-report`}>
           View report
         </Link>
       </div>
@@ -84,7 +94,7 @@ export function InspectionChargesPanel({
             <h3>Pet review</h3>
             <button
               type="button"
-              className="button button-secondary"
+              className={buttonVariants({ variant: 'secondary' })}
               disabled={mutations.generatePetCandidates.isPending}
               onClick={() => mutations.generatePetCandidates.mutate({ id: inspectionId })}
             >
@@ -122,14 +132,14 @@ export function InspectionChargesPanel({
             {isOccupied ? (
               <button
                 type="button"
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 disabled={mutations.generateCharges.isPending}
                 onClick={() => mutations.generateCharges.mutate({ id: inspectionId })}
               >
                 {mutations.generateCharges.isPending ? 'Generating…' : 'Generate pet charges'}
               </button>
             ) : null}
-            <button type="button" className="button button-secondary" onClick={() => setAddingCharge(true)}>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setAddingCharge(true)}>
               Add charge
             </button>
           </div>
@@ -200,15 +210,15 @@ function ChargeRuleBanner({
               onChange={(event) => setAmount(event.target.value)}
               aria-label="Charge amount"
             />
-            <button className="button button-primary" disabled={mutation.isPending}>
+            <button className={buttonVariants({ variant: 'primary' })} disabled={mutation.isPending}>
               Save
             </button>
-            <button type="button" className="button button-secondary" onClick={() => setEditing(false)}>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setEditing(false)}>
               Cancel
             </button>
           </form>
         ) : (
-          <button type="button" className="button button-secondary" onClick={() => setEditing(true)}>
+          <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setEditing(true)}>
             {rule ? 'Edit amount' : 'Configure'}
           </button>
         )
@@ -278,7 +288,7 @@ function PetCandidateRow({
         </select>
         <button
           type="button"
-          className="button button-primary"
+          className={buttonVariants({ variant: 'primary' })}
           disabled={!dirty || mutation.isPending}
           onClick={() =>
             mutation.mutate({ inspectionId, candidateId: candidate.id, reviewStatus, authorizationStatus })
@@ -325,7 +335,7 @@ function ChargeRow({ inspectionId, charge }: { inspectionId: string; charge: Adm
           <>
             <button
               type="button"
-              className="button button-primary charge-action"
+              className={cn(buttonVariants({ variant: 'primary' }), 'charge-action')}
               disabled={mutation.isPending}
               onClick={() =>
                 mutation.mutate({ inspectionId, chargeId: charge.id, decision: 'APPROVE' })
@@ -335,14 +345,14 @@ function ChargeRow({ inspectionId, charge }: { inspectionId: string; charge: Adm
             </button>
             <button
               type="button"
-              className="button button-secondary charge-action"
+              className={cn(buttonVariants({ variant: 'secondary' }), 'charge-action')}
               onClick={() => setAdjusting((value) => !value)}
             >
               Adjust
             </button>
             <button
               type="button"
-              className="button button-secondary charge-action"
+              className={cn(buttonVariants({ variant: 'secondary' }), 'charge-action')}
               disabled={mutation.isPending}
               onClick={() =>
                 mutation.mutate({ inspectionId, chargeId: charge.id, decision: 'WAIVE' })
@@ -352,7 +362,7 @@ function ChargeRow({ inspectionId, charge }: { inspectionId: string; charge: Adm
             </button>
             <button
               type="button"
-              className="button button-secondary charge-action"
+              className={cn(buttonVariants({ variant: 'secondary' }), 'charge-action')}
               disabled={mutation.isPending}
               onClick={() =>
                 mutation.mutate({ inspectionId, chargeId: charge.id, decision: 'REJECT' })
@@ -382,7 +392,7 @@ function ChargeRow({ inspectionId, charge }: { inspectionId: string; charge: Adm
             onChange={(event) => setAmount(event.target.value)}
             aria-label="Adjusted amount"
           />
-          <button className="button button-primary" disabled={mutation.isPending}>
+          <button className={buttonVariants({ variant: 'primary' })} disabled={mutation.isPending}>
             Save adjusted
           </button>
         </form>
@@ -398,16 +408,10 @@ function AddChargeDialog({
   inspectionId: string;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const mutation = useAdminMutations().createCharge;
   const [description, setDescription] = useState('');
   const [unitAmount, setUnitAmount] = useState('');
   const [reason, setReason] = useState('');
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -421,10 +425,16 @@ function AddChargeDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>Add a charge</h2>
-        <p>Manually proposed charges start as pending review — they are not approved until reviewed.</p>
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Add a charge</DialogTitle>
+            <DialogDescription>
+              Manually proposed charges start as pending review — they are not approved until
+              reviewed.
+            </DialogDescription>
+          </DialogHeader>
         <label className="field">
           <span>Description</span>
           <input value={description} onChange={(event) => setDescription(event.target.value)} required />
@@ -445,18 +455,19 @@ function AddChargeDialog({
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="button button-primary"
-            disabled={mutation.isPending || !description.trim() || !unitAmount}
-          >
-            {mutation.isPending ? 'Adding…' : 'Add charge'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              className={buttonVariants({ variant: 'primary' })}
+              disabled={mutation.isPending || !description.trim() || !unitAmount}
+            >
+              {mutation.isPending ? 'Adding…' : 'Add charge'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

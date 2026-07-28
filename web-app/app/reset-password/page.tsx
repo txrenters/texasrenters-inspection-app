@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState, type FormEvent } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import { api } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
@@ -55,7 +56,7 @@ export default function ResetPasswordPage() {
         {done ? (
           <>
             <div className="auth-success">Your password was updated.</div>
-            <Link className="button button-primary" href="/login">
+            <Link className={buttonVariants({ variant: 'primary' })} href="/login">
               Continue to sign in
             </Link>
           </>
@@ -82,7 +83,7 @@ export default function ResetPasswordPage() {
               />
             </div>
             {error ? <div className="auth-error">{error}</div> : null}
-            <button className="button button-primary">Update password</button>
+            <button className={buttonVariants({ variant: 'primary' })}>Update password</button>
           </form>
         )}
       </section>

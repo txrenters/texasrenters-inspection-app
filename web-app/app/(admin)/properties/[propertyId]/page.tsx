@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { buttonVariants } from '@/components/ui/button';
 
 import {
   Badge,
@@ -11,7 +12,8 @@ import {
   PageHeader,
   address,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { useProperty } from '@/lib/queries';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { usePermissions } from '@/lib/auth';
@@ -49,7 +51,7 @@ export default function PropertyDetailPage() {
         breadcrumbs={[{ label: 'Properties', href: '/properties' }, { label: item.name }]}
         action={
           item.isActive && permissions.has('inspections:manage') ? (
-            <Link className="button button-primary" href={`/inspections/new?propertyId=${item.id}`}>
+            <Link className={buttonVariants({ variant: 'primary' })} href={`/inspections/new?propertyId=${item.id}`}>
               Create inspection
             </Link>
           ) : (
@@ -57,7 +59,8 @@ export default function PropertyDetailPage() {
           )
         }
       />
-      <section className="panel">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section>
         <div className="detail-grid">
           <div className="detail-item">
             <span>Portfolio</span>
@@ -106,11 +109,13 @@ export default function PropertyDetailPage() {
             <strong>{formatDate(item.lastSyncedAt)}</strong>
           </div>
         </div>
-      </section>
-      <section className="panel" style={{ marginTop: 20 }}>
-        <div className="panel-header">
-          <h2>Active units</h2>
-        </div>
+        </section>
+      </Card>
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section style={{ marginTop: 20 }}>
+        <CardHeader className="p-0 pb-4">
+          <CardTitle className="text-[17px]">Active units</CardTitle>
+        </CardHeader>
         <DataTable
           headers={[
             'Unit',
@@ -138,11 +143,13 @@ export default function PropertyDetailPage() {
             </tr>
           ))}
         </DataTable>
-      </section>
-      <section className="panel" style={{ marginTop: 20 }}>
-        <div className="panel-header">
-          <h2>Relevant leases</h2>
-        </div>
+        </section>
+      </Card>
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section style={{ marginTop: 20 }}>
+        <CardHeader className="p-0 pb-4">
+          <CardTitle className="text-[17px]">Relevant leases</CardTitle>
+        </CardHeader>
         {item.leases?.length ? (
           <DataTable headers={['Lease', 'Status', 'Term start', 'Term ends', 'Scheduled move-out']}>
             {item.leases.map((lease) => (
@@ -160,7 +167,8 @@ export default function PropertyDetailPage() {
         ) : (
           <p>No relevant active leases were returned.</p>
         )}
-      </section>
+        </section>
+      </Card>
       <FloorPlanManager propertyId={item.id} canManage={permissions.has('properties:manage')} />
     </>
   );

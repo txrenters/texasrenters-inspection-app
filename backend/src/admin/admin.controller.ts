@@ -79,6 +79,7 @@ import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
+import { AreaEvidenceService } from './area-evidence.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 import type { ComparisonClassification } from '@prisma/client';
@@ -95,6 +96,7 @@ export class AdminController {
     private readonly floorPlans: FloorPlanAdminService,
     private readonly reportShares: ReportShareService,
     private readonly comparison: ComparisonService,
+    private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
@@ -328,8 +330,13 @@ export class AdminController {
   @Get('photos/:photoId/content')
   @RequirePermissions('inspections:read')
   @Header('Cache-Control', 'private, no-store')
-  async photoContent(@Req() request: AuthenticatedRequest, @Param('photoId') id: string) {
-    const file = await this.service.photoContent(request.user, id);
+  async photoContent(
+    @Req() request: AuthenticatedRequest,
+    @Param('photoId') id: string,
+    /** Bounded gallery variant; omit for the full-resolution original. */
+    @Query('w') width?: string,
+  ) {
+    const file = await this.service.photoContent(request.user, id, width ? Number(width) : undefined);
     return new StreamableFile(file.bytes, {
       type: file.mimeType,
       disposition: `inline; filename="${file.fileName}"`,
@@ -434,6 +441,24 @@ export class AdminController {
     @Body() body: InspectionUnderReviewDto,
   ) {
     return this.service.markInspectionUnderReview(request.user, id, body);
+  }
+  /**
+   * Area-first evidence index: counts and status for every area, no media.
+   * The review screen loads this first and fetches one area's evidence on open.
+   */
+  @Get('inspections/:inspectionId/area-evidence-summary')
+  @RequirePermissions('inspections:read')
+  areaEvidenceSummary(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.areaEvidence.summary(request.user, id);
+  }
+  @Get('inspections/:inspectionId/areas/:areaId/evidence')
+  @RequirePermissions('inspections:read')
+  areaEvidenceDetail(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+  ) {
+    return this.areaEvidence.areaEvidence(request.user, inspectionId, areaId);
   }
   @Get('inspections/:inspectionId/areas')
   @RequirePermissions('inspections:read')

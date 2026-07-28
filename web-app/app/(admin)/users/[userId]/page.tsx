@@ -2,8 +2,10 @@
 
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
-import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/ui';
+import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/shared';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { usePermissions } from '@/lib/auth';
 import { formatPermission } from '@/lib/access';
 import { useRoles, useUser, useAccessMutations } from '@/lib/queries';
@@ -72,7 +74,7 @@ export default function UserDetailPage() {
         action={
           canManage && !item.isSystemAdmin ? (
             <button
-              className={item.isActive ? 'button button-danger' : 'button button-primary'}
+              className={buttonVariants({ variant: item.isActive ? 'danger' : 'primary' })}
               disabled={updateUserStatus.isPending}
               onClick={() => void toggleStatus()}
             >
@@ -88,14 +90,15 @@ export default function UserDetailPage() {
         </div>
       ) : null}
 
-      <section className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
             <span className="section-kicker">Identity</span>
-            <h2>Account</h2>
+            <CardTitle className="text-[17px]">Account</CardTitle>
           </div>
           <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
-        </div>
+        </CardHeader>
         <dl className="detail-grid">
           <div className="detail-item">
             <dt>Effective permissions</dt>
@@ -112,19 +115,21 @@ export default function UserDetailPage() {
             </dd>
           </div>
         </dl>
-      </section>
+        </section>
+      </Card>
 
-      <section className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <section className="section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
             <span className="section-kicker">Access control</span>
-            <h2>Role assignment</h2>
-            <p className="panel-description">
+            <CardTitle className="text-[17px]">Role assignment</CardTitle>
+            <CardDescription>
               Access is defined entirely by what you assign here. Changes take effect on the user’s
               next request.
-            </p>
+            </CardDescription>
           </div>
-        </div>
+        </CardHeader>
 
         {item.isSystemAdmin ? (
           <div className="alert alert-warning">
@@ -172,7 +177,7 @@ export default function UserDetailPage() {
         {canManage && !item.isSystemAdmin ? (
           <div className="form-actions">
             <button
-              className="button button-primary"
+              className={buttonVariants({ variant: 'primary' })}
               disabled={!dirty || setUserRoles.isPending}
               onClick={() => void save()}
             >
@@ -180,7 +185,8 @@ export default function UserDetailPage() {
             </button>
           </div>
         ) : null}
-      </section>
+        </section>
+      </Card>
     </>
   );
 }

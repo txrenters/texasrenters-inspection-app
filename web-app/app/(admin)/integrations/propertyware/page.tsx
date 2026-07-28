@@ -11,7 +11,7 @@ import {
   PageHeader,
   TableLoadingState,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,

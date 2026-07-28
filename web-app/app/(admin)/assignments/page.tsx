@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import { AssignmentCreateDialog } from '@/components/assignment-create-dialog';
 import {
@@ -14,7 +15,7 @@ import {
   Pagination,
   TableLoadingState,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import { useAssignments, useTechnicians } from '@/lib/queries';
 
@@ -53,7 +54,7 @@ export default function AssignmentsPage() {
         description="Current and historical technician assignments. Reassignment never overwrites prior records."
         action={
           canAssign ? (
-            <button className="button button-primary" onClick={() => setCreating(true)}>
+            <button className={buttonVariants({ variant: 'primary' })} onClick={() => setCreating(true)}>
               Create assignment
             </button>
           ) : undefined
@@ -130,7 +131,7 @@ export default function AssignmentsPage() {
                 : 'Assignment history will appear after an inspection is assigned.'
           }
           action={
-            <button className="button button-primary" onClick={() => setCreating(true)}>
+            <button className={buttonVariants({ variant: 'primary' })} onClick={() => setCreating(true)}>
               Create assignment
             </button>
           }

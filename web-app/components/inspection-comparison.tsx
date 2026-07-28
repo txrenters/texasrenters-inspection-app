@@ -1,9 +1,20 @@
 'use client';
 
 import type { AdminAreaComparison, ComparisonClassification } from '@texasrenters/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 
-import { Badge, ErrorState, LoadingState, formatDate } from '@/components/ui';
+import { Badge, ErrorState, LoadingState, formatDate } from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
 import { useAdminMutations, useInspectionComparison } from '@/lib/queries';
 
@@ -37,21 +48,24 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
   const data = comparison.data;
 
   return (
-    <section
-      className="panel inspection-comparison-panel"
-      aria-labelledby="inspection-comparison-title"
-    >
-      <div className="panel-header">
+    <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section
+        className="inspection-comparison-panel"
+        aria-labelledby="inspection-comparison-title"
+      >
+      <CardHeader className="p-0 pb-4">
         <div>
           <span className="section-kicker">Move-in comparison</span>
-          <h2 id="inspection-comparison-title">Move-in vs move-out</h2>
-          <p className="panel-description">
+          <CardTitle id="inspection-comparison-title" className="text-[17px]">
+            Move-in vs move-out
+          </CardTitle>
+          <CardDescription>
             Deterministic draft comparing this move-out against the move-in baseline. A reviewer
             approves it.
-          </p>
+          </CardDescription>
         </div>
         {data ? <Badge value={data.overallCondition} /> : null}
-      </div>
+      </CardHeader>
 
       {comparison.isLoading ? (
         <LoadingState label="Loading comparison…" />
@@ -59,14 +73,14 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
         <ErrorState error={comparison.error} retry={() => void comparison.refetch()} />
       ) : !data ? (
         <div className="comparison-empty">
-          <p className="panel-description">
+          <p className="text-xs leading-relaxed text-muted-foreground">
             No comparison has been generated yet. It is drafted automatically once move-out review
             is ready.
           </p>
           {canManage ? (
             <button
               type="button"
-              className="button button-secondary"
+              className={buttonVariants({ variant: 'secondary' })}
               disabled={mutations.generateComparison.isPending}
               onClick={() => mutations.generateComparison.mutate({ id: inspectionId })}
             >
@@ -144,7 +158,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   {canReview ? (
                     <button
                       type="button"
-                      className="button button-secondary comparison-override-button"
+                      className={cn(buttonVariants({ variant: 'secondary' }), 'comparison-override-button')}
                       onClick={() => setOverrideArea(area)}
                     >
                       Override
@@ -160,7 +174,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
               <>
                 <button
                   type="button"
-                  className="button button-primary"
+                  className={buttonVariants({ variant: 'primary' })}
                   disabled={mutations.reviewComparison.isPending}
                   onClick={() =>
                     mutations.reviewComparison.mutate({
@@ -174,7 +188,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                 </button>
                 <button
                   type="button"
-                  className="button button-secondary"
+                  className={buttonVariants({ variant: 'secondary' })}
                   disabled={mutations.reviewComparison.isPending}
                   onClick={() =>
                     mutations.reviewComparison.mutate({
@@ -191,7 +205,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             {canManage && data.status !== 'APPROVED' ? (
               <button
                 type="button"
-                className="button button-secondary"
+                className={buttonVariants({ variant: 'secondary' })}
                 disabled={mutations.generateComparison.isPending}
                 onClick={() => mutations.generateComparison.mutate({ id: inspectionId })}
               >
@@ -212,7 +226,8 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
           onClose={() => setOverrideArea(null)}
         />
       ) : null}
-    </section>
+      </section>
+    </Card>
   );
 }
 
@@ -225,17 +240,11 @@ function OverrideAreaDialog({
   area: AdminAreaComparison;
   onClose: () => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const mutation = useAdminMutations().overrideAreaComparison;
   const [classification, setClassification] = useState<ComparisonClassification>(
     area.classification,
   );
   const [reason, setReason] = useState('');
-
-  useEffect(() => {
-    ref.current?.showModal();
-    return () => ref.current?.close();
-  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -249,12 +258,15 @@ function OverrideAreaDialog({
   }
 
   return (
-    <dialog ref={ref} className="dialog" onCancel={onClose} onClose={onClose}>
-      <form onSubmit={(event) => void submit(event)}>
-        <h2>Override classification</h2>
-        <p>
-          {area.areaName} — currently {classLabel(area.classification)}.
-        </p>
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent>
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Override classification</DialogTitle>
+            <DialogDescription>
+              {area.areaName} — currently {classLabel(area.classification)}.
+            </DialogDescription>
+          </DialogHeader>
         <label className="field">
           <span>Classification</span>
           <select
@@ -273,15 +285,16 @@ function OverrideAreaDialog({
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
         {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
-        <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="button button-primary" disabled={mutation.isPending}>
-            {mutation.isPending ? 'Saving…' : 'Save override'}
-          </button>
-        </div>
-      </form>
-    </dialog>
+          <DialogFooter>
+            <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
+              Cancel
+            </button>
+            <button className={buttonVariants({ variant: 'primary' })} disabled={mutation.isPending}>
+              {mutation.isPending ? 'Saving…' : 'Save override'}
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

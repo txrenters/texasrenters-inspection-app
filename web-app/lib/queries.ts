@@ -22,6 +22,8 @@ import type {
   AdminUser,
   AdminUserDetail,
   AdminFloorPlan,
+  AreaEvidenceBundle,
+  AreaEvidenceSummary,
   AdminFloorPlanExtractionJob,
   AdminFloorPlanExtractionStarted,
   AdminPropertyArea,
@@ -91,6 +93,13 @@ export const keys = {
     ['admin', 'inspection', id, 'audit', page] as const,
   inspectionMedia: (id: string) => ['admin', 'inspection', id, 'media'] as const,
   inspectionPhotos: (id: string) => ['admin', 'inspection', id, 'photos'] as const,
+  /**
+   * Area-first evidence. One summary per inspection, one bundle per area, so an
+   * opened area caches independently and switching back is instant.
+   */
+  areaEvidenceSummary: (id: string) => ['admin', 'inspection', id, 'area-evidence'] as const,
+  areaEvidence: (id: string, areaId: string) =>
+    ['admin', 'inspection', id, 'area-evidence', areaId] as const,
   inspectionAreas: (id: string) => ['admin', 'inspection', id, 'areas'] as const,
   inspectionComparison: (id: string) => ['admin', 'inspection', id, 'comparison'] as const,
   inspectionPets: (id: string) => ['admin', 'inspection', id, 'pets'] as const,
@@ -262,6 +271,30 @@ export const useInspectionFindings = (
     enabled: Boolean(id) && enabled,
     placeholderData: keepPreviousData,
   });
+/** Compact area index: counts and status only, no media. */
+export const useAreaEvidenceSummary = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.areaEvidenceSummary(id),
+    queryFn: ({ signal }) =>
+      api<AreaEvidenceSummary>(`/api/v1/admin/inspections/${id}/area-evidence-summary`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+
+/**
+ * Evidence for the one open area. Cached per area id, so returning to a
+ * previously opened area is served from cache instead of refetching, and a
+ * slow response for one area can never paint over another.
+ */
+export const useAreaEvidence = (id: string, areaId: string | null) =>
+  useQuery({
+    queryKey: keys.areaEvidence(id, areaId ?? ''),
+    queryFn: ({ signal }) =>
+      api<AreaEvidenceBundle>(`/api/v1/admin/inspections/${id}/areas/${areaId}/evidence`, {
+        signal,
+      }),
+    enabled: Boolean(id) && Boolean(areaId),
+  });
+
 export const useReportShares = (id: string) =>
   useQuery({
     queryKey: keys.reportShares(id),
@@ -1355,6 +1388,9 @@ export function useAdminMutations() {
         void verifyAffectedQueries(client, [
           ['admin', 'inspection', variables.inspectionId, 'findings'],
           ['admin', 'inspection', variables.inspectionId, 'audit'],
+          // Counts and the derived area review status both move with a
+          // decision; the prefix covers the summary and every cached area.
+          keys.areaEvidenceSummary(variables.inspectionId),
         ]);
       },
     }),
@@ -1369,6 +1405,9 @@ export function useAdminMutations() {
         void verifyAffectedQueries(client, [
           ['admin', 'inspection', variables.inspectionId, 'findings'],
           ['admin', 'inspection', variables.inspectionId, 'audit'],
+          // Counts and the derived area review status both move with a
+          // decision; the prefix covers the summary and every cached area.
+          keys.areaEvidenceSummary(variables.inspectionId),
         ]);
       },
     }),

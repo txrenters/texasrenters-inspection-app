@@ -7,8 +7,10 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
+import { buttonVariants } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 
-import { PageHeader } from '@/components/ui';
+import { PageHeader } from '@/components/shared';
 import { SearchableSelect } from '@/components/searchable-select';
 import {
   useAdminMutations,
@@ -184,7 +186,8 @@ function CreateInspectionForm() {
         description="Schedule the property lifecycle in order. The approved floor plan is reused while every inspection keeps its own auditable evidence."
         breadcrumbs={[{ label: 'Inspections', href: '/inspections' }, { label: 'Create' }]}
       />
-      <form className="panel" onSubmit={(event) => void handleSubmit(submit)(event)} noValidate>
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+        <form onSubmit={(event) => void handleSubmit(submit)(event)} noValidate>
         <div className="form-grid">
           <div className="field">
             <label htmlFor="inspectionType">Inspection type</label>
@@ -400,7 +403,7 @@ function CreateInspectionForm() {
             </span>
             <button
               type="button"
-              className="button button-secondary button-small"
+              className={buttonVariants({ variant: 'secondary', size: 'small' })}
               disabled={fallbackArea.isPending}
               onClick={() => fallbackArea.mutate({ propertyId })}
             >
@@ -421,11 +424,11 @@ function CreateInspectionForm() {
           </p>
         ) : null}
         <div className="form-actions">
-          <button type="button" className="button button-secondary" onClick={() => router.back()}>
+          <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => router.back()}>
             Cancel
           </button>
           <button
-            className="button button-primary"
+            className={buttonVariants({ variant: 'primary' })}
             disabled={
               isSubmitting ||
               mutation.isPending ||
@@ -438,7 +441,8 @@ function CreateInspectionForm() {
             {isSubmitting ? 'Creating…' : 'Create inspection'}
           </button>
         </div>
-      </form>
+        </form>
+      </Card>
     </>
   );
 }
@@ -463,7 +467,7 @@ function inspectionTypeGuidance(type: InspectionType) {
 
 export default function CreateInspectionPage() {
   return (
-    <Suspense fallback={<div className="panel">Loading form…</div>}>
+    <Suspense fallback={<Card className="p-[22px]">Loading form…</Card>}>
       <CreateInspectionForm />
     </Suspense>
   );

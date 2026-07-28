@@ -2,6 +2,7 @@
 
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { buttonVariants } from '@/components/ui/button';
 
 import { AssignmentDialog } from '@/components/assignment-dialog';
 import {
@@ -9,13 +10,8 @@ import {
   InspectionEditDialog,
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
-import {
-  InspectionCompleteDialog,
-  InspectionFindingsSection,
-  InspectionPhotosSection,
-  InspectionSummariesSection,
-  InspectionMediaSection,
-} from '@/components/inspection-review';
+import { InspectionCompleteDialog } from '@/components/inspection-review';
+import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
 import { InspectionChargesPanel } from '@/components/inspection-charges';
 import { InspectionComparisonPanel } from '@/components/inspection-comparison';
 import {
@@ -32,7 +28,7 @@ import {
   PageHeader,
   TableLoadingState,
   formatDate,
-} from '@/components/ui';
+} from '@/components/shared';
 import {
   useAssignments,
   useInspection,
@@ -92,12 +88,12 @@ export default function InspectionDetailPage() {
         action={
           <div className="inspection-action-bar">
             {!finalized && permissions.has('inspections:assign') ? (
-              <button className="button button-secondary" onClick={() => setAssigning(true)}>
+              <button className={buttonVariants({ variant: 'secondary' })} onClick={() => setAssigning(true)}>
                 {current ? 'Reassign' : 'Assign technician'}
               </button>
             ) : null}
             {permissions.has('reports:share') ? (
-              <button className="button button-secondary" onClick={() => setSharing(true)}>
+              <button className={buttonVariants({ variant: 'secondary' })} onClick={() => setSharing(true)}>
                 Share report
               </button>
             ) : null}
@@ -105,7 +101,7 @@ export default function InspectionDetailPage() {
             (permissions.has('inspections:manage') ||
               (current && permissions.has('inspections:assign'))) ? (
               <details className="inspection-action-menu">
-                <summary className="button button-secondary">More actions</summary>
+                <summary className={buttonVariants({ variant: 'secondary' })}>More actions</summary>
                 <div className="inspection-action-menu-content">
                   {permissions.has('inspections:manage') ? (
                     <button type="button" onClick={() => setEditing(true)}>
@@ -199,10 +195,10 @@ export default function InspectionDetailPage() {
 
       <InspectionWorkflowPanel inspection={item} onFinalize={() => setCompleting(true)} />
 
-      <InspectionMediaSection inspectionId={id} />
-      <InspectionPhotosSection inspectionId={id} />
-      <InspectionSummariesSection inspectionId={id} />
-      <InspectionFindingsSection inspectionId={id} />
+      {/* Area-first: recordings, photos, condition summaries and findings are
+          read through the area they belong to rather than through four
+          page-wide, media-type-first sections. */}
+      <AreaEvidenceWorkspace inspectionId={id} />
       {item.inspectionType === 'MOVE_OUT' ? (
         <InspectionComparisonPanel inspectionId={id} />
       ) : null}
