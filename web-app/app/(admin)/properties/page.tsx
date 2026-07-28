@@ -2,6 +2,9 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 import { SearchableSelect } from '@/components/searchable-select';
@@ -83,9 +86,9 @@ export default function PropertiesPage() {
             : undefined
         }
       >
-        <div className="field field-grow">
-          <label htmlFor="search">Search name or address</label>
-          <input
+        <Field className="flex-1">
+          <FieldLabel htmlFor="search">Search name or address</FieldLabel>
+          <Input
             id="search"
             value={search}
             onChange={(event) => {
@@ -94,9 +97,9 @@ export default function PropertiesPage() {
             }}
             placeholder="Search properties..."
           />
-        </div>
-        <div className="field field-medium">
-          <label htmlFor="portfolio">Portfolio</label>
+        </Field>
+        <Field className="w-[min(280px,100%)]">
+          <FieldLabel htmlFor="portfolio">Portfolio</FieldLabel>
           <SearchableSelect
             id="portfolio"
             value={portfolioId}
@@ -118,7 +121,7 @@ export default function PropertiesPage() {
               setPage(1);
             }}
           />
-        </div>
+        </Field>
       </FilterToolbar>
       {properties.isLoading || isSearchPending || properties.isPlaceholderData ? (
         <TableLoadingState
@@ -152,24 +155,24 @@ export default function PropertiesPage() {
         <>
           <DataTable headers={PROPERTY_HEADERS} label="Active synchronized properties">
             {properties.data.items.map((property) => (
-              <tr key={property.id}>
-                <td>
-                  <Link className="table-link" href={`/properties/${property.id}`}>
+              <TableRow key={property.id}>
+                <TableCell>
+                  <Link className="font-semibold text-primary" href={`/properties/${property.id}`}>
                     {property.name}
                   </Link>
-                </td>
-                <td>{address(property)}</td>
-                <td>{property.portfolio.name}</td>
-                <td className="numeric-cell">{property._count?.units ?? 0}</td>
-                <td>
+                </TableCell>
+                <TableCell>{address(property)}</TableCell>
+                <TableCell>{property.portfolio.name}</TableCell>
+                <TableCell className="numeric-cell">{property._count?.units ?? 0}</TableCell>
+                <TableCell>
                   {property.totalArea?.label ?? 'Not provided'}
                   {property.totalArea?.source === 'MANUAL' ? (
                     <span className="cell-note">Manual</span>
                   ) : property.totalArea?.derived ? (
                     <span className="cell-note">Derived</span>
                   ) : null}
-                </td>
-                <td>
+                </TableCell>
+                <TableCell>
                   {property.leaseSummary?.summary ?? '—'}
                   {property.leaseSummary?.leaseDataAvailable === false ? (
                     <span className="cell-note is-warning">Not synchronized</span>
@@ -178,13 +181,13 @@ export default function PropertiesPage() {
                       Next ends {formatDate(property.leaseSummary.nextLeaseEndDate)}
                     </span>
                   ) : null}
-                </td>
-                <td className="numeric-cell">{property._count?.inspections ?? 0}</td>
-                <td>
+                </TableCell>
+                <TableCell className="numeric-cell">{property._count?.inspections ?? 0}</TableCell>
+                <TableCell>
                   <Badge value={property.isActive ? 'ACTIVE' : 'INACTIVE'} />
-                </td>
-                <td>{formatDate(property.lastSyncedAt)}</td>
-              </tr>
+                </TableCell>
+                <TableCell>{formatDate(property.lastSyncedAt)}</TableCell>
+              </TableRow>
             ))}
           </DataTable>
           <Pagination page={page} totalPages={properties.data.totalPages} onPage={setPage} />

@@ -3,6 +3,14 @@
 import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
 import { Button } from './ui/button';
@@ -217,32 +225,32 @@ export function TableLoadingState({
   }
 
   return (
-    <div className="overflow-auto rounded-2xl border border-border bg-card" aria-busy="true">
-      <table aria-label={label}>
-        <thead>
-          <tr>
+    <div className="overflow-hidden rounded-2xl border border-border bg-card" aria-busy="true">
+      <Table aria-label={label}>
+        <TableHeader>
+          <TableRow>
             {headers.map((header) => (
-              <th key={header} scope="col">
+              <TableHead key={header} scope="col">
                 {header}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {Array.from({ length: rows }, (_, rowIndex) => (
-            <tr key={rowIndex}>
+            <TableRow key={rowIndex}>
               {headers.map((header, columnIndex) => (
-                <td key={header}>
+                <TableCell key={header}>
                   <Skeleton
                     className="h-2.5"
                     style={{ width: `${Math.max(38, 82 - ((rowIndex + columnIndex) % 4) * 12)}%` }}
                   />
-                </td>
+                </TableCell>
               ))}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -337,19 +345,19 @@ export function DataTable({
   label?: string;
 }) {
   return (
-    <div className="overflow-auto rounded-2xl border border-border bg-card">
-      <table aria-label={label}>
-        <thead>
-          <tr>
+    <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <Table aria-label={label}>
+        <TableHeader>
+          <TableRow>
             {headers.map((header) => (
-              <th key={header} scope="col">
+              <TableHead key={header} scope="col">
                 {header}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
+          </TableRow>
+        </TableHeader>
+        <TableBody>{children}</TableBody>
+      </Table>
     </div>
   );
 }

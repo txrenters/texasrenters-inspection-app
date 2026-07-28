@@ -1,6 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { buttonVariants } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -23,6 +32,10 @@ import {
 import type { AdminInspectionFinding, AdminInspectionPhoto } from '@texasrenters/shared';
 
 import { Badge, ErrorState, LoadingState, Pagination, formatDate } from './shared';
+
+// Radix Select rejects an empty string as an item value; the "nothing
+// selected" row uses a sentinel translated back to '' at the boundary.
+const NONE = '__none__';
 
 function formatSeconds(total: number) {
   const minutes = Math.floor(total / 60);
@@ -112,7 +125,7 @@ function RoomVideoPlayer({
       >
         {loading ? 'Loading video…' : `Load ${label} video`}
       </button>
-      {error ? <p className="field-error">{error}</p> : null}
+      {error ? <FieldError>{error}</FieldError> : null}
     </div>
   );
 }
@@ -120,17 +133,18 @@ function RoomVideoPlayer({
 export function InspectionMediaSection({ inspectionId }: { inspectionId: string }) {
   const media = useInspectionMedia(inspectionId);
   return (
-    <section className="panel section-gap inspection-section">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4 max-[560px]:grid">
         <div>
-          <span className="section-kicker">Inspection evidence</span>
-          <h2>Room recordings</h2>
-          <p className="panel-description">Video evidence uploaded by the assigned technician.</p>
+          <span className="block text-xs font-semibold text-muted-foreground">Inspection evidence</span>
+          <CardTitle className="text-[17px]">Room recordings</CardTitle>
+          <CardDescription>Video evidence uploaded by the assigned technician.</CardDescription>
         </div>
         {!media.isLoading && !media.isError ? (
           <span className="section-count">{media.data?.length ?? 0} recordings</span>
         ) : null}
-      </div>
+      </CardHeader>
       {media.isLoading ? (
         <LoadingState label="Loading room recordings…" />
       ) : media.isError ? (
@@ -142,7 +156,7 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
               <header className="media-card-header">
                 <div>
                   <strong>{item.roomName}</strong>
-                  {item.floorName ? <span className="media-meta"> · {item.floorName}</span> : null}
+                  {item.floorName ? <span className="text-[13px] text-muted-foreground"> · {item.floorName}</span> : null}
                   <span
                     className={
                       item.recordingType === 'ADDITIONAL_ISSUE'
@@ -159,7 +173,7 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
                 <p className="media-card-label">
                   {item.label}
                   {item.category ? (
-                    <span className="media-meta"> · {formatCategory(item.category)}</span>
+                    <span className="text-[13px] text-muted-foreground"> · {formatCategory(item.category)}</span>
                   ) : null}
                 </p>
               ) : null}
@@ -170,7 +184,7 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
                 thumbnailUrl={item.thumbnailUrl}
               />
               <footer className="media-card-footer">
-                <span className="media-meta">
+                <span className="text-[13px] text-muted-foreground">
                   {formatSeconds(item.durationSeconds)} · {item.technicianName} ·{' '}
                   {formatDate(item.createdAt)}
                 </span>
@@ -193,7 +207,8 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
           </div>
         </div>
       )}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -233,7 +248,7 @@ function PhotoThumb({ photo }: { photo: AdminInspectionPhoto }) {
       )}
       <figcaption>
         <Badge value={photo.captureType} />
-        {photo.label ? <span className="media-meta"> {photo.label}</span> : null}
+        {photo.label ? <span className="text-[13px] text-muted-foreground"> {photo.label}</span> : null}
       </figcaption>
     </figure>
   );
@@ -248,19 +263,20 @@ export function InspectionPhotosSection({ inspectionId }: { inspectionId: string
     byRoom.set(photo.roomName, list);
   }
   return (
-    <section className="panel section-gap inspection-section">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4 max-[560px]:grid">
         <div>
-          <span className="section-kicker">Inspection evidence</span>
-          <h2>Area photos</h2>
-          <p className="panel-description">
+          <span className="block text-xs font-semibold text-muted-foreground">Inspection evidence</span>
+          <CardTitle className="text-[17px]">Area photos</CardTitle>
+          <CardDescription>
             Overview and close-up snapshots captured by the technician.
-          </p>
+          </CardDescription>
         </div>
         {!photos.isLoading && !photos.isError ? (
           <span className="section-count">{photos.data?.length ?? 0} photos</span>
         ) : null}
-      </div>
+      </CardHeader>
       {photos.isLoading ? (
         <LoadingState label="Loading photos…" />
       ) : photos.isError ? (
@@ -286,7 +302,8 @@ export function InspectionPhotosSection({ inspectionId }: { inspectionId: string
           </div>
         </div>
       )}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -304,12 +321,12 @@ function FindingReviewControls({
 
   if (finding.reviewStatus !== 'PENDING_REVIEW')
     return finding.lastReview ? (
-      <span className="media-meta">
+      <span className="text-[13px] text-muted-foreground">
         {finding.lastReview.reviewerName} · {formatDate(finding.lastReview.createdAt)}
         {finding.lastReview.reason ? ` · ${finding.lastReview.reason}` : ''}
       </span>
     ) : (
-      <span className="media-meta">Reviewed</span>
+      <span className="text-[13px] text-muted-foreground">Reviewed</span>
     );
 
   if (rejecting)
@@ -345,7 +362,7 @@ function FindingReviewControls({
             {rejectFinding.isPending ? 'Rejecting…' : 'Confirm reject'}
           </button>
         </div>
-        {rejectFinding.error ? <p className="field-error">{rejectFinding.error.message}</p> : null}
+        {rejectFinding.error ? <FieldError>{rejectFinding.error.message}</FieldError> : null}
       </div>
     );
 
@@ -367,7 +384,7 @@ function FindingReviewControls({
       >
         Reject
       </button>
-      {approveFinding.error ? <p className="field-error">{approveFinding.error.message}</p> : null}
+      {approveFinding.error ? <FieldError>{approveFinding.error.message}</FieldError> : null}
     </div>
   );
 }
@@ -378,20 +395,21 @@ export function InspectionSummariesSection({ inspectionId }: { inspectionId: str
   const summaries = useInspectionFindings(inspectionId, page, '', 'SUMMARIES', canReadFindings);
   if (!canReadFindings) return null;
   return (
-    <section className="panel section-gap inspection-section">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4 max-[560px]:grid">
         <div>
-          <span className="section-kicker">Informational</span>
-          <h2>Room condition summaries</h2>
-          <p className="panel-description">
+          <span className="block text-xs font-semibold text-muted-foreground">Informational</span>
+          <CardTitle className="text-[17px]">Room condition summaries</CardTitle>
+          <CardDescription>
             AI narration summaries per room. These are reference material only — they need no
             approval and never lead to tenant charges.
-          </p>
+          </CardDescription>
         </div>
         {!summaries.isLoading && !summaries.isError ? (
           <span className="section-count">{summaries.data?.total ?? 0} rooms</span>
         ) : null}
-      </div>
+      </CardHeader>
       {summaries.isLoading ? (
         <LoadingState label="Loading room summaries…" />
       ) : summaries.isError ? (
@@ -424,7 +442,8 @@ export function InspectionSummariesSection({ inspectionId }: { inspectionId: str
           </div>
         </div>
       )}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -443,34 +462,39 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
   const isFilterPending = findings.isPlaceholderData;
   if (!canReadFindings) return null;
   return (
-    <section className="panel section-gap inspection-section">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section className="section-gap">
+        <CardHeader className="p-0 pb-4 max-[560px]:grid">
         <div>
-          <span className="section-kicker">Human oversight</span>
-          <h2>Findings review</h2>
-          <p className="panel-description">
+          <span className="block text-xs font-semibold text-muted-foreground">Human oversight</span>
+          <CardTitle className="text-[17px]">Findings review</CardTitle>
+          <CardDescription>
             Review each finding to decide whether it should be charged to the tenant. Findings stay
             pending until an authorized person approves or rejects them — the AI never decides
             charges.
-          </p>
+          </CardDescription>
         </div>
-        <div className="finding-filter field">
-          <label htmlFor="finding-review-status">Review status</label>
-          <select
-            id="finding-review-status"
-            value={reviewStatus}
-            onChange={(event) => {
+        <Field className="finding-filter">
+          <FieldLabel htmlFor="finding-review-status">Review status</FieldLabel>
+          <Select
+            onValueChange={(next) => {
               setPage(1);
-              setReviewStatus(event.target.value);
+              setReviewStatus(next === NONE ? '' : next);
             }}
+            value={reviewStatus || NONE}
           >
-            <option value="">All statuses</option>
-            <option value="PENDING_REVIEW">Pending review</option>
-            <option value="APPROVED">Approved</option>
-            <option value="REJECTED">Rejected</option>
-          </select>
-        </div>
-      </div>
+            <SelectTrigger id="finding-review-status">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>All statuses</SelectItem>
+              <SelectItem value="PENDING_REVIEW">Pending review</SelectItem>
+              <SelectItem value="APPROVED">Approved</SelectItem>
+              <SelectItem value="REJECTED">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+      </CardHeader>
       {findings.isLoading || isFilterPending ? (
         <LoadingState label={isFilterPending ? 'Filtering findings...' : 'Loading findings...'} />
       ) : findings.isError ? (
@@ -483,7 +507,7 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
                 <header className="finding-card-header">
                   <div>
                     <strong>{finding.title}</strong>
-                    <span className="media-meta">
+                    <span className="text-[13px] text-muted-foreground">
                       {' '}
                       · {finding.roomName} · {formatSeconds(finding.videoTimestampStart)}–
                       {formatSeconds(finding.videoTimestampEnd)}
@@ -495,7 +519,7 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
                   </div>
                 </header>
                 <p>{finding.description}</p>
-                <p className="media-meta">
+                <p className="text-[13px] text-muted-foreground">
                   Baseline: {finding.baselineCondition || 'Not documented'} · Comparison:{' '}
                   {finding.comparisonResult.replaceAll('_', ' ').toLowerCase()} · Confidence:{' '}
                   {Math.round(finding.confidence * 100)}%
@@ -503,11 +527,11 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
                 {canReviewFindings ? (
                   <FindingReviewControls finding={finding} inspectionId={inspectionId} />
                 ) : finding.lastReview ? (
-                  <span className="media-meta">
+                  <span className="text-[13px] text-muted-foreground">
                     {finding.lastReview.reviewerName} · {formatDate(finding.lastReview.createdAt)}
                   </span>
                 ) : (
-                  <span className="media-meta">Awaiting an authorized reviewer</span>
+                  <span className="text-[13px] text-muted-foreground">Awaiting an authorized reviewer</span>
                 )}
               </li>
             ))}
@@ -533,7 +557,8 @@ export function InspectionFindingsSection({ inspectionId }: { inspectionId: stri
           </div>
         </div>
       )}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -573,12 +598,13 @@ export function InspectionCompleteDialog({
             </AlertDialogDescription>
           </AlertDialogHeader>
         {needsOverride ? (
-          <p className="field-error">
+          <FieldError>
             {pendingFindings} AI finding{pendingFindings === 1 ? '' : 's'} still await human review.
             Resolve them, or document an override reason to finalize anyway.
-          </p>
+          </FieldError>
         ) : null}
-        <label className="field">
+        <Field asChild>
+<label>
           <span>Override reason{needsOverride ? '' : ' (optional)'}</span>
           <textarea
             value={overrideReason}
@@ -591,7 +617,8 @@ export function InspectionCompleteDialog({
             }
           />
         </label>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+</Field>
+        {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <AlertDialogFooter>
             <AlertDialogCancel type="button" onClick={onClose}>
               Keep open

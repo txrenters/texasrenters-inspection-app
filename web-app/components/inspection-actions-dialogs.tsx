@@ -4,6 +4,16 @@ import type { AdminInspection } from '@texasrenters/shared';
 import { useState } from 'react';
 import { PencilIcon } from 'lucide-react';
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
@@ -88,48 +98,49 @@ export function InspectionEditDialog({
           </div>
         </div>
 
-        <div className="field">
-          <label htmlFor="edit-inspection-schedule">Scheduled date and time</label>
-          <input
+        <Field>
+          <FieldLabel htmlFor="edit-inspection-schedule">Scheduled date and time</FieldLabel>
+          <Input
             id="edit-inspection-schedule"
             type="datetime-local"
             required
             value={scheduledAt}
             onChange={(event) => setScheduledAt(event.target.value)}
           />
-          <small className="field-help">
+          <FieldDescription>
             Controls when this inspection appears in the technician’s schedule.
-          </small>
-        </div>
-        <div className="field inspection-edit-field">
-          <label htmlFor="edit-inspection-priority">Priority</label>
-          <select
-            id="edit-inspection-priority"
-            value={priority}
-            onChange={(event) => setPriority(event.target.value)}
-          >
-            <option value="STANDARD">Standard</option>
-            <option value="HIGH">High</option>
-          </select>
-          <small className="field-help">
+          </FieldDescription>
+        </Field>
+        <Field className="mt-3.5">
+          <FieldLabel htmlFor="edit-inspection-priority">Priority</FieldLabel>
+          <Select onValueChange={setPriority} value={priority}>
+            <SelectTrigger id="edit-inspection-priority">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="STANDARD">Standard</SelectItem>
+              <SelectItem value="HIGH">High</SelectItem>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
             Use High only when the inspection requires operational attention.
-          </small>
-        </div>
-        <div className="field inspection-edit-field">
-          <div className="field-label-row">
-            <label htmlFor="edit-inspection-notes">Technician instructions and internal notes</label>
+          </FieldDescription>
+        </Field>
+        <Field className="mt-3.5">
+          <div className="flex items-baseline justify-between gap-3">
+            <FieldLabel htmlFor="edit-inspection-notes">Technician instructions and internal notes</FieldLabel>
             <span>{internalNotes.length}/2000</span>
           </div>
-          <textarea
+          <Textarea
             id="edit-inspection-notes"
             value={internalNotes}
             maxLength={2000}
             onChange={(event) => setInternalNotes(event.target.value)}
           />
-          <small className="field-help">
+          <FieldDescription>
             Visible to authorized operations staff and the assigned technician in the mobile app.
-          </small>
-        </div>
+          </FieldDescription>
+        </Field>
         <div className="inspection-edit-guidance">
           <strong>Why can’t the property, lease, or type be changed?</strong>
           <p>
@@ -138,7 +149,7 @@ export function InspectionEditDialog({
             incorrect.
           </p>
         </div>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+        {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <DialogFooter>
             <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
               Cancel
@@ -183,9 +194,9 @@ export function InspectionCancelDialog({
               Cancellation closes the current technician assignment but preserves its history.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="field">
-            <label htmlFor="cancel-inspection-reason">Cancellation reason</label>
-            <textarea
+          <Field>
+            <FieldLabel htmlFor="cancel-inspection-reason">Cancellation reason</FieldLabel>
+            <Textarea
               id="cancel-inspection-reason"
               required
               minLength={2}
@@ -193,8 +204,8 @@ export function InspectionCancelDialog({
               value={reason}
               onChange={(event) => setReason(event.target.value)}
             />
-          </div>
-          {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+          </Field>
+          {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <AlertDialogFooter>
             <AlertDialogCancel type="button" onClick={onClose}>
               Keep inspection
@@ -241,9 +252,9 @@ export function InspectionUnassignDialog({
               reassignment.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="field">
-            <label htmlFor="unassign-inspection-reason">Reason</label>
-            <textarea
+          <Field>
+            <FieldLabel htmlFor="unassign-inspection-reason">Reason</FieldLabel>
+            <Textarea
               id="unassign-inspection-reason"
               required
               minLength={2}
@@ -251,8 +262,8 @@ export function InspectionUnassignDialog({
               value={reason}
               onChange={(event) => setReason(event.target.value)}
             />
-          </div>
-          {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+          </Field>
+          {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <AlertDialogFooter>
             <AlertDialogCancel type="button" onClick={onClose}>
               Keep assignment

@@ -2,6 +2,15 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 import { AssignmentCreateDialog } from '@/components/assignment-create-dialog';
@@ -29,6 +38,10 @@ const ASSIGNMENT_HEADERS = [
   'Ended',
   'Status',
 ];
+
+// Radix Select rejects an empty string as an item value, so the unfiltered
+// row carries a sentinel that is translated back to '' for the query.
+const ALL = '__all__';
 
 export default function AssignmentsPage() {
   const canAssign = usePermissions().has('inspections:assign');
@@ -72,43 +85,55 @@ export default function AssignmentsPage() {
             : undefined
         }
       >
-        <div className="field field-medium">
-          <label htmlFor="assignment-technician">Technician</label>
-          <select
-            id="assignment-technician"
-            value={technicianId}
+        <Field className="w-[min(280px,100%)]">
+          <FieldLabel htmlFor="assignment-technician">Technician</FieldLabel>
+          <Select
             disabled={assignmentStatus === 'UNASSIGNED'}
-            onChange={(event) => {
-              setTechnicianId(event.target.value);
+            onValueChange={(next) => {
+              setTechnicianId(next === ALL ? '' : next);
               setPage(1);
             }}
+            value={technicianId || ALL}
           >
-            <option value="">All technicians</option>
-            {technicians.data?.items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field field-medium">
-          <label htmlFor="assignment-status">Assignment status</label>
-          <select
-            id="assignment-status"
-            value={assignmentStatus}
-            onChange={(event) => {
-              const status = event.target.value;
+            <SelectTrigger id="assignment-technician">
+              <SelectValue placeholder="All technicians" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All technicians</SelectItem>
+              {technicians.data?.items.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {item.displayName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field className="w-[min(280px,100%)]">
+          <FieldLabel htmlFor="assignment-status">Assignment status</FieldLabel>
+          <Select
+            onValueChange={(next) => {
+              const status = next === ALL ? '' : next;
               setAssignmentStatus(status);
+              // Unassigned rows have no technician, so the technician filter is
+              // cleared rather than left stale behind a disabled control.
               if (status === 'UNASSIGNED') setTechnicianId('');
               setPage(1);
             }}
+            value={assignmentStatus || ALL}
           >
-            <option value="">All statuses</option>
-            {['ASSIGNED', 'REASSIGNED', 'UNASSIGNED'].map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-        </div>
+            <SelectTrigger id="assignment-status">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All statuses</SelectItem>
+              {['ASSIGNED', 'REASSIGNED', 'UNASSIGNED'].map((item) => (
+                <SelectItem key={item} value={item}>
+                  {item}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
       </FilterToolbar>
       {assignments.isLoading || isFilterPending ? (
         <TableLoadingState
@@ -140,23 +165,23 @@ export default function AssignmentsPage() {
         <>
           <DataTable headers={ASSIGNMENT_HEADERS} label="Technician assignment history">
             {assignments.data.items.map((assignment) => (
-              <tr key={assignment.id}>
-                <td>
-                  <Link className="table-link" href={`/inspections/${assignment.inspectionId}`}>
+              <TableRow key={assignment.id}>
+                <TableCell>
+                  <Link className="font-semibold text-primary" href={`/inspections/${assignment.inspectionId}`}>
                     Open inspection
                   </Link>
-                </td>
-                <td>
+                </TableCell>
+                <TableCell>
                   {assignment.inspection?.propertywareBuilding?.name ?? 'Property unavailable'}
-                </td>
-                <td>{assignment.inspection?.propertywareUnit?.name ?? 'Entire property'}</td>
-                <td>
+                </TableCell>
+                <TableCell>{assignment.inspection?.propertywareUnit?.name ?? 'Entire property'}</TableCell>
+                <TableCell>
                   {assignment.technician?.displayName ?? assignment.technicianId ?? 'Unassigned'}
-                </td>
-                <td>{assignment.assignedBy?.displayName ?? assignment.assignedById ?? '-'}</td>
-                <td>{assignment.assignedAt ? formatDate(assignment.assignedAt) : '-'}</td>
-                <td>{assignment.endedAt ? formatDate(assignment.endedAt) : '-'}</td>
-                <td>
+                </TableCell>
+                <TableCell>{assignment.assignedBy?.displayName ?? assignment.assignedById ?? '-'}</TableCell>
+                <TableCell>{assignment.assignedAt ? formatDate(assignment.assignedAt) : '-'}</TableCell>
+                <TableCell>{assignment.endedAt ? formatDate(assignment.endedAt) : '-'}</TableCell>
+                <TableCell>
                   <Badge
                     value={
                       assignment.recordType === 'UNASSIGNED_INSPECTION'
@@ -166,8 +191,8 @@ export default function AssignmentsPage() {
                           : assignment.status
                     }
                   />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
           </DataTable>
           <Pagination page={page} totalPages={assignments.data.totalPages} onPage={setPage} />

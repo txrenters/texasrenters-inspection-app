@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { TableCell, TableRow } from '@/components/ui/table';
 import { buttonVariants } from '@/components/ui/button';
 
 import {
@@ -61,12 +62,12 @@ export default function PropertyDetailPage() {
       />
       <Card className="p-[22px] max-[560px]:p-4" asChild>
         <section>
-        <div className="detail-grid">
-          <div className="detail-item">
+        <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Portfolio</span>
             <strong>{item.portfolio.name}</strong>
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Total area</span>
             <strong>{item.totalArea?.label ?? 'Not provided'}</strong>
             <small>
@@ -79,7 +80,7 @@ export default function PropertyDetailPage() {
                     : 'No reliable value'}
             </small>
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Lease summary</span>
             <strong>{item.leaseSummary?.summary ?? 'Lease data not synchronized'}</strong>
             {item.leaseSummary?.leaseDataAvailable === false ? (
@@ -96,15 +97,15 @@ export default function PropertyDetailPage() {
               <small>No upcoming lease end date</small>
             )}
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Source status</span>
             <strong>{item.sourceStatus ?? 'Not provided'}</strong>
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>External reference</span>
             <strong>{item.externalId}</strong>
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Last synchronized</span>
             <strong>{formatDate(item.lastSyncedAt)}</strong>
           </div>
@@ -128,19 +129,19 @@ export default function PropertyDetailPage() {
           ]}
         >
           {item.units?.map((unit) => (
-            <tr key={unit.id}>
-              <td>{unit.name}</td>
-              <td>{unit.bedrooms ?? 'Not provided'}</td>
-              <td>{unit.bathrooms ?? 'Not provided'}</td>
-              <td>{unit.leaseStatus ?? 'No relevant lease'}</td>
-              <td>
+            <TableRow key={unit.id}>
+              <TableCell>{unit.name}</TableCell>
+              <TableCell>{unit.bedrooms ?? 'Not provided'}</TableCell>
+              <TableCell>{unit.bathrooms ?? 'Not provided'}</TableCell>
+              <TableCell>{unit.leaseStatus ?? 'No relevant lease'}</TableCell>
+              <TableCell>
                 <LeaseEnd endDate={unit.leaseEndDate} />
-              </td>
-              <td>{unit.scheduledMoveOutDate ? formatDate(unit.scheduledMoveOutDate) : '—'}</td>
-              <td>
+              </TableCell>
+              <TableCell>{unit.scheduledMoveOutDate ? formatDate(unit.scheduledMoveOutDate) : '—'}</TableCell>
+              <TableCell>
                 <Badge value={unit.isActive ? 'ACTIVE' : 'INACTIVE'} />
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
         </DataTable>
         </section>
@@ -153,15 +154,15 @@ export default function PropertyDetailPage() {
         {item.leases?.length ? (
           <DataTable headers={['Lease', 'Status', 'Term start', 'Term ends', 'Scheduled move-out']}>
             {item.leases.map((lease) => (
-              <tr key={lease.id}>
-                <td>{lease.leaseName ?? lease.externalId}</td>
-                <td>{lease.sourceStatus ?? 'Not provided'}</td>
-                <td>{lease.startDate ? formatDate(lease.startDate) : '—'}</td>
-                <td>
+              <TableRow key={lease.id}>
+                <TableCell>{lease.leaseName ?? lease.externalId}</TableCell>
+                <TableCell>{lease.sourceStatus ?? 'Not provided'}</TableCell>
+                <TableCell>{lease.startDate ? formatDate(lease.startDate) : '—'}</TableCell>
+                <TableCell>
                   <LeaseEnd endDate={lease.endDate} />
-                </td>
-                <td>{formatDate(lease.scheduledMoveOutDate)}</td>
-              </tr>
+                </TableCell>
+                <TableCell>{formatDate(lease.scheduledMoveOutDate)}</TableCell>
+              </TableRow>
             ))}
           </DataTable>
         ) : (

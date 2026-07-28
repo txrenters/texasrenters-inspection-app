@@ -52,10 +52,16 @@ function DropdownMenuItem({
       data-variant={variant}
       className={cn(
         'relative flex cursor-pointer select-none items-center gap-2 rounded-md px-2 py-1.5',
+        // Forced, not inherited. With `asChild` the item becomes a <Link>, and
+        // unlayered element rules in globals.css outrank `@layer utilities`
+        // regardless of specificity — so a plain utility lost and the anchor kept
+        // a near-white colour on the white light-theme menu, making Profile and
+        // Settings invisible. `!` is the only thing that beats layer order here.
+        '!text-popover-foreground',
         'text-[13px] outline-hidden focus:bg-[var(--surface-hover)]',
         'data-disabled:pointer-events-none data-disabled:opacity-50',
         "[&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
-        variant === 'destructive' && 'text-[var(--danger)] focus:bg-[var(--danger-soft)]',
+        variant === 'destructive' && '!text-[var(--danger)] focus:bg-[var(--danger-soft)]',
         className,
       )}
       {...props}

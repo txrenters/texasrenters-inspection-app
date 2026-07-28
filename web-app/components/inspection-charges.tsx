@@ -7,6 +7,15 @@ import type {
 } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Field, FieldError } from '@/components/ui/field';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
@@ -59,32 +68,35 @@ export function InspectionChargesPanel({
 
   if (!canReview)
     return (
-      <section className="panel">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section>
+        <CardHeader className="p-0 pb-4">
           <div>
-            <span className="section-kicker">Charges</span>
-            <h2>Charges &amp; pet review</h2>
+            <span className="block text-xs font-semibold text-muted-foreground">Charges</span>
+            <CardTitle className="text-[17px]">Charges &amp; pet review</CardTitle>
           </div>
-        </div>
-        <p className="panel-description">You do not have permission to review charges.</p>
+        </CardHeader>
+        <p className="text-[13px] text-muted-foreground">You do not have permission to review charges.</p>
       </section>
+      </Card>
     );
 
   return (
-    <section className="panel inspection-charges-panel" aria-labelledby="inspection-charges-title">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section aria-labelledby="inspection-charges-title">
+        <CardHeader className="p-0 pb-4">
         <div>
-          <span className="section-kicker">Charges</span>
-          <h2 id="inspection-charges-title">Charges &amp; pet review</h2>
-          <p className="panel-description">
+          <span className="block text-xs font-semibold text-muted-foreground">Charges</span>
+          <CardTitle className="text-[17px]" id="inspection-charges-title">Charges &amp; pet review</CardTitle>
+          <CardDescription>
             A reviewer confirms unique unauthorized pets and finalizes charges — nothing is
             auto-approved.
-          </p>
+          </CardDescription>
         </div>
         <Link className={buttonVariants({ variant: 'secondary' })} href={`/inspections/${inspectionId}/charge-report`}>
           View report
         </Link>
-      </div>
+        </CardHeader>
 
       <ChargeRuleBanner rule={petRule} canConfigure={canConfigure} />
 
@@ -116,7 +128,7 @@ export function InspectionChargesPanel({
               ))}
             </ul>
           ) : (
-            <p className="panel-description">
+            <p className="text-[13px] text-muted-foreground">
               {pets.data?.observations.length
                 ? `${pets.data.observations.length} observation(s) recorded — group them into unique animals to review.`
                 : 'No pet observations were recorded for this inspection.'}
@@ -145,7 +157,7 @@ export function InspectionChargesPanel({
           </div>
         </div>
         {mutations.generateCharges.error ? (
-          <p className="field-error">{mutations.generateCharges.error.message}</p>
+          <FieldError>{mutations.generateCharges.error.message}</FieldError>
         ) : null}
         {charges.isLoading ? (
           <LoadingState label="Loading charges…" />
@@ -158,14 +170,15 @@ export function InspectionChargesPanel({
             ))}
           </ul>
         ) : (
-          <p className="panel-description">No charges have been proposed.</p>
+          <p className="text-[13px] text-muted-foreground">No charges have been proposed.</p>
         )}
       </div>
 
       {addingCharge ? (
         <AddChargeDialog inspectionId={inspectionId} onClose={() => setAddingCharge(false)} />
       ) : null}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -184,7 +197,7 @@ function ChargeRuleBanner({
     <div className="charge-rule-banner">
       <div>
         <strong>Unauthorized pet charge</strong>
-        <span className="area-meta">
+        <span className="text-xs text-muted-foreground">
           {rule
             ? ` ${money(rule.amount, rule.currency)} per unique pet${rule.isActive ? '' : ' (inactive)'}`
             : ' not configured'}
@@ -249,7 +262,7 @@ function PetCandidateRow({
     <li className="pet-candidate-item">
       <div className="pet-candidate-main">
         <strong>{candidate.label}</strong>
-        <span className="area-meta">
+        <span className="text-xs text-muted-foreground">
           {' '}
           {candidate.species} · {candidate.observationCount} observation
           {candidate.observationCount === 1 ? '' : 's'}
@@ -259,33 +272,43 @@ function PetCandidateRow({
         <label className="visually-hidden" htmlFor={`rs-${candidate.id}`}>
           Review status
         </label>
-        <select
-          id={`rs-${candidate.id}`}
+        <Select
+          onValueChange={(next) =>
+            setReviewStatus(next as AdminPetCandidate['reviewStatus'])
+          }
           value={reviewStatus}
-          onChange={(event) => setReviewStatus(event.target.value as AdminPetCandidate['reviewStatus'])}
         >
-          {REVIEW_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status.replaceAll('_', ' ').toLowerCase()}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id={`rs-${candidate.id}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {REVIEW_STATUSES.map((status) => (
+              <SelectItem key={status} value={status}>
+                {status.replaceAll('_', ' ').toLowerCase()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <label className="visually-hidden" htmlFor={`as-${candidate.id}`}>
           Authorization
         </label>
-        <select
-          id={`as-${candidate.id}`}
-          value={authorizationStatus}
-          onChange={(event) =>
-            setAuthorizationStatus(event.target.value as AdminPetCandidate['authorizationStatus'])
+        <Select
+          onValueChange={(next) =>
+            setAuthorizationStatus(next as AdminPetCandidate['authorizationStatus'])
           }
+          value={authorizationStatus}
         >
-          {AUTH_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status.toLowerCase()}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id={`as-${candidate.id}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {AUTH_STATUSES.map((status) => (
+              <SelectItem key={status} value={status}>
+                {status.toLowerCase()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <button
           type="button"
           className={buttonVariants({ variant: 'primary' })}
@@ -318,7 +341,7 @@ function ChargeRow({ inspectionId, charge }: { inspectionId: string; charge: Adm
     <li className="charge-item">
       <div className="charge-main">
         <strong>{charge.description}</strong>
-        <div className="area-meta">
+        <div className="text-xs text-muted-foreground">
           {charge.chargeCode} · proposed {money(charge.proposedAmount, charge.currency)}
           {charge.approvedAmount !== null && charge.approvedAmount !== undefined
             ? ` · approved ${money(charge.approvedAmount, charge.currency)}`
@@ -435,11 +458,14 @@ function AddChargeDialog({
               reviewed.
             </DialogDescription>
           </DialogHeader>
-        <label className="field">
+        <Field asChild>
+<label>
           <span>Description</span>
           <input value={description} onChange={(event) => setDescription(event.target.value)} required />
         </label>
-        <label className="field">
+</Field>
+        <Field asChild>
+<label>
           <span>Amount</span>
           <input
             type="number"
@@ -450,11 +476,14 @@ function AddChargeDialog({
             required
           />
         </label>
-        <label className="field">
+</Field>
+        <Field asChild>
+<label>
           <span>Reason (optional)</span>
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+</Field>
+        {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <DialogFooter>
             <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
               Cancel

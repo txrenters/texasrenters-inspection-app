@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 import {
   Sheet,
@@ -53,7 +55,7 @@ function ShareRow({ share, inspectionId }: { share: AdminReportShare; inspection
       <div className="share-row-info">
         <div className="share-row-head">
           <Badge value={state} />
-          <span className="media-meta">
+          <span className="text-[13px] text-muted-foreground">
             {share.recipientEmail ?? 'No email supplied'} · created {formatDate(share.createdAt)} ·
             expires {formatDate(share.expiresAt)}
           </span>
@@ -119,22 +121,22 @@ export function ReportShareDialog({
         </SheetHeader>
         <SheetBody className="grid gap-4">
       <form onSubmit={(event) => void submit(event)} className="share-create-form">
-        <div className="field share-email-field">
-          <label htmlFor="report-share-email">Homeowner email (optional)</label>
-          <input
+        <Field className="min-w-60 flex-1">
+          <FieldLabel htmlFor="report-share-email">Homeowner email (optional)</FieldLabel>
+          <Input
             id="report-share-email"
             type="email"
             placeholder="owner@example.com"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
-        </div>
+        </Field>
         <button className={buttonVariants({ variant: 'primary' })} disabled={createReportShare.isPending}>
           {createReportShare.isPending ? 'Creating…' : 'Create link'}
         </button>
       </form>
       {createReportShare.error ? (
-        <p className="field-error">{createReportShare.error.message}</p>
+        <FieldError>{createReportShare.error.message}</FieldError>
       ) : null}
       {createReportShare.data?.emailDeliveryStatus ? (
         <div
@@ -161,7 +163,7 @@ export function ReportShareDialog({
           ))}
         </ul>
       ) : (
-        <p className="media-meta">No report links have been created for this inspection yet.</p>
+        <p className="text-[13px] text-muted-foreground">No report links have been created for this inspection yet.</p>
       )}
         </SheetBody>
         <SheetFooter>

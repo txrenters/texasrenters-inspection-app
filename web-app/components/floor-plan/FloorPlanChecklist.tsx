@@ -1,5 +1,13 @@
 import type { AdminPropertyArea } from '@texasrenters/shared';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { FieldError } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 export interface AreaFloorGroup {
@@ -203,18 +211,19 @@ export function FloorPlanChecklist({
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <select
-            aria-label="Area filter"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value as AreaFilter)}
-          >
-            <option value="ALL">All areas</option>
-            <option value="REQUIRED">Required</option>
-            <option value="OPTIONAL">Optional</option>
-            <option value="DRAFT">Draft areas</option>
-            <option value="APPROVED">Approved areas</option>
-            <option value="MISSING">Missing marker</option>
-          </select>
+          <Select onValueChange={(next) => setFilter(next as AreaFilter)} value={filter}>
+            <SelectTrigger aria-label="Area filter">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All areas</SelectItem>
+              <SelectItem value="REQUIRED">Required</SelectItem>
+              <SelectItem value="OPTIONAL">Optional</SelectItem>
+              <SelectItem value="DRAFT">Draft areas</SelectItem>
+              <SelectItem value="APPROVED">Approved areas</SelectItem>
+              <SelectItem value="MISSING">Missing marker</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       ) : null}
 
@@ -304,7 +313,7 @@ export function FloorPlanChecklist({
               {saving ? 'Saving…' : 'Save position'}
             </button>
           </div>
-          {saveError ? <p className="field-error">{saveError}</p> : null}
+          {saveError ? <FieldError>{saveError}</FieldError> : null}
         </div>
       ) : null}
       {saveMessage ? (

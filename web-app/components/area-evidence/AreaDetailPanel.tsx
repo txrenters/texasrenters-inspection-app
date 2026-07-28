@@ -3,6 +3,8 @@
 import type { AreaFinding, AreaRecording } from '@texasrenters/shared';
 import { useState } from 'react';
 
+import { FieldError } from '@/components/ui/field';
+import { Alert } from '@/components/ui/alert';
 import { api, apiBlob } from '@/lib/api';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
@@ -90,11 +92,11 @@ function RecordingCard({
         </button>
       )}
       {error ? (
-        <p className="alert alert-danger" role="alert">
+        <Alert variant="destructive" role="alert">
           {error} <button type="button" onClick={() => void play()}>Retry</button>
-        </p>
+        </Alert>
       ) : null}
-      <footer className="media-meta">
+      <footer className="text-[13px] text-muted-foreground">
         {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
         {formatDate(recording.createdAt)}
       </footer>
@@ -122,12 +124,12 @@ function FindingReviewControls({
 
   if (finding.reviewStatus !== 'PENDING_REVIEW')
     return finding.lastReview ? (
-      <span className="media-meta">
+      <span className="text-[13px] text-muted-foreground">
         {finding.lastReview.reviewerName} · {formatDate(finding.lastReview.createdAt)}
         {finding.lastReview.reason ? ` · ${finding.lastReview.reason}` : ''}
       </span>
     ) : (
-      <span className="media-meta">Reviewed</span>
+      <span className="text-[13px] text-muted-foreground">Reviewed</span>
     );
 
   if (rejecting)
@@ -167,7 +169,7 @@ function FindingReviewControls({
           </button>
         </div>
         {rejectFinding.error ? (
-          <p className="field-error">{rejectFinding.error.message}</p>
+          <FieldError>{rejectFinding.error.message}</FieldError>
         ) : null}
       </div>
     );
@@ -195,7 +197,7 @@ function FindingReviewControls({
         Reject
       </button>
       {approveFinding.error ? (
-        <p className="field-error">{approveFinding.error.message}</p>
+        <FieldError>{approveFinding.error.message}</FieldError>
       ) : null}
     </div>
   );
@@ -223,9 +225,9 @@ function FindingRow({
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="area-finding-number">{String(index + 1).padStart(2, '0')}</span>
-        <span className="area-finding-title">
+        <span className="grid min-w-0 flex-1 gap-px">
           <strong>{finding.title}</strong>
-          <span className="media-meta">
+          <span className="text-[13px] text-muted-foreground">
             {finding.category.replaceAll('_', ' ').toLowerCase()}
             {finding.photoCount ? ` · ${finding.photoCount} photo${finding.photoCount === 1 ? '' : 's'}` : ''}
             {finding.recordingId
@@ -233,7 +235,7 @@ function FindingRow({
               : ''}
           </span>
         </span>
-        <span className="area-finding-status">
+        <span className="flex shrink-0 gap-1.5">
           <Badge value={finding.severity} />
           <Badge value={finding.reviewStatus} />
         </span>
@@ -242,16 +244,16 @@ function FindingRow({
         <div className="area-finding-body">
           <p>{finding.description}</p>
           {finding.baselineCondition ? (
-            <p className="media-meta">At move-in: {finding.baselineCondition}</p>
+            <p className="text-[13px] text-muted-foreground">At move-in: {finding.baselineCondition}</p>
           ) : null}
-          <p className="media-meta">
+          <p className="text-[13px] text-muted-foreground">
             {finding.comparisonResult.replaceAll('_', ' ').toLowerCase()} · confidence{' '}
             {Math.round(finding.confidence * 100)}%
           </p>
           {canReview ? (
             <FindingReviewControls finding={finding} inspectionId={inspectionId} />
           ) : finding.lastReview ? (
-            <p className="media-meta">
+            <p className="text-[13px] text-muted-foreground">
               {finding.lastReview.reviewerName} · {formatDate(finding.lastReview.createdAt)}
               {finding.lastReview.reason ? ` · ${finding.lastReview.reason}` : ''}
             </p>
@@ -293,7 +295,7 @@ export function AreaDetailPanel({
       <header className="area-detail-header">
         <div>
           <h3>{area.name}</h3>
-          <span className="media-meta">
+          <span className="text-[13px] text-muted-foreground">
             {area.floorName ?? 'No floor recorded'} ·{' '}
             {area.isRequired ? 'Required' : 'Optional'} · {area.completionStatus}
           </span>
@@ -301,22 +303,22 @@ export function AreaDetailPanel({
       </header>
 
       {area.skipReason ? (
-        <p className="alert alert-danger" role="alert">
+        <Alert variant="destructive" role="alert">
           Skipped — {area.skipReason}
-        </p>
+        </Alert>
       ) : null}
 
       {conditionSummary ? (
-        <section className="area-detail-section">
+        <section className="mt-5 border-t border-border pt-4">
           <h4>Condition summary</h4>
           <p>{conditionSummary.description}</p>
-          <span className="media-meta">
+          <span className="text-[13px] text-muted-foreground">
             Overall context — itemized findings below list the specific work.
           </span>
         </section>
       ) : null}
 
-      <section className="area-detail-section">
+      <section className="mt-5 border-t border-border pt-4">
         <h4>Recordings</h4>
         {recordings.length ? (
           <div className="area-recording-list">
@@ -330,18 +332,18 @@ export function AreaDetailPanel({
             ))}
           </div>
         ) : (
-          <p className="floor-plan-muted">No recordings were uploaded for this area.</p>
+          <p className="text-xs text-muted-foreground">No recordings were uploaded for this area.</p>
         )}
       </section>
 
-      <section className="area-detail-section">
+      <section className="mt-5 border-t border-border pt-4">
         <h4>Photos</h4>
         {photoGroups.length ? (
           photoGroups.map((group) => (
             <div key={`${group.key}-${group.findingId ?? 'area'}`} className="area-photo-group">
               <h5>
                 {group.label}
-                {group.findingId ? <span className="media-meta"> · finding evidence</span> : null}
+                {group.findingId ? <span className="text-[13px] text-muted-foreground"> · finding evidence</span> : null}
               </h5>
               <div className="area-photo-grid">
                 {group.photos.map((photo) => (
@@ -351,11 +353,11 @@ export function AreaDetailPanel({
             </div>
           ))
         ) : (
-          <p className="floor-plan-muted">No photos were captured for this area.</p>
+          <p className="text-xs text-muted-foreground">No photos were captured for this area.</p>
         )}
       </section>
 
-      <section className="area-detail-section">
+      <section className="mt-5 border-t border-border pt-4">
         <h4>
           Findings{' '}
           {findings.length ? <span className="section-count">{findings.length}</span> : null}
@@ -373,7 +375,7 @@ export function AreaDetailPanel({
             ))}
           </ol>
         ) : (
-          <p className="floor-plan-muted">
+          <p className="text-xs text-muted-foreground">
             {recordings.length || photoGroups.length
               ? 'No issues were reported for this area.'
               : 'Analysis has not run for this area yet.'}

@@ -2,6 +2,14 @@
 
 import type { AdminAreaComparison, ComparisonClassification } from '@texasrenters/shared';
 import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Field, FieldError } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -55,7 +63,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
       >
       <CardHeader className="p-0 pb-4">
         <div>
-          <span className="section-kicker">Move-in comparison</span>
+          <span className="block text-xs font-semibold text-muted-foreground">Move-in comparison</span>
           <CardTitle id="inspection-comparison-title" className="text-[17px]">
             Move-in vs move-out
           </CardTitle>
@@ -88,7 +96,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             </button>
           ) : null}
           {mutations.generateComparison.error ? (
-            <p className="field-error">{mutations.generateComparison.error.message}</p>
+            <FieldError>{mutations.generateComparison.error.message}</FieldError>
           ) : null}
         </div>
       ) : (
@@ -130,11 +138,11 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
               <li key={area.id} className="comparison-area-item">
                 <div className="comparison-area-main">
                   <strong>{area.areaName}</strong>
-                  {area.floorName ? <span className="area-meta"> · {area.floorName}</span> : null}
+                  {area.floorName ? <span className="text-xs text-muted-foreground"> · {area.floorName}</span> : null}
                   {area.summary ? <p className="comparison-area-summary">{area.summary}</p> : null}
                   {area.originalClassification &&
                   area.originalClassification !== area.classification ? (
-                    <p className="area-meta">
+                    <p className="text-xs text-muted-foreground">
                       Overridden from {classLabel(area.originalClassification)}
                       {area.overrideReason ? ` — ${area.overrideReason}` : ''}
                     </p>
@@ -149,7 +157,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   {area.requiresReview ? (
                     <span className="comparison-chip comparison-chip--flag">Review</span>
                   ) : null}
-                  <span className="area-meta">
+                  <span className="text-xs text-muted-foreground">
                     {area.matchMethod.replaceAll('_', ' ').toLowerCase()}
                     {area.matchConfidence
                       ? ` · ${Math.round(area.matchConfidence * 100)}%`
@@ -214,7 +222,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             ) : null}
           </div>
           {mutations.reviewComparison.error ? (
-            <p className="field-error">{mutations.reviewComparison.error.message}</p>
+            <FieldError>{mutations.reviewComparison.error.message}</FieldError>
           ) : null}
         </>
       )}
@@ -267,24 +275,33 @@ function OverrideAreaDialog({
               {area.areaName} — currently {classLabel(area.classification)}.
             </DialogDescription>
           </DialogHeader>
-        <label className="field">
+        <Field asChild>
+<label>
           <span>Classification</span>
-          <select
+          <Select
+            onValueChange={(next) => setClassification(next as ComparisonClassification)}
             value={classification}
-            onChange={(event) => setClassification(event.target.value as ComparisonClassification)}
           >
-            {CLASSIFICATIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CLASSIFICATIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
-        <label className="field">
+</Field>
+        <Field asChild>
+<label>
           <span>Reason (optional)</span>
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+</Field>
+        {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <DialogFooter>
             <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
               Cancel

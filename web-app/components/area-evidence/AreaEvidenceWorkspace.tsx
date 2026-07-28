@@ -4,6 +4,14 @@ import type { AreaEvidenceSummaryItem, AreaReviewStatus } from '@texasrenters/sh
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Alert } from '@/components/ui/alert';
 import { useAreaEvidenceSummary } from '@/lib/queries';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState, LoadingState } from '../shared';
@@ -117,7 +125,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
       <section className="section-gap inspection-section" aria-labelledby="area-evidence-heading">
       <CardHeader className="p-0 pb-4">
         <div>
-          <span className="section-kicker">Inspection evidence</span>
+          <span className="block text-xs font-semibold text-muted-foreground">Inspection evidence</span>
           <CardTitle id="area-evidence-heading" className="text-[17px]">
             Areas
           </CardTitle>
@@ -136,11 +144,11 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
       </p>
 
       {unassigned.recordings || unassigned.photos ? (
-        <div className="alert alert-danger" role="alert">
+        <Alert variant="destructive" role="alert">
           Unassigned evidence: {countLabel(unassigned.recordings, 'recording')} and{' '}
           {countLabel(unassigned.photos, 'photo')} are not linked to an area and need
           reassignment.
-        </div>
+        </Alert>
       ) : null}
 
       <div className="area-evidence-layout">
@@ -153,17 +161,18 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               placeholder="Search areas"
               onChange={(event) => setSearch(event.target.value)}
             />
-            <select
-              value={statusFilter}
-              aria-label="Filter by review status"
-              onChange={(event) => setStatusFilter(event.target.value)}
-            >
-              {STATUS_FILTERS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            <Select onValueChange={setStatusFilter} value={statusFilter}>
+              <SelectTrigger aria-label="Filter by review status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_FILTERS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {filtered.length ? (
@@ -209,7 +218,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               })}
             </ul>
           ) : (
-            <p className="floor-plan-muted">No areas match this filter.</p>
+            <p className="text-xs text-muted-foreground">No areas match this filter.</p>
           )}
         </div>
 
@@ -217,7 +226,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           {selectedId ? (
             <AreaDetailPanel key={selectedId} inspectionId={inspectionId} areaId={selectedId} />
           ) : (
-            <p className="floor-plan-muted">Select an area to review its evidence.</p>
+            <p className="text-xs text-muted-foreground">Select an area to review its evidence.</p>
           )}
         </div>
       </div>

@@ -1,6 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import { Input } from '@/components/ui/input';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 
@@ -58,16 +61,16 @@ export default function ProvidersPage() {
                   {descriptions[provider.provider] ?? 'External service provider.'}
                 </CardDescription>
                 {provider.detail ? (
-                  <div className="alert alert-warning">{provider.detail}</div>
+                  <Alert variant="warning">{provider.detail}</Alert>
                 ) : null}
                 {provider.provider === 'Mailer' && canManage ? (
                   <form
                     className="provider-test-form"
                     onSubmit={(event) => void submitMailTest(event)}
                   >
-                    <div className="field">
-                      <label htmlFor="mail-test-recipient">Test recipient</label>
-                      <input
+                    <Field>
+                      <FieldLabel htmlFor="mail-test-recipient">Test recipient</FieldLabel>
+                      <Input
                         id="mail-test-recipient"
                         type="email"
                         required
@@ -75,7 +78,7 @@ export default function ProvidersPage() {
                         placeholder="you@example.com"
                         onChange={(event) => setTestRecipient(event.target.value)}
                       />
-                    </div>
+                    </Field>
                     <button
                       className={buttonVariants({ variant: 'secondary' })}
                       disabled={testMail.isPending || !testRecipient.trim()}
@@ -93,7 +96,7 @@ export default function ProvidersPage() {
                       </div>
                     ) : null}
                     {testMail.error ? (
-                      <p className="field-error">{testMail.error.message}</p>
+                      <FieldError>{testMail.error.message}</FieldError>
                     ) : null}
                   </form>
                 ) : null}

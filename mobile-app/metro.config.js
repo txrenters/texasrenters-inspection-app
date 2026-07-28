@@ -2,6 +2,7 @@
 /* global require, module, __dirname */
 
 const { getDefaultConfig } = require('expo/metro-config');
+const { withNativeWind } = require('nativewind/metro');
 const http = require('node:http');
 
 const config = getDefaultConfig(__dirname);
@@ -61,4 +62,7 @@ config.server.enhanceMiddleware = (middleware, server) => {
   };
 };
 
-module.exports = config;
+// withNativeWind wraps LAST so the pnpm _tmp_ blockList, the zustand resolver
+// shim and the /api/v1 proxy above are all preserved. inlineRem: 16 is required
+// by the React Native Reusables setup.
+module.exports = withNativeWind(config, { input: './global.css', inlineRem: 16 });

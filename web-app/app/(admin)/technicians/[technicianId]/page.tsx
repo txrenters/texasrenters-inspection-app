@@ -3,6 +3,19 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -31,8 +44,6 @@ export default function TechnicianDetailPage() {
     return <ErrorState error={technician.error} retry={() => void technician.refetch()} />;
   const item = technician.data!;
   async function toggle() {
-    const verb = item.isActive ? 'deactivate' : 'activate';
-    if (!window.confirm(`Are you sure you want to ${verb} ${item.displayName}?`)) return;
     await mutation.mutateAsync({ id, isActive: !item.isActive });
   }
   return (
@@ -43,33 +54,59 @@ export default function TechnicianDetailPage() {
         breadcrumbs={[{ label: 'Technicians', href: '/technicians' }, { label: item.displayName }]}
         action={
           canManage ? (
-            <button
-              className={buttonVariants({ variant: item.isActive ? 'danger' : 'primary' })}
-              onClick={() => void toggle()}
-              disabled={mutation.isPending}
-            >
-              {item.isActive ? 'Deactivate' : 'Activate'}
-            </button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  className={buttonVariants({ variant: item.isActive ? 'danger' : 'primary' })}
+                  disabled={mutation.isPending}
+                >
+                  {item.isActive ? 'Deactivate' : 'Activate'}
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {item.isActive ? 'Deactivate' : 'Activate'} {item.displayName}?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {item.isActive
+                      ? 'They lose access to the mobile app immediately. Inspections already assigned to them stay assigned and must be reassigned separately.'
+                      : 'They regain access to the mobile app and can be assigned inspections again.'}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className={buttonVariants({
+                      variant: item.isActive ? 'danger' : 'primary',
+                    })}
+                    onClick={() => void toggle()}
+                  >
+                    {item.isActive ? 'Deactivate' : 'Activate'}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           ) : undefined
         }
       />
       {mutation.error ? (
-        <div className="alert alert-danger" role="alert">
+        <Alert variant="destructive" role="alert">
           {mutation.error.message}
-        </div>
+        </Alert>
       ) : null}
       <Card className="p-[22px] max-[560px]:p-4" asChild>
         <section>
-        <div className="detail-grid">
-          <div className="detail-item">
+        <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Status</span>
             <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Current assignments</span>
             <strong>{item.workload?.current ?? 0}</strong>
           </div>
-          <div className="detail-item">
+          <div className="rounded-xl bg-background p-3.5">
             <span>Account created</span>
             <strong>{formatDate(item.createdAt)}</strong>
           </div>
@@ -93,19 +130,19 @@ export default function TechnicianDetailPage() {
           <>
             <DataTable headers={['Inspection', 'Assigned', 'Ended', 'Status', 'Reason']}>
               {assignments.data.items.map((assignment) => (
-                <tr key={assignment.id}>
-                  <td>
-                    <Link className="table-link" href={`/inspections/${assignment.inspectionId}`}>
+                <TableRow key={assignment.id}>
+                  <TableCell>
+                    <Link className="font-semibold text-primary" href={`/inspections/${assignment.inspectionId}`}>
                       {assignment.inspection?.propertywareBuilding?.name ?? 'Open inspection'}
                     </Link>
-                  </td>
-                  <td>{formatDate(assignment.assignedAt)}</td>
-                  <td>{formatDate(assignment.endedAt)}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell>{formatDate(assignment.assignedAt)}</TableCell>
+                  <TableCell>{formatDate(assignment.endedAt)}</TableCell>
+                  <TableCell>
                     <Badge value={assignment.isCurrent ? 'CURRENT' : assignment.status} />
-                  </td>
-                  <td>{assignment.reason ?? '—'}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell>{assignment.reason ?? '—'}</TableCell>
+                </TableRow>
               ))}
             </DataTable>
             <Pagination

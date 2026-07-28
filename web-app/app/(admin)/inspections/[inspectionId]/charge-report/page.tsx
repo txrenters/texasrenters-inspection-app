@@ -3,6 +3,7 @@
 import type { AdminCharge } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { buttonVariants } from '@/components/ui/button';
 
 import { Badge, ErrorState, LoadingState, formatDate } from '@/components/shared';
@@ -16,30 +17,30 @@ function money(amount: number | null | undefined, currency = 'USD') {
 function ChargeTable({ charges, currency }: { charges: AdminCharge[]; currency: string }) {
   if (!charges.length) return <p className="charge-report-empty">None.</p>;
   return (
-    <table className="charge-report-table">
-      <thead>
-        <tr>
-          <th>Description</th>
-          <th>Source</th>
-          <th>Proposed</th>
-          <th>Approved</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
+    <Table className="text-sm">
+      <TableHeader>
+        <TableRow>
+          <TableHead>Description</TableHead>
+          <TableHead>Source</TableHead>
+          <TableHead>Proposed</TableHead>
+          <TableHead>Approved</TableHead>
+          <TableHead>Status</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {charges.map((charge) => (
-          <tr key={charge.id}>
-            <td>{charge.description}</td>
-            <td className="charge-report-source">
+          <TableRow key={charge.id}>
+            <TableCell>{charge.description}</TableCell>
+            <TableCell className="charge-report-source">
               {charge.source.replaceAll('_', ' ').toLowerCase()}
-            </td>
-            <td>{money(charge.proposedAmount, currency)}</td>
-            <td>{money(charge.approvedAmount, currency)}</td>
-            <td>{charge.status.replaceAll('_', ' ').toLowerCase()}</td>
-          </tr>
+            </TableCell>
+            <TableCell>{money(charge.proposedAmount, currency)}</TableCell>
+            <TableCell>{money(charge.approvedAmount, currency)}</TableCell>
+            <TableCell>{charge.status.replaceAll('_', ' ').toLowerCase()}</TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }
 

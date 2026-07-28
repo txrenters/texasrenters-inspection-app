@@ -1,6 +1,19 @@
 'use client';
 
 import { useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 
 import type { AdminRoleSummary } from '@texasrenters/shared';
@@ -31,12 +44,6 @@ export default function RolesPage() {
   const { deleteRole } = useAccessMutations();
 
   async function remove(role: AdminRoleSummary) {
-    if (
-      !window.confirm(
-        `Delete “${role.name}”? It will be removed from ${role.assignedUserCount} user(s).`,
-      )
-    )
-      return;
     await deleteRole.mutateAsync(role.id);
   }
 
@@ -56,9 +63,9 @@ export default function RolesPage() {
       {creating ? <RoleEditorDialog onClose={() => setCreating(false)} /> : null}
       {editing ? <RoleEditorDialog role={editing} onClose={() => setEditing(null)} /> : null}
       {deleteRole.error ? (
-        <div className="alert alert-danger" role="alert">
+        <Alert variant="destructive" role="alert">
           {deleteRole.error.message}
-        </div>
+        </Alert>
       ) : null}
       {roles.isLoading ? (
         <TableLoadingState headers={ROLE_HEADERS} label="Loading roles" rows={4} />
@@ -77,12 +84,12 @@ export default function RolesPage() {
         <>
           <DataTable headers={ROLE_HEADERS} label="Custom roles">
             {roles.data.items.map((role) => (
-              <tr key={role.id}>
-                <td>
+              <TableRow key={role.id}>
+                <TableCell>
                   <strong>{role.name}</strong>
-                  {role.description ? <div className="media-meta">{role.description}</div> : null}
-                </td>
-                <td>
+                  {role.description ? <div className="text-[13px] text-muted-foreground">{role.description}</div> : null}
+                </TableCell>
+                <TableCell>
                   <div className="badge-wrap">
                     {role.permissions.length ? (
                       role.permissions
@@ -91,33 +98,55 @@ export default function RolesPage() {
                           <Badge key={permission} value={formatPermission(permission)} />
                         ))
                     ) : (
-                      <span className="media-meta">No permissions</span>
+                      <span className="text-[13px] text-muted-foreground">No permissions</span>
                     )}
                     {role.permissions.length > 6 ? (
-                      <span className="media-meta">+{role.permissions.length - 6} more</span>
+                      <span className="text-[13px] text-muted-foreground">+{role.permissions.length - 6} more</span>
                     ) : null}
                   </div>
-                </td>
-                <td className="numeric-cell">{role.assignedUserCount}</td>
-                <td>
+                </TableCell>
+                <TableCell className="numeric-cell">{role.assignedUserCount}</TableCell>
+                <TableCell>
                   {canManage ? (
                     <div className="action-row">
                       <button className={buttonVariants({ variant: 'secondary' })} onClick={() => setEditing(role)}>
                         Edit
                       </button>
-                      <button
-                        className={buttonVariants({ variant: 'danger' })}
-                        disabled={deleteRole.isPending}
-                        onClick={() => void remove(role)}
-                      >
-                        Delete
-                      </button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <button
+                            className={buttonVariants({ variant: 'danger' })}
+                            disabled={deleteRole.isPending}
+                          >
+                            Delete
+                          </button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete “{role.name}”?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This removes the role from {role.assignedUserCount} user
+                              {role.assignedUserCount === 1 ? '' : 's'}. Those users lose every
+                              permission this role granted until another role is assigned.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className={buttonVariants({ variant: 'danger' })}
+                              onClick={() => void remove(role)}
+                            >
+                              Delete role
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
                   ) : (
-                    <span className="media-meta">View only</span>
+                    <span className="text-[13px] text-muted-foreground">View only</span>
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
           </DataTable>
           <Pagination page={page} totalPages={roles.data.totalPages} onPage={setPage} />

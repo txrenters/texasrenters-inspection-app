@@ -1,6 +1,16 @@
 'use client';
 
 import type { AiProviderConfiguration, AiProviderName } from '@texasrenters/shared';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { cn } from '@/lib/utils';
+import { Alert } from '@/components/ui/alert';
 import { Card, CardTitle } from '@/components/ui/card';
 import { useEffect, useState } from 'react';
 import { buttonVariants } from '@/components/ui/button';
@@ -30,12 +40,12 @@ export default function SettingsPage() {
           <section>
           <span className="section-eyebrow">Organization</span>
           <CardTitle className="text-[17px]">{membership?.organization.name ?? 'Unavailable'}</CardTitle>
-          <div className="detail-grid compact-grid">
-            <div className="detail-item">
+          <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1 compact-grid">
+            <div className="rounded-xl bg-background p-3.5">
               <span>Organization ID</span>
               <strong className="mono">{membership?.organization.id ?? 'Unavailable'}</strong>
             </div>
-            <div className="detail-item">
+            <div className="rounded-xl bg-background p-3.5">
               <span>Your role</span>
               <strong>{accessLabel}</strong>
             </div>
@@ -74,10 +84,10 @@ export default function SettingsPage() {
         ) : aiSettings.data ? (
           <>
             {!aiSettings.data.keyStorageAvailable ? (
-              <div className="alert alert-warning ai-storage-warning">
+              <Alert variant="warning" className="ai-storage-warning">
                 Secure key entry is disabled until <code>AI_CREDENTIALS_ENCRYPTION_KEY</code> is
                 configured on the backend. Existing environment keys continue to work.
-              </div>
+              </Alert>
             ) : null}
             <div className="ai-routing-control">
               <div className="ai-routing-icon" aria-hidden>
@@ -215,7 +225,11 @@ function AiProviderPanel({
   };
 
   return (
-    <article className={`panel ai-provider-panel${active ? ' is-active' : ''}`}>
+    <Card
+      className={cn('p-[22px] max-[560px]:p-4', 'ai-provider-panel', active && 'is-active')}
+      asChild
+    >
+    <article>
       <div className="ai-provider-heading">
         <div className="ai-provider-identity">
           <div className="ai-provider-mark" aria-hidden>
@@ -288,20 +302,21 @@ function AiProviderPanel({
         </div>
       </div>
       <div className="ai-provider-form">
-        <label className="ai-model-field">
+        <label className="col-span-full">
           <span>Model</span>
-          <select
-            value={modelId}
-            disabled={!canManage}
-            onChange={(e) => setModelId(e.target.value)}
-          >
-            {provider.models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.name} — {model.tier}
-                {model.recommended ? ' · Recommended' : ''}
-              </option>
-            ))}
-          </select>
+          <Select disabled={!canManage} onValueChange={setModelId} value={modelId}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {provider.models.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.name} — {model.tier}
+                  {model.recommended ? ' · Recommended' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           {(() => {
             const selected = provider.models.find((model) => model.id === modelId);
             if (!selected) return null;
@@ -327,11 +342,11 @@ function AiProviderPanel({
             placeholder="e.g. 1000000"
             onChange={(event) => setBudget(event.target.value)}
           />
-          <small className="ai-field-help">
+          <small className="text-[10px] text-muted-foreground">
             Soft limit for this provider&apos;s monthly token use. Leave blank for no local cap.
           </small>
         </label>
-        <label className="ai-key-field">
+        <label className="col-span-full">
           <span>API key</span>
           <input
             type="password"
@@ -353,10 +368,9 @@ function AiProviderPanel({
         </label>
         {provider.keySource === 'SETTINGS' && canManage ? (
           <label className="checkbox-label ai-clear-key">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={clearApiKey}
-              onChange={(event) => setClearApiKey(event.target.checked)}
+              onCheckedChange={(checked) => setClearApiKey(checked === true)}
             />
             Remove the stored key and fall back to the backend environment key
           </label>
@@ -399,5 +413,6 @@ function AiProviderPanel({
         </div>
       </div>
     </article>
+    </Card>
   );
 }

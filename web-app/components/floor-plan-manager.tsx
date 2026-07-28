@@ -3,6 +3,22 @@
 import type { AdminPropertyArea } from '@texasrenters/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -38,6 +54,7 @@ export function FloorPlanManager({
   const [scope, setScope] = useState(BUILDING_SCOPE);
   const [file, setFile] = useState<File>();
   const [fileInputVersion, setFileInputVersion] = useState(0);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [extractionSeconds, setExtractionSeconds] = useState(0);
@@ -149,12 +166,6 @@ export function FloorPlanManager({
   const deleteSelected = useCallback(async () => {
     const areaIds = [...selectedIds];
     if (!areaIds.length) return;
-    // Irreversible, so it is always confirmed — and the count is spelled out
-    // because the selection may span floors that are scrolled out of view.
-    const confirmed = window.confirm(
-      `Delete ${areaIds.length} draft area${areaIds.length === 1 ? '' : 's'}? This cannot be undone.`,
-    );
-    if (!confirmed) return;
     await actions.deletePropertyAreas
       .mutateAsync({ propertyId, areaIds })
       .then(() => {
@@ -226,17 +237,20 @@ export function FloorPlanManager({
     actions.approvePropertyAreas.error,
   ].find(Boolean);
 
-  async function upload(event: FormEvent) {
+  // Replacing an existing source version is confirmed first; the submit is
+  // parked rather than blocked because AlertDialog is asynchronous.
+  function upload(event: FormEvent) {
     event.preventDefault();
     if (!file) return;
-    if (
-      latest &&
-      !window.confirm(
-        'Upload this as a new active source version? Existing approved areas stay in history, but their markers will require review against the new plan.',
-      )
-    ) {
+    if (latest) {
+      setConfirmReplace(true);
       return;
     }
+    void runUpload();
+  }
+
+  async function runUpload() {
+    if (!file) return;
     setMessage(undefined);
     try {
       await actions.uploadFloorPlan.mutateAsync({
@@ -324,18 +338,18 @@ export function FloorPlanManager({
         </div>
       </div>
 
-      <div className="panel floor-plan-source">
-        <div className="panel-header floor-plan-source-heading">
+      <Card className="p-[22px] max-[560px]:p-4">
+        <CardHeader className="p-0 pb-5">
           <div>
             <span className="section-eyebrow">Inspection area source</span>
-            <h2 id="floor-plan-heading">{scopeLabel} floor plan</h2>
-            <p>
+            <CardTitle className="mt-[5px] text-[17px]" id="floor-plan-heading">{scopeLabel} floor plan</CardTitle>
+            <CardDescription className="mt-[5px] mb-0">
               Maintain the visual reference used to verify and approve this scope&apos;s inspection
               areas.
-            </p>
+            </CardDescription>
           </div>
           {latest ? <Badge value={latest.status} /> : null}
-        </div>
+        </CardHeader>
         <div className="floor-plan-grid">
           <div className="floor-plan-preview-shell">
             <div className="floor-plan-preview-toolbar">
@@ -400,7 +414,31 @@ export function FloorPlanManager({
               </div>
             ) : null}
             {canManage ? (
-              <form onSubmit={(event) => void upload(event)} className="floor-plan-upload-section">
+              <>
+              <AlertDialog onOpenChange={setConfirmReplace} open={confirmReplace}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Replace the active source version?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Existing approved areas stay in history, but their markers will
+                      require review against the new plan before they can be trusted.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className={buttonVariants({ variant: 'primary' })}
+                      onClick={() => {
+                        setConfirmReplace(false);
+                        void runUpload();
+                      }}
+                    >
+                      Upload new version
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+              <form onSubmit={upload} className="floor-plan-upload-section">
                 <div className="floor-plan-control-heading">
                   <div>
                     <strong>{latest ? 'Replace source plan' : 'Upload source plan'}</strong>
@@ -457,6 +495,7 @@ export function FloorPlanManager({
                   </button>
                 ) : null}
               </form>
+              </>
             ) : null}
 
             {latest ? (
@@ -551,25 +590,25 @@ export function FloorPlanManager({
         {extractionError ? (
           // Reported by the job rather than the request, so it survives an
           // extraction that outlives its HTTP call.
-          <div className="alert alert-danger" role="alert">
+          <Alert variant="destructive" role="alert">
             {extractionError}
-          </div>
+          </Alert>
         ) : null}
         {actionError ? (
-          <div className="alert alert-danger" role="alert">
+          <Alert variant="destructive" role="alert">
             {actionError instanceof Error
               ? actionError.message
               : 'The request could not be completed.'}
-          </div>
+          </Alert>
         ) : null}
-        {message ? <div className="alert alert-success">{message}</div> : null}
-      </div>
+        {message ? <Alert variant="success">{message}</Alert> : null}
+      </Card>
 
-      <div className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4 section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
-            <h2>{scopeLabel} draft area review</h2>
-            <p>Edit AI suggestions or add missing rooms before approval.</p>
+            <CardTitle className="text-[17px]">{scopeLabel} draft area review</CardTitle>
+            <CardDescription>Edit AI suggestions or add missing rooms before approval.</CardDescription>
           </div>
           {canManage ? (
             <button
@@ -587,7 +626,7 @@ export function FloorPlanManager({
                 : `Approve ${drafts.length || ''} draft${drafts.length === 1 ? '' : 's'}`}
             </button>
           ) : null}
-        </div>
+        </CardHeader>
         {canManage ? (
           <ManualAreaForm
             key={scope}
@@ -606,15 +645,14 @@ export function FloorPlanManager({
         {canManage && draftGroups.length ? (
           <div className={`area-batch-bar${selectedCount ? ' is-active' : ''}`}>
             <label className="area-batch-select">
-              <input
-                type="checkbox"
-                checked={allDraftsSelected}
-                // Partial selection reads as indeterminate rather than
-                // unchecked, so the box never implies "nothing is selected".
-                ref={(node) => {
-                  if (node) node.indeterminate = selectedCount > 0 && !allDraftsSelected;
-                }}
-                onChange={(event) => setGroupSelected(draftIds, event.target.checked)}
+              <Checkbox
+                // Partial selection reads as indeterminate rather than unchecked,
+                // so the box never implies "nothing is selected". Radix models this
+                // as a third checked value instead of an imperative DOM property.
+                checked={
+                  allDraftsSelected ? true : selectedCount > 0 ? 'indeterminate' : false
+                }
+                onCheckedChange={(checked) => setGroupSelected(draftIds, checked === true)}
               />
               <span>{allDraftsSelected ? 'Clear selection' : 'Select all'}</span>
             </label>
@@ -624,15 +662,40 @@ export function FloorPlanManager({
                 : `${draftIds.length} draft area${draftIds.length === 1 ? '' : 's'}`}
             </span>
             {selectedCount ? (
-              <button
-                className={buttonVariants({ variant: 'danger', size: 'small' })}
-                disabled={actions.deletePropertyAreas.isPending}
-                onClick={() => void deleteSelected()}
-              >
-                {actions.deletePropertyAreas.isPending
-                  ? 'Deleting…'
-                  : `Delete ${selectedCount} selected`}
-              </button>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <button
+                    className={buttonVariants({ variant: 'danger', size: 'small' })}
+                    disabled={actions.deletePropertyAreas.isPending}
+                  >
+                    {actions.deletePropertyAreas.isPending
+                      ? 'Deleting…'
+                      : `Delete ${selectedCount} selected`}
+                  </button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      Delete {selectedCount} draft area{selectedCount === 1 ? '' : 's'}?
+                    </AlertDialogTitle>
+                    {/* The count is spelled out because the selection may span
+                        floors that are scrolled out of view. */}
+                    <AlertDialogDescription>
+                      This cannot be undone. Any markers placed on {selectedCount === 1 ? 'it' : 'them'}{' '}
+                      are removed with the {selectedCount === 1 ? 'area' : 'areas'}.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className={buttonVariants({ variant: 'danger' })}
+                      onClick={() => void deleteSelected()}
+                    >
+                      Delete {selectedCount === 1 ? 'area' : 'areas'}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             ) : (
               <span className="area-batch-hint">Select areas to delete them in bulk</span>
             )}
@@ -654,7 +717,7 @@ export function FloorPlanManager({
                     )
                   }
                 />
-                <div className="area-review-list">
+                <div>
                   {group.areas.map((area) => (
                     <AreaReviewRow
                       key={area.id}
@@ -695,18 +758,18 @@ export function FloorPlanManager({
             ))}
           </div>
         ) : (
-          <p className="floor-plan-muted">No draft areas are waiting for review in this scope.</p>
+          <p className="text-xs text-muted-foreground">No draft areas are waiting for review in this scope.</p>
         )}
-      </div>
+      </Card>
 
-      <div className="panel section-gap">
-        <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4 section-gap">
+        <CardHeader className="p-0 pb-4">
           <div>
-            <h2>{scopeLabel} approved master areas</h2>
-            <p>Only these areas are copied into newly created inspections for this scope.</p>
+            <CardTitle className="text-[17px]">{scopeLabel} approved master areas</CardTitle>
+            <CardDescription>Only these areas are copied into newly created inspections for this scope.</CardDescription>
           </div>
           <Badge value={`${approved.length} APPROVED`} />
-        </div>
+        </CardHeader>
         {approvedGroups.length ? (
           <div className="floor-area-groups">
             {approvedGroups.map((group) => (
@@ -726,11 +789,11 @@ export function FloorPlanManager({
             ))}
           </div>
         ) : (
-          <p className="floor-plan-muted">
+          <p className="text-xs text-muted-foreground">
             No areas are approved in this scope. Inspections require an approved master area list.
           </p>
         )}
-      </div>
+      </Card>
       {isExtracting ? (
         <ExtractionProgressModal elapsedSeconds={extractionSeconds} />
       ) : null}
@@ -892,23 +955,38 @@ function FloorPlanComparisonModal({
   const hasUnsavedMarkerChangesRef = useRef(hasUnsavedMarkerChanges);
   hasUnsavedMarkerChangesRef.current = hasUnsavedMarkerChanges;
 
-  const selectArea = (id: string) => {
-    if (
-      editingAreaId &&
-      editingAreaId !== id &&
-      hasUnsavedMarkerChanges &&
-      !window.confirm('Discard the unsaved marker position and select another area?')
-    ) {
+  // `window.confirm` blocked, so each of these guards could early-return inline.
+  // AlertDialog does not, so the intent is parked here and replayed on confirm —
+  // otherwise navigating away would silently discard the marker edit.
+  const [pendingDiscard, setPendingDiscard] = useState<{
+    what: string;
+    run: () => void;
+  } | null>(null);
+  const guardUnsaved = useCallback((what: string, next: () => void) => {
+    if (!hasUnsavedMarkerChangesRef.current) {
+      next();
       return;
     }
-    setSelectedAreaId(id);
-    setFocusNonce((nonce) => nonce + 1);
-    setSaveMessage(null);
+    setPendingDiscard({ what, run: next });
+  }, []);
+
+  const selectArea = (id: string) => {
+    const apply = () => {
+      setSelectedAreaId(id);
+      setFocusNonce((nonce) => nonce + 1);
+      setSaveMessage(null);
+      if (editingAreaId && editingAreaId !== id) {
+        setEditingAreaId(null);
+        setDraftMarker(null);
+        setSaveError(null);
+      }
+    };
+    // Only a switch away from the area being edited can lose work.
     if (editingAreaId && editingAreaId !== id) {
-      setEditingAreaId(null);
-      setDraftMarker(null);
-      setSaveError(null);
+      guardUnsaved('select another area', apply);
+      return;
     }
+    apply();
   };
   const startEdit = (id: string) => {
     const area = allAreas.find((item) => item.id === id);
@@ -958,14 +1036,8 @@ function FloorPlanComparisonModal({
     );
   };
   const requestClose = useCallback(() => {
-    if (
-      hasUnsavedMarkerChangesRef.current &&
-      !window.confirm('Discard the unsaved marker position and close the review workspace?')
-    ) {
-      return;
-    }
-    onClose();
-  }, [onClose]);
+    guardUnsaved('close the review workspace', onClose);
+  }, [guardUnsaved, onClose]);
   const focusArea = (id: string) => {
     setSelectedAreaId(id);
     setFocusNonce((nonce) => nonce + 1);
@@ -1026,6 +1098,33 @@ function FloorPlanComparisonModal({
         if (event.target === event.currentTarget) requestClose();
       }}
     >
+      <AlertDialog
+        onOpenChange={(open) => !open && setPendingDiscard(null)}
+        open={pendingDiscard !== null}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard the unsaved marker position?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The marker you moved has not been saved. Continuing to{' '}
+              {pendingDiscard?.what} discards that change and keeps the position
+              already stored for this area.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'danger' })}
+              onClick={() => {
+                pendingDiscard?.run();
+                setPendingDiscard(null);
+              }}
+            >
+              Discard change
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div
         ref={dialogRef}
         className={`floor-plan-comparison-modal${editingAreaId ? ' is-editing' : ''}`}
@@ -1056,11 +1155,10 @@ function FloorPlanComparisonModal({
           <div className="floor-plan-review-header-actions">
             {supportsMarkers ? (
               <label className="fp-showall-toggle">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={showAllMarkers}
                   disabled={Boolean(editingAreaId)}
-                  onChange={() => setShowAllMarkers((value) => !value)}
+                  onCheckedChange={() => setShowAllMarkers((value) => !value)}
                 />
                 <span>Show all markers</span>
               </label>
@@ -1118,16 +1216,12 @@ function FloorPlanComparisonModal({
                   onDraftChange={setDraftMarker}
                   pageNumber={pageNumber}
                   onPageChange={(page) => {
-                    if (
-                      hasUnsavedMarkerChanges &&
-                      !window.confirm('Discard the unsaved marker position and change pages?')
-                    ) {
-                      return;
-                    }
-                    setPageNumber(page);
-                    // A selection on another page is no longer meaningful.
-                    setSelectedAreaId(null);
-                    cancelEdit();
+                    guardUnsaved('change pages', () => {
+                      setPageNumber(page);
+                      // A selection on another page is no longer meaningful.
+                      setSelectedAreaId(null);
+                      cancelEdit();
+                    });
                   }}
                 />
               ) : (
@@ -1280,14 +1374,12 @@ function FloorGroupHeading({
           and the box never reads as a stray duplicate of the toolbar's. */}
       {selectable && onSelectAll ? (
         <label className="floor-area-heading-select">
-          <input
-            type="checkbox"
-            checked={allSelected}
+          <Checkbox
             aria-label={`Select all areas on ${label}`}
-            ref={(node) => {
-              if (node) node.indeterminate = selectedCount > 0 && !allSelected;
-            }}
-            onChange={(event) => onSelectAll(event.target.checked)}
+            // Radix carries the third state as a value rather than an imperative
+            // DOM property, so partial selection stays visible on re-render.
+            checked={allSelected ? true : selectedCount > 0 ? 'indeterminate' : false}
+            onCheckedChange={(checked) => onSelectAll(checked === true)}
           />
           <h3>{label}</h3>
         </label>
@@ -1325,30 +1417,29 @@ function ManualAreaForm({
           .catch(() => undefined);
       }}
     >
-      <div className="field">
-        <label htmlFor="manual-floor">Floor</label>
-        <input
+      <Field>
+        <FieldLabel htmlFor="manual-floor">Floor</FieldLabel>
+        <Input
           id="manual-floor"
           list="manual-floor-options"
           value={floorName}
           onChange={(event) => setFloorName(event.target.value)}
         />
         <FloorOptions id="manual-floor-options" floorNames={floorNames} />
-      </div>
-      <div className="field field-grow">
-        <label htmlFor="manual-area">Area name</label>
-        <input
+      </Field>
+      <Field className="flex-1">
+        <FieldLabel htmlFor="manual-area">Area name</FieldLabel>
+        <Input
           id="manual-area"
           value={name}
           placeholder="e.g. Bedroom 1"
           onChange={(event) => setName(event.target.value)}
         />
-      </div>
-      <label className="check-field">
-        <input
-          type="checkbox"
+      </Field>
+      <label className="flex min-h-[42px] items-center gap-[7px] text-[13px] font-semibold">
+        <Checkbox
           checked={isRequired}
-          onChange={(event) => setIsRequired(event.target.checked)}
+          onCheckedChange={(checked) => setIsRequired(checked === true)}
         />
         Required
       </label>
@@ -1420,18 +1511,17 @@ function AreaReviewRow({
       aria-busy={Boolean(sync && sync.state !== 'SYNCED')}
     >
       {onToggleSelected ? (
-        <label className="area-select-box">
-          <input
-            type="checkbox"
-            checked={Boolean(selected)}
+        <label className="flex items-center self-center pr-0.5">
+          <Checkbox
             aria-label={`Select ${area.name}`}
-            onChange={(event) => onToggleSelected(event.target.checked)}
+            checked={Boolean(selected)}
+            onCheckedChange={(checked) => onToggleSelected(checked === true)}
           />
         </label>
       ) : null}
-      <div className="field">
-        <label htmlFor={`floor-${area.id}`}>Floor</label>
-        <input
+      <Field>
+        <FieldLabel htmlFor={`floor-${area.id}`}>Floor</FieldLabel>
+        <Input
           id={`floor-${area.id}`}
           list={floorOptionsId}
           value={floorName}
@@ -1442,10 +1532,10 @@ function AreaReviewRow({
           }}
         />
         <FloorOptions id={floorOptionsId} floorNames={floorNames} />
-      </div>
-      <div className="field field-grow">
-        <label htmlFor={`area-${area.id}`}>Area</label>
-        <input
+      </Field>
+      <Field className="flex-1">
+        <FieldLabel htmlFor={`area-${area.id}`}>Area</FieldLabel>
+        <Input
           id={`area-${area.id}`}
           value={name}
           disabled={readOnly}
@@ -1461,14 +1551,14 @@ function AreaReviewRow({
         </small>
         {sync ? <small className="cell-note">{syncLabel(sync.state)}</small> : null}
         {hasExternalConflict ? (
-          <small className="field-error">
+          <FieldError>
             This area changed elsewhere. Review the latest values before saving.
-          </small>
+          </FieldError>
         ) : null}
-      </div>
-      <div className="field area-order-field">
-        <label htmlFor={`order-${area.id}`}>Order</label>
-        <input
+      </Field>
+      <Field className="w-[90px] min-w-[90px]">
+        <FieldLabel htmlFor={`order-${area.id}`}>Order</FieldLabel>
+        <Input
           id={`order-${area.id}`}
           type="number"
           min={1}
@@ -1479,14 +1569,13 @@ function AreaReviewRow({
             setIsDirty(true);
           }}
         />
-      </div>
-      <label className="check-field">
-        <input
-          type="checkbox"
+      </Field>
+      <label className="flex min-h-[42px] items-center gap-[7px] text-[13px] font-semibold">
+        <Checkbox
           checked={isRequired}
           disabled={readOnly}
-          onChange={(event) => {
-            setIsRequired(event.target.checked);
+          onCheckedChange={(checked) => {
+            setIsRequired(checked === true);
             setIsDirty(true);
           }}
         />

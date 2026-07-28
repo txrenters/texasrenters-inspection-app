@@ -3,6 +3,9 @@
 import { useState, type FormEvent } from 'react';
 import { UserPlusIcon } from 'lucide-react';
 
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
@@ -116,9 +119,9 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
         ) : (
           <form onSubmit={(event) => void submit(event)}>
             <div className="form-grid">
-              <div className="field">
-                <label htmlFor="technician-name">Full name</label>
-                <input
+              <Field>
+                <FieldLabel htmlFor="technician-name">Full name</FieldLabel>
+                <Input
                   id="technician-name"
                   autoFocus
                   required
@@ -129,10 +132,10 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                 />
-              </div>
-              <div className="field">
-                <label htmlFor="technician-email">Work email</label>
-                <input
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="technician-email">Work email</FieldLabel>
+                <Input
                   id="technician-email"
                   required
                   type="email"
@@ -142,7 +145,7 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                 />
-              </div>
+              </Field>
             </div>
             <div className="temporary-password-note">
               <span aria-hidden>
@@ -156,9 +159,9 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
               </p>
             </div>
             {create.error ? (
-              <div className="alert alert-danger" role="alert">
+              <Alert variant="destructive" role="alert">
                 {create.error.message}
-              </div>
+              </Alert>
             ) : null}
             <DialogFooter>
               <button

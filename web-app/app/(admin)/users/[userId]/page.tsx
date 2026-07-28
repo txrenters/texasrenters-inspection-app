@@ -2,6 +2,19 @@
 
 import { useParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 
 import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/shared';
@@ -56,8 +69,6 @@ export default function UserDetailPage() {
   }
 
   async function toggleStatus() {
-    const verb = item.isActive ? 'deactivate' : 'activate';
-    if (!window.confirm(`Are you sure you want to ${verb} ${item.displayName}?`)) return;
     try {
       await updateUserStatus.mutateAsync({ id, isActive: !item.isActive });
     } catch {
@@ -73,34 +84,60 @@ export default function UserDetailPage() {
         breadcrumbs={[{ label: 'Users', href: '/users' }, { label: 'Detail' }]}
         action={
           canManage && !item.isSystemAdmin ? (
-            <button
-              className={buttonVariants({ variant: item.isActive ? 'danger' : 'primary' })}
-              disabled={updateUserStatus.isPending}
-              onClick={() => void toggleStatus()}
-            >
-              {item.isActive ? 'Deactivate account' : 'Activate account'}
-            </button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  className={buttonVariants({ variant: item.isActive ? 'danger' : 'primary' })}
+                  disabled={updateUserStatus.isPending}
+                >
+                  {item.isActive ? 'Deactivate account' : 'Activate account'}
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {item.isActive ? 'Deactivate' : 'Activate'} {item.displayName}?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {item.isActive
+                      ? 'They are signed out and lose access to every admin screen. Their roles are kept, so activating later restores the same permissions.'
+                      : 'They regain access with the roles already assigned to this account.'}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    className={buttonVariants({
+                      variant: item.isActive ? 'danger' : 'primary',
+                    })}
+                    onClick={() => void toggleStatus()}
+                  >
+                    {item.isActive ? 'Deactivate' : 'Activate'}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           ) : undefined
         }
       />
 
       {updateUserStatus.error ? (
-        <div className="alert alert-danger" role="alert">
+        <Alert variant="destructive" role="alert">
           {updateUserStatus.error.message}
-        </div>
+        </Alert>
       ) : null}
 
       <Card className="p-[22px] max-[560px]:p-4" asChild>
         <section className="section-gap">
         <CardHeader className="p-0 pb-4">
           <div>
-            <span className="section-kicker">Identity</span>
+            <span className="block text-xs font-semibold text-muted-foreground">Identity</span>
             <CardTitle className="text-[17px]">Account</CardTitle>
           </div>
           <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
         </CardHeader>
-        <dl className="detail-grid">
-          <div className="detail-item">
+        <dl className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
+          <div className="rounded-xl bg-background p-3.5">
             <dt>Effective permissions</dt>
             <dd>
               <div className="badge-wrap">
@@ -109,7 +146,7 @@ export default function UserDetailPage() {
                     <Badge key={permission} value={formatPermission(permission)} />
                   ))
                 ) : (
-                  <span className="media-meta">No permissions — assign a role below.</span>
+                  <span className="text-[13px] text-muted-foreground">No permissions — assign a role below.</span>
                 )}
               </div>
             </dd>
@@ -122,7 +159,7 @@ export default function UserDetailPage() {
         <section className="section-gap">
         <CardHeader className="p-0 pb-4">
           <div>
-            <span className="section-kicker">Access control</span>
+            <span className="block text-xs font-semibold text-muted-foreground">Access control</span>
             <CardTitle className="text-[17px]">Role assignment</CardTitle>
             <CardDescription>
               Access is defined entirely by what you assign here. Changes take effect on the user’s
@@ -132,10 +169,10 @@ export default function UserDetailPage() {
         </CardHeader>
 
         {item.isSystemAdmin ? (
-          <div className="alert alert-warning">
+          <Alert variant="warning">
             This is the protected bootstrap administrator. It has every permission and cannot be
             changed through custom role assignment.
-          </div>
+          </Alert>
         ) : (
           <fieldset className="permission-group" disabled={!canManage}>
             <legend>Assigned roles</legend>
@@ -143,15 +180,14 @@ export default function UserDetailPage() {
               Effective access is the union of permissions in the selected roles.
             </p>
             {roles.isLoading ? (
-              <p className="media-meta">Loading roles…</p>
+              <p className="text-[13px] text-muted-foreground">Loading roles…</p>
             ) : roles.data?.items.length ? (
               <div className="permission-options">
                 {roles.data.items.map((role) => (
                   <label key={role.id} className="permission-option">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={roleIds.has(role.id)}
-                      onChange={() => toggle(roleIds, setRoleIds, role.id)}
+                      onCheckedChange={() => toggle(roleIds, setRoleIds, role.id)}
                     />
                     <span>
                       <strong>{role.name}</strong>
@@ -163,15 +199,15 @@ export default function UserDetailPage() {
                 ))}
               </div>
             ) : (
-              <p className="media-meta">No custom roles exist yet.</p>
+              <p className="text-[13px] text-muted-foreground">No custom roles exist yet.</p>
             )}
           </fieldset>
         )}
 
         {setUserRoles.error ? (
-          <div className="alert alert-danger" role="alert">
+          <Alert variant="destructive" role="alert">
             {setUserRoles.error.message}
-          </div>
+          </Alert>
         ) : null}
 
         {canManage && !item.isSystemAdmin ? (

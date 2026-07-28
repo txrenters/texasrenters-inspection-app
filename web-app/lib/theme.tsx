@@ -1,5 +1,6 @@
 'use client';
 
+import { Monitor, Moon, Sun } from 'lucide-react';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 export type ThemePreference = 'light' | 'dark' | 'system';
@@ -58,10 +59,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
 export function ThemeSelector() {
   const { preference, setPreference } = useContext(ThemeContext);
-  const options: Array<{ value: ThemePreference; label: string; icon: string }> = [
-    { value: 'light', label: 'Light theme', icon: '☀' },
-    { value: 'dark', label: 'Dark theme', icon: '◐' },
-    { value: 'system', label: 'Use system theme', icon: '◫' },
+  const options = [
+    { value: 'light' as const, label: 'Light theme', Icon: Sun },
+    { value: 'dark' as const, label: 'Dark theme', Icon: Moon },
+    { value: 'system' as const, label: 'Use system theme', Icon: Monitor },
   ];
   return (
     <div className="theme-selector" aria-label="Color theme" role="group">
@@ -75,7 +76,7 @@ export function ThemeSelector() {
           title={option.label}
           type="button"
         >
-          <span aria-hidden>{option.icon}</span>
+          <option.Icon aria-hidden className="size-3.5" />
         </button>
       ))}
     </div>

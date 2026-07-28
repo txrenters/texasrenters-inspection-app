@@ -1,6 +1,10 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
@@ -69,9 +73,9 @@ export function RoleEditorDialog({
           </DialogHeader>
           <div className="grid gap-4">
           <div className="form-grid">
-            <div className="field">
-              <label htmlFor="role-name">Role name</label>
-              <input
+            <Field>
+              <FieldLabel htmlFor="role-name">Role name</FieldLabel>
+              <Input
                 id="role-name"
                 autoFocus
                 required
@@ -81,21 +85,21 @@ export function RoleEditorDialog({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
               />
-            </div>
-            <div className="field">
-              <label htmlFor="role-description">Description (optional)</label>
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="role-description">Description (optional)</FieldLabel>
+              <Input
                 id="role-description"
                 maxLength={280}
                 placeholder="What is this role for?"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
               />
-            </div>
+            </Field>
           </div>
 
           {catalog.isLoading ? (
-            <p className="media-meta">Loading permissions…</p>
+            <p className="text-[13px] text-muted-foreground">Loading permissions…</p>
           ) : catalog.data ? (
             <div className="permission-groups">
               {catalog.data.groups.map((group) => (
@@ -105,10 +109,9 @@ export function RoleEditorDialog({
                   <div className="permission-options">
                     {group.permissions.map((permission) => (
                       <label key={permission.key} className="permission-option">
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={permissions.has(permission.key)}
-                          onChange={() => toggle(permission.key)}
+                          onCheckedChange={() => toggle(permission.key)}
                         />
                         <span>
                           <strong>{permission.label}</strong>
@@ -122,12 +125,12 @@ export function RoleEditorDialog({
             </div>
           ) : null}
 
-          <p className="media-meta">{permissions.size} permission(s) selected</p>
+          <p className="text-[13px] text-muted-foreground">{permissions.size} permission(s) selected</p>
 
           {mutation.error ? (
-            <div className="alert alert-danger" role="alert">
+            <Alert variant="destructive" role="alert">
               {mutation.error.message}
-            </div>
+            </Alert>
           ) : null}
           <DialogFooter>
             <button

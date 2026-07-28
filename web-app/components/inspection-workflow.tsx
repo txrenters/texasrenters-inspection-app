@@ -2,7 +2,16 @@
 
 import type { AdminInspection } from '@texasrenters/shared';
 import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Field, FieldError } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -41,6 +50,10 @@ type WorkflowAction = 'tbd' | 'follow-up' | 'under-review';
  * the human-only transitions — finalize, mark TBD, require a follow-up, or send
  * back for review. Technician submission never finalizes; only these actions do.
  */
+// Radix Select rejects an empty string as an item value; the "nothing
+// selected" row uses a sentinel translated back to '' at the boundary.
+const NONE = '__none__';
+
 export function InspectionWorkflowPanel({
   inspection,
   onFinalize,
@@ -56,18 +69,19 @@ export function InspectionWorkflowPanel({
   const finalized = inspection.status === 'COMPLETED' || inspection.status === 'CANCELLED';
 
   return (
-    <section className="panel inspection-workflow-panel" aria-labelledby="inspection-workflow-title">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section aria-labelledby="inspection-workflow-title">
+        <CardHeader className="p-0 pb-4">
         <div>
-          <span className="section-kicker">Review workflow</span>
-          <h2 id="inspection-workflow-title">Finalization &amp; follow-up</h2>
-          <p className="panel-description">
+          <span className="block text-xs font-semibold text-muted-foreground">Review workflow</span>
+          <CardTitle className="text-[17px]" id="inspection-workflow-title">Finalization &amp; follow-up</CardTitle>
+          <CardDescription>
             Submitting is not completing — an administrator finalizes, defers, or requests a
             follow-up.
-          </p>
+          </CardDescription>
         </div>
         <Badge value={inspection.status} />
-      </div>
+      </CardHeader>
 
       <dl className="workflow-facts">
         <div className="workflow-fact">
@@ -152,7 +166,8 @@ export function InspectionWorkflowPanel({
           onClose={() => setAction(null)}
         />
       ) : null}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -232,21 +247,27 @@ function WorkflowActionDialog({
           </DialogHeader>
         {action === 'follow-up' ? (
           <>
-            <label className="field">
+            <Field asChild>
+<label>
               <span>Planned date (optional)</span>
               <input type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
             </label>
-            <label className="field">
+</Field>
+            <Field asChild>
+<label>
               <span>Tasks / areas to cover (optional)</span>
               <textarea value={tasks} onChange={(event) => setTasks(event.target.value)} rows={2} />
             </label>
+</Field>
           </>
         ) : null}
-        <label className="field">
+        <Field asChild>
+<label>
           <span>Reason (optional)</span>
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+</Field>
+        {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <DialogFooter>
             <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
               Cancel
@@ -272,36 +293,37 @@ export function InspectionAreasPanel({ inspectionId }: { inspectionId: string })
   const canMerge = permissions.has('inspections:manage');
 
   return (
-    <section className="panel inspection-areas-panel" aria-labelledby="inspection-areas-title">
-      <div className="panel-header">
+      <Card className="p-[22px] max-[560px]:p-4" asChild>
+      <section aria-labelledby="inspection-areas-title">
+        <CardHeader className="p-0 pb-4">
         <div>
-          <span className="section-kicker">Areas</span>
-          <h2 id="inspection-areas-title">Inspection areas</h2>
-          <p className="panel-description">Rooms and outdoor areas captured for this inspection.</p>
+          <span className="block text-xs font-semibold text-muted-foreground">Areas</span>
+          <CardTitle className="text-[17px]" id="inspection-areas-title">Inspection areas</CardTitle>
+          <CardDescription>Rooms and outdoor areas captured for this inspection.</CardDescription>
         </div>
         {canMerge && (areas.data?.length ?? 0) >= 2 ? (
           <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setMerging(true)}>
             Merge duplicates
           </button>
         ) : null}
-      </div>
+      </CardHeader>
 
       {areas.isLoading ? (
         <LoadingState label="Loading areas…" />
       ) : areas.isError ? (
         <ErrorState error={areas.error} retry={() => void areas.refetch()} />
       ) : areas.data?.length ? (
-        <ul className="area-list">
+        <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {areas.data.map((area) => (
-            <li key={area.id} className="area-list-item">
+            <li key={area.id} className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border px-3.5 py-2.5">
               <div>
                 <strong>{area.name}</strong>
-                {area.floorName ? <span className="area-meta"> · {area.floorName}</span> : null}
+                {area.floorName ? <span className="text-xs text-muted-foreground"> · {area.floorName}</span> : null}
               </div>
-              <div className="area-list-meta">
+              <div className="flex flex-wrap items-center gap-2">
                 <Badge value={area.environment} />
                 <Badge value={area.completionStatus} />
-                <span className="area-meta">
+                <span className="text-xs text-muted-foreground">
                   {area.mediaCount} video{area.mediaCount === 1 ? '' : 's'} · {area.photoCount} photo
                   {area.photoCount === 1 ? '' : 's'}
                 </span>
@@ -320,7 +342,8 @@ export function InspectionAreasPanel({ inspectionId }: { inspectionId: string })
           onClose={() => setMerging(false)}
         />
       ) : null}
-    </section>
+      </section>
+      </Card>
   );
 }
 
@@ -363,38 +386,60 @@ function MergeAreasDialog({
               the source area is removed. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-        <label className="field">
+        <Field asChild>
+<label>
           <span>Source area (merged away)</span>
-          <select value={sourceAreaId} onChange={(event) => setSourceAreaId(event.target.value)}>
-            <option value="">Select an area…</option>
-            {areas.map((area) => (
-              <option key={area.id} value={area.id}>
-                {area.name}
-                {area.floorName ? ` · ${area.floorName}` : ''} ({area.mediaCount}v/{area.photoCount}
-                p)
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Target area (kept)</span>
-          <select value={targetAreaId} onChange={(event) => setTargetAreaId(event.target.value)}>
-            <option value="">Select an area…</option>
-            {areas
-              .filter((area) => area.id !== sourceAreaId)
-              .map((area) => (
-                <option key={area.id} value={area.id}>
+          <Select
+            onValueChange={(next) => setSourceAreaId(next === NONE ? '' : next)}
+            value={sourceAreaId || NONE}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select an area…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Select an area…</SelectItem>
+              {areas.map((area) => (
+                <SelectItem key={area.id} value={area.id}>
                   {area.name}
-                  {area.floorName ? ` · ${area.floorName}` : ''}
-                </option>
+                  {area.floorName ? ` · ${area.floorName}` : ''} ({area.mediaCount}v/
+                  {area.photoCount}p)
+                </SelectItem>
               ))}
-          </select>
+            </SelectContent>
+          </Select>
         </label>
-        <label className="field">
+</Field>
+        <Field asChild>
+<label>
+          <span>Target area (kept)</span>
+          <Select
+            onValueChange={(next) => setTargetAreaId(next === NONE ? '' : next)}
+            value={targetAreaId || NONE}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select an area…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NONE}>Select an area…</SelectItem>
+              {areas
+                .filter((area) => area.id !== sourceAreaId)
+                .map((area) => (
+                  <SelectItem key={area.id} value={area.id}>
+                    {area.name}
+                    {area.floorName ? ` · ${area.floorName}` : ''}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </label>
+</Field>
+        <Field asChild>
+<label>
           <span>Reason (optional)</span>
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
         </label>
-        {mutation.error ? <p className="field-error">{mutation.error.message}</p> : null}
+</Field>
+        {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
           <AlertDialogFooter>
             <AlertDialogCancel type="button" onClick={onClose}>
               Cancel

@@ -2,6 +2,16 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 import {
@@ -20,6 +30,10 @@ import { useUsers } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
 const USER_HEADERS = ['User', 'Email', 'Assigned roles', 'Status'];
+
+// Radix Select rejects an empty string as an item value, so the unfiltered
+// row carries a sentinel that is translated back to '' for the query.
+const ALL = '__all__';
 
 export default function UsersPage() {
   const [page, setPage] = useState(1);
@@ -71,9 +85,9 @@ export default function UsersPage() {
             : undefined
         }
       >
-        <div className="field field-grow">
-          <label htmlFor="user-search">Search name or email</label>
-          <input
+        <Field className="flex-1">
+          <FieldLabel htmlFor="user-search">Search name or email</FieldLabel>
+          <Input
             id="user-search"
             value={search}
             onChange={(event) => {
@@ -82,22 +96,26 @@ export default function UsersPage() {
             }}
             placeholder="Search users..."
           />
-        </div>
-        <div className="field field-medium">
-          <label htmlFor="user-active">Account status</label>
-          <select
-            id="user-active"
-            value={active}
-            onChange={(event) => {
-              setActive(event.target.value);
+        </Field>
+        <Field className="w-[min(280px,100%)]">
+          <FieldLabel htmlFor="user-active">Account status</FieldLabel>
+          <Select
+            onValueChange={(next) => {
+              setActive(next === ALL ? '' : next);
               setPage(1);
             }}
+            value={active || ALL}
           >
-            <option value="">All accounts</option>
-            <option value="true">Active</option>
-            <option value="false">Inactive</option>
-          </select>
-        </div>
+            <SelectTrigger id="user-active">
+              <SelectValue placeholder="All accounts" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All accounts</SelectItem>
+              <SelectItem value="true">Active</SelectItem>
+              <SelectItem value="false">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
       </FilterToolbar>
       {users.isLoading || isFilterPending ? (
         <TableLoadingState headers={USER_HEADERS} label="Loading users" rows={4} />
@@ -116,28 +134,28 @@ export default function UsersPage() {
         <>
           <DataTable headers={USER_HEADERS} label="User accounts">
             {users.data.items.map((user) => (
-              <tr key={user.id}>
-                <td>
-                  <Link className="table-link" href={`/users/${user.id}`}>
+              <TableRow key={user.id}>
+                <TableCell>
+                  <Link className="font-semibold text-primary" href={`/users/${user.id}`}>
                     {user.displayName}
                   </Link>
-                </td>
-                <td>{user.email}</td>
-                <td>
+                </TableCell>
+                <TableCell>{user.email}</TableCell>
+                <TableCell>
                   <div className="badge-wrap">
                     {user.isSystemAdmin ? (
                       <Badge value="SYSTEM ADMINISTRATOR" />
                     ) : user.customRoles.length ? (
                       user.customRoles.map((role) => <Badge key={role.id} value={role.name} />)
                     ) : (
-                      <span className="media-meta">None</span>
+                      <span className="text-[13px] text-muted-foreground">None</span>
                     )}
                   </div>
-                </td>
-                <td>
+                </TableCell>
+                <TableCell>
                   <Badge value={user.isActive ? 'ACTIVE' : 'INACTIVE'} />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
           </DataTable>
           <Pagination page={page} totalPages={users.data.totalPages} onPage={setPage} />

@@ -1,6 +1,10 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
@@ -106,9 +110,9 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
         ) : (
           <form onSubmit={(event) => void submit(event)}>
             <div className="form-grid">
-              <div className="field">
-                <label htmlFor="user-name">Full name</label>
-                <input
+              <Field>
+                <FieldLabel htmlFor="user-name">Full name</FieldLabel>
+                <Input
                   id="user-name"
                   autoFocus
                   required
@@ -119,10 +123,10 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
                 />
-              </div>
-              <div className="field">
-                <label htmlFor="user-email">Work email</label>
-                <input
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="user-email">Work email</FieldLabel>
+                <Input
                   id="user-email"
                   required
                   type="email"
@@ -132,7 +136,7 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                 />
-              </div>
+              </Field>
             </div>
 
             <fieldset className="permission-group">
@@ -142,15 +146,14 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 permissions granted by the selected roles.
               </p>
               {roles.isLoading ? (
-                <p className="media-meta">Loading roles…</p>
+                <p className="text-[13px] text-muted-foreground">Loading roles…</p>
               ) : roles.data?.items.length ? (
                 <div className="permission-options">
                   {roles.data.items.map((role) => (
                     <label key={role.id} className="permission-option">
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={roleIds.has(role.id)}
-                        onChange={() => toggle(roleIds, setRoleIds, role.id)}
+                        onCheckedChange={() => toggle(roleIds, setRoleIds, role.id)}
                       />
                       <span>
                         <strong>{role.name}</strong>
@@ -162,16 +165,16 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                   ))}
                 </div>
               ) : (
-                <p className="media-meta">
+                <p className="text-[13px] text-muted-foreground">
                   No roles exist yet. Create a role before provisioning a user.
                 </p>
               )}
             </fieldset>
 
             {create.error ? (
-              <div className="alert alert-danger" role="alert">
+              <Alert variant="destructive" role="alert">
                 {create.error.message}
-              </div>
+              </Alert>
             ) : null}
             <DialogFooter>
               <button

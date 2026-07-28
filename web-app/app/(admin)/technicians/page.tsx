@@ -2,6 +2,16 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 import {
@@ -20,6 +30,10 @@ import { useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
 const TECHNICIAN_HEADERS = ['Technician', 'Email', 'Current', 'In progress', 'Completed', 'Status'];
+
+// Radix Select rejects an empty string as an item value, so the unfiltered
+// row carries a sentinel that is translated back to '' for the query.
+const ALL = '__all__';
 
 export default function TechniciansPage() {
   const canProvision = usePermissions().has('technicians:provision');
@@ -97,9 +111,9 @@ export default function TechniciansPage() {
             : undefined
         }
       >
-        <div className="field field-grow">
-          <label htmlFor="technician-search">Search name or email</label>
-          <input
+        <Field className="flex-1">
+          <FieldLabel htmlFor="technician-search">Search name or email</FieldLabel>
+          <Input
             id="technician-search"
             value={search}
             onChange={(event) => {
@@ -108,22 +122,26 @@ export default function TechniciansPage() {
             }}
             placeholder="Search technicians..."
           />
-        </div>
-        <div className="field field-medium">
-          <label htmlFor="technician-active">Account status</label>
-          <select
-            id="technician-active"
-            value={active}
-            onChange={(event) => {
-              setActive(event.target.value);
+        </Field>
+        <Field className="w-[min(280px,100%)]">
+          <FieldLabel htmlFor="technician-active">Account status</FieldLabel>
+          <Select
+            onValueChange={(next) => {
+              setActive(next === ALL ? '' : next);
               setPage(1);
             }}
+            value={active || ALL}
           >
-            <option value="">All accounts</option>
-            <option value="true">Active</option>
-            <option value="false">Inactive</option>
-          </select>
-        </div>
+            <SelectTrigger id="technician-active">
+              <SelectValue placeholder="All accounts" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All accounts</SelectItem>
+              <SelectItem value="true">Active</SelectItem>
+              <SelectItem value="false">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
       </FilterToolbar>
       {technicians.isLoading || isFilterPending ? (
         <TableLoadingState
@@ -146,20 +164,20 @@ export default function TechniciansPage() {
         <>
           <DataTable headers={TECHNICIAN_HEADERS} label="Technician accounts and workloads">
             {technicians.data.items.map((item) => (
-              <tr key={item.id}>
-                <td>
-                  <Link className="table-link" href={`/technicians/${item.id}`}>
+              <TableRow key={item.id}>
+                <TableCell>
+                  <Link className="font-semibold text-primary" href={`/technicians/${item.id}`}>
                     {item.displayName}
                   </Link>
-                </td>
-                <td>{item.email}</td>
-                <td className="numeric-cell">{item.workload?.current ?? 0}</td>
-                <td className="numeric-cell">{item.workload?.inProgress ?? 0}</td>
-                <td className="numeric-cell">{item.workload?.completed ?? 0}</td>
-                <td>
+                </TableCell>
+                <TableCell>{item.email}</TableCell>
+                <TableCell className="numeric-cell">{item.workload?.current ?? 0}</TableCell>
+                <TableCell className="numeric-cell">{item.workload?.inProgress ?? 0}</TableCell>
+                <TableCell className="numeric-cell">{item.workload?.completed ?? 0}</TableCell>
+                <TableCell>
                   <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
           </DataTable>
           <Pagination page={page} totalPages={technicians.data.totalPages} onPage={setPage} />

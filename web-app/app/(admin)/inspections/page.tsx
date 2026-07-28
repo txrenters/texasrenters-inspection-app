@@ -3,6 +3,17 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { InspectionType } from '@texasrenters/shared';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
+import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 import {
@@ -30,6 +41,10 @@ const INSPECTION_HEADERS = [
   'Assignment',
   'Technician',
 ];
+
+// Radix Select rejects an empty string as an item value, so the unfiltered
+// row carries a sentinel that is translated back to '' for the query.
+const ALL = '__all__';
 
 export default function InspectionsPage() {
   const canManage = usePermissions().has('inspections:manage');
@@ -86,9 +101,9 @@ export default function InspectionsPage() {
             : undefined
         }
       >
-        <div className="field field-grow">
-          <label htmlFor="inspection-search">Search property or unit</label>
-          <input
+        <Field className="flex-1">
+          <FieldLabel htmlFor="inspection-search">Search property or unit</FieldLabel>
+          <Input
             id="inspection-search"
             value={search}
             onChange={(event) => {
@@ -97,57 +112,66 @@ export default function InspectionsPage() {
             }}
             placeholder="Search inspections..."
           />
-        </div>
-        <div className="field field-compact">
-          <label htmlFor="inspection-type">Type</label>
-          <select
-            id="inspection-type"
-            value={inspectionType}
-            onChange={(event) => {
-              setInspectionType(event.target.value);
+        </Field>
+        <Field className="w-[min(210px,100%)]">
+          <FieldLabel htmlFor="inspection-type">Type</FieldLabel>
+          <Select
+            onValueChange={(next) => {
+              setInspectionType(next === ALL ? '' : next);
               setPage(1);
             }}
+            value={inspectionType || ALL}
           >
-            <option value="">All types</option>
-            {Object.values(InspectionType).map((type) => (
-              <option key={type} value={type}>
-                {type.replaceAll('_', ' ')}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field field-compact">
-          <label htmlFor="inspection-status">Status</label>
-          <select
-            id="inspection-status"
-            value={status}
-            onChange={(event) => {
-              setStatus(event.target.value);
+            <SelectTrigger id="inspection-type">
+              <SelectValue placeholder="All types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All types</SelectItem>
+              {Object.values(InspectionType).map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type.replaceAll('_', ' ')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field className="w-[min(210px,100%)]">
+          <FieldLabel htmlFor="inspection-status">Status</FieldLabel>
+          <Select
+            onValueChange={(next) => {
+              setStatus(next === ALL ? '' : next);
               setPage(1);
             }}
+            value={status || ALL}
           >
-            <option value="">All statuses</option>
-            {[
-              'SCHEDULED',
-              'IN_PROGRESS',
-              'PROCESSING',
-              'REVIEW_REQUIRED',
-              'COMPLETED',
-              'CANCELLED',
-            ].map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </select>
-        </div>
-        <label className="check-field filter-toggle">
-          <input
-            type="checkbox"
+            <SelectTrigger id="inspection-status">
+              <SelectValue placeholder="All statuses" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All statuses</SelectItem>
+              {[
+                'SCHEDULED',
+                'IN_PROGRESS',
+                'PROCESSING',
+                'REVIEW_REQUIRED',
+                'COMPLETED',
+                'CANCELLED',
+              ].map((item) => (
+                <SelectItem key={item} value={item}>
+                  {item.replaceAll('_', ' ')}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <label className="flex min-h-[42px] items-center gap-2 text-[13px] font-semibold">
+          <Checkbox
             checked={unassignedOnly}
-            onChange={(event) => {
-              setUnassignedOnly(event.target.checked);
+            onCheckedChange={(checked) => {
+              setUnassignedOnly(checked === true);
               setPage(1);
             }}
-          />{' '}
+          />
           Unassigned only
         </label>
       </FilterToolbar>
@@ -179,28 +203,28 @@ export default function InspectionsPage() {
             {inspections.data.items.map((inspection) => {
               const current = inspection.assignments.find((assignment) => assignment.isCurrent);
               return (
-                <tr key={inspection.id}>
-                  <td>
-                    <Link className="table-link" href={`/inspections/${inspection.id}`}>
+                <TableRow key={inspection.id}>
+                  <TableCell>
+                    <Link className="font-semibold text-primary" href={`/inspections/${inspection.id}`}>
                       {inspection.propertywareBuilding?.name ?? 'Property snapshot'}
                     </Link>
-                  </td>
-                  <td>{inspection.propertywareUnit?.name ?? 'Entire property'}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell>{inspection.propertywareUnit?.name ?? 'Entire property'}</TableCell>
+                  <TableCell>
                     <Badge value={inspection.inspectionType} />
-                  </td>
-                  <td>{formatDate(inspection.scheduledAt)}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell>{formatDate(inspection.scheduledAt)}</TableCell>
+                  <TableCell>
                     <Badge value={inspection.priority} />
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell>
                     <Badge value={inspection.status} />
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell>
                     <Badge value={current ? 'ASSIGNED' : 'UNASSIGNED'} />
-                  </td>
-                  <td>{current?.technician?.displayName ?? '-'}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell>{current?.technician?.displayName ?? '-'}</TableCell>
+                </TableRow>
               );
             })}
           </DataTable>

@@ -2,6 +2,8 @@
 
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { buttonVariants } from '@/components/ui/button';
 
 import { AssignmentDialog } from '@/components/assignment-dialog';
@@ -132,10 +134,11 @@ export default function InspectionDetailPage() {
         }
       />
 
-      <section className="panel inspection-overview" aria-labelledby="inspection-overview-title">
+      <Card className="overflow-visible p-0" asChild>
+      <section aria-labelledby="inspection-overview-title">
         <div className="inspection-status-row">
           <div>
-            <span className="section-kicker">Current state</span>
+            <span className="block text-xs font-semibold text-muted-foreground">Current state</span>
             <h2 id="inspection-overview-title">Inspection overview</h2>
           </div>
           <div className="inspection-status-badges">
@@ -192,6 +195,7 @@ export default function InspectionDetailPage() {
           </div>
         ) : null}
       </section>
+      </Card>
 
       <InspectionWorkflowPanel inspection={item} onFinalize={() => setCompleting(true)} />
 
@@ -208,14 +212,15 @@ export default function InspectionDetailPage() {
       <InspectionAreasPanel inspectionId={id} />
 
       <div className="inspection-history-layout section-gap">
-        <section className="panel inspection-history-panel">
-          <div className="panel-header">
+        <Card className="p-[22px] max-[560px]:p-4 min-w-0" asChild>
+        <section>
+          <CardHeader className="p-0 pb-4">
             <div>
-              <span className="section-kicker">Workforce</span>
-              <h2>Assignment history</h2>
-              <p className="panel-description">Current and previous technician ownership.</p>
+              <span className="block text-xs font-semibold text-muted-foreground">Workforce</span>
+              <CardTitle className="text-[17px]">Assignment history</CardTitle>
+              <CardDescription>Current and previous technician ownership.</CardDescription>
             </div>
-          </div>
+          </CardHeader>
           {assignments.isLoading ? (
             <TableLoadingState
               headers={['Technician', 'Assigned by', 'Assigned', 'Ended', 'Status', 'Reason']}
@@ -231,20 +236,20 @@ export default function InspectionDetailPage() {
                 label="Inspection assignment history"
               >
                 {assignments.data.items.map((assignment) => (
-                  <tr key={assignment.id}>
-                    <td>
+                  <TableRow key={assignment.id}>
+                    <TableCell>
                       <strong>
                         {assignment.technician?.displayName ?? assignment.technicianId}
                       </strong>
-                    </td>
-                    <td>{assignment.assignedBy?.displayName ?? assignment.assignedById}</td>
-                    <td>{formatDate(assignment.assignedAt)}</td>
-                    <td>{formatDate(assignment.endedAt)}</td>
-                    <td>
+                    </TableCell>
+                    <TableCell>{assignment.assignedBy?.displayName ?? assignment.assignedById}</TableCell>
+                    <TableCell>{formatDate(assignment.assignedAt)}</TableCell>
+                    <TableCell>{formatDate(assignment.endedAt)}</TableCell>
+                    <TableCell>
                       <Badge value={assignment.isCurrent ? 'CURRENT' : assignment.status} />
-                    </td>
-                    <td>{assignment.reason ?? '—'}</td>
-                  </tr>
+                    </TableCell>
+                    <TableCell>{assignment.reason ?? '—'}</TableCell>
+                  </TableRow>
                 ))}
               </DataTable>
               <Pagination
@@ -257,15 +262,17 @@ export default function InspectionDetailPage() {
             <div className="compact-empty-state">No assignment history has been recorded.</div>
           )}
         </section>
+        </Card>
 
-        <section className="panel inspection-audit-panel">
-          <div className="panel-header">
+        <Card className="p-[22px] max-[560px]:p-4 min-w-0" asChild>
+        <section>
+          <CardHeader className="p-0 pb-4">
             <div>
-              <span className="section-kicker">Audit trail</span>
-              <h2>Recent activity</h2>
-              <p className="panel-description">Immutable operational events for this inspection.</p>
+              <span className="block text-xs font-semibold text-muted-foreground">Audit trail</span>
+              <CardTitle className="text-[17px]">Recent activity</CardTitle>
+              <CardDescription>Immutable operational events for this inspection.</CardDescription>
             </div>
-          </div>
+          </CardHeader>
           {audit.isLoading ? (
             <LoadingState label="Loading audit activity…" />
           ) : audit.isError ? (
@@ -290,6 +297,7 @@ export default function InspectionDetailPage() {
             <div className="compact-empty-state">No audit activity has been recorded.</div>
           )}
         </section>
+        </Card>
       </div>
 
       {assigning ? (
