@@ -4,6 +4,7 @@ import { resolveApiUrl } from '@texasrenters/shared';
 import { getSupabaseClient } from '../auth/supabase';
 import { environment } from '../config/environment';
 import type { PhotoCaptureType } from '../domain/models';
+import type { SnapshotCaptureSource } from '../capture/guided-capture';
 
 export interface UploadRoomPhotoInput {
   roomId: string;
@@ -12,6 +13,11 @@ export interface UploadRoomPhotoInput {
   idempotencyKey: string;
   width?: number;
   height?: number;
+  recordingSessionId?: string;
+  videoTimestampMs?: number;
+  captureSource?: SnapshotCaptureSource;
+  sequenceNumber?: number;
+  findingId?: string;
 }
 
 /**
@@ -39,6 +45,17 @@ export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id
         captureType: input.captureType,
         ...(input.width ? { width: String(Math.round(input.width)) } : {}),
         ...(input.height ? { height: String(Math.round(input.height)) } : {}),
+        ...(input.recordingSessionId
+          ? { recordingSessionId: input.recordingSessionId }
+          : {}),
+        ...(input.videoTimestampMs !== undefined
+          ? { videoTimestampMs: String(Math.max(0, Math.round(input.videoTimestampMs))) }
+          : {}),
+        ...(input.captureSource ? { captureSource: input.captureSource } : {}),
+        ...(input.sequenceNumber
+          ? { sequenceNumber: String(Math.max(1, Math.round(input.sequenceNumber))) }
+          : {}),
+        ...(input.findingId ? { findingId: input.findingId } : {}),
       },
       headers: { authorization: `Bearer ${data.session.access_token}` },
     },

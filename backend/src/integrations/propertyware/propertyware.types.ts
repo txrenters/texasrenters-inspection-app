@@ -8,6 +8,8 @@ export interface PropertywareConfig {
   clientSecret?: string;
   organizationId?: string;
   portfolioReportUrl?: string;
+  /** Published lease report, used when REST /leases is not permitted. */
+  leaseReportUrl?: string;
   requestTimeoutMs: number;
   pageSize: number;
   maxRetries: number;
@@ -113,9 +115,11 @@ export interface NormalizedUnit extends NormalizedAddress {
 export interface NormalizedLease {
   entityType: 'leases';
   externalId: string;
-  portfolioExternalId: string;
+  /** Absent for report-sourced leases; resolved from the building instead. */
+  portfolioExternalId?: string;
   buildingExternalId: string;
-  unitExternalId: string;
+  /** Absent for report-sourced leases, which link at building level. */
+  unitExternalId?: string;
   idNumber?: string;
   leaseName?: string;
   isActive: boolean;

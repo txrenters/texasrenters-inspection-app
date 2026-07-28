@@ -28,4 +28,33 @@ describe('local recording metadata', () => {
     expect(draft.durationSeconds).toBe(1);
     expect(draft.estimatedSizeMb).toBe(0.66);
   });
+
+  it('stores only summarized guided-capture metadata with the primary recording', () => {
+    const draft = buildRecordingDraft({
+      inspectionId: 'inspection-oak',
+      roomId: 'room-oak-1',
+      uri: 'file:///video.mp4',
+      durationSeconds: 22,
+      captureSummary: {
+        sessionId: 'capture-session-1',
+        policyVersion: 'guided-area-v1',
+        startedAt: '2026-07-28T00:00:00.000Z',
+        completedAt: '2026-07-28T00:00:22.000Z',
+        durationSeconds: 22,
+        clockwiseRotationDegrees: 360,
+        counterClockwiseRotationDegrees: 0,
+        returnedToStart: true,
+        sensorSupported: true,
+        sensorConfidence: 'HIGH',
+        coverageStatus: 'COMPLETE',
+        manualConfirmation: true,
+        evidenceComplete: true,
+        snapshotCount: 3,
+        findingMarkerCount: 1,
+      },
+    });
+
+    expect(draft.captureSummary?.coverageStatus).toBe('COMPLETE');
+    expect(draft.captureSummary).not.toHaveProperty('sensorSamples');
+  });
 });

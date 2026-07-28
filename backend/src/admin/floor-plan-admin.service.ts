@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
+import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -24,6 +25,13 @@ export interface UploadedFloorPlan {
 }
 
 const ALLOWED_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png'] as const;
+
+/**
+ * A RUNNING extraction older than this was abandoned — almost always a process
+ * restart mid-call. Generous enough for a complex multi-storey plan, short
+ * enough that an operator is not left watching a spinner that will never end.
+ */
+const EXTRACTION_STALE_AFTER_MS = 10 * 60 * 1000;
 
 const floorPlanResponseSelect = {
   id: true,
@@ -78,6 +86,7 @@ const propertyAreaResponseSelect = {
   boundingBoxY: true,
   boundingBoxWidth: true,
   boundingBoxHeight: true,
+  updatedAt: true,
   createdBy: { select: { id: true, displayName: true } },
   floor: { select: { id: true, name: true, sortOrder: true } },
   _count: { select: { inspectionAreas: true } },
@@ -116,6 +125,7 @@ function mapArea(row: PropertyAreaRow) {
   return {
     id: row.id,
     propertyId: row.propertyId,
+    updatedAt: row.updatedAt,
     unitId: row.unitId,
     unit: row.unit,
     name: row.name,
@@ -148,6 +158,8 @@ function mapArea(row: PropertyAreaRow) {
 
 @Injectable()
 export class FloorPlanAdminService {
+  private readonly logger = new Logger(FloorPlanAdminService.name);
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(FloorPlanStorageService) private readonly storage: FloorPlanStorageService,
@@ -220,10 +232,34 @@ export class FloorPlanAdminService {
     };
   }
 
+  /**
+   * Starts extraction and returns immediately with the job to poll.
+   *
+   * The model call takes tens of seconds on a simple plan and grows with plan
+   * complexity, while the HTTP server closes idle sockets after
+   * HTTP_REQUEST_TIMEOUT_MS. Running it inside the request meant the socket was
+   * destroyed mid-flight — the browser saw ERR_EMPTY_RESPONSE while the handler
+   * ran to completion and logged success, so nothing appeared in the error
+   * logs. No timeout value fixes that for arbitrarily complex plans; the work
+   * has to leave the request.
+   */
   async extract(user: AuthenticatedUser, floorPlanId: string) {
     const plan = await this.requirePlan(user.organizationId, floorPlanId);
     const configuration = await this.aiSettings.resolve(user.organizationId);
     const descriptor = this.extraction.descriptor(configuration);
+    // One extraction per plan at a time: a second run would race the first
+    // over the same draft areas. A job abandoned by a restart is not counted.
+    const active = await this.prisma.floorPlanExtractionJob.findFirst({
+      where: { floorPlanId, status: 'RUNNING' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, updatedAt: true },
+    });
+    if (active && !this.isStaleJob(active.updatedAt))
+      throw new ApplicationError(
+        409,
+        'EXTRACTION_ALREADY_RUNNING',
+        'An extraction is already running for this plan.',
+      );
     const job = await this.prisma.floorPlanExtractionJob.create({
       data: { floorPlanId, status: 'RUNNING', ...descriptor },
     });
@@ -231,6 +267,65 @@ export class FloorPlanAdminService {
       where: { id: floorPlanId },
       data: { status: FloorPlanStatus.PROCESSING },
     });
+    // Deliberately not awaited: the caller polls extractionJob() instead.
+    // runExtraction records its own outcome and never rejects.
+    void this.runExtraction(user, plan, configuration, job.id);
+    return { jobId: job.id, status: 'RUNNING' as const };
+  }
+
+  /** A RUNNING job older than this was abandoned by a process restart. */
+  private isStaleJob(updatedAt: Date) {
+    return Date.now() - updatedAt.getTime() > EXTRACTION_STALE_AFTER_MS;
+  }
+
+  /**
+   * Status for a running or finished extraction. Self-heals a job abandoned
+   * mid-flight: without this a restart would leave the plan PROCESSING and the
+   * UI polling forever.
+   */
+  async extractionJob(user: AuthenticatedUser, floorPlanId: string, jobId: string) {
+    await this.requirePlan(user.organizationId, floorPlanId);
+    const job = await this.prisma.floorPlanExtractionJob.findFirst({
+      where: { id: jobId, floorPlanId },
+      select: { id: true, status: true, errorCode: true, output: true, updatedAt: true },
+    });
+    if (!job)
+      throw new ApplicationError(404, 'EXTRACTION_JOB_NOT_FOUND', 'Extraction job was not found.');
+    if (job.status === 'RUNNING' && this.isStaleJob(job.updatedAt)) {
+      await Promise.allSettled([
+        this.prisma.floorPlanExtractionJob.update({
+          where: { id: job.id },
+          data: { status: 'FAILED', errorCode: 'FLOOR_PLAN_EXTRACTION_TIMED_OUT' },
+        }),
+        this.prisma.propertyFloorPlan.update({
+          where: { id: floorPlanId },
+          data: { status: FloorPlanStatus.FAILED },
+        }),
+      ]);
+      return {
+        id: job.id,
+        status: 'FAILED' as const,
+        errorCode: 'FLOOR_PLAN_EXTRACTION_TIMED_OUT',
+        summary: null,
+      };
+    }
+    const output = job.output as { summary?: AdminFloorPlanExtractionSummary } | null;
+    return {
+      id: job.id,
+      status: job.status,
+      errorCode: job.errorCode,
+      summary: output?.summary ?? null,
+    };
+  }
+
+  private async runExtraction(
+    user: AuthenticatedUser,
+    plan: Awaited<ReturnType<FloorPlanAdminService['requirePlan']>>,
+    configuration: Awaited<ReturnType<AiProviderSettingsService['resolve']>>,
+    jobId: string,
+  ) {
+    const floorPlanId = plan.id;
+    const job = { id: jobId };
     try {
       const extractionResult = await this.extraction.extract(
         await this.storage.get(plan.storageKey),
@@ -404,7 +499,15 @@ export class FloorPlanAdminService {
           data: { status: FloorPlanStatus.FAILED },
         }),
       ]);
-      throw error;
+      // Nothing is awaiting this call, so the error is recorded on the job and
+      // deliberately not rethrown — an unhandled rejection would take the
+      // process down and tell the operator nothing.
+      this.logger.error(
+        `Floor plan extraction ${jobId} failed: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return undefined;
     }
   }
 
@@ -591,6 +694,7 @@ export class FloorPlanAdminService {
 
   async updateArea(user: AuthenticatedUser, areaId: string, input: UpdatePropertyAreaDto) {
     const area = await this.requireArea(user.organizationId, areaId);
+    this.assertExpectedAreaRevision(area.updatedAt, input.expectedUpdatedAt);
     if (area.status !== PropertyAreaStatus.DRAFT)
       throw new ApplicationError(409, 'AREA_ALREADY_APPROVED', 'Approved areas cannot be edited.');
     const floorName = input.floorName?.trim() || area.floor?.name || 'Ground Floor';
@@ -604,18 +708,43 @@ export class FloorPlanAdminService {
           input.inspectionOrder ?? area.inspectionOrder,
         )
       : area.floor;
-    const updated = await this.prisma.propertyArea.update({
-      where: { id: areaId },
-      data: {
-        ...(input.name ? { name } : {}),
-        ...(input.floorName ? { floorId: floor?.id } : {}),
-        ...(input.inspectionOrder ? { inspectionOrder: input.inspectionOrder } : {}),
-        ...(input.isRequired === undefined ? {} : { isRequired: input.isRequired }),
-        ...(input.environment ? { environment: input.environment } : {}),
-        ...(input.category ? { category: input.category } : {}),
-        ...(input.notes === undefined ? {} : { notes: input.notes.trim() || null }),
-      },
-      select: propertyAreaResponseSelect,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.propertyArea.updateMany({
+        where: {
+          id: areaId,
+          ...(input.expectedUpdatedAt ? { updatedAt: new Date(input.expectedUpdatedAt) } : {}),
+        },
+        data: {
+          ...(input.name ? { name } : {}),
+          ...(input.floorName ? { floorId: floor?.id } : {}),
+          ...(input.inspectionOrder ? { inspectionOrder: input.inspectionOrder } : {}),
+          ...(input.isRequired === undefined ? {} : { isRequired: input.isRequired }),
+          ...(input.environment ? { environment: input.environment } : {}),
+          ...(input.category ? { category: input.category } : {}),
+          ...(input.notes === undefined ? {} : { notes: input.notes.trim() || null }),
+        },
+      });
+      if (!result.count) {
+        const current = await tx.propertyArea.findUnique({
+          where: { id: areaId },
+          select: { updatedAt: true },
+        });
+        throw new ApplicationError(
+          409,
+          'AREA_VERSION_CONFLICT',
+          'This area changed after you opened it. Review the latest values and try again.',
+          [
+            {
+              attemptedUpdatedAt: input.expectedUpdatedAt ?? null,
+              currentUpdatedAt: current?.updatedAt ?? null,
+            },
+          ],
+        );
+      }
+      return tx.propertyArea.findUniqueOrThrow({
+        where: { id: areaId },
+        select: propertyAreaResponseSelect,
+      });
     });
     return mapArea(updated);
   }
@@ -657,6 +786,7 @@ export class FloorPlanAdminService {
    */
   async updateAreaMarker(user: AuthenticatedUser, areaId: string, input: UpdateAreaMarkerDto) {
     const area = await this.requireArea(user.organizationId, areaId);
+    this.assertExpectedAreaRevision(area.updatedAt, input.expectedUpdatedAt);
     // Keep the marker's own plan version; for a legacy/manual area with none,
     // bind it to the latest plan in the area's scope so it renders on that plan.
     let sourceFloorPlanId = area.sourceFloorPlanId;
@@ -670,22 +800,55 @@ export class FloorPlanAdminService {
     }
     const hadMarker = area.markerX !== null && area.markerY !== null;
     const previous = hadMarker ? { x: Number(area.markerX), y: Number(area.markerY) } : null;
-    const updated = await this.prisma.propertyArea.update({
-      where: { id: areaId },
-      data: {
-        markerX: input.x,
-        markerY: input.y,
-        // Human placement carries no model confidence.
-        markerSource: hadMarker ? 'ADMIN_ADJUSTED' : 'ADMIN_PLACED',
-        markerConfidence: null,
-        markerUpdatedById: user.id,
-        markerUpdatedAt: new Date(),
-        sourceFloorPlanId,
-        ...(input.pageNumber !== undefined ? { sourcePageNumber: input.pageNumber } : {}),
-        // NOTE: `status` is intentionally never written here.
-      },
-      select: propertyAreaResponseSelect,
-    });
+    const markerData = {
+      markerX: input.x,
+      markerY: input.y,
+      // Human placement carries no model confidence.
+      markerSource: hadMarker ? 'ADMIN_ADJUSTED' : 'ADMIN_PLACED',
+      markerConfidence: null,
+      markerUpdatedById: user.id,
+      markerUpdatedAt: new Date(),
+      sourceFloorPlanId,
+      ...(input.pageNumber !== undefined ? { sourcePageNumber: input.pageNumber } : {}),
+      // NOTE: `status` is intentionally never written here.
+    };
+    const expectedUpdatedAt = input.expectedUpdatedAt;
+    const updated = expectedUpdatedAt
+      ? await this.prisma.$transaction(async (tx) => {
+      const result = await tx.propertyArea.updateMany({
+        where: {
+          id: areaId,
+          updatedAt: new Date(expectedUpdatedAt),
+        },
+        data: markerData,
+      });
+      if (!result.count) {
+        const current = await tx.propertyArea.findUnique({
+          where: { id: areaId },
+          select: { updatedAt: true },
+        });
+        throw new ApplicationError(
+          409,
+          'AREA_VERSION_CONFLICT',
+          'This marker changed after you opened it. Review the latest position and try again.',
+          [
+            {
+              attemptedUpdatedAt: expectedUpdatedAt,
+              currentUpdatedAt: current?.updatedAt ?? null,
+            },
+          ],
+        );
+      }
+      return tx.propertyArea.findUniqueOrThrow({
+        where: { id: areaId },
+        select: propertyAreaResponseSelect,
+      });
+    })
+      : await this.prisma.propertyArea.update({
+          where: { id: areaId },
+          data: markerData,
+          select: propertyAreaResponseSelect,
+        });
     await this.audit(
       user,
       hadMarker ? 'AREA_MARKER_MOVED' : 'AREA_MARKER_PLACED',
@@ -701,6 +864,16 @@ export class FloorPlanAdminService {
     return mapArea(updated);
   }
 
+  private assertExpectedAreaRevision(current: Date, expected?: string) {
+    if (!expected || current.getTime() === new Date(expected).getTime()) return;
+    throw new ApplicationError(
+      409,
+      'AREA_VERSION_CONFLICT',
+      'This area changed after you opened it. Review the latest values and try again.',
+      [{ attemptedUpdatedAt: expected, currentUpdatedAt: current }],
+    );
+  }
+
   async deleteArea(user: AuthenticatedUser, areaId: string) {
     const area = await this.requireArea(user.organizationId, areaId);
     const uses = await this.prisma.inspectionArea.count({ where: { propertyAreaId: areaId } });
@@ -714,7 +887,74 @@ export class FloorPlanAdminService {
     await this.audit(user, 'PROPERTY_AREA_DELETED', 'PropertyArea', areaId, {
       propertywareBuildingId: area.propertyId,
     });
-    return { deleted: true };
+    return { id: areaId, deleted: true as const, deletedAt: new Date().toISOString() };
+  }
+
+  /**
+   * Deletes several areas at once.
+   *
+   * All-or-nothing: deletion is irreversible, so a batch containing anything
+   * protected is refused outright rather than partially applied. The refusal
+   * names the offending areas so the operator can deselect them — failing with
+   * only a count would leave them guessing which of twenty rows was the problem.
+   */
+  async deleteAreas(user: AuthenticatedUser, buildingId: string, areaIds: string[]) {
+    await this.requireBuilding(user.organizationId, buildingId, true);
+    const uniqueIds = [...new Set(areaIds)];
+    if (uniqueIds.length !== areaIds.length)
+      throw new ApplicationError(
+        422,
+        'INVALID_AREA_SELECTION',
+        'Area selection contains duplicates.',
+      );
+    const selected = await this.prisma.propertyArea.findMany({
+      where: { id: { in: uniqueIds }, propertyId: buildingId },
+      select: { id: true, name: true },
+    });
+    // Anything not found is either outside this building or another
+    // organization's; either way it must not be silently skipped.
+    if (selected.length !== uniqueIds.length)
+      throw new ApplicationError(
+        422,
+        'INVALID_AREA_SELECTION',
+        'Select only areas that belong to this property.',
+      );
+    const inUse = await this.prisma.inspectionArea.findMany({
+      where: { propertyAreaId: { in: uniqueIds } },
+      select: { propertyAreaId: true },
+      distinct: ['propertyAreaId'],
+    });
+    if (inUse.length) {
+      const blocked = new Set(inUse.map((row) => row.propertyAreaId));
+      const names = selected.filter((area) => blocked.has(area.id)).map((area) => area.name);
+      throw new ApplicationError(
+        409,
+        'AREA_IN_USE',
+        `${names.length} selected area${names.length === 1 ? '' : 's'} ${
+          names.length === 1 ? 'is' : 'are'
+        } used by an inspection and cannot be deleted: ${names.join(', ')}.`,
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.propertyArea.deleteMany({ where: { id: { in: uniqueIds } } });
+      // One audit event per area, matching single deletion, so the trail reads
+      // the same however the deletion was performed.
+      await tx.auditLog.createMany({
+        data: uniqueIds.map((areaId) => ({
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'PROPERTY_AREA_DELETED',
+          entityType: 'PropertyArea',
+          entityId: areaId,
+          metadata: { propertywareBuildingId: buildingId, batch: true },
+        })),
+      });
+    });
+    return {
+      ids: uniqueIds,
+      deleted: uniqueIds.length,
+      deletedAt: new Date().toISOString(),
+    };
   }
 
   async approveAreas(user: AuthenticatedUser, buildingId: string, areaIds: string[]) {

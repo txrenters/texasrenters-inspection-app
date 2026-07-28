@@ -52,6 +52,7 @@ function areaRow(overrides: Record<string, unknown>) {
     boundingBoxWidth: null,
     boundingBoxHeight: null,
     createdBy: null,
+    updatedAt: new Date('2026-07-28T02:00:00.000Z'),
     floor: null,
     _count: { inspectionAreas: 0 },
     ...overrides,
@@ -146,6 +147,36 @@ describe('updateAreaMarker (spec §12/§18/§19)', () => {
     expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ action: 'AREA_MARKER_MOVED' }) }),
     );
+  });
+
+  it('rejects a stale marker edit instead of overwriting a newer revision', async () => {
+    const tx = {
+      propertyArea: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ updatedAt: new Date('2026-07-28T03:00:00.000Z') }),
+      },
+    };
+    const prisma = {
+      propertyArea: {
+        findFirst: jest.fn().mockResolvedValue(
+          areaRow({ markerX: 0.1, markerY: 0.1, sourceFloorPlanId: 'plan-1' }),
+        ),
+      },
+      propertyFloorPlan: { findFirst: jest.fn() },
+      auditLog: { create: jest.fn() },
+      $transaction: jest.fn((callback) => callback(tx)),
+    };
+
+    const mutation = service(prisma).updateAreaMarker(admin, 'area-1', {
+        x: 0.6,
+        y: 0.7,
+        expectedUpdatedAt: '2026-07-28T02:00:00.000Z',
+      });
+    await expect(mutation).rejects.toMatchObject({ code: 'AREA_VERSION_CONFLICT' });
+    await mutation.catch((error: { getStatus(): number }) => expect(error.getStatus()).toBe(409));
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('backfills only missing markers and never rewrites names, order, or status', async () => {

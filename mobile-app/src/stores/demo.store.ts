@@ -123,7 +123,30 @@ export const useDemoStore = create<DemoState>()(
       enqueueUpload: (item) => set((state) => ({ uploads: [item, ...state.uploads] })),
       updateUpload: (id, update) =>
         set((state) => ({
-          uploads: state.uploads.map((item) => (item.id === id ? { ...item, ...update } : item)),
+          uploads: state.uploads.map((item) => {
+            if (item.id !== id) return item;
+            const operationId = item.operationId ?? `upload:${item.mediaId}`;
+            const syncState =
+              update.status === 'UPLOADING'
+                ? 'UPLOADING'
+                : update.status === 'FAILED'
+                  ? 'FAILED'
+                  : update.status === 'COMPLETED'
+                    ? 'VERIFYING'
+                    : update.status === 'PENDING' || update.status === 'PAUSED'
+                      ? 'OFFLINE_PENDING'
+                      : item.__sync?.state ?? 'OFFLINE_PENDING';
+            return {
+              ...item,
+              ...update,
+              operationId,
+              __sync: {
+                operationId,
+                state: syncState,
+                ...(update.lastError ? { error: update.lastError } : {}),
+              },
+            };
+          }),
         })),
       removeUpload: (id) =>
         set((state) => ({ uploads: state.uploads.filter((item) => item.id !== id) })),

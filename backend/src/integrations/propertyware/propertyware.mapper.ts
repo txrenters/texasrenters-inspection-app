@@ -98,9 +98,11 @@ export function mapLease(raw: RawPropertywareLease): NormalizedLease {
   return {
     entityType: 'leases',
     externalId: id(raw.id),
-    portfolioExternalId: id(raw.portfolioID),
+    // Report-sourced leases carry neither; the portfolio is resolved from the
+    // building at persist time and the unit link is left empty.
+    portfolioExternalId: raw.portfolioID == null ? undefined : id(raw.portfolioID),
     buildingExternalId: id(raw.buildingID),
-    unitExternalId: id(raw.unitID),
+    unitExternalId: raw.unitID == null ? undefined : id(raw.unitID),
     idNumber: raw.idNumber == null ? undefined : id(raw.idNumber),
     leaseName: value(raw.leaseName),
     isActive: raw.active,

@@ -89,6 +89,35 @@ describe('technician photo evidence', () => {
     });
   });
 
+  it('stores validated capture-session provenance without raw sensor data', async () => {
+    const { service, prisma } = build();
+    await service.uploadPhoto(
+      technician,
+      'area-1',
+      {
+        idempotencyKey: 'photo-key-guided-1',
+        captureType: 'FINDING_CONTEXT' as never,
+        recordingSessionId: 'capture-session-1',
+        videoTimestampMs: 12_000,
+        captureSource: 'VIDEO_FRAME_EXTRACTION',
+        sequenceNumber: 2,
+      },
+      jpeg,
+    );
+
+    expect(prisma.inspectionPhoto.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: {
+            recordingSessionId: 'capture-session-1',
+            videoTimestampMs: 12_000,
+            captureSource: 'VIDEO_FRAME_EXTRACTION',
+          },
+        }),
+      }),
+    );
+  });
+
   it('is idempotent: a re-sent key returns the stored photo without a new upload', async () => {
     const { service, prisma, mediaStorage } = build({
       inspectionPhoto: {

@@ -57,6 +57,47 @@ export async function storeApiRecord<TSchema extends z.ZodType>(
   return validated;
 }
 
+/** Atomically rewrites one validated offline record after a successful mutation. */
+export async function updateApiRecord<TSchema extends z.ZodType>(
+  key: string,
+  schema: TSchema,
+  update: (current: z.output<TSchema> | undefined) => z.input<TSchema>,
+) {
+  const scopedKey = await cacheKey(key);
+  const stored = await demoStorage.getItem(scopedKey);
+  let current: z.output<TSchema> | undefined;
+  if (stored) {
+    try {
+      const parsed = schema.safeParse(JSON.parse(stored));
+      if (parsed.success) current = parsed.data;
+    } catch {
+      current = undefined;
+    }
+  }
+  const next = schema.parse(update(current));
+  await demoStorage.setItem(scopedKey, JSON.stringify(next));
+  return next;
+}
+
+export async function updateExistingApiRecord<TSchema extends z.ZodType>(
+  key: string,
+  schema: TSchema,
+  update: (current: z.output<TSchema>) => z.input<TSchema>,
+) {
+  const scopedKey = await cacheKey(key);
+  const stored = await demoStorage.getItem(scopedKey);
+  if (!stored) return undefined;
+  try {
+    const current = schema.parse(JSON.parse(stored));
+    const next = schema.parse(update(current));
+    await demoStorage.setItem(scopedKey, JSON.stringify(next));
+    return next;
+  } catch {
+    await demoStorage.removeItem(scopedKey);
+    return undefined;
+  }
+}
+
 async function cacheKey(key: string) {
   const { data } = await getSupabaseClient().auth.getSession();
   const userId = data.session?.user.id;

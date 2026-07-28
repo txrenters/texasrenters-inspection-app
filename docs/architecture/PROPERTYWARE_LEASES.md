@@ -36,6 +36,59 @@ is not needed to schedule or report on an inspection, and tenant contact data
 carries privacy weight this system has no reason to hold. Adding any of them is
 a schema migration, not a mapper tweak.
 
+## Published-report fallback
+
+This Propertyware integration is **not permitted to read `/leases`** — the REST
+call returns HTTP 403. When `PROPERTYWARE_LEASE_REPORT_URL` is configured, a 403
+on leases falls back to a published saved report rendered as JSON, mirroring the
+existing portfolios fallback.
+
+```
+PROPERTYWARE_LEASE_REPORT_URL=https://app.propertyware.com/pw/00a/<report>/JSON?<token>
+```
+
+The URL carries its own access token, so it is fetched **without** credentials
+and is pinned to `https://app.propertyware.com/pw/…/JSON` — a misconfigured
+value cannot send that token to another host. Treat it as a secret: anyone
+holding the link can read the report without logging in.
+
+### What the report can and cannot supply
+
+Columns are positional. The report provides Status [0], Lease Name [4], Start
+[5], End [6], Notice Given [7], and **Building Entity ID [9]** — but no lease ID,
+no unit, and no portfolio ID.
+
+Consequences, each handled explicitly rather than papered over:
+
+- **Identity.** With no lease ID, each lease is keyed by a deterministic hash of
+  `building + lease name + start date` — a natural key of real Propertyware
+  values, so re-syncing updates rather than duplicates. Keys are prefixed `rpt-`
+  so they can never collide with the numeric IDs REST issues. A lease renamed or
+  re-dated upstream keys differently and appears as a new record; the old one is
+  then deactivated by the usual unseen-record pass.
+- **Unit.** `PropertywareLease.unitId` and `externalUnitId` are nullable
+  (migration `202607250008_lease_report_fallback`). Report leases attach at
+  building level; REST leases still carry a unit.
+- **Portfolio.** Recovered from the building the lease resolves to, never guessed
+  from the portfolio *name* column.
+- **Provenance.** `sourceFeed` is `rest` or `report`, so the two are always
+  distinguishable.
+
+Tenant names are **not** inferred from the "Lease Name" column — it is a label,
+not a contact list, and REST is the only source for `tenantDisplayNames`.
+
+### If the REST permission is later granted
+
+REST becomes the source automatically: it is tried first, and the fallback only
+runs on 403. REST leases arrive with numeric IDs and full unit links, and the
+`rpt-` records — no longer seen in the feed — are deactivated by the normal pass.
+Granting the permission remains the better outcome: it yields every lease rather
+than whatever the saved report is filtered to, plus unit links and tenant names.
+
+> **Check the report's own filter.** A saved report scoped to, say,
+> `Active - Notice Given` returns only those leases, and the sync can import no
+> more than the report contains.
+
 ## Two dates that must not be conflated
 
 | Field | Question it answers |

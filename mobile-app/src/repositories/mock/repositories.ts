@@ -312,6 +312,8 @@ export class MockUploadRepository implements UploadRepository {
       processingStatus: 'NOT_STARTED' as const,
       processingProgress: 0,
       createdAt: new Date().toISOString(),
+      operationId: `upload:${media.id}`,
+      __sync: { state: 'OFFLINE_PENDING' as const, operationId: `upload:${media.id}` },
     };
     useDemoStore.getState().enqueueUpload(item);
     return item;

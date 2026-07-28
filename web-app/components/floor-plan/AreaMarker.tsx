@@ -11,6 +11,9 @@ interface AreaMarkerProps {
   quiet?: boolean;
   editing?: boolean;
   orderLabel?: number;
+  source?: string | null;
+  normalizedX?: number;
+  normalizedY?: number;
   /** Bumped on (re)selection to retrigger the locate pulse. */
   pulseKey?: number;
   onSelect: () => void;
@@ -29,12 +32,21 @@ export function AreaMarker({
   quiet,
   editing,
   orderLabel,
+  source,
+  normalizedX,
+  normalizedY,
   pulseKey,
   onSelect,
   onNudge,
   onDragPointerDown,
 }: AreaMarkerProps) {
   const showLabel = selected || editing;
+  const sourceClass =
+    source === 'ADMIN_ADJUSTED' || source === 'ADMIN_PLACED'
+      ? 'is-admin'
+      : source === 'AI_EXTRACTED' || source === 'DETERMINISTIC_EXTRACTED'
+        ? 'is-suggested'
+        : 'is-unverified';
   const style = {
     left,
     top,
@@ -62,11 +74,26 @@ export function AreaMarker({
         selected ? 'is-selected' : '',
         quiet ? 'is-quiet' : '',
         editing ? 'is-editing' : '',
+        sourceClass,
+        normalizedX != null && normalizedX > 0.78 ? 'is-near-right' : '',
+        normalizedX != null && normalizedX < 0.22 ? 'is-near-left' : '',
+        normalizedY != null && normalizedY > 0.78 ? 'is-near-bottom' : '',
+        normalizedY != null && normalizedY < 0.22 ? 'is-near-top' : '',
       ]
         .filter(Boolean)
         .join(' ')}
       style={style}
-      aria-label={editing ? `${name} marker, editing` : `${name} marker`}
+      aria-label={
+        editing
+          ? `${name} marker, editing`
+          : `${name} marker, ${
+              sourceClass === 'is-admin'
+                ? 'administrator placed'
+                : sourceClass === 'is-suggested'
+                  ? 'suggested'
+                  : 'needs review'
+            }`
+      }
       aria-pressed={selected}
       onClick={onSelect}
       onKeyDown={handleKeyDown}

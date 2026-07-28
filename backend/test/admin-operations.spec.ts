@@ -149,7 +149,10 @@ describe('administrator inspection operations', () => {
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+      inspection: { findFirst: jest.fn().mockResolvedValue({ ...created, assignments: [] }) },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
     const service = new AdminService(prisma as never);
 
     await service.createInspection(user, {
@@ -241,7 +244,12 @@ describe('administrator inspection operations', () => {
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'occupied-1', assignments: [] }),
+      },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
     const service = new AdminService(prisma as never);
 
     await service.createInspection(user, {

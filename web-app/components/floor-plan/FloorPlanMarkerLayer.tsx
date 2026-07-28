@@ -10,6 +10,7 @@ export interface MarkerAreaItem {
   x: number;
   y: number;
   orderLabel?: number;
+  source?: string | null;
 }
 
 interface FloorPlanMarkerLayerProps {
@@ -60,6 +61,9 @@ export function FloorPlanMarkerLayer({
             selected={marker.id === selectedAreaId}
             quiet={showAllMarkers && marker.id !== selectedAreaId}
             orderLabel={marker.orderLabel}
+            source={marker.source}
+            normalizedX={marker.x}
+            normalizedY={marker.y}
             pulseKey={marker.id === selectedAreaId ? focusNonce : undefined}
             onSelect={() => onSelectArea(marker.id)}
           />
@@ -78,6 +82,9 @@ export function FloorPlanMarkerLayer({
                 zoom={zoom}
                 selected
                 editing
+                source="ADMIN_ADJUSTED"
+                normalizedX={draft.x}
+                normalizedY={draft.y}
                 pulseKey={focusNonce}
                 onSelect={() => onSelectArea(draft.id)}
                 onNudge={onNudge}

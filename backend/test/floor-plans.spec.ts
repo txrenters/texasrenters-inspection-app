@@ -4,6 +4,16 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { ApplicationError } from '../src/common/errors';
 import { FloorPlanAdminService } from '../src/admin/floor-plan-admin.service';
 
+/**
+ * Extraction is started, not awaited — the request returns a job id and the
+ * work continues on the microtask queue. Draining it lets a test observe the
+ * outcome the client would later poll for.
+ */
+async function flushBackgroundWork() {
+  for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
   authUserId: 'auth-admin',
@@ -139,6 +149,8 @@ describe('administrator floor plans', () => {
           .mockRejectedValueOnce(new Error('status update unavailable')),
       },
       floorPlanExtractionJob: {
+        // No extraction already running for this plan.
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'job-1' }),
         update: jest.fn().mockRejectedValue(new Error('job update unavailable')),
       },
@@ -165,7 +177,17 @@ describe('administrator floor plans', () => {
       } as never,
     );
 
-    await expect(service.extract(admin, 'plan-1')).rejects.toBe(providerError);
+    // Extraction runs outside the request now, so starting it resolves with the
+    // job to poll and the provider failure is recorded on that job instead of
+    // being thrown at the caller.
+    await expect(service.extract(admin, 'plan-1')).resolves.toMatchObject({
+      jobId: 'job-1',
+      status: 'RUNNING',
+    });
+    await flushBackgroundWork();
+
+    // The actionable provider code still survives, even though the bookkeeping
+    // writes themselves fail — that was the point of this test.
     expect(prisma.floorPlanExtractionJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ errorCode: 'FLOOR_PLAN_AI_CREDITS_REQUIRED' }),
@@ -217,6 +239,8 @@ describe('administrator floor plans', () => {
         update: jest.fn().mockResolvedValue(plan),
       },
       floorPlanExtractionJob: {
+        // No extraction already running for this plan.
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({
           id: 'job-1',
           provider: 'openai',
@@ -277,14 +301,12 @@ describe('administrator floor plans', () => {
       aiSettings as never,
     );
 
+    // Starting extraction returns the job to poll; the outcome lands on the job.
     await expect(service.extract(admin, plan.id)).resolves.toMatchObject({
-      summary: {
-        detectedCount: 4,
-        createdCount: 2,
-        alreadyPresentCount: 2,
-      },
-      areas: created,
+      status: 'RUNNING',
     });
+    await flushBackgroundWork();
+
     expect(tx.propertyArea.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
         expect.objectContaining({ name: 'Foyer', inspectionOrder: 3 }),

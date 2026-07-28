@@ -3153,6 +3153,23 @@ tbody tr:last-child td {
 .floor-plan-upload-button {
   justify-self: start;
 }
+.floor-plan-replacement-notice {
+  display: grid;
+  gap: 3px;
+  padding: 11px 12px;
+  border-left: 3px solid var(--warning);
+  border-radius: 9px;
+  background: var(--warning-soft);
+}
+.floor-plan-replacement-notice strong {
+  color: var(--warning);
+  font-size: 11px;
+}
+.floor-plan-replacement-notice span {
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.45;
+}
 .floor-plan-area-count {
   flex: 0 0 auto;
   padding: 5px 8px;
@@ -3161,6 +3178,31 @@ tbody tr:last-child td {
   color: var(--blue);
   font-size: 10px;
   font-weight: 800;
+}
+.floor-plan-readiness {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+.floor-plan-readiness > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 11px;
+  border-right: 1px solid var(--border);
+}
+.floor-plan-readiness > div:last-child {
+  border-right: 0;
+}
+.floor-plan-readiness span {
+  color: var(--text-2);
+  font-size: 9px;
+}
+.floor-plan-readiness strong {
+  font-size: 14px;
 }
 .floor-plan-action-grid {
   display: grid;
@@ -3366,16 +3408,25 @@ tbody tr:last-child td {
 .floor-plan-comparison-modal:focus {
   outline: none;
 }
+.floor-plan-comparison-modal.is-editing .floor-plan-comparison-area-button:not(.is-selected),
+.floor-plan-comparison-modal.is-editing .fp-checklist-tools {
+  pointer-events: none;
+  opacity: 0.45;
+}
 .floor-plan-comparison-header {
-  display: flex;
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 18px 22px;
+  gap: 18px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  box-shadow: 0 6px 20px color-mix(in srgb, #020817 10%, transparent);
 }
-.floor-plan-comparison-header > div {
+.floor-plan-comparison-title {
   min-width: 0;
 }
 .floor-plan-comparison-header span,
@@ -3388,12 +3439,58 @@ tbody tr:last-child td {
 }
 .floor-plan-comparison-header h2 {
   margin: 3px 0;
-  font-size: clamp(20px, 2vw, 27px);
+  font-size: clamp(18px, 1.7vw, 24px);
 }
 .floor-plan-comparison-header p {
   margin: 0;
   color: var(--text-2);
   font-size: 12px;
+}
+.floor-plan-review-progress {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+.floor-plan-review-progress strong {
+  font-size: 12px;
+}
+.floor-plan-review-progress > span:not(.floor-plan-review-progress-track) {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.floor-plan-review-progress-track {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.floor-plan-review-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--blue), var(--green));
+  transition: width 180ms ease;
+}
+.floor-plan-review-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.floor-plan-review-header-actions .fp-showall-toggle {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  white-space: nowrap;
+}
+.fp-review-panel-toggle {
+  display: none;
 }
 .floor-plan-comparison-close {
   display: grid;
@@ -3417,7 +3514,7 @@ tbody tr:last-child td {
 .floor-plan-comparison-content {
   display: grid;
   min-height: 0;
-  grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr);
+  grid-template-columns: minmax(0, 2fr) minmax(360px, 1fr);
   gap: 1px;
   background: var(--border);
 }
@@ -3427,6 +3524,14 @@ tbody tr:last-child td {
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--surface);
+}
+.floor-plan-comparison-areas {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+.floor-plan-comparison-areas .floor-plan-checklist {
+  flex: 1;
 }
 .floor-plan-comparison-pane-header {
   display: flex;
@@ -3548,16 +3653,26 @@ tbody tr:last-child td {
   width: 18px;
   height: 18px;
   border-radius: 3px;
-  background: var(--blue);
+  background: #0b4bb3;
   border: 2px solid #fff;
   box-shadow:
     0 0 0 1px var(--blue),
     0 1px 3px rgba(0, 0, 0, 0.45);
 }
+.fp-marker.is-suggested .fp-marker-square {
+  background: #2563eb;
+  border-style: dashed;
+}
+.fp-marker.is-admin .fp-marker-square {
+  background: #4c8f16;
+}
+.fp-marker.is-unverified .fp-marker-square {
+  background: #b66a04;
+}
 .fp-marker.is-quiet .fp-marker-square {
   width: 12px;
   height: 12px;
-  background: color-mix(in srgb, var(--blue) 55%, transparent);
+  opacity: 0.74;
 }
 .fp-marker:focus-visible {
   outline: none;
@@ -3574,13 +3689,31 @@ tbody tr:last-child td {
   transform: translateX(-50%);
   white-space: nowrap;
   pointer-events: none;
-  font-size: 11px;
+  max-width: 150px;
+  overflow: hidden;
+  font-size: 10px;
   font-weight: 700;
   color: var(--text);
   background: var(--surface);
   padding: 1px 6px;
   border-radius: 6px;
   border: 1px solid var(--border);
+  text-overflow: ellipsis;
+  line-height: 1.35;
+  box-shadow: 0 5px 18px color-mix(in srgb, #020817 22%, transparent);
+}
+.fp-marker.is-near-bottom .fp-marker-label {
+  top: auto;
+  bottom: calc(100% + 3px);
+}
+.fp-marker.is-near-right .fp-marker-label {
+  right: 0;
+  left: auto;
+  transform: none;
+}
+.fp-marker.is-near-left .fp-marker-label {
+  left: 0;
+  transform: none;
 }
 .fp-marker-order {
   position: absolute;
@@ -3623,17 +3756,28 @@ tbody tr:last-child td {
   }
 }
 .fp-canvas-toolbar {
+  position: absolute;
+  z-index: 3;
+  right: 12px;
+  bottom: 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
 }
 .fp-page-selector {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 0;
 }
 .fp-page-label {
   font-size: 12px;
@@ -3643,7 +3787,7 @@ tbody tr:last-child td {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 0;
   flex-wrap: wrap;
 }
 .fp-zoom-level {
@@ -3659,14 +3803,14 @@ tbody tr:last-child td {
   gap: 10px;
   flex-wrap: wrap;
   padding: 8px 10px;
-  margin-bottom: 10px;
+  margin: 10px 14px 0;
   border-radius: 10px;
   background: color-mix(in srgb, var(--blue) 8%, var(--surface));
   font-size: 12px;
   color: var(--text-2);
 }
 .fp-backfill-result {
-  margin: 0 0 10px;
+  margin: 8px 14px 0;
   font-size: 12px;
   color: var(--text-2);
 }
@@ -3676,6 +3820,35 @@ tbody tr:last-child td {
   gap: 8px;
   margin-bottom: 10px;
   font-size: 13px;
+}
+.fp-marker-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-2);
+  font-size: 9px;
+}
+.fp-marker-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.fp-marker-legend i {
+  width: 8px;
+  height: 8px;
+  border: 1px solid #fff;
+  border-radius: 2px;
+  background: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue);
+}
+.fp-marker-legend i.is-suggested {
+  background: #2563eb;
+}
+.fp-marker-legend i.is-admin {
+  background: #4c8f16;
 }
 .fp-row-actions {
   display: flex;
@@ -3698,8 +3871,8 @@ tbody tr:last-child td {
   border-radius: 10px;
 }
 .floor-plan-comparison-area-button.is-selected {
-  background: color-mix(in srgb, var(--blue) 12%, var(--surface));
-  outline: 2px solid var(--blue);
+  background: transparent;
+  outline: none;
 }
 .visually-hidden {
   position: absolute;
@@ -3737,13 +3910,122 @@ tbody tr:last-child td {
   letter-spacing: 0;
   text-transform: none;
 }
+.floor-plan-checklist {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
 .floor-plan-comparison-list {
   display: grid;
   align-content: start;
   gap: 18px;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 18px 24px;
+  padding: 12px 14px 18px;
+}
+.fp-selected-area {
+  display: grid;
+  gap: 10px;
+  margin: 12px 14px 0;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--blue) 45%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--blue) 5%, var(--surface));
+}
+.fp-selected-area-heading,
+.fp-selected-area-actions,
+.fp-selected-area-statuses {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.fp-selected-area-heading > div {
+  display: grid;
+  gap: 2px;
+}
+.fp-selected-area-heading span,
+.fp-selected-area-statuses > div > span,
+.fp-selected-area-facts dt {
+  color: var(--text-2);
+  font-size: 9px;
+}
+.fp-selected-area-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.fp-selected-area-order {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--blue-soft);
+  color: var(--blue) !important;
+  font-weight: 800;
+}
+.fp-selected-area-statuses > div {
+  display: grid;
+  gap: 4px;
+}
+.fp-selected-area-statuses > div:last-child {
+  justify-items: end;
+}
+.fp-selected-area-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+}
+.fp-selected-area-facts div {
+  display: grid;
+  gap: 2px;
+}
+.fp-selected-area-facts dd {
+  margin: 0;
+  font-size: 10px;
+  text-transform: capitalize;
+}
+.fp-selected-area-empty,
+.fp-checklist-empty {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  margin: 12px 14px 0;
+  padding: 20px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-2);
+  text-align: center;
+}
+.fp-selected-area-empty strong,
+.fp-checklist-empty strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.fp-selected-area-empty p,
+.fp-checklist-empty p {
+  margin: 0;
+  font-size: 10px;
+}
+.fp-checklist-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 8px;
+  padding: 10px 14px 0;
+}
+.fp-checklist-tools input,
+.fp-checklist-tools select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
 }
 .floor-plan-comparison-floor {
   display: grid;
@@ -3788,10 +4070,16 @@ tbody tr:last-child td {
     background 160ms ease,
     transform 160ms ease;
 }
+.floor-plan-comparison-floor li.is-selected {
+  border-color: var(--blue);
+  border-left-width: 4px;
+  background: color-mix(in srgb, var(--blue) 8%, var(--surface));
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--blue) 10%, transparent);
+}
 .floor-plan-comparison-area-button {
   display: grid;
   width: 100%;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 30px minmax(0, 1fr) minmax(92px, auto);
   align-items: center;
   gap: 10px;
   padding: 10px;
@@ -3800,6 +4088,10 @@ tbody tr:last-child td {
   color: inherit;
   font: inherit;
   text-align: left;
+}
+.floor-plan-comparison-area-button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }
 .floor-plan-comparison-order {
   display: grid;
@@ -3835,14 +4127,112 @@ tbody tr:last-child td {
   font-size: 9px;
   font-weight: 800;
 }
+.fp-row-statuses {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+.fp-status {
+  width: fit-content;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 8px;
+  font-weight: 850;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.fp-status.is-approved,
+.fp-status.is-marker-verified {
+  background: color-mix(in srgb, var(--green) 15%, var(--surface));
+  color: var(--green);
+}
+.fp-status.is-marker-missing {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.fp-status.is-marker-suggested,
+.fp-status.is-marker-review,
+.fp-status.is-draft {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.fp-edit-footer {
+  position: sticky;
+  z-index: 4;
+  bottom: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 -10px 24px color-mix(in srgb, #020817 10%, transparent);
+}
+.fp-edit-footer > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+.fp-edit-footer > div:first-child span,
+.fp-edit-footer small {
+  color: var(--text-2);
+  font-size: 9px;
+}
+.fp-edit-footer > div:nth-child(2) {
+  display: flex;
+  gap: 6px;
+}
+.fp-edit-footer .field-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.fp-save-message {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 6;
+  max-width: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--green) 40%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--green) 12%, var(--surface));
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 750;
+  box-shadow: var(--shadow-md);
+}
 .floor-plan-comparison-status.is-approved {
   background: color-mix(in srgb, var(--green) 14%, var(--surface));
   color: var(--green);
 }
+@media (max-width: 1180px) {
+  .floor-plan-comparison-header {
+    grid-template-columns: minmax(240px, 1fr) auto;
+  }
+  .floor-plan-review-progress {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
 @media (max-width: 980px) {
   .floor-plan-comparison-content {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(340px, 1.15fr) minmax(280px, 0.85fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .floor-plan-comparison-areas {
+    display: none;
+  }
+  .floor-plan-comparison-content.is-review-open .floor-plan-comparison-plan {
+    display: none;
+  }
+  .floor-plan-comparison-content.is-review-open .floor-plan-comparison-areas {
+    display: flex;
+  }
+  .fp-review-panel-toggle {
+    display: inline-flex;
   }
 }
 @media (max-width: 640px) {
@@ -3858,16 +4248,46 @@ tbody tr:last-child td {
   .floor-plan-comparison-pane-header {
     padding-inline: 14px;
   }
+  .floor-plan-comparison-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
   .floor-plan-comparison-header p,
   .floor-plan-comparison-counts {
     display: none;
+  }
+  .floor-plan-review-header-actions .fp-showall-toggle {
+    position: absolute;
+    top: 76px;
+    right: 14px;
+  }
+  .floor-plan-review-progress {
+    padding-right: 122px;
+  }
+  .floor-plan-comparison-pane-header {
+    min-height: 58px;
+  }
+  .fp-checklist-tools {
+    grid-template-columns: 1fr;
+  }
+  .fp-selected-area-statuses {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .fp-selected-area-statuses > div:last-child {
+    justify-items: start;
+  }
+  .fp-edit-footer {
+    grid-template-columns: 1fr;
   }
 }
 .manual-area-form,
 .area-review-row {
   display: flex;
-  align-items: flex-end;
+  /* Centre, not flex-end: the row mixes labelled fields, a bare checkbox and a
+     button group, and baseline-aligning them left the checkbox floating low. */
+  align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 .manual-area-form {
   padding: 14px;
@@ -3892,27 +4312,56 @@ tbody tr:last-child td {
   display: grid;
   gap: 10px;
 }
+/* Floor divider. The green rule ties each group back to the plan's floor
+   grouping and stops the long list reading as one undifferentiated stack. */
 .floor-area-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 58px;
+  z-index: 1;
+  padding: 7px 10px;
+  border-left: 3px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-subtle);
 }
 .floor-area-heading h3 {
   margin: 0;
   font-size: 13px;
+  letter-spacing: 0.01em;
 }
 .floor-area-heading span {
   color: var(--text-2);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 .area-review-row {
   padding: 13px;
   border: 1px solid var(--border);
   border-radius: 12px;
+  background: var(--surface);
+}
+/* The four row actions are a set; keeping them tight and pushed right stops
+   them competing with the editable fields for attention. */
+.area-review-row .action-row {
+  gap: 6px;
+  margin-left: auto;
+}
+.area-review-row .action-row .button-small {
+  padding-inline: 10px;
+}
+/* Destructive action reads as destructive only on intent, not at rest. */
+.area-review-row .action-row .button-danger {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+.area-review-row .action-row .button-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  border-color: var(--danger);
 }
 .area-order-field {
   width: 90px;
@@ -3978,8 +4427,18 @@ tbody tr:last-child td {
     height: 400px;
   }
   .floor-plan-file-facts,
-  .floor-plan-action-grid {
+  .floor-plan-action-grid,
+  .floor-plan-readiness {
     grid-template-columns: 1fr;
+  }
+  .floor-plan-readiness > div {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .floor-plan-readiness > div:last-child {
+    border-bottom: 0;
   }
   .floor-plan-file-picker {
     grid-template-columns: 38px minmax(0, 1fr);
@@ -4444,6 +4903,96 @@ tbody tr:last-child td {
   .report-cover h1 {
     font-size: 21px;
   }
+}
+
+/* ---- Draft area review: selection toolbar, floor headings, rows ---------- */
+
+/* A single accent colour drives every selection affordance below, so the
+   checkbox, the row rail, and the toolbar always agree. */
+.area-batch-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 16px 0 4px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.area-batch-bar.is-active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+.area-batch-select,
+.floor-area-heading-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  user-select: none;
+}
+.area-batch-select span {
+  font-size: 13px;
+  font-weight: 650;
+}
+.area-batch-count {
+  margin-right: auto;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+.area-batch-bar.is-active .area-batch-count {
+  color: var(--blue-dark);
+}
+.area-batch-hint {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* Selection checkboxes sit in a fixed gutter so the toolbar, every floor
+   heading, and every row line up down a single column. */
+.area-batch-bar > .area-batch-select > input,
+.floor-area-heading-select > input,
+.area-select-box > input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+.floor-area-heading-select h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.area-select-box {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  padding-right: 2px;
+}
+
+.area-review-row {
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.area-review-row:hover {
+  border-color: color-mix(in srgb, var(--border) 45%, var(--blue));
+}
+.area-review-row.is-selected {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+/* Keep inputs readable against the tinted selected background. */
+.area-review-row.is-selected input:not([type='checkbox']) {
+  background: var(--surface);
 }
 
 /* Missing upstream data, distinguished from a confirmed negative. */

@@ -4,6 +4,46 @@ An administrator uploads a floor plan (PDF/JPEG/PNG) and runs AI extraction to
 produce a draft inspection-area checklist. Areas land as `DRAFT` for human review
 and approval; the AI never approves anything.
 
+## Extraction runs outside the request
+
+`POST /admin/floor-plans/:id/extract` starts the job and returns
+`{ jobId, status: 'RUNNING' }` immediately. The client polls
+`GET /admin/floor-plans/:id/extraction-jobs/:jobId` until it reports `COMPLETED`
+or `FAILED`.
+
+It used to run inline, and that failed in a way that was almost invisible:
+
+- The model call takes ~58s on a modest two-storey plan and grows with
+  complexity.
+- `main.ts` sets `server.setTimeout(HTTP_REQUEST_TIMEOUT_MS ?? 30_000)` — a
+  socket **inactivity** timeout. A handler that is busy computing sends nothing,
+  so the socket goes idle and Node destroys it at 30s.
+- The browser sees `net::ERR_EMPTY_RESPONSE`; the handler keeps running,
+  finishes normally, and writes its response into a connection nobody holds.
+
+The backend therefore logged **no error** — only a `slow_request` line showing a
+completed 58s request — while the UI reported failure. Raising the timeout just
+moves the cliff; a more complex plan finds it again. Taking the work out of the
+request removes the whole class of failure.
+
+### Job lifecycle
+
+`FloorPlanExtractionJob` moves `RUNNING → COMPLETED | FAILED`. The background
+runner records its own outcome and **never rethrows** — nothing awaits it, and an
+unhandled rejection would take the process down while telling the operator
+nothing.
+
+Two guards matter:
+
+- **One extraction per plan.** A second start is refused with 409
+  `EXTRACTION_ALREADY_RUNNING`; concurrent runs would race over the same draft
+  areas.
+- **Abandoned jobs self-heal.** A job left `RUNNING` past
+  `EXTRACTION_STALE_AFTER_MS` (10 minutes) — a restart mid-call — is reported and
+  persisted as `FLOOR_PLAN_EXTRACTION_TIMED_OUT`, and the plan drops out of
+  `PROCESSING`. Without this the plan would be locked out of extraction and the
+  UI would poll forever.
+
 ## Provider configuration
 
 The provider, model, and enablement come from the **global Settings**

@@ -310,6 +310,7 @@ export class UpdatePropertyAreaDto {
   @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
   @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  @IsOptional() @IsDateString() expectedUpdatedAt?: string;
 }
 
 export class RejectPropertyAreaDto {
@@ -321,8 +322,13 @@ export class UpdateAreaMarkerDto {
   @Type(() => Number) @IsNumber() @Min(0) @Max(1) x!: number;
   @Type(() => Number) @IsNumber() @Min(0) @Max(1) y!: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000) pageNumber?: number;
+  @IsOptional() @IsDateString() expectedUpdatedAt?: string;
 }
 
 export class ApprovePropertyAreasDto {
+  @ArrayMinSize(1) @IsUUID('4', { each: true }) areaIds!: string[];
+}
+
+export class DeletePropertyAreasDto {
   @ArrayMinSize(1) @IsUUID('4', { each: true }) areaIds!: string[];
 }

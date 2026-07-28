@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  AdminAssignment,
   AdminAssignmentListItem,
   AdminAuditEvent,
   AdminDashboard,
@@ -21,7 +22,8 @@ import type {
   AdminUser,
   AdminUserDetail,
   AdminFloorPlan,
-  AdminFloorPlanExtractionResult,
+  AdminFloorPlanExtractionJob,
+  AdminFloorPlanExtractionStarted,
   AdminPropertyArea,
   AdminPortfolio,
   AdminProperty,
@@ -37,6 +39,8 @@ import type {
   AiSettings,
   AiProviderName,
   MailDeliveryResult,
+  AdminDeleteResult,
+  AdminBulkDeleteResult,
 } from '@texasrenters/shared';
 import { allPropertywareEntities } from '@texasrenters/shared';
 import {
@@ -48,10 +52,30 @@ import {
 } from '@tanstack/react-query';
 
 import { api, type Page, queryString } from './api';
+import {
+  beginEntityOperation,
+  cancelAffectedQueries,
+  clearEntityOperation,
+  completeEntityDeletion,
+  completeEntityOperation,
+  createOperationId,
+  failEntityOperation,
+  insertEntityIntoList,
+  mergeAuthoritativeEntity,
+  patchEntityById,
+  patchEntityInQueries,
+  removeEntityFromQueries,
+  replaceTemporaryEntity,
+  snapshotEntity,
+  verifyAffectedQueries,
+} from './state-consistency';
 
 export const keys = {
+  all: ['admin'] as const,
   dashboard: ['admin', 'dashboard'] as const,
+  portfoliosRoot: ['admin', 'portfolios'] as const,
   portfolios: (search: string) => ['admin', 'portfolios', search] as const,
+  propertiesRoot: ['admin', 'properties'] as const,
   propertyOptions: (portfolioId: string, search: string) =>
     ['admin', 'property-options', portfolioId, search] as const,
   properties: (query: object) => ['admin', 'properties', query] as const,
@@ -60,6 +84,7 @@ export const keys = {
   propertyAreas: (id: string) => ['admin', 'property', id, 'areas'] as const,
   units: (id: string) => ['admin', 'units', id] as const,
   leases: (id: string) => ['admin', 'leases', id] as const,
+  inspectionsRoot: ['admin', 'inspections'] as const,
   inspections: (query: object) => ['admin', 'inspections', query] as const,
   inspection: (id: string) => ['admin', 'inspection', id] as const,
   inspectionAudit: (id: string, page: number) =>
@@ -75,15 +100,20 @@ export const keys = {
   reportShares: (id: string) => ['admin', 'inspection', id, 'report-shares'] as const,
   inspectionFindings: (id: string, page: number, reviewStatus: string, kind = 'ALL') =>
     ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
+  assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
+  techniciansRoot: ['admin', 'technicians'] as const,
   technicians: (query: object) => ['admin', 'technicians', query] as const,
   technician: (id: string) => ['admin', 'technician', id] as const,
+  usersRoot: ['admin', 'access', 'users'] as const,
   users: (query: object) => ['admin', 'access', 'users', query] as const,
   user: (id: string) => ['admin', 'access', 'user', id] as const,
+  rolesRoot: ['admin', 'access', 'roles'] as const,
   roles: (query: object) => ['admin', 'access', 'roles', query] as const,
   role: (id: string) => ['admin', 'access', 'role', id] as const,
   permissionCatalog: ['admin', 'access', 'permissions'] as const,
   propertyware: ['admin', 'propertyware'] as const,
+  propertywareSchedule: ['admin', 'propertyware', 'schedule'] as const,
   syncRuns: ['admin', 'propertyware', 'runs'] as const,
   syncErrors: (runId: string, page: number) =>
     ['admin', 'propertyware', 'runs', runId, 'errors', page] as const,
@@ -349,7 +379,7 @@ export interface PropertywareSchedule {
 }
 export const useSyncSchedule = () =>
   useQuery({
-    queryKey: ['admin', 'propertyware', 'schedule'] as const,
+    queryKey: keys.propertywareSchedule,
     queryFn: ({ signal }) =>
       api<PropertywareSchedule>('/api/v1/admin/integrations/propertyware/schedule', { signal }),
   });
@@ -457,7 +487,6 @@ export function useAiSettingsMutations() {
           method: 'POST',
         }),
       onSuccess: refresh,
-      onSettled: () => client.invalidateQueries({ queryKey: keys.aiSettings }),
     }),
   };
 }
@@ -465,12 +494,16 @@ export function useAiSettingsMutations() {
 export function useAccessMutations() {
   const client = useQueryClient();
   const refreshUsers = (id?: string) => {
-    void client.invalidateQueries({ queryKey: ['admin', 'access', 'users'] });
-    if (id) void client.invalidateQueries({ queryKey: keys.user(id) });
+    void verifyAffectedQueries(client, [
+      keys.usersRoot,
+      ...(id ? [keys.user(id)] : []),
+    ]);
   };
   const refreshRoles = (id?: string) => {
-    void client.invalidateQueries({ queryKey: ['admin', 'access', 'roles'] });
-    if (id) void client.invalidateQueries({ queryKey: keys.role(id) });
+    void verifyAffectedQueries(client, [
+      keys.rolesRoot,
+      ...(id ? [keys.role(id)] : []),
+    ]);
   };
   return {
     createUser: useMutation({
@@ -479,7 +512,10 @@ export function useAccessMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: () => refreshUsers(),
+      onSuccess: (data) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshUsers(data.id);
+      },
     }),
     updateUserStatus: useMutation({
       mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
@@ -487,7 +523,29 @@ export function useAccessMutations() {
           method: 'PATCH',
           body: JSON.stringify({ isActive }),
         }),
-      onSuccess: (_data, variables) => refreshUsers(variables.id),
+      onMutate: async (variables) => {
+        await cancelAffectedQueries(client, [keys.usersRoot, keys.user(variables.id)]);
+        const previous = snapshotEntity<AdminUserDetail>(client, keys.usersRoot, variables.id);
+        const operationId = beginEntityOperation(variables.id, 'UPDATING', {
+          isActive: variables.isActive,
+        });
+        patchEntityById(client, keys.all, variables.id, { isActive: variables.isActive }, {
+          state: 'UPDATING',
+          operationId,
+        });
+        return { operationId, previous };
+      },
+      onSuccess: (data, variables, context) => {
+        if (!context || !completeEntityOperation(variables.id, context.operationId, data)) return;
+        patchEntityInQueries(client, keys.all, data);
+        refreshUsers(variables.id);
+      },
+      onError: (_error, variables, context) => {
+        if (!context) return;
+        failEntityOperation(variables.id, context.operationId);
+        if (context.previous) patchEntityInQueries(client, keys.all, context.previous);
+        else refreshUsers(variables.id);
+      },
     }),
     setUserRoles: useMutation({
       mutationFn: ({ id, roleIds }: { id: string; roleIds: string[] }) =>
@@ -495,7 +553,10 @@ export function useAccessMutations() {
           method: 'PUT',
           body: JSON.stringify({ roleIds }),
         }),
-      onSuccess: (_data, variables) => refreshUsers(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshUsers(variables.id);
+      },
     }),
     createRole: useMutation({
       mutationFn: (input: { name: string; description?: string; permissions: string[] }) =>
@@ -503,7 +564,10 @@ export function useAccessMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: () => refreshRoles(),
+      onSuccess: (data) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshRoles(data.id);
+      },
     }),
     updateRole: useMutation({
       mutationFn: ({
@@ -519,11 +583,28 @@ export function useAccessMutations() {
           method: 'PATCH',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshRoles(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshRoles(variables.id);
+      },
     }),
     deleteRole: useMutation({
-      mutationFn: (id: string) => api(`/api/v1/admin/access/roles/${id}`, { method: 'DELETE' }),
-      onSuccess: () => refreshRoles(),
+      mutationFn: (id: string) =>
+        api<AdminDeleteResult>(`/api/v1/admin/access/roles/${id}`, { method: 'DELETE' }),
+      onMutate: async (id) => {
+        await cancelAffectedQueries(client, [keys.rolesRoot, keys.role(id)]);
+        const operationId = beginEntityOperation(id, 'DELETING');
+        removeEntityFromQueries(client, keys.rolesRoot, id);
+        return { operationId };
+      },
+      onSuccess: (_data, id, context) => {
+        if (context) completeEntityDeletion(id, context.operationId);
+        refreshRoles();
+      },
+      onError: (_error, id, context) => {
+        if (context) failEntityOperation(id, context.operationId);
+        refreshRoles(id);
+      },
     }),
   };
 }
@@ -531,27 +612,35 @@ export function useAccessMutations() {
 export function useAdminMutations() {
   const client = useQueryClient();
   const refreshInspection = (id?: string) => {
-    void client.invalidateQueries({ queryKey: ['admin', 'inspections'] });
-    void client.invalidateQueries({ queryKey: ['admin', 'assignments'] });
-    void client.invalidateQueries({ queryKey: keys.dashboard });
-    if (id) void client.invalidateQueries({ queryKey: keys.inspection(id) });
+    void verifyAffectedQueries(client, [
+      keys.inspectionsRoot,
+      keys.assignmentsRoot,
+      keys.dashboard,
+      ...(id ? [keys.inspection(id)] : []),
+    ]);
   };
   // A workflow action (finalize / TBD / follow-up / merge) also changes the
   // audit trail and area list for the open inspection.
   const refreshWorkflow = (id: string) => {
     refreshInspection(id);
-    void client.invalidateQueries({ queryKey: ['admin', 'inspection', id, 'audit'] });
-    void client.invalidateQueries({ queryKey: keys.inspectionAreas(id) });
+    void verifyAffectedQueries(client, [
+      ['admin', 'inspection', id, 'audit'],
+      keys.inspectionAreas(id),
+    ]);
   };
   // A pet/charge action changes the pet review, charge list, and the report.
   const refreshCharges = (id: string) => {
-    void client.invalidateQueries({ queryKey: keys.inspectionPets(id) });
-    void client.invalidateQueries({ queryKey: keys.inspectionCharges(id) });
-    void client.invalidateQueries({ queryKey: keys.chargeReport(id) });
+    void verifyAffectedQueries(client, [
+      keys.inspectionPets(id),
+      keys.inspectionCharges(id),
+      keys.chargeReport(id),
+    ]);
   };
   const refreshFloorPlan = (propertyId: string) => {
-    void client.invalidateQueries({ queryKey: keys.floorPlans(propertyId) });
-    void client.invalidateQueries({ queryKey: keys.propertyAreas(propertyId) });
+    void verifyAffectedQueries(client, [
+      keys.floorPlans(propertyId),
+      keys.propertyAreas(propertyId),
+    ]);
   };
   return {
     uploadFloorPlan: useMutation({
@@ -572,16 +661,36 @@ export function useAdminMutations() {
           body: form,
         });
       },
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onSuccess: (data, variables) => {
+        const current = client.getQueryData<AdminFloorPlan[]>(keys.floorPlans(variables.propertyId));
+        client.setQueryData(
+          keys.floorPlans(variables.propertyId),
+          current?.some((plan) => plan.id === data.id)
+            ? current.map((plan) => (plan.id === data.id ? data : plan))
+            : [data, ...(current ?? [])],
+        );
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshFloorPlan(variables.propertyId);
+      },
     }),
+    /**
+     * Starts extraction and resolves as soon as the job exists. The model call
+     * runs on the server outside the request — it routinely outlives the HTTP
+     * socket timeout — so the caller polls `floorPlanExtractionJob` until the
+     * job settles rather than waiting on this response.
+     */
     extractFloorPlan: useMutation({
       mutationFn: (variables: { propertyId: string; floorPlanId: string }) =>
-        api<AdminFloorPlanExtractionResult>(
+        api<AdminFloorPlanExtractionStarted>(
           `/api/v1/admin/floor-plans/${variables.floorPlanId}/extract`,
           { method: 'POST' },
         ),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
     }),
+    floorPlanExtractionJob: (floorPlanId: string, jobId: string, signal?: AbortSignal) =>
+      api<AdminFloorPlanExtractionJob>(
+        `/api/v1/admin/floor-plans/${floorPlanId}/extraction-jobs/${jobId}`,
+        { signal },
+      ),
     createPropertyArea: useMutation({
       mutationFn: ({
         propertyId,
@@ -598,14 +707,76 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onMutate: async (variables) => {
+        const queryKey = keys.propertyAreas(variables.propertyId);
+        await cancelAffectedQueries(client, [queryKey]);
+        const temporaryId = `client:area:${createOperationId('create-area')}`;
+        const operationId = beginEntityOperation(temporaryId, 'CREATING');
+        const optimistic = {
+          id: temporaryId,
+          propertyId: variables.propertyId,
+          unitId: variables.unitId ?? null,
+          unit: null,
+          name: variables.name.trim(),
+          inspectionOrder: variables.inspectionOrder,
+          isRequired: variables.isRequired,
+          status: 'DRAFT' as const,
+          source: 'MANUAL',
+          updatedAt: new Date().toISOString(),
+          floor: {
+            id: `client:floor:${variables.floorName.trim().toLowerCase()}`,
+            name: variables.floorName.trim(),
+            sortOrder: variables.inspectionOrder,
+          },
+          __sync: { state: 'CREATING' as const, operationId },
+        };
+        insertEntityIntoList(client, queryKey, optimistic);
+        return { temporaryId, operationId };
+      },
+      onSuccess: (data, variables, context) => {
+        if (context) {
+          clearEntityOperation(context.temporaryId, context.operationId);
+          replaceTemporaryEntity(
+            client,
+            keys.propertyAreas(variables.propertyId),
+            context.temporaryId,
+            data,
+          );
+        }
+        const operationId = beginEntityOperation(data.id, 'CREATING', data);
+        completeEntityOperation(data.id, operationId, data);
+        patchEntityInQueries(client, keys.propertyAreas(variables.propertyId), data);
+      },
+      onError: (_error, variables, context) => {
+        if (!context) return;
+        failEntityOperation(context.temporaryId, context.operationId);
+        removeEntityFromQueries(
+          client,
+          keys.propertyAreas(variables.propertyId),
+          context.temporaryId,
+        );
+      },
+      onSettled: (data, error, variables) => {
+        if (!error && data)
+          void verifyAffectedQueries(client, [
+            keys.floorPlans(variables.propertyId),
+            keys.propertyAreas(variables.propertyId),
+          ]);
+      },
     }),
     createFallbackPropertyArea: useMutation({
       mutationFn: ({ propertyId }: { propertyId: string }) =>
         api<AdminPropertyArea>(`/api/v1/admin/properties/${propertyId}/areas/fallback`, {
           method: 'POST',
         }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        const current =
+          client.getQueryData<AdminPropertyArea[]>(keys.propertyAreas(variables.propertyId)) ?? [];
+        if (!current.some((area) => area.id === data.id))
+          client.setQueryData(keys.propertyAreas(variables.propertyId), [...current, data]);
+        refreshFloorPlan(variables.propertyId);
+      },
     }),
     updatePropertyArea: useMutation({
       mutationFn: (variables: {
@@ -615,6 +786,7 @@ export function useAdminMutations() {
         name?: string;
         inspectionOrder?: number;
         isRequired?: boolean;
+        expectedUpdatedAt?: string;
       }) => {
         return api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}`, {
           method: 'PATCH',
@@ -623,15 +795,88 @@ export function useAdminMutations() {
             name: variables.name,
             inspectionOrder: variables.inspectionOrder,
             isRequired: variables.isRequired,
+            expectedUpdatedAt: variables.expectedUpdatedAt,
           }),
         });
       },
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onMutate: async (variables) => {
+        const queryKey = keys.propertyAreas(variables.propertyId);
+        await cancelAffectedQueries(client, [queryKey]);
+        const previous = client
+          .getQueryData<AdminPropertyArea[]>(queryKey)
+          ?.find((area) => area.id === variables.areaId);
+        const patch = {
+          ...(variables.floorName
+            ? {
+                floor: {
+                  id: previous?.floor?.id ?? `client:floor:${variables.floorName}`,
+                  name: variables.floorName,
+                  sortOrder: previous?.floor?.sortOrder ?? variables.inspectionOrder ?? 1,
+                },
+              }
+            : {}),
+          ...(variables.name ? { name: variables.name } : {}),
+          ...(variables.inspectionOrder
+            ? { inspectionOrder: variables.inspectionOrder }
+            : {}),
+          ...(variables.isRequired === undefined
+            ? {}
+            : { isRequired: variables.isRequired }),
+        };
+        const operationId = beginEntityOperation(variables.areaId, 'UPDATING', patch);
+        patchEntityById(client, queryKey, variables.areaId, patch, {
+          state: 'UPDATING',
+          operationId,
+        });
+        return { operationId, previous };
+      },
+      onSuccess: (data, variables, context) => {
+        if (!context || !completeEntityOperation(data.id, context.operationId, data)) return;
+        patchEntityInQueries(client, keys.propertyAreas(variables.propertyId), data);
+      },
+      onError: (_error, variables, context) => {
+        if (!context || !failEntityOperation(variables.areaId, context.operationId)) return;
+        if (context.previous)
+          patchEntityInQueries(
+            client,
+            keys.propertyAreas(variables.propertyId),
+            context.previous,
+          );
+      },
+      onSettled: (data, error, variables) => {
+        if (!error && data) refreshFloorPlan(variables.propertyId);
+      },
     }),
     deletePropertyArea: useMutation({
       mutationFn: (variables: { propertyId: string; areaId: string }) =>
-        api(`/api/v1/admin/property-areas/${variables.areaId}`, { method: 'DELETE' }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+        api<AdminDeleteResult>(`/api/v1/admin/property-areas/${variables.areaId}`, {
+          method: 'DELETE',
+        }),
+      onMutate: async (variables) => {
+        const queryKey = keys.propertyAreas(variables.propertyId);
+        await cancelAffectedQueries(client, [queryKey]);
+        const previous = client
+          .getQueryData<AdminPropertyArea[]>(queryKey)
+          ?.find((area) => area.id === variables.areaId);
+        const operationId = beginEntityOperation(variables.areaId, 'DELETING');
+        removeEntityFromQueries(client, queryKey, variables.areaId);
+        return { operationId, previous };
+      },
+      onSuccess: (data, _variables, context) => {
+        if (context) completeEntityDeletion(data.id, context.operationId);
+      },
+      onError: (_error, variables, context) => {
+        if (!context || !failEntityOperation(variables.areaId, context.operationId)) return;
+        if (context.previous)
+          insertEntityIntoList(
+            client,
+            keys.propertyAreas(variables.propertyId),
+            context.previous,
+          );
+      },
+      onSettled: (data, error, variables) => {
+        if (!error && data) refreshFloorPlan(variables.propertyId);
+      },
     }),
     // Re-runs extraction to fill in coordinates for areas that have none. Adds
     // marker data only — never changes names, ordering, or approval status.
@@ -652,6 +897,7 @@ export function useAdminMutations() {
         x: number;
         y: number;
         pageNumber?: number;
+        expectedUpdatedAt?: string;
       }) =>
         api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}/marker`, {
           method: 'PATCH',
@@ -659,9 +905,87 @@ export function useAdminMutations() {
             x: variables.x,
             y: variables.y,
             ...(variables.pageNumber ? { pageNumber: variables.pageNumber } : {}),
+            expectedUpdatedAt: variables.expectedUpdatedAt,
           }),
         }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onMutate: async (variables) => {
+        const queryKey = keys.propertyAreas(variables.propertyId);
+        await cancelAffectedQueries(client, [queryKey]);
+        const previous = client
+          .getQueryData<AdminPropertyArea[]>(queryKey)
+          ?.find((area) => area.id === variables.areaId);
+        const marker = {
+          available: true as const,
+          x: variables.x,
+          y: variables.y,
+          source: previous?.marker ? 'ADMIN_ADJUSTED' : 'ADMIN_PLACED',
+          confidence: null,
+          updatedAt: new Date().toISOString(),
+        };
+        const operationId = beginEntityOperation(variables.areaId, 'UPDATING', { marker });
+        patchEntityById(client, queryKey, variables.areaId, { marker }, {
+          state: 'UPDATING',
+          operationId,
+        });
+        return { operationId, previous };
+      },
+      onSuccess: (data, variables, context) => {
+        if (!context || !completeEntityOperation(data.id, context.operationId, data)) return;
+        patchEntityInQueries(client, keys.propertyAreas(variables.propertyId), data);
+      },
+      onError: (_error, variables, context) => {
+        if (!context || !failEntityOperation(variables.areaId, context.operationId)) return;
+        if (context.previous)
+          patchEntityInQueries(
+            client,
+            keys.propertyAreas(variables.propertyId),
+            context.previous,
+          );
+      },
+      onSettled: (data, error, variables) => {
+        if (!error && data) refreshFloorPlan(variables.propertyId);
+      },
+    }),
+    deletePropertyAreas: useMutation({
+      mutationFn: ({ propertyId, areaIds }: { propertyId: string; areaIds: string[] }) =>
+        api<AdminBulkDeleteResult>(`/api/v1/admin/properties/${propertyId}/areas/delete`, {
+          method: 'POST',
+          body: JSON.stringify({ areaIds }),
+        }),
+      onMutate: async (variables) => {
+        const queryKey = keys.propertyAreas(variables.propertyId);
+        await cancelAffectedQueries(client, [queryKey]);
+        const current = client.getQueryData<AdminPropertyArea[]>(queryKey) ?? [];
+        const previous = current.filter((area) => variables.areaIds.includes(area.id));
+        const operations = new Map(
+          variables.areaIds.map((id) => [id, beginEntityOperation(id, 'DELETING')]),
+        );
+        for (const id of variables.areaIds) removeEntityFromQueries(client, queryKey, id);
+        return { operations, previous };
+      },
+      onSuccess: (data, _variables, context) => {
+        if (!context) return;
+        for (const id of data.ids) {
+          const operationId = context.operations.get(id);
+          if (operationId) completeEntityDeletion(id, operationId);
+        }
+      },
+      onError: (_error, variables, context) => {
+        if (!context) return;
+        for (const [id, operationId] of context.operations) {
+          if (!failEntityOperation(id, operationId)) continue;
+          const previous = context.previous.find((area) => area.id === id);
+          if (previous)
+            insertEntityIntoList(
+              client,
+              keys.propertyAreas(variables.propertyId),
+              previous,
+            );
+        }
+      },
+      onSettled: (data, error, variables) => {
+        if (!error && data) refreshFloorPlan(variables.propertyId);
+      },
     }),
     approvePropertyAreas: useMutation({
       mutationFn: ({ propertyId, areaIds }: { propertyId: string; areaIds: string[] }) =>
@@ -669,7 +993,35 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify({ areaIds }),
         }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onMutate: async (variables) => {
+        const queryKey = keys.propertyAreas(variables.propertyId);
+        await cancelAffectedQueries(client, [queryKey]);
+        const previous = client.getQueryData<AdminPropertyArea[]>(queryKey) ?? [];
+        const operations = new Map<string, string>();
+        for (const id of variables.areaIds) {
+          const operationId = beginEntityOperation(id, 'PROCESSING');
+          operations.set(id, operationId);
+          patchEntityById(client, queryKey, id, {}, { state: 'PROCESSING', operationId });
+        }
+        return { operations, previous };
+      },
+      onSuccess: (data, variables, context) => {
+        client.setQueryData(keys.propertyAreas(variables.propertyId), data);
+        if (!context) return;
+        for (const area of data) {
+          const operationId = context.operations.get(area.id);
+          if (operationId) completeEntityOperation(area.id, operationId, area);
+        }
+      },
+      onError: (_error, variables, context) => {
+        if (!context) return;
+        for (const [id, operationId] of context.operations)
+          failEntityOperation(id, operationId);
+        client.setQueryData(keys.propertyAreas(variables.propertyId), context.previous);
+      },
+      onSettled: (data, error, variables) => {
+        if (!error && data) refreshFloorPlan(variables.propertyId);
+      },
     }),
     rejectPropertyArea: useMutation({
       mutationFn: (variables: { propertyId: string; areaId: string; reason?: string }) =>
@@ -677,14 +1029,20 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify({ reason: variables.reason }),
         }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshFloorPlan(variables.propertyId);
+      },
     }),
     archivePropertyArea: useMutation({
       mutationFn: (variables: { propertyId: string; areaId: string }) =>
         api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}/archive`, {
           method: 'POST',
         }),
-      onSuccess: (_data, variables) => refreshFloorPlan(variables.propertyId),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshFloorPlan(variables.propertyId);
+      },
     }),
     createTechnician: useMutation({
       mutationFn: (input: { email: string; displayName: string }) =>
@@ -692,18 +1050,22 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: () => {
-        void client.invalidateQueries({ queryKey: ['admin', 'technicians'] });
-        void client.invalidateQueries({ queryKey: keys.dashboard });
+      onSuccess: (data) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [keys.techniciansRoot, keys.dashboard]);
       },
     }),
     createInspection: useMutation({
       mutationFn: (input: object) =>
-        api<{ id: string }>('/api/v1/admin/inspections', {
+        api<AdminInspection>('/api/v1/admin/inspections', {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: () => refreshInspection(),
+      onSuccess: (data) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(data.id), data);
+        refreshInspection(data.id);
+      },
     }),
     updateInspection: useMutation({
       mutationFn: ({
@@ -721,7 +1083,11 @@ export function useAdminMutations() {
           method: 'PATCH',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshInspection(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshInspection(variables.id);
+      },
     }),
     finalizeInspection: useMutation({
       mutationFn: ({ id, overrideReason }: { id: string; overrideReason?: string }) =>
@@ -729,7 +1095,11 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(overrideReason ? { overrideReason } : {}),
         }),
-      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshWorkflow(variables.id);
+      },
     }),
     markInspectionTbd: useMutation({
       mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
@@ -737,7 +1107,11 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(reason ? { reason } : {}),
         }),
-      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshWorkflow(variables.id);
+      },
     }),
     requireInspectionFollowUp: useMutation({
       mutationFn: ({
@@ -753,7 +1127,11 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshWorkflow(variables.id);
+      },
     }),
     markInspectionUnderReview: useMutation({
       mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
@@ -761,7 +1139,11 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(reason ? { reason } : {}),
         }),
-      onSuccess: (_data, variables) => refreshWorkflow(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshWorkflow(variables.id);
+      },
     }),
     mergeInspectionAreas: useMutation({
       mutationFn: ({
@@ -779,11 +1161,11 @@ export function useAdminMutations() {
         }),
       onSuccess: (_data, variables) => {
         refreshWorkflow(variables.id);
-        void client.invalidateQueries({ queryKey: keys.inspectionMedia(variables.id) });
-        void client.invalidateQueries({ queryKey: keys.inspectionPhotos(variables.id) });
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.id, 'findings'],
-        });
+        void verifyAffectedQueries(client, [
+          keys.inspectionMedia(variables.id),
+          keys.inspectionPhotos(variables.id),
+          ['admin', 'inspection', variables.id, 'findings'],
+        ]);
       },
     }),
     generateComparison: useMutation({
@@ -791,8 +1173,11 @@ export function useAdminMutations() {
         api<AdminInspectionComparison>(`/api/v1/admin/inspections/${id}/comparison/generate`, {
           method: 'POST',
         }),
-      onSuccess: (_data, variables) =>
-        client.invalidateQueries({ queryKey: keys.inspectionComparison(variables.id) }),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.inspectionComparison(variables.id), data);
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [keys.inspectionComparison(variables.id)]);
+      },
     }),
     reviewComparison: useMutation({
       mutationFn: ({
@@ -809,8 +1194,11 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify({ decision, note }),
         }),
-      onSuccess: (_data, variables) =>
-        client.invalidateQueries({ queryKey: keys.inspectionComparison(variables.inspectionId) }),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.inspectionComparison(variables.inspectionId), data);
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [keys.inspectionComparison(variables.inspectionId)]);
+      },
     }),
     overrideAreaComparison: useMutation({
       mutationFn: ({
@@ -827,8 +1215,11 @@ export function useAdminMutations() {
           `/api/v1/admin/area-comparisons/${areaComparisonId}/override`,
           { method: 'POST', body: JSON.stringify({ classification, reason }) },
         ),
-      onSuccess: (_data, variables) =>
-        client.invalidateQueries({ queryKey: keys.inspectionComparison(variables.inspectionId) }),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.inspectionComparison(variables.inspectionId), data);
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [keys.inspectionComparison(variables.inspectionId)]);
+      },
     }),
     upsertChargeRule: useMutation({
       mutationFn: (input: { amount: number; code?: string; isActive?: boolean }) =>
@@ -836,14 +1227,20 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: () => client.invalidateQueries({ queryKey: keys.chargeRules }),
+      onSuccess: (data) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [keys.chargeRules]);
+      },
     }),
     generatePetCandidates: useMutation({
       mutationFn: ({ id }: { id: string }) =>
         api<AdminInspectionPets>(`/api/v1/admin/inspections/${id}/pets/generate`, {
           method: 'POST',
         }),
-      onSuccess: (_data, variables) => refreshCharges(variables.id),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.inspectionPets(variables.id), data);
+        refreshCharges(variables.id);
+      },
     }),
     reviewPetCandidate: useMutation({
       mutationFn: ({
@@ -860,12 +1257,18 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshCharges(variables.inspectionId),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.inspectionPets(variables.inspectionId), data);
+        refreshCharges(variables.inspectionId);
+      },
     }),
     generateCharges: useMutation({
       mutationFn: ({ id }: { id: string }) =>
         api<AdminCharge[]>(`/api/v1/admin/inspections/${id}/charges/generate`, { method: 'POST' }),
-      onSuccess: (_data, variables) => refreshCharges(variables.id),
+      onSuccess: (data, variables) => {
+        client.setQueryData(keys.inspectionCharges(variables.id), data);
+        refreshCharges(variables.id);
+      },
     }),
     createCharge: useMutation({
       mutationFn: ({
@@ -885,7 +1288,10 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshCharges(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshCharges(variables.id);
+      },
     }),
     reviewCharge: useMutation({
       mutationFn: ({
@@ -902,7 +1308,10 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshCharges(variables.inspectionId),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshCharges(variables.inspectionId);
+      },
     }),
     createReportShare: useMutation({
       mutationFn: ({
@@ -916,21 +1325,23 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify(recipientEmail ? { recipientEmail } : {}),
         }),
-      onSuccess: (_data, variables) => {
-        void client.invalidateQueries({ queryKey: keys.reportShares(variables.inspectionId) });
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
-        });
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [
+          keys.reportShares(variables.inspectionId),
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
+        ]);
       },
     }),
     revokeReportShare: useMutation({
       mutationFn: ({ id }: { id: string; inspectionId: string }) =>
         api<AdminReportShare>(`/api/v1/admin/report-shares/${id}`, { method: 'DELETE' }),
-      onSuccess: (_data, variables) => {
-        void client.invalidateQueries({ queryKey: keys.reportShares(variables.inspectionId) });
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
-        });
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [
+          keys.reportShares(variables.inspectionId),
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
+        ]);
       },
     }),
     approveFinding: useMutation({
@@ -939,13 +1350,12 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify({ reason }),
         }),
-      onSuccess: (_data, variables) => {
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.inspectionId, 'findings'],
-        });
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
-        });
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [
+          ['admin', 'inspection', variables.inspectionId, 'findings'],
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
+        ]);
       },
     }),
     rejectFinding: useMutation({
@@ -954,13 +1364,12 @@ export function useAdminMutations() {
           method: 'POST',
           body: JSON.stringify({ reason }),
         }),
-      onSuccess: (_data, variables) => {
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.inspectionId, 'findings'],
-        });
-        void client.invalidateQueries({
-          queryKey: ['admin', 'inspection', variables.inspectionId, 'audit'],
-        });
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        void verifyAffectedQueries(client, [
+          ['admin', 'inspection', variables.inspectionId, 'findings'],
+          ['admin', 'inspection', variables.inspectionId, 'audit'],
+        ]);
       },
     }),
     assign: useMutation({
@@ -973,11 +1382,14 @@ export function useAdminMutations() {
         reason?: string;
         idempotencyKey?: string;
       }) =>
-        api(`/api/v1/admin/inspections/${id}/assign`, {
+        api<AdminAssignment>(`/api/v1/admin/inspections/${id}/assign`, {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshInspection(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshInspection(variables.id);
+      },
     }),
     reassign: useMutation({
       mutationFn: ({
@@ -989,30 +1401,68 @@ export function useAdminMutations() {
         reason?: string;
         idempotencyKey?: string;
       }) =>
-        api(`/api/v1/admin/inspections/${id}/reassign`, {
+        api<AdminAssignment>(`/api/v1/admin/inspections/${id}/reassign`, {
           method: 'POST',
           body: JSON.stringify(input),
         }),
-      onSuccess: (_data, variables) => refreshInspection(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshInspection(variables.id);
+      },
     }),
     unassign: useMutation({
       mutationFn: ({ id, reason }: { id: string; reason: string }) =>
-        api(`/api/v1/admin/inspections/${id}/unassign`, {
+        api<AdminAssignment>(`/api/v1/admin/inspections/${id}/unassign`, {
           method: 'POST',
           body: JSON.stringify({ reason }),
         }),
-      onSuccess: (_data, variables) => refreshInspection(variables.id),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        refreshInspection(variables.id);
+      },
     }),
     updateTechnician: useMutation({
       mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
-        api(`/api/v1/admin/technicians/${id}/status`, {
+        api<AdminTechnician>(`/api/v1/admin/technicians/${id}/status`, {
           method: 'PATCH',
           body: JSON.stringify({ isActive }),
         }),
-      onSuccess: (_data, variables) => {
-        void client.invalidateQueries({ queryKey: ['admin', 'technicians'] });
-        void client.invalidateQueries({ queryKey: keys.technician(variables.id) });
-        void client.invalidateQueries({ queryKey: keys.dashboard });
+      onMutate: async (variables) => {
+        await cancelAffectedQueries(client, [
+          keys.techniciansRoot,
+          keys.technician(variables.id),
+        ]);
+        const previous = snapshotEntity<AdminTechnician>(
+          client,
+          keys.techniciansRoot,
+          variables.id,
+        );
+        const operationId = beginEntityOperation(variables.id, 'UPDATING', {
+          isActive: variables.isActive,
+        });
+        patchEntityById(client, keys.all, variables.id, { isActive: variables.isActive }, {
+          state: 'UPDATING',
+          operationId,
+        });
+        return { operationId, previous };
+      },
+      onSuccess: (data, variables, context) => {
+        if (!context || !completeEntityOperation(variables.id, context.operationId, data)) return;
+        patchEntityInQueries(client, keys.all, data);
+        void verifyAffectedQueries(client, [
+          keys.techniciansRoot,
+          keys.technician(variables.id),
+          keys.dashboard,
+        ]);
+      },
+      onError: (_error, variables, context) => {
+        if (context) failEntityOperation(variables.id, context.operationId);
+        if (context?.previous) patchEntityInQueries(client, keys.all, context.previous);
+        else
+          void verifyAffectedQueries(client, [
+            keys.techniciansRoot,
+            keys.technician(variables.id),
+          ]);
       },
     }),
     sync: useMutation({
@@ -1029,10 +1479,12 @@ export function useAdminMutations() {
           },
         ),
       onSuccess: () => {
-        void client.invalidateQueries({ queryKey: keys.propertyware });
-        void client.invalidateQueries({ queryKey: ['admin', 'portfolios'] });
-        void client.invalidateQueries({ queryKey: keys.syncRuns });
-        void client.invalidateQueries({ queryKey: keys.dashboard });
+        void verifyAffectedQueries(client, [
+          keys.propertyware,
+          keys.portfoliosRoot,
+          keys.syncRuns,
+          keys.dashboard,
+        ]);
       },
     }),
   };

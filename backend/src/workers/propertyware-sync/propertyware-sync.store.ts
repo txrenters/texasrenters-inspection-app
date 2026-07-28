@@ -390,9 +390,11 @@ export class InMemoryPropertywareSyncStore implements PropertywareSyncStore {
           return false;
         if (
           record.entityType === 'leases' &&
-          (!active('portfolios', record.portfolioExternalId) ||
+          // Report-sourced leases have no portfolio or unit parent to check;
+          // only the parents they actually declare must be active.
+          ((record.portfolioExternalId && !active('portfolios', record.portfolioExternalId)) ||
             !active('buildings', record.buildingExternalId) ||
-            !active('units', record.unitExternalId))
+            (record.unitExternalId && !active('units', record.unitExternalId)))
         )
           return false;
         if (
@@ -961,18 +963,29 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
       };
       saved = await this.prisma.propertywareUnit.upsert({ where: key, create: data, update: data });
     } else {
-      const portfolio = await this.requirePortfolio(organizationId, record.portfolioExternalId);
       const building = await this.requireBuilding(organizationId, record.buildingExternalId);
-      const unit = await this.requireUnit(organizationId, record.unitExternalId);
+      // The published report exposes no portfolio or unit column. Portfolio is
+      // recoverable from the building we just resolved; the unit link is simply
+      // absent, and such a lease attaches at building level.
+      const portfolio = record.portfolioExternalId
+        ? {
+            id: (await this.requirePortfolio(organizationId, record.portfolioExternalId)).id,
+            externalId: record.portfolioExternalId,
+          }
+        : await this.portfolioOfBuilding(building.id);
+      const unit = record.unitExternalId
+        ? await this.requireUnit(organizationId, record.unitExternalId)
+        : null;
       const data = {
         organizationId,
         externalId: record.externalId,
         portfolioId: portfolio.id,
         buildingId: building.id,
-        unitId: unit.id,
-        externalPortfolioId: record.portfolioExternalId,
+        unitId: unit?.id ?? null,
+        sourceFeed: record.unitExternalId ? 'rest' : 'report',
+        externalPortfolioId: record.portfolioExternalId ?? portfolio.externalId,
         externalBuildingId: record.buildingExternalId,
-        externalUnitId: record.unitExternalId,
+        externalUnitId: record.unitExternalId ?? null,
         idNumber: record.idNumber,
         leaseName: record.leaseName,
         startDate: date(record.startDate),
@@ -1386,6 +1399,20 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
     const item = (await this.getRecordCache(organizationId, 'units')).get(externalId);
     if (!item) throw new Error(`Missing synchronized unit parent ${externalId}.`);
     return item;
+  }
+  /**
+   * Portfolio owning a building. Report-sourced leases have no portfolio column
+   * of their own, but their building already resolves one, so the link is
+   * recovered rather than guessed. The record cache holds only ids, hence the
+   * lookup.
+   */
+  private async portfolioOfBuilding(buildingId: string) {
+    const building = await this.prisma.propertywareBuilding.findUnique({
+      where: { id: buildingId },
+      select: { portfolioId: true, externalPortfolioId: true },
+    });
+    if (!building) throw new Error(`Missing synchronized building ${buildingId}.`);
+    return { id: building.portfolioId, externalId: building.externalPortfolioId };
   }
   private delegateFor(entity: PropertywareEntity) {
     return entity === 'portfolios'

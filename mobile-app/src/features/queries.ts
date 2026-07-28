@@ -1,32 +1,51 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { DemoRole, FindingStatus, InspectionStatus } from '../domain/models';
+import type { DemoRole, FindingStatus, InspectionStatus, LocalMedia } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
 import type { AddAreaInput } from '../repositories/contracts';
+import {
+  beginIntent,
+  cancelQueries,
+  completeIntent,
+  failIntent,
+  mergeEntity,
+  patchEntity,
+  verifyQueries,
+} from './state-consistency';
 
 // Socket events, push notifications, app foreground, and mutations are the primary refresh paths.
 // This minute-level poll is only a bounded safety net when realtime delivery is interrupted.
 const assignmentRefreshInterval = process.env.NODE_ENV === 'test' ? false : 60_000;
 
 export const queryKeys = {
+  all: [] as const,
+  demoUsers: ['demoUsers'] as const,
   currentUser: ['currentUser'] as const,
   dashboard: ['dashboard'] as const,
   inspections: (filters: object = {}) => ['inspections', filters] as const,
+  inspectionsRoot: ['inspections'] as const,
   inspection: (id: string) => ['inspection', id] as const,
+  inspectionContext: (id: string) => ['inspection', id, 'context'] as const,
+  inspectionReport: (id: string) => ['inspection', id, 'report'] as const,
+  roomsRoot: ['inspectionRooms'] as const,
   rooms: (id: string) => ['inspectionRooms', id] as const,
+  roomRoot: ['room'] as const,
   room: (id: string) => ['room', id] as const,
   media: (roomId: string) => ['media', roomId] as const,
   property: (id: string) => ['property', id] as const,
   floorPlan: (id: string) => ['floorPlan', id] as const,
   uploads: ['uploads'] as const,
+  findingsRoot: ['findings'] as const,
   findings: (inspectionId?: string) => ['findings', inspectionId ?? 'all'] as const,
   finding: (id: string) => ['finding', id] as const,
+  findingForInspection: (id: string, inspectionId?: string) =>
+    ['finding', id, inspectionId ?? ''] as const,
 };
 
 export function useDemoUsers() {
   return useQuery({
-    queryKey: ['demoUsers'],
+    queryKey: queryKeys.demoUsers,
     queryFn: () => repositories.auth.listDemoUsers(),
     enabled: isDemoMode,
   });
@@ -97,14 +116,14 @@ export function useInspection(id: string) {
 }
 export function useInspectionContext(id: string) {
   return useQuery({
-    queryKey: [...queryKeys.inspection(id), 'context'],
+    queryKey: queryKeys.inspectionContext(id),
     queryFn: () => repositories.inspections.context(id),
     enabled: Boolean(id),
   });
 }
 export function useInspectionReport(id: string) {
   return useQuery({
-    queryKey: [...queryKeys.inspection(id), 'report'],
+    queryKey: queryKeys.inspectionReport(id),
     queryFn: () => repositories.inspections.report(id),
     enabled: Boolean(id),
   });
@@ -112,21 +131,34 @@ export function useInspectionReport(id: string) {
 export function useInspectionActions(id: string) {
   const client = useQueryClient();
   const refresh = () =>
-    Promise.all([
-      client.invalidateQueries({ queryKey: queryKeys.inspection(id) }),
-      client.invalidateQueries({ queryKey: [...queryKeys.inspection(id), 'context'] }),
-      client.invalidateQueries({ queryKey: ['inspections'] }),
-      client.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    verifyQueries(client, [
+      queryKeys.inspection(id),
+      queryKeys.inspectionContext(id),
+      queryKeys.inspectionsRoot,
+      queryKeys.dashboard,
     ]);
+  const action = (state: 'PROCESSING', request: () => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>) => ({
+    mutationFn: request,
+    onMutate: async () => {
+      await cancelQueries(client, [queryKeys.inspection(id), queryKeys.inspectionsRoot]);
+      const operation = beginIntent(id, state);
+      patchEntity(client, queryKeys.all, id, {}, { state, operationId: operation });
+      return { operation };
+    },
+    onSuccess: (inspection: Awaited<ReturnType<typeof repositories.inspections.start>>, _variables: void, context?: { operation: string }) => {
+      if (!context || !completeIntent(id, context.operation, inspection)) return;
+      mergeEntity(client, queryKeys.all, inspection, context.operation);
+      client.setQueryData(queryKeys.inspection(id), inspection);
+      void refresh();
+    },
+    onError: (_error: unknown, _variables: void, context?: { operation: string }) => {
+      if (context) failIntent(id, context.operation);
+      void refresh();
+    },
+  });
   return {
-    start: useMutation({
-      mutationFn: () => repositories.inspections.start(id),
-      onSuccess: refresh,
-    }),
-    complete: useMutation({
-      mutationFn: () => repositories.inspections.complete(id),
-      onSuccess: refresh,
-    }),
+    start: useMutation(action('PROCESSING', () => repositories.inspections.start(id))),
+    complete: useMutation(action('PROCESSING', () => repositories.inspections.complete(id))),
   };
 }
 export function useRooms(inspectionId: string) {
@@ -191,7 +223,7 @@ export function useFindings(inspectionId?: string, pollWhileProcessing = false) 
 }
 export function useFinding(id: string, inspectionId?: string) {
   return useQuery({
-    queryKey: [...queryKeys.finding(id), inspectionId ?? ''],
+    queryKey: queryKeys.findingForInspection(id, inspectionId),
     queryFn: () => repositories.findings.get(id, inspectionId),
     enabled: Boolean(id),
   });
@@ -201,11 +233,16 @@ export function useAddArea(inspectionId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (input: AddAreaInput) => repositories.inspections.addArea(inspectionId, input),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: queryKeys.rooms(inspectionId) });
-      void client.invalidateQueries({
-        queryKey: [...queryKeys.inspection(inspectionId), 'context'],
-      });
+    onSuccess: (room) => {
+      mergeEntity(client, queryKeys.all, room);
+      client.setQueryData<Awaited<ReturnType<typeof repositories.inspections.rooms>>>(
+        queryKeys.rooms(inspectionId),
+        (current = []) => current.some((item) => item.id === room.id) ? current : [...current, room],
+      );
+      void verifyQueries(client, [
+        queryKeys.rooms(inspectionId),
+        queryKeys.inspectionContext(inspectionId),
+      ]);
     },
   });
 }
@@ -213,25 +250,52 @@ export function useAddArea(inspectionId: string) {
 export function useUpdateRoom(inspectionId: string, roomId: string) {
   const client = useQueryClient();
   const refresh = () =>
-    Promise.all([
-      client.invalidateQueries({ queryKey: queryKeys.room(roomId) }),
-      client.invalidateQueries({ queryKey: queryKeys.rooms(inspectionId) }),
-      client.invalidateQueries({
-        queryKey: [...queryKeys.inspection(inspectionId), 'context'],
-      }),
+    verifyQueries(client, [
+      queryKeys.room(roomId),
+      queryKeys.rooms(inspectionId),
+      queryKeys.inspectionContext(inspectionId),
     ]);
   return {
     note: useMutation({
       mutationFn: (note: string) => repositories.inspections.updateRoomNote(roomId, note),
-      onSuccess: refresh,
+      onMutate: async (note) => {
+        await cancelQueries(client, [queryKeys.room(roomId), queryKeys.rooms(inspectionId)]);
+        const previous = client.getQueryData(queryKeys.room(roomId));
+        const operation = beginIntent(roomId, 'UPDATING', { note });
+        patchEntity(client, queryKeys.all, roomId, { note }, {
+          state: 'UPDATING',
+          operationId: operation,
+        });
+        return { operation, previous };
+      },
+      onSuccess: (room, _note, context) => {
+        if (!context || !completeIntent(roomId, context.operation, room)) return;
+        mergeEntity(client, queryKeys.all, room, context.operation);
+        client.setQueryData(queryKeys.room(roomId), room);
+        void refresh();
+      },
+      onError: (_error, _note, context) => {
+        if (!context) return;
+        failIntent(roomId, context.operation);
+        if (context.previous) client.setQueryData(queryKeys.room(roomId), context.previous);
+        void refresh();
+      },
     }),
     skip: useMutation({
       mutationFn: (reason: string) => repositories.inspections.skipRoom(roomId, reason),
-      onSuccess: refresh,
+      onSuccess: (room) => {
+        mergeEntity(client, queryKeys.all, room);
+        client.setQueryData(queryKeys.room(roomId), room);
+        void refresh();
+      },
     }),
     complete: useMutation({
       mutationFn: () => repositories.inspections.completeRoom(roomId),
-      onSuccess: refresh,
+      onSuccess: (room) => {
+        mergeEntity(client, queryKeys.all, room);
+        client.setQueryData(queryKeys.room(roomId), room);
+        void refresh();
+      },
     }),
   };
 }
@@ -244,38 +308,52 @@ export function useSaveRecording() {
       const upload = await repositories.uploads.enqueue(media);
       return { media, upload };
     },
-    onSuccess: ({ media }) => {
-      void client.invalidateQueries({ queryKey: queryKeys.media(media.roomId) });
-      void client.invalidateQueries({ queryKey: queryKeys.room(media.roomId) });
-      void client.invalidateQueries({ queryKey: queryKeys.rooms(media.inspectionId) });
-      void client.invalidateQueries({ queryKey: queryKeys.uploads });
-      void client.invalidateQueries({ queryKey: queryKeys.dashboard });
+    onSuccess: ({ media, upload }) => {
+      client.setQueryData<LocalMedia[]>(
+        queryKeys.media(media.roomId),
+        (current = []) =>
+          current.some((item) => item.id === media.id) ? current : [media, ...current],
+      );
+      client.setQueryData<Awaited<ReturnType<typeof repositories.uploads.list>>>(
+        queryKeys.uploads,
+        (current = []) => current.some((item) => item.id === upload.id) ? current : [upload, ...current],
+      );
+      void verifyQueries(client, [
+        queryKeys.room(media.roomId),
+        queryKeys.rooms(media.inspectionId),
+        queryKeys.dashboard,
+      ]);
     },
   });
 }
 
 export function useUploadActions() {
   const client = useQueryClient();
-  const refresh = () => client.invalidateQueries({ queryKey: queryKeys.uploads });
+  const run = (action: (id: string) => Promise<void>) => async (id: string) => {
+    await action(id);
+    return repositories.uploads.list();
+  };
+  const refresh = (uploads: Awaited<ReturnType<typeof repositories.uploads.list>>) =>
+    client.setQueryData(queryKeys.uploads, uploads);
   return {
     pause: useMutation({
-      mutationFn: repositories.uploads.pause.bind(repositories.uploads),
+      mutationFn: run(repositories.uploads.pause.bind(repositories.uploads)),
       onSuccess: refresh,
     }),
     resume: useMutation({
-      mutationFn: repositories.uploads.resume.bind(repositories.uploads),
+      mutationFn: run(repositories.uploads.resume.bind(repositories.uploads)),
       onSuccess: refresh,
     }),
     retry: useMutation({
-      mutationFn: repositories.uploads.retry.bind(repositories.uploads),
+      mutationFn: run(repositories.uploads.retry.bind(repositories.uploads)),
       onSuccess: refresh,
     }),
     retryProcessing: useMutation({
-      mutationFn: repositories.uploads.retryProcessing.bind(repositories.uploads),
+      mutationFn: run(repositories.uploads.retryProcessing.bind(repositories.uploads)),
       onSuccess: refresh,
     }),
     remove: useMutation({
-      mutationFn: repositories.uploads.remove.bind(repositories.uploads),
+      mutationFn: run(repositories.uploads.remove.bind(repositories.uploads)),
       onSuccess: refresh,
     }),
   };
@@ -284,27 +362,31 @@ export function useUploadActions() {
 export function useFindingActions(inspectionId: string, findingId: string) {
   const client = useQueryClient();
   const refresh = () =>
-    Promise.all([
-      client.invalidateQueries({ queryKey: queryKeys.finding(findingId) }),
-      client.invalidateQueries({ queryKey: queryKeys.findings(inspectionId) }),
+    verifyQueries(client, [
+      queryKeys.finding(findingId),
+      queryKeys.findings(inspectionId),
     ]);
+  const authoritative = (finding: Awaited<ReturnType<typeof repositories.findings.approve>>) => {
+    mergeEntity(client, queryKeys.all, finding);
+    void refresh();
+  };
   return {
     approve: useMutation({
       mutationFn: () => repositories.findings.approve(findingId),
-      onSuccess: refresh,
+      onSuccess: authoritative,
     }),
     edit: useMutation({
       mutationFn: ({ observation, notes }: { observation: string; notes: string }) =>
         repositories.findings.edit(findingId, observation, notes),
-      onSuccess: refresh,
+      onSuccess: authoritative,
     }),
     reject: useMutation({
       mutationFn: (reason: string) => repositories.findings.reject(findingId, reason),
-      onSuccess: refresh,
+      onSuccess: authoritative,
     }),
     reinspect: useMutation({
       mutationFn: (reason: string) => repositories.findings.requestReinspection(findingId, reason),
-      onSuccess: refresh,
+      onSuccess: authoritative,
     }),
   };
 }

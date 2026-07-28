@@ -60,6 +60,7 @@ export default function RecordingReviewScreen() {
   const [label, setLabel] = useState(draft?.label ?? '');
   const [category, setCategory] = useState<AdditionalVideoCategory | undefined>(draft?.category);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [coverageConfirmed, setCoverageConfirmed] = useState(false);
   const playableUri = draft && !draft.uri.startsWith('mock://') ? draft.uri : null;
   const player = useVideoPlayer(playableUri, (videoPlayer) => {
     videoPlayer.loop = false;
@@ -81,7 +82,7 @@ export default function RecordingReviewScreen() {
     );
   const nextRoom = nextInspectionRoom(rooms.data ?? [], areaId);
   const trimmedLabel = label.trim();
-  const canSave = !isAdditional || trimmedLabel.length > 0;
+  const canSave = isAdditional ? trimmedLabel.length > 0 : coverageConfirmed;
   const saveForUpload = () => {
     if (!canSave) return;
     save.mutate(
@@ -97,6 +98,16 @@ export default function RecordingReviewScreen() {
           durationSeconds: draft.durationSeconds,
           estimatedSizeMb: draft.estimatedSizeMb,
           note,
+          captureSummary: draft.captureSummary
+            ? {
+                ...draft.captureSummary,
+                manualConfirmation: coverageConfirmed,
+                coverageStatus:
+                  draft.captureSummary.coverageStatus === 'COMPLETE'
+                    ? 'COMPLETE'
+                    : 'MANUALLY_CONFIRMED',
+              }
+            : undefined,
         },
       },
       {
@@ -170,6 +181,40 @@ export default function RecordingReviewScreen() {
         </View>
         <Meta label="Recorded" value={new Date(draft.recordedAt).toLocaleString()} />
       </Card>
+      {!isAdditional && draft.captureSummary ? (
+        <Card>
+          <Text style={styles.label}>GUIDED CAPTURE SUMMARY</Text>
+          <View style={styles.summaryGrid}>
+            <Meta
+              label="Rotation estimate"
+              value={`${draft.captureSummary.clockwiseRotationDegrees}° clockwise`}
+            />
+            <Meta
+              label="Returned to Wall 1"
+              value={draft.captureSummary.returnedToStart ? 'Estimated yes' : 'Not confirmed'}
+            />
+            <Meta label="Sensor confidence" value={draft.captureSummary.sensorConfidence} />
+            <Meta
+              label="Evidence"
+              value={`${draft.captureSummary.snapshotCount} photos · ${draft.captureSummary.findingMarkerCount} markers`}
+            />
+          </View>
+          <Text style={styles.captureDisclaimer}>
+            Sensors estimate movement only; they do not prove every surface was visible.
+          </Text>
+          <Pressable
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: coverageConfirmed }}
+            onPress={() => setCoverageConfirmed((value) => !value)}
+            style={[styles.confirmation, coverageConfirmed && styles.confirmationChecked]}
+          >
+            <Text style={styles.confirmationMark}>{coverageConfirmed ? '✓' : '○'}</Text>
+            <Text style={styles.confirmationText}>
+              I confirm the room video and photos capture the required evidence.
+            </Text>
+          </Pressable>
+        </Card>
+      ) : null}
       {isAdditional ? (
         <Card>
           <Text style={styles.label}>CLIP LABEL</Text>
@@ -324,5 +369,22 @@ const createStyles = (colors: AppColors) =>
     categoryChipText: { ...typography.caption, color: colors.textSecondary },
     categoryChipTextSelected: { color: colors.white, fontWeight: '700' },
     actions: { gap: spacing.sm },
+    summaryGrid: { gap: spacing.sm },
+    captureDisclaimer: { ...typography.caption, color: colors.textSecondary },
+    confirmation: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      padding: spacing.md,
+    },
+    confirmationChecked: {
+      borderColor: colors.success,
+      backgroundColor: colors.successSoft,
+    },
+    confirmationMark: { ...typography.heading, color: colors.primary },
+    confirmationText: { ...typography.body, color: colors.textPrimary, flex: 1 },
     error: { ...typography.caption, color: colors.danger },
   });

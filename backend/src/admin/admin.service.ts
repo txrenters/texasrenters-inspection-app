@@ -409,7 +409,7 @@ export class AdminService {
   private leaseSummary(
     units: Array<{ id: string }>,
     leases: Array<{
-      unitId: string;
+      unitId: string | null;
       sourceStatus: string | null;
       scheduledMoveOutDate: Date | null;
       endDate?: Date | null;
@@ -418,7 +418,10 @@ export class AdminService {
     const now = new Date();
     const activeLeaseCount = leases.length;
     const scheduledMoveOutCount = leases.filter((lease) => lease.scheduledMoveOutDate).length;
-    const leasedUnitIds = new Set(leases.map((lease) => lease.unitId));
+    // Report-sourced leases have no unit, so they cannot mark one occupied.
+    const leasedUnitIds = new Set(
+      leases.map((lease) => lease.unitId).filter((id): id is string => Boolean(id)),
+    );
     const vacantUnitCount = units.filter((unit) => !leasedUnitIds.has(unit.id)).length;
     const expiringSoonCount = leases.filter(
       (lease) => leaseExpiryStatus(lease.endDate ?? null, now) === 'EXPIRING_SOON',
@@ -431,9 +434,11 @@ export class AdminService {
       .sort((left, right) => left.getTime() - right.getTime());
 
     // Vacancy — and therefore "no relevant lease" — is only meaningful once
-    // units exist to compare against. With none synced we know nothing about
-    // this property's leases, and must not imply that it has none.
-    const leaseDataAvailable = units.length > 0;
+    // units exist to compare against. With neither units nor leases synced we
+    // know nothing about this property and must not imply it has no lease.
+    // Report-sourced leases attach at building level with no unit, so their
+    // presence alone is enough to have something real to say.
+    const leaseDataAvailable = units.length > 0 || leases.length > 0;
 
     const parts: string[] = [];
     if (activeLeaseCount)
@@ -1063,7 +1068,10 @@ export class AdminService {
       type: 'inspection.changed',
       organizationId: user.organizationId,
     });
-    return inspection;
+    // The committed primary read is the mutation's authoritative response.
+    // Clients must not have to invalidate and race a potentially older list
+    // response just to learn the entity they created.
+    return this.inspection(user, inspection.id);
   }
 
   async updateInspection(user: AuthenticatedUser, id: string, input: UpdateAdminInspectionDto) {

@@ -7,3 +7,4 @@ export * from './leases/lease-expiry.js';
 export * from './report/report-view.js';
 export * from './schemas/finding.js';
 export * from './schemas/floor-plan.js';
+export * from './state/sync.js';

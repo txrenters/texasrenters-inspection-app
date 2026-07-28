@@ -62,6 +62,9 @@ function buildTx(overrides: Record<string, unknown> = {}) {
 
 function buildService(tx: ReturnType<typeof buildTx>) {
   const prisma = {
+    inspection: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', assignments: [] }),
+    },
     $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
   };
   return new AdminService(prisma as never);

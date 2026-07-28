@@ -92,6 +92,7 @@ export function FloorPlanCanvas({
       x: area.marker!.x,
       y: area.marker!.y,
       orderLabel: area.inspectionOrder,
+      source: area.marker!.source,
     }));
   const editingArea = editingAreaId ? areas.find((area) => area.id === editingAreaId) : undefined;
   const draft =
@@ -309,6 +310,12 @@ export function FloorPlanCanvas({
       <div
         ref={attachStage}
         className="floor-plan-comparison-image-stage fp-stage"
+        role="region"
+        aria-label={
+          editingAreaId
+            ? 'Floor plan marker editor. Click to place the marker or use arrow keys on the marker.'
+            : 'Interactive floor plan. Drag to pan when zoomed.'
+        }
         onPointerDown={handleStagePointerDown}
         onPointerMove={handleStagePointerMove}
         onPointerUp={handleStagePointerUp}

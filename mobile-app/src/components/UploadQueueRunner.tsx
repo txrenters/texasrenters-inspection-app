@@ -3,6 +3,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { queryKeys } from '../features/queries';
+import { verifyQueries } from '../features/state-consistency';
 import { repositories } from '../repositories';
 
 const FOREGROUND_QUEUE_INTERVAL_MS = 4_000;
@@ -18,11 +19,11 @@ export function UploadQueueRunner() {
     try {
       const changed = await repositories.uploads.tick();
       if (!changed) return;
-      await Promise.all([
-        client.invalidateQueries({ queryKey: queryKeys.uploads }),
-        client.invalidateQueries({ queryKey: ['inspectionRooms'] }),
-        client.invalidateQueries({ queryKey: ['room'] }),
-        client.invalidateQueries({ queryKey: queryKeys.dashboard }),
+      client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
+      await verifyQueries(client, [
+        queryKeys.roomsRoot,
+        queryKeys.roomRoot,
+        queryKeys.dashboard,
       ]);
     } finally {
       running.current = false;

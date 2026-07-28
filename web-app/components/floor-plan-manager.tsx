@@ -6,12 +6,15 @@ import { createPortal } from 'react-dom';
 
 import { apiBlob } from '@/lib/api';
 import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/lib/queries';
+import { entitySyncMetadata } from '@/lib/state-consistency';
 
 import { FloorPlanCanvas } from './floor-plan/FloorPlanCanvas';
-import { FloorPlanChecklist } from './floor-plan/FloorPlanChecklist';
+import { FloorPlanChecklist, getMarkerStatus } from './floor-plan/FloorPlanChecklist';
 import { Badge, ErrorState, LoadingState, formatDate } from './ui';
 
 const BUILDING_SCOPE = 'building-wide';
+/** How often the extraction job is polled once started. */
+const EXTRACTION_POLL_MS = 2_000;
 const EXTRACTION_STAGES = [
   'Reading labels across the full plan',
   'Separating floors and stories',
@@ -37,6 +40,18 @@ export function FloorPlanManager({
   const [message, setMessage] = useState<string>();
   const [extractionSeconds, setExtractionSeconds] = useState(0);
   const [isComparisonOpen, setIsComparisonOpen] = useState(false);
+  // Extraction is a background job now; these track the poll rather than the
+  // pending state of a (no longer long-running) mutation.
+  const [extractingJobId, setExtractingJobId] = useState<string | null>(null);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
+  const pollAbort = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    pollAbort.current = controller;
+    // Unmounting must stop the poll loop, or it keeps hitting the API and
+    // calling setState on a component that is gone.
+    return () => controller.abort();
+  }, []);
   const activeUnits = useMemo(
     () => units.data?.items.filter((unit) => unit.isActive) ?? [],
     [units.data?.items],
@@ -59,6 +74,23 @@ export function FloorPlanManager({
     () => scopedAreas.filter((area) => area.status === 'APPROVED'),
     [scopedAreas],
   );
+  const currentPlanMarkers = useMemo(
+    () =>
+      latest
+        ? scopedAreas.filter(
+            (area) => Boolean(area.marker) && area.sourceFloorPlanId === latest.id,
+          )
+        : [],
+    [latest, scopedAreas],
+  );
+  const adminMarkers = useMemo(
+    () =>
+      currentPlanMarkers.filter(
+        (area) =>
+          area.marker?.source === 'ADMIN_ADJUSTED' || area.marker?.source === 'ADMIN_PLACED',
+      ),
+    [currentPlanMarkers],
+  );
   const floorNames = useMemo(
     () =>
       [...new Set(scopedAreas.map((area) => area.floor?.name).filter(Boolean) as string[])].sort(
@@ -75,7 +107,60 @@ export function FloorPlanManager({
     selectedUnitId === null
       ? 'Building-wide'
       : (activeUnits.find((unit) => unit.id === selectedUnitId)?.name ?? 'Selected unit');
+  const isExtracting = Boolean(extractingJobId);
   const closeComparison = useCallback(() => setIsComparisonOpen(false), []);
+
+  // Batch selection over the draft review list. Held as ids rather than
+  // indices so it survives reordering and refetches.
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const draftIds = useMemo(() => drafts.map((area) => area.id), [drafts]);
+  // Drop ids that no longer exist — after a delete, an approval, or a scope
+  // change — so a stale selection can never be submitted.
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const live = new Set(draftIds);
+      const next = new Set([...current].filter((id) => live.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [draftIds]);
+  const toggleSelected = useCallback((areaId: string, selected: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(areaId);
+      else next.delete(areaId);
+      return next;
+    });
+  }, []);
+  const setGroupSelected = useCallback((ids: string[], selected: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (selected) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+  const selectedCount = selectedIds.size;
+  const allDraftsSelected = draftIds.length > 0 && selectedCount === draftIds.length;
+
+  const deleteSelected = useCallback(async () => {
+    const areaIds = [...selectedIds];
+    if (!areaIds.length) return;
+    // Irreversible, so it is always confirmed — and the count is spelled out
+    // because the selection may span floors that are scrolled out of view.
+    const confirmed = window.confirm(
+      `Delete ${areaIds.length} draft area${areaIds.length === 1 ? '' : 's'}? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    await actions.deletePropertyAreas
+      .mutateAsync({ propertyId, areaIds })
+      .then(() => {
+        setMessage(`${areaIds.length} area${areaIds.length === 1 ? '' : 's'} deleted.`);
+        setSelectedIds(new Set());
+      })
+      .catch(() => undefined);
+  }, [actions.deletePropertyAreas, propertyId, selectedIds]);
 
   useEffect(() => {
     if (scope !== BUILDING_SCOPE && !activeUnits.some((unit) => unit.id === scope)) {
@@ -90,7 +175,7 @@ export function FloorPlanManager({
   }, [scope]);
 
   useEffect(() => {
-    if (!actions.extractFloorPlan.isPending) {
+    if (!extractingJobId) {
       setExtractionSeconds(0);
       return;
     }
@@ -100,7 +185,7 @@ export function FloorPlanManager({
     updateElapsed();
     const timer = window.setInterval(updateElapsed, 1_000);
     return () => window.clearInterval(timer);
-  }, [actions.extractFloorPlan.isPending]);
+  }, [extractingJobId]);
 
   useEffect(() => {
     if (!latest) {
@@ -135,12 +220,21 @@ export function FloorPlanManager({
     actions.createPropertyArea.error,
     actions.updatePropertyArea.error,
     actions.deletePropertyArea.error,
+    actions.deletePropertyAreas.error,
     actions.approvePropertyAreas.error,
   ].find(Boolean);
 
   async function upload(event: FormEvent) {
     event.preventDefault();
     if (!file) return;
+    if (
+      latest &&
+      !window.confirm(
+        'Upload this as a new active source version? Existing approved areas stay in history, but their markers will require review against the new plan.',
+      )
+    ) {
+      return;
+    }
     setMessage(undefined);
     try {
       await actions.uploadFloorPlan.mutateAsync({
@@ -156,22 +250,51 @@ export function FloorPlanManager({
     }
   }
 
+  /**
+   * Starts extraction, then polls the job until it settles. The model call runs
+   * server-side outside the request because it outlives the HTTP socket
+   * timeout, so there is no long response to await here.
+   */
   async function extract() {
     if (!latest) return;
     setMessage(undefined);
+    setExtractionError(null);
+    const floorPlanId = latest.id;
     try {
-      const result = await actions.extractFloorPlan.mutateAsync({
-        propertyId,
-        floorPlanId: latest.id,
-      });
-      const { detectedCount, createdCount, alreadyPresentCount } = result.summary;
-      setMessage(
-        `AI detected ${detectedCount} area${detectedCount === 1 ? '' : 's'}: ` +
-          `${createdCount} added as new draft${createdCount === 1 ? '' : 's'} and ` +
-          `${alreadyPresentCount} already present in this scope.`,
+      const started = await actions.extractFloorPlan.mutateAsync({ propertyId, floorPlanId });
+      setExtractingJobId(started.jobId);
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, EXTRACTION_POLL_MS));
+        if (pollAbort.current?.signal.aborted) return;
+        const job = await actions.floorPlanExtractionJob(floorPlanId, started.jobId);
+        if (job.status === 'COMPLETED') {
+          const detected = job.summary?.detectedCount ?? 0;
+          const created = job.summary?.createdCount ?? 0;
+          const present = job.summary?.alreadyPresentCount ?? 0;
+          setMessage(
+            `AI detected ${detected} area${detected === 1 ? '' : 's'}: ` +
+              `${created} added as new draft${created === 1 ? '' : 's'} and ` +
+              `${present} already present in this scope.`,
+          );
+          await Promise.all([plans.refetch(), areas.refetch()]);
+          return;
+        }
+        if (job.status === 'FAILED') {
+          setExtractionError(
+            job.errorCode === 'FLOOR_PLAN_EXTRACTION_TIMED_OUT'
+              ? 'Extraction did not finish. The plan may be too complex for the current model — try again, or split the plan by floor.'
+              : `Extraction failed (${job.errorCode ?? 'unknown error'}). Check the AI provider settings and try again.`,
+          );
+          await Promise.all([plans.refetch(), areas.refetch()]);
+          return;
+        }
+      }
+    } catch (error) {
+      setExtractionError(
+        error instanceof Error ? error.message : 'Extraction could not be started.',
       );
-    } catch {
-      // The mutation error is rendered in the workspace alert.
+    } finally {
+      setExtractingJobId(null);
     }
   }
 
@@ -309,13 +432,26 @@ export function FloorPlanManager({
                     {file ? 'Change file' : 'Browse'}
                   </span>
                 </label>
+                {file && latest ? (
+                  <div className="floor-plan-replacement-notice" role="note">
+                    <strong>New source version</strong>
+                    <span>
+                      Existing areas remain in history. Markers must be reviewed against the new
+                      source before they are treated as current.
+                    </span>
+                  </div>
+                ) : null}
                 {file ? (
                   <button
                     className="button button-secondary floor-plan-upload-button"
                     type="submit"
                     disabled={actions.uploadFloorPlan.isPending}
                   >
-                    {actions.uploadFloorPlan.isPending ? 'Uploading…' : 'Upload securely'}
+                    {actions.uploadFloorPlan.isPending
+                      ? 'Uploading…'
+                      : latest
+                        ? 'Upload new version'
+                        : 'Upload securely'}
                   </button>
                 ) : null}
               </form>
@@ -334,15 +470,33 @@ export function FloorPlanManager({
                     {scopedAreas.length} area{scopedAreas.length === 1 ? '' : 's'}
                   </span>
                 </div>
+                <div className="floor-plan-readiness" aria-label="Floor plan review readiness">
+                  <div>
+                    <span>Extracted areas</span>
+                    <strong>{scopedAreas.length}</strong>
+                  </div>
+                  <div>
+                    <span>Area approval</span>
+                    <strong>{approved.length}/{scopedAreas.length}</strong>
+                  </div>
+                  <div>
+                    <span>Markers present</span>
+                    <strong>{currentPlanMarkers.length}/{scopedAreas.length}</strong>
+                  </div>
+                  <div>
+                    <span>Admin placed</span>
+                    <strong>{adminMarkers.length}</strong>
+                  </div>
+                </div>
                 <div className="floor-plan-action-grid">
                   {canManage ? (
                     <button
                       className="button button-secondary"
                       type="button"
                       onClick={() => void extract()}
-                      disabled={actions.extractFloorPlan.isPending}
+                      disabled={isExtracting}
                     >
-                      {actions.extractFloorPlan.isPending ? (
+                      {isExtracting ? (
                         <>
                           <span className="button-spinner" aria-hidden />
                           Extracting…
@@ -350,7 +504,7 @@ export function FloorPlanManager({
                       ) : (
                         <>
                           <span aria-hidden>✦</span>
-                          Extract areas with AI
+                          {scopedAreas.length ? 'Re-extract areas' : 'Extract areas with AI'}
                         </>
                       )}
                     </button>
@@ -359,28 +513,36 @@ export function FloorPlanManager({
                     className="button button-primary"
                     type="button"
                     onClick={() => setIsComparisonOpen(true)}
-                    disabled={!scopedAreas.length || actions.extractFloorPlan.isPending}
+                    disabled={!scopedAreas.length || isExtracting}
                     title={
                       scopedAreas.length
                         ? 'Compare the source plan with extracted areas'
                         : 'Extract or define areas before comparing'
                     }
                   >
-                    Compare plan &amp; areas
+                    Review {scopedAreas.length || ''} extracted area
+                    {scopedAreas.length === 1 ? '' : 's'}
                     <span aria-hidden>→</span>
                   </button>
                 </div>
                 <div className="floor-plan-review-note">
                   <span aria-hidden>!</span>
                   <p>
-                    AI suggestions remain drafts until an authorized administrator reviews and
-                    approves every area in this scope.
+                    Area approval and marker placement are reviewed separately. Moving a marker
+                    never approves an area.
                   </p>
                 </div>
               </div>
             ) : null}
           </div>
         </div>
+        {extractionError ? (
+          // Reported by the job rather than the request, so it survives an
+          // extraction that outlives its HTTP call.
+          <div className="alert alert-danger" role="alert">
+            {extractionError}
+          </div>
+        ) : null}
         {actionError ? (
           <div className="alert alert-danger" role="alert">
             {actionError instanceof Error
@@ -429,20 +591,74 @@ export function FloorPlanManager({
             }
           />
         ) : null}
+        {canManage && draftGroups.length ? (
+          <div className={`area-batch-bar${selectedCount ? ' is-active' : ''}`}>
+            <label className="area-batch-select">
+              <input
+                type="checkbox"
+                checked={allDraftsSelected}
+                // Partial selection reads as indeterminate rather than
+                // unchecked, so the box never implies "nothing is selected".
+                ref={(node) => {
+                  if (node) node.indeterminate = selectedCount > 0 && !allDraftsSelected;
+                }}
+                onChange={(event) => setGroupSelected(draftIds, event.target.checked)}
+              />
+              <span>{allDraftsSelected ? 'Clear selection' : 'Select all'}</span>
+            </label>
+            <span className="area-batch-count">
+              {selectedCount
+                ? `${selectedCount} of ${draftIds.length} selected`
+                : `${draftIds.length} draft area${draftIds.length === 1 ? '' : 's'}`}
+            </span>
+            {selectedCount ? (
+              <button
+                className="button button-danger button-small"
+                disabled={actions.deletePropertyAreas.isPending}
+                onClick={() => void deleteSelected()}
+              >
+                {actions.deletePropertyAreas.isPending
+                  ? 'Deleting…'
+                  : `Delete ${selectedCount} selected`}
+              </button>
+            ) : (
+              <span className="area-batch-hint">Select areas to delete them in bulk</span>
+            )}
+          </div>
+        ) : null}
         {draftGroups.length ? (
           <div className="floor-area-groups">
             {draftGroups.map((group) => (
               <section key={group.key} className="floor-area-group">
-                <FloorGroupHeading label={group.label} count={group.areas.length} />
+                <FloorGroupHeading
+                  label={group.label}
+                  count={group.areas.length}
+                  selectable={canManage}
+                  selectedCount={group.areas.filter((area) => selectedIds.has(area.id)).length}
+                  onSelectAll={(selected) =>
+                    setGroupSelected(
+                      group.areas.map((area) => area.id),
+                      selected,
+                    )
+                  }
+                />
                 <div className="area-review-list">
                   {group.areas.map((area) => (
                     <AreaReviewRow
                       key={area.id}
                       area={area}
                       floorNames={floorNames}
-                      saving={actions.updatePropertyArea.isPending}
-                      deleting={actions.deletePropertyArea.isPending}
+                      saving={
+                        actions.updatePropertyArea.isPending &&
+                        actions.updatePropertyArea.variables?.areaId === area.id
+                      }
+                      deleting={
+                        actions.deletePropertyArea.isPending &&
+                        actions.deletePropertyArea.variables?.areaId === area.id
+                      }
                       readOnly={!canManage}
+                      selected={selectedIds.has(area.id)}
+                      onToggleSelected={(selected) => toggleSelected(area.id, selected)}
                       onReject={() =>
                         actions.rejectPropertyArea.mutateAsync({ propertyId, areaId: area.id })
                       }
@@ -453,6 +669,7 @@ export function FloorPlanManager({
                         actions.updatePropertyArea.mutateAsync({
                           propertyId,
                           areaId: area.id,
+                          expectedUpdatedAt: area.updatedAt,
                           ...input,
                         })
                       }
@@ -502,7 +719,7 @@ export function FloorPlanManager({
           </p>
         )}
       </div>
-      {actions.extractFloorPlan.isPending ? (
+      {isExtracting ? (
         <ExtractionProgressModal elapsedSeconds={extractionSeconds} />
       ) : null}
       {isComparisonOpen && latest ? (
@@ -636,18 +853,45 @@ function FloorPlanComparisonModal({
   const [draftMarker, setDraftMarker] = useState<{ x: number; y: number } | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [backfillMessage, setBackfillMessage] = useState<string | null>(null);
+  const [isReviewPanelOpen, setIsReviewPanelOpen] = useState(false);
   const backfill = useAdminMutations().retryMissingMarkers;
   const selectedArea = allAreas.find((area) => area.id === selectedAreaId) ?? null;
   // Areas with no usable marker for the plan currently displayed.
   const missingMarkerCount = allAreas.filter(
     (area) => !area.marker || area.sourceFloorPlanId !== planId,
   ).length;
+  const reviewPercent = allAreas.length
+    ? Math.round((approvedCount / allAreas.length) * 100)
+    : 0;
+  const currentMarker =
+    selectedArea?.marker && selectedArea.sourceFloorPlanId === planId
+      ? selectedArea.marker
+      : null;
+  const hasUnsavedMarkerChanges = Boolean(
+    editingAreaId &&
+      draftMarker &&
+      (!currentMarker ||
+        Math.abs(currentMarker.x - draftMarker.x) > 0.000001 ||
+        Math.abs(currentMarker.y - draftMarker.y) > 0.000001),
+  );
+  const hasUnsavedMarkerChangesRef = useRef(hasUnsavedMarkerChanges);
+  hasUnsavedMarkerChangesRef.current = hasUnsavedMarkerChanges;
 
   const selectArea = (id: string) => {
+    if (
+      editingAreaId &&
+      editingAreaId !== id &&
+      hasUnsavedMarkerChanges &&
+      !window.confirm('Discard the unsaved marker position and select another area?')
+    ) {
+      return;
+    }
     setSelectedAreaId(id);
     setFocusNonce((nonce) => nonce + 1);
+    setSaveMessage(null);
     if (editingAreaId && editingAreaId !== id) {
       setEditingAreaId(null);
       setDraftMarker(null);
@@ -659,6 +903,7 @@ function FloorPlanComparisonModal({
     setSelectedAreaId(id);
     setEditingAreaId(id);
     setSaveError(null);
+    setSaveMessage(null);
     setDraftMarker(
       area?.marker && area.sourceFloorPlanId === planId
         ? { x: area.marker.x, y: area.marker.y }
@@ -673,6 +918,7 @@ function FloorPlanComparisonModal({
   };
   const saveMarker = (id: string) => {
     if (!draftMarker) return;
+    const area = allAreas.find((item) => item.id === id);
     setSaveError(null);
     markerMutation.mutate(
       {
@@ -680,6 +926,7 @@ function FloorPlanComparisonModal({
         areaId: id,
         x: draftMarker.x,
         y: draftMarker.y,
+        expectedUpdatedAt: area?.updatedAt,
         // PDF coordinates are relative to the page being viewed.
         ...(isPdfPlan ? { pageNumber } : {}),
       },
@@ -687,6 +934,7 @@ function FloorPlanComparisonModal({
         onSuccess: () => {
           setEditingAreaId(null);
           setDraftMarker(null);
+          setSaveMessage('Marker position saved. Area approval was not changed.');
         },
         onError: (error) =>
           setSaveError(
@@ -696,6 +944,19 @@ function FloorPlanComparisonModal({
           ),
       },
     );
+  };
+  const requestClose = useCallback(() => {
+    if (
+      hasUnsavedMarkerChangesRef.current &&
+      !window.confirm('Discard the unsaved marker position and close the review workspace?')
+    ) {
+      return;
+    }
+    onClose();
+  }, [onClose]);
+  const focusArea = (id: string) => {
+    setSelectedAreaId(id);
+    setFocusNonce((nonce) => nonce + 1);
   };
 
   useEffect(() => {
@@ -711,7 +972,7 @@ function FloorPlanComparisonModal({
     const handleKeyboard = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        requestClose();
         return;
       }
       if (event.key !== 'Tab' || !dialogRef.current) return;
@@ -744,41 +1005,78 @@ function FloorPlanComparisonModal({
       document.removeEventListener('keydown', handleKeyboard);
       previouslyFocused?.focus();
     };
-  }, [onClose]);
+  }, [requestClose]);
 
   return createPortal(
     <div
       className="floor-plan-comparison-backdrop"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       <div
         ref={dialogRef}
-        className="floor-plan-comparison-modal"
+        className={`floor-plan-comparison-modal${editingAreaId ? ' is-editing' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="floor-plan-comparison-title"
         tabIndex={-1}
       >
         <header className="floor-plan-comparison-header">
-          <div>
+          <div className="floor-plan-comparison-title">
             <span>Floor-plan review</span>
             <h2 id="floor-plan-comparison-title">Compare plan and extracted areas</h2>
-            <p>{scopeLabel} · Verify every room before approving the area list.</p>
+            <p>
+              {scopeLabel} · {fileName}
+              {isPdfPlan ? ` · Page ${pageNumber}` : ''}
+            </p>
           </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            className="floor-plan-comparison-close"
-            onClick={onClose}
-            aria-label="Close floor-plan comparison"
-          >
-            ×
-          </button>
+          <div className="floor-plan-review-progress" aria-label="Review progress">
+            <strong>{reviewPercent}% reviewed</strong>
+            <span>
+              {allAreas.length} areas · {approvedCount} approved · {draftCount} drafts ·{' '}
+              {missingMarkerCount} missing markers
+            </span>
+            <span className="floor-plan-review-progress-track" aria-hidden>
+              <span style={{ width: `${reviewPercent}%` }} />
+            </span>
+          </div>
+          <div className="floor-plan-review-header-actions">
+            {supportsMarkers ? (
+              <label className="fp-showall-toggle">
+                <input
+                  type="checkbox"
+                  checked={showAllMarkers}
+                  disabled={Boolean(editingAreaId)}
+                  onChange={() => setShowAllMarkers((value) => !value)}
+                />
+                <span>Show all markers</span>
+              </label>
+            ) : null}
+            <button
+              type="button"
+              className="button button-secondary button-small fp-review-panel-toggle"
+              aria-pressed={isReviewPanelOpen}
+              disabled={Boolean(editingAreaId)}
+              onClick={() => setIsReviewPanelOpen((value) => !value)}
+            >
+              {isReviewPanelOpen ? 'Show plan' : 'Review areas'}
+            </button>
+            <button
+              ref={closeButtonRef}
+              type="button"
+              className="floor-plan-comparison-close"
+              onClick={requestClose}
+              aria-label="Close floor-plan comparison"
+            >
+              ×
+            </button>
+          </div>
         </header>
 
-        <div className="floor-plan-comparison-content">
+        <div
+          className={`floor-plan-comparison-content${isReviewPanelOpen ? ' is-review-open' : ''}`}
+        >
           <section className="floor-plan-comparison-pane floor-plan-comparison-plan">
             <div className="floor-plan-comparison-pane-header">
               <div>
@@ -808,6 +1106,12 @@ function FloorPlanComparisonModal({
                   onDraftChange={setDraftMarker}
                   pageNumber={pageNumber}
                   onPageChange={(page) => {
+                    if (
+                      hasUnsavedMarkerChanges &&
+                      !window.confirm('Discard the unsaved marker position and change pages?')
+                    ) {
+                      return;
+                    }
                     setPageNumber(page);
                     // A selection on another page is no longer meaningful.
                     setSelectedAreaId(null);
@@ -823,7 +1127,11 @@ function FloorPlanComparisonModal({
             </div>
           </section>
 
-          <aside className="floor-plan-comparison-pane floor-plan-comparison-areas">
+          <aside
+            className={`floor-plan-comparison-pane floor-plan-comparison-areas${
+              isReviewPanelOpen ? ' is-open' : ''
+            }`}
+          >
             <div className="floor-plan-comparison-pane-header">
               <div>
                 <span>Extracted checklist</span>
@@ -838,11 +1146,19 @@ function FloorPlanComparisonModal({
                 <span>{approvedCount} approved</span>
               </div>
             </div>
+            {supportsMarkers && showAllMarkers ? (
+              <div className="fp-marker-legend" aria-label="Marker legend">
+                <span><i className="is-selected" aria-hidden />Selected</span>
+                <span><i className="is-suggested" aria-hidden />AI suggested</span>
+                <span><i className="is-admin" aria-hidden />Admin placed</span>
+              </div>
+            ) : null}
 
             {canManage && supportsMarkers && missingMarkerCount > 0 ? (
               <div className="fp-backfill">
                 <span>
-                  {missingMarkerCount} area{missingMarkerCount === 1 ? '' : 's'} without a marker.
+                  {missingMarkerCount} area{missingMarkerCount === 1 ? '' : 's'} need marker
+                  placement.
                 </span>
                 <button
                   type="button"
@@ -868,7 +1184,7 @@ function FloorPlanComparisonModal({
                     );
                   }}
                 >
-                  {backfill.isPending ? 'Backfilling…' : 'Backfill missing markers'}
+                  {backfill.isPending ? 'Retrying…' : 'Retry marker extraction'}
                 </button>
               </div>
             ) : null}
@@ -879,7 +1195,11 @@ function FloorPlanComparisonModal({
             ) : null}
 
             <p className="visually-hidden" aria-live="polite">
-              {selectedArea ? `${selectedArea.name} selected` : ''}
+              {selectedArea
+                ? `${selectedArea.name} selected. Area is ${selectedArea.status.toLowerCase()}; ${
+                    getMarkerStatus(selectedArea, planId).announcement
+                  }.`
+                : ''}
             </p>
             <FloorPlanChecklist
               groups={groups}
@@ -888,12 +1208,12 @@ function FloorPlanComparisonModal({
               editingAreaId={editingAreaId}
               hasDraft={draftMarker !== null}
               canManage={canManage}
-              showAllMarkers={showAllMarkers}
               supportsMarkers={supportsMarkers}
               saving={markerMutation.isPending}
               saveError={saveError}
+              saveMessage={saveMessage}
               onSelectArea={selectArea}
-              onToggleShowAll={() => setShowAllMarkers((value) => !value)}
+              onFocusArea={focusArea}
               onStartEdit={startEdit}
               onCancelEdit={cancelEdit}
               onSaveMarker={saveMarker}
@@ -928,12 +1248,42 @@ function ScopeButton({
   );
 }
 
-function FloorGroupHeading({ label, count }: { label: string; count: number }) {
+function FloorGroupHeading({
+  label,
+  count,
+  selectable,
+  selectedCount = 0,
+  onSelectAll,
+}: {
+  label: string;
+  count: number;
+  selectable?: boolean;
+  selectedCount?: number;
+  onSelectAll?: (selected: boolean) => void;
+}) {
+  const allSelected = count > 0 && selectedCount === count;
   return (
     <div className="floor-area-heading">
-      <h3>{label}</h3>
+      {/* Checkbox and floor name are one control, so the title stays left-aligned
+          and the box never reads as a stray duplicate of the toolbar's. */}
+      {selectable && onSelectAll ? (
+        <label className="floor-area-heading-select">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            aria-label={`Select all areas on ${label}`}
+            ref={(node) => {
+              if (node) node.indeterminate = selectedCount > 0 && !allSelected;
+            }}
+            onChange={(event) => onSelectAll(event.target.checked)}
+          />
+          <h3>{label}</h3>
+        </label>
+      ) : (
+        <h3>{label}</h3>
+      )}
       <span>
-        {count} area{count === 1 ? '' : 's'}
+        {selectedCount ? `${selectedCount} of ${count} selected` : `${count} area${count === 1 ? '' : 's'}`}
       </span>
     </div>
   );
@@ -1013,6 +1363,8 @@ function AreaReviewRow({
   saving,
   deleting,
   readOnly,
+  selected,
+  onToggleSelected,
   onSave,
   onDelete,
   onReject,
@@ -1023,6 +1375,8 @@ function AreaReviewRow({
   saving: boolean;
   deleting: boolean;
   readOnly: boolean;
+  selected?: boolean;
+  onToggleSelected?: (selected: boolean) => void;
   onSave: (input: AreaInput) => Promise<unknown>;
   onDelete: () => Promise<unknown>;
   onReject: () => Promise<unknown>;
@@ -1035,9 +1389,34 @@ function AreaReviewRow({
   const [name, setName] = useState(area.name);
   const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
   const [isRequired, setIsRequired] = useState(area.isRequired);
+  const [isDirty, setIsDirty] = useState(false);
+  const loadedRevision = useRef(area.updatedAt);
+  const sync = entitySyncMetadata(area);
+  const hasExternalConflict = isDirty && loadedRevision.current !== area.updatedAt;
+  useEffect(() => {
+    if (isDirty) return;
+    setFloorName(area.floor?.name ?? '');
+    setName(area.name);
+    setInspectionOrder(area.inspectionOrder);
+    setIsRequired(area.isRequired);
+    loadedRevision.current = area.updatedAt;
+  }, [area, isDirty]);
   const floorOptionsId = `floor-options-${area.id}`;
   return (
-    <article className="area-review-row">
+    <article
+      className={`area-review-row${selected ? ' is-selected' : ''}`}
+      aria-busy={Boolean(sync && sync.state !== 'SYNCED')}
+    >
+      {onToggleSelected ? (
+        <label className="area-select-box">
+          <input
+            type="checkbox"
+            checked={Boolean(selected)}
+            aria-label={`Select ${area.name}`}
+            onChange={(event) => onToggleSelected(event.target.checked)}
+          />
+        </label>
+      ) : null}
       <div className="field">
         <label htmlFor={`floor-${area.id}`}>Floor</label>
         <input
@@ -1045,7 +1424,10 @@ function AreaReviewRow({
           list={floorOptionsId}
           value={floorName}
           disabled={readOnly}
-          onChange={(event) => setFloorName(event.target.value)}
+          onChange={(event) => {
+            setFloorName(event.target.value);
+            setIsDirty(true);
+          }}
         />
         <FloorOptions id={floorOptionsId} floorNames={floorNames} />
       </div>
@@ -1055,13 +1437,22 @@ function AreaReviewRow({
           id={`area-${area.id}`}
           value={name}
           disabled={readOnly}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            setName(event.target.value);
+            setIsDirty(true);
+          }}
         />
         <small className="cell-note">
           {environmentLabel ? `${environmentLabel} · ` : ''}
           {area.source === 'TECHNICIAN' ? 'Technician-added' : area.source.toLowerCase()}
           {area.createdBy ? ` · by ${area.createdBy.displayName}` : ''}
         </small>
+        {sync ? <small className="cell-note">{syncLabel(sync.state)}</small> : null}
+        {hasExternalConflict ? (
+          <small className="field-error">
+            This area changed elsewhere. Review the latest values before saving.
+          </small>
+        ) : null}
       </div>
       <div className="field area-order-field">
         <label htmlFor={`order-${area.id}`}>Order</label>
@@ -1071,7 +1462,10 @@ function AreaReviewRow({
           min={1}
           value={inspectionOrder}
           disabled={readOnly}
-          onChange={(event) => setInspectionOrder(Number(event.target.value))}
+          onChange={(event) => {
+            setInspectionOrder(Number(event.target.value));
+            setIsDirty(true);
+          }}
         />
       </div>
       <label className="check-field">
@@ -1079,7 +1473,10 @@ function AreaReviewRow({
           type="checkbox"
           checked={isRequired}
           disabled={readOnly}
-          onChange={(event) => setIsRequired(event.target.checked)}
+          onChange={(event) => {
+            setIsRequired(event.target.checked);
+            setIsDirty(true);
+          }}
         />
         Required
       </label>
@@ -1087,12 +1484,24 @@ function AreaReviewRow({
         <div className="action-row">
           <button
             className="button button-secondary button-small"
-            disabled={saving || !floorName.trim() || !name.trim() || inspectionOrder < 1}
-            onClick={() =>
-              void onSave({ floorName, name, inspectionOrder, isRequired }).catch(() => undefined)
+            disabled={
+              saving ||
+              hasExternalConflict ||
+              !isDirty ||
+              !floorName.trim() ||
+              !name.trim() ||
+              inspectionOrder < 1
             }
+            onClick={() => {
+              void onSave({ floorName, name, inspectionOrder, isRequired })
+                .then(() => {
+                  setIsDirty(false);
+                  loadedRevision.current = area.updatedAt;
+                })
+                .catch(() => undefined);
+            }}
           >
-            Save
+            {saving ? 'Saving…' : 'Save'}
           </button>
           {area.status === 'DRAFT' ? (
             <button
@@ -1115,12 +1524,26 @@ function AreaReviewRow({
             disabled={deleting}
             onClick={() => void onDelete().catch(() => undefined)}
           >
-            Remove
+            {deleting ? 'Removing…' : 'Remove'}
           </button>
         </div>
       ) : null}
     </article>
   );
+}
+
+function syncLabel(state: string) {
+  const labels: Record<string, string> = {
+    CREATING: 'Creating…',
+    UPDATING: 'Saving…',
+    DELETING: 'Removing…',
+    PROCESSING: 'Processing…',
+    VERIFYING: 'Verifying…',
+    OFFLINE_PENDING: 'Waiting for connection…',
+    RETRYING: 'Retrying…',
+    FAILED: 'Unable to save',
+  };
+  return labels[state] ?? state.toLowerCase();
 }
 
 function FloorOptions({ id, floorNames }: { id: string; floorNames: string[] }) {

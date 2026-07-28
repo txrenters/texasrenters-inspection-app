@@ -66,7 +66,11 @@ export default function InspectionOverviewScreen() {
       }
     >
       <PropertyVisual tone={property.imageTone} />
-      {actionError ? <Text style={styles.actionError}>{actionError.message}</Text> : null}
+      {actionError ? (
+        <Text style={styles.actionError}>
+          {actionError instanceof Error ? actionError.message : 'The action could not be completed.'}
+        </Text>
+      ) : null}
       <View style={styles.statusRow}>
         <StatusBadge label={inspection.type} tone="info" />
         <StatusBadge label={inspection.status} />

@@ -9,6 +9,8 @@ import {
   ApiConnectionError,
   cachedApiRecord,
   storeApiRecord,
+  updateApiRecord,
+  updateExistingApiRecord,
 } from '../../storage/offline-record-cache';
 import type {
   AddAreaInput,
@@ -68,6 +70,7 @@ const inspectionSchema = z.object({
     total: z.number(),
     hasFailedUpload: z.boolean(),
   }),
+  updatedAt: z.string().optional(),
 });
 const roomSchema = z.object({
   id: z.string(),
@@ -103,6 +106,7 @@ const roomSchema = z.object({
   category: z.string().nullable().optional(),
   source: z.string().default('AI_FLOOR_PLAN'),
   areaStatus: z.enum(['DRAFT', 'APPROVED', 'REJECTED']).default('APPROVED'),
+  updatedAt: z.string().optional(),
 });
 const findingSchema = z.object({
   id: z.string(),
@@ -136,6 +140,7 @@ const findingSchema = z.object({
     'REINSPECTION_REQUESTED',
   ]),
   reviewerNotes: z.string().optional(),
+  updatedAt: z.string().optional(),
 });
 const uploadSchema = z.object({
   id: z.string(),
@@ -409,14 +414,32 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
   }
   async start(id: string) {
-    return inspectionSchema.parse(
+    const inspection = inspectionSchema.parse(
       await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/start`, 'POST'),
     );
+    await Promise.all([
+      storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
+      updateExistingApiRecord(
+        `inspection-context:${id}`,
+        inspectionContextSchema,
+        (current) => ({ ...current, inspection }),
+      ),
+    ]);
+    return inspection;
   }
   async complete(id: string) {
-    return inspectionSchema.parse(
+    const inspection = inspectionSchema.parse(
       await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`, 'POST'),
     );
+    await Promise.all([
+      storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
+      updateExistingApiRecord(
+        `inspection-context:${id}`,
+        inspectionContextSchema,
+        (current) => ({ ...current, inspection }),
+      ),
+    ]);
+    return inspection;
   }
   async rooms(inspectionId: string) {
     const rooms = await cachedApiRecord(
@@ -434,7 +457,7 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
   }
   async addArea(inspectionId: string, input: AddAreaInput) {
-    return withLocalRoomState(
+    const room = withLocalRoomState(
       roomSchema.parse(
         await writeJson(
           `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/areas`,
@@ -443,25 +466,70 @@ export class ApiInspectionRepository implements InspectionRepository {
         ),
       ),
     );
+    await Promise.all([
+      storeApiRecord(`room:${room.id}`, roomSchema, room),
+      updateApiRecord(`inspection-rooms:${inspectionId}`, z.array(roomSchema), (current = []) =>
+        current.some((item) => item.id === room.id) ? current : [...current, room],
+      ),
+      updateExistingApiRecord(
+        `inspection-context:${inspectionId}`,
+        inspectionContextSchema,
+        (current) => ({
+          ...current,
+          rooms: current.rooms.some((item) => item.id === room.id)
+            ? current.rooms
+            : [...current.rooms, room],
+        }),
+      ),
+    ]);
+    return room;
   }
   async updateRoomNote(roomId: string, note: string) {
-    return roomSchema.parse(
+    const room = roomSchema.parse(
       await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/note`, 'PATCH', {
         note,
       }),
     );
+    await this.persistRoom(room);
+    return room;
   }
   async skipRoom(roomId: string, reason: string) {
-    return roomSchema.parse(
+    const room = roomSchema.parse(
       await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
         reason,
       }),
     );
+    await this.persistRoom(room);
+    return room;
   }
   async completeRoom(roomId: string) {
-    return roomSchema.parse(
+    const room = roomSchema.parse(
       await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST'),
     );
+    await this.persistRoom(room);
+    return room;
+  }
+
+  private async persistRoom(room: z.output<typeof roomSchema>) {
+    await Promise.all([
+      storeApiRecord(`room:${room.id}`, roomSchema, room),
+      updateApiRecord(
+        `inspection-rooms:${room.inspectionId}`,
+        z.array(roomSchema),
+        (current = []) => {
+          const next = current.map((item) => (item.id === room.id ? room : item));
+          return next.some((item) => item.id === room.id) ? next : [...next, room];
+        },
+      ),
+      updateExistingApiRecord(
+        `inspection-context:${room.inspectionId}`,
+        inspectionContextSchema,
+        (current) => ({
+          ...current,
+          rooms: current.rooms.map((item) => (item.id === room.id ? room : item)),
+        }),
+      ),
+    ]);
   }
 }
 
@@ -599,6 +667,8 @@ export class ApiUploadRepository implements UploadRepository {
       processingProgress: 0,
       attemptCount: 0,
       createdAt: new Date().toISOString(),
+      operationId: `upload:${media.id}`,
+      __sync: { state: 'OFFLINE_PENDING', operationId: `upload:${media.id}` },
     };
     useDemoStore.getState().enqueueUpload(item);
     void this.tick();
@@ -691,6 +761,30 @@ export class ApiUploadRepository implements UploadRepository {
         idempotencyKey: media.id,
         durationSeconds: String(Math.max(1, Math.round(media.durationSeconds))),
       };
+      if (!isAdditional && media.captureSummary) {
+        parameters.captureSessionId = media.captureSummary.sessionId;
+        parameters.capturePolicyVersion = media.captureSummary.policyVersion;
+        parameters.coverageStatus = media.captureSummary.coverageStatus;
+        parameters.sensorConfidence = media.captureSummary.sensorConfidence;
+        parameters.clockwiseRotationDegrees = String(
+          media.captureSummary.clockwiseRotationDegrees,
+        );
+        parameters.counterClockwiseRotationDegrees = String(
+          media.captureSummary.counterClockwiseRotationDegrees,
+        );
+        parameters.returnedToStart = String(media.captureSummary.returnedToStart);
+        parameters.sensorSupported = String(media.captureSummary.sensorSupported);
+        parameters.manualConfirmation = String(media.captureSummary.manualConfirmation);
+        parameters.evidenceComplete = String(media.captureSummary.evidenceComplete);
+        parameters.snapshotCount = String(media.captureSummary.snapshotCount);
+        parameters.findingMarkerCount = String(media.captureSummary.findingMarkerCount);
+        if (media.captureSummary.startHeadingDegrees !== undefined)
+          parameters.startHeadingDegrees = String(
+            media.captureSummary.startHeadingDegrees,
+          );
+        if (media.captureSummary.endHeadingDegrees !== undefined)
+          parameters.endHeadingDegrees = String(media.captureSummary.endHeadingDegrees);
+      }
       if (isAdditional) {
         parameters.label = (pending.label ?? media.label ?? 'Additional clip').slice(0, 120);
         if (pending.category ?? media.category)

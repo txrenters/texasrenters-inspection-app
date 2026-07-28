@@ -2,8 +2,10 @@ import { AreaCategory, AreaEnvironment, PhotoCaptureType } from '@prisma/client'
 import { Transform, Type } from 'class-transformer';
 import {
   IsEnum,
+  IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
@@ -60,6 +62,29 @@ export class TechnicianMediaUploadDto {
   @Type(() => Number) @IsInt() @Min(1) @Max(7200) durationSeconds!: number;
 
   @IsOptional() @IsString() @MaxLength(60) captureGuidelineVersion?: string;
+  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/) captureSessionId?: string;
+  @IsOptional() @IsString() @MaxLength(60) capturePolicyVersion?: string;
+  @IsOptional()
+  @IsIn([
+    'COMPLETE',
+    'LIKELY_COMPLETE',
+    'INCOMPLETE',
+    'SENSOR_UNAVAILABLE',
+    'LOW_CONFIDENCE',
+    'MANUALLY_CONFIRMED',
+  ])
+  coverageStatus?: string;
+  @IsOptional() @IsIn(['HIGH', 'MEDIUM', 'LOW', 'UNAVAILABLE']) sensorConfidence?: string;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(720) clockwiseRotationDegrees?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(720) counterClockwiseRotationDegrees?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(360) startHeadingDegrees?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(360) endHeadingDegrees?: number;
+  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() returnedToStart?: boolean;
+  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() sensorSupported?: boolean;
+  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() manualConfirmation?: boolean;
+  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() evidenceComplete?: boolean;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) snapshotCount?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) findingMarkerCount?: number;
 }
 
 const ADDITIONAL_VIDEO_CATEGORIES = [
@@ -94,6 +119,21 @@ export class TechnicianPhotoUploadDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(1000) sequenceNumber?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20000) width?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20000) height?: number;
+  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/) recordingSessionId?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(7_200_000) videoTimestampMs?: number;
+  @IsOptional()
+  @IsIn([
+    'NATIVE_STILL_DURING_VIDEO',
+    'VIDEO_FRAME_EXTRACTION',
+    'SEPARATE_PHOTO_CAPTURE',
+  ])
+  captureSource?: string;
+}
+
+function parseMultipartBoolean(value: unknown) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return value;
 }
 
 export class TechnicianNoteDto {

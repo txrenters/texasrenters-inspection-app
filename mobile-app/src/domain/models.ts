@@ -1,4 +1,9 @@
 import type { InspectionType } from '@texasrenters/shared';
+import type {
+  GuidedCaptureSummary,
+  SnapshotCaptureSource,
+} from '../capture/guided-capture';
+import type { EntitySyncMetadata } from '@texasrenters/shared';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
 export type InspectionStatus =
@@ -124,6 +129,8 @@ export interface InspectionRoom {
   category?: string | null;
   source?: string; // AI_FLOOR_PLAN | MANUAL | MANUAL_FALLBACK | TECHNICIAN
   areaStatus?: AreaApprovalStatus; // DRAFT technician areas await admin approval
+  updatedAt?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface Inspection {
@@ -143,6 +150,8 @@ export interface Inspection {
   propertyNotes: string;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };
+  updatedAt?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface InspectionContext {
@@ -217,9 +226,22 @@ export interface LocalMedia {
   estimatedSizeMb: number;
   recordedAt: string;
   note: string;
+  captureSummary?: GuidedCaptureSummary;
 }
 
-export type PhotoCaptureType = 'AREA_OVERVIEW' | 'FINDING_DETAIL' | 'SUPPORTING_EVIDENCE';
+export type PhotoCaptureType =
+  | 'AREA_OVERVIEW'
+  | 'WALL_OVERVIEW'
+  | 'FINDING_CONTEXT'
+  | 'FINDING_CLOSE_UP'
+  | 'SUPPORTING_ANGLE'
+  | 'SCALE_REFERENCE'
+  | 'SERIAL_OR_LABEL'
+  | 'VIDEO_FRAME_SNAPSHOT'
+  | 'OTHER'
+  // Retained so offline drafts created by earlier releases still deserialize.
+  | 'FINDING_DETAIL'
+  | 'SUPPORTING_EVIDENCE';
 export type PhotoUploadStatus = 'PENDING' | 'UPLOADING' | 'UPLOADED' | 'FAILED';
 
 export interface RoomSnapshot {
@@ -233,6 +255,11 @@ export interface RoomSnapshot {
   sizeBytes?: number;
   capturedAt: string;
   captureType?: PhotoCaptureType;
+  recordingSessionId?: string;
+  videoTimestampMs?: number;
+  captureSource?: SnapshotCaptureSource;
+  sequenceNumber?: number;
+  findingId?: string;
   uploadStatus?: PhotoUploadStatus;
   serverPhotoId?: string;
 }
@@ -259,6 +286,8 @@ export interface UploadItem {
   processingStatus: ProcessingStatus;
   processingProgress: number;
   createdAt: string;
+  operationId?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface Finding {
@@ -286,6 +315,8 @@ export interface Finding {
   recommendedReview: string;
   reviewStatus: FindingStatus;
   reviewerNotes?: string;
+  updatedAt?: string;
+  __sync?: EntitySyncMetadata;
 }
 
 export interface DashboardSummary {

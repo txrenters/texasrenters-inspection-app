@@ -83,6 +83,23 @@ function videoStorageKey(
   return `${organizationId}/${inspectionId}/${areaId}/videos/${randomUUID()}${videoExtension(mimeType)}`;
 }
 
+function captureSummaryFromDto(dto: TechnicianMediaUploadDto): Prisma.InputJsonValue {
+  return {
+    coverageStatus: dto.coverageStatus ?? 'INCOMPLETE',
+    sensorConfidence: dto.sensorConfidence ?? 'UNAVAILABLE',
+    clockwiseRotationDegrees: dto.clockwiseRotationDegrees ?? 0,
+    counterClockwiseRotationDegrees: dto.counterClockwiseRotationDegrees ?? 0,
+    startHeadingDegrees: dto.startHeadingDegrees ?? null,
+    endHeadingDegrees: dto.endHeadingDegrees ?? null,
+    returnedToStart: dto.returnedToStart ?? false,
+    sensorSupported: dto.sensorSupported ?? false,
+    manualConfirmation: dto.manualConfirmation ?? false,
+    evidenceComplete: dto.evidenceComplete ?? false,
+    snapshotCount: dto.snapshotCount ?? 0,
+    findingMarkerCount: dto.findingMarkerCount ?? 0,
+  };
+}
+
 const photoSelect = {
   id: true,
   inspectionAreaId: true,
@@ -791,6 +808,9 @@ export class TechnicianService {
               durationSeconds: dto.durationSeconds,
               recordingType: VideoRecordingType.PRIMARY_AREA,
               captureGuidelineVersion: dto.captureGuidelineVersion ?? null,
+              captureSessionId: dto.captureSessionId ?? null,
+              capturePolicyVersion: dto.capturePolicyVersion ?? null,
+              captureSummary: dto.captureSessionId ? captureSummaryFromDto(dto) : undefined,
               uploadStatus: MediaUploadStatus.UPLOADED,
               processingStatus: MediaProcessingStatus.PENDING,
             },
@@ -1032,6 +1052,14 @@ export class TechnicianService {
             height: dto.height ?? null,
             sizeBytes: file.size,
             idempotencyKey: dto.idempotencyKey,
+            metadata:
+              dto.recordingSessionId || dto.videoTimestampMs !== undefined || dto.captureSource
+                ? {
+                    recordingSessionId: dto.recordingSessionId,
+                    videoTimestampMs: dto.videoTimestampMs,
+                    captureSource: dto.captureSource,
+                  }
+                : undefined,
           },
           select: photoSelect,
         });

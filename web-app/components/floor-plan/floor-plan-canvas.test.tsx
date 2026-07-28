@@ -91,22 +91,22 @@ function renderCanvas(overrides: Partial<Parameters<typeof FloorPlanCanvas>[0]> 
 describe('FloorPlanCanvas', () => {
   it('renders the selected marker over the correct rendered image location', () => {
     renderCanvas();
-    const marker = screen.getByRole('button', { name: 'Kitchen marker' });
+    const marker = screen.getByRole('button', { name: /Kitchen marker/ });
     // 0.5,0.5 → offsetX 0 + 0.5*800 = 400; offsetY 200 + 0.5*400 = 400.
     expect(marker).toHaveStyle({ left: '400px', top: '400px' });
     // Only the selected marker shows when "show all" is off.
-    expect(screen.queryByRole('button', { name: 'Living Room marker' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Living Room marker/ })).not.toBeInTheDocument();
   });
 
   it('selects the checklist item when a marker is clicked', () => {
     const { onSelectArea } = renderCanvas();
-    fireEvent.click(screen.getByRole('button', { name: 'Kitchen marker' }));
+    fireEvent.click(screen.getByRole('button', { name: /Kitchen marker/ }));
     expect(onSelectArea).toHaveBeenCalledWith('kitchen');
   });
 
   it('shows all valid markers when show-all is on', () => {
     renderCanvas({ showAllMarkers: true, selectedAreaId: null });
-    expect(screen.getAllByRole('button', { name: / marker$/ })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: / marker,/ })).toHaveLength(2);
   });
 
   it('places a marker at the clicked point (normalized) in edit mode', () => {
@@ -141,7 +141,7 @@ describe('FloorPlanCanvas', () => {
     // Once the page rasterizes it flows through the same <img> geometry path.
     const img = await screen.findByAltText('plan.png');
     fireEvent.load(img);
-    const marker = await screen.findByRole('button', { name: 'Kitchen marker' });
+    const marker = await screen.findByRole('button', { name: /Kitchen marker/ });
     expect(marker).toHaveStyle({ left: '400px', top: '400px' });
 
     expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
@@ -161,15 +161,15 @@ describe('FloorPlanCanvas', () => {
     });
     fireEvent.load(await screen.findByAltText('plan.png'));
 
-    expect(await screen.findByRole('button', { name: 'Kitchen marker' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Living Room marker' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Kitchen marker/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Living Room marker/ })).not.toBeInTheDocument();
   });
 });
 
 function renderChecklist(overrides: Partial<Parameters<typeof FloorPlanChecklist>[0]> = {}) {
   const spies = {
     onSelectArea: vi.fn(),
-    onToggleShowAll: vi.fn(),
+    onFocusArea: vi.fn(),
     onStartEdit: vi.fn(),
     onCancelEdit: vi.fn(),
     onSaveMarker: vi.fn(),
@@ -182,10 +182,10 @@ function renderChecklist(overrides: Partial<Parameters<typeof FloorPlanChecklist
       editingAreaId: null,
       hasDraft: false,
       canManage: true,
-      showAllMarkers: false,
       supportsMarkers: true,
       saving: false,
       saveError: null,
+      saveMessage: null,
       ...spies,
       ...overrides,
     }),
@@ -220,9 +220,24 @@ describe('FloorPlanChecklist', () => {
     expect(onCancelEdit).toHaveBeenCalled();
   });
 
-  it('toggles show-all markers', () => {
-    const { onToggleShowAll } = renderChecklist();
-    fireEvent.click(screen.getByRole('checkbox', { name: /Show all markers/i }));
-    expect(onToggleShowAll).toHaveBeenCalled();
+  it('shows area approval and marker status separately', () => {
+    renderChecklist();
+    expect(screen.getAllByText('DRAFT').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Needs review').length).toBeGreaterThan(0);
+  });
+
+  it('shows a clear missing-marker state without fabricating a marker', () => {
+    renderChecklist({ selectedAreaId: 'garage' });
+    expect(screen.getAllByText('Marker missing').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Place marker' })).toBeInTheDocument();
+  });
+
+  it('retains native button semantics and a pressed state for keyboard selection', () => {
+    renderChecklist();
+    const garageButton = screen.getByRole('button', { name: /Garage/ });
+    garageButton.focus();
+    expect(garageButton.tagName).toBe('BUTTON');
+    expect(garageButton).toHaveFocus();
+    expect(garageButton).toHaveAttribute('aria-pressed', 'false');
   });
 });

@@ -37,6 +37,7 @@ import {
   AdminFindingsQueryDto,
   AssignmentDto,
   ApprovePropertyAreasDto,
+  DeletePropertyAreasDto,
   AreaComparisonOverrideDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
@@ -172,6 +173,16 @@ export class AdminController {
       disposition: `inline; filename="${file.fileName}"`,
     });
   }
+  /** Poll target for the extraction started by POST .../extract. */
+  @Get('floor-plans/:floorPlanId/extraction-jobs/:jobId')
+  @RequirePermissions('properties:manage')
+  floorPlanExtractionJob(
+    @Req() request: AuthenticatedRequest,
+    @Param('floorPlanId') floorPlanId: string,
+    @Param('jobId') jobId: string,
+  ) {
+    return this.floorPlans.extractionJob(request.user, floorPlanId, jobId);
+  }
   @Post('floor-plans/:floorPlanId/extract')
   @RequirePermissions('properties:manage')
   extractFloorPlan(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
@@ -240,6 +251,15 @@ export class AdminController {
   @RequirePermissions('properties:manage')
   archivePropertyArea(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.archiveArea(request.user, id);
+  }
+  @Post('properties/:propertyId/areas/delete')
+  @RequirePermissions('properties:manage')
+  deletePropertyAreas(
+    @Req() request: AuthenticatedRequest,
+    @Param('propertyId') id: string,
+    @Body() body: DeletePropertyAreasDto,
+  ) {
+    return this.floorPlans.deleteAreas(request.user, id, body.areaIds);
   }
   @Post('properties/:propertyId/areas/approve')
   @RequirePermissions('properties:manage')

@@ -170,19 +170,34 @@ export interface AdminFloorPlanExtractionJob {
   updatedAt: string;
 }
 
+export interface AdminFloorPlanExtractionSummary {
+  detectedCount: number;
+  createdCount: number;
+  alreadyPresentCount: number;
+  /** Areas whose spatial marker was missing or invalid (needs manual placement). */
+  markerWarnings?: number;
+}
+
 export interface AdminFloorPlanExtractionResult {
   id: string;
   status: 'COMPLETED';
   provider: string;
   modelId: string;
-  summary: {
-    detectedCount: number;
-    createdCount: number;
-    alreadyPresentCount: number;
-    /** Areas whose spatial marker was missing or invalid (needs manual placement). */
-    markerWarnings?: number;
-  };
+  summary: AdminFloorPlanExtractionSummary;
   areas: AdminPropertyArea[];
+}
+
+/** Extraction runs outside the request; the client polls this until it settles. */
+export interface AdminFloorPlanExtractionStarted {
+  jobId: string;
+  status: 'RUNNING';
+}
+
+export interface AdminFloorPlanExtractionJob {
+  id: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  errorCode?: string | null;
+  summary?: AdminFloorPlanExtractionSummary | null;
 }
 
 export type AreaEnvironment = 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
@@ -214,6 +229,8 @@ export interface AdminAreaBoundingBox {
 export interface AdminPropertyArea {
   id: string;
   propertyId: string;
+  /** Server revision used to reject stale reads and conflicting edits. */
+  updatedAt: string;
   /** Null = building-level area shared by all units; set = one unit's area. */
   unitId?: string | null;
   unit?: { id: string; name: string } | null;
@@ -235,6 +252,18 @@ export interface AdminPropertyArea {
   /** Null when the area has no marker for the current plan version. */
   marker?: AdminAreaMarker | null;
   boundingBox?: AdminAreaBoundingBox | null;
+}
+
+export interface AdminDeleteResult {
+  id: string;
+  deleted: true;
+  deletedAt: string;
+}
+
+export interface AdminBulkDeleteResult {
+  ids: string[];
+  deleted: number;
+  deletedAt: string;
 }
 
 export interface AdminUnit {

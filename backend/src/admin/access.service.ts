@@ -175,7 +175,7 @@ export class AccessService {
     // shrink on their next request.
     await this.prisma.role.delete({ where: { id } });
     await this.audit(user, 'ROLE_DELETED', 'Role', id, { name: role.name });
-    return { id };
+    return { id, deleted: true as const, deletedAt: new Date().toISOString() };
   }
 
   async listUsers(user: AuthenticatedUser, query: AccessListQueryDto) {

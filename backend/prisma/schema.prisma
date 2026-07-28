@@ -119,6 +119,14 @@ enum MediaProcessingStatus {
 
 enum PhotoCaptureType {
   AREA_OVERVIEW
+  WALL_OVERVIEW
+  FINDING_CONTEXT
+  FINDING_CLOSE_UP
+  SUPPORTING_ANGLE
+  SCALE_REFERENCE
+  SERIAL_OR_LABEL
+  VIDEO_FRAME_SNAPSHOT
+  OTHER
   FINDING_DETAIL
   SUPPORTING_EVIDENCE
 }
@@ -829,10 +837,15 @@ model PropertywareLease {
   sourceSystem         String                @default("propertyware")
   portfolioId          String                @db.Uuid
   buildingId           String                @db.Uuid
-  unitId               String                @db.Uuid
+  // Nullable because a lease can arrive from the published Propertyware report
+  // fallback, which exposes only building-level identifiers. REST-sourced
+  // leases always carry a unit; report-sourced ones attach to the building.
+  unitId               String?               @db.Uuid
   externalPortfolioId  String
   externalBuildingId   String
-  externalUnitId       String
+  externalUnitId       String?
+  // 'rest' | 'report' — which Propertyware surface this record came from.
+  sourceFeed           String                @default("rest")
   idNumber             String?
   leaseName            String?
   sourceStatus         String?
@@ -856,7 +869,7 @@ model PropertywareLease {
   updatedAt            DateTime              @updatedAt
   portfolio            PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
   building             PropertywareBuilding  @relation(fields: [buildingId], references: [id])
-  unit                 PropertywareUnit      @relation(fields: [unitId], references: [id])
+  unit                 PropertywareUnit?     @relation(fields: [unitId], references: [id])
   inspections          Inspection[]
 
   @@unique([organizationId, sourceSystem, externalId])
@@ -1040,6 +1053,10 @@ model InspectionMedia {
   // avoid a second media↔finding relation). Plain FK enforced in the migration.
   relatedFindingId        String?                @db.Uuid
   captureGuidelineVersion String?
+  captureSessionId         String?                @unique
+  capturePolicyVersion     String?
+  // Summarized capture metrics only. Raw motion samples stay on the device.
+  captureSummary           Json?
   uploadStatus            MediaUploadStatus      @default(PENDING)
   processingStatus        MediaProcessingStatus  @default(PENDING)
   createdAt               DateTime               @default(now())

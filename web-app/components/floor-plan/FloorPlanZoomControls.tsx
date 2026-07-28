@@ -36,8 +36,13 @@ export function FloorPlanZoomControls({
       >
         +
       </button>
-      <button type="button" className="button button-secondary button-small" onClick={onReset}>
-        Reset
+      <button
+        type="button"
+        className="button button-secondary button-small"
+        onClick={onReset}
+        title="Fit the complete source plan in the viewport"
+      >
+        Fit plan
       </button>
       <button
         type="button"
