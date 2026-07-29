@@ -1,326 +1,142 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { AppScreen } from '../../../../src/components/AppScreen';
-import { inspectionProgress, RoomCard } from '../../../../src/components/FeatureCards';
+import { inspectionProgress } from '../../../../src/components/FeatureCards';
+import { AreaCard } from '../../../../src/components/AreaCard';
+import { AppListScreen } from '../../../../src/components/ScreenPrimitives';
 import { EmptyState, ErrorState, LoadingState } from '../../../../src/components/ScreenStates';
 import { AppButton, Card, ProgressBar } from '../../../../src/components/ui';
-import { useAddArea, useRooms } from '../../../../src/features/queries';
-import { type AppColors, radius, spacing, typography, useAppTheme, useThemedStyles } from '../../../../src/theme';
-import type { AreaEnvironment } from '../../../../src/domain/models';
-import {
-  AREA_CATEGORIES,
-  AREA_ENVIRONMENTS,
-  groupRoomsBySection,
-} from '../../../../src/utils/area-taxonomy';
-import { nextInspectionRoom } from '../../../../src/utils/room-workflow';
+import { useFindings, useRooms } from '../../../../src/features/queries';
+import { type AppColors, spacing, typography, useThemedStyles } from '../../../../src/theme';
+import { groupRoomsBySection } from '../../../../src/utils/area-taxonomy';
+import { pickUpNextArea } from '../../../../src/utils/area-status';
 
 export default function InspectionAreasScreen() {
   const styles = useThemedStyles(createStyles);
   const { inspectionId = '' } = useLocalSearchParams<{ inspectionId: string }>();
   const query = useRooms(inspectionId);
-  const [adding, setAdding] = useState(false);
+  // One request for the whole inspection, then grouped locally. Querying photos
+  // or findings per area would be an N+1 across the list.
+  const findings = useFindings(inspectionId);
 
-  if (query.isLoading) return <LoadingState label="Loading areas…" />;
+  if (query.isLoading) return <LoadingState label="Loading inspection areas…" />;
   if (query.isError)
     return <ErrorState message={query.error.message} onRetry={() => void query.refetch()} />;
-  const roomList = query.data ?? [];
-  const sections = groupRoomsBySection(roomList);
-  const progress = inspectionProgress(roomList);
-  const nextRoom = nextInspectionRoom(roomList);
-  const sequence = new Map(roomList.map((room, index) => [room.id, index + 1]));
-  const openRoom = (roomId: string) =>
+
+  const rooms = query.data ?? [];
+  const sections = groupRoomsBySection(rooms);
+  const progress = inspectionProgress(rooms);
+  // Derived, and deliberately the only place the up-next area is decided — so
+  // the card ring, the badge and the sticky footer can never disagree.
+  const nextRoom = pickUpNextArea(rooms);
+  const sequence = new Map(rooms.map((room, index) => [room.id, index + 1]));
+  const findingCounts = (findings.data ?? []).reduce<Record<string, number>>((totals, finding) => {
+    totals[finding.roomId] = (totals[finding.roomId] ?? 0) + 1;
+    return totals;
+  }, {});
+  const items = sections.flatMap((section) =>
+    section.rooms.map((room, index) => ({
+      id: room.id,
+      room,
+      section,
+      startsSection: index === 0,
+    })),
+  );
+  const openRoom = (areaId: string) =>
     router.push({
       pathname: '/(app)/inspections/[inspectionId]/area/[areaId]',
-      params: { inspectionId, areaId: roomId },
+      params: { inspectionId, areaId },
     });
 
   return (
-    <AppScreen
+    <AppListScreen
       title="Inspection areas"
-      subtitle="Indoor, outdoor, and areas you add on site"
-      refresh={{ onRefresh: () => query.refetch() }}
+      subtitle="Complete one area at a time. Uploads continue in the background."
+      refresh={{ refreshing: query.isRefetching, onRefresh: () => query.refetch() }}
+      data={items}
+      keyExtractor={(item) => item.id}
+      renderItem={({ item }) => (
+        <View style={styles.listItem}>
+          {item.startsSection ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{item.section.label}</Text>
+                <Text style={styles.sectionCount}>
+                  {item.section.rooms.length} area{item.section.rooms.length === 1 ? '' : 's'}
+                </Text>
+              </View>
+              {item.section.key === 'MANUAL' ? (
+                <Text style={styles.sectionNote}>
+                  Added on site · awaiting administrator approval
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+          <AreaCard
+            room={item.room}
+            sequence={sequence.get(item.room.id) ?? 0}
+            findingCount={findingCounts[item.room.id] ?? 0}
+            isUpNext={item.room.id === nextRoom?.id}
+            onOpen={() => openRoom(item.room.id)}
+            onAction={() => openRoom(item.room.id)}
+          />
+        </View>
+      )}
+      header={
+        <View style={styles.header}>
+          <Card muted>
+            <Text style={styles.progressTitle}>
+              {progress.completed} of {progress.total} required areas completed
+            </Text>
+            <ProgressBar value={progress.value} />
+            <Text style={styles.progressHelp}>
+              Record the area, save it to the upload queue, then continue without waiting.
+            </Text>
+          </Card>
+          <AppButton
+            label="Add missing area"
+            icon="add"
+            variant="outline"
+            onPress={() =>
+              router.push({
+                pathname: '/(app)/inspections/[inspectionId]/areas/new',
+                params: { inspectionId },
+              })
+            }
+          />
+        </View>
+      }
       bottomAction={
         nextRoom ? (
           <AppButton label={`Continue with ${nextRoom.name}`} onPress={() => openRoom(nextRoom.id)} />
         ) : undefined
       }
-    >
-      <Card muted>
-        <Text style={styles.progressTitle}>
-          {progress.completed} of {progress.total} required areas completed
-        </Text>
-        <ProgressBar value={progress.value} />
-        <Text style={styles.progressHelp}>
-          Work through indoor and outdoor areas. Add any missing or outdoor area you find on site — an
-          administrator approves added areas.
-        </Text>
-      </Card>
-
-      <AppButton label="+ Add area" variant="outline" onPress={() => setAdding(true)} />
-
-      {roomList.length ? (
-        sections.map((section) => (
-          <View key={section.key} style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{section.label}</Text>
-              <Text style={styles.sectionCount}>
-                {section.rooms.length} area{section.rooms.length === 1 ? '' : 's'}
-              </Text>
-            </View>
-            {section.key === 'MANUAL' ? (
-              <Text style={styles.sectionNote}>Added on site — awaiting administrator approval.</Text>
-            ) : null}
-            <View style={styles.sectionRooms}>
-              {section.rooms.map((room) => (
-                <RoomCard
-                  key={room.id}
-                  room={room}
-                  sequenceNumber={sequence.get(room.id)}
-                  isUpNext={room.id === nextRoom?.id}
-                  onPress={() => openRoom(room.id)}
-                />
-              ))}
-            </View>
-          </View>
-        ))
-      ) : (
+      ListEmptyComponent={
         <EmptyState
-          title="No areas yet"
-          message="An administrator must approve extracted areas, or you can add one with “Add area”."
+          title="No inspection areas"
+          message="An administrator must approve extracted areas, or you can add a missing area."
         />
-      )}
-
-      <AddAreaModal
-        visible={adding}
-        inspectionId={inspectionId}
-        onClose={() => setAdding(false)}
-        onAdded={() => {
-          setAdding(false);
-          void query.refetch();
-        }}
-      />
-    </AppScreen>
-  );
-}
-
-function AddAreaModal({
-  visible,
-  inspectionId,
-  onClose,
-  onAdded,
-}: {
-  visible: boolean;
-  inspectionId: string;
-  onClose: () => void;
-  onAdded: () => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  const { colors } = useAppTheme();
-  const addArea = useAddArea(inspectionId);
-  const [name, setName] = useState('');
-  const [environment, setEnvironment] = useState<AreaEnvironment>('INDOOR');
-  const [category, setCategory] = useState<string | null>(null);
-  const [floorName, setFloorName] = useState('');
-  const [notes, setNotes] = useState('');
-
-  const reset = () => {
-    setName('');
-    setEnvironment('INDOOR');
-    setCategory(null);
-    setFloorName('');
-    setNotes('');
-  };
-
-  // Categories relevant to the chosen environment, so the picker stays focused.
-  const categories = useMemo(
-    () => AREA_CATEGORIES.filter((option) => option.environment === environment),
-    [environment],
-  );
-
-  async function save() {
-    if (!name.trim()) return;
-    try {
-      await addArea.mutateAsync({
-        name: name.trim(),
-        environment,
-        category: category ?? undefined,
-        floorName: floorName.trim() || undefined,
-        notes: notes.trim() || undefined,
-      });
-      reset();
-      onAdded();
-    } catch {
-      // Error surfaced below via addArea.error.
-    }
-  }
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.modalSheet}>
-          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
-            <Text style={styles.modalTitle}>Add area</Text>
-
-            <Text style={styles.fieldLabel}>Area name</Text>
-            <TextInput
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder="e.g. Back patio, Perimeter fence"
-              placeholderTextColor={colors.textSecondary}
-            />
-
-            <Text style={styles.fieldLabel}>Location</Text>
-            <View style={styles.chipRow}>
-              {AREA_ENVIRONMENTS.map((option) => (
-                <Chip
-                  key={option.value}
-                  label={option.label}
-                  selected={environment === option.value}
-                  onPress={() => {
-                    setEnvironment(option.value);
-                    setCategory(null);
-                  }}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.fieldLabel}>Category</Text>
-            <View style={styles.chipRow}>
-              {categories.map((option) => (
-                <Chip
-                  key={option.value}
-                  label={option.label}
-                  selected={category === option.value}
-                  onPress={() => setCategory(category === option.value ? null : option.value)}
-                />
-              ))}
-            </View>
-
-            <Text style={styles.fieldLabel}>Floor or level (optional)</Text>
-            <TextInput
-              style={styles.input}
-              value={floorName}
-              onChangeText={setFloorName}
-              placeholder="e.g. Exterior, Second floor"
-              placeholderTextColor={colors.textSecondary}
-            />
-
-            <Text style={styles.fieldLabel}>Notes (optional)</Text>
-            <TextInput
-              style={[styles.input, styles.inputMultiline]}
-              value={notes}
-              onChangeText={setNotes}
-              placeholder="Why this area was added"
-              placeholderTextColor={colors.textSecondary}
-              multiline
-            />
-
-            {addArea.error ? (
-              <Text style={styles.modalError}>{(addArea.error as Error).message}</Text>
-            ) : null}
-
-            <View style={styles.modalActions}>
-              <AppButton label="Cancel" variant="outline" onPress={onClose} />
-              <AppButton
-                label={addArea.isPending ? 'Adding…' : 'Add area'}
-                onPress={() => void save()}
-                disabled={!name.trim() || addArea.isPending}
-              />
-            </View>
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function Chip({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}) {
-  const styles = useThemedStyles(createStyles);
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={[styles.chip, selected && styles.chipSelected]}
-    >
-      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
-    </Pressable>
+      }
+    />
   );
 }
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
-    section: { gap: spacing.sm },
+    header: { gap: spacing.md },
+    listItem: { gap: spacing.sm },
+    section: { gap: spacing.xs, marginTop: spacing.sm },
     sectionHeader: {
+      minWidth: 0,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.sm,
       paddingHorizontal: spacing.xs,
     },
-    sectionTitle: { ...typography.heading, color: colors.textPrimary },
+    sectionTitle: { ...typography.heading, color: colors.textPrimary, flexShrink: 1 },
     sectionCount: { ...typography.caption, color: colors.textSecondary },
     sectionNote: { ...typography.caption, color: colors.warning, paddingHorizontal: spacing.xs },
-    sectionRooms: { gap: spacing.md },
     progressTitle: { ...typography.heading, color: colors.textPrimary },
     progressHelp: { ...typography.caption, color: colors.textSecondary },
-    modalBackdrop: {
-      flex: 1,
-      justifyContent: 'flex-end',
-      backgroundColor: 'rgba(0,0,0,0.4)',
-    },
-    modalSheet: {
-      maxHeight: '90%',
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: radius.lg,
-      borderTopRightRadius: radius.lg,
-    },
-    modalContent: { padding: spacing.lg, gap: spacing.sm },
-    modalTitle: { ...typography.title, color: colors.textPrimary, marginBottom: spacing.xs },
-    fieldLabel: {
-      ...typography.caption,
-      color: colors.textSecondary,
-      fontWeight: '800',
-      marginTop: spacing.sm,
-    },
-    input: {
-      ...typography.body,
-      color: colors.textPrimary,
-      backgroundColor: colors.background,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: radius.md,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.sm,
-    },
-    inputMultiline: { minHeight: 72, textAlignVertical: 'top' },
-    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-    chip: {
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: radius.round,
-      paddingHorizontal: spacing.md,
-      paddingVertical: spacing.xs,
-      backgroundColor: colors.background,
-    },
-    chipSelected: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
-    chipText: { ...typography.caption, color: colors.textSecondary },
-    chipTextSelected: { color: colors.primary, fontWeight: '800' },
-    modalError: { ...typography.caption, color: colors.danger, marginTop: spacing.xs },
-    modalActions: {
-      flexDirection: 'row',
-      gap: spacing.sm,
-      marginTop: spacing.md,
-    },
   });

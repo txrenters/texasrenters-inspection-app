@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 
 import { AppScreen } from '../../../../../src/components/AppScreen';
@@ -11,6 +11,7 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../../../../../src/components/ui';
+import { Textarea } from '../../../../../src/components/ui/textarea';
 import { isDemoMode } from '../../../../../src/config/environment';
 import { useFinding, useFindingActions } from '../../../../../src/features/queries';
 import {
@@ -168,13 +169,13 @@ export default function FindingDetailScreen() {
           });
         }}
       >
-        <TextInput
+        <Textarea
           accessibilityLabel="Review decision reason"
           value={reason}
           onChangeText={setReason}
           placeholder="Required reason"
           multiline
-          style={styles.input}
+          className="min-h-[96px]"
         />
         {error ? (
           <Text accessibilityRole="alert" style={styles.error}>
@@ -195,20 +196,20 @@ export default function FindingDetailScreen() {
           )
         }
       >
-        <TextInput
+        <Textarea
           accessibilityLabel="Edited observation"
           value={observation}
           onChangeText={setObservation}
           multiline
-          style={styles.input}
+          className="min-h-[96px]"
         />
-        <TextInput
+        <Textarea
           accessibilityLabel="Reviewer notes"
           value={notes}
           onChangeText={setNotes}
           placeholder="Reviewer notes"
           multiline
-          style={styles.input}
+          className="min-h-[96px]"
         />
         {error ? (
           <Text accessibilityRole="alert" style={styles.error}>
@@ -276,10 +277,11 @@ const createStyles = (colors: AppColors) =>
       borderLeftColor: colors.info,
       paddingLeft: spacing.md,
     },
-    thumbnails: { flexDirection: 'row', gap: spacing.sm },
+    thumbnails: { minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     thumbnail: {
       height: 78,
       flex: 1,
+      minWidth: 84,
       alignItems: 'center',
       justifyContent: 'center',
       borderRadius: radius.sm,
@@ -292,15 +294,6 @@ const createStyles = (colors: AppColors) =>
       color: colors.textSecondary,
       textAlign: 'center',
       padding: spacing.md,
-    },
-    input: {
-      minHeight: 86,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: radius.md,
-      padding: spacing.md,
-      color: colors.textPrimary,
-      textAlignVertical: 'top',
     },
     error: { ...typography.caption, color: colors.danger },
   });

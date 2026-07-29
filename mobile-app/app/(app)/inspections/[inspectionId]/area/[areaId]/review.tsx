@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppScreen } from '../../../../../../src/components/AppScreen';
 import { formatDuration } from '../../../../../../src/components/FeatureCards';
 import { AppButton, Card, ConfirmationModal } from '../../../../../../src/components/ui';
+import { Input } from '../../../../../../src/components/ui/input';
+import { Textarea } from '../../../../../../src/components/ui/textarea';
 import type { AdditionalVideoCategory } from '../../../../../../src/domain/models';
 import {
   useInspection,
@@ -20,7 +22,6 @@ import {
   radius,
   spacing,
   typography,
-  useAppTheme,
   useThemedStyles,
 } from '../../../../../../src/theme';
 import { nextInspectionRoom } from '../../../../../../src/utils/room-workflow';
@@ -41,7 +42,6 @@ const ADDITIONAL_VIDEO_CATEGORIES: ReadonlyArray<{ value: AdditionalVideoCategor
   ];
 
 export default function RecordingReviewScreen() {
-  const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
   const { inspectionId = '', areaId = '' } = useLocalSearchParams<{
     inspectionId: string;
@@ -218,14 +218,13 @@ export default function RecordingReviewScreen() {
       {isAdditional ? (
         <Card>
           <Text style={styles.label}>CLIP LABEL</Text>
-          <TextInput
+          <Input
             accessibilityLabel="Clip label"
             value={label}
             onChangeText={setLabel}
             placeholder="e.g. Water stain under kitchen sink"
-            placeholderTextColor={colors.textSecondary}
             maxLength={120}
-            style={styles.labelInput}
+            className="h-12"
           />
           <Text style={styles.hint}>A short label is required so reviewers can find this clip.</Text>
           <Text style={[styles.label, styles.categoryLabel]}>CATEGORY (OPTIONAL)</Text>
@@ -253,14 +252,12 @@ export default function RecordingReviewScreen() {
       ) : null}
       <Card>
         <Text style={styles.label}>TECHNICIAN NOTES</Text>
-        <TextInput
+        <Textarea
           accessibilityLabel="Recording notes"
           value={note}
           onChangeText={setNote}
           placeholder="Add context for the reviewer"
-          placeholderTextColor={colors.textSecondary}
-          multiline
-          style={styles.input}
+          className="min-h-[112px]"
         />
       </Card>
       <View style={styles.actions}>
@@ -333,29 +330,13 @@ const createStyles = (colors: AppColors) =>
     playText: { color: colors.primaryDark, fontSize: 25, marginLeft: 4 },
     previewLabel: { ...typography.caption, color: colors.primarySoft, letterSpacing: 1 },
     localNotice: { ...typography.caption, color: colors.textSecondary },
-    row: { flexDirection: 'row', gap: spacing.md },
-    meta: { flex: 1, gap: spacing.xs },
+    row: { minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+    meta: { flex: 1, minWidth: 132, gap: spacing.xs },
     label: { ...typography.caption, color: colors.primary, fontWeight: '800' },
     categoryLabel: { marginTop: spacing.md },
     value: { ...typography.body, color: colors.textPrimary },
     body: { ...typography.body, color: colors.textSecondary },
     hint: { ...typography.caption, color: colors.textSecondary },
-    input: {
-      minHeight: 100,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: radius.md,
-      padding: spacing.md,
-      color: colors.textPrimary,
-      textAlignVertical: 'top',
-    },
-    labelInput: {
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: radius.md,
-      padding: spacing.md,
-      color: colors.textPrimary,
-    },
     categoryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
     categoryChip: {
       paddingHorizontal: spacing.md,
@@ -385,6 +366,11 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.successSoft,
     },
     confirmationMark: { ...typography.heading, color: colors.primary },
-    confirmationText: { ...typography.body, color: colors.textPrimary, flex: 1 },
+    confirmationText: {
+      ...typography.body,
+      color: colors.textPrimary,
+      flex: 1,
+      minWidth: 0,
+    },
     error: { ...typography.caption, color: colors.danger },
   });

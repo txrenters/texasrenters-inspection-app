@@ -1,4 +1,5 @@
-import { createContext, type PropsWithChildren, useContext, useMemo } from 'react';
+import { createContext, type PropsWithChildren, useContext, useEffect, useMemo } from 'react';
+import { useColorScheme as useNativeWindColorScheme } from 'nativewind';
 import { useColorScheme } from 'react-native';
 
 import { usePreferencesStore, type ThemePreference } from '../stores/preferences.store';
@@ -33,9 +34,19 @@ const AppThemeContext = createContext<AppTheme>(defaultTheme);
 
 export function AppThemeProvider({ children }: PropsWithChildren) {
   const systemTheme = useColorScheme();
+  const { setColorScheme } = useNativeWindColorScheme();
   const preference = usePreferencesStore((state) => state.themePreference);
   const setPreference = usePreferencesStore((state) => state.setThemePreference);
   const resolvedTheme = resolveTheme(preference, systemTheme);
+
+  useEffect(() => {
+    // Keep NativeWind semantic utilities and the legacy palette on the same
+    // resolved theme. Without this, generated RNR components remain light while
+    // the surrounding application switches to dark mode.
+    // Jest does not run the NativeWind Tailwind transform, so its test stylesheet
+    // cannot accept manual class-mode changes even though the application can.
+    if (process.env.NODE_ENV !== 'test') setColorScheme(preference);
+  }, [preference, setColorScheme]);
 
   const value = useMemo<AppTheme>(
     () => ({

@@ -7,14 +7,17 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
+  type TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { CircleAlert, CircleCheck } from 'lucide-react-native';
 
 import { BrandLogo } from '../../src/components/BrandLogo';
 import { LoadingState } from '../../src/components/ScreenStates';
 import { AppButton, InitialsAvatar, StatusBadge } from '../../src/components/ui';
+import { Alert, AlertDescription, AlertTitle } from '../../src/components/ui/alert';
+import { Input } from '../../src/components/ui/input';
 import { isDemoMode } from '../../src/config/environment';
 import type { DemoRole } from '../../src/domain/models';
 import {
@@ -122,7 +125,7 @@ function AccountLogin() {
                   ]}
                 >
                   <Text style={styles.inputIcon}>@</Text>
-                  <TextInput
+                  <Input
                     accessibilityLabel="Email address"
                     autoCapitalize="none"
                     autoComplete="email"
@@ -138,6 +141,7 @@ function AccountLogin() {
                     placeholder="name@texasrenters.com"
                     placeholderTextColor={styles.placeholder.color}
                     returnKeyType={resetMode ? 'send' : 'next'}
+                    className="h-auto flex-1 border-0 bg-transparent px-0 shadow-none dark:bg-transparent"
                     style={styles.input}
                     value={email}
                   />
@@ -170,7 +174,7 @@ function AccountLogin() {
                     ]}
                   >
                     <Text style={styles.inputIcon}>●</Text>
-                    <TextInput
+                    <Input
                       ref={passwordInput}
                       accessibilityLabel="Password"
                       autoCapitalize="none"
@@ -189,6 +193,7 @@ function AccountLogin() {
                       placeholderTextColor={styles.placeholder.color}
                       returnKeyType="go"
                       secureTextEntry={!showPassword}
+                      className="h-auto flex-1 border-0 bg-transparent px-0 shadow-none dark:bg-transparent"
                       style={styles.input}
                       value={password}
                     />
@@ -210,24 +215,28 @@ function AccountLogin() {
               ) : null}
 
               {login.isError ? (
-                <View accessibilityRole="alert" style={styles.errorPanel}>
-                  <Text style={styles.errorTitle}>We couldn’t sign you in</Text>
-                  <Text style={styles.error}>{login.error.message}</Text>
-                </View>
+                <Alert icon={CircleAlert} variant="destructive">
+                  <AlertTitle>We couldn’t sign you in</AlertTitle>
+                  <AlertDescription>{login.error.message}</AlertDescription>
+                </Alert>
               ) : null}
               {passwordReset.isError ? (
-                <View accessibilityRole="alert" style={styles.errorPanel}>
-                  <Text style={styles.errorTitle}>Reset link not sent</Text>
-                  <Text style={styles.error}>{passwordReset.error.message}</Text>
-                </View>
+                <Alert icon={CircleAlert} variant="destructive">
+                  <AlertTitle>Reset link not sent</AlertTitle>
+                  <AlertDescription>{passwordReset.error.message}</AlertDescription>
+                </Alert>
               ) : null}
               {passwordReset.isSuccess ? (
-                <View accessibilityRole="alert" style={styles.successPanel}>
-                  <Text style={styles.successTitle}>Check your inbox</Text>
-                  <Text style={styles.successText}>
+                <Alert
+                  icon={CircleCheck}
+                  className="border-approved/40 bg-approved/10"
+                  iconClassName="text-approved"
+                >
+                  <AlertTitle className="text-approved">Check your inbox</AlertTitle>
+                  <AlertDescription>
                     A password reset link was sent if this account exists.
-                  </Text>
-                </View>
+                  </AlertDescription>
+                </Alert>
               ) : null}
 
               <AppButton
@@ -335,7 +344,13 @@ const createStyles = (colors: AppColors) =>
       flexGrow: 1,
       paddingVertical: spacing.sm,
     },
-    brandRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+    brandRow: {
+      minWidth: 0,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
     intro: { gap: spacing.sm },
     eyebrow: { ...typography.label, color: colors.primary, letterSpacing: 1.4 },
     title: { ...typography.display, color: colors.textPrimary },
@@ -350,7 +365,14 @@ const createStyles = (colors: AppColors) =>
       ...shadows.card,
     },
     fieldGroup: { gap: spacing.sm },
-    labelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    labelRow: {
+      minWidth: 0,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
     fieldLabel: { ...typography.label, color: colors.textPrimary },
     textAction: { ...typography.caption, color: colors.primary, fontWeight: '700' },
     inputShell: {
@@ -387,22 +409,7 @@ const createStyles = (colors: AppColors) =>
       paddingLeft: spacing.sm,
     },
     fieldError: { ...typography.caption, color: colors.danger },
-    errorPanel: {
-      gap: spacing.xs,
-      padding: spacing.md,
-      borderRadius: radius.md,
-      backgroundColor: colors.dangerSoft,
-    },
-    errorTitle: { ...typography.label, color: colors.danger },
     error: { ...typography.caption, color: colors.danger },
-    successPanel: {
-      gap: spacing.xs,
-      padding: spacing.md,
-      borderRadius: radius.md,
-      backgroundColor: colors.successSoft,
-    },
-    successTitle: { ...typography.label, color: colors.success },
-    successText: { ...typography.caption, color: colors.textSecondary },
     securityNote: {
       flexDirection: 'row',
       justifyContent: 'center',

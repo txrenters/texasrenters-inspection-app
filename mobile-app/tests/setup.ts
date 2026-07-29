@@ -2,6 +2,10 @@
   true;
 process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA = 'true';
 
+jest.mock('react-native-safe-area-context', () =>
+  jest.requireActual('react-native-safe-area-context/jest/mock').default,
+);
+
 jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
   useLocalSearchParams: jest.fn(() => ({})),

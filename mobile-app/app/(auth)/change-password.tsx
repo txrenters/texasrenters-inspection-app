@@ -6,13 +6,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BrandLogo } from '../../src/components/BrandLogo';
 import { AppButton, Card, StatusBadge } from '../../src/components/ui';
+import { Input } from '../../src/components/ui/input';
 import { useRequiredPasswordChange } from '../../src/features/queries';
 import { type AppColors, spacing, typography, useThemedStyles } from '../../src/theme';
 
@@ -57,12 +57,12 @@ export default function ChangePasswordScreen() {
               12 characters.
             </Text>
             <Text style={styles.label}>New password</Text>
-            <TextInput
+            <Input
               accessibilityLabel="New password"
               autoCapitalize="none"
               autoComplete="new-password"
               secureTextEntry
-              style={styles.input}
+              className="h-[54px]"
               value={password}
               onChangeText={(value) => {
                 setPassword(value);
@@ -70,12 +70,12 @@ export default function ChangePasswordScreen() {
               }}
             />
             <Text style={styles.label}>Confirm new password</Text>
-            <TextInput
+            <Input
               accessibilityLabel="Confirm new password"
               autoCapitalize="none"
               autoComplete="new-password"
               secureTextEntry
-              style={styles.input}
+              className="h-[54px]"
               value={confirmation}
               onChangeText={(value) => {
                 setConfirmation(value);
@@ -112,19 +112,17 @@ const createStyles = (colors: AppColors) =>
       gap: spacing.lg,
       padding: spacing.lg,
     },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    header: {
+      minWidth: 0,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: spacing.sm,
+    },
     eyebrow: { ...typography.label, color: colors.primary, letterSpacing: 1.2 },
     title: { ...typography.display, color: colors.textPrimary },
     body: { ...typography.body, color: colors.textSecondary },
     label: { ...typography.label, color: colors.textPrimary },
-    input: {
-      minHeight: 54,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 12,
-      paddingHorizontal: spacing.md,
-      color: colors.textPrimary,
-      backgroundColor: colors.background,
-    },
     error: { ...typography.caption, color: colors.danger },
   });

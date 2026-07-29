@@ -99,6 +99,7 @@ export default function DashboardScreen() {
           ))
         ) : (
           <EmptyState
+            compact
             title="No inspections assigned"
             message="Your workspace starts empty. An administrator must assign an inspection before it appears here."
           />
@@ -112,7 +113,6 @@ export default function DashboardScreen() {
           description="Search assigned and recently completed inspections."
           onPress={() => router.push('/(app)/(tabs)/inspections')}
         />
-        <View style={styles.separator} />
         <QuickActionRow
           icon="cloud-upload-outline"
           title="Upload center"
@@ -166,23 +166,24 @@ const createStyles = (colors: AppColors) =>
     list: { gap: spacing.md },
     link: { ...typography.label, color: colors.primary },
     actionList: {
-      overflow: 'hidden',
-      borderRadius: radius.lg,
-      backgroundColor: colors.surface,
-      paddingHorizontal: spacing.md,
+      gap: spacing.sm,
     },
     actionRow: {
-      minHeight: 78,
+      minHeight: 68,
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radius.md,
+      backgroundColor: colors.surface,
+      paddingHorizontal: spacing.md,
       paddingVertical: spacing.md,
     },
     pressedRow: { opacity: 0.65 },
     actionIcon: { color: colors.primary },
     actionCopy: { flex: 1, minWidth: 0 },
     chevron: { color: colors.textSecondary },
-    separator: { height: 1, marginLeft: 38, backgroundColor: colors.border },
     quickTitle: { ...typography.heading, color: colors.textPrimary },
     quickBody: { ...typography.body, color: colors.textSecondary },
   });

@@ -63,7 +63,13 @@ async function bootstrap() {
   // rawBody keeps the exact request bytes available for webhook signature checks.
   const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   configureApplication(app);
-  if (process.env.NODE_ENV !== 'production') {
+  // Swagger is a development convenience. During remote beta the backend is
+  // publicly reachable through ngrok, so exposing the full API surface and DTO
+  // shapes is opt-in rather than automatic.
+  const swaggerEnabled =
+    process.env.NODE_ENV !== 'production' &&
+    (process.env.APP_ENV !== 'remote-beta' || process.env.ENABLE_SWAGGER === 'true');
+  if (swaggerEnabled) {
     const config = new DocumentBuilder()
       .setTitle('TexasRenters Inspection API')
       .setDescription('Mock-first REST API foundation. AI findings always require human review.')
@@ -72,7 +78,9 @@ async function bootstrap() {
       .build();
     SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
   }
-  await app.listen(process.env.PORT ?? 3000);
+  // Bind every interface: inside a container, listening only on loopback makes
+  // the service unreachable from the Docker network and therefore from ngrok.
+  await app.listen(process.env.PORT ?? 3000, process.env.HOST ?? '0.0.0.0');
   const server = app.getHttpServer() as {
     setTimeout(value: number): void;
     keepAliveTimeout: number;

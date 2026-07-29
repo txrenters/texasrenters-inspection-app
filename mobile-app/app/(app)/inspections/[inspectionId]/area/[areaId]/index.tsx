@@ -1,9 +1,16 @@
 import { useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 
 import { AppScreen } from '../../../../../../src/components/AppScreen';
 import { formatDuration } from '../../../../../../src/components/FeatureCards';
+import { EvidenceSummary } from '../../../../../../src/components/ScreenPrimitives';
+import { AreaCompletionChecklist } from '../../../../../../src/components/AreaCompletionChecklist';
+import { AreaStatusLine } from '../../../../../../src/components/AreaStatusLine';
+import {
+  areaCompletionGate,
+  deriveAreaRequirements,
+} from '../../../../../../src/utils/area-requirements';
 import { ErrorState, LoadingState } from '../../../../../../src/components/ScreenStates';
 import {
   AppButton,
@@ -12,8 +19,15 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../../../../../../src/components/ui';
+import { Input } from '../../../../../../src/components/ui/input';
+import { Textarea } from '../../../../../../src/components/ui/textarea';
 import { isDemoMode } from '../../../../../../src/config/environment';
-import { useRoom, useRoomMedia, useUpdateRoom } from '../../../../../../src/features/queries';
+import {
+  useFindings,
+  useRoom,
+  useRoomMedia,
+  useUpdateRoom,
+} from '../../../../../../src/features/queries';
 import { recordPetObservation } from '../../../../../../src/media/pet-observation';
 import {
   type AppColors,
@@ -31,6 +45,12 @@ export default function RoomDetailsScreen() {
   }>();
   const room = useRoom(areaId);
   const media = useRoomMedia(areaId);
+  // Findings are fetched per inspection, so this reuses the cache the area list
+  // already populated rather than issuing a second request.
+  const findings = useFindings(inspectionId);
+  const areaFindingCount = (findings.data ?? []).filter(
+    (finding) => finding.roomId === areaId,
+  ).length;
   const actions = useUpdateRoom(inspectionId, areaId);
   const [note, setNote] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
@@ -51,6 +71,20 @@ export default function RoomDetailsScreen() {
       ? 'RECORDING_SAVED'
       : room.data.completionStatus;
   const roomClosed = completionStatus === 'COMPLETED';
+  // Derived from the same room record the list uses, so the detail screen and
+  // the area card can never disagree about this area's state.
+  const requirements = deriveAreaRequirements(
+    { ...room.data, completionStatus },
+    {
+      hasPrimaryRecording: hasSavedRecording,
+      // Photos are not listed by the mobile client yet, so this stays 0 rather
+      // than guessing. It only affects the advisory defect re-check.
+      photoCount: 0,
+      findingCount: areaFindingCount,
+      uploadSettled: room.data.uploadStatus !== 'FAILED',
+    },
+  );
+  const gate = areaCompletionGate(requirements);
   const recordAdditional = () =>
     router.push({
       pathname: '/(app)/inspections/[inspectionId]/area/[areaId]/record',
@@ -116,11 +150,10 @@ export default function RoomDetailsScreen() {
         )
       }
     >
-      <View style={styles.badges}>
-        <StatusBadge label={completionStatus} />
-        <StatusBadge label={room.data.uploadStatus} />
-        <StatusBadge label={room.data.processingStatus} />
-      </View>
+      {/* One derived status with an icon, label and explanation, replacing a row
+          of unlabeled badges that stated the state twice without saying what to
+          do about it. */}
+      <AreaStatusLine room={{ ...room.data, completionStatus }} />
       <Card>
         <SectionHeader
           title={room.data.inspectionType === 'MOVE_IN' ? 'Initial condition' : 'Move-in baseline'}
@@ -184,13 +217,12 @@ export default function RoomDetailsScreen() {
       </Card>
       <Card>
         <SectionHeader title="Technician note" />
-        <TextInput
+        <Textarea
           accessibilityLabel="Room note"
           value={note}
           onChangeText={setNote}
           placeholder="Add an observation or reminder"
-          multiline
-          style={styles.input}
+          className="min-h-24"
         />
         <AppButton
           label="Save note"
@@ -200,16 +232,43 @@ export default function RoomDetailsScreen() {
           compact
         />
       </Card>
-      <Card muted>
-        <SectionHeader title="Room status" />
-        <Timeline label="Baseline reviewed" complete />
-        <Timeline label="Recording saved" complete={hasSavedRecording} />
-        <Timeline label="Upload confirmed" complete={room.data.uploadStatus === 'COMPLETED'} />
-        <Timeline
-          label="AI findings ready"
-          complete={room.data.processingStatus === 'READY_FOR_REVIEW'}
+      <View style={styles.sectionBlock}>
+        <SectionHeader title="Evidence status" />
+        <EvidenceSummary
+          items={[
+            { label: 'Baseline', value: 'Reviewed', complete: true },
+            {
+              label: 'Room recording',
+              value: hasSavedRecording ? 'Saved on this device' : 'Required before completion',
+              complete: hasSavedRecording,
+              attention: !hasSavedRecording,
+            },
+            {
+              label: 'Upload',
+              value:
+                room.data.uploadStatus === 'COMPLETED'
+                  ? 'Confirmed'
+                  : room.data.uploadStatus === 'FAILED'
+                    ? 'Needs retry'
+                    : hasSavedRecording
+                      ? 'Queued in background'
+                      : 'Waiting for recording',
+              complete: room.data.uploadStatus === 'COMPLETED',
+              attention: room.data.uploadStatus === 'FAILED',
+            },
+            {
+              label: 'AI review',
+              value:
+                room.data.processingStatus === 'READY_FOR_REVIEW'
+                  ? 'Ready for review'
+                  : hasSavedRecording
+                    ? 'Runs after upload'
+                    : 'Waiting for evidence',
+              complete: room.data.processingStatus === 'READY_FOR_REVIEW',
+            },
+          ]}
         />
-      </Card>
+      </View>
       <View style={styles.actions}>
         {isDemoMode ? (
           <AppButton
@@ -223,11 +282,13 @@ export default function RoomDetailsScreen() {
             }
           />
         ) : null}
-        <AppButton
-          label="Add additional video"
-          variant="outline"
-          onPress={recordAdditional}
-        />
+        {hasSavedRecording ? (
+          <AppButton
+            label="Add additional evidence clip"
+            variant="outline"
+            onPress={recordAdditional}
+          />
+        ) : null}
         {isOccupied ? (
           <AppButton label="Log pet sighting" variant="outline" onPress={() => setPetOpen(true)} />
         ) : null}
@@ -235,6 +296,8 @@ export default function RoomDetailsScreen() {
           label="Mark complete"
           variant="secondary"
           onPress={() => actions.complete.mutate()}
+          disabled={!hasSavedRecording || actions.complete.isPending}
+          loading={actions.complete.isPending}
         />
         <AppButton label="Mark as skipped" variant="ghost" onPress={() => setSkipOpen(true)} />
       </View>
@@ -263,13 +326,12 @@ export default function RoomDetailsScreen() {
           })
         }
       >
-        <TextInput
+        <Textarea
           accessibilityLabel="Skip reason"
           value={skipReason}
           onChangeText={setSkipReason}
           placeholder="Required reason"
-          multiline
-          style={styles.input}
+          className="min-h-24"
         />
         {actions.skip.isError ? (
           <Text accessibilityRole="alert" style={styles.error}>
@@ -287,27 +349,24 @@ export default function RoomDetailsScreen() {
           if (!petSaving && petSpecies.trim() && petLabel.trim()) void submitPetObservation();
         }}
       >
-        <TextInput
+        <Input
           accessibilityLabel="Pet species"
           value={petSpecies}
           onChangeText={setPetSpecies}
           placeholder="Species (e.g. Dog)"
-          style={styles.input}
         />
-        <TextInput
+        <Input
           accessibilityLabel="Temporary pet label"
           value={petLabel}
           onChangeText={setPetLabel}
           placeholder="Temporary label (e.g. Brown dog)"
-          style={styles.input}
         />
-        <TextInput
+        <Textarea
           accessibilityLabel="Pet notes"
           value={petNotes}
           onChangeText={setPetNotes}
           placeholder="Distinguishing characteristics, area seen, notes"
-          multiline
-          style={styles.input}
+          className="min-h-24"
         />
         {petError ? (
           <Text accessibilityRole="alert" style={styles.error}>
@@ -315,19 +374,8 @@ export default function RoomDetailsScreen() {
           </Text>
         ) : null}
       </ConfirmationModal>
+      <AreaCompletionChecklist blockedReason={gate.reason} requirements={requirements} />
     </AppScreen>
-  );
-}
-
-function Timeline({ label, complete }: { label: string; complete: boolean }) {
-  const styles = useThemedStyles(createStyles);
-  return (
-    <View style={styles.timeline}>
-      <View style={[styles.timelineDot, complete && styles.timelineDone]}>
-        <Text style={styles.timelineIcon}>{complete ? '✓' : ''}</Text>
-      </View>
-      <Text style={[styles.timelineLabel, complete && styles.timelineLabelDone]}>{label}</Text>
-    </View>
   );
 }
 
@@ -365,30 +413,7 @@ const createStyles = (colors: AppColors) =>
     playText: { color: colors.white },
     flex: { flex: 1 },
     mediaTitle: { ...typography.label, color: colors.textPrimary },
-    input: {
-      minHeight: 88,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: radius.md,
-      backgroundColor: colors.surface,
-      color: colors.textPrimary,
-      padding: spacing.md,
-      textAlignVertical: 'top',
-    },
-    timeline: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    timelineDot: {
-      width: 24,
-      height: 24,
-      borderRadius: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 2,
-      borderColor: colors.border,
-    },
-    timelineDone: { backgroundColor: colors.success, borderColor: colors.success },
-    timelineIcon: { color: colors.white, fontSize: 11, fontWeight: '900' },
-    timelineLabel: { ...typography.body, color: colors.textSecondary },
-    timelineLabelDone: { color: colors.textPrimary, fontWeight: '600' },
+    sectionBlock: { gap: spacing.sm },
     actions: { gap: spacing.sm },
     error: { ...typography.caption, color: colors.danger },
   });

@@ -1,0 +1,1413 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "TexasRenters Technician API",
+    "version": "1.0",
+    "description": "Technician-facing endpoints for the TexasRenters mobile inspection app. All /technician routes require a Supabase JWT in the Authorization header and the INSPECTION_TECHNICIAN role."
+  },
+  "servers": [
+    {
+      "url": "https://vixen-blazer-unrented.ngrok-free.dev",
+      "description": "Remote beta (temporary)"
+    }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "operationId": "HealthController_health_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/health/readiness": {
+      "get": {
+        "operationId": "HealthController_readiness_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/health/database": {
+      "get": {
+        "operationId": "HealthController_databaseReadiness_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "VerticalSliceController_me_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "mock vertical slice"
+        ]
+      }
+    },
+    "/api/v1/auth/change-required-password": {
+      "post": {
+        "operationId": "AuthController_changeRequiredPassword_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRequiredPasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/api/v1/technician/notification-devices": {
+      "post": {
+        "operationId": "TechnicianController_registerNotificationDevice_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobilePushDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      },
+      "delete": {
+        "operationId": "TechnicianController_removeNotificationDevice_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveMobilePushDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/dashboard": {
+      "get": {
+        "operationId": "TechnicianController_dashboard_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections": {
+      "get": {
+        "operationId": "TechnicianController_inspections_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}": {
+      "get": {
+        "operationId": "TechnicianController_inspection_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/context": {
+      "get": {
+        "operationId": "TechnicianController_inspectionContext_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/start": {
+      "post": {
+        "operationId": "TechnicianController_startInspection_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/complete": {
+      "post": {
+        "operationId": "TechnicianController_completeInspection_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/rooms": {
+      "get": {
+        "operationId": "TechnicianController_rooms_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/areas": {
+      "post": {
+        "operationId": "TechnicianController_createArea_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TechnicianCreateAreaDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/pet-observations": {
+      "post": {
+        "operationId": "TechnicianController_recordPetObservation_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PetObservationDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/findings": {
+      "get": {
+        "operationId": "TechnicianController_findings_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/inspections/{inspectionId}/report": {
+      "get": {
+        "operationId": "TechnicianController_report_v1",
+        "parameters": [
+          {
+            "name": "inspectionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/properties/{propertyId}": {
+      "get": {
+        "operationId": "TechnicianController_property_v1",
+        "parameters": [
+          {
+            "name": "propertyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/properties/{propertyId}/floor-plan": {
+      "get": {
+        "operationId": "TechnicianController_floorPlan_v1",
+        "parameters": [
+          {
+            "name": "propertyId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/floor-plans/{floorPlanId}/content": {
+      "get": {
+        "operationId": "TechnicianController_floorPlanContent_v1",
+        "parameters": [
+          {
+            "name": "floorPlanId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}": {
+      "get": {
+        "operationId": "TechnicianController_room_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}/note": {
+      "patch": {
+        "operationId": "TechnicianController_note_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TechnicianNoteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}/skip": {
+      "post": {
+        "operationId": "TechnicianController_skip_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TechnicianReasonDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}/complete": {
+      "post": {
+        "operationId": "TechnicianController_completeRoom_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}/media": {
+      "get": {
+        "operationId": "TechnicianController_media_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      },
+      "post": {
+        "operationId": "TechnicianController_uploadMedia_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TechnicianMediaUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}/videos": {
+      "post": {
+        "operationId": "TechnicianController_uploadAdditionalVideo_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TechnicianAdditionalVideoDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/rooms/{roomId}/photos": {
+      "get": {
+        "operationId": "TechnicianController_photos_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      },
+      "post": {
+        "operationId": "TechnicianController_uploadPhoto_v1",
+        "parameters": [
+          {
+            "name": "roomId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TechnicianPhotoUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/photos/{photoId}": {
+      "delete": {
+        "operationId": "TechnicianController_deletePhoto_v1",
+        "parameters": [
+          {
+            "name": "photoId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/photos/{photoId}/content": {
+      "get": {
+        "operationId": "TechnicianController_photoContent_v1",
+        "parameters": [
+          {
+            "name": "photoId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/uploads": {
+      "get": {
+        "operationId": "TechnicianController_uploads_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    },
+    "/api/v1/technician/media/{mediaId}/reprocess": {
+      "post": {
+        "operationId": "TechnicianController_reprocessMedia_v1",
+        "parameters": [
+          {
+            "name": "mediaId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "Technician mobile application"
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {
+      "CreatePropertyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "addressLine1": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "object",
+            "default": "TX"
+          },
+          "postalCode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "addressLine1",
+          "city",
+          "state",
+          "postalCode"
+        ]
+      },
+      "UpdatePropertyDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "addressLine1": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterFloorPlanDto": {
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "application/pdf",
+              "image/jpeg",
+              "image/png"
+            ]
+          },
+          "sizeBytes": {
+            "type": "number",
+            "maximum": 20000000
+          }
+        },
+        "required": [
+          "fileName",
+          "mimeType",
+          "sizeBytes"
+        ]
+      },
+      "CreateAreaDto": {
+        "type": "object",
+        "properties": {
+          "floorName": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "inspectionOrder": {
+            "type": "number"
+          },
+          "isRequired": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "floorName",
+          "name",
+          "inspectionOrder",
+          "isRequired"
+        ]
+      },
+      "UpdateAreaDto": {
+        "type": "object",
+        "properties": {
+          "floorName": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "inspectionOrder": {
+            "type": "number"
+          },
+          "isRequired": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AreaOrderDto": {
+        "type": "object",
+        "properties": {
+          "areaIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "areaIds"
+        ]
+      },
+      "CreateInspectionDto": {
+        "type": "object",
+        "properties": {
+          "propertyId": {
+            "type": "string"
+          },
+          "technicianId": {
+            "type": "string"
+          },
+          "scheduledAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "propertyId",
+          "technicianId",
+          "scheduledAt"
+        ]
+      },
+      "ReasonDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "UploadSessionDto": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "fileName",
+          "mimeType"
+        ]
+      },
+      "RegisterMediaDto": {
+        "type": "object",
+        "properties": {
+          "providerUploadId": {
+            "type": "string"
+          },
+          "providerMediaId": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "durationSeconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "providerUploadId",
+          "providerMediaId",
+          "mimeType",
+          "durationSeconds"
+        ]
+      },
+      "UpdateFindingDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "WebhookDto": {
+        "type": "object",
+        "properties": {
+          "providerEventId": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerEventId",
+          "eventType"
+        ]
+      },
+      "UploadFloorPlanDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreatePropertyAreaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdatePropertyAreaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAreaMarkerDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RejectPropertyAreaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "DeletePropertyAreasDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ApprovePropertyAreasDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateAdminInspectionDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "FindingReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "FindingRejectDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateReportShareDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAdminInspectionDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "FinalizeInspectionDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "InspectionTbdDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "InspectionFollowUpDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "InspectionUnderReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "MergeInspectionAreasDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ComparisonReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "AreaComparisonOverrideDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ChargeRuleDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "PetCandidateReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateChargeDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ChargeReviewDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "AssignmentDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UnassignDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateTechnicianDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TestMailDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAiRoutingDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateAiProviderDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CacheInvalidateDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CacheNamespaceDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateRoleDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateRoleDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "CreateUserDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateUserDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "UpdateUserStatusDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "SetUserRolesDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ChangeRequiredPasswordDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "PropertywareSyncRequestDto": {
+        "type": "object",
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "portfolios",
+                "buildings",
+                "units",
+                "leases"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "initial",
+              "incremental"
+            ],
+            "default": "incremental"
+          }
+        },
+        "required": [
+          "entities"
+        ]
+      },
+      "MobilePushDeviceDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "RemoveMobilePushDeviceDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianCreateAreaDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "PetObservationDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianNoteDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianReasonDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianMediaUploadDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianAdditionalVideoDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TechnicianPhotoUploadDto": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  "tags": []
+}

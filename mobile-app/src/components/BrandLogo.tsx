@@ -21,7 +21,13 @@ export function BrandLogo({ compact = false }: { compact?: boolean }) {
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
-    container: { alignItems: 'center', alignSelf: 'flex-start', gap: spacing.xs },
+    container: {
+      maxWidth: '100%',
+      minWidth: 0,
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: spacing.xs,
+    },
     logoPlate: {
       width: 270,
       height: 78,
@@ -30,7 +36,7 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: brandColors.white,
       paddingHorizontal: spacing.sm,
     },
-    compactPlate: { width: 190, height: 56, borderRadius: 9 },
+    compactPlate: { width: 176, maxWidth: '100%', height: 52, borderRadius: 9 },
     logo: { width: '100%', height: '100%' },
     compactLogo: { height: 50 },
     inspection: {

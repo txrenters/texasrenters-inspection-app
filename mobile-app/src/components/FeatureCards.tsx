@@ -59,6 +59,7 @@ export function InspectionSummaryCard({
     : `${action} at ${property.address}`;
   return (
     <Pressable
+      testID="inspection-summary-card"
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       onPress={onPress}
@@ -70,14 +71,13 @@ export function InspectionSummaryCard({
     >
       {isOverdue ? (
         <Animated.View
-          pointerEvents="none"
           style={[
             styles.overdueRing,
             { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }) },
           ]}
         />
       ) : null}
-      <View style={styles.inspectionHeader}>
+      <View testID="inspection-summary-header" style={styles.inspectionHeader}>
         <View style={styles.summaryBadges}>
           <StatusBadge label={inspection.type} tone="info" />
           {unitName ? <StatusBadge label={unitName} tone="info" /> : null}
@@ -88,14 +88,15 @@ export function InspectionSummaryCard({
           ) : (
             <StatusBadge label={inspection.status} />
           )}
+          <StatusBadge
+            label={`${formatStatus(inspection.priority)} priority`}
+            tone={inspection.priority === 'HIGH' ? 'warning' : 'neutral'}
+          />
         </View>
-        <Text style={[styles.eyebrow, isOverdue && { color: colors.danger }]}>
-          {formatStatus(inspection.priority)} priority
-        </Text>
       </View>
-      <View style={styles.inspectionTop}>
+      <View testID="inspection-summary-property-row" style={styles.inspectionTop}>
         <PropertyVisual tone={property.imageTone} compact />
-        <View style={styles.flex}>
+        <View testID="inspection-summary-copy" style={styles.inspectionCopy}>
           <Text style={styles.cardTitle}>{property.address}</Text>
           <Text style={styles.cardBody}>{property.cityStateZip}</Text>
           <Text style={styles.date}>{formatDateTime(inspection.scheduledAt)}</Text>
@@ -106,12 +107,15 @@ export function InspectionSummaryCard({
         label={`${progress.completed} of ${progress.total} required rooms complete`}
       />
       <View style={styles.rowBetween}>
-        <View style={styles.statusRow}>
+        <View testID="inspection-summary-action-row" style={styles.statusRow}>
           <StatusBadge
             label={uploadAttention ? 'FAILED' : 'PENDING'}
             tone={uploadAttention ? 'danger' : 'warning'}
           />
-          <Text style={styles.actionText}>{action} →</Text>
+          <View style={styles.primaryAction}>
+            <Text style={styles.primaryActionText}>{action}</Text>
+            <Ionicons name="arrow-forward" size={16} color={colors.primary} />
+          </View>
         </View>
       </View>
     </Pressable>
@@ -130,6 +134,22 @@ export function RoomCard({
   isUpNext?: boolean;
 }) {
   const styles = useThemedStyles(createStyles);
+  const recordingLabel =
+    room.completionStatus === 'NOT_STARTED'
+      ? 'No recording'
+      : formatStatus(room.completionStatus);
+  const uploadLabel =
+    room.uploadStatus === 'COMPLETED'
+      ? 'Uploaded'
+      : room.uploadStatus === 'FAILED'
+        ? 'Upload failed'
+        : 'Queued';
+  const processingLabel =
+    room.processingStatus === 'READY_FOR_REVIEW'
+      ? 'AI ready'
+      : room.processingStatus === 'NOT_STARTED'
+        ? 'AI pending'
+        : 'AI processing';
   const nextAction =
     room.uploadStatus === 'FAILED'
       ? 'Retry upload'
@@ -151,7 +171,7 @@ export function RoomCard({
         pressed && styles.pressed,
       ]}
     >
-      <View style={styles.rowBetween}>
+      <View style={styles.roomHeader}>
         {sequenceNumber != null ? (
           <View style={[styles.sequenceBadge, isUpNext && styles.sequenceBadgeActive]}>
             <Text style={[styles.sequenceNumber, isUpNext && styles.sequenceNumberActive]}>
@@ -165,29 +185,30 @@ export function RoomCard({
             {room.floorName} · {room.isRequired ? 'Required' : 'Optional'}
           </Text>
         </View>
-        {isUpNext ? <StatusBadge label="UP NEXT" tone="info" /> : <Text style={styles.chevron}>›</Text>}
+        <View style={styles.roomTrailing}>
+          <StatusBadge
+            label={
+              isUpNext
+                ? 'UP NEXT'
+                : room.completionStatus === 'COMPLETED'
+                  ? 'COMPLETED'
+                  : room.completionStatus
+            }
+            tone={isUpNext ? 'info' : undefined}
+          />
+          <Ionicons name="chevron-forward" size={20} style={styles.chevronIcon} />
+        </View>
       </View>
-      <View style={styles.statusGrid}>
-        <StatusLine label="Baseline" value={room.baseline.condition} />
-        <StatusLine label="Recording" value={room.completionStatus} />
-        <StatusLine label="Upload" value={room.uploadStatus} />
-        <StatusLine label="AI review" value={room.processingStatus} />
+      <View style={styles.evidenceSummary}>
+        <Text style={styles.evidenceSummaryText}>
+          {recordingLabel} · {uploadLabel} · {processingLabel}
+        </Text>
       </View>
       <View style={styles.nextAction}>
-        <Text style={styles.nextActionLabel}>NEXT</Text>
+        <Text style={styles.nextActionLabel}>{isUpNext ? 'NEXT AREA' : 'ROOM ACTION'}</Text>
         <Text style={styles.actionText}>{nextAction}</Text>
       </View>
     </Pressable>
-  );
-}
-
-function StatusLine({ label, value }: { label: string; value: string }) {
-  const styles = useThemedStyles(createStyles);
-  return (
-    <View style={styles.statusLine}>
-      <Text style={styles.statusLabel}>{label}</Text>
-      <StatusBadge label={value} />
-    </View>
   );
 }
 
@@ -395,13 +416,19 @@ export function formatDuration(seconds: number) {
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
     summaryBadges: {
-      flex: 1,
+      minWidth: 0,
+      flexGrow: 1,
+      flexShrink: 1,
       flexDirection: 'row',
       flexWrap: 'wrap',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       gap: spacing.xs,
     },
     inspectionCard: {
+      width: '100%',
+      minWidth: 0,
+      alignSelf: 'stretch',
+      overflow: 'hidden',
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
@@ -414,6 +441,7 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.dangerSoft,
     },
     overdueRing: {
+      pointerEvents: 'none',
       position: 'absolute',
       top: 0,
       left: 0,
@@ -424,6 +452,9 @@ const createStyles = (colors: AppColors) =>
       borderColor: colors.danger,
     },
     alertBanner: {
+      width: '100%',
+      minWidth: 0,
+      alignSelf: 'stretch',
       flexDirection: 'row',
       alignItems: 'center',
       gap: spacing.sm,
@@ -440,22 +471,35 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.warningSoft,
       borderColor: colors.warning,
     },
-    alertBannerText: { ...typography.label, flex: 1 },
+    alertBannerText: { ...typography.label, flex: 1, minWidth: 0, flexShrink: 1 },
     inspectionHeader: {
+      width: '100%',
       minWidth: 0,
       flexDirection: 'row',
-      alignItems: 'center',
+      flexWrap: 'wrap',
+      alignItems: 'flex-start',
       justifyContent: 'space-between',
       gap: spacing.sm,
     },
-    inspectionTop: { flexDirection: 'row', gap: spacing.md },
+    inspectionTop: {
+      width: '100%',
+      minWidth: 0,
+      flexDirection: 'row',
+      flexWrap: 'nowrap',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+    },
     roomCard: {
+      width: '100%',
+      minWidth: 0,
+      alignSelf: 'stretch',
+      overflow: 'hidden',
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
       borderRadius: radius.lg,
       padding: spacing.md,
-      gap: spacing.md,
+      gap: spacing.sm,
     },
     upNextCard: { borderColor: colors.primary, borderWidth: 2 },
     sequenceBadge: {
@@ -471,6 +515,10 @@ const createStyles = (colors: AppColors) =>
     sequenceNumber: { ...typography.caption, color: colors.textSecondary, fontWeight: '800' },
     sequenceNumberActive: { color: colors.white },
     findingCard: {
+      width: '100%',
+      minWidth: 0,
+      alignSelf: 'stretch',
+      overflow: 'hidden',
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.border,
@@ -480,11 +528,35 @@ const createStyles = (colors: AppColors) =>
     },
     pressed: { opacity: 0.8, transform: [{ scale: 0.995 }] },
     flex: { flex: 1, minWidth: 0 },
+    inspectionCopy: {
+      minWidth: 0,
+      flexGrow: 1,
+      flexShrink: 1,
+      flexBasis: 0,
+    },
     rowBetween: {
+      width: '100%',
+      minWidth: 0,
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.sm,
+    },
+    roomHeader: {
+      width: '100%',
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+    },
+    roomTrailing: {
+      maxWidth: '42%',
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: spacing.xs,
     },
     eyebrow: {
       ...typography.caption,
@@ -493,28 +565,57 @@ const createStyles = (colors: AppColors) =>
       letterSpacing: 0.5,
       flexShrink: 1,
     },
-    cardTitle: { ...typography.heading, color: colors.textPrimary },
-    cardBody: { ...typography.body, color: colors.textSecondary },
+    cardTitle: { ...typography.heading, color: colors.textPrimary, flexShrink: 1 },
+    cardBody: { ...typography.body, color: colors.textSecondary, flexShrink: 1 },
     date: { ...typography.caption, color: colors.textPrimary, marginTop: spacing.xs },
     meta: { ...typography.caption, color: colors.textSecondary },
-    statusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
-    actionText: { ...typography.label, color: colors.primary },
-    chevron: { color: colors.primary, fontSize: 30, lineHeight: 32 },
-    statusGrid: {
-      gap: spacing.sm,
-      padding: spacing.sm,
-      backgroundColor: colors.background,
-      borderRadius: radius.md,
-    },
-    statusLine: {
-      minHeight: 30,
+    statusRow: {
+      flex: 1,
+      minWidth: 0,
       flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      flexWrap: 'wrap',
+    },
+    actionText: { ...typography.label, color: colors.primary, flexShrink: 1 },
+    primaryAction: {
+      minHeight: 36,
+      minWidth: 0,
+      flexGrow: 1,
+      flexShrink: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      gap: spacing.xs,
+    },
+    primaryActionText: {
+      ...typography.label,
+      color: colors.primary,
+      textAlign: 'right',
+      flexShrink: 1,
+    },
+    chevronIcon: { color: colors.primary },
+    evidenceSummary: {
+      minHeight: 34,
+      justifyContent: 'center',
+      borderRadius: radius.sm,
+      backgroundColor: colors.surfaceMuted,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    evidenceSummaryText: {
+      ...typography.caption,
+      color: colors.textSecondary,
+      flexShrink: 1,
+    },
+    nextAction: {
+      minWidth: 0,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.sm,
     },
-    statusLabel: { ...typography.caption, color: colors.textSecondary },
-    nextAction: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     nextActionLabel: { ...typography.caption, color: colors.textSecondary, fontWeight: '800' },
     errorText: {
       ...typography.caption,
@@ -546,7 +647,12 @@ const createStyles = (colors: AppColors) =>
     timelineDotText: { color: colors.white, fontSize: 11, fontWeight: '900' },
     timelineText: { ...typography.caption, color: colors.textSecondary },
     timelineTextActive: { color: colors.textPrimary, fontWeight: '700' },
-    confidence: { ...typography.caption, color: colors.textSecondary, textAlign: 'right' },
+    confidence: {
+      ...typography.caption,
+      color: colors.textSecondary,
+      textAlign: 'right',
+      flexShrink: 1,
+    },
     recommendation: {
       ...typography.caption,
       color: colors.info,

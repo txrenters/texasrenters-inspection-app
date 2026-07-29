@@ -1,6 +1,6 @@
 import type { PropsWithChildren } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import WelcomeScreen from '../app/(auth)/welcome';
@@ -47,7 +47,9 @@ describe('mock-first application', () => {
         screen.getByRole('button', { name: 'Continue as Inspection Technician' }),
       ).toBeOnTheScreen(),
     );
-    fireEvent.press(screen.getByRole('button', { name: 'Continue as Inspection Technician' }));
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Continue as Inspection Technician' }));
+    });
     await waitFor(() => expect(useDemoStore.getState().selectedUserId).toBe('demo-technician'));
     expect(router.replace).toHaveBeenCalledWith('/(app)/(tabs)/dashboard');
     expect(await repositories.auth.listDemoUsers()).toHaveLength(3);
@@ -124,7 +126,7 @@ describe('mock-first application', () => {
     const onPress = jest.fn();
     await render(<RoomCard room={rooms[8]!} onPress={onPress} />);
     expect(screen.getByText('Bedroom 1')).toBeOnTheScreen();
-    expect(screen.getByText('Documented')).toBeOnTheScreen();
+    expect(screen.getByText('No recording · Queued · AI pending')).toBeOnTheScreen();
     fireEvent.press(screen.getByRole('button', { name: 'Start recording for Bedroom 1' }));
     expect(onPress).toHaveBeenCalledTimes(1);
   });

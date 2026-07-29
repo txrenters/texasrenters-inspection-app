@@ -1,0 +1,96 @@
+# Temporary remote iOS beta environment.
+#
+# Not production. Brings up the NestJS backend and exposes it through an ngrok
+# HTTPS tunnel so technicians on cellular data can reach it, while Metro is
+# separately exposed through `expo start --tunnel`.
+#
+#   docker compose --env-file backend/.env.local -f compose.remote-beta.yml up -d --build
+#
+# Credentials come from the existing backend/.env.local — there is no separate
+# remote-beta secret file to keep in sync. That file is git-ignored and is
+# injected at runtime, never copied into an image layer.
+#
+# Supabase stays the hosted database, so no local Postgres service exists here.
+
+services:
+  backend:
+    build:
+      # The Dockerfile copies the workspace manifests, so the context is the
+      # repository root rather than ./backend.
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
+    env_file:
+      - ./backend/.env.local
+    environment:
+      APP_ENV: remote-beta
+      # Containers must listen on every interface; loopback would be unreachable
+      # from the Docker network and therefore from ngrok.
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
+      # NODE_ENV is deliberately NOT overridden. backend/.env.local sets
+      # `development`, and app.module.ts registers the mock video/transcription/
+      # AI providers only outside production — forcing production here would
+      # fail dependency injection for the currently configured providers.
+      # Swagger is still disabled, gated on APP_ENV=remote-beta in main.ts.
+      #
+      # Redis in backend/.env.local points at localhost, which inside a container
+      # is the container itself. The cache would fail to connect, so it is off
+      # for the duration of the beta.
+      CACHE_ENABLED: 'false'
+      # Safety net: this service is publicly reachable for the session, so the
+      # mock-auth bypass must never be active even if the file changes.
+      USE_MOCK_AUTH: 'false'
+    ports:
+      # Loopback only. ngrok is the single public entry point; binding 0.0.0.0
+      # here would additionally expose the backend to the local LAN.
+      - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Cloudflare Tunnel rather than ngrok.
+  #
+  # ngrok's free plan permits ONE simultaneous agent session, and Expo's Metro
+  # tunnel (`expo start --tunnel`) needs one of its own. Running both meant
+  # whichever started second failed — @expo/ngrok surfaces that as an unhelpful
+  # "Cannot read properties of undefined (reading 'body')". cloudflared has no
+  # such limit, so Metro keeps ngrok and the API comes through here.
+  #
+  # A quick tunnel needs no Cloudflare account and issues a random
+  # *.trycloudflare.com URL. Set CLOUDFLARE_TUNNEL_TOKEN in backend/.env.local to
+  # use a named tunnel with a stable hostname instead.
+  tunnel:
+    image: ngrok/ngrok:latest
+    # Pinned to the account's free ngrok dev domain, so the public URL is stable
+    # across restarts. That matters for two reasons: testers keep one QR code, and
+    # third-party tooling can be configured against a fixed base URL.
+    #
+    # Free accounts cannot rename the dev domain; NGROK_DOMAIN just pins the tunnel
+    # to the one already assigned. Verified earlier that this does NOT conflict
+    # with Expo's own Metro tunnel — both run simultaneously.
+    command:
+      - http
+      - http://backend:${PORT:-3000}
+      - --url=https://${NGROK_DOMAIN}
+      - --log
+      - stdout
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?NGROK_AUTHTOKEN is missing from backend/.env.local}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      # 4041, not 4040: Expo's own ngrok agent binds 4040 whenever a Metro tunnel
+      # is running, and the two collide. The agent inspection API exposes captured
+      # request and response bodies, so it stays on loopback either way.
+      - '127.0.0.1:4041:4040'
+    restart: unless-stopped

@@ -1,4 +1,4 @@
-import { Controller, Get, Inject } from '@nestjs/common';
+import { Controller, Get, Inject, Optional } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 
 import { VerticalSliceService } from '../vertical-slice/vertical-slice.service';
@@ -9,7 +9,12 @@ import { PrismaService } from '../database/prisma.service';
 @Controller('health')
 export class HealthController {
   constructor(
-    @Inject(VerticalSliceService) private readonly service: VerticalSliceService,
+    // The vertical-slice stack is registered only outside production (see
+    // app.module.ts). Injecting it unconditionally made the production build
+    // unbootable, so it is optional and its diagnostics are simply omitted.
+    @Optional()
+    @Inject(VerticalSliceService)
+    private readonly service: VerticalSliceService | undefined,
     @Inject(DatabaseHealthService) private readonly database: DatabaseHealthService,
     @Inject(PrismaService) private readonly prisma: PrismaService,
   ) {}
@@ -21,7 +26,7 @@ export class HealthController {
     return {
       status: database.ready ? 'ready' : 'not_ready',
       database,
-      providers: this.service.diagnostics(),
+      ...(this.service ? { providers: this.service.diagnostics() } : {}),
     };
   }
   @Get('database') databaseReadiness() {
