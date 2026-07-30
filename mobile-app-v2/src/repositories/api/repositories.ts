@@ -3,11 +3,12 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { getSupabaseClient } from '../../auth/supabase';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
-import type { LocalMedia, UploadItem } from '../../domain/models';
+import type { LocalMedia, PhotoCaptureType, UploadItem } from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
 import {
   ApiConnectionError,
   cachedApiRecord,
+  SessionExpiredError,
   storeApiRecord,
   updateApiRecord,
   updateExistingApiRecord,
@@ -16,6 +17,7 @@ import type {
   AddAreaInput,
   AuthRepository,
   CatalogRepository,
+  FindingKind,
   FindingRepository,
   FloorPlanRepository,
   InspectionRepository,
@@ -142,6 +144,19 @@ const findingSchema = z.object({
   reviewerNotes: z.string().optional(),
   updatedAt: z.string().optional(),
 });
+const roomPhotoSchema = z.object({
+  id: z.string(),
+  roomId: z.string(),
+  findingId: z.string().nullish(),
+  // Permissive: the server's PhotoCaptureType enum has grown over time, and a
+  // photo with an unrecognised type must still be counted as evidence rather
+  // than failing the whole request.
+  captureType: z.string().transform((value) => value as PhotoCaptureType),
+  sequenceNumber: z.number().nullish(),
+  label: z.string().nullish(),
+  capturedAt: z.string(),
+  contentPath: z.string(),
+});
 const uploadSchema = z.object({
   id: z.string(),
   mediaId: z.string(),
@@ -186,6 +201,8 @@ const reportSchema = z.object({
   generatedAt: z.string(),
   rooms: z.array(
     roomSchema.extend({
+      // Defaulted so a client running against an older backend still parses.
+      photoCount: z.number().default(0),
       summary: z.string().nullable(),
       findings: z.array(
         z.object({
@@ -213,6 +230,7 @@ const reportSchema = z.object({
     finishedRooms: z.number(),
     summaries: z.number(),
     defectFindings: z.number(),
+    photos: z.number().default(0),
     pendingReviewCount: z.number(),
   }),
 });
@@ -229,7 +247,7 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
   if (!environment.apiBaseUrl)
     throw new Error('The TexasRenters API URL is not configured for this app build.');
   const { data } = await getSupabaseClient().auth.getSession();
-  if (!data.session) throw new Error('Your session has expired. Sign in again.');
+  if (!data.session) throw new SessionExpiredError();
   const method = (options.method ?? 'GET').toUpperCase();
   const canFallback = method === 'GET' || method === 'HEAD';
   const baseUrls = environment.apiBaseUrls.length
@@ -271,6 +289,11 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
       const payload = (await response.json().catch(() => null)) as { message?: string } | null;
       if (hasFallback && [502, 503, 504].includes(response.status)) continue;
       const message = payload?.message ?? `TexasRenters API request failed (${response.status}).`;
+      // A token that expired server-side is the common case; the local
+      // getSession() check above only catches a session missing outright.
+      // 403 is deliberately excluded: that is a permissions problem, and
+      // signing out would hide it behind a misleading login prompt.
+      if (response.status === 401) throw new SessionExpiredError();
       if (response.status >= 500) throw new ApiConnectionError(message);
       throw new Error(message);
     }
@@ -419,11 +442,10 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
     await Promise.all([
       storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
-      updateExistingApiRecord(
-        `inspection-context:${id}`,
-        inspectionContextSchema,
-        (current) => ({ ...current, inspection }),
-      ),
+      updateExistingApiRecord(`inspection-context:${id}`, inspectionContextSchema, (current) => ({
+        ...current,
+        inspection,
+      })),
     ]);
     return inspection;
   }
@@ -433,11 +455,10 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
     await Promise.all([
       storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
-      updateExistingApiRecord(
-        `inspection-context:${id}`,
-        inspectionContextSchema,
-        (current) => ({ ...current, inspection }),
-      ),
+      updateExistingApiRecord(`inspection-context:${id}`, inspectionContextSchema, (current) => ({
+        ...current,
+        inspection,
+      })),
     ]);
     return inspection;
   }
@@ -540,7 +561,7 @@ export class ApiFloorPlanRepository implements FloorPlanRepository {
     );
     if (!plan) return null;
     const { data } = await getSupabaseClient().auth.getSession();
-    if (!data.session) throw new Error('Your session has expired. Sign in again.');
+    if (!data.session) throw new SessionExpiredError();
     return {
       ...plan,
       contentSources: environment.apiBaseUrls.map((baseUrl) => ({
@@ -619,6 +640,17 @@ export class ApiMediaRepository implements MediaRepository {
     };
     useDemoStore.getState().saveMedia(media);
     return media;
+  }
+  async photosForRoom(roomId: string) {
+    return z
+      .array(roomPhotoSchema)
+      .parse(await getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/photos`))
+      .map((photo) => ({
+        ...photo,
+        findingId: photo.findingId ?? null,
+        sequenceNumber: photo.sequenceNumber ?? null,
+        label: photo.label ?? null,
+      }));
   }
 }
 
@@ -744,7 +776,7 @@ export class ApiUploadRepository implements UploadRepository {
         return true;
       }
       const { data } = await getSupabaseClient().auth.getSession();
-      if (!data.session) throw new Error('Your session has expired. Sign in again.');
+      if (!data.session) throw new SessionExpiredError();
       const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
       if (!baseUrl)
         throw new Error('The TexasRenters API URL is not configured for this app build.');
@@ -766,9 +798,7 @@ export class ApiUploadRepository implements UploadRepository {
         parameters.capturePolicyVersion = media.captureSummary.policyVersion;
         parameters.coverageStatus = media.captureSummary.coverageStatus;
         parameters.sensorConfidence = media.captureSummary.sensorConfidence;
-        parameters.clockwiseRotationDegrees = String(
-          media.captureSummary.clockwiseRotationDegrees,
-        );
+        parameters.clockwiseRotationDegrees = String(media.captureSummary.clockwiseRotationDegrees);
         parameters.counterClockwiseRotationDegrees = String(
           media.captureSummary.counterClockwiseRotationDegrees,
         );
@@ -779,9 +809,7 @@ export class ApiUploadRepository implements UploadRepository {
         parameters.snapshotCount = String(media.captureSummary.snapshotCount);
         parameters.findingMarkerCount = String(media.captureSummary.findingMarkerCount);
         if (media.captureSummary.startHeadingDegrees !== undefined)
-          parameters.startHeadingDegrees = String(
-            media.captureSummary.startHeadingDegrees,
-          );
+          parameters.startHeadingDegrees = String(media.captureSummary.startHeadingDegrees);
         if (media.captureSummary.endHeadingDegrees !== undefined)
           parameters.endHeadingDegrees = String(media.captureSummary.endHeadingDegrees);
       }
@@ -902,19 +930,20 @@ function withLocalRoomState(room: z.infer<typeof roomSchema>) {
 }
 
 export class ApiFindingRepository implements FindingRepository {
-  async list(inspectionId?: string) {
+  async list(inspectionId?: string, kind: FindingKind = 'DEFECTS') {
     if (!inspectionId) return [];
     return z
       .object({ items: z.array(findingSchema) })
       .parse(
         await getJson(
-          `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/findings?page=1&pageSize=100`,
+          `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/findings?page=1&pageSize=100&kind=${kind}`,
         ),
       ).items;
   }
   async get(id: string, inspectionId?: string) {
     if (!inspectionId) return unavailable('Open findings from their assigned inspection.');
-    const findings = await this.list(inspectionId);
+    // ALL, because a summary opened by id is still a valid target.
+    const findings = await this.list(inspectionId, 'ALL');
     const finding = findings.find((item) => item.id === id);
     if (!finding) throw new Error('This finding is no longer available for this inspection.');
     return finding;

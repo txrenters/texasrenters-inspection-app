@@ -1,8 +1,5 @@
 import type { EntitySyncMetadata, InspectionType } from '@texasrenters/shared';
-import type {
-  GuidedCaptureSummary,
-  SnapshotCaptureSource,
-} from '../capture/guided-capture';
+import type { GuidedCaptureSummary, SnapshotCaptureSource } from '../capture/guided-capture';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
 export type InspectionStatus =
@@ -174,6 +171,8 @@ export interface InspectionReportFinding {
 }
 
 export interface InspectionReportRoom extends InspectionRoom {
+  /** Server-side photo count. Not the device's local snapshot store. */
+  photoCount: number;
   summary: string | null;
   findings: InspectionReportFinding[];
 }
@@ -188,6 +187,7 @@ export interface InspectionReport {
     finishedRooms: number;
     summaries: number;
     defectFindings: number;
+    photos: number;
     pendingReviewCount: number;
   };
 }
@@ -242,6 +242,19 @@ export type PhotoCaptureType =
   | 'FINDING_DETAIL'
   | 'SUPPORTING_EVIDENCE';
 export type PhotoUploadStatus = 'PENDING' | 'UPLOADING' | 'UPLOADED' | 'FAILED';
+
+/** A photo the server holds for an area — server truth, not a local draft. */
+export interface RoomPhoto {
+  id: string;
+  roomId: string;
+  findingId: string | null;
+  captureType: PhotoCaptureType;
+  sequenceNumber: number | null;
+  label: string | null;
+  capturedAt: string;
+  /** Authenticated path; not directly loadable without the bearer token. */
+  contentPath: string;
+}
 
 export interface RoomSnapshot {
   id: string;

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DemoRole, FindingStatus, InspectionStatus, LocalMedia } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
-import type { AddAreaInput } from '../repositories/contracts';
+import type { AddAreaInput, FindingKind } from '../repositories/contracts';
 import {
   beginIntent,
   cancelQueries,
@@ -33,11 +33,15 @@ export const queryKeys = {
   roomRoot: ['room'] as const,
   room: (id: string) => ['room', id] as const,
   media: (roomId: string) => ['media', roomId] as const,
+  roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
   property: (id: string) => ['property', id] as const,
   floorPlan: (id: string) => ['floorPlan', id] as const,
   uploads: ['uploads'] as const,
   findingsRoot: ['findings'] as const,
-  findings: (inspectionId?: string) => ['findings', inspectionId ?? 'all'] as const,
+  // `kind` is part of the key: defects and summaries come from the same
+  // endpoint, and sharing a key would let one overwrite the other's cache.
+  findings: (inspectionId?: string, kind: FindingKind = 'DEFECTS') =>
+    ['findings', inspectionId ?? 'all', kind] as const,
   finding: (id: string) => ['finding', id] as const,
   findingForInspection: (id: string, inspectionId?: string) =>
     ['finding', id, inspectionId ?? ''] as const,
@@ -137,7 +141,10 @@ export function useInspectionActions(id: string) {
       queryKeys.inspectionsRoot,
       queryKeys.dashboard,
     ]);
-  const action = (state: 'PROCESSING', request: () => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>) => ({
+  const action = (
+    state: 'PROCESSING',
+    request: () => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>,
+  ) => ({
     mutationFn: request,
     onMutate: async () => {
       await cancelQueries(client, [queryKeys.inspection(id), queryKeys.inspectionsRoot]);
@@ -145,7 +152,11 @@ export function useInspectionActions(id: string) {
       patchEntity(client, queryKeys.all, id, {}, { state, operationId: operation });
       return { operation };
     },
-    onSuccess: (inspection: Awaited<ReturnType<typeof repositories.inspections.start>>, _variables: void, context?: { operation: string }) => {
+    onSuccess: (
+      inspection: Awaited<ReturnType<typeof repositories.inspections.start>>,
+      _variables: void,
+      context?: { operation: string },
+    ) => {
       if (!context || !completeIntent(id, context.operation, inspection)) return;
       mergeEntity(client, queryKeys.all, inspection, context.operation);
       client.setQueryData(queryKeys.inspection(id), inspection);
@@ -172,6 +183,20 @@ export function useRoom(roomId: string) {
   return useQuery({
     queryKey: queryKeys.room(roomId),
     queryFn: () => repositories.inspections.room(roomId),
+    enabled: Boolean(roomId),
+  });
+}
+/**
+ * Photos the server holds for an area.
+ *
+ * Separate from the device snapshot store on purpose: that only knows about
+ * captures made on this handset, so after a reinstall it would report zero
+ * evidence for an area that is fully documented.
+ */
+export function useRoomPhotos(roomId: string) {
+  return useQuery({
+    queryKey: queryKeys.roomPhotos(roomId),
+    queryFn: () => repositories.media.photosForRoom(roomId),
     enabled: Boolean(roomId),
   });
 }
@@ -213,13 +238,32 @@ export function useUploads() {
     refetchIntervalInBackground: false,
   });
 }
+/** Defects only — the per-room narrative summary is a separate concern. */
 export function useFindings(inspectionId?: string, pollWhileProcessing = false) {
   return useQuery({
-    queryKey: queryKeys.findings(inspectionId),
-    queryFn: () => repositories.findings.list(inspectionId),
+    queryKey: queryKeys.findings(inspectionId, 'DEFECTS'),
+    queryFn: () => repositories.findings.list(inspectionId, 'DEFECTS'),
     refetchInterval: (query) => (pollWhileProcessing && !query.state.data?.length ? 5_000 : false),
     refetchIntervalInBackground: false,
   });
+}
+
+/**
+ * The AI's narrative summary for each room, keyed by room id.
+ *
+ * Stored server-side as a finding row, so it arrives through the same endpoint
+ * with `kind=SUMMARIES`. Polls while analysis is still running so the summary
+ * appears without the technician having to pull-to-refresh.
+ */
+export function useRoomSummaries(inspectionId?: string, pollWhileProcessing = false) {
+  const query = useQuery({
+    queryKey: queryKeys.findings(inspectionId, 'SUMMARIES'),
+    queryFn: () => repositories.findings.list(inspectionId, 'SUMMARIES'),
+    refetchInterval: (state) => (pollWhileProcessing && !state.state.data?.length ? 5_000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const byRoomId = new Map((query.data ?? []).map((finding) => [finding.roomId, finding]));
+  return { ...query, byRoomId };
 }
 export function useFinding(id: string, inspectionId?: string) {
   return useQuery({
@@ -237,7 +281,8 @@ export function useAddArea(inspectionId: string) {
       mergeEntity(client, queryKeys.all, room);
       client.setQueryData<Awaited<ReturnType<typeof repositories.inspections.rooms>>>(
         queryKeys.rooms(inspectionId),
-        (current = []) => current.some((item) => item.id === room.id) ? current : [...current, room],
+        (current = []) =>
+          current.some((item) => item.id === room.id) ? current : [...current, room],
       );
       void verifyQueries(client, [
         queryKeys.rooms(inspectionId),
@@ -262,10 +307,16 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
         await cancelQueries(client, [queryKeys.room(roomId), queryKeys.rooms(inspectionId)]);
         const previous = client.getQueryData(queryKeys.room(roomId));
         const operation = beginIntent(roomId, 'UPDATING', { note });
-        patchEntity(client, queryKeys.all, roomId, { note }, {
-          state: 'UPDATING',
-          operationId: operation,
-        });
+        patchEntity(
+          client,
+          queryKeys.all,
+          roomId,
+          { note },
+          {
+            state: 'UPDATING',
+            operationId: operation,
+          },
+        );
         return { operation, previous };
       },
       onSuccess: (room, _note, context) => {
@@ -309,14 +360,13 @@ export function useSaveRecording() {
       return { media, upload };
     },
     onSuccess: ({ media, upload }) => {
-      client.setQueryData<LocalMedia[]>(
-        queryKeys.media(media.roomId),
-        (current = []) =>
-          current.some((item) => item.id === media.id) ? current : [media, ...current],
+      client.setQueryData<LocalMedia[]>(queryKeys.media(media.roomId), (current = []) =>
+        current.some((item) => item.id === media.id) ? current : [media, ...current],
       );
       client.setQueryData<Awaited<ReturnType<typeof repositories.uploads.list>>>(
         queryKeys.uploads,
-        (current = []) => current.some((item) => item.id === upload.id) ? current : [upload, ...current],
+        (current = []) =>
+          current.some((item) => item.id === upload.id) ? current : [upload, ...current],
       );
       void verifyQueries(client, [
         queryKeys.room(media.roomId),
@@ -362,10 +412,7 @@ export function useUploadActions() {
 export function useFindingActions(inspectionId: string, findingId: string) {
   const client = useQueryClient();
   const refresh = () =>
-    verifyQueries(client, [
-      queryKeys.finding(findingId),
-      queryKeys.findings(inspectionId),
-    ]);
+    verifyQueries(client, [queryKeys.finding(findingId), queryKeys.findings(inspectionId)]);
   const authoritative = (finding: Awaited<ReturnType<typeof repositories.findings.approve>>) => {
     mergeEntity(client, queryKeys.all, finding);
     void refresh();

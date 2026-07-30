@@ -107,9 +107,7 @@ export function mergeEntity<T extends { id: string }>(
 ) {
   const id = existingOperationId ?? beginIntent(entity.id, 'UPDATING', entity);
   if (!completeIntent(entity.id, id, entity)) return false;
-  client.setQueriesData({ queryKey }, (current) =>
-    transform(current, entity.id, () => entity),
-  );
+  client.setQueriesData({ queryKey }, (current) => transform(current, entity.id, () => entity));
   return true;
 }
 

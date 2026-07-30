@@ -14,6 +14,7 @@ import type {
   LeaseSummary,
   PortfolioSummary,
   Property,
+  RoomPhoto,
   UnitSummary,
   UploadItem,
 } from '../domain/models';
@@ -72,6 +73,15 @@ export interface FloorPlanRepository {
 export interface MediaRepository {
   listForRoom(roomId: string): Promise<LocalMedia[]>;
   save(input: Omit<LocalMedia, 'id' | 'recordedAt'>): Promise<LocalMedia>;
+  /**
+   * Photos the server holds for this area.
+   *
+   * Distinct from the device's local snapshot store, which only knows about
+   * captures made on this handset. A technician who reinstalled, switched
+   * phones, or cleared the local cache still has their evidence — counting the
+   * local store would tell them it was gone.
+   */
+  photosForRoom(roomId: string): Promise<RoomPhoto[]>;
 }
 
 export interface UploadRepository {
@@ -85,8 +95,15 @@ export interface UploadRepository {
   tick(): Promise<boolean>;
 }
 
+/**
+ * The API stores the per-room AI summary as a finding row of its own
+ * (`findingType: NO_CHANGE`, title "Room condition summary"), so an unfiltered
+ * list mixes narrative summaries in with actual defects. Always ask for one.
+ */
+export type FindingKind = 'ALL' | 'DEFECTS' | 'SUMMARIES';
+
 export interface FindingRepository {
-  list(inspectionId?: string): Promise<Finding[]>;
+  list(inspectionId?: string, kind?: FindingKind): Promise<Finding[]>;
   get(id: string, inspectionId?: string): Promise<Finding>;
   approve(id: string): Promise<Finding>;
   edit(id: string, observation: string, notes: string): Promise<Finding>;

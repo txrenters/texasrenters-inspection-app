@@ -1,6 +1,7 @@
 import type {
   AddAreaInput,
   AuthRepository,
+  FindingKind,
   FindingRepository,
   FloorPlanRepository,
   InspectionRepository,
@@ -10,6 +11,7 @@ import type {
 } from '../contracts';
 import type { DemoRole, DemoUser, Finding, InspectionRoom, LocalMedia } from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
+import { isRoomSummary } from '../../utils/ai-review';
 import { demoUsers, inspections, properties, rooms } from './data';
 
 async function mockDelay() {
@@ -129,13 +131,16 @@ export class MockInspectionRepository implements InspectionRepository {
     const allFindings = Object.values(useDemoStore.getState().findings).filter(
       (finding) => finding.inspectionId === id,
     );
+    const snapshots = useDemoStore.getState().snapshots ?? [];
     const reportRooms = context.rooms.map((room) => {
       const roomFindings = allFindings.filter((finding) => finding.roomId === room.id);
       return {
         ...room,
+        // Demo mode has no server, so local snapshots stand in for the count.
+        photoCount: snapshots.filter((snapshot) => snapshot.roomId === room.id).length,
         summary:
-          roomFindings.find((finding) => finding.title === 'Room condition summary')
-            ?.observation ?? null,
+          roomFindings.find((finding) => finding.title === 'Room condition summary')?.observation ??
+          null,
         findings: roomFindings
           .filter((finding) => finding.title !== 'Room condition summary')
           .map((finding) => ({
@@ -165,6 +170,7 @@ export class MockInspectionRepository implements InspectionRepository {
         finishedRooms: finished.length,
         summaries: reportRooms.filter((room) => room.summary).length,
         defectFindings: reportRooms.reduce((sum, room) => sum + room.findings.length, 0),
+        photos: reportRooms.reduce((sum, room) => sum + room.photoCount, 0),
         pendingReviewCount: context.pendingReviewCount,
       },
     };
@@ -274,6 +280,22 @@ export class MockMediaRepository implements MediaRepository {
     useDemoStore.getState().saveMedia(media);
     return media;
   }
+  async photosForRoom(roomId: string) {
+    await mockDelay();
+    // Demo mode has no server, so local snapshots stand in for server photos.
+    return (useDemoStore.getState().snapshots ?? [])
+      .filter((snapshot) => snapshot.roomId === roomId)
+      .map((snapshot) => ({
+        id: snapshot.id,
+        roomId: snapshot.roomId,
+        findingId: null,
+        captureType: snapshot.captureType ?? ('AREA_OVERVIEW' as const),
+        sequenceNumber: snapshot.sequenceNumber ?? null,
+        label: null,
+        capturedAt: snapshot.capturedAt ?? new Date().toISOString(),
+        contentPath: snapshot.uri,
+      }));
+  }
 }
 
 export class MockUploadRepository implements UploadRepository {
@@ -347,11 +369,18 @@ export class MockUploadRepository implements UploadRepository {
 }
 
 export class MockFindingRepository implements FindingRepository {
-  async list(inspectionId?: string) {
+  async list(inspectionId?: string, kind: FindingKind = 'DEFECTS') {
     await mockDelay();
     ensureMockAvailable();
     const findings = Object.values(useDemoStore.getState().findings);
-    return inspectionId ? findings.filter((item) => item.inspectionId === inspectionId) : findings;
+    const scoped = inspectionId
+      ? findings.filter((item) => item.inspectionId === inspectionId)
+      : findings;
+    // Mirrors the server's `kind` filter so demo mode cannot drift from the
+    // real API and hide a mixed-in summary bug.
+    if (kind === 'SUMMARIES') return scoped.filter(isRoomSummary);
+    if (kind === 'DEFECTS') return scoped.filter((item) => !isRoomSummary(item));
+    return scoped;
   }
   async get(id: string) {
     await mockDelay();
