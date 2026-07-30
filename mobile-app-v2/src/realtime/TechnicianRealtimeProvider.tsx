@@ -12,6 +12,7 @@ import { environment, isDemoMode, resolveEasProjectId } from '../config/environm
 import { queryKeys } from '../features/queries';
 import { verifyQueries } from '../features/state-consistency';
 import { requestJson } from '../repositories/api/repositories';
+import { areNotificationsEnabled } from '../stores/preferences.store';
 import { loadNotifications } from './notifications';
 import { pushDeviceStorage } from './push-device-storage';
 
@@ -117,6 +118,9 @@ async function configureNotifications(Notifications: NotificationsModule | null)
 
 async function registerRemotePushDevice() {
   if (!['ios', 'android'].includes(Platform.OS)) return undefined;
+  // Registering a push token while the preference is off would let the server
+  // keep pushing to a device whose owner opted out.
+  if (!areNotificationsEnabled()) return undefined;
   try {
     const Notifications = await loadNotifications();
     if (!Notifications) return undefined;
@@ -141,6 +145,7 @@ async function registerRemotePushDevice() {
 }
 
 async function notifyNewAssignment(inspectionId: string) {
+  if (!areNotificationsEnabled()) return;
   const Notifications = await loadNotifications();
   if (!Notifications) return;
   const permission = await Notifications.getPermissionsAsync();

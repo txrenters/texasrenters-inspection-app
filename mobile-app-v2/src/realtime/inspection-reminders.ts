@@ -1,4 +1,5 @@
 import type { Inspection } from '../domain/models';
+import { areNotificationsEnabled } from '../stores/preferences.store';
 import { collectInspectionAlerts, UPCOMING_REMINDER_LEAD_MS } from '../utils/inspection-alerts';
 import { loadNotifications } from './notifications';
 
@@ -31,6 +32,15 @@ export async function syncInspectionReminders(inspections: Inspection[]): Promis
       .filter((entry) => entry.content.data?.kind === REMINDER_TAG)
       .map((entry) => Notifications.cancelScheduledNotificationAsync(entry.identifier)),
   );
+
+  // Turning the preference off must revoke reminders already on the device, not
+  // merely stop scheduling new ones — otherwise yesterday's reminders keep
+  // firing and the setting looks broken. The cancellation above has run by this
+  // point, so returning here leaves the device clean.
+  if (!areNotificationsEnabled()) {
+    await Notifications.setBadgeCountAsync(0).catch(() => undefined);
+    return;
+  }
 
   const now = Date.now();
   for (const inspection of inspections) {

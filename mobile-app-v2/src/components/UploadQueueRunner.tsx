@@ -4,7 +4,10 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { queryKeys } from '../features/queries';
 import { verifyQueries } from '../features/state-consistency';
+import { evaluateUploadGate } from '../lib/connectivity';
 import { repositories } from '../repositories';
+import { useNetworkStore } from '../stores/network.store';
+import { usePreferencesStore } from '../stores/preferences.store';
 
 const FOREGROUND_QUEUE_INTERVAL_MS = 4_000;
 
@@ -12,23 +15,31 @@ const FOREGROUND_QUEUE_INTERVAL_MS = 4_000;
 export function UploadQueueRunner() {
   const client = useQueryClient();
   const running = useRef(false);
+  const autoUpload = usePreferencesStore((state) => state.autoUpload);
+  const wifiOnlyUploads = usePreferencesStore((state) => state.wifiOnlyUploads);
+  // Select primitives, never an object literal: zustand v5 compares with
+  // Object.is, so a fresh object each render breaks the snapshot cache and
+  // React loops on "getSnapshot should be cached".
+  const isOnline = useNetworkStore((state) => state.isOnline);
+  const isMetered = useNetworkStore((state) => state.isMetered);
+  const allowed = evaluateUploadGate({
+    autoUpload,
+    wifiOnlyUploads,
+    connectivity: { isOnline, isMetered, type: '' },
+  }).allowed;
 
   const flush = useCallback(async () => {
-    if (running.current || AppState.currentState !== 'active') return;
+    if (!allowed || running.current || AppState.currentState !== 'active') return;
     running.current = true;
     try {
       const changed = await repositories.uploads.tick();
       if (!changed) return;
       client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
-      await verifyQueries(client, [
-        queryKeys.roomsRoot,
-        queryKeys.roomRoot,
-        queryKeys.dashboard,
-      ]);
+      await verifyQueries(client, [queryKeys.roomsRoot, queryKeys.roomRoot, queryKeys.dashboard]);
     } finally {
       running.current = false;
     }
-  }, [client]);
+  }, [allowed, client]);
 
   useEffect(() => {
     void flush();

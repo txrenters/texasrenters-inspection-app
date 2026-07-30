@@ -5,6 +5,7 @@ import { getSupabaseClient } from '../auth/supabase';
 import { environment } from '../config/environment';
 import type { PhotoCaptureType } from '../domain/models';
 import type { SnapshotCaptureSource } from '../capture/guided-capture';
+import { SessionExpiredError } from '../storage/offline-record-cache';
 
 export interface UploadRoomPhotoInput {
   roomId: string;
@@ -28,7 +29,7 @@ export interface UploadRoomPhotoInput {
  */
 export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id: string }> {
   const { data } = await getSupabaseClient().auth.getSession();
-  if (!data.session) throw new Error('Your session has expired. Sign in again.');
+  if (!data.session) throw new SessionExpiredError();
   const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
   if (!baseUrl) throw new Error('The TexasRenters API URL is not configured for this app build.');
 
@@ -45,9 +46,7 @@ export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id
         captureType: input.captureType,
         ...(input.width ? { width: String(Math.round(input.width)) } : {}),
         ...(input.height ? { height: String(Math.round(input.height)) } : {}),
-        ...(input.recordingSessionId
-          ? { recordingSessionId: input.recordingSessionId }
-          : {}),
+        ...(input.recordingSessionId ? { recordingSessionId: input.recordingSessionId } : {}),
         ...(input.videoTimestampMs !== undefined
           ? { videoTimestampMs: String(Math.max(0, Math.round(input.videoTimestampMs))) }
           : {}),

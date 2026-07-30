@@ -1,4 +1,5 @@
-import { cssInterop, useColorScheme } from 'nativewind';
+import { router } from 'expo-router';
+import { useColorScheme } from 'nativewind';
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -7,6 +8,7 @@ import {
   PauseIcon,
   PlayIcon,
   RefreshCwIcon,
+  SettingsIcon,
   Trash2Icon,
   UploadCloudIcon,
   WifiIcon,
@@ -17,9 +19,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { UploadItem } from '@/src/domain/models';
 import { useUploadActions, useUploads } from '@/src/features/queries';
+import { evaluateUploadGate } from '@/src/lib/connectivity';
 import { useNetworkStore } from '@/src/stores/network.store';
+import { usePreferencesStore } from '@/src/stores/preferences.store';
+import { registerIcons } from '@/src/lib/icons';
 
-for (const icon of [
+registerIcons(
   AlertTriangleIcon,
   CheckCircle2Icon,
   ClockIcon,
@@ -27,13 +32,12 @@ for (const icon of [
   PauseIcon,
   PlayIcon,
   RefreshCwIcon,
+  SettingsIcon,
   Trash2Icon,
   UploadCloudIcon,
   WifiIcon,
   WifiOffIcon,
-]) {
-  cssInterop(icon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-}
+);
 
 const STATUS_CONFIG: Record<
   string,
@@ -130,9 +134,13 @@ function UploadRow({
 
       {!complete ? (
         <View className="mt-3 flex-row justify-end gap-2">
+          {/* Every label names the room. With several uploads queued, "Retry
+              Upload" alone does not say which one is about to be acted on. */}
           {item.status === 'FAILED' ? (
             <Pressable
-              className="flex-row items-center justify-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 active:scale-[0.98]"
+              accessibilityLabel={`Retry upload for ${item.roomName}`}
+              accessibilityRole="button"
+              className="min-h-11 flex-row items-center justify-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 active:scale-[0.98]"
               onPress={() => actions.retry.mutate(item.id)}
             >
               <RefreshCwIcon size={14} className="text-primary" />
@@ -140,7 +148,9 @@ function UploadRow({
             </Pressable>
           ) : item.status === 'PAUSED' ? (
             <Pressable
-              className="flex-row items-center justify-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 active:scale-[0.98]"
+              accessibilityLabel={`Resume upload for ${item.roomName}`}
+              accessibilityRole="button"
+              className="min-h-11 flex-row items-center justify-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 active:scale-[0.98]"
               onPress={() => actions.resume.mutate(item.id)}
             >
               <PlayIcon size={14} className="text-primary" />
@@ -148,7 +158,9 @@ function UploadRow({
             </Pressable>
           ) : (
             <Pressable
-              className="flex-row items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 active:scale-[0.98]"
+              accessibilityLabel={`Pause upload for ${item.roomName}`}
+              accessibilityRole="button"
+              className="min-h-11 flex-row items-center justify-center gap-1.5 rounded-lg bg-muted px-3 py-2 active:scale-[0.98]"
               onPress={() => actions.pause.mutate(item.id)}
             >
               <PauseIcon size={14} className="text-muted-foreground" />
@@ -156,7 +168,13 @@ function UploadRow({
             </Pressable>
           )}
           <Pressable
-            className="rounded-lg bg-destructive/10 p-2 active:scale-[0.98]"
+            // Destructive and icon-only: the hint spells out the consequence,
+            // because "Remove" next to a trash can is ambiguous about whether
+            // the recording itself is being discarded.
+            accessibilityHint="Removes this item from the upload queue"
+            accessibilityLabel={`Remove ${item.roomName} from the upload queue`}
+            accessibilityRole="button"
+            className="min-h-11 min-w-11 items-center justify-center rounded-lg bg-destructive/10 p-2 active:scale-[0.98]"
             onPress={() => actions.remove.mutate(item.id)}
           >
             <Trash2Icon size={14} className="text-destructive" />
@@ -173,6 +191,14 @@ export default function UploadsScreen() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const isOnline = useNetworkStore((state) => state.isOnline);
+  const isMetered = useNetworkStore((state) => state.isMetered);
+  const autoUpload = usePreferencesStore((state) => state.autoUpload);
+  const wifiOnlyUploads = usePreferencesStore((state) => state.wifiOnlyUploads);
+  const gate = evaluateUploadGate({
+    autoUpload,
+    wifiOnlyUploads,
+    connectivity: { isOnline, isMetered, type: '' },
+  });
   const sorted = [...(uploads.data ?? [])].sort((left, right) => {
     if (left.status === 'COMPLETED' && right.status !== 'COMPLETED') return 1;
     if (right.status === 'COMPLETED' && left.status !== 'COMPLETED') return -1;
@@ -243,13 +269,21 @@ export default function UploadsScreen() {
               </View>
             </View>
 
-            <View className="mx-5 mt-4 flex-row items-center gap-3 rounded-2xl bg-card p-4">
+            {/* Reports the same gate the queue runner obeys. A stalled queue
+                must never look identical to a working one — technicians are
+                told to confirm "pending: 0" before they leave a property. */}
+            <View
+              accessibilityRole={gate.allowed ? undefined : 'alert'}
+              className={`mx-5 mt-4 flex-row items-center gap-3 rounded-2xl p-4 ${
+                gate.allowed ? 'bg-card' : 'border border-chart-4/25 bg-chart-4/10'
+              }`}
+            >
               <View
                 className={`h-10 w-10 items-center justify-center rounded-full ${
-                  isOnline ? 'bg-chart-3/15' : 'bg-chart-4/15'
+                  gate.allowed ? 'bg-chart-3/15' : 'bg-chart-4/15'
                 }`}
               >
-                {isOnline ? (
+                {gate.allowed ? (
                   <WifiIcon size={18} className="text-chart-3" />
                 ) : (
                   <WifiOffIcon size={18} className="text-chart-4" />
@@ -257,21 +291,39 @@ export default function UploadsScreen() {
               </View>
               <View className="min-w-0 flex-1">
                 <Text className="text-sm font-semibold text-foreground">
-                  {isOnline ? 'Connected' : 'Offline — evidence is safe'}
+                  {gate.allowed
+                    ? isMetered
+                      ? 'Connected · mobile data'
+                      : 'Connected'
+                    : pendingCount > 0
+                      ? `${pendingCount} upload${pendingCount === 1 ? '' : 's'} paused`
+                      : 'Uploads paused'}
                 </Text>
-                <Text className="mt-0.5 text-xs text-muted-foreground">
-                  {isOnline
-                    ? 'Background uploads are active. Evidence syncs automatically.'
-                    : 'Queued evidence resumes automatically when connectivity returns.'}
+                <Text className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  {gate.allowed
+                    ? 'Evidence uploads automatically while the app is open.'
+                    : gate.reason}
                 </Text>
               </View>
+              {gate.allowed ? null : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Open upload settings"
+                  className="h-9 w-9 items-center justify-center rounded-full bg-chart-4/15 active:scale-95"
+                  onPress={() => router.push('/(app)/(tabs)/settings')}
+                >
+                  <SettingsIcon size={16} className="text-chart-4" />
+                </Pressable>
+              )}
             </View>
 
             <View className="mb-3 mt-5 flex-row items-center justify-between px-5">
               <Text className="text-lg font-semibold text-foreground">Upload Queue</Text>
               {sorted.some((item) => item.status === 'FAILED') ? (
                 <Pressable
-                  className="flex-row items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 active:scale-[0.97]"
+                  accessibilityLabel="Retry all failed uploads"
+                  accessibilityRole="button"
+                  className="min-h-11 flex-row items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 active:scale-[0.97]"
                   onPress={() =>
                     sorted
                       .filter((item) => item.status === 'FAILED')
