@@ -3,6 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { DemoRole, FindingStatus, InspectionStatus, LocalMedia } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
+// Do not import the device store here. This module is inside the `repositories`
+// import graph, and adding `useDemoStore` left the binding undefined at
+// evaluation time — the app crashed on launch with
+// `Property 'useDemoStore' doesn't exist`. Screens that need live device state
+// import it themselves; see `useLiveUploadProgress`.
 import type { AddAreaInput, FindingKind } from '../repositories/contracts';
 import {
   beginIntent,
@@ -221,12 +226,21 @@ export function useFloorPlan(propertyId: string) {
     enabled: Boolean(propertyId),
   });
 }
+/**
+ * The uploads list as the server and the durable queue last reported it.
+ *
+ * Deliberately does **not** merge in live transfer progress. This module sits
+ * inside the `repositories` import graph, and importing the device store here
+ * left the binding undefined at evaluation time — the whole app crashed with
+ * `Property 'useDemoStore' doesn't exist`. Screens that need live progress
+ * merge it themselves; see `useLiveUploadProgress`.
+ */
 export function useUploads() {
   return useQuery({
     queryKey: queryKeys.uploads,
     queryFn: () => repositories.uploads.list(),
-    refetchInterval: (query) => {
-      const uploads = query.state.data;
+    refetchInterval: (state) => {
+      const uploads = state.state.data;
       return uploads?.some(
         (item) =>
           item.status === 'COMPLETED' &&

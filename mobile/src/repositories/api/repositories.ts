@@ -841,6 +841,12 @@ export class ApiUploadRepository implements UploadRepository {
           mimeType: 'video/mp4',
           parameters,
           headers: { authorization: `Bearer ${data.session.access_token}` },
+          // Stated explicitly rather than relying on the default: an in-flight
+          // transfer must survive the technician locking the phone or switching
+          // apps mid-room. The native session keeps going and retries through
+          // connection drops; the promise settles when the app is next
+          // foregrounded. Android ignores this and is always background.
+          sessionType: LegacyFileSystem.FileSystemSessionType.BACKGROUND,
         },
         (progress) => {
           if (progress.totalBytesExpectedToSend > 0)
