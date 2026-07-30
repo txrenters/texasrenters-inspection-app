@@ -1,11 +1,12 @@
 import { Tabs } from 'expo-router';
 import { HomeIcon, ClipboardListIcon, UploadCloudIcon, CogIcon } from 'lucide-react-native';
-import { cssInterop, useColorScheme } from 'nativewind';
+import { useColorScheme } from 'nativewind';
+import { registerIcons } from '@/src/lib/icons';
 
-cssInterop(HomeIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-cssInterop(ClipboardListIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-cssInterop(UploadCloudIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-cssInterop(CogIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
+registerIcons(HomeIcon);
+registerIcons(ClipboardListIcon);
+registerIcons(UploadCloudIcon);
+registerIcons(CogIcon);
 
 export default function TabsLayout() {
   const { colorScheme } = useColorScheme();
@@ -43,7 +44,10 @@ export default function TabsLayout() {
         options={{
           title: 'Inspections',
           tabBarIcon: ({ focused }) => (
-            <ClipboardListIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={22} />
+            <ClipboardListIcon
+              className={focused ? 'text-primary' : 'text-muted-foreground'}
+              size={22}
+            />
           ),
         }}
       />
@@ -52,7 +56,10 @@ export default function TabsLayout() {
         options={{
           title: 'Uploads',
           tabBarIcon: ({ focused }) => (
-            <UploadCloudIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={22} />
+            <UploadCloudIcon
+              className={focused ? 'text-primary' : 'text-muted-foreground'}
+              size={22}
+            />
           ),
         }}
       />

@@ -12,14 +12,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import { EyeIcon, EyeOffIcon, LogInIcon, ShieldCheckIcon } from 'lucide-react-native';
-import { cssInterop } from 'nativewind';
 
 import { useApiLogin } from '@/src/features/queries';
+import { registerIcons } from '@/src/lib/icons';
 
-cssInterop(LogInIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-cssInterop(ShieldCheckIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-cssInterop(EyeIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-cssInterop(EyeOffIcon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
+registerIcons(LogInIcon);
+registerIcons(ShieldCheckIcon);
+registerIcons(EyeIcon);
+registerIcons(EyeOffIcon);
 
 export default function LoginScreen() {
   const appName = Constants.expoConfig?.name ?? 'TexasRenters Inspect';
@@ -49,7 +49,10 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} className="flex-1">
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        className="flex-1"
+      >
         <ScrollView
           className="flex-1"
           contentContainerStyle={{
@@ -65,19 +68,34 @@ export default function LoginScreen() {
               <ShieldCheckIcon size={36} className="text-primary-foreground" />
             </View>
             <Text className="text-2xl font-bold tracking-tight text-foreground">{appName}</Text>
-            <Text className="mt-1 text-sm text-muted-foreground">Technician inspection workspace</Text>
+            <Text className="mt-1 text-sm text-muted-foreground">
+              Technician inspection workspace
+            </Text>
           </View>
 
+          {/* Assertive: a failed sign-in must interrupt, or a screen-reader
+              user re-submits the same credentials without knowing why. */}
           {error ? (
-            <View className="mb-4 rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3">
+            <View
+              accessibilityLiveRegion="assertive"
+              accessibilityRole="alert"
+              className="mb-4 rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3"
+            >
               <Text className="text-sm text-destructive">{error}</Text>
             </View>
           ) : null}
 
           <View className="mb-4 gap-2">
-            <Text className="ml-1 text-sm font-semibold text-foreground">Work email</Text>
+            <Text
+              nativeID="login-email-label"
+              className="ml-1 text-sm font-semibold text-foreground"
+            >
+              Work email
+            </Text>
             <TextInput
-              className="rounded-xl border border-border bg-card px-4 py-3.5 text-base text-foreground"
+              accessibilityLabel="Work email"
+              accessibilityLabelledBy="login-email-label"
+              className="min-h-12 rounded-xl border border-border bg-card px-4 py-3.5 text-base text-foreground"
               placeholder="you@texasrenters.com"
               placeholderTextColor="#9a9484"
               value={email}
@@ -90,10 +108,17 @@ export default function LoginScreen() {
           </View>
 
           <View className="mb-6 gap-2">
-            <Text className="ml-1 text-sm font-semibold text-foreground">Password</Text>
+            <Text
+              nativeID="login-password-label"
+              className="ml-1 text-sm font-semibold text-foreground"
+            >
+              Password
+            </Text>
             <View className="flex-row items-center rounded-xl border border-border bg-card">
               <TextInput
-                className="flex-1 px-4 py-3.5 text-base text-foreground"
+                accessibilityLabel="Password"
+                accessibilityLabelledBy="login-password-label"
+                className="min-h-12 flex-1 px-4 py-3.5 text-base text-foreground"
                 placeholder="Enter your password"
                 placeholderTextColor="#9a9484"
                 value={password}
@@ -101,7 +126,13 @@ export default function LoginScreen() {
                 secureTextEntry={!showPassword}
                 autoComplete="password"
               />
-              <Pressable className="px-3 py-3" onPress={() => setShowPassword((value) => !value)}>
+              <Pressable
+                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: showPassword }}
+                className="min-h-11 min-w-11 items-center justify-center px-3 py-3"
+                onPress={() => setShowPassword((value) => !value)}
+              >
                 {showPassword ? (
                   <EyeOffIcon size={20} className="text-muted-foreground" />
                 ) : (
@@ -112,7 +143,10 @@ export default function LoginScreen() {
           </View>
 
           <Pressable
-            className={`items-center rounded-xl bg-primary py-3.5 active:scale-[0.98] ${login.isPending ? 'opacity-70' : ''}`}
+            accessibilityLabel={login.isPending ? 'Signing in' : 'Sign in'}
+            accessibilityRole="button"
+            accessibilityState={{ busy: login.isPending, disabled: login.isPending }}
+            className={`min-h-12 items-center rounded-xl bg-primary py-3.5 active:scale-[0.98] ${login.isPending ? 'opacity-70' : ''}`}
             onPress={() => void handleLogin()}
             disabled={login.isPending}
           >

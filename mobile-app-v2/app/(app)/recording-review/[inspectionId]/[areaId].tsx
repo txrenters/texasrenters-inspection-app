@@ -37,7 +37,9 @@ export default function RecordingReviewScreen() {
           Return to the room and record a video first.
         </Text>
         <Pressable
-          className="mt-5 rounded-xl bg-primary px-6 py-3"
+          accessibilityLabel="Back to room"
+          accessibilityRole="button"
+          className="mt-5 min-h-12 justify-center rounded-xl bg-primary px-6 py-3"
           onPress={() => router.replace(`/areas/${areaId}`)}
         >
           <Text className="font-bold text-primary-foreground">Back to room</Text>
@@ -94,8 +96,13 @@ export default function RecordingReviewScreen() {
           style={{ height: 300, marginTop: 20, borderRadius: 18, backgroundColor: '#000' }}
         />
         <View className="mt-5 rounded-2xl bg-card p-5">
-          <Text className="font-semibold text-foreground">Technician note</Text>
+          <Text nativeID="recording-note-label" className="font-semibold text-foreground">
+            Technician note
+          </Text>
           <TextInput
+            accessibilityLabel="Technician note"
+            accessibilityHint="Add context for the reviewer"
+            accessibilityLabelledBy="recording-note-label"
             className="mt-3 min-h-24 rounded-xl border border-border bg-muted px-4 py-3 text-foreground"
             value={note}
             onChangeText={setNote}
@@ -106,9 +113,13 @@ export default function RecordingReviewScreen() {
           />
         </View>
         <Pressable
+          // The tick is rendered as a bare "✓" glyph, which a screen reader
+          // either skips or reads as punctuation, so the label must carry the
+          // whole statement being agreed to.
+          accessibilityLabel="I confirm this recording captures the required room evidence."
           accessibilityRole="checkbox"
           accessibilityState={{ checked: confirmed }}
-          className={`mt-4 flex-row items-start gap-3 rounded-2xl border p-4 ${
+          className={`mt-4 min-h-14 flex-row items-start gap-3 rounded-2xl border p-4 ${
             confirmed ? 'border-primary bg-primary/10' : 'border-border bg-card'
           }`}
           onPress={() => setConfirmed((value) => !value)}
@@ -125,13 +136,22 @@ export default function RecordingReviewScreen() {
           </Text>
         </Pressable>
         {save.isError ? (
-          <Text className="mt-3 text-sm text-destructive">
+          <Text
+            accessibilityLiveRegion="assertive"
+            accessibilityRole="alert"
+            className="mt-3 text-sm text-destructive"
+          >
             {save.error instanceof Error ? save.error.message : 'Could not queue the recording.'}
           </Text>
         ) : null}
         <View className="mt-5 flex-row gap-3">
+          {/* Both discard the take. The hints say so explicitly, because these
+              sit side by side and an accidental tap loses the recording. */}
           <Pressable
-            className="flex-1 items-center rounded-xl border border-border bg-card py-3"
+            accessibilityHint="Deletes this recording and reopens the camera"
+            accessibilityLabel="Retake recording"
+            accessibilityRole="button"
+            className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border bg-card py-3"
             onPress={() => {
               deleteDraftRecording(draft.uri);
               setDraft(null);
@@ -141,7 +161,10 @@ export default function RecordingReviewScreen() {
             <Text className="font-semibold text-foreground">Retake</Text>
           </Pressable>
           <Pressable
-            className="flex-1 items-center rounded-xl bg-destructive/10 py-3"
+            accessibilityHint="Deletes this recording and returns to the area without saving"
+            accessibilityLabel="Discard recording"
+            accessibilityRole="button"
+            className="min-h-12 flex-1 items-center justify-center rounded-xl bg-destructive/10 py-3"
             onPress={() => {
               deleteDraftRecording(draft.uri);
               setDraft(null);
@@ -154,7 +177,18 @@ export default function RecordingReviewScreen() {
       </ScrollView>
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
         <Pressable
-          className={`items-center rounded-xl py-4 ${
+          // Disabled with no stated reason is indistinguishable from broken.
+          accessibilityHint={confirmed ? undefined : 'Confirm the recording above before saving'}
+          accessibilityLabel={
+            save.isPending
+              ? 'Saving and queueing recording'
+              : nextRoom
+                ? `Save and continue to ${nextRoom.name}`
+                : 'Save and return to inspection'
+          }
+          accessibilityRole="button"
+          accessibilityState={{ busy: save.isPending, disabled: !confirmed || save.isPending }}
+          className={`min-h-12 items-center justify-center rounded-xl py-4 ${
             confirmed ? 'bg-primary' : 'bg-muted'
           }`}
           disabled={!confirmed || save.isPending}

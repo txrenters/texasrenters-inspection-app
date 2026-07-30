@@ -30,8 +30,7 @@ export default function ChangePasswordScreen() {
   };
 
   const error =
-    validationError ||
-    (changePassword.error instanceof Error ? changePassword.error.message : '');
+    validationError || (changePassword.error instanceof Error ? changePassword.error.message : '');
 
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background px-6">
@@ -41,28 +40,46 @@ export default function ChangePasswordScreen() {
           Replace the temporary password before opening assigned inspections.
         </Text>
         {error ? (
-          <View className="mt-5 rounded-xl bg-destructive/10 px-4 py-3">
+          <View
+            accessibilityLiveRegion="assertive"
+            accessibilityRole="alert"
+            className="mt-5 rounded-xl bg-destructive/10 px-4 py-3"
+          >
             <Text className="text-sm text-destructive">{error}</Text>
           </View>
         ) : null}
+        {/* These fields have no visible label — only a placeholder, which
+            disappears the moment typing starts and which several screen
+            readers skip entirely. The explicit labels are the only thing
+            distinguishing the two password boxes. */}
         <TextInput
-          className="mt-6 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
+          accessibilityLabel="New password"
+          className="mt-6 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
           placeholder="New password"
           placeholderTextColor="#9a9484"
           secureTextEntry
+          textContentType="newPassword"
           value={password}
           onChangeText={setPassword}
         />
         <TextInput
-          className="mt-3 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
+          accessibilityLabel="Confirm new password"
+          className="mt-3 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
           placeholder="Confirm new password"
           placeholderTextColor="#9a9484"
           secureTextEntry
+          textContentType="newPassword"
           value={confirmation}
           onChangeText={setConfirmation}
         />
         <Pressable
-          className="mt-5 items-center rounded-xl bg-primary py-4 active:scale-[0.98]"
+          accessibilityLabel={changePassword.isPending ? 'Updating password' : 'Update password'}
+          accessibilityRole="button"
+          accessibilityState={{
+            busy: changePassword.isPending,
+            disabled: changePassword.isPending,
+          }}
+          className="mt-5 min-h-12 items-center justify-center rounded-xl bg-primary py-4 active:scale-[0.98]"
           disabled={changePassword.isPending}
           onPress={() => void submit()}
         >

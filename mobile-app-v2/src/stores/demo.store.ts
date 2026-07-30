@@ -41,6 +41,7 @@ interface DemoState {
   enqueueUpload: (item: UploadItem) => void;
   updateUpload: (id: string, update: Partial<UploadItem>) => void;
   removeUpload: (id: string) => void;
+  clearLocalEvidence: () => void;
   tickUploads: () => void;
   updateFinding: (id: string, update: Partial<Finding>) => void;
   resetDemoData: () => void;
@@ -135,7 +136,7 @@ export const useDemoStore = create<DemoState>()(
                     ? 'VERIFYING'
                     : update.status === 'PENDING' || update.status === 'PAUSED'
                       ? 'OFFLINE_PENDING'
-                      : item.__sync?.state ?? 'OFFLINE_PENDING';
+                      : (item.__sync?.state ?? 'OFFLINE_PENDING');
             return {
               ...item,
               ...update,
@@ -150,6 +151,13 @@ export const useDemoStore = create<DemoState>()(
         })),
       removeUpload: (id) =>
         set((state) => ({ uploads: state.uploads.filter((item) => item.id !== id) })),
+      clearLocalEvidence: () =>
+        set({
+          media: [],
+          snapshots: [],
+          uploads: [],
+          draftRecording: null,
+        }),
       tickUploads: () => {
         const state = get();
         if (!state.isOnline) return;

@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { cssInterop, useColorScheme } from 'nativewind';
+import { useColorScheme } from 'nativewind';
 import {
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -12,16 +12,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Inspection } from '@/src/domain/models';
 import { useCurrentUser, useDashboard } from '@/src/features/queries';
+import { registerIcons } from '@/src/lib/icons';
 
-for (const icon of [
-  CheckCircle2Icon,
-  ChevronRightIcon,
-  ClipboardListIcon,
-  MapPinIcon,
-  Settings2Icon,
-]) {
-  cssInterop(icon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-}
+registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon, Settings2Icon);
 
 function inspectionDate(inspection: Inspection, includeTime = false) {
   return new Date(inspection.scheduledAt).toLocaleDateString('en-US', {
@@ -120,10 +113,24 @@ export default function HomeScreen() {
             {inProgress.map((inspection) => (
               <Pressable
                 key={inspection.id}
+                // Grouped: otherwise VoiceOver stops on address, unit, city,
+                // "In Progress" and date as five separate items per card.
+                accessibilityLabel={[
+                  inspection.property.address,
+                  inspection.unitName ?? 'Entire property',
+                  inspection.property.cityStateZip,
+                  'In progress',
+                  inspectionDate(inspection),
+                ].join(', ')}
+                accessibilityRole="button"
+                accessibilityHint="Opens this inspection"
                 className="mx-5 mb-3 rounded-2xl bg-card p-4 active:scale-[0.98]"
                 onPress={() => router.push(`/inspections/${inspection.id}`)}
               >
-                <View className="flex-row items-start gap-3">
+                <View
+                  importantForAccessibility="no-hide-descendants"
+                  className="flex-row items-start gap-3"
+                >
                   <View className="mt-0.5 h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
                     <MapPinIcon size={18} className="text-primary" />
                   </View>
@@ -154,14 +161,26 @@ export default function HomeScreen() {
         <View className="mt-6">
           <View className="mb-3 flex-row items-center justify-between px-5">
             <Text className="text-lg font-semibold text-foreground">Upcoming</Text>
-            <Pressable onPress={() => router.push('/inspections')}>
+            <Pressable
+              accessibilityLabel="See all inspections"
+              accessibilityRole="button"
+              className="min-h-11 justify-center px-1"
+              onPress={() => router.push('/inspections')}
+            >
               <Text className="text-sm font-semibold text-primary">See all</Text>
             </Pressable>
           </View>
           {assigned.map((inspection) => (
             <Pressable
               key={inspection.id}
-              className="mx-5 flex-row items-center gap-3 border-b border-border py-3.5 active:opacity-60"
+              accessibilityLabel={[
+                inspection.property.address,
+                inspection.unitName ?? 'Entire property',
+                inspectionDate(inspection, true),
+              ].join(', ')}
+              accessibilityRole="button"
+              accessibilityHint="Opens this inspection"
+              className="mx-5 min-h-14 flex-row items-center gap-3 border-b border-border py-3.5 active:opacity-60"
               onPress={() => router.push(`/inspections/${inspection.id}`)}
             >
               <View className="h-2 w-2 rounded-full bg-chart-4" />
@@ -194,7 +213,10 @@ export default function HomeScreen() {
             {completed.slice(0, 2).map((inspection) => (
               <Pressable
                 key={inspection.id}
-                className="mx-5 flex-row items-center gap-3 py-3 active:opacity-60"
+                accessibilityLabel={`${inspection.property.address}, completed, ${inspection.progress.completed} of ${inspection.progress.total} rooms`}
+                accessibilityRole="button"
+                accessibilityHint="Opens this inspection"
+                className="mx-5 min-h-14 flex-row items-center gap-3 py-3 active:opacity-60"
                 onPress={() => router.push(`/inspections/${inspection.id}`)}
               >
                 <View className="h-9 w-9 items-center justify-center rounded-full bg-chart-3/15">

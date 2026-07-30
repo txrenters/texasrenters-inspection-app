@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { router } from 'expo-router';
-import { cssInterop, useColorScheme } from 'nativewind';
+import { useColorScheme } from 'nativewind';
 import {
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -14,17 +14,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Inspection, InspectionStatus } from '@/src/domain/models';
 import { useInspections } from '@/src/features/queries';
+import { registerIcons } from '@/src/lib/icons';
 
-for (const icon of [
+registerIcons(
   CheckCircle2Icon,
   ChevronRightIcon,
   ClipboardListIcon,
   MapPinIcon,
   SearchIcon,
   Settings2Icon,
-]) {
-  cssInterop(icon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-}
+);
 
 const FILTERS: { key: 'ALL' | InspectionStatus; label: string }[] = [
   { key: 'ALL', label: 'All' },
@@ -67,10 +66,27 @@ function InspectionRow({ item }: { item: Inspection }) {
   const StatusIcon = config.icon;
   return (
     <Pressable
+      // Read as one item. Left ungrouped, VoiceOver stops six times per card —
+      // address, unit, type, progress, status, date — and a technician swiping
+      // through a day's assignments has to hold it all in their head.
+      accessibilityLabel={[
+        item.property.address,
+        item.unitName ?? 'Entire property',
+        item.property.cityStateZip,
+        item.type.replaceAll('_', ' ').toLowerCase(),
+        `${item.progress.completed} of ${item.progress.total} rooms complete`,
+        config.label.toLowerCase(),
+        new Date(item.scheduledAt).toLocaleString(),
+        item.progress.hasFailedUpload ? 'Has a failed upload' : '',
+      ]
+        .filter(Boolean)
+        .join(', ')}
+      accessibilityRole="button"
+      accessibilityHint="Opens this inspection"
       className="mx-5 mb-3 rounded-2xl bg-card p-4 active:scale-[0.98]"
       onPress={() => router.push(`/inspections/${item.id}`)}
     >
-      <View className="flex-row items-start gap-3">
+      <View importantForAccessibility="no-hide-descendants" className="flex-row items-start gap-3">
         <View className="mt-0.5 h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
           <MapPinIcon size={18} className="text-primary" />
         </View>
@@ -145,9 +161,7 @@ export default function InspectionsScreen() {
         ListHeaderComponent={
           <View>
             <View className="px-5 pb-2 pt-4">
-              <Text className="text-2xl font-bold tracking-tight text-foreground">
-                Inspections
-              </Text>
+              <Text className="text-2xl font-bold tracking-tight text-foreground">Inspections</Text>
               <Text className="mt-0.5 text-sm text-muted-foreground">
                 {(inspections.data ?? []).length} total ·{' '}
                 {(inspections.data ?? []).filter((item) => item.status === 'SCHEDULED').length}{' '}
@@ -175,7 +189,10 @@ export default function InspectionsScreen() {
                   const active = filter === item.key;
                   return (
                     <Pressable
-                      className={`rounded-full px-4 py-2 active:scale-[0.97] ${
+                      accessibilityLabel={`Filter: ${item.label}`}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: active }}
+                      className={`min-h-11 justify-center rounded-full px-4 py-2 active:scale-[0.97] ${
                         active ? 'bg-primary' : 'border border-border bg-card'
                       }`}
                       onPress={() => setFilter(item.key)}
@@ -208,13 +225,9 @@ export default function InspectionsScreen() {
           <View className="items-center gap-3 py-16">
             <SearchIcon size={36} className="text-muted-foreground" />
             <View className="items-center gap-1">
-              <Text className="text-base font-semibold text-foreground">
-                No inspections found
-              </Text>
+              <Text className="text-base font-semibold text-foreground">No inspections found</Text>
               <Text className="px-8 text-center text-sm text-muted-foreground">
-                {search
-                  ? 'Try a different search term.'
-                  : 'No inspections match this filter.'}
+                {search ? 'Try a different search term.' : 'No inspections match this filter.'}
               </Text>
             </View>
           </View>

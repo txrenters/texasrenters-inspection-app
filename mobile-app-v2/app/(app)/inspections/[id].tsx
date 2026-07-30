@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { cssInterop, useColorScheme } from 'nativewind';
+import { useColorScheme } from 'nativewind';
 import {
   AlertTriangleIcon,
   ArrowLeftIcon,
@@ -18,8 +18,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
+import { registerIcons } from '@/src/lib/icons';
+import {
+  deriveAreaStatus,
+  pickUpNextArea,
+  type AreaStatusDescriptor,
+} from '@/src/utils/area-status';
 
-for (const icon of [
+registerIcons(
   AlertTriangleIcon,
   ArrowLeftIcon,
   CameraIcon,
@@ -31,27 +37,59 @@ for (const icon of [
   MapPinIcon,
   PlayCircleIcon,
   Settings2Icon,
-]) {
-  cssInterop(icon, { className: { target: 'style', nativeStyleToProp: { color: true } } });
-}
+);
 
 function isRoomDone(room: InspectionRoom) {
-  return room.completionStatus === 'COMPLETED' || room.completionStatus === 'SKIPPED';
+  const { status } = deriveAreaStatus(room);
+  return status === 'COMPLETED' || status === 'SKIPPED';
 }
 
+const TONE_TEXT: Record<AreaStatusDescriptor['tone'], string> = {
+  neutral: 'text-muted-foreground',
+  info: 'text-chart-2',
+  progress: 'text-chart-2',
+  success: 'text-chart-3',
+  warning: 'text-chart-4',
+  danger: 'text-destructive',
+};
+
 function RoomRow({ room, findings }: { room: InspectionRoom; findings: Finding[] }) {
-  const done = isRoomDone(room);
-  const active = room.completionStatus === 'RECORDING_SAVED';
+  // Derived rather than open-coded: a failed upload now surfaces on this row
+  // instead of reading as "not started", which is the one state a technician
+  // has to act on before leaving the property.
+  const derived = deriveAreaStatus(room);
+  const done = derived.status === 'COMPLETED' || derived.status === 'SKIPPED';
+  const active = derived.status !== 'NOT_STARTED' && !done;
   const roomFindings = findings.filter((finding) => finding.roomId === room.id);
   return (
     <Pressable
-      className="mx-5 mb-2 overflow-hidden rounded-xl bg-card active:scale-[0.98]"
+      // Status is otherwise conveyed only by a coloured bar and an icon, both
+      // invisible to a screen reader — it has to be said in words.
+      accessibilityLabel={[
+        room.name,
+        room.floorName,
+        room.isRequired ? 'Required' : 'Optional',
+        derived.label,
+        derived.detail,
+        roomFindings.length ? `${roomFindings.length} findings` : '',
+      ]
+        .filter(Boolean)
+        .join(', ')}
+      accessibilityRole="button"
+      accessibilityHint="Opens this area"
+      className="mx-5 mb-2 min-h-14 overflow-hidden rounded-xl bg-card active:scale-[0.98]"
       onPress={() => router.push(`/areas/${room.id}`)}
     >
-      <View className="flex-row items-center">
+      <View importantForAccessibility="no-hide-descendants" className="flex-row items-center">
         <View
           className={`w-1.5 self-stretch ${
-            done ? 'bg-chart-3' : active ? 'bg-chart-2' : 'bg-muted'
+            derived.needsAttention
+              ? 'bg-chart-4'
+              : done
+                ? 'bg-chart-3'
+                : active
+                  ? 'bg-chart-2'
+                  : 'bg-muted'
           }`}
         />
         <View className="flex-1 flex-row items-center gap-3 p-4">
@@ -74,8 +112,15 @@ function RoomRow({ room, findings }: { room: InspectionRoom; findings: Finding[]
               {room.floorName} · {room.isRequired ? 'Required' : 'Optional'}
               {roomFindings.length ? ` · ${roomFindings.length} findings` : ''}
             </Text>
+            {/* Status in words as well as colour. */}
+            <Text className={`mt-0.5 text-xs font-medium ${TONE_TEXT[derived.tone]}`}>
+              {derived.label}
+            </Text>
             {room.baseline.summary ? (
-              <Text numberOfLines={2} className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              <Text
+                numberOfLines={2}
+                className="mt-1 text-xs leading-relaxed text-muted-foreground"
+              >
                 {room.baseline.summary}
               </Text>
             ) : null}
@@ -108,7 +153,9 @@ export default function InspectionOverviewScreen() {
   const item = inspection.data;
   const roomList = rooms.data ?? [];
   const findingList = findings.data ?? [];
-  const nextRoom = roomList.find((room) => !isRoomDone(room));
+  // pickUpNextArea outranks a plain "first unfinished": it surfaces failed
+  // uploads and ready-to-complete areas ahead of untouched required work.
+  const nextRoom = pickUpNextArea(roomList);
   const completedRooms = roomList.filter(isRoomDone).length;
   const progress = roomList.length ? Math.round((completedRooms / roomList.length) * 100) : 0;
   const pendingUploads = roomList.filter((room) =>
@@ -133,7 +180,10 @@ export default function InspectionOverviewScreen() {
       >
         <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
           <Pressable
+            accessibilityLabel="Back"
+            accessibilityRole="button"
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
+            hitSlop={8}
             onPress={() => router.back()}
           >
             <ArrowLeftIcon size={18} className="text-foreground" />
@@ -269,9 +319,7 @@ export default function InspectionOverviewScreen() {
                 <View className="flex-row items-start justify-between">
                   <View className="mr-3 min-w-0 flex-1">
                     <Text className="text-sm font-semibold text-foreground">{finding.title}</Text>
-                    <Text className="mt-0.5 text-xs text-muted-foreground">
-                      {finding.roomName}
-                    </Text>
+                    <Text className="mt-0.5 text-xs text-muted-foreground">{finding.roomName}</Text>
                   </View>
                   <View
                     className={`flex-row items-center gap-1 rounded-full px-2.5 py-0.5 ${
@@ -322,7 +370,15 @@ export default function InspectionOverviewScreen() {
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
         {item.status === 'SCHEDULED' ? (
           <Pressable
-            className="items-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
+            accessibilityLabel={
+              actions.start.isPending ? 'Starting inspection' : 'Start inspection'
+            }
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: actions.start.isPending,
+              disabled: actions.start.isPending,
+            }}
+            className="min-h-12 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
             disabled={actions.start.isPending}
             onPress={() =>
               actions.start.mutate(undefined, {
@@ -342,7 +398,11 @@ export default function InspectionOverviewScreen() {
         ) : item.status === 'IN_PROGRESS' ? (
           <View className="flex-row gap-3">
             <Pressable
-              className="flex-1 items-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
+              accessibilityLabel={
+                nextRoom ? `Continue to ${nextRoom.name}` : 'Go to review and submit'
+              }
+              accessibilityRole="button"
+              className="min-h-12 flex-1 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
               onPress={() =>
                 nextRoom ? router.push(`/areas/${nextRoom.id}`) : router.push(`/review/${id}`)
               }
@@ -355,7 +415,9 @@ export default function InspectionOverviewScreen() {
               </View>
             </Pressable>
             <Pressable
-              className="flex-1 items-center rounded-xl border border-border bg-card py-3.5 active:scale-[0.98]"
+              accessibilityLabel="Review and submit"
+              accessibilityRole="button"
+              className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border bg-card py-3.5 active:scale-[0.98]"
               onPress={() => router.push(`/review/${id}`)}
             >
               <Text className="text-sm font-bold text-foreground">Review & Submit</Text>

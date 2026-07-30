@@ -21,9 +21,7 @@ export type CaptureCoverageStatus =
 export type CaptureSensorConfidence = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNAVAILABLE';
 
 export type SnapshotCaptureSource =
-  | 'NATIVE_STILL_DURING_VIDEO'
-  | 'VIDEO_FRAME_EXTRACTION'
-  | 'SEPARATE_PHOTO_CAPTURE';
+  'NATIVE_STILL_DURING_VIDEO' | 'VIDEO_FRAME_EXTRACTION' | 'SEPARATE_PHOTO_CAPTURE';
 
 export interface FindingMarker {
   id: string;
@@ -113,8 +111,7 @@ export function updateRotationTracker(
     endHeadingDegrees: heading,
     // DeviceMotion rotation alpha increases counter-clockwise on the platforms
     // supported by Expo, so a negative signed delta is clockwise.
-    clockwiseRotationDegrees:
-      tracker.clockwiseRotationDegrees + (delta < 0 ? magnitude : 0),
+    clockwiseRotationDegrees: tracker.clockwiseRotationDegrees + (delta < 0 ? magnitude : 0),
     counterClockwiseRotationDegrees:
       tracker.counterClockwiseRotationDegrees + (delta > 0 ? magnitude : 0),
     acceptedSamples: tracker.acceptedSamples + 1,
@@ -129,10 +126,7 @@ export function rotationProgress(tracker: RotationTracker) {
 }
 
 export function returnedToStart(tracker: RotationTracker) {
-  if (
-    tracker.startHeadingDegrees === undefined ||
-    tracker.endHeadingDegrees === undefined
-  )
+  if (tracker.startHeadingDegrees === undefined || tracker.endHeadingDegrees === undefined)
     return false;
   return (
     Math.abs(shortestSignedDelta(tracker.startHeadingDegrees, tracker.endHeadingDegrees)) <=
@@ -157,7 +151,11 @@ export function evaluateCapture({
 } {
   const didReturn = returnedToStart(tracker);
   if (manualConfirmation)
-    return { status: 'MANUALLY_CONFIRMED', confidence: sensorSupported ? 'LOW' : 'UNAVAILABLE', returnedToStart: didReturn };
+    return {
+      status: 'MANUALLY_CONFIRMED',
+      confidence: sensorSupported ? 'LOW' : 'UNAVAILABLE',
+      returnedToStart: didReturn,
+    };
   if (!sensorSupported)
     return { status: 'SENSOR_UNAVAILABLE', confidence: 'UNAVAILABLE', returnedToStart: false };
 
@@ -166,8 +164,7 @@ export function evaluateCapture({
     tracker.clockwiseRotationDegrees <= GUIDED_CAPTURE_POLICY.maximumClockwiseDegrees;
   const sufficientDuration = durationSeconds >= GUIDED_CAPTURE_POLICY.minimumDurationSeconds;
   const wrongDirection =
-    tracker.counterClockwiseRotationDegrees >=
-    GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
+    tracker.counterClockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
   const noisy =
     tracker.rejectedSamples > 8 ||
     (tracker.acceptedSamples > 0 && tracker.rejectedSamples / tracker.acceptedSamples > 0.35);
@@ -176,8 +173,7 @@ export function evaluateCapture({
     return { status: 'COMPLETE', confidence: 'HIGH', returnedToStart: true };
   if (sufficientRotation && sufficientDuration && didReturn)
     return { status: 'LIKELY_COMPLETE', confidence: 'MEDIUM', returnedToStart: true };
-  if (noisy)
-    return { status: 'LOW_CONFIDENCE', confidence: 'LOW', returnedToStart: didReturn };
+  if (noisy) return { status: 'LOW_CONFIDENCE', confidence: 'LOW', returnedToStart: didReturn };
   return { status: 'INCOMPLETE', confidence: 'LOW', returnedToStart: didReturn };
 }
 

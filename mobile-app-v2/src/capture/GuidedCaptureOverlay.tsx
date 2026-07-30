@@ -2,11 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
-import {
-  GUIDED_CAPTURE_POLICY,
-  rotationProgress,
-  type RotationTracker,
-} from './guided-capture';
+import { GUIDED_CAPTURE_POLICY, rotationProgress, type RotationTracker } from './guided-capture';
 
 export function GuidedCaptureOverlay({
   tracker,
@@ -20,8 +16,7 @@ export function GuidedCaptureOverlay({
   const progress = rotationProgress(tracker);
   const circumference = 2 * Math.PI * 42;
   const wrongDirection =
-    tracker.counterClockwiseRotationDegrees >=
-    GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
+    tracker.counterClockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
   const instruction =
     progress >= 0.92
       ? returnedToStart
