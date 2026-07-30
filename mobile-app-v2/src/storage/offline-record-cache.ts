@@ -13,6 +13,22 @@ export class ApiConnectionError extends Error {
 }
 
 /**
+ * The technician's Supabase session is gone or unrefreshable.
+ *
+ * Distinct from a generic Error so the app can react once, centrally, by
+ * routing back to sign-in. Previously every query surfaced the raw text
+ * "Your session has expired. Sign in again." on its own screen, leaving a
+ * technician mid-inspection to work out for themselves that they had to find
+ * Settings and sign out before they could sign back in.
+ */
+export class SessionExpiredError extends Error {
+  constructor(message = 'Your session has expired. Sign in again.') {
+    super(message);
+    this.name = 'SessionExpiredError';
+  }
+}
+
+/**
  * Stores validated, user-scoped REST DTOs in the native SQLite-backed store.
  * Only connection failures may fall back to cached data; authorization and
  * business-rule responses always win over device state.
@@ -101,6 +117,6 @@ export async function updateExistingApiRecord<TSchema extends z.ZodType>(
 async function cacheKey(key: string) {
   const { data } = await getSupabaseClient().auth.getSession();
   const userId = data.session?.user.id;
-  if (!userId) throw new Error('Your session has expired. Sign in again.');
+  if (!userId) throw new SessionExpiredError();
   return `${CACHE_PREFIX}:${userId}:${key}`;
 }

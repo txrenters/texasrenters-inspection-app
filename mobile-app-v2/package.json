@@ -32,11 +32,13 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
+    "@react-native-community/netinfo": "11.4.1",
     "@supabase/supabase-js": "^2.110.7",
     "@tanstack/react-query": "5.101.2",
     "@texasrenters/shared": "workspace:*",
     "expo": "54.0.36",
     "expo-camera": "17.0.10",
+    "expo-clipboard": "~8.0.8",
     "expo-constants": "^18.0.13",
     "expo-file-system": "~19.0.23",
     "expo-font": "~14.0.12",
@@ -69,9 +71,8 @@
     "zustand": "5.0.14"
   },
   "devDependencies": {
-    "@expo/ngrok": "^4.1.3",
-    "@types/react": "~19.1.10",
     "@types/jest": "29.5.14",
+    "@types/react": "~19.1.10",
     "babel-plugin-module-resolver": "^5.0.2",
     "babel-preset-expo": "~54.0.12",
     "dotenv": "^16.4.5",
