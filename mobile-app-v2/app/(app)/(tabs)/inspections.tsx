@@ -13,6 +13,10 @@ import { FlatList, Pressable, RefreshControl, Text, TextInput, View } from 'reac
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Inspection, InspectionStatus } from '@/src/domain/models';
+import {
+  InspectionUrgencyBadge,
+  useInspectionUrgency,
+} from '@/src/components/InspectionUrgencyBadge';
 import { useInspections } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -57,6 +61,7 @@ const STATUS_CONFIG: Record<
 };
 
 function InspectionRow({ item }: { item: Inspection }) {
+  const urgency = useInspectionUrgency(item);
   const config = STATUS_CONFIG[item.status] ?? {
     label: item.status.replaceAll('_', ' '),
     bg: 'bg-muted',
@@ -76,6 +81,9 @@ function InspectionRow({ item }: { item: Inspection }) {
         item.type.replaceAll('_', ' ').toLowerCase(),
         `${item.progress.completed} of ${item.progress.total} rooms complete`,
         config.label.toLowerCase(),
+        // Carried in the row's own label: the badge below sits inside a hidden
+        // subtree, so this is the only way it reaches a screen reader.
+        urgency?.spoken ?? '',
         new Date(item.scheduledAt).toLocaleString(),
         item.progress.hasFailedUpload ? 'Has a failed upload' : '',
       ]
@@ -108,6 +116,7 @@ function InspectionRow({ item }: { item: Inspection }) {
                 {config.label.toLowerCase()}
               </Text>
             </View>
+            <InspectionUrgencyBadge inspection={item} />
             <Text className="text-xs text-muted-foreground">
               {new Date(item.scheduledAt).toLocaleDateString('en-US', {
                 month: 'short',

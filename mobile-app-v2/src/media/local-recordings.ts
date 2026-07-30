@@ -44,7 +44,10 @@ export function buildRecordingDraft({
         : normalizedDuration * FALLBACK_MEGABYTES_PER_SECOND,
     recordedAt: new Date().toISOString(),
     note: '',
-    captureSummary,
+    // Additional clips are focused evidence, not full-room walkthroughs. Keep
+    // their upload contract free of 360-completion pressure even if a stale
+    // caller accidentally supplies a primary capture summary.
+    captureSummary: recordingType === 'PRIMARY_AREA' ? captureSummary : undefined,
   };
 }
 

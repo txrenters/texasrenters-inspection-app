@@ -8,6 +8,8 @@ export const GUIDED_CAPTURE_POLICY = {
   wrongDirectionWarningDegrees: 25,
   jitterDegrees: 1,
   maximumSampleDeltaDegrees: 45,
+  maximumRecommendedDegreesPerSecond: 75,
+  tooFastWarningDurationMs: 500,
 } as const;
 
 export type CaptureCoverageStatus =
@@ -19,6 +21,18 @@ export type CaptureCoverageStatus =
   | 'MANUALLY_CONFIRMED';
 
 export type CaptureSensorConfidence = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNAVAILABLE';
+
+export type GuidedCaptureState =
+  | 'READY'
+  | 'RECORDING'
+  | 'ROTATE_CLOCKWISE'
+  | 'WRONG_DIRECTION'
+  | 'TOO_FAST'
+  | 'CONTINUE_AROUND_ROOM'
+  | 'RETURN_TO_START'
+  | 'LIKELY_COMPLETE'
+  | 'COMPLETE'
+  | 'SENSOR_UNAVAILABLE';
 
 export type SnapshotCaptureSource =
   'NATIVE_STILL_DURING_VIDEO' | 'VIDEO_FRAME_EXTRACTION' | 'SEPARATE_PHOTO_CAPTURE';
@@ -56,6 +70,10 @@ export interface RotationTracker {
   endHeadingDegrees?: number;
   clockwiseRotationDegrees: number;
   counterClockwiseRotationDegrees: number;
+  recentCounterClockwiseDegrees: number;
+  smoothedDegreesPerSecond: number;
+  fastRotationDurationMs: number;
+  previousSampleAtMs?: number;
   acceptedSamples: number;
   rejectedSamples: number;
 }
@@ -64,6 +82,9 @@ export function createRotationTracker(): RotationTracker {
   return {
     clockwiseRotationDegrees: 0,
     counterClockwiseRotationDegrees: 0,
+    recentCounterClockwiseDegrees: 0,
+    smoothedDegreesPerSecond: 0,
+    fastRotationDurationMs: 0,
     acceptedSamples: 0,
     rejectedSamples: 0,
   };
@@ -80,6 +101,7 @@ export function shortestSignedDelta(previous: number, current: number) {
 export function updateRotationTracker(
   tracker: RotationTracker,
   headingDegrees: number,
+  sampleAtMs = Date.now(),
 ): RotationTracker {
   const heading = normalizeHeading(headingDegrees);
   if (tracker.previousHeadingDegrees === undefined) {
@@ -88,6 +110,7 @@ export function updateRotationTracker(
       startHeadingDegrees: heading,
       previousHeadingDegrees: heading,
       endHeadingDegrees: heading,
+      previousSampleAtMs: sampleAtMs,
       acceptedSamples: 1,
     };
   }
@@ -105,15 +128,34 @@ export function updateRotationTracker(
     };
   }
 
+  const elapsedMs = Math.max(16, sampleAtMs - (tracker.previousSampleAtMs ?? sampleAtMs - 50));
+  const instantaneousSpeed = magnitude / (elapsedMs / 1000);
+  const smoothedSpeed =
+    tracker.acceptedSamples <= 1
+      ? instantaneousSpeed
+      : tracker.smoothedDegreesPerSecond * 0.72 + instantaneousSpeed * 0.28;
+  const clockwise = delta < 0;
+  const recentCounterClockwiseDegrees = clockwise
+    ? Math.max(0, tracker.recentCounterClockwiseDegrees * 0.82 - magnitude * 0.35)
+    : tracker.recentCounterClockwiseDegrees * 0.9 + magnitude;
+  const fastRotationDurationMs =
+    smoothedSpeed >= GUIDED_CAPTURE_POLICY.maximumRecommendedDegreesPerSecond
+      ? tracker.fastRotationDurationMs + elapsedMs
+      : Math.max(0, tracker.fastRotationDurationMs - elapsedMs * 1.5);
+
   return {
     ...tracker,
     previousHeadingDegrees: heading,
     endHeadingDegrees: heading,
+    previousSampleAtMs: sampleAtMs,
     // DeviceMotion rotation alpha increases counter-clockwise on the platforms
     // supported by Expo, so a negative signed delta is clockwise.
-    clockwiseRotationDegrees: tracker.clockwiseRotationDegrees + (delta < 0 ? magnitude : 0),
+    clockwiseRotationDegrees: tracker.clockwiseRotationDegrees + (clockwise ? magnitude : 0),
     counterClockwiseRotationDegrees:
-      tracker.counterClockwiseRotationDegrees + (delta > 0 ? magnitude : 0),
+      tracker.counterClockwiseRotationDegrees + (clockwise ? 0 : magnitude),
+    recentCounterClockwiseDegrees,
+    smoothedDegreesPerSecond: smoothedSpeed,
+    fastRotationDurationMs,
     acceptedSamples: tracker.acceptedSamples + 1,
   };
 }
@@ -132,6 +174,48 @@ export function returnedToStart(tracker: RotationTracker) {
     Math.abs(shortestSignedDelta(tracker.startHeadingDegrees, tracker.endHeadingDegrees)) <=
     GUIDED_CAPTURE_POLICY.returnToStartToleranceDegrees
   );
+}
+
+export function guidedCaptureState({
+  tracker,
+  recording,
+  sensorSupported,
+  durationSeconds,
+}: {
+  tracker: RotationTracker;
+  recording: boolean;
+  sensorSupported: boolean;
+  durationSeconds: number;
+}): GuidedCaptureState {
+  if (!recording) return 'READY';
+  if (!sensorSupported) return 'SENSOR_UNAVAILABLE';
+  if (tracker.acceptedSamples < 2) return 'RECORDING';
+
+  const progress = rotationProgress(tracker);
+  const didReturn =
+    tracker.clockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
+    returnedToStart(tracker);
+  const evaluation = evaluateCapture({
+    tracker,
+    durationSeconds,
+    sensorSupported,
+  });
+
+  if (evaluation.status === 'COMPLETE') return 'COMPLETE';
+  if (evaluation.status === 'LIKELY_COMPLETE') return 'LIKELY_COMPLETE';
+  if (progress >= 0.92 && didReturn) return 'LIKELY_COMPLETE';
+  if (progress >= 0.92) return 'RETURN_TO_START';
+  if (
+    tracker.recentCounterClockwiseDegrees >=
+    GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees
+  )
+    return 'WRONG_DIRECTION';
+  if (
+    tracker.fastRotationDurationMs >= GUIDED_CAPTURE_POLICY.tooFastWarningDurationMs
+  )
+    return 'TOO_FAST';
+  if (progress >= 0.08) return 'CONTINUE_AROUND_ROOM';
+  return 'ROTATE_CLOCKWISE';
 }
 
 export function evaluateCapture({

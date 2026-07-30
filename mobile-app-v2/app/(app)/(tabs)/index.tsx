@@ -11,6 +11,10 @@ import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Inspection } from '@/src/domain/models';
+import {
+  InspectionUrgencyBadge,
+  useInspectionUrgency,
+} from '@/src/components/InspectionUrgencyBadge';
 import { useCurrentUser, useDashboard } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -24,6 +28,55 @@ function inspectionDate(inspection: Inspection, includeTime = false) {
     hour: includeTime ? 'numeric' : undefined,
     minute: includeTime ? '2-digit' : undefined,
   });
+}
+
+/**
+ * One upcoming assignment. Its own component so the urgency hook — which ticks
+ * on the minute — re-renders just this row rather than the whole dashboard.
+ */
+function AssignedInspectionRow({ inspection }: { inspection: Inspection }) {
+  const urgency = useInspectionUrgency(inspection);
+  return (
+    <Pressable
+      accessibilityLabel={[
+        inspection.property.address,
+        inspection.unitName ?? 'Entire property',
+        inspectionDate(inspection, true),
+        // The badge sits in a hidden subtree, so the row's label is the only
+        // route to a screen reader.
+        urgency?.spoken ?? '',
+      ]
+        .filter(Boolean)
+        .join(', ')}
+      accessibilityRole="button"
+      accessibilityHint="Opens this inspection"
+      className="mx-5 min-h-14 flex-row items-center gap-3 border-b border-border py-3.5 active:opacity-60"
+      onPress={() => router.push(`/inspections/${inspection.id}`)}
+    >
+      <View
+        importantForAccessibility="no-hide-descendants"
+        className="flex-1 flex-row items-center gap-3"
+      >
+        <View
+          className={`h-2 w-2 rounded-full ${urgency?.overdue ? 'bg-destructive' : 'bg-chart-4'}`}
+        />
+        <View className="min-w-0 flex-1">
+          <Text numberOfLines={1} className="text-base font-medium text-foreground">
+            {inspection.property.address}
+          </Text>
+          <Text numberOfLines={1} className="mt-0.5 text-xs text-muted-foreground">
+            {inspection.unitName ?? 'Entire property'} · {inspectionDate(inspection, true)}
+          </Text>
+          {urgency ? (
+            <View className="mt-1 flex-row">
+              <InspectionUrgencyBadge inspection={inspection} />
+            </View>
+          ) : null}
+        </View>
+        <ChevronRightIcon size={16} className="text-muted-foreground" />
+      </View>
+    </Pressable>
+  );
 }
 
 export default function HomeScreen() {
@@ -171,29 +224,7 @@ export default function HomeScreen() {
             </Pressable>
           </View>
           {assigned.map((inspection) => (
-            <Pressable
-              key={inspection.id}
-              accessibilityLabel={[
-                inspection.property.address,
-                inspection.unitName ?? 'Entire property',
-                inspectionDate(inspection, true),
-              ].join(', ')}
-              accessibilityRole="button"
-              accessibilityHint="Opens this inspection"
-              className="mx-5 min-h-14 flex-row items-center gap-3 border-b border-border py-3.5 active:opacity-60"
-              onPress={() => router.push(`/inspections/${inspection.id}`)}
-            >
-              <View className="h-2 w-2 rounded-full bg-chart-4" />
-              <View className="min-w-0 flex-1">
-                <Text numberOfLines={1} className="text-base font-medium text-foreground">
-                  {inspection.property.address}
-                </Text>
-                <Text numberOfLines={1} className="mt-0.5 text-xs text-muted-foreground">
-                  {inspection.unitName ?? 'Entire property'} · {inspectionDate(inspection, true)}
-                </Text>
-              </View>
-              <ChevronRightIcon size={16} className="text-muted-foreground" />
-            </Pressable>
+            <AssignedInspectionRow inspection={inspection} key={inspection.id} />
           ))}
           {!dashboard.isLoading && assigned.length === 0 ? (
             <View className="mx-5 items-center gap-2 rounded-2xl bg-card p-6">

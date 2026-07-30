@@ -2,6 +2,10 @@ import type { ExpoConfig } from 'expo/config';
 
 const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
 
+/** `--background` from global.css, so splash and first paint agree. */
+const LIGHT_BACKGROUND = '#FCFBF8';
+const DARK_BACKGROUND = '#0A0F18';
+
 const config: ExpoConfig = {
   name: 'TexasRenters Inspect V2',
   slug: 'texasrenters-inspect-v2',
@@ -17,11 +21,28 @@ const config: ExpoConfig = {
     'expo-notifications',
     'expo-video',
     [
+      'expo-sensors',
+      {
+        motionPermission:
+          'Allow TexasRenters Inspect to guide a slow clockwise room walkthrough.',
+      },
+    ],
+    [
       'expo-splash-screen',
       {
-        image: './assets/splash.png',
+        // Backgrounds match the app's own --background tokens, so the splash
+        // dissolves into the first screen instead of flashing a different
+        // colour. `dark` is honoured because userInterfaceStyle is 'automatic'.
+        image: './assets/splash-light.png',
         resizeMode: 'contain',
-        backgroundColor: '#145347',
+        backgroundColor: LIGHT_BACKGROUND,
+        dark: {
+          // A separate asset, not a tint: the logo's "TEXAS" and ".com" are
+          // dark navy and vanish on a dark background, while the green
+          // "RENTERS" reads fine. See scripts/build-splash.mjs.
+          image: './assets/splash-dark.png',
+          backgroundColor: DARK_BACKGROUND,
+        },
       },
     ],
     [

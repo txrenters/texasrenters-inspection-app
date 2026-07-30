@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Fragment } from 'react';
 
+import { HeaderClocks } from '@/components/header-clocks';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -51,6 +52,8 @@ export function AppHeader() {
           ))}
         </BreadcrumbList>
       </Breadcrumb>
+      <HeaderClocks />
+      <Separator className="mr-1 hidden h-4! md:block" orientation="vertical" />
       <div className="hidden items-center gap-2 text-xs text-muted-foreground lg:flex">
         <ShieldCheck aria-hidden className="size-4 text-primary" />
         <span className="size-2 rounded-full bg-accent shadow-[0_0_0_3px_var(--green-soft)]" />

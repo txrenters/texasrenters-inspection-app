@@ -31,6 +31,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
+import {
+  GUIDED_CAPTURE_POLICY,
+  evaluateCapture,
+  guidedCaptureState,
+  rotationProgress,
+  type GuidedCaptureSummary,
+} from '@/src/capture/guided-capture';
+import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
 import { useRoom } from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
@@ -59,6 +68,10 @@ function formatDuration(seconds: number) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+function newCaptureSessionId() {
+  return `capture-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 export default function RoomCameraScreen() {
   const {
     inspectionId = '',
@@ -73,6 +86,15 @@ export default function RoomCameraScreen() {
   const [camera, setCamera] = useState<CameraView | null>(null);
   const secondsRef = useRef(0);
   const mountedRef = useRef(true);
+  // 360° walkthrough telemetry. The refs feed the capture summary attached to
+  // the recording; none of them drive the visible chrome below.
+  const captureSessionIdRef = useRef(newCaptureSessionId());
+  const sessionStartedAtRef = useRef(new Date().toISOString());
+  const snapshotTypesRef = useRef<PhotoCaptureType[]>([]);
+  const motionSupportedRef = useRef(false);
+  const guidanceMilestoneRef = useRef(0);
+  const previousGuidanceRef = useRef<string | null>(null);
+  const [motionResolved, setMotionResolved] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
@@ -91,6 +113,13 @@ export default function RoomCameraScreen() {
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
   const isAdditional = recordingType === 'ADDITIONAL_ISSUE';
   const hasPermissions = Boolean(cameraPermission?.granted && microphonePermission?.granted);
+  const guidedSensor = useGuidedCaptureSensor(recording && !isAdditional);
+  const guidanceState = guidedCaptureState({
+    tracker: guidedSensor.tracker,
+    recording,
+    sensorSupported: motionResolved ? motionSupportedRef.current : true,
+    durationSeconds: seconds,
+  });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -99,6 +128,40 @@ export default function RoomCameraScreen() {
       camera?.stopRecording();
     };
   }, [camera]);
+
+  // Haptic tick at each quarter of the clockwise loop, heavy at completion —
+  // progress a technician can feel without looking away from the room.
+  useEffect(() => {
+    if (!recording || isAdditional || !motionSupportedRef.current) return;
+    const milestone =
+      [100, 75, 50, 25].find(
+        (value) => Math.round(rotationProgress(guidedSensor.tracker) * 100) >= value,
+      ) ?? 0;
+    if (milestone <= guidanceMilestoneRef.current) return;
+    guidanceMilestoneRef.current = milestone;
+    void Haptics.impactAsync(
+      milestone >= 100 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light,
+    ).catch(() => undefined);
+  }, [guidedSensor.tracker, isAdditional, recording]);
+
+  // Spoken guidance on state *changes* only, so a screen reader hears the
+  // correction once rather than on every sensor sample.
+  useEffect(() => {
+    if (!recording || isAdditional || previousGuidanceRef.current === guidanceState) return;
+    previousGuidanceRef.current = guidanceState;
+    if (guidanceState === 'WRONG_DIRECTION') {
+      announce('Turn the other way and continue clockwise.');
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(
+        () => undefined,
+      );
+    } else if (guidanceState === 'TOO_FAST') {
+      announce('Slow down for a clear room walkthrough.');
+    } else if (guidanceState === 'RETURN_TO_START') {
+      announce('Return to Wall 1 to complete the walkthrough.');
+    } else if (guidanceState === 'COMPLETE') {
+      announce('Clockwise walkthrough complete.');
+    }
+  }, [guidanceState, isAdditional, recording]);
 
   useEffect(() => {
     if (!recording || stopping) return;
@@ -123,15 +186,66 @@ export default function RoomCameraScreen() {
     return true;
   };
 
+  const createCaptureSummary = (durationSeconds: number): GuidedCaptureSummary | undefined => {
+    if (isAdditional) return undefined;
+    const evaluation = evaluateCapture({
+      tracker: guidedSensor.trackerRef.current,
+      durationSeconds,
+      sensorSupported: motionSupportedRef.current,
+    });
+    const hasOverview = snapshotTypesRef.current.includes('AREA_OVERVIEW');
+    return {
+      sessionId: captureSessionIdRef.current,
+      policyVersion: GUIDED_CAPTURE_POLICY.version,
+      startedAt: sessionStartedAtRef.current,
+      completedAt: new Date().toISOString(),
+      durationSeconds,
+      clockwiseRotationDegrees: Math.round(
+        guidedSensor.trackerRef.current.clockwiseRotationDegrees,
+      ),
+      counterClockwiseRotationDegrees: Math.round(
+        guidedSensor.trackerRef.current.counterClockwiseRotationDegrees,
+      ),
+      startHeadingDegrees: guidedSensor.trackerRef.current.startHeadingDegrees,
+      endHeadingDegrees: guidedSensor.trackerRef.current.endHeadingDegrees,
+      returnedToStart: evaluation.returnedToStart,
+      sensorSupported: motionSupportedRef.current,
+      sensorConfidence: evaluation.confidence,
+      coverageStatus: evaluation.status,
+      manualConfirmation: false,
+      evidenceComplete: hasOverview,
+      snapshotCount: snapshotTypesRef.current.length,
+      findingMarkerCount: 0,
+    };
+  };
+
   const beginRecording = async () => {
     if (!(await requestPermissions())) return;
     if (!camera || !ready || recording) return;
     setError(null);
     secondsRef.current = 0;
     setSeconds(0);
+    sessionStartedAtRef.current = new Date().toISOString();
+    guidanceMilestoneRef.current = 0;
+    previousGuidanceRef.current = null;
+
+    if (!isAdditional) {
+      guidedSensor.reset();
+      const sensorGranted = await guidedSensor.requestAccess();
+      motionSupportedRef.current = sensorGranted;
+      setMotionResolved(true);
+      if (!sensorGranted) {
+        announce('Motion guidance unavailable. Complete one slow clockwise walkthrough manually.');
+      }
+    }
+
     setRecording(true);
     setStopping(false);
-    announce('Recording started. Narrate as you move clockwise around the room.');
+    announce(
+      isAdditional
+        ? 'Additional evidence recording started.'
+        : 'Wall 1 registered. Begin one slow clockwise walkthrough.',
+    );
     try {
       const result = await camera.recordAsync({
         maxDuration: MAX_RECORDING_SECONDS,
@@ -148,6 +262,9 @@ export default function RoomCameraScreen() {
           durationSeconds: Math.max(1, secondsRef.current),
           sizeBytes: stored.sizeBytes,
           recordingType: isAdditional ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
+          // Rotation coverage travels with the recording so the backend can
+          // judge walkthrough completeness alongside the video itself.
+          captureSummary: createCaptureSummary(Math.max(1, secondsRef.current)),
         }),
       );
       router.replace({
@@ -215,6 +332,7 @@ export default function RoomCameraScreen() {
         height: photo.height,
         sizeBytes: stored.sizeBytes,
         captureType,
+        recordingSessionId: captureSessionIdRef.current,
         videoTimestampMs: recording ? secondsRef.current * 1000 : undefined,
         captureSource:
           recording && Platform.OS === 'ios'
@@ -223,6 +341,8 @@ export default function RoomCameraScreen() {
         sequenceNumber: photoCount + 1,
       });
       addSnapshot(snapshot);
+      // Feeds evidenceComplete/snapshotCount in the capture summary.
+      snapshotTypesRef.current.push(captureType);
       setPhotoCount((count) => count + 1);
       // Capturing an overview advances the selector to finding context.
       const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
@@ -354,6 +474,14 @@ export default function RoomCameraScreen() {
         </View>
 
         <View className="items-center px-5 pb-4">
+          {/* Live 360° guidance. Only while recording a primary walkthrough, so
+              the idle screen keeps its uncluttered layout; additional evidence
+              clips are free-form and get no rotation coaching. */}
+          {recording && !isAdditional ? (
+            <View className="mb-4 w-full" pointerEvents="none">
+              <GuidedCaptureOverlay state={guidanceState} tracker={guidedSensor.tracker} />
+            </View>
+          ) : null}
           {/* The elapsed time is the only signal that recording is actually
               running. Sighted users get the red REC badge; this gives everyone
               else the same information without spamming every tick. */}

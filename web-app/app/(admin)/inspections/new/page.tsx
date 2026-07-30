@@ -34,9 +34,12 @@ import {
   useUnits,
 } from '@/lib/queries';
 import { ApiError } from '@/lib/api';
+import { propertyOptionLabel } from '@/lib/property-label';
 
 const schema = z.object({
-  portfolioId: z.string().min(1, 'Select a portfolio.'),
+  // Optional: derived from the chosen property, and never sent to the API —
+  // it exists only to narrow the property list.
+  portfolioId: z.string(),
   propertyId: z.string().min(1, 'Select a property.'),
   unitId: z.string().optional(),
   leaseId: z.string().optional(),
@@ -60,6 +63,13 @@ function CreateInspectionForm() {
   const search = useSearchParams();
   const [propertySearch, setPropertySearch] = useState('');
   const [portfolioSearch, setPortfolioSearch] = useState('');
+  /**
+   * The portfolio the coordinator explicitly picked, as opposed to the one
+   * derived from a chosen property. Only this narrows the property list —
+   * feeding the derived value back would silently restrict the list to the
+   * first property's portfolio and make the next one impossible to find.
+   */
+  const [portfolioFilterId, setPortfolioFilterId] = useState('');
   const [selectedProperty, setSelectedProperty] = useState<AdminProperty | null>(null);
   const prefillId = search.get('propertyId') ?? '';
   const prefill = useProperty(prefillId);
@@ -102,7 +112,7 @@ function CreateInspectionForm() {
   const propertyId = watch('propertyId');
   const unitId = watch('unitId');
   const inspectionType = watch('inspectionType');
-  const properties = usePropertyOptions(portfolioId, propertySearch);
+  const properties = usePropertyOptions(portfolioFilterId, propertySearch);
   const propertyRecords = useMemo(
     () => properties.data?.pages.flatMap((page) => page.items) ?? [],
     [properties.data?.pages],
@@ -113,7 +123,7 @@ function CreateInspectionForm() {
         const itemAddress = propertyAddress(item);
         return {
           value: item.id,
-          label: itemAddress ? `${item.name} — ${itemAddress}` : item.name,
+          label: propertyOptionLabel(item.name, itemAddress),
           searchText: [item.addressLine1, item.addressLine2, item.city, item.state, item.postalCode]
             .filter(Boolean)
             .join(' '),
@@ -224,18 +234,25 @@ function CreateInspectionForm() {
             <small>{inspectionTypeGuidance(inspectionType)}</small>
           </Field>
           <Field>
-            <FieldLabel htmlFor="portfolioId">Portfolio</FieldLabel>
+            <FieldLabel htmlFor="portfolioId">Portfolio (optional filter)</FieldLabel>
             <Input type="hidden" {...register('portfolioId')} />
             <SearchableSelect
               id="portfolioId"
               value={portfolioId}
               options={portfolioOptions}
               selectedOption={
-                prefill.data
-                  ? { value: prefill.data.portfolio.id, label: prefill.data.portfolio.name }
-                  : undefined
+                // The auto-filled portfolio is usually absent from the loaded
+                // page of options, so pass it explicitly or the trigger blanks.
+                selectedProperty
+                  ? {
+                      value: selectedProperty.portfolio.id,
+                      label: selectedProperty.portfolio.name,
+                    }
+                  : prefill.data
+                    ? { value: prefill.data.portfolio.id, label: prefill.data.portfolio.name }
+                    : undefined
               }
-              placeholder={portfolios.isLoading ? 'Loading portfolios…' : 'Select portfolio'}
+              placeholder={portfolios.isLoading ? 'Loading portfolios…' : 'All portfolios'}
               searchPlaceholder="Search portfolios…"
               emptyMessage="No active portfolio matches your search."
               optionsLabel="Portfolio options"
@@ -247,6 +264,7 @@ function CreateInspectionForm() {
               onSearch={setPortfolioSearch}
               onLoadMore={() => void portfolios.fetchNextPage()}
               onChange={(nextPortfolioId) => {
+                setPortfolioFilterId(nextPortfolioId);
                 setValue('portfolioId', nextPortfolioId, { shouldValidate: true });
                 setValue('propertyId', '');
                 setValue('unitId', '');
@@ -275,34 +293,36 @@ function CreateInspectionForm() {
                 selectedProperty
                   ? {
                       value: selectedProperty.id,
-                      label: propertyAddress(selectedProperty)
-                        ? `${selectedProperty.name} — ${propertyAddress(selectedProperty)}`
-                        : selectedProperty.name,
+                      label: propertyOptionLabel(
+                        selectedProperty.name,
+                        propertyAddress(selectedProperty),
+                      ),
                     }
                   : undefined
               }
               placeholder={
-                !portfolioId
-                  ? 'Select a portfolio first'
-                  : properties.isLoading
-                    ? 'Loading properties…'
-                    : 'Select property'
+                properties.isLoading ? 'Loading properties…' : 'Search by address or name'
               }
               searchPlaceholder="Search name, address, or city…"
               emptyMessage="No active property matches your search."
               optionsLabel="Property options"
               loadingMoreLabel="Loading more properties…"
               moreHint="Scroll for more properties"
-              disabled={!portfolioId || properties.isLoading || properties.isError}
+              disabled={properties.isLoading || properties.isError}
               hasMore={properties.hasNextPage}
               loadingMore={properties.isFetchingNextPage}
               onSearch={setPropertySearch}
               onLoadMore={() => void properties.fetchNextPage()}
               onChange={(nextPropertyId) => {
                 setValue('propertyId', nextPropertyId, { shouldValidate: true });
-                setSelectedProperty(
-                  propertyRecords.find((item) => item.id === nextPropertyId) ?? null,
-                );
+                const record = propertyRecords.find((item) => item.id === nextPropertyId) ?? null;
+                setSelectedProperty(record);
+                // The portfolio is a property of the property, so derive it
+                // rather than asking the coordinator to state it twice.
+                if (record) {
+                  setValue('portfolioId', record.portfolio.id, { shouldValidate: true });
+                  setPortfolioSearch('');
+                }
                 setValue('unitId', '');
                 setValue('leaseId', '');
                 clearErrors('unitId');
@@ -527,6 +547,7 @@ function inspectionTypeLabel(type: InspectionType) {
     [InspectionType.OCCUPIED]: 'Occupied',
     [InspectionType.BACK_TO_MARKET]: 'Back-to-market',
     [InspectionType.MOVE_OUT]: 'Move-out',
+    [InspectionType.HVAC]: 'HVAC',
   }[type];
 }
 
@@ -536,6 +557,8 @@ function inspectionTypeGuidance(type: InspectionType) {
     [InspectionType.OCCUPIED]: 'A repeatable health check compared with the move-in baseline.',
     [InspectionType.BACK_TO_MARKET]: 'Prepares the property for marketing before lease end.',
     [InspectionType.MOVE_OUT]: 'Final condition inspection after the back-to-market inspection.',
+    [InspectionType.HVAC]:
+      'Heating and cooling equipment check. Scheduled independently of the tenancy lifecycle.',
   }[type];
 }
 

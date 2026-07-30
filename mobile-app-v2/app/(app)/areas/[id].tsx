@@ -407,7 +407,13 @@ export default function AreaDetailScreen() {
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
         <Pressable
           className="items-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
-          onPress={() => router.push(`/camera/${inspectionId}/${id}`)}
+          onPress={() =>
+            router.push(
+              hasRecording
+                ? `/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`
+                : `/camera/${inspectionId}/${id}`,
+            )
+          }
         >
           <View className="flex-row items-center gap-2">
             {hasRecording ? (

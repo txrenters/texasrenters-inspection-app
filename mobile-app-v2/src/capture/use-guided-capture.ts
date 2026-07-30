@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DeviceMotion } from 'expo-sensors';
+import { Platform } from 'react-native';
 
 import {
   createRotationTracker,
@@ -37,11 +38,15 @@ export function useGuidedCaptureSensor(active: boolean) {
 
   useEffect(() => {
     if (!active || !authorized || available === false) return;
-    DeviceMotion.setUpdateInterval(50);
+    // Android throttles motion sensors unless a high-sampling permission is
+    // present. A slow room walkthrough does not need that permission or its
+    // battery cost, so 5 Hz is the portable baseline; iOS remains smoother.
+    DeviceMotion.setUpdateInterval(Platform.OS === 'android' ? 200 : 75);
     let lastRender = 0;
     const subscription = DeviceMotion.addListener((measurement) => {
+      if (!measurement.rotation) return;
       const heading = radiansOrDegreesToDegrees(measurement.rotation.alpha);
-      trackerRef.current = updateRotationTracker(trackerRef.current, heading);
+      trackerRef.current = updateRotationTracker(trackerRef.current, heading, Date.now());
       const now = Date.now();
       if (now - lastRender >= 180) {
         lastRender = now;

@@ -7,9 +7,19 @@ describe('shared backend CORS configuration', () => {
         'http://localhost:3001',
         'http://localhost:5454',
         'http://localhost:8081',
+        'http://localhost:8082',
         'http://localhost:19006',
       ]),
     );
+  });
+
+  it('allows the mobile-app-v2 web origin when configured in production', () => {
+    expect(
+      allowedCorsOrigins({
+        NODE_ENV: 'production',
+        MOBILE_APP_ORIGIN: 'http://localhost:8082',
+      }),
+    ).toEqual(['http://localhost:8082']);
   });
 
   it('keeps the admin origin when local configuration only names mobile origins', () => {

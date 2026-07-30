@@ -22,6 +22,7 @@ import { useUploadActions, useUploads } from '@/src/features/queries';
 import { evaluateUploadGate } from '@/src/lib/connectivity';
 import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
+import { progressBarWidth, progressPercent } from '@/src/utils/upload-progress';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
@@ -109,14 +110,23 @@ function UploadRow({
 
           {!complete ? (
             <View className="mt-2">
-              <View className="h-1.5 overflow-hidden rounded-full bg-muted">
+              {/* `progress` is a 0–1 fraction. Rendering it directly as a
+                  percentage drew every bar at under 1% wide, which is
+                  indistinguishable from an upload that never started. */}
+              <View
+                accessibilityLabel={`${progressPercent(item.progress)} percent uploaded`}
+                accessibilityRole="progressbar"
+                accessibilityValue={{ min: 0, max: 100, now: progressPercent(item.progress) }}
+                className="h-1.5 overflow-hidden rounded-full bg-muted"
+              >
                 <View
                   className="h-full rounded-full bg-primary"
-                  style={{ width: `${item.progress}%` }}
+                  style={{ width: progressBarWidth(item.progress) }}
                 />
               </View>
               <Text className="mt-1 text-xs text-muted-foreground">
-                {item.progress}% · {item.processingStatus.replaceAll('_', ' ').toLowerCase()}
+                {progressPercent(item.progress)}% ·{' '}
+                {item.processingStatus.replaceAll('_', ' ').toLowerCase()}
               </Text>
             </View>
           ) : (

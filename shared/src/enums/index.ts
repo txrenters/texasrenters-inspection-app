@@ -30,6 +30,12 @@ export const InspectionType = {
   OCCUPIED: 'OCCUPIED',
   BACK_TO_MARKET: 'BACK_TO_MARKET',
   MOVE_OUT: 'MOVE_OUT',
+  /**
+   * Equipment maintenance, not a tenancy lifecycle stage. Deliberately outside
+   * the MOVE_IN -> OCCUPIED -> BACK_TO_MARKET -> MOVE_OUT chain: HVAC is checked
+   * on a schedule of its own, on tenanted and vacant properties alike.
+   */
+  HVAC: 'HVAC',
 } as const;
 export type InspectionType = (typeof InspectionType)[keyof typeof InspectionType];
 export enum UploadQueueStatus {

@@ -2430,6 +2430,12 @@ export class AdminService {
     },
   ) {
     if (input.inspectionType === InspectionType.MOVE_IN) return null;
+    // HVAC is equipment maintenance, not a tenancy lifecycle stage. It is
+    // scheduled on its own cadence against tenanted and vacant properties
+    // alike, so requiring a completed move-in — or any predecessor — would
+    // block legitimate work on every property this system has not onboarded
+    // through a full lease cycle.
+    if (input.inspectionType === InspectionType.HVAC) return null;
 
     const lifecycleScope = {
       organizationId: input.organizationId,

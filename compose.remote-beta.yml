@@ -27,6 +27,8 @@ services:
       CACHE_ENABLED: 'false'
       # The public beta boundary must always use real authentication.
       USE_MOCK_AUTH: 'false'
+      # Expo web for mobile-app-v2 runs on 8082 during remote-beta development.
+      MOBILE_APP_ORIGIN: http://localhost:8082
     ports:
       # ngrok is the only public entry point. The host binding stays loopback-only.
       - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'

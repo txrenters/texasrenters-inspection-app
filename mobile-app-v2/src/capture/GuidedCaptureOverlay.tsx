@@ -2,65 +2,126 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
-import { GUIDED_CAPTURE_POLICY, rotationProgress, type RotationTracker } from './guided-capture';
+import {
+  rotationProgress,
+  type GuidedCaptureState,
+  type RotationTracker,
+} from './guided-capture';
+
+const GUIDANCE_COPY: Record<GuidedCaptureState, { label: string; detail: string }> = {
+  READY: {
+    label: 'Face Wall 1',
+    detail: 'Start here, then make one slow clockwise walkthrough.',
+  },
+  RECORDING: {
+    label: 'Wall 1 registered',
+    detail: 'Begin turning slowly clockwise.',
+  },
+  ROTATE_CLOCKWISE: {
+    label: 'Rotate clockwise',
+    detail: 'Keep the walls centered and narrate visible conditions.',
+  },
+  WRONG_DIRECTION: {
+    label: 'Turn the other way',
+    detail: 'Continue clockwise; small corrections are okay.',
+  },
+  TOO_FAST: {
+    label: 'Slow down',
+    detail: 'Move steadily so the room remains clear.',
+  },
+  CONTINUE_AROUND_ROOM: {
+    label: 'Continue clockwise',
+    detail: 'Keep moving around the room toward Wall 1.',
+  },
+  RETURN_TO_START: {
+    label: 'Return to Wall 1',
+    detail: 'Complete the loop at your starting wall.',
+  },
+  LIKELY_COMPLETE: {
+    label: 'Walkthrough likely complete',
+    detail: 'Capture any missing photos, then stop and review.',
+  },
+  COMPLETE: {
+    label: 'Walkthrough complete',
+    detail: 'Capture any missing photos, then stop and review.',
+  },
+  SENSOR_UNAVAILABLE: {
+    label: 'Manual motion guide',
+    detail: 'Complete one slow clockwise walkthrough.',
+  },
+};
 
 export function GuidedCaptureOverlay({
   tracker,
-  sensorAvailable,
-  returnedToStart,
+  state,
 }: {
   tracker: RotationTracker;
-  sensorAvailable: boolean;
-  returnedToStart: boolean;
+  state: GuidedCaptureState;
 }) {
-  const progress = rotationProgress(tracker);
-  const circumference = 2 * Math.PI * 42;
-  const wrongDirection =
-    tracker.counterClockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
-  const instruction =
-    progress >= 0.92
-      ? returnedToStart
-        ? 'Rotation estimate complete. Capture any missing evidence.'
-        : 'Continue slowly to the Wall 1 start marker.'
-      : wrongDirection
-        ? 'Turn the other way — continue clockwise.'
-        : 'Rotate slowly clockwise. Keep walls centered.';
+  const progress = state === 'READY' ? 0 : rotationProgress(tracker);
+  const circumference = 2 * Math.PI * 24;
+  const copy = GUIDANCE_COPY[state];
+  const warning = state === 'WRONG_DIRECTION' || state === 'TOO_FAST';
+  const complete = state === 'COMPLETE' || state === 'LIKELY_COMPLETE';
 
   return (
-    <View style={styles.container}>
+    <View
+      accessible
+      accessibilityLabel={`${copy.label}. ${copy.detail}`}
+      pointerEvents="none"
+      style={styles.container}
+    >
+      <View style={[styles.copy, warning && styles.warning, complete && styles.complete]}>
+        <Ionicons
+          color="#FFFFFF"
+          name={
+            complete
+              ? 'checkmark-circle'
+              : state === 'WRONG_DIRECTION'
+                ? 'return-up-back'
+                : state === 'TOO_FAST'
+                  ? 'speedometer-outline'
+                  : 'refresh'
+          }
+          size={18}
+        />
+        <View style={styles.copyText}>
+          <Text numberOfLines={1} style={styles.label}>
+            {copy.label}
+          </Text>
+          <Text numberOfLines={2} style={styles.detail}>
+            {copy.detail}
+          </Text>
+        </View>
+      </View>
+
       <View style={styles.progress}>
-        <Svg width={104} height={104} style={StyleSheet.absoluteFill}>
+        <Svg height={60} style={StyleSheet.absoluteFill} width={60}>
           <Circle
-            cx={52}
-            cy={52}
-            r={42}
-            fill="rgba(5,16,15,0.56)"
-            stroke="rgba(255,255,255,0.3)"
-            strokeWidth={7}
+            cx={30}
+            cy={30}
+            fill="rgba(3, 8, 12, 0.62)"
+            r={24}
+            stroke="rgba(255,255,255,0.28)"
+            strokeWidth={4}
           />
           <Circle
-            cx={52}
-            cy={52}
-            r={42}
+            cx={30}
+            cy={30}
             fill="transparent"
-            stroke="#86D239"
+            origin="30,30"
+            r={24}
+            rotation="-90"
+            stroke={warning ? '#F6C564' : complete ? '#86D239' : '#FFFFFF'}
             strokeDasharray={`${circumference} ${circumference}`}
             strokeDashoffset={circumference * (1 - progress)}
             strokeLinecap="round"
-            strokeWidth={7}
-            rotation="-90"
-            origin="52,52"
+            strokeWidth={4}
           />
         </Svg>
-        <Ionicons color="#FFFFFF" name="arrow-forward-circle" size={28} />
+        <Ionicons color="#FFFFFF" name="refresh" size={17} />
         <Text style={styles.percent}>
-          {sensorAvailable ? `${Math.round(progress * 100)}%` : 'GUIDE'}
-        </Text>
-      </View>
-      <View style={[styles.instruction, wrongDirection && styles.warning]}>
-        <Text style={styles.instructionText}>{instruction}</Text>
-        <Text style={styles.disclaimer}>
-          Motion is an estimate; photos and your confirmation verify evidence.
+          {state === 'SENSOR_UNAVAILABLE' ? 'GUIDE' : `${Math.round(progress * 100)}%`}
         </Text>
       </View>
     </View>
@@ -69,29 +130,41 @@ export function GuidedCaptureOverlay({
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
-    pointerEvents: 'none',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    paddingBottom: 16,
+    justifyContent: 'flex-end',
+    gap: 8,
   },
+  copy: {
+    minHeight: 52,
+    maxWidth: 238,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.24)',
+    borderRadius: 16,
+    backgroundColor: 'rgba(3, 8, 12, 0.68)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  warning: {
+    borderColor: 'rgba(246,197,100,0.65)',
+    backgroundColor: 'rgba(91,55,8,0.78)',
+  },
+  complete: {
+    borderColor: 'rgba(134,210,57,0.65)',
+    backgroundColor: 'rgba(21,70,30,0.76)',
+  },
+  copyText: { minWidth: 0, flex: 1 },
+  label: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  detail: { marginTop: 1, color: 'rgba(255,255,255,0.72)', fontSize: 10, lineHeight: 13 },
   progress: {
-    width: 104,
-    height: 104,
+    width: 60,
+    height: 60,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 1,
   },
-  percent: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
-  instruction: {
-    maxWidth: '90%',
-    borderRadius: 14,
-    backgroundColor: 'rgba(5,16,15,0.74)',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
-  warning: { backgroundColor: 'rgba(124,65,8,0.88)' },
-  instructionText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', textAlign: 'center' },
-  disclaimer: { color: '#C8D7D5', fontSize: 10, marginTop: 3, textAlign: 'center' },
+  percent: { color: '#FFFFFF', fontSize: 8, fontWeight: '900' },
 });

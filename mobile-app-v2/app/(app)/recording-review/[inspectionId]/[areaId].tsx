@@ -4,15 +4,28 @@ import { useVideoPlayer, VideoView } from 'expo-video';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import type { AdditionalVideoCategory } from '@/src/domain/models';
 import { useInspection, useRoom, useRooms, useSaveRecording } from '@/src/features/queries';
 import { deleteDraftRecording } from '@/src/media/local-recordings';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { nextInspectionRoom } from '@/src/utils/room-workflow';
 
+const ADDITIONAL_CATEGORIES: readonly {
+  value: AdditionalVideoCategory;
+  label: string;
+}[] = [
+  { value: 'ADDITIONAL_DAMAGE', label: 'Damage' },
+  { value: 'APPLIANCE_TEST', label: 'Appliance' },
+  { value: 'SAFETY', label: 'Safety' },
+  { value: 'FOLLOW_UP', label: 'Follow-up' },
+  { value: 'OTHER', label: 'Other' },
+];
+
 export default function RecordingReviewScreen() {
-  const { inspectionId = '', areaId = '' } = useLocalSearchParams<{
+  const { inspectionId = '', areaId = '', recordingType } = useLocalSearchParams<{
     inspectionId: string;
     areaId: string;
+    recordingType?: string;
   }>();
   const room = useRoom(areaId);
   const rooms = useRooms(inspectionId);
@@ -25,9 +38,15 @@ export default function RecordingReviewScreen() {
   const save = useSaveRecording();
   const [note, setNote] = useState(draft?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  const [label, setLabel] = useState(draft?.label ?? '');
+  const [category, setCategory] = useState<AdditionalVideoCategory>(
+    draft?.category ?? 'OTHER',
+  );
   const player = useVideoPlayer(draft?.uri ?? null, (instance) => {
     instance.loop = false;
   });
+  const isAdditional =
+    draft?.recordingType === 'ADDITIONAL_ISSUE' || recordingType === 'ADDITIONAL_ISSUE';
 
   if (!draft) {
     return (
@@ -57,20 +76,32 @@ export default function RecordingReviewScreen() {
           inspectionId,
           roomId: areaId,
           recordingType: draft.recordingType ?? 'PRIMARY_AREA',
-          label: draft.label,
-          category: draft.category,
+          label: isAdditional
+            ? label.trim() || `${room.data?.name ?? 'Room'} additional evidence`
+            : draft.label,
+          category: isAdditional ? category : draft.category,
           propertyAddress: inspection.data?.property.address ?? 'Assigned property',
           roomName: room.data?.name ?? 'Room evidence',
           uri: draft.uri,
           durationSeconds: draft.durationSeconds,
           estimatedSizeMb: draft.estimatedSizeMb,
           note,
-          captureSummary: draft.captureSummary,
+          captureSummary: draft.captureSummary
+            ? {
+                ...draft.captureSummary,
+                manualConfirmation: true,
+                coverageStatus:
+                  draft.captureSummary.coverageStatus === 'COMPLETE' ||
+                  draft.captureSummary.coverageStatus === 'LIKELY_COMPLETE'
+                    ? draft.captureSummary.coverageStatus
+                    : 'MANUALLY_CONFIRMED',
+              }
+            : undefined,
         },
       },
       {
         onSuccess: () => {
-          if (draft.recordingType === 'ADDITIONAL_ISSUE') {
+          if (isAdditional) {
             router.replace(`/areas/${areaId}`);
           } else if (nextRoom) {
             router.replace(`/areas/${nextRoom.id}`);
@@ -112,11 +143,58 @@ export default function RecordingReviewScreen() {
             placeholderTextColor="#9a9484"
           />
         </View>
+        {isAdditional ? (
+          <View className="mt-4 rounded-2xl bg-card p-5">
+            <Text className="font-semibold text-foreground">Additional evidence details</Text>
+            <Text className="mt-1 text-xs leading-5 text-muted-foreground">
+              Give this focused clip a short label so reviewers understand why it was added.
+            </Text>
+            <TextInput
+              accessibilityLabel="Additional evidence label"
+              className="mt-3 min-h-12 rounded-xl border border-border bg-muted px-4 py-3 text-foreground"
+              value={label}
+              onChangeText={setLabel}
+              placeholder="e.g. Sink leak follow-up"
+              placeholderTextColor="#9a9484"
+            />
+            <Text className="mt-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Category
+            </Text>
+            <View accessibilityRole="radiogroup" className="mt-2 flex-row flex-wrap gap-2">
+              {ADDITIONAL_CATEGORIES.map((option) => {
+                const selected = category === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    className={`min-h-11 items-center justify-center rounded-full border px-4 ${
+                      selected ? 'border-primary bg-primary/10' : 'border-border bg-muted'
+                    }`}
+                    onPress={() => setCategory(option.value)}
+                  >
+                    <Text
+                      className={`text-sm font-semibold ${
+                        selected ? 'text-primary' : 'text-muted-foreground'
+                      }`}
+                    >
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
         <Pressable
           // The tick is rendered as a bare "✓" glyph, which a screen reader
           // either skips or reads as punctuation, so the label must carry the
           // whole statement being agreed to.
-          accessibilityLabel="I confirm this recording captures the required room evidence."
+          accessibilityLabel={
+            isAdditional
+              ? 'I confirm this clip clearly captures the additional evidence.'
+              : 'I confirm this recording captures the required room evidence.'
+          }
           accessibilityRole="checkbox"
           accessibilityState={{ checked: confirmed }}
           className={`mt-4 min-h-14 flex-row items-start gap-3 rounded-2xl border p-4 ${
@@ -132,7 +210,9 @@ export default function RecordingReviewScreen() {
             <Text className="text-xs text-primary-foreground">{confirmed ? '✓' : ''}</Text>
           </View>
           <Text className="flex-1 text-sm leading-5 text-foreground">
-            I confirm this recording captures the required room evidence.
+            {isAdditional
+              ? 'I confirm this clip clearly captures the additional evidence.'
+              : 'I confirm this recording captures the required room evidence.'}
           </Text>
         </Pressable>
         {save.isError ? (
@@ -155,7 +235,11 @@ export default function RecordingReviewScreen() {
             onPress={() => {
               deleteDraftRecording(draft.uri);
               setDraft(null);
-              router.replace(`/camera/${inspectionId}/${areaId}`);
+              router.replace(
+                isAdditional
+                  ? `/camera/${inspectionId}/${areaId}?recordingType=ADDITIONAL_ISSUE`
+                  : `/camera/${inspectionId}/${areaId}`,
+              );
             }}
           >
             <Text className="font-semibold text-foreground">Retake</Text>
@@ -182,7 +266,9 @@ export default function RecordingReviewScreen() {
           accessibilityLabel={
             save.isPending
               ? 'Saving and queueing recording'
-              : nextRoom
+              : isAdditional
+                ? 'Save and queue additional evidence'
+                : nextRoom
                 ? `Save and continue to ${nextRoom.name}`
                 : 'Save and return to inspection'
           }
@@ -201,7 +287,9 @@ export default function RecordingReviewScreen() {
           >
             {save.isPending
               ? 'Saving & queueing…'
-              : nextRoom
+              : isAdditional
+                ? 'Save & queue evidence'
+                : nextRoom
                 ? `Save & continue to ${nextRoom.name}`
                 : 'Save & return to inspection'}
           </Text>

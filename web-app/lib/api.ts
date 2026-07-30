@@ -4,6 +4,21 @@ import { resolveApiUrl, type ApiErrorContract, type Paginated } from '@texasrent
 
 import { supabase } from './supabase';
 
+/**
+ * Bypasses ngrok's free-tier browser interstitial.
+ *
+ * Without it, ngrok answers any browser-User-Agent request with an HTML warning
+ * page instead of proxying to the API. That page carries no
+ * `Access-Control-Allow-Origin`, so the browser reports a CORS failure and the
+ * real cause — that the request never reached the backend at all — is invisible.
+ * The preflight already succeeds, which makes it look like a server misconfig.
+ *
+ * Harmless against a non-ngrok host, and free: every request here already sends
+ * `authorization`, which is not CORS-safelisted, so a preflight happens either
+ * way and this adds no extra round trip.
+ */
+const NGROK_SKIP_INTERSTITIAL = { 'ngrok-skip-browser-warning': 'true' } as const;
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -31,6 +46,7 @@ export async function api<T>(
       ...options,
       headers: {
         ...(isFormData ? {} : { 'content-type': 'application/json' }),
+        ...NGROK_SKIP_INTERSTITIAL,
         authorization: `Bearer ${data.session.access_token}`,
         ...options.headers,
       },
@@ -62,7 +78,10 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
   try {
     response = await fetch(resolveApiUrl(baseUrl, path), {
       signal,
-      headers: { authorization: `Bearer ${data.session.access_token}` },
+      headers: {
+        ...NGROK_SKIP_INTERSTITIAL,
+        authorization: `Bearer ${data.session.access_token}`,
+      },
     });
   } catch {
     throw new ApiError(0, 'NETWORK_ERROR', 'The API could not be reached. Check your connection.');

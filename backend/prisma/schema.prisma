@@ -90,6 +90,8 @@ enum InspectionType {
   OCCUPIED
   BACK_TO_MARKET
   MOVE_OUT
+  /// Equipment maintenance, outside the tenancy lifecycle chain.
+  HVAC
 }
 
 enum InspectionAreaCompletionStatus {
@@ -1053,10 +1055,10 @@ model InspectionMedia {
   // avoid a second media↔finding relation). Plain FK enforced in the migration.
   relatedFindingId        String?                @db.Uuid
   captureGuidelineVersion String?
-  captureSessionId         String?                @unique
-  capturePolicyVersion     String?
+  captureSessionId        String?                @unique
+  capturePolicyVersion    String?
   // Summarized capture metrics only. Raw motion samples stay on the device.
-  captureSummary           Json?
+  captureSummary          Json?
   uploadStatus            MediaUploadStatus      @default(PENDING)
   processingStatus        MediaProcessingStatus  @default(PENDING)
   createdAt               DateTime               @default(now())

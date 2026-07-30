@@ -91,6 +91,30 @@ export function SearchableSelect({
     if (match) setSelectedCache(match);
   }, [availableOptions, value]);
 
+  const searching = query.trim().length > 0;
+
+  /**
+   * The rows actually rendered.
+   *
+   * The chosen option is pinned to the top when the loaded page does not
+   * contain it — with paginated or auto-filled values it usually will not, and
+   * the list would then open with no checkmark anywhere, silently disagreeing
+   * with the trigger above it.
+   *
+   * Not pinned while searching: a row that does not match what was typed is
+   * noise, and the checkmark on the trigger still carries the current value.
+   */
+  const listOptions = useMemo(() => {
+    if (searching || !selected) return availableOptions;
+    return availableOptions.some((option) => option.value === selected.value)
+      ? availableOptions
+      : [selected, ...availableOptions];
+  }, [availableOptions, searching, selected]);
+
+  /** cmdk matches on the item's `value`, so this must be built identically. */
+  const itemValue = (option: SearchableSelectOption) =>
+    `${option.label} ${option.searchText ?? ''}`.trim();
+
   // Debounced server search, unchanged from the previous implementation.
   useEffect(() => {
     if (!open || !onSearch) return;
@@ -133,12 +157,17 @@ export function SearchableSelect({
           role="combobox"
           type="button"
         >
-          <span className="truncate">{selected?.label ?? placeholder}</span>
+          {/* min-w-0 is what makes `truncate` actually take effect: without
+              it the flex item cannot shrink below its content width. */}
+          <span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
           <ChevronsUpDown aria-hidden className="size-4 shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
-        <Command shouldFilter={!onSearch}>
+        <Command
+          defaultValue={selected ? itemValue(selected) : undefined}
+          shouldFilter={!onSearch}
+        >
           <CommandInput
             onValueChange={setQuery}
             placeholder={searchPlaceholder}
@@ -147,20 +176,20 @@ export function SearchableSelect({
           <CommandList onScroll={handleScroll}>
             <CommandEmpty>{emptyMessage}</CommandEmpty>
             <CommandGroup heading={optionsLabel}>
-              {availableOptions.map((option) => (
+              {listOptions.map((option) => (
                 <CommandItem
                   key={option.value || '__clear__'}
                   onSelect={() => {
                     onChange(option.value);
                     handleOpenChange(false);
                   }}
-                  value={`${option.label} ${option.searchText ?? ''}`.trim()}
+                  value={itemValue(option)}
                 >
                   <Check
                     aria-hidden
                     className={cn('size-4', option.value === value ? 'opacity-100' : 'opacity-0')}
                   />
-                  <span className="truncate">{option.label}</span>
+                  <span className="min-w-0 truncate">{option.label}</span>
                 </CommandItem>
               ))}
             </CommandGroup>
