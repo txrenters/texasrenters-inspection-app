@@ -110,7 +110,9 @@ const roomSchema = z.object({
   areaStatus: z.enum(['DRAFT', 'APPROVED', 'REJECTED']).default('APPROVED'),
   updatedAt: z.string().optional(),
 });
-const findingSchema = z.object({
+// Exported for the offline round-trip tests: these schemas are re-parsed
+// against their own cached output, so their shape has to be verifiable.
+export const findingSchema = z.object({
   id: z.string(),
   inspectionId: z.string(),
   roomId: z.string(),
@@ -144,19 +146,30 @@ const findingSchema = z.object({
   reviewerNotes: z.string().optional(),
   updatedAt: z.string().optional(),
 });
-const roomPhotoSchema = z.object({
-  id: z.string(),
-  roomId: z.string(),
-  findingId: z.string().nullish(),
-  // Permissive: the server's PhotoCaptureType enum has grown over time, and a
-  // photo with an unrecognised type must still be counted as evidence rather
-  // than failing the whole request.
-  captureType: z.string().transform((value) => value as PhotoCaptureType),
-  sequenceNumber: z.number().nullish(),
-  label: z.string().nullish(),
-  capturedAt: z.string(),
-  contentPath: z.string(),
-});
+export const roomPhotoSchema = z
+  .object({
+    id: z.string(),
+    roomId: z.string(),
+    findingId: z.string().nullish(),
+    // Permissive: the server's PhotoCaptureType enum has grown over time, and a
+    // photo with an unrecognised type must still be counted as evidence rather
+    // than failing the whole request.
+    captureType: z.string(),
+    sequenceNumber: z.number().nullish(),
+    label: z.string().nullish(),
+    capturedAt: z.string(),
+    contentPath: z.string(),
+  })
+  // Normalising inside the schema, not at the call site, so what gets written
+  // to the offline cache is already the final shape and survives a round trip
+  // back through this same parser.
+  .transform((photo) => ({
+    ...photo,
+    findingId: photo.findingId ?? null,
+    captureType: photo.captureType as PhotoCaptureType,
+    sequenceNumber: photo.sequenceNumber ?? null,
+    label: photo.label ?? null,
+  }));
 const uploadSchema = z.object({
   id: z.string(),
   mediaId: z.string(),
@@ -642,15 +655,12 @@ export class ApiMediaRepository implements MediaRepository {
     return media;
   }
   async photosForRoom(roomId: string) {
-    return z
-      .array(roomPhotoSchema)
-      .parse(await getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/photos`))
-      .map((photo) => ({
-        ...photo,
-        findingId: photo.findingId ?? null,
-        sequenceNumber: photo.sequenceNumber ?? null,
-        label: photo.label ?? null,
-      }));
+    // Cached so a technician re-opening an area without signal still sees how
+    // much evidence exists there. Without it the completion checklist reports
+    // zero photos offline, which reads as "you have not documented this".
+    return cachedApiRecord(`room-photos:${roomId}`, z.array(roomPhotoSchema), () =>
+      getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/photos`),
+    );
   }
 }
 
@@ -932,21 +942,30 @@ function withLocalRoomState(room: z.infer<typeof roomSchema>) {
 export class ApiFindingRepository implements FindingRepository {
   async list(inspectionId?: string, kind: FindingKind = 'DEFECTS') {
     if (!inspectionId) return [];
-    return z
-      .object({ items: z.array(findingSchema) })
-      .parse(
-        await getJson(
+    // `kind` is part of the key for the same reason it is part of the
+    // react-query key: defects and summaries come from one endpoint, and a
+    // shared key would let one overwrite the other in the cache.
+    const payload = await cachedApiRecord(
+      `findings:${inspectionId}:${kind}`,
+      z.object({ items: z.array(findingSchema) }),
+      () =>
+        getJson(
           `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/findings?page=1&pageSize=100&kind=${kind}`,
         ),
-      ).items;
+    );
+    return payload.items;
   }
   async get(id: string, inspectionId?: string) {
     if (!inspectionId) return unavailable('Open findings from their assigned inspection.');
-    // ALL, because a summary opened by id is still a valid target.
-    const findings = await this.list(inspectionId, 'ALL');
-    const finding = findings.find((item) => item.id === id);
-    if (!finding) throw new Error('This finding is no longer available for this inspection.');
-    return finding;
+    // Search the kinds the app actually fetches, rather than kind=ALL: no
+    // screen requests ALL, so it is never in the offline cache and a finding
+    // opened without signal would fail even though its list is cached.
+    // Defects first — that is what the lists a technician taps are made of.
+    for (const kind of ['DEFECTS', 'SUMMARIES'] as const) {
+      const finding = (await this.list(inspectionId, kind)).find((item) => item.id === id);
+      if (finding) return finding;
+    }
+    throw new Error('This finding is no longer available for this inspection.');
   }
   approve = async () => unavailable('Technicians cannot approve AI findings.');
   edit = async () => unavailable('Technicians cannot edit AI findings.');
