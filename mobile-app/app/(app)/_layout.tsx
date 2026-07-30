@@ -22,6 +22,7 @@ export default function AppLayout() {
           headerTintColor: colors.textPrimary,
           headerShadowVisible: false,
           headerTitleStyle: { fontWeight: '700' },
+          headerBackButtonDisplayMode: 'minimal',
           contentStyle: { backgroundColor: colors.background },
         }}
       >
@@ -31,6 +32,10 @@ export default function AppLayout() {
           options={{ title: 'Inspection overview' }}
         />
         <Stack.Screen name="inspections/[inspectionId]/areas" options={{ title: 'Rooms' }} />
+        <Stack.Screen
+          name="inspections/[inspectionId]/areas/new"
+          options={{ title: 'Add area', presentation: 'card' }}
+        />
         <Stack.Screen name="inspections/[inspectionId]/findings" options={{ title: 'Findings' }} />
         <Stack.Screen
           name="inspections/[inspectionId]/finding/[findingId]"

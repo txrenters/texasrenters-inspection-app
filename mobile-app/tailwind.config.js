@@ -54,6 +54,46 @@ module.exports = {
           DEFAULT: 'hsl(var(--info))',
           foreground: 'hsl(var(--info-foreground))',
         },
+        offline: {
+          DEFAULT: 'hsl(var(--offline))',
+          foreground: 'hsl(var(--offline-foreground))',
+        },
+        'pending-sync': {
+          DEFAULT: 'hsl(var(--pending-sync))',
+          foreground: 'hsl(var(--pending-sync-foreground))',
+        },
+        uploading: {
+          DEFAULT: 'hsl(var(--uploading))',
+          foreground: 'hsl(var(--uploading-foreground))',
+        },
+        processing: {
+          DEFAULT: 'hsl(var(--processing))',
+          foreground: 'hsl(var(--processing-foreground))',
+        },
+        'needs-review': {
+          DEFAULT: 'hsl(var(--needs-review))',
+          foreground: 'hsl(var(--needs-review-foreground))',
+        },
+        approved: {
+          DEFAULT: 'hsl(var(--approved))',
+          foreground: 'hsl(var(--approved-foreground))',
+        },
+        rejected: {
+          DEFAULT: 'hsl(var(--rejected))',
+          foreground: 'hsl(var(--rejected-foreground))',
+        },
+        failed: {
+          DEFAULT: 'hsl(var(--failed))',
+          foreground: 'hsl(var(--failed-foreground))',
+        },
+        recording: {
+          DEFAULT: 'hsl(var(--recording))',
+          foreground: 'hsl(var(--recording-foreground))',
+        },
+        'capture-guide': {
+          DEFAULT: 'hsl(var(--capture-guide))',
+          foreground: 'hsl(var(--capture-guide-foreground))',
+        },
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',

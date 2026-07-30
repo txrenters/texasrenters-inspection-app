@@ -63,6 +63,10 @@ export function FloorPlanManager({
   // pending state of a (no longer long-running) mutation.
   const [extractingJobId, setExtractingJobId] = useState<string | null>(null);
   const [extractionError, setExtractionError] = useState<string | null>(null);
+  // React state does not become visible until the next render. This guard
+  // closes the small window where a fast second click could start a duplicate
+  // extraction request before the disabled button appears.
+  const extractionRequestActive = useRef(false);
   const pollAbort = useRef<AbortController | null>(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -126,7 +130,7 @@ export function FloorPlanManager({
     selectedUnitId === null
       ? 'Building-wide'
       : (activeUnits.find((unit) => unit.id === selectedUnitId)?.name ?? 'Selected unit');
-  const isExtracting = Boolean(extractingJobId);
+  const isExtracting = actions.extractFloorPlan.isPending || Boolean(extractingJobId);
   const closeComparison = useCallback(() => setIsComparisonOpen(false), []);
 
   // Batch selection over the draft review list. Held as ids rather than
@@ -236,6 +240,11 @@ export function FloorPlanManager({
     actions.deletePropertyAreas.error,
     actions.approvePropertyAreas.error,
   ].find(Boolean);
+  const actionErrorMessage = actionError
+    ? actionError instanceof Error
+      ? actionError.message
+      : 'The request could not be completed.'
+    : null;
 
   // Replacing an existing source version is confirmed first; the submit is
   // parked rather than blocked because AlertDialog is asynchronous.
@@ -272,9 +281,11 @@ export function FloorPlanManager({
    * timeout, so there is no long response to await here.
    */
   async function extract() {
-    if (!latest) return;
+    if (!latest || extractionRequestActive.current) return;
+    extractionRequestActive.current = true;
     setMessage(undefined);
     setExtractionError(null);
+    actions.extractFloorPlan.reset();
     const floorPlanId = latest.id;
     try {
       const started = await actions.extractFloorPlan.mutateAsync({ propertyId, floorPlanId });
@@ -292,6 +303,8 @@ export function FloorPlanManager({
               `${created} added as new draft${created === 1 ? '' : 's'} and ` +
               `${present} already present in this scope.`,
           );
+          setExtractionError(null);
+          actions.extractFloorPlan.reset();
           await Promise.all([plans.refetch(), areas.refetch()]);
           return;
         }
@@ -310,6 +323,7 @@ export function FloorPlanManager({
         error instanceof Error ? error.message : 'Extraction could not be started.',
       );
     } finally {
+      extractionRequestActive.current = false;
       setExtractingJobId(null);
     }
   }
@@ -594,11 +608,9 @@ export function FloorPlanManager({
             {extractionError}
           </Alert>
         ) : null}
-        {actionError ? (
+        {actionErrorMessage && actionErrorMessage !== extractionError ? (
           <Alert variant="destructive" role="alert">
-            {actionError instanceof Error
-              ? actionError.message
-              : 'The request could not be completed.'}
+            {actionErrorMessage}
           </Alert>
         ) : null}
         {message ? <Alert variant="success">{message}</Alert> : null}

@@ -158,6 +158,14 @@ export const useProperties = (
     enabled,
     placeholderData: keepPreviousData,
   });
+/**
+ * Property options, optionally narrowed to one portfolio.
+ *
+ * `portfolioId` is deliberately optional: an empty value is dropped by
+ * `queryString`, so the request returns every active property. Scheduling
+ * starts from the address a coordinator was given, and requiring them to first
+ * recall which portfolio owns it inverted the order they actually work in.
+ */
 export const usePropertyOptions = (portfolioId: string, search = '') =>
   useInfiniteQuery({
     queryKey: keys.propertyOptions(portfolioId, search),
@@ -173,7 +181,6 @@ export const usePropertyOptions = (portfolioId: string, search = '') =>
         })}`,
         { signal },
       ),
-    enabled: Boolean(portfolioId),
     getNextPageParam: (lastPage) =>
       lastPage.page < lastPage.totalPages ? lastPage.page + 1 : undefined,
   });

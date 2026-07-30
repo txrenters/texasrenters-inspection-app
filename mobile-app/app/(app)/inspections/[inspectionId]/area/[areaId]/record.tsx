@@ -26,6 +26,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppButton, ConfirmationModal } from '../../../../../../src/components/ui';
+import { Label } from '../../../../../../src/components/ui/label';
+import {
+  RadioGroup,
+  RadioGroupItem,
+} from '../../../../../../src/components/ui/radio-group';
 import { GuidedCaptureOverlay } from '../../../../../../src/capture/GuidedCaptureOverlay';
 import {
   evaluateCapture,
@@ -1018,40 +1023,70 @@ function CaptureTypeModal({
   visible: boolean;
 }) {
   const styles = useThemedStyles(createStyles);
+  const [draft, setDraft] = useState<PhotoCaptureType>(selected);
+  useEffect(() => {
+    if (visible) setDraft(selected);
+  }, [selected, visible]);
   return (
     <Modal animationType="slide" onRequestClose={onClose} transparent visible={visible}>
       <Pressable accessibilityRole="button" onPress={onClose} style={styles.guideBackdrop}>
-        <Pressable style={styles.captureTypeSheet}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.guideTitle}>Snapshot type</Text>
-          <Text style={styles.captureTypeDescription}>
-            Choose what the next snapshot documents.
-          </Text>
-          {CAPTURE_TYPE_OPTIONS.map((option) => {
-            const isSelected = selected === option.value;
-            return (
-              <Pressable
-                key={option.value}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: isSelected }}
-                onPress={() => onSelect(option.value)}
-                style={({ pressed }) => [
-                  styles.captureTypeOption,
-                  isSelected && styles.captureTypeOptionSelected,
-                  pressed && styles.pressed,
-                ]}
-              >
-                <Ionicons
-                  color={isSelected ? '#86D239' : '#61716F'}
-                  name={isSelected ? 'radio-button-on' : 'radio-button-off'}
-                  size={22}
+        <SafeAreaView edges={['bottom']} style={styles.captureTypeSafeArea}>
+          <Pressable style={styles.captureTypeSheet}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.captureTypeHeader}>
+              <View style={styles.captureTypeHeaderCopy}>
+                <Text style={styles.guideTitle}>Snapshot type</Text>
+                <Text style={styles.captureTypeDescription}>
+                  Choose what the next snapshot documents.
+                </Text>
+              </View>
+              <CameraIconButton accessibilityLabel="Close snapshot type" icon="close" onPress={onClose} />
+            </View>
+            <RadioGroup
+              value={draft}
+              onValueChange={(value) => setDraft(value as PhotoCaptureType)}
+              className="gap-2"
+            >
+              {CAPTURE_TYPE_OPTIONS.map((option) => {
+                const isSelected = draft === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    onPress={() => setDraft(option.value)}
+                    style={[
+                      styles.captureTypeOption,
+                      isSelected && styles.captureTypeOptionSelected,
+                    ]}
+                  >
+                    <RadioGroupItem
+                      id={`snapshot-${option.value}`}
+                      value={option.value}
+                      accessibilityLabel={option.label}
+                    />
+                    <Label
+                      nativeID={`snapshot-${option.value}`}
+                      onPress={() => setDraft(option.value)}
+                      className="flex-1 text-base font-extrabold"
+                    >
+                      {option.label}
+                    </Label>
+                  </Pressable>
+                );
+              })}
+            </RadioGroup>
+            <View style={styles.captureTypeActions}>
+              <AppButton label="Photo tips" onPress={onPhotoGuide} variant="ghost" compact />
+              <View style={styles.captureTypeActionButtons}>
+                <AppButton label="Cancel" onPress={onClose} variant="outline" compact />
+                <AppButton
+                  label="Use selection"
+                  onPress={() => onSelect(draft)}
+                  compact
                 />
-                <Text style={styles.captureTypeOptionText}>{option.label}</Text>
-              </Pressable>
-            );
-          })}
-          <AppButton label="Photo tips" onPress={onPhotoGuide} variant="ghost" />
-        </Pressable>
+              </View>
+            </View>
+          </Pressable>
+        </SafeAreaView>
       </Pressable>
     </Modal>
   );
@@ -1472,6 +1507,7 @@ const createStyles = (colors: AppColors) =>
     captureTypeSheet: {
       width: '100%',
       maxWidth: 560,
+      maxHeight: '88%',
       alignSelf: 'center',
       gap: spacing.sm,
       borderTopLeftRadius: radius.lg,
@@ -1479,6 +1515,21 @@ const createStyles = (colors: AppColors) =>
       padding: spacing.lg,
       backgroundColor: colors.surface,
     },
+    captureTypeSafeArea: {
+      width: '100%',
+      maxWidth: 560,
+      alignSelf: 'center',
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: radius.lg,
+      borderTopRightRadius: radius.lg,
+    },
+    captureTypeHeader: {
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+    },
+    captureTypeHeaderCopy: { flex: 1, minWidth: 0, gap: spacing.xs },
     sheetHandle: {
       width: 42,
       height: 4,
@@ -1503,5 +1554,15 @@ const createStyles = (colors: AppColors) =>
       borderColor: colors.primary,
       backgroundColor: colors.primarySoft,
     },
-    captureTypeOptionText: { ...typography.body, color: colors.textPrimary, fontWeight: '800' },
+    captureTypeActions: {
+      gap: spacing.sm,
+      paddingTop: spacing.xs,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+    },
+    captureTypeActionButtons: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: spacing.sm,
+    },
   });

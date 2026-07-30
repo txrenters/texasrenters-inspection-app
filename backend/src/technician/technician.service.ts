@@ -1353,6 +1353,19 @@ export class TechnicianService {
     });
     const isSummary = (finding: (typeof findings)[number]) =>
       finding.findingType === 'NO_CHANGE' && finding.title === ROOM_SUMMARY_TITLE;
+    // Photo counts per area. The mobile review screen previously counted the
+    // device's own snapshot store, which reports zero after a reinstall or on a
+    // replacement handset — telling a technician their evidence is missing at
+    // the exact moment they are deciding whether to submit.
+    const photoCounts = await this.prisma.inspectionPhoto.groupBy({
+      by: ['inspectionAreaId'],
+      where: { inspectionArea: { inspectionId } },
+      _count: { _all: true },
+    });
+    const photoCountByArea = new Map(
+      photoCounts.map((row) => [row.inspectionAreaId, row._count._all]),
+    );
+
     const rooms = record.areas.map((area) => {
       const room = this.mapRoom(area);
       const roomFindings = findings.filter(
@@ -1362,6 +1375,7 @@ export class TechnicianService {
       const defects = roomFindings.filter((finding) => !isSummary(finding));
       return {
         ...room,
+        photoCount: photoCountByArea.get(area.id) ?? 0,
         summary: summary?.description ?? null,
         findings: defects.map((finding) => ({
           id: finding.id,
@@ -1390,6 +1404,7 @@ export class TechnicianService {
         finishedRooms: finished.length,
         summaries: rooms.filter((room) => room.summary).length,
         defectFindings: rooms.reduce((sum, room) => sum + room.findings.length, 0),
+        photos: rooms.reduce((sum, room) => sum + room.photoCount, 0),
         pendingReviewCount: record._count.findings,
       },
     };

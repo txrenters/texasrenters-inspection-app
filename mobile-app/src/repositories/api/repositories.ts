@@ -48,7 +48,7 @@ const inspectionSchema = z.object({
   propertyId: z.string(),
   unitId: z.string().nullable().optional(),
   unitName: z.string().nullable().optional(),
-  type: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT']),
+  type: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT', 'HVAC']),
   baselineInspectionId: z.string().nullable().optional(),
   baselineScheduledAt: z.string().optional(),
   scheduledAt: z.string(),
@@ -80,7 +80,7 @@ const roomSchema = z.object({
   floorName: z.string(),
   order: z.number(),
   isRequired: z.boolean(),
-  inspectionType: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT']),
+  inspectionType: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT', 'HVAC']),
   baseline: z.object({
     summary: z.string(),
     condition: z.enum(['DOCUMENTED', 'LIMITED', 'NOT_AVAILABLE']),

@@ -1,7 +1,7 @@
 'use client';
 
 import type { AreaFinding, AreaRecording } from '@texasrenters/shared';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { FieldError } from '@/components/ui/field';
 import { Alert } from '@/components/ui/alert';
@@ -9,9 +9,34 @@ import { api, apiBlob } from '@/lib/api';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
 import { buttonVariants } from '@/components/ui/button';
+import { Maximize2 } from 'lucide-react';
+
 import { Badge, ErrorState, formatDate } from '../shared';
 
+import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
+
+/**
+ * A section heading with an optional count.
+ *
+ * The old markup used bare <h4>/<h5> with a hairline rule, which Preflight's
+ * absence left at browser-default sizing — "Recordings" and the area title
+ * rendered at nearly the same weight, so the panel read as one flat list.
+ */
+function SectionHeading({ children, count }: { children: string; count?: number }) {
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <h4 className="m-0 text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {children}
+      </h4>
+      {count ? (
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground">
+          {count}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function formatSeconds(total: number) {
   const minutes = Math.floor(total / 60);
@@ -28,10 +53,12 @@ function RecordingCard({
   recording,
   activeId,
   onActivate,
+  onExpand,
 }: {
   recording: AreaRecording;
   activeId: string | null;
   onActivate: (id: string | null) => void;
+  onExpand: () => void;
 }) {
   const [source, setSource] = useState<string | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
@@ -73,13 +100,24 @@ function RecordingCard({
         <Badge value={recording.processingStatus} />
       </header>
       {active && (source || objectUrl) ? (
-        <video
-          controls
-          autoPlay
-          className="area-recording-player"
-          poster={recording.thumbnailUrl ?? undefined}
-          src={source ?? objectUrl ?? undefined}
-        />
+        <div className="relative">
+          <video
+            controls
+            autoPlay
+            className="area-recording-player"
+            poster={recording.thumbnailUrl ?? undefined}
+            src={source ?? objectUrl ?? undefined}
+          />
+          <button
+            aria-label="View recording full screen"
+            className={`${buttonVariants({ variant: 'secondary', size: 'small' })} absolute right-2 top-2`}
+            onClick={onExpand}
+            type="button"
+          >
+            <Maximize2 aria-hidden className="size-3.5" />
+            Full screen
+          </button>
+        </div>
       ) : (
         <button type="button" className="area-recording-poster" onClick={() => void play()}>
           {recording.thumbnailUrl ? (
@@ -275,6 +313,36 @@ export function AreaDetailPanel({
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
   // Reviewing is a privileged decision; reading evidence is not.
   const canReview = usePermissions().has('findings:review');
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+
+  // One flat list across recordings and photos, so the arrow keys walk the
+  // whole area's evidence rather than stopping at a section boundary.
+  const viewerItems = useMemo<EvidenceViewerItem[]>(() => {
+    const bundle = evidence.data;
+    if (!bundle) return [];
+    return [
+      ...bundle.recordings.map((recording) => ({
+        id: recording.id,
+        kind: 'recording' as const,
+        contentPath: recording.contentPath,
+        title:
+          recording.recordingType === 'PRIMARY_AREA'
+            ? `Primary recording — ${bundle.area.name}`
+            : recording.label || `Additional recording — ${bundle.area.name}`,
+        caption: `${formatSeconds(recording.durationSeconds)} · ${recording.technicianName} · ${formatDate(recording.createdAt)}`,
+        posterUrl: recording.thumbnailUrl,
+      })),
+      ...bundle.photoGroups.flatMap((group) =>
+        group.photos.map((photo) => ({
+          id: photo.id,
+          kind: 'photo' as const,
+          contentPath: photo.contentPath,
+          title: photo.label || captureLabel(photo.captureType),
+          caption: `${bundle.area.name} · ${group.label}`,
+        })),
+      ),
+    ];
+  }, [evidence.data]);
 
   // An area-level skeleton, never a whole-page loader, and keyed by area so a
   // slow response can never paint over the area the reviewer is looking at.
@@ -310,7 +378,7 @@ export function AreaDetailPanel({
 
       {conditionSummary ? (
         <section className="mt-5 border-t border-border pt-4">
-          <h4>Condition summary</h4>
+          <SectionHeading>Condition summary</SectionHeading>
           <p>{conditionSummary.description}</p>
           <span className="text-[13px] text-muted-foreground">
             Overall context — itemized findings below list the specific work.
@@ -319,15 +387,18 @@ export function AreaDetailPanel({
       ) : null}
 
       <section className="mt-5 border-t border-border pt-4">
-        <h4>Recordings</h4>
+        <SectionHeading count={recordings.length}>Recordings</SectionHeading>
         {recordings.length ? (
           <div className="area-recording-list">
             {recordings.map((recording) => (
               <RecordingCard
                 key={recording.id}
-                recording={recording}
                 activeId={activeRecording}
                 onActivate={setActiveRecording}
+                onExpand={() =>
+                  setViewerIndex(viewerItems.findIndex((entry) => entry.id === recording.id))
+                }
+                recording={recording}
               />
             ))}
           </div>
@@ -337,17 +408,24 @@ export function AreaDetailPanel({
       </section>
 
       <section className="mt-5 border-t border-border pt-4">
-        <h4>Photos</h4>
+        <SectionHeading count={photoGroups.reduce((sum, group) => sum + group.photos.length, 0)}>Photos</SectionHeading>
         {photoGroups.length ? (
           photoGroups.map((group) => (
             <div key={`${group.key}-${group.findingId ?? 'area'}`} className="area-photo-group">
-              <h5>
+              <h5 className="mb-2 mt-0 text-xs font-semibold text-foreground">
                 {group.label}
                 {group.findingId ? <span className="text-[13px] text-muted-foreground"> · finding evidence</span> : null}
               </h5>
               <div className="area-photo-grid">
                 {group.photos.map((photo) => (
-                  <LazyPhoto key={photo.id} photo={photo} areaName={area.name} />
+                  <LazyPhoto
+                    key={photo.id}
+                    areaName={area.name}
+                    onOpen={() =>
+                      setViewerIndex(viewerItems.findIndex((entry) => entry.id === photo.id))
+                    }
+                    photo={photo}
+                  />
                 ))}
               </div>
             </div>
@@ -358,10 +436,7 @@ export function AreaDetailPanel({
       </section>
 
       <section className="mt-5 border-t border-border pt-4">
-        <h4>
-          Findings{' '}
-          {findings.length ? <span className="section-count">{findings.length}</span> : null}
-        </h4>
+        <SectionHeading count={findings.length}>Findings</SectionHeading>
         {findings.length ? (
           <ol className="area-finding-list">
             {findings.map((finding, index) => (
@@ -382,6 +457,14 @@ export function AreaDetailPanel({
           </p>
         )}
       </section>
+
+      {viewerIndex !== null && viewerIndex >= 0 ? (
+        <EvidenceViewer
+          items={viewerItems}
+          onClose={() => setViewerIndex(null)}
+          startIndex={viewerIndex}
+        />
+      ) : null}
     </div>
   );
 }

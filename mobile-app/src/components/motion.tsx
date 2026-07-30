@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react';
-import { AccessibilityInfo, Animated, Easing } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Platform } from 'react-native';
 
 /**
  * Returns an Animated value that loops 0→1→0 while `active`, for attention-
@@ -28,13 +28,13 @@ export function usePulse(active: boolean): Animated.Value {
           toValue: 1,
           duration: 850,
           easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== 'web',
         }),
         Animated.timing(value, {
           toValue: 0,
           duration: 850,
           easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== 'web',
         }),
       ]),
     );
@@ -64,7 +64,7 @@ export function ScreenEntrance({ children }: PropsWithChildren) {
       toValue: 1,
       duration: 280,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== 'web',
     });
     animation.start();
     return () => animation.stop();
@@ -73,6 +73,9 @@ export function ScreenEntrance({ children }: PropsWithChildren) {
   return (
     <Animated.View
       style={{
+        width: '100%',
+        minWidth: 0,
+        flexShrink: 1,
         opacity: progress,
         transform: [
           { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) },

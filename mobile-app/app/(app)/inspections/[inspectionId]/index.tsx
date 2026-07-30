@@ -217,6 +217,7 @@ const createStyles = (colors: AppColors) =>
       ...typography.caption,
       color: colors.textSecondary,
       flexGrow: 1,
+      flexShrink: 1,
       textAlign: 'right',
     },
     metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
@@ -238,7 +239,7 @@ const createStyles = (colors: AppColors) =>
     cardBody: { ...typography.body, color: colors.textPrimary },
     actions: { gap: spacing.sm },
     actionError: { ...typography.caption, color: colors.danger },
-    step: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+    step: { minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
     stepBadge: {
       width: 22,
       height: 22,

@@ -2,7 +2,6 @@ import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import {
   ActivityIndicator,
-  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -11,11 +10,33 @@ import {
   View,
 } from 'react-native';
 
+import { Badge as ReusableBadge } from './ui/badge';
+import { Button as ReusableButton } from './ui/button';
+import { Card as ReusableCard } from './ui/card';
+import { Progress as ReusableProgress } from './ui/progress';
+import { Text as ReusableText } from './ui/text';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { cn } from '../lib/utils';
 import { isDemoMode } from '../config/environment';
 import {
   type AppColors,
   radius,
-  shadows,
   sizes,
   spacing,
   typography,
@@ -45,31 +66,34 @@ export function AppButton({
   icon?: ComponentProps<typeof Ionicons>['name'];
 }) {
   const { colors } = useAppTheme();
-  const styles = useThemedStyles(createStyles);
+  const reusableVariant = {
+    primary: 'default',
+    secondary: 'secondary',
+    outline: 'outline',
+    danger: 'destructive',
+    ghost: 'ghost',
+  }[variant] as 'default' | 'secondary' | 'outline' | 'destructive' | 'ghost';
+
   return (
-    <Pressable
+    <ReusableButton
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled, busy: loading }}
       disabled={disabled || loading}
+      variant={reusableVariant}
+      size={compact ? 'sm' : 'lg'}
+      className={cn('min-h-11', compact && 'px-3')}
       onPress={() => {
         blurActiveWebElement();
         onPress();
       }}
-      style={({ pressed }) => [
-        styles.button,
-        styles[`${variant}Button`],
-        compact && styles.compactButton,
-        pressed && styles.pressed,
-        (disabled || loading) && styles.disabled,
-      ]}
     >
       {loading ? (
         <ActivityIndicator
           color={variant === 'primary' || variant === 'danger' ? colors.white : colors.primary}
         />
       ) : (
-        <View style={styles.buttonContent}>
+        <>
           {icon ? (
             <Ionicons
               name={icon}
@@ -79,10 +103,12 @@ export function AppButton({
               }
             />
           ) : null}
-          <Text style={[styles.buttonLabel, styles[`${variant}Label`]]}>{label}</Text>
-        </View>
+          <ReusableText className="shrink text-center text-[15px] font-semibold">
+            {label}
+          </ReusableText>
+        </>
       )}
-    </Pressable>
+    </ReusableButton>
   );
 }
 
@@ -92,16 +118,35 @@ function blurActiveWebElement() {
   if (activeElement instanceof HTMLElement) activeElement.blur();
 }
 
-const toneMap = (colors: AppColors) =>
-  ({
-    success: { background: colors.successSoft, text: colors.success, icon: '✓' },
-    warning: { background: colors.warningSoft, text: colors.warning, icon: '!' },
-    danger: { background: colors.dangerSoft, text: colors.danger, icon: '×' },
-    info: { background: colors.infoSoft, text: colors.info, icon: '•' },
-    neutral: { background: colors.surfaceMuted, text: colors.textSecondary, icon: '•' },
-  }) as const;
+const toneMap = {
+  success: {
+    container: 'border-approved/20 bg-approved/15',
+    text: 'text-approved',
+    icon: '✓',
+  },
+  warning: {
+    container: 'border-needs-review/20 bg-needs-review/15',
+    text: 'text-needs-review',
+    icon: '!',
+  },
+  danger: {
+    container: 'border-failed/20 bg-failed/15',
+    text: 'text-failed',
+    icon: '×',
+  },
+  info: {
+    container: 'border-uploading/20 bg-uploading/15',
+    text: 'text-uploading',
+    icon: '•',
+  },
+  neutral: {
+    container: 'border-border bg-muted',
+    text: 'text-muted-foreground',
+    icon: '•',
+  },
+} as const;
 
-export type StatusTone = keyof ReturnType<typeof toneMap>;
+export type StatusTone = keyof typeof toneMap;
 
 export function statusTone(status: string): StatusTone {
   if (['COMPLETED', 'APPROVED', 'READY_FOR_REVIEW', 'DOCUMENTED'].includes(status))
@@ -148,17 +193,27 @@ export function StatusBadge({
   label: string;
   tone?: StatusTone;
 }) {
-  const { colors } = useAppTheme();
-  const styles = useThemedStyles(createStyles);
-  const palette = toneMap(colors)[tone];
+  const palette = toneMap[tone];
   return (
-    <View
+    <ReusableBadge
+      variant="outline"
       accessibilityLabel={formatStatus(label)}
-      style={[styles.badge, { backgroundColor: palette.background }]}
+      style={nativeBadgeStyles.container}
+      className={cn(
+        'min-h-7 max-w-full shrink self-start gap-1 px-2.5 py-1',
+        palette.container,
+      )}
     >
-      <Text style={[styles.badgeIcon, { color: palette.text }]}>{palette.icon}</Text>
-      <Text style={[styles.badgeText, { color: palette.text }]}>{formatStatus(label)}</Text>
-    </View>
+      <ReusableText className={cn('text-[11px] font-black', palette.text)}>
+        {palette.icon}
+      </ReusableText>
+      <ReusableText
+        style={nativeBadgeStyles.label}
+        className={cn('min-w-0 shrink text-[11px] font-extrabold', palette.text)}
+      >
+        {formatStatus(label)}
+      </ReusableText>
+    </ReusableBadge>
   );
 }
 
@@ -166,22 +221,30 @@ export function ProgressBar({ value, label }: { value: number; label?: string })
   const styles = useThemedStyles(createStyles);
   const percentage = Math.max(0, Math.min(100, Math.round(value * 100)));
   return (
-    <View
-      accessibilityRole="progressbar"
-      accessibilityValue={{ min: 0, max: 100, now: percentage }}
-      style={styles.progressGroup}
-    >
+    <View style={styles.progressGroup}>
       {label ? <Text style={styles.progressLabel}>{label}</Text> : null}
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${percentage}%` }]} />
-      </View>
+      <ReusableProgress
+        value={percentage}
+        accessibilityLabel={label}
+        style={nativeProgressStyles.root}
+        className="h-2 bg-primary/20"
+        indicatorClassName="bg-primary"
+      />
     </View>
   );
 }
 
 export function Card({ children, muted = false }: PropsWithChildren<{ muted?: boolean }>) {
-  const styles = useThemedStyles(createStyles);
-  return <View style={[styles.card, muted && styles.mutedCard]}>{children}</View>;
+  return (
+    <ReusableCard
+      className={cn(
+        'w-full min-w-0 gap-4 p-4 py-4 shadow-none',
+        muted && 'border-transparent bg-muted',
+      )}
+    >
+      {children}
+    </ReusableCard>
+  );
 }
 
 export function SectionHeader({
@@ -318,13 +381,13 @@ export function PropertyVisual({
         { backgroundColor: backgrounds[tone] },
       ]}
     >
-      <View style={styles.sun} />
-      <View style={styles.houseRoof} />
-      <View style={styles.houseBody}>
-        <View style={styles.door} />
-        <View style={styles.window} />
+      <View style={[styles.sun, compact && styles.compactSun]} />
+      <View style={[styles.houseRoof, compact && styles.compactHouseRoof]} />
+      <View style={[styles.houseBody, compact && styles.compactHouseBody]}>
+        <View style={[styles.door, compact && styles.compactDoor]} />
+        <View style={[styles.window, compact && styles.compactWindow]} />
       </View>
-      <View style={styles.ground} />
+      <View style={[styles.ground, compact && styles.compactGround]} />
     </View>
   );
 }
@@ -347,26 +410,56 @@ export function ConfirmationModal({
   onCancel: () => void;
   onConfirm: () => void;
 }>) {
-  const styles = useThemedStyles(createStyles);
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.modalOverlay}>
-        <View accessibilityViewIsModal style={styles.modalCard}>
-          <Text style={styles.modalTitle}>{title}</Text>
-          <Text style={styles.modalMessage}>{message}</Text>
+  if (!destructive) {
+    return (
+      <Dialog
+        open={visible}
+        onOpenChange={(open) => {
+          if (!open) onCancel();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{message}</DialogDescription>
+          </DialogHeader>
           {children}
-          <View style={styles.modalActions}>
-            <AppButton label="Cancel" variant="ghost" onPress={onCancel} compact />
-            <AppButton
-              label={confirmLabel}
-              variant={destructive ? 'danger' : 'primary'}
-              onPress={onConfirm}
-              compact
-            />
-          </View>
-        </View>
-      </View>
-    </Modal>
+          <DialogFooter>
+            <ReusableButton variant="outline" onPress={onCancel}>
+              <ReusableText>Cancel</ReusableText>
+            </ReusableButton>
+            <ReusableButton onPress={onConfirm}>
+              <ReusableText>{confirmLabel}</ReusableText>
+            </ReusableButton>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  return (
+    <AlertDialog
+      open={visible}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{message}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {children}
+        <AlertDialogFooter>
+          <AlertDialogCancel onPress={onCancel}>
+            <Text>Cancel</Text>
+          </AlertDialogCancel>
+          <ReusableButton variant="destructive" onPress={onConfirm}>
+            <ReusableText>{confirmLabel}</ReusableText>
+          </ReusableButton>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -379,74 +472,45 @@ export function InitialsAvatar({ initials }: { initials: string }) {
   );
 }
 
+const nativeBadgeStyles = StyleSheet.create({
+  container: {
+    maxWidth: '100%',
+    flexShrink: 1,
+    alignSelf: 'flex-start',
+  },
+  label: {
+    minWidth: 0,
+    flexShrink: 1,
+  },
+});
+
+const nativeProgressStyles = StyleSheet.create({
+  root: {
+    width: '100%',
+    minWidth: 0,
+    height: 8,
+    flexShrink: 0,
+  },
+});
+
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
-    button: {
-      minHeight: sizes.button,
-      borderRadius: radius.md,
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingHorizontal: spacing.lg,
-    },
-    buttonContent: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    compactButton: { minHeight: sizes.touch, paddingHorizontal: spacing.md, flexGrow: 0 },
-    primaryButton: { backgroundColor: colors.primary },
-    secondaryButton: { backgroundColor: colors.secondarySoft },
-    outlineButton: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.primary },
-    dangerButton: { backgroundColor: colors.danger },
-    ghostButton: { backgroundColor: 'transparent' },
-    buttonLabel: { ...typography.label, fontSize: 15 },
-    primaryLabel: { color: colors.white },
-    secondaryLabel: { color: colors.secondaryDark },
-    outlineLabel: { color: colors.primary },
-    dangerLabel: { color: colors.white },
-    ghostLabel: { color: colors.primary },
     pressed: { opacity: 0.78, transform: [{ scale: 0.975 }] },
-    disabled: { opacity: 0.46 },
-    badge: {
-      minHeight: 28,
-      flexDirection: 'row',
-      alignItems: 'center',
-      alignSelf: 'flex-start',
-      gap: 5,
-      borderRadius: radius.round,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-    },
-    badgeIcon: { fontSize: 12, fontWeight: '900' },
-    badgeText: { fontSize: 11, lineHeight: 15, fontWeight: '800' },
-    progressGroup: { gap: spacing.xs },
-    progressLabel: { ...typography.caption, color: colors.textSecondary },
-    progressTrack: {
-      height: 8,
-      backgroundColor: colors.border,
-      borderRadius: radius.round,
-      overflow: 'hidden',
-    },
-    progressFill: { height: 8, backgroundColor: colors.primary, borderRadius: radius.round },
-    card: {
-      backgroundColor: colors.surface,
-      borderRadius: radius.lg,
-      padding: spacing.md,
-      gap: spacing.md,
-    },
-    mutedCard: {
-      backgroundColor: colors.surfaceMuted,
-      ...Platform.select({
-        web: { boxShadow: 'none' },
-        default: { shadowOpacity: 0, elevation: 0 },
-      }),
-    },
+    progressGroup: { width: '100%', minWidth: 0, gap: spacing.xs },
+    progressLabel: { ...typography.caption, color: colors.textSecondary, flexShrink: 1 },
     sectionHeader: {
+      width: '100%',
+      minWidth: 0,
       minHeight: 32,
       flexDirection: 'row',
+      flexWrap: 'wrap',
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: spacing.md,
     },
     sectionHeading: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minWidth: 0 },
     sectionIcon: { color: colors.primary },
-    sectionTitle: { ...typography.heading, color: colors.textPrimary },
+    sectionTitle: { ...typography.heading, color: colors.textPrimary, flexShrink: 1 },
     statCard: {
       minWidth: '46%',
       flexGrow: 1,
@@ -466,6 +530,8 @@ const createStyles = (colors: AppColors) =>
     chipText: { ...typography.label, color: colors.textSecondary },
     selectedChipText: { color: colors.white },
     searchBox: {
+      width: '100%',
+      minWidth: 0,
       minHeight: sizes.touch,
       flexDirection: 'row',
       alignItems: 'center',
@@ -474,7 +540,13 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.surfaceMuted,
       paddingHorizontal: spacing.md,
     },
-    searchInput: { flex: 1, color: colors.textPrimary, fontSize: 15, paddingVertical: spacing.sm },
+    searchInput: {
+      flex: 1,
+      minWidth: 0,
+      color: colors.textPrimary,
+      fontSize: 15,
+      paddingVertical: spacing.sm,
+    },
     demoBanner: {
       minHeight: 32,
       flexDirection: 'row',
@@ -489,13 +561,23 @@ const createStyles = (colors: AppColors) =>
     demoDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.primary },
     demoText: { ...typography.caption, color: colors.primaryDark, fontWeight: '700' },
     propertyVisual: {
+      width: '100%',
+      minWidth: 0,
       height: 176,
       borderRadius: radius.lg,
       overflow: 'hidden',
       justifyContent: 'flex-end',
       alignItems: 'center',
     },
-    compactVisual: { height: 92, width: 96, borderRadius: radius.md },
+    compactVisual: {
+      width: 78,
+      minWidth: 78,
+      maxWidth: 78,
+      height: 72,
+      flexGrow: 0,
+      flexShrink: 0,
+      borderRadius: radius.md,
+    },
     sun: {
       position: 'absolute',
       width: 34,
@@ -515,6 +597,11 @@ const createStyles = (colors: AppColors) =>
       borderRightColor: 'transparent',
       borderBottomColor: colors.primaryDark,
     },
+    compactHouseRoof: {
+      borderLeftWidth: 35,
+      borderRightWidth: 35,
+      borderBottomWidth: 26,
+    },
     houseBody: {
       width: 130,
       height: 72,
@@ -524,7 +611,13 @@ const createStyles = (colors: AppColors) =>
       justifyContent: 'space-around',
       paddingHorizontal: spacing.md,
     },
+    compactHouseBody: {
+      width: 62,
+      height: 36,
+      paddingHorizontal: spacing.xs,
+    },
     door: { width: 26, height: 50, backgroundColor: '#8C6D56' },
+    compactDoor: { width: 15, height: 25 },
     window: {
       width: 34,
       height: 30,
@@ -533,26 +626,15 @@ const createStyles = (colors: AppColors) =>
       borderColor: colors.white,
       marginBottom: spacing.md,
     },
+    compactWindow: {
+      width: 20,
+      height: 17,
+      borderWidth: 2,
+      marginBottom: 6,
+    },
     ground: { height: 18, alignSelf: 'stretch', backgroundColor: '#8BAA88' },
-    modalOverlay: {
-      flex: 1,
-      backgroundColor: colors.overlay,
-      justifyContent: 'center',
-      padding: spacing.lg,
-    },
-    modalCard: {
-      width: '100%',
-      maxWidth: 520,
-      alignSelf: 'center',
-      backgroundColor: colors.surface,
-      borderRadius: radius.xl,
-      padding: spacing.lg,
-      gap: spacing.md,
-      ...shadows.floating,
-    },
-    modalTitle: { ...typography.heading, color: colors.textPrimary },
-    modalMessage: { ...typography.body, color: colors.textSecondary },
-    modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.sm },
+    compactGround: { height: 10 },
+    compactSun: { width: 18, height: 18, borderRadius: 9, right: 8, top: 7 },
     avatar: {
       width: 46,
       height: 46,

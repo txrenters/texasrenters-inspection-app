@@ -1,0 +1,80 @@
+# Temporary remote iOS beta environment.
+#
+# Not production. A single Docker-managed ngrok agent exposes one gateway URL.
+# The gateway routes /api and Socket.IO to NestJS and every Expo/Metro path to
+# mobile-app-v2 on the host. Expo must not start a second ngrok agent.
+#
+#   docker compose --env-file backend/.env.local -f compose.remote-beta.yml up -d --build
+#
+# Credentials come from the ignored backend/.env.local file and are injected at
+# runtime. They are never copied into an image layer or exposed to the clients.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
+    env_file:
+      - ./backend/.env.local
+    environment:
+      APP_ENV: remote-beta
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
+      # backend/.env.local currently points Redis at the host. Disable that
+      # optional cache inside this isolated beta container until it has its own
+      # Docker-network Redis URL.
+      CACHE_ENABLED: 'false'
+      # The public beta boundary must always use real authentication.
+      USE_MOCK_AUTH: 'false'
+      # Expo web for mobile-app-v2 runs on 8082 during remote-beta development.
+      MOBILE_APP_ORIGIN: http://localhost:8082
+    ports:
+      # ngrok is the only public entry point. The host binding stays loopback-only.
+      - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # One internal gateway keeps the account to a single ngrok agent session while
+  # exposing both the REST API and V2 Metro to remote testers.
+  gateway:
+    image: nginx:1.29-alpine
+    volumes:
+      - ./infrastructure/nginx/remote-beta.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Docker Desktop provides this name automatically. The explicit mapping also
+    # keeps the compose file usable on modern Linux Docker engines.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    restart: unless-stopped
+
+  tunnel:
+    image: ngrok/ngrok:latest
+    # The free ngrok dev domain is stable across restarts. It terminates at the
+    # gateway instead of competing with a second Expo-managed ngrok agent.
+    command:
+      - http
+      - http://gateway:80
+      - --url=https://${NGROK_DOMAIN}
+      - --log
+      - stdout
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?NGROK_AUTHTOKEN is missing from backend/.env.local}
+    depends_on:
+      gateway:
+        condition: service_started
+    ports:
+      # The inspection API contains captured payloads, so it remains loopback-only.
+      - '127.0.0.1:4041:4040'
+    restart: unless-stopped

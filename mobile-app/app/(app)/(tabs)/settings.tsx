@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { AppScreen } from '../../../src/components/AppScreen';
+import { Label } from '../../../src/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '../../../src/components/ui/radio-group';
 import {
   AppButton,
   Card,
@@ -35,6 +37,22 @@ export default function SettingsScreen() {
   const state = useDemoStore();
   const signOut = useSignOut();
   const [resetOpen, setResetOpen] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<
+    'Checking…' | 'Reachable' | 'Unavailable' | 'Not configured'
+  >(environment.apiBaseUrl ? 'Checking…' : 'Not configured');
+  useEffect(() => {
+    if (!environment.apiBaseUrl) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4_000);
+    void fetch(`${environment.apiBaseUrl}/health`, { signal: controller.signal })
+      .then((response) => setBackendStatus(response.ok ? 'Reachable' : 'Unavailable'))
+      .catch(() => setBackendStatus('Unavailable'))
+      .finally(() => clearTimeout(timeout));
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
   const reset = () => {
     clearLocalRecordings();
     clearLocalSnapshots();
@@ -80,27 +98,38 @@ export default function SettingsScreen() {
         />
         <SettingRow
           label="Backend status"
-          value={environment.apiBaseUrl ? 'Configured' : 'Not configured'}
+          value={backendStatus}
         />
         <SettingRow label="App version" value={Constants.expoConfig?.version ?? '0.1.0'} />
-        <SettingRow
-          label="Theme"
-          value={`${theme.preference.charAt(0).toUpperCase()}${theme.preference.slice(1)}`}
-        />
       </Card>
       <SectionHeader title="Appearance" icon="color-palette-outline" />
       <Card>
         <Text style={styles.settingLabel}>Color theme</Text>
-        <View style={styles.chips}>
+        <RadioGroup
+          value={theme.preference}
+          onValueChange={(value) => theme.setPreference(value as 'light' | 'dark' | 'system')}
+          className="gap-1"
+        >
           {(['light', 'dark', 'system'] as const).map((preference) => (
-            <FilterChip
-              key={preference}
-              label={`${preference.charAt(0).toUpperCase()}${preference.slice(1)}`}
-              selected={theme.preference === preference}
-              onPress={() => theme.setPreference(preference)}
-            />
+            <View key={preference} style={styles.themeRow}>
+              <RadioGroupItem
+                id={`theme-${preference}`}
+                value={preference}
+                accessibilityLabel={`${preference} theme`}
+              />
+              <Label
+                nativeID={`theme-${preference}`}
+                onPress={() => theme.setPreference(preference)}
+                className="flex-1 py-3 text-base font-semibold"
+              >
+                {preference.charAt(0).toUpperCase() + preference.slice(1)}
+              </Label>
+              {theme.preference === preference ? (
+                <Text style={styles.selectedTheme}>Selected</Text>
+              ) : null}
+            </View>
           ))}
-        </View>
+        </RadioGroup>
         <Text style={styles.description}>System follows your device appearance automatically.</Text>
       </Card>
       {isDemoMode ? <SectionHeader title="Simulation controls" icon="flask-outline" /> : null}
@@ -225,20 +254,48 @@ const createStyles = (colors: AppColors) =>
       backgroundColor: colors.dangerSoft,
       padding: spacing.md,
     },
-    profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-    flex: { flex: 1 },
+    profileRow: {
+      minWidth: 0,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
+    flex: { flex: 1, minWidth: 0 },
     profileName: { ...typography.heading, color: colors.textPrimary },
     body: { ...typography.body, color: colors.textSecondary },
     settingRow: {
       minHeight: 38,
+      minWidth: 0,
       flexDirection: 'row',
+      flexWrap: 'wrap',
       justifyContent: 'space-between',
       alignItems: 'center',
       gap: spacing.md,
     },
     settingLabel: { ...typography.label, color: colors.textPrimary },
-    settingValue: { ...typography.body, color: colors.textSecondary, textAlign: 'right' },
-    toggleRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    settingValue: {
+      ...typography.body,
+      color: colors.textSecondary,
+      textAlign: 'right',
+      flexShrink: 1,
+    },
+    toggleRow: {
+      minHeight: 64,
+      minWidth: 0,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+    },
     description: { ...typography.caption, color: colors.textSecondary, marginTop: spacing.xs },
-    chips: { flexDirection: 'row', gap: spacing.sm },
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+    themeRow: {
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.md,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    selectedTheme: { ...typography.caption, color: colors.primary, fontWeight: '800' },
   });

@@ -1,5 +1,6 @@
 import {
   extractMetroHost,
+  validateRemoteBetaApiUrl,
   resolveEasProjectId,
   resolveDeviceApiBaseUrl,
   resolveDeviceApiBaseUrls,
@@ -126,5 +127,57 @@ describe('mobile environment', () => {
     expect(resolveRealtimeBaseUrls(['https://api.example.com/api/v1'])).toEqual([
       'https://api.example.com',
     ]);
+  });
+});
+
+describe('validateRemoteBetaApiUrl', () => {
+  const reject = (url: string | null) => {
+    const result = validateRemoteBetaApiUrl(url, 'remote-beta');
+    expect(result.ok).toBe(false);
+    return result.ok ? '' : result.reason;
+  };
+
+  it('accepts a public HTTPS tunnel URL', () => {
+    expect(validateRemoteBetaApiUrl('https://abc123.ngrok-free.app', 'remote-beta')).toEqual({
+      ok: true,
+    });
+  });
+
+  it('requires the variable to be present', () => {
+    expect(reject(null)).toMatch(/required/i);
+  });
+
+  it('rejects plain HTTP', () => {
+    expect(reject('http://abc123.ngrok-free.app')).toMatch(/HTTPS/i);
+  });
+
+  it.each(['https://localhost:3000', 'https://127.0.0.1:3000', 'https://0.0.0.0:3000'])(
+    'rejects loopback address %s',
+    (url) => {
+      // On a technician's phone these resolve to the phone itself, not the
+      // developer machine, so the request fails with a confusing network error.
+      expect(reject(url)).toMatch(/phone itself/i);
+    },
+  );
+
+  it.each(['https://10.0.0.5:3000', 'https://192.168.1.20:3000', 'https://172.16.4.4:3000'])(
+    'rejects private LAN address %s',
+    (url) => {
+      expect(reject(url)).toMatch(/private LAN|unreachable/i);
+    },
+  );
+
+  it('rejects a Docker service hostname', () => {
+    expect(reject('https://backend:3000')).toMatch(/Docker service/i);
+  });
+
+  it('rejects an invalid URL', () => {
+    expect(reject('not a url')).toMatch(/not a valid URL/i);
+  });
+
+  it('does not constrain non-remote-beta environments', () => {
+    // LAN and adb-reverse workflows legitimately use these addresses.
+    expect(validateRemoteBetaApiUrl('http://localhost:3000', 'development')).toEqual({ ok: true });
+    expect(validateRemoteBetaApiUrl(null, 'development')).toEqual({ ok: true });
   });
 });

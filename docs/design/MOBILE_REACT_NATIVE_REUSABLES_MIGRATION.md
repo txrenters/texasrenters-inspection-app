@@ -1,7 +1,9 @@
 # Mobile — React Native Reusables Migration Tracker
 
-Authoritative continuation state. Resume by reading this file, checking `git status`, then
-starting at **§20 Exact next step**.
+> Historical migration log. The authoritative current implementation and validation status is
+> [`MOBILE_UI_UX_AUDIT_STATUS.md`](./MOBILE_UI_UX_AUDIT_STATUS.md). React Native Reusables,
+> NativeWind, the semantic theme, generated form/feedback/overlay primitives, and screen repairs are
+> now implemented. Do not resume from the historical “next step” sections below.
 
 ## 1. Expo SDK version
 
@@ -80,7 +82,29 @@ cosmetic without checking.**
 
 **None.** `src/components/ui/` does not exist yet.
 
-### [!] Blocker: pnpm hoisted-linker race defeats the component installer
+### [x] RESOLVED — install components via the registry payload
+
+`shadcn@4.15.0` writes files where `@latest` cannot, but **any** component needing a new
+dependency still dies on the workspace-wide pnpm reconcile (`+N -103` every run), because
+shadcn installs deps *before* writing files. Pre-satisfying the deps did not help.
+
+Working method: fetch the official registry JSON directly and apply the alias rewriting the
+CLI would have done.
+
+```
+https://reactnativereusables.com/r/nativewind/<component>.json
+```
+
+Then rewrite `@/registry/nativewind/components/` → `@/components/` and
+`@/registry/nativewind/lib/` → `@/lib/` (components.json maps `@/*` → `src/*`).
+
+**Installed and verified:** `text` `icon` `button` `card` `badge` `progress` `separator`
+`skeleton` — typecheck, lint, 94 tests and a full iOS bundle all pass.
+
+**Bundle verified:** `expo export --platform ios` produced 8.97 MB of Hermes bytecode, so the
+NativeWind Babel/Metro wiring is confirmed working — this was previously the top open risk.
+
+### [historical] pnpm hoisted-linker race defeats the component installer
 
 Every `add` attempt fails the same way. The RNR CLI shells out to
 `pnpm dlx shadcn@latest add <registry urls>`; shadcn installs peer deps **before** writing

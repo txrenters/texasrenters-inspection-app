@@ -21,7 +21,7 @@ export function Field({
   return (
     <Comp
       data-slot="field"
-      className={cn('grid content-start gap-1.5', className)}
+      className={cn('grid min-w-0 content-start gap-1.5', className)}
       {...props}
     />
   );

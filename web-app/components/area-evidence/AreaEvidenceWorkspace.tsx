@@ -11,7 +11,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Search } from 'lucide-react';
+
 import { Alert } from '@/components/ui/alert';
+import { Input } from '@/components/ui/input';
 import { useAreaEvidenceSummary } from '@/lib/queries';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState, LoadingState } from '../shared';
@@ -39,8 +42,15 @@ const STATUS_META: Record<AreaReviewStatus, { label: string; tone: string }> = {
   FAILED: { label: 'Failed', tone: 'danger' },
 };
 
+/**
+ * Radix Select throws on an empty-string item value, which silently left the
+ * trigger blank — the filter looked broken because it *was*. ALL is a sentinel
+ * mapped back to "no filter" at the call site.
+ */
+const ALL_STATUSES = 'ALL';
+
 const STATUS_FILTERS = [
-  { value: '', label: 'All areas' },
+  { value: ALL_STATUSES, label: 'All areas' },
   { value: 'FINDINGS_NEED_REVIEW', label: 'Needs review' },
   { value: 'EVIDENCE_INCOMPLETE', label: 'Incomplete' },
   { value: 'NOT_STARTED', label: 'Not started' },
@@ -74,13 +84,13 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
   // areas, and a reviewer can send a colleague straight to one room.
   const selectedFromUrl = searchParams.get('area');
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
 
   const areas = summary.data?.areas ?? [];
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return areas.filter((area) => {
-      if (statusFilter && area.reviewStatus !== statusFilter) return false;
+      if (statusFilter !== ALL_STATUSES && area.reviewStatus !== statusFilter) return false;
       if (!term) return true;
       return (
         area.name.toLowerCase().includes(term) ||
@@ -154,16 +164,23 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
       <div className="area-evidence-layout">
         <div className="area-evidence-list-pane">
           <div className="area-evidence-filters">
-            <input
-              type="search"
-              value={search}
-              aria-label="Search areas"
-              placeholder="Search areas"
-              onChange={(event) => setSearch(event.target.value)}
-            />
+            <div className="relative flex-1">
+              <Search
+                aria-hidden
+                className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+              />
+              <Input
+                aria-label="Search areas"
+                className="pl-8"
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search areas"
+                type="search"
+                value={search}
+              />
+            </div>
             <Select onValueChange={setStatusFilter} value={statusFilter}>
-              <SelectTrigger aria-label="Filter by review status">
-                <SelectValue />
+              <SelectTrigger aria-label="Filter by review status" className="w-[150px]">
+                <SelectValue placeholder="All areas" />
               </SelectTrigger>
               <SelectContent>
                 {STATUS_FILTERS.map((option) => (

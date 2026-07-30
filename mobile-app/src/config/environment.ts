@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 export type DataSource = 'mock' | 'api';
+export type AppEnvironment = 'development' | 'remote-beta' | 'production';
 
 const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
 const configuredApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || null;
@@ -22,6 +23,7 @@ const apiBaseUrls = resolveDeviceApiBaseUrls(
 const apiBaseUrl = apiBaseUrls[0] ?? null;
 const realtimeBaseUrls = resolveRealtimeBaseUrls(apiBaseUrls);
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() || null;
+const appEnv = (process.env.EXPO_PUBLIC_APP_ENV?.trim() || 'development') as AppEnvironment;
 
 export function resolveDeviceApiBaseUrl(
   baseUrl: string | null,
@@ -150,7 +152,64 @@ function isPrivateNetworkHost(host: string) {
   );
 }
 
+/**
+ * Remote beta puts the backend behind a public ngrok tunnel and the testers on
+ * cellular data, so an address that merely works on the developer's desk is a
+ * silent failure: the phone resolves `localhost` to *itself* and every request
+ * dies with a confusing network error. This rejects those addresses up front
+ * with an actionable message instead.
+ */
+export function validateRemoteBetaApiUrl(
+  value: string | null,
+  env: AppEnvironment,
+): { ok: true } | { ok: false; reason: string } {
+  if (env !== 'remote-beta') return { ok: true };
+  if (!value)
+    return {
+      ok: false,
+      reason: 'EXPO_PUBLIC_API_BASE_URL is required in remote-beta mode. Re-run the start helper.',
+    };
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { ok: false, reason: `EXPO_PUBLIC_API_BASE_URL is not a valid URL: ${value}` };
+  }
+
+  if (url.protocol !== 'https:')
+    return { ok: false, reason: `Remote beta requires HTTPS. Received ${url.protocol}//` };
+
+  const host = url.hostname.toLowerCase();
+  if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(host))
+    return {
+      ok: false,
+      reason: `"${host}" is the phone itself, not the developer machine. Use the public ngrok URL.`,
+    };
+  // Compose service names resolve only inside the Docker network.
+  if (!host.includes('.'))
+    return { ok: false, reason: `"${host}" looks like a Docker service name, not a public host.` };
+  if (isPrivateNetworkHost(host))
+    return {
+      ok: false,
+      reason: `"${host}" is a private LAN address and is unreachable over cellular data.`,
+    };
+  if (host.startsWith('fd') || host.startsWith('fc') || host.startsWith('fe80'))
+    return { ok: false, reason: `"${host}" is a private IPv6 address.` };
+
+  return { ok: true };
+}
+
+const remoteBetaCheck = validateRemoteBetaApiUrl(apiBaseUrl, appEnv);
+if (!remoteBetaCheck.ok && __DEV__) {
+  // Loud in development, non-fatal: a tester mid-inspection must not lose
+  // captured work because the tunnel URL went stale.
+  console.error(`[remote-beta] ${remoteBetaCheck.reason}`);
+}
+
 export const environment = {
+  appEnv,
+  remoteBetaApiUrlError: remoteBetaCheck.ok ? null : remoteBetaCheck.reason,
   dataSource: (demoDataEnabled ? 'mock' : 'api') as DataSource,
   apiBaseUrl,
   apiBaseUrls,

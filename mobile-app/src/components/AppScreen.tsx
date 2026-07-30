@@ -1,10 +1,12 @@
 import { useState, type PropsWithChildren, type ReactNode } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ScreenEntrance } from './motion';
+import { ScreenHeader, StickyActionFooter, stickyActionReservedSpace } from './ScreenPrimitives';
 import { DemoModeBanner } from './ui';
 import { NetworkBanner } from './NetworkBanner';
-import { type AppColors, sizes, spacing, typography, useAppTheme, useThemedStyles } from '../theme';
+import { type AppColors, sizes, spacing, useAppTheme, useThemedStyles } from '../theme';
 
 export function AppScreen({
   title,
@@ -27,6 +29,7 @@ export function AppScreen({
 }>) {
   const { colors } = useAppTheme();
   const styles = useThemedStyles(createStyles);
+  const insets = useSafeAreaInsets();
   const [manualRefreshActive, setManualRefreshActive] = useState(false);
   const refreshActive = refresh?.refreshing ?? manualRefreshActive;
   const handleRefresh = async () => {
@@ -56,65 +59,38 @@ export function AppScreen({
             />
           ) : undefined
         }
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingBottom:
+              (bottomAction ? stickyActionReservedSpace : spacing.xl) + insets.bottom,
+          },
+        ]}
       >
         <ScreenEntrance>
           <View style={styles.screenContent}>
-            <View style={styles.header}>
-              <View style={styles.flex}>
-                {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
-                <Text style={styles.title}>{title}</Text>
-                {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
-              </View>
-              {action}
-            </View>
+            <ScreenHeader title={title} subtitle={subtitle} eyebrow={eyebrow} action={action} />
             <View style={styles.body}>{children}</View>
           </View>
         </ScreenEntrance>
       </ScrollView>
-      {bottomAction ? <View style={styles.bottomAction}>{bottomAction}</View> : null}
+      {bottomAction ? <StickyActionFooter>{bottomAction}</StickyActionFooter> : null}
     </View>
   );
 }
 
 const createStyles = (colors: AppColors) =>
   StyleSheet.create({
-    root: { flex: 1, backgroundColor: colors.canvas },
+    root: { flex: 1, minWidth: 0, overflow: 'hidden', backgroundColor: colors.canvas },
     content: {
       width: '100%',
       maxWidth: sizes.contentMax,
+      minWidth: 0,
+      flexGrow: 1,
       alignSelf: 'center',
       padding: spacing.md,
-      paddingBottom: 104,
+      ...Platform.select({ web: { boxSizing: 'border-box' as const } }),
     },
-    screenContent: { gap: spacing.lg },
-    body: { gap: spacing.lg },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: spacing.md,
-      paddingHorizontal: spacing.xs,
-      paddingTop: spacing.sm,
-    },
-    flex: { flex: 1 },
-    eyebrow: {
-      ...typography.caption,
-      color: colors.primary,
-      fontSize: 10,
-      fontWeight: '900',
-      letterSpacing: 1.25,
-      marginBottom: spacing.xs,
-    },
-    title: { ...typography.title, color: colors.textPrimary },
-    subtitle: { ...typography.body, color: colors.textSecondary, marginTop: spacing.xs },
-    bottomAction: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: colors.surface,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
-      padding: spacing.md,
-    },
+    screenContent: { width: '100%', minWidth: 0, gap: spacing.lg },
+    body: { width: '100%', minWidth: 0, gap: spacing.lg },
   });

@@ -9,3 +9,23 @@ node_modules
 **/.env
 tmp
 *.log
+
+# Never let a real secret file reach a build layer.
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# Local artefacts that only inflate the context.
+**/.next
+**/.turbo
+**/build
+**/.vscode
+**/.idea
+**/test-results
+**/playwright-report
+**/*.mp4
+**/*.mov
+mobile-app
+web-app
+docs
+supabase

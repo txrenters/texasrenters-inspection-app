@@ -144,3 +144,99 @@ describe('SearchableSelect', () => {
     expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SearchableSelect selected-option visibility', () => {
+  /** The auto-filled case: the value is real, but not in the loaded page. */
+  const offPageSelection = {
+    value: 'martin',
+    label: 'Martin, Anthony',
+  };
+
+  it('shows the chosen option in the list even when the loaded page omits it', () => {
+    // Portfolios are paginated, so an auto-filled value is usually absent from
+    // page 1. Without pinning, the menu opened with no checkmark anywhere and
+    // contradicted the trigger directly above it.
+    render(
+      createElement(SearchableSelect, {
+        id: 'portfolioId',
+        value: 'martin',
+        options,
+        selectedOption: offPageSelection,
+        placeholder: 'All portfolios',
+        onChange: vi.fn(),
+      }),
+    );
+    openMenu();
+    const menu = screen.getByRole('listbox');
+    expect(within(menu).getByText('Martin, Anthony')).toBeInTheDocument();
+  });
+
+  it('marks the chosen option as selected', () => {
+    render(
+      createElement(SearchableSelect, {
+        id: 'portfolioId',
+        value: 'martin',
+        options,
+        selectedOption: offPageSelection,
+        placeholder: 'All portfolios',
+        onChange: vi.fn(),
+      }),
+    );
+    openMenu();
+    const row = screen.getByRole('option', { name: /Martin, Anthony/ });
+    expect(row).toHaveAttribute('data-selected', 'true');
+  });
+
+  it('does not duplicate the chosen option when the page already contains it', () => {
+    render(
+      createElement(SearchableSelect, {
+        id: 'portfolioId',
+        value: 'two',
+        options,
+        selectedOption: { value: 'two', label: 'Austin Residential' },
+        placeholder: 'All portfolios',
+        onChange: vi.fn(),
+      }),
+    );
+    openMenu();
+    // Scoped to the menu: the trigger legitimately shows the same label.
+    const menu = screen.getByRole('listbox');
+    expect(within(menu).getAllByText('Austin Residential')).toHaveLength(1);
+  });
+
+  it('drops the pinned option once a search is typed', () => {
+    // A row that does not match what was typed is noise; the trigger still
+    // carries the current value.
+    render(
+      createElement(SearchableSelect, {
+        id: 'portfolioId',
+        value: 'martin',
+        options,
+        selectedOption: offPageSelection,
+        placeholder: 'All portfolios',
+        onChange: vi.fn(),
+        onSearch: vi.fn(),
+      }),
+    );
+    // openMenu returns the trigger: once open, CommandInput is also a combobox.
+    const trigger = openMenu();
+    fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'Westlake' } });
+    // Gone from the menu, but still on the trigger — the value is unchanged.
+    expect(within(screen.getByRole('listbox')).queryByText('Martin, Anthony')).toBeNull();
+    expect(trigger).toHaveTextContent('Martin, Anthony');
+  });
+
+  it('still renders the full list when nothing is selected', () => {
+    render(
+      createElement(SearchableSelect, {
+        id: 'portfolioId',
+        value: '',
+        options,
+        placeholder: 'All portfolios',
+        onChange: vi.fn(),
+      }),
+    );
+    openMenu();
+    expect(screen.getAllByRole('option')).toHaveLength(options.length);
+  });
+});
