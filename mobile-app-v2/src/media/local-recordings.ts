@@ -1,7 +1,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
-import type { LocalMedia, VideoRecordingType } from '../domain/models';
+import type { AdditionalVideoCategory, LocalMedia, VideoRecordingType } from '../domain/models';
 import type { GuidedCaptureSummary } from '../capture/guided-capture';
 
 const RECORDINGS_FOLDER = 'inspection-recordings';
@@ -16,6 +16,12 @@ type RecordingDraftInput = {
   sizeBytes?: number;
   recordingType?: VideoRecordingType;
   captureSummary?: GuidedCaptureSummary;
+  // Additional-evidence context. All optional, so primary walkthroughs are
+  // unaffected; the upload repository already reads these off LocalMedia and
+  // sends them as label/category/relatedFindingId for ADDITIONAL_ISSUE clips.
+  label?: string;
+  category?: AdditionalVideoCategory;
+  relatedFindingId?: string;
 };
 
 export function buildRecordingDraft({
@@ -27,6 +33,9 @@ export function buildRecordingDraft({
   sizeBytes,
   recordingType = 'PRIMARY_AREA',
   captureSummary,
+  label,
+  category,
+  relatedFindingId,
 }: RecordingDraftInput): LocalMedia {
   const normalizedDuration = Math.max(1, Math.round(durationSeconds));
 
@@ -45,6 +54,9 @@ export function buildRecordingDraft({
     recordedAt: new Date().toISOString(),
     note: '',
     captureSummary,
+    label,
+    category,
+    relatedFindingId,
   };
 }
 

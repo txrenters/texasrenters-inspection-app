@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CameraView,
   type CameraType,
@@ -8,18 +8,9 @@ import {
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { CameraIcon, CheckIcon } from 'lucide-react-native';
 import {
-  ArrowLeftIcon,
-  CameraIcon,
-  FocusIcon,
-  ImageIcon,
-  InfoIcon,
-  RotateCcwIcon,
-  SquareIcon,
-  ZapIcon,
-  ZapOffIcon,
-} from 'lucide-react-native';
-import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   Linking,
@@ -27,30 +18,48 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
-import { useRoom } from '@/src/features/queries';
+import {
+  CameraControls,
+  CameraHeader,
+  CameraStatusBar,
+  CaptureInfoRow,
+  FramingGuide,
+  RecordingStatusPill,
+} from '@/src/capture/camera-chrome';
+import { computeCameraLayout, SPACING } from '@/src/capture/camera-layout';
+import { GuideSheet, SNAPSHOT_TYPES, SnapshotTypeSheet } from '@/src/capture/CameraSheets';
+import { deriveGuidance, shouldPulse, type GuidanceStep } from '@/src/capture/guidance-state';
+import {
+  evaluateCapture,
+  GUIDED_CAPTURE_POLICY,
+  returnedToStart,
+  type FindingMarker,
+  type GuidedCaptureSummary,
+} from '@/src/capture/guided-capture';
+import {
+  isPrimaryWalkthrough,
+  purposeByValue,
+  RECORDING_TYPE_BY_MODE,
+  resolveRecordingMode,
+} from '@/src/capture/recording-mode';
+import { RotationGuidance } from '@/src/capture/RotationGuidance';
+import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
+import type { AdditionalVideoCategory, PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
+import { useRoom, useRoomMedia } from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
+import { registerIcons } from '@/src/lib/icons';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
 import { uploadRoomPhoto } from '@/src/media/photo-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
-import { registerIcons } from '@/src/lib/icons';
+import { useNetworkStore } from '@/src/stores/network.store';
 
-registerIcons(
-  ArrowLeftIcon,
-  CameraIcon,
-  FocusIcon,
-  ImageIcon,
-  InfoIcon,
-  RotateCcwIcon,
-  SquareIcon,
-  ZapIcon,
-  ZapOffIcon,
-);
+registerIcons(CameraIcon, CheckIcon);
 
 const MAX_RECORDING_SECONDS = 10 * 60;
 
@@ -59,38 +68,119 @@ function formatDuration(seconds: number) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
+const snapshotLabel = (value: PhotoCaptureType) =>
+  SNAPSHOT_TYPES.find((type) => type.value === value)?.label ?? 'Area overview';
+
 export default function RoomCameraScreen() {
   const {
     inspectionId = '',
     areaId = '',
     recordingType,
+    purpose,
+    findingId,
   } = useLocalSearchParams<{
     inspectionId: string;
     areaId: string;
     recordingType?: string;
+    purpose?: string;
+    findingId?: string;
   }>();
   const room = useRoom(areaId);
+  const media = useRoomMedia(areaId);
+  const insets = useSafeAreaInsets();
+  const { height: screenHeight, width: screenWidth } = useWindowDimensions();
+
   const [camera, setCamera] = useState<CameraView | null>(null);
   const secondsRef = useRef(0);
   const mountedRef = useRef(true);
+  const sessionIdRef = useRef(`capture-${Date.now()}`);
+  const startedAtRef = useRef<string | null>(null);
+  const lastStepRef = useRef<GuidanceStep | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [torch, setTorch] = useState(false);
   const [facing, setFacing] = useState<CameraType>('back');
   const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
   const [photoCount, setPhotoCount] = useState(0);
+  const [findingMarkers, setFindingMarkers] = useState<FindingMarker[]>([]);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [startConfirmed, setStartConfirmed] = useState(false);
+  const [typeSheetOpen, setTypeSheetOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const [headerHeight, setHeaderHeight] = useState(64);
+  const [bottomStackHeight, setBottomStackHeight] = useState(232);
+
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
   const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
-  const isAdditional = recordingType === 'ADDITIONAL_ISSUE';
+  const isOnline = useNetworkStore((state) => state.isOnline);
+
+  // Mode comes from the route when explicit, otherwise from whether a primary
+  // walkthrough already exists — never from a display label.
+  const mode = useMemo(
+    () => resolveRecordingMode({ routeRecordingType: recordingType, existingMedia: media.data }),
+    [recordingType, media.data],
+  );
+  const primary = isPrimaryWalkthrough(mode);
+  const purposeDetail = purposeByValue(purpose as AdditionalVideoCategory | undefined);
   const hasPermissions = Boolean(cameraPermission?.granted && microphonePermission?.granted);
+
+  // Motion only runs for the primary walkthrough, and only while recording.
+  const sensor = useGuidedCaptureSensor(primary && recording);
+  const sensorSupported = primary && sensor.available !== false && sensor.authorized;
+
+  const layout = useMemo(
+    () =>
+      computeCameraLayout({
+        screenHeight,
+        screenWidth,
+        topInset: insets.top,
+        bottomInset: insets.bottom,
+        headerHeight,
+        bottomStackHeight,
+      }),
+    [screenHeight, screenWidth, insets.top, insets.bottom, headerHeight, bottomStackHeight],
+  );
+
+  const guidance = useMemo(
+    () =>
+      deriveGuidance({
+        tracker: sensor.tracker,
+        sensorSupported,
+        recording,
+        startConfirmed: !primary || startConfirmed,
+        durationSeconds: seconds,
+        nowMs: sensor.tracker.lastSampleAtMs,
+      }),
+    [sensor.tracker, sensorSupported, recording, primary, startConfirmed, seconds],
+  );
+
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then(setReduceMotion)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (primary) void sensor.requestAccess();
+  }, [primary, sensor]);
+
+  // One tap per notable transition, never a repeating buzz.
+  useEffect(() => {
+    if (!recording) return;
+    if (shouldPulse(lastStepRef.current, guidance.step)) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    }
+    lastStepRef.current = guidance.step;
+  }, [guidance.step, recording]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -123,15 +213,52 @@ export default function RoomCameraScreen() {
     return true;
   };
 
+  /** Summary persisted with the recording. Shape is fixed by the upload contract. */
+  const buildCaptureSummary = useCallback((): GuidedCaptureSummary | undefined => {
+    if (!primary) return undefined;
+    const tracker = sensor.trackerRef.current;
+    const durationSeconds = Math.max(1, secondsRef.current);
+    const evaluation = evaluateCapture({ tracker, durationSeconds, sensorSupported });
+    return {
+      sessionId: sessionIdRef.current,
+      policyVersion: GUIDED_CAPTURE_POLICY.version,
+      startedAt: startedAtRef.current ?? new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      durationSeconds,
+      clockwiseRotationDegrees: Math.round(tracker.clockwiseRotationDegrees),
+      counterClockwiseRotationDegrees: Math.round(tracker.counterClockwiseRotationDegrees),
+      startHeadingDegrees: tracker.startHeadingDegrees,
+      endHeadingDegrees: tracker.endHeadingDegrees,
+      returnedToStart: returnedToStart(tracker),
+      sensorSupported,
+      sensorConfidence: evaluation.confidence,
+      coverageStatus: evaluation.status,
+      manualConfirmation: false,
+      // Rotation guidance is not evidence completeness — the review screen and
+      // the area's own requirements decide that.
+      evidenceComplete: false,
+      snapshotCount: photoCount,
+      findingMarkerCount: findingMarkers.length,
+    };
+  }, [primary, sensor.trackerRef, sensorSupported, photoCount, findingMarkers.length]);
+
   const beginRecording = async () => {
     if (!(await requestPermissions())) return;
     if (!camera || !ready || recording) return;
     setError(null);
     secondsRef.current = 0;
     setSeconds(0);
+    sessionIdRef.current = `capture-${Date.now()}`;
+    startedAtRef.current = new Date().toISOString();
+    lastStepRef.current = null;
+    sensor.reset();
     setRecording(true);
     setStopping(false);
-    announce('Recording started. Narrate as you move clockwise around the room.');
+    announce(
+      primary
+        ? 'Recording started. Move slowly clockwise and narrate as you go.'
+        : 'Recording started. Narrate the evidence you are capturing.',
+    );
     try {
       const result = await camera.recordAsync({
         maxDuration: MAX_RECORDING_SECONDS,
@@ -147,7 +274,11 @@ export default function RoomCameraScreen() {
           uri: stored.uri,
           durationSeconds: Math.max(1, secondsRef.current),
           sizeBytes: stored.sizeBytes,
-          recordingType: isAdditional ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
+          recordingType: RECORDING_TYPE_BY_MODE[mode],
+          label: purposeDetail?.label,
+          category: purposeDetail?.value,
+          relatedFindingId: findingId,
+          captureSummary: buildCaptureSummary(),
         }),
       );
       router.replace({
@@ -201,10 +332,7 @@ export default function RoomCameraScreen() {
     setCapturingPhoto(true);
     setError(null);
     try {
-      const photo = await camera.takePictureAsync({
-        quality: 0.82,
-        shutterSound: false,
-      });
+      const photo = await camera.takePictureAsync({ quality: 0.82, shutterSound: false });
       const stored = persistRoomSnapshot(photo.uri, inspectionId, areaId);
       const snapshot = buildRoomSnapshot({
         ownerUserId,
@@ -215,22 +343,20 @@ export default function RoomCameraScreen() {
         height: photo.height,
         sizeBytes: stored.sizeBytes,
         captureType,
+        recordingSessionId: recording ? sessionIdRef.current : undefined,
         videoTimestampMs: recording ? secondsRef.current * 1000 : undefined,
         captureSource:
           recording && Platform.OS === 'ios'
             ? 'NATIVE_STILL_DURING_VIDEO'
             : 'SEPARATE_PHOTO_CAPTURE',
         sequenceNumber: photoCount + 1,
+        findingId,
       });
       addSnapshot(snapshot);
       setPhotoCount((count) => count + 1);
-      // Capturing an overview advances the selector to finding context.
       const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
       if (advancedToFindingContext) setCaptureType('FINDING_CONTEXT');
       void Haptics.selectionAsync().catch(() => undefined);
-      // Haptics alone do not say *what* happened, and the shutter is muted so
-      // it never lands on the inspection audio. Announce the count, and the new
-      // selection when it just changed underneath the technician.
       announce(
         `Photo ${photoCount + 1} saved.${
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
@@ -244,9 +370,50 @@ export default function RoomCameraScreen() {
     }
   };
 
+  /** Marks the moment without interrupting the take. Detail comes later. */
+  const markFinding = () => {
+    if (!recording) return;
+    const marker: FindingMarker = {
+      id: `marker-${Date.now()}`,
+      videoTimestampMs: secondsRef.current * 1000,
+      rotationDegrees: Math.round(sensor.trackerRef.current.clockwiseRotationDegrees),
+      createdAt: new Date().toISOString(),
+    };
+    setFindingMarkers((markers) => [...markers, marker]);
+    setCaptureType('FINDING_CONTEXT');
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    announce(
+      `Finding marked at ${formatDuration(secondsRef.current)}. Next snapshot: finding context.`,
+    );
+  };
+
+  const switchFacing = () => {
+    // Guarded so repeated taps cannot stack camera reconfigurations.
+    if (switching || stopping) return;
+    setSwitching(true);
+    setFacing((value) => (value === 'back' ? 'front' : 'back'));
+    setTorch(false);
+    setTimeout(() => mountedRef.current && setSwitching(false), 400);
+  };
+
+  const leaveScreen = () => {
+    if (recording || stopping) {
+      Alert.alert(
+        'Stop recording first?',
+        'Leaving now discards the take in progress. Nothing already saved is affected.',
+        [
+          { text: 'Keep recording', style: 'cancel' },
+          { text: 'Stop and review', onPress: stopRecording },
+        ],
+      );
+      return;
+    }
+    router.back();
+  };
+
   if (!hasPermissions) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-black px-8">
+      <View className="flex-1 items-center justify-center bg-black px-8">
         <CameraIcon size={44} className="text-white" />
         <Text className="mt-5 text-xl font-bold text-white">Camera access required</Text>
         <Text className="mt-2 text-center text-sm leading-6 text-white/70">
@@ -259,7 +426,7 @@ export default function RoomCameraScreen() {
         ) : null}
         <Pressable
           accessibilityRole="button"
-          className="mt-6 min-h-12 rounded-xl bg-primary px-6 py-4"
+          className="mt-6 min-h-12 justify-center rounded-xl bg-primary px-6 py-4"
           onPress={() =>
             cameraPermission?.canAskAgain === false || microphonePermission?.canAskAgain === false
               ? void Linking.openSettings()
@@ -272,9 +439,11 @@ export default function RoomCameraScreen() {
               : 'Enable camera & microphone'}
           </Text>
         </Pressable>
-      </SafeAreaView>
+      </View>
     );
   }
+
+  const showGuidance = primary || guidance.step === 'SENSOR_UNAVAILABLE';
 
   return (
     <View className="flex-1 bg-black">
@@ -290,228 +459,148 @@ export default function RoomCameraScreen() {
         onCameraReady={() => setReady(true)}
         onMountError={(event) => setError(event.message)}
       />
-      <View className="absolute inset-x-0 top-0 h-44 bg-black/45" />
-      <View className="absolute inset-x-0 bottom-0 h-72 bg-black/60" />
+
+      {/* Scrims sized to the measured zones, so they never encroach on the
+          preview region the framing guide occupies. */}
       <View
-        style={{ ...StyleSheet.absoluteFillObject, pointerEvents: 'none' }}
-        className="items-center justify-center"
-      >
-        <View className="h-[48%] w-[82%] rounded-3xl border border-white/30">
-          <View className="absolute left-1/3 top-0 h-full w-px bg-white/15" />
-          <View className="absolute right-1/3 top-0 h-full w-px bg-white/15" />
-          <View className="absolute left-0 top-1/3 h-px w-full bg-white/15" />
-          <View className="absolute bottom-1/3 left-0 h-px w-full bg-white/15" />
+        pointerEvents="none"
+        className="absolute inset-x-0 top-0 bg-black/40"
+        style={{ height: insets.top + headerHeight }}
+      />
+      <View
+        pointerEvents="none"
+        className="absolute inset-x-0 bottom-0 bg-black/55"
+        style={{ height: insets.bottom + bottomStackHeight }}
+      />
+
+      <FramingGuide layout={layout} />
+
+      {showGuidance ? (
+        <RotationGuidance
+          guidance={guidance}
+          layout={layout}
+          reduceMotion={reduceMotion}
+          showProgress={primary && sensorSupported}
+        />
+      ) : null}
+
+      {/* Zone 1 — header */}
+      <View className="absolute inset-x-0 top-0" style={{ paddingTop: insets.top }}>
+        <CameraHeader
+          areaName={room.data?.name ?? 'Area'}
+          subtitle={primary ? 'Primary walkthrough' : (purposeDetail?.label ?? 'Additional evidence')}
+          torch={torch}
+          torchAvailable={facing === 'back'}
+          facing={facing}
+          switching={switching}
+          onBack={leaveScreen}
+          onToggleTorch={() => setTorch((value) => !value)}
+          onSwitchFacing={switchFacing}
+          onLayout={setHeaderHeight}
+        />
+        <View className="items-center" style={{ paddingTop: SPACING.xs }}>
+          <RecordingStatusPill
+            phase={stopping ? 'SAVING' : recording ? 'RECORDING' : 'READY'}
+            elapsed={formatDuration(seconds)}
+            readyDetail={
+              primary
+                ? startConfirmed
+                  ? 'Wall 1 confirmed'
+                  : 'Confirm Wall 1 to begin'
+                : (purposeDetail?.label ?? 'Additional evidence')
+            }
+          />
         </View>
       </View>
-      <SafeAreaView edges={['top', 'bottom']} className="flex-1 justify-between">
-        <View className="flex-row items-center gap-3 px-5 py-3">
-          <Pressable
-            // While recording this button stops the take rather than leaving,
-            // so the label must not say "Back" — that would read as discarding.
-            accessibilityLabel={recording ? 'Stop recording and review' : 'Back to area'}
-            accessibilityRole="button"
-            className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
-            // 40pt visual, 44pt target: hitSlop keeps the design and still
-            // clears the minimum for a gloved or unsteady hand.
-            hitSlop={8}
-            onPress={() => (recording ? stopRecording() : router.back())}
-          >
-            <ArrowLeftIcon size={21} className="text-white" />
-          </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text numberOfLines={1} className="text-xl font-bold text-white">
-              {room.data?.name ?? 'Room'}
-            </Text>
-            <Text className="text-xs text-white/70">
-              {isAdditional ? 'Additional evidence clip' : 'Primary room walkthrough'}
-            </Text>
-          </View>
-          <Pressable
-            accessibilityLabel="Flashlight"
-            accessibilityRole="switch"
-            accessibilityState={{ checked: torch, disabled: facing !== 'back' }}
-            className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
-            hitSlop={8}
-            onPress={() => setTorch((value) => !value)}
-          >
-            {torch ? (
-              <ZapIcon size={20} className="text-white" />
-            ) : (
-              <ZapOffIcon size={20} className="text-white" />
-            )}
-          </Pressable>
-          <Pressable
-            accessibilityLabel={
-              facing === 'back' ? 'Switch to front camera' : 'Switch to rear camera'
-            }
-            accessibilityRole="button"
-            className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
-            hitSlop={8}
-            onPress={() => setFacing((value) => (value === 'back' ? 'front' : 'back'))}
-          >
-            <RotateCcwIcon size={20} className="text-white" />
-          </Pressable>
-        </View>
 
-        <View className="items-center px-5 pb-4">
-          {/* The elapsed time is the only signal that recording is actually
-              running. Sighted users get the red REC badge; this gives everyone
-              else the same information without spamming every tick. */}
-          <View
-            accessibilityLabel={
-              recording ? `Recording, ${formatDuration(seconds)} elapsed` : 'Ready to record'
-            }
-            accessibilityRole="timer"
-            className="mb-5 rounded-full bg-black/65 px-5 py-2"
-          >
-            <Text className="text-lg font-bold text-white">
-              {formatDuration(seconds)} {recording ? 'REC' : 'READY'}
-            </Text>
-          </View>
-          <View className="mb-4 w-full">
-            <View className="mb-2 flex-row items-end justify-between">
-              <View>
-                <Text className="text-[10px] font-bold uppercase tracking-[2px] text-white/60">
-                  Next snapshot
-                </Text>
-                <Text className="mt-0.5 text-sm font-bold text-white">
-                  {captureType === 'AREA_OVERVIEW' ? 'Area overview' : 'Finding context'}
-                </Text>
-              </View>
-              <Text className="text-xs text-white/60">
-                {photoCount} photo{photoCount === 1 ? '' : 's'}
-              </Text>
-            </View>
-            {/* Two mutually exclusive choices, so radio rather than button:
-                it tells the technician one is already selected instead of
-                reading them as two independent actions. */}
-            <View accessibilityRole="radiogroup" className="flex-row gap-2">
-              <Pressable
-                accessibilityLabel="Next snapshot: area overview"
-                accessibilityRole="radio"
-                accessibilityState={{ selected: captureType === 'AREA_OVERVIEW' }}
-                className={`min-h-11 flex-1 flex-row items-center justify-center gap-2 rounded-xl px-3 py-2.5 ${
-                  captureType === 'AREA_OVERVIEW'
-                    ? 'bg-white'
-                    : 'border border-white/25 bg-black/30'
-                }`}
-                onPress={() => setCaptureType('AREA_OVERVIEW')}
-              >
-                <ImageIcon
-                  size={15}
-                  className={captureType === 'AREA_OVERVIEW' ? 'text-black' : 'text-white'}
-                />
-                <Text
-                  className={`text-xs font-bold ${
-                    captureType === 'AREA_OVERVIEW' ? 'text-black' : 'text-white'
-                  }`}
-                >
-                  Area overview
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel="Next snapshot: finding context"
-                accessibilityRole="radio"
-                accessibilityState={{ selected: captureType === 'FINDING_CONTEXT' }}
-                className={`min-h-11 flex-1 flex-row items-center justify-center gap-2 rounded-xl px-3 py-2.5 ${
-                  captureType === 'FINDING_CONTEXT'
-                    ? 'bg-white'
-                    : 'border border-white/25 bg-black/30'
-                }`}
-                onPress={() => setCaptureType('FINDING_CONTEXT')}
-              >
-                <FocusIcon
-                  size={15}
-                  className={captureType === 'FINDING_CONTEXT' ? 'text-black' : 'text-white'}
-                />
-                <Text
-                  className={`text-xs font-bold ${
-                    captureType === 'FINDING_CONTEXT' ? 'text-black' : 'text-white'
-                  }`}
-                >
-                  Finding context
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-          {error ? (
-            <View
-              accessibilityLiveRegion="assertive"
-              accessibilityRole="alert"
-              className="mb-4 w-full rounded-xl bg-red-950/80 px-4 py-3"
-            >
-              <Text className="text-center text-xs text-red-100">{error}</Text>
-            </View>
-          ) : null}
-          <View className="mb-5 flex-row items-center justify-center gap-8">
-            {/* Grouped, or VoiceOver reads "3" and "photos" as two stops. */}
-            <View
-              accessible
-              accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
-              className="items-center"
-            >
-              <Text className="text-2xl font-bold text-white">{photoCount}</Text>
-              <Text className="text-xs text-white/70">photos</Text>
-            </View>
-            <Pressable
-              accessibilityHint={
-                captureType === 'AREA_OVERVIEW'
-                  ? 'Captures a wide shot of the area'
-                  : 'Captures a close-up for a finding'
-              }
-              accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
-              accessibilityRole="button"
-              accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
-              className="h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-white/15"
-              onPress={() => void takeSnapshot()}
-              disabled={!ready || capturingPhoto}
-            >
-              {capturingPhoto ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <CameraIcon size={27} className="text-white" />
-              )}
-            </Pressable>
-            <Pressable
-              accessibilityLabel="Room capture guide"
-              accessibilityRole="button"
-              className="min-h-11 min-w-11 items-center justify-center"
-              onPress={() =>
-                Alert.alert(
-                  'Room capture guide',
-                  'Start with a wide room overview. Move slowly clockwise, narrate visible conditions, then capture focused context for any finding.',
-                )
-              }
-            >
-              <InfoIcon size={22} className="text-white" />
-              <Text className="mt-1 text-center text-xs text-white/70">Guide</Text>
-            </Pressable>
-          </View>
+      {/* Wall 1 confirmation gates only the guidance, never the camera. */}
+      {primary && !startConfirmed && !recording ? (
+        <View
+          className="absolute inset-x-0 items-center px-6"
+          style={{ top: layout.guide.top + layout.guide.height / 2 - 40 }}
+        >
           <Pressable
-            accessibilityHint={recording ? 'Ends the take and opens the review screen' : undefined}
-            accessibilityLabel={
-              stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
-            }
+            accessibilityHint="Marks your starting wall so the turn can be measured"
+            accessibilityLabel="Confirm Wall 1"
             accessibilityRole="button"
-            accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
-            className="h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-red-500"
-            disabled={!ready || stopping}
-            onPress={recording ? stopRecording : () => void beginRecording()}
+            className="min-h-12 flex-row items-center rounded-2xl bg-white/95 px-5 py-3 active:opacity-80"
+            style={{ gap: SPACING.sm }}
+            onPress={() => {
+              setStartConfirmed(true);
+              void Haptics.selectionAsync().catch(() => undefined);
+              announce('Wall 1 confirmed. Hold a wide view, then start recording.');
+            }}
           >
-            {recording ? (
-              <SquareIcon size={27} className="text-white" />
-            ) : (
-              <View className="h-14 w-14 rounded-full bg-red-500" />
-            )}
+            <CheckIcon size={18} className="text-black" />
+            <Text className="font-bold text-black">Confirm Wall 1</Text>
           </Pressable>
-          {/* importantForAccessibility="no": the label above already conveys
-              this, and leaving it focusable makes the technician swipe past a
-              duplicate of the control they just heard. */}
-          <Text importantForAccessibility="no" className="mt-2 text-sm font-semibold text-white">
-            {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
-          </Text>
         </View>
-      </SafeAreaView>
+      ) : null}
+
+      {/* Zones 3–5 — capture info, controls, status. Measured as one stack so
+          the framing guide above always knows how much room it has left. */}
+      <View
+        className="absolute inset-x-0 bottom-0"
+        style={{ paddingBottom: insets.bottom }}
+        onLayout={(event) =>
+          setBottomStackHeight(Math.round(event.nativeEvent.layout.height - insets.bottom))
+        }
+      >
+        {error ? (
+          <View
+            accessibilityLiveRegion="assertive"
+            accessibilityRole="alert"
+            className="mx-4 mb-3 rounded-xl bg-red-950/85 px-4 py-2.5"
+          >
+            <Text className="text-center text-xs text-red-100">{error}</Text>
+          </View>
+        ) : null}
+
+        <CaptureInfoRow
+          nextLabel={snapshotLabel(captureType)}
+          photoCount={photoCount}
+          findingCount={primary ? findingMarkers.length : undefined}
+          secondaryLabel={primary ? undefined : (purposeDetail?.label ?? 'Additional evidence')}
+          onPressType={() => setTypeSheetOpen(true)}
+        />
+
+        <CameraControls
+          recording={recording}
+          saving={stopping}
+          ready={ready}
+          capturingPhoto={capturingPhoto}
+          tertiaryLabel={primary && recording ? 'Mark finding' : 'Open guide'}
+          onSnapshot={() => void takeSnapshot()}
+          onToggleRecording={recording ? stopRecording : () => void beginRecording()}
+          onTertiary={primary && recording ? markFinding : () => setGuideOpen(true)}
+        />
+
+        <CameraStatusBar
+          micOn={Boolean(microphonePermission?.granted)}
+          motionActive={primary && recording && sensorSupported}
+          offline={!isOnline}
+        />
+      </View>
+
+      {!ready ? (
+        <View className="absolute inset-0 items-center justify-center bg-black/40">
+          <ActivityIndicator color="#fff" />
+        </View>
+      ) : null}
+
+      <SnapshotTypeSheet
+        visible={typeSheetOpen}
+        selected={captureType}
+        onSelect={setCaptureType}
+        onClose={() => setTypeSheetOpen(false)}
+      />
+      <GuideSheet
+        visible={guideOpen}
+        mode={mode}
+        guidance={guidance}
+        purpose={purpose}
+        onClose={() => setGuideOpen(false)}
+      />
     </View>
   );
 }

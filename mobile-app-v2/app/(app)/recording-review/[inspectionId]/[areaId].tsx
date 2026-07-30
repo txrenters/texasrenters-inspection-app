@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CaptureSummaryCard } from '@/src/capture/CaptureSummaryCard';
 import { useInspection, useRoom, useRooms, useSaveRecording } from '@/src/features/queries';
 import { deleteDraftRecording } from '@/src/media/local-recordings';
 import { useDemoStore } from '@/src/stores/demo.store';
@@ -85,9 +86,12 @@ export default function RecordingReviewScreen() {
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
       <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 130 }}>
-        <Text className="text-2xl font-bold text-foreground">Review recording</Text>
+        <Text className="text-2xl font-bold text-foreground">
+          {draft.recordingType === 'ADDITIONAL_ISSUE' ? 'Review evidence clip' : 'Review recording'}
+        </Text>
         <Text className="mt-1 text-sm text-muted-foreground">
-          {room.data?.name ?? 'Room'} · Stored on this device
+          {room.data?.name ?? 'Room'}
+          {draft.label ? ` · ${draft.label}` : ''} · Stored on this device
         </Text>
         <VideoView
           player={player}
@@ -95,6 +99,10 @@ export default function RecordingReviewScreen() {
           contentFit="contain"
           style={{ height: 300, marginTop: 20, borderRadius: 18, backgroundColor: '#000' }}
         />
+        {/* Only the primary walkthrough carries a guidance summary; an
+            additional clip has no 360° requirement to report against. */}
+        {draft.captureSummary ? <CaptureSummaryCard summary={draft.captureSummary} /> : null}
+
         <View className="mt-5 rounded-2xl bg-card p-5">
           <Text nativeID="recording-note-label" className="font-semibold text-foreground">
             Technician note
@@ -155,7 +163,19 @@ export default function RecordingReviewScreen() {
             onPress={() => {
               deleteDraftRecording(draft.uri);
               setDraft(null);
-              router.replace(`/camera/${inspectionId}/${areaId}`);
+              // Carry the mode and purpose back to the camera. Without them a
+              // primary retake would be re-detected as additional evidence,
+              // because a primary recording now exists for the area.
+              router.replace({
+                pathname: '/(app)/camera/[inspectionId]/[areaId]',
+                params: {
+                  inspectionId,
+                  areaId,
+                  recordingType: draft.recordingType ?? 'PRIMARY_AREA',
+                  ...(draft.category ? { purpose: draft.category } : {}),
+                  ...(draft.relatedFindingId ? { findingId: draft.relatedFindingId } : {}),
+                },
+              });
             }}
           >
             <Text className="font-semibold text-foreground">Retake</Text>
@@ -165,11 +185,27 @@ export default function RecordingReviewScreen() {
             accessibilityLabel="Discard recording"
             accessibilityRole="button"
             className="min-h-12 flex-1 items-center justify-center rounded-xl bg-destructive/10 py-3"
-            onPress={() => {
-              deleteDraftRecording(draft.uri);
-              setDraft(null);
-              router.replace(`/areas/${areaId}`);
-            }}
+            // Confirmed, because this is the only irreversible action on the
+            // screen and it sits directly beside Retake. An incomplete
+            // walkthrough is never discarded automatically.
+            onPress={() =>
+              Alert.alert(
+                'Discard this recording?',
+                'The video is deleted from this device and cannot be recovered. Photos you already captured are kept.',
+                [
+                  { text: 'Keep recording', style: 'cancel' },
+                  {
+                    text: 'Discard',
+                    style: 'destructive',
+                    onPress: () => {
+                      deleteDraftRecording(draft.uri);
+                      setDraft(null);
+                      router.replace(`/areas/${areaId}`);
+                    },
+                  },
+                ],
+              )
+            }
           >
             <Text className="font-semibold text-destructive">Discard</Text>
           </Pressable>

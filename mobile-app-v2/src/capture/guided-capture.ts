@@ -8,6 +8,17 @@ export const GUIDED_CAPTURE_POLICY = {
   wrongDirectionWarningDegrees: 25,
   jitterDegrees: 1,
   maximumSampleDeltaDegrees: 45,
+  /**
+   * Coaching thresholds. Deliberately generous: a technician glancing at a
+   * light switch should never be told they are going the wrong way, so a
+   * reverse only counts once it is both large enough and sustained.
+   */
+  tooFastDegreesPerSecond: 55,
+  stationaryDegreesPerSecond: 3,
+  sustainedReverseMs: 1_200,
+  /** A reverse shorter than this is a natural correction and is forgiven. */
+  reverseForgivenessDegrees: 12,
+  almostCompleteProgress: 0.85,
 } as const;
 
 export type CaptureCoverageStatus =
@@ -58,7 +69,19 @@ export interface RotationTracker {
   counterClockwiseRotationDegrees: number;
   acceptedSamples: number;
   rejectedSamples: number;
+  // Timing-derived fields, added for speed and direction coaching. All optional
+  // or zero-initialised so a tracker built by earlier code stays valid.
+  lastSampleAtMs?: number;
+  /** Smoothed magnitude, for "slow down" without reacting to single samples. */
+  angularVelocityDegreesPerSecond: number;
+  /** Signed direction of the most recent accepted movement. */
+  lastDirection: RotationDirection;
+  /** Degrees accumulated in the current unbroken reverse run. */
+  reverseRunDegrees: number;
+  reverseRunStartedAtMs?: number;
 }
+
+export type RotationDirection = 'CLOCKWISE' | 'COUNTER_CLOCKWISE' | 'STATIONARY';
 
 export function createRotationTracker(): RotationTracker {
   return {
@@ -66,6 +89,9 @@ export function createRotationTracker(): RotationTracker {
     counterClockwiseRotationDegrees: 0,
     acceptedSamples: 0,
     rejectedSamples: 0,
+    angularVelocityDegreesPerSecond: 0,
+    lastDirection: 'STATIONARY',
+    reverseRunDegrees: 0,
   };
 }
 
@@ -77,9 +103,13 @@ export function shortestSignedDelta(previous: number, current: number) {
   return ((normalizeHeading(current) - normalizeHeading(previous) + 540) % 360) - 180;
 }
 
+/** Exponential smoothing weight for angular velocity. Higher = more responsive. */
+const VELOCITY_SMOOTHING = 0.3;
+
 export function updateRotationTracker(
   tracker: RotationTracker,
   headingDegrees: number,
+  atMs?: number,
 ): RotationTracker {
   const heading = normalizeHeading(headingDegrees);
   if (tracker.previousHeadingDegrees === undefined) {
@@ -88,6 +118,7 @@ export function updateRotationTracker(
       startHeadingDegrees: heading,
       previousHeadingDegrees: heading,
       endHeadingDegrees: heading,
+      lastSampleAtMs: atMs,
       acceptedSamples: 1,
     };
   }
@@ -101,21 +132,72 @@ export function updateRotationTracker(
     return {
       ...tracker,
       endHeadingDegrees: heading,
+      lastSampleAtMs: atMs ?? tracker.lastSampleAtMs,
       rejectedSamples: tracker.rejectedSamples + 1,
     };
   }
+
+  // DeviceMotion rotation alpha increases counter-clockwise on the platforms
+  // supported by Expo, so a negative signed delta is clockwise.
+  const clockwise = delta < 0;
+  const elapsedMs =
+    atMs !== undefined && tracker.lastSampleAtMs !== undefined
+      ? Math.max(1, atMs - tracker.lastSampleAtMs)
+      : undefined;
+  const instantaneous = elapsedMs ? (magnitude / elapsedMs) * 1000 : undefined;
+  const velocity =
+    instantaneous === undefined
+      ? tracker.angularVelocityDegreesPerSecond
+      : tracker.angularVelocityDegreesPerSecond * (1 - VELOCITY_SMOOTHING) +
+        instantaneous * VELOCITY_SMOOTHING;
+
+  // A reverse run resets the moment the technician turns the right way again,
+  // so a glance back never accumulates toward a warning across the whole take.
+  const reverseRunDegrees = clockwise ? 0 : tracker.reverseRunDegrees + magnitude;
+  // Stamped from the *previous* sample: the reverse began when the technician
+  // started moving, not when the sample that noticed it arrived. Using `atMs`
+  // here silently discards one sample interval from every measured run.
+  const reverseRunStartedAtMs = clockwise
+    ? undefined
+    : (tracker.reverseRunStartedAtMs ?? tracker.lastSampleAtMs ?? atMs);
 
   return {
     ...tracker,
     previousHeadingDegrees: heading,
     endHeadingDegrees: heading,
-    // DeviceMotion rotation alpha increases counter-clockwise on the platforms
-    // supported by Expo, so a negative signed delta is clockwise.
-    clockwiseRotationDegrees: tracker.clockwiseRotationDegrees + (delta < 0 ? magnitude : 0),
+    lastSampleAtMs: atMs ?? tracker.lastSampleAtMs,
+    clockwiseRotationDegrees: tracker.clockwiseRotationDegrees + (clockwise ? magnitude : 0),
     counterClockwiseRotationDegrees:
-      tracker.counterClockwiseRotationDegrees + (delta > 0 ? magnitude : 0),
+      tracker.counterClockwiseRotationDegrees + (clockwise ? 0 : magnitude),
+    angularVelocityDegreesPerSecond: velocity,
+    lastDirection: clockwise ? 'CLOCKWISE' : 'COUNTER_CLOCKWISE',
+    reverseRunDegrees,
+    reverseRunStartedAtMs,
     acceptedSamples: tracker.acceptedSamples + 1,
   };
+}
+
+/**
+ * Whether the technician has been turning the wrong way long enough to be told.
+ *
+ * Requires both a meaningful reverse *and* sustained duration. Either alone
+ * produces false warnings — a quick look back at a light switch clears the
+ * degree threshold in a fraction of a second.
+ */
+export function sustainedWrongDirection(tracker: RotationTracker, nowMs?: number): boolean {
+  if (tracker.reverseRunDegrees < GUIDED_CAPTURE_POLICY.reverseForgivenessDegrees) return false;
+  if (tracker.reverseRunStartedAtMs === undefined || nowMs === undefined)
+    return tracker.reverseRunDegrees >= GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
+  return nowMs - tracker.reverseRunStartedAtMs >= GUIDED_CAPTURE_POLICY.sustainedReverseMs;
+}
+
+export type RotationSpeedState = 'GOOD' | 'TOO_FAST' | 'STATIONARY';
+
+export function rotationSpeed(tracker: RotationTracker): RotationSpeedState {
+  const speed = tracker.angularVelocityDegreesPerSecond;
+  if (speed > GUIDED_CAPTURE_POLICY.tooFastDegreesPerSecond) return 'TOO_FAST';
+  if (speed < GUIDED_CAPTURE_POLICY.stationaryDegreesPerSecond) return 'STATIONARY';
+  return 'GOOD';
 }
 
 export function rotationProgress(tracker: RotationTracker) {
