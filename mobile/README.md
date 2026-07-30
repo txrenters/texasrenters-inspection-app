@@ -2,7 +2,7 @@
 
 This package is the redesigned Expo technician application. It keeps the visual
 work from the supplied prototype while using the same production architecture as
-`mobile-app`:
+`mobile`:
 
 - Supabase technician authentication with mandatory first-login password change
 - authenticated TexasRenters REST API calls only
@@ -57,7 +57,7 @@ to NestJS, while the Expo manifest, bundle, assets, and Fast Refresh route to V2
 Metro on port `8082`. Expo does not start a second ngrok agent.
 
 For a cold start, use `pnpm remote-beta -- --clear` from the repository root.
-When the current Docker gateway is already running, enter `mobile-app-v2` and
+When the current Docker gateway is already running, enter `mobile` and
 use `pnpm start:tunnel --clear`.
 
 ## Data and evidence flow

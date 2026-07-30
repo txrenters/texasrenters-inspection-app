@@ -2,7 +2,7 @@
 #
 # Not production. A single Docker-managed ngrok agent exposes one gateway URL.
 # The gateway routes /api and Socket.IO to NestJS and every Expo/Metro path to
-# mobile-app-v2 on the host. Expo must not start a second ngrok agent.
+# mobile on the host. Expo must not start a second ngrok agent.
 #
 #   docker compose --env-file backend/.env.local -f compose.remote-beta.yml up -d --build
 #
@@ -27,7 +27,7 @@ services:
       CACHE_ENABLED: 'false'
       # The public beta boundary must always use real authentication.
       USE_MOCK_AUTH: 'false'
-      # Expo web for mobile-app-v2 runs on 8082 during remote-beta development.
+      # Expo web for mobile runs on 8082 during remote-beta development.
       MOBILE_APP_ORIGIN: http://localhost:8082
     ports:
       # ngrok is the only public entry point. The host binding stays loopback-only.

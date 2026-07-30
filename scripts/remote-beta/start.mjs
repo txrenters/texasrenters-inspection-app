@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cold-starts the temporary remote beta and launches mobile-app-v2.
+ * Cold-starts the temporary remote beta and launches mobile.
  *
  * One Docker-managed ngrok URL terminates at the remote-beta gateway:
  *   /api/* and /socket.io/* -> backend container
@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const COMPOSE_FILE = join(ROOT, 'compose.remote-beta.yml');
 const ENV_FILE = join(ROOT, 'backend', '.env.local');
-const MOBILE_ENV = join(ROOT, 'mobile-app-v2', '.env.local');
+const MOBILE_ENV = join(ROOT, 'mobile', '.env.local');
 const NGROK_AGENT_API = 'http://127.0.0.1:4041/api/tunnels';
 const PNPM_CLI = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'pnpm.js');
 
@@ -175,7 +175,7 @@ function updateMobileEnv(publicUrl) {
     MOBILE_ENV,
     `${next.filter((line, index, all) => line !== '' || index < all.length - 1).join('\n')}\n`,
   );
-  log('✓ Updated mobile-app-v2/.env.local (remote-beta routing only)');
+  log('✓ Updated mobile/.env.local (remote-beta routing only)');
 }
 
 await preflight();
@@ -209,7 +209,7 @@ log(`
  Local backend     : http://127.0.0.1:3000
  Public gateway    : ${publicUrl}
  REST API          : ${publicUrl}/api/v1
- Mobile client     : mobile-app-v2
+ Mobile client     : mobile
  Tunnel inspector  : http://127.0.0.1:4041 (local only)
 
  Metro             : starting V2 on port 8082
@@ -228,7 +228,7 @@ if (!existsSync(PNPM_CLI)) {
 // Launch pnpm through Node instead of pnpm.cmd. Node 24 on Windows can throw
 // spawn EINVAL for .cmd shims when stdio is inherited.
 const metro = spawn(process.execPath, [PNPM_CLI, 'run', 'start:tunnel', ...extraArgs], {
-  cwd: join(ROOT, 'mobile-app-v2'),
+  cwd: join(ROOT, 'mobile'),
   stdio: 'inherit',
 });
 metro.on('error', (error) => fail(`V2 Metro could not be started: ${error.message}`));

@@ -29,6 +29,6 @@ verification begins.
 - Server revisions are `version` when present, otherwise `updatedAt`.
 
 The implementations are `web-app/lib/state-consistency.ts` and
-`mobile-app/src/features/state-consistency.ts`; the shared state vocabulary and revision helpers
+`mobile/src/features/state-consistency.ts`; the shared state vocabulary and revision helpers
 are in `shared/src/state/sync.ts`.
 

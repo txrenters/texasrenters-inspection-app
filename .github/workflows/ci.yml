@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
     paths:
-      - 'mobile-app/**'
+      - 'mobile/**'
       - 'web-app/**'
       - 'backend/**'
       - 'shared/**'
@@ -16,7 +16,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'mobile-app/**'
+      - 'mobile/**'
       - 'web-app/**'
       - 'backend/**'
       - 'shared/**'

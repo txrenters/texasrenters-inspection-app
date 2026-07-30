@@ -20,7 +20,7 @@ Live authentication and Propertyware portfolio/building synchronization are conn
 
 ## Architecture
 
-- `mobile-app/`: Expo SDK 54 technician application using Expo Router, TypeScript, TanStack Query, Zustand, SecureStore, and repository adapters.
+- `mobile/`: Expo SDK 54 technician application using Expo Router, TypeScript, TanStack Query, Zustand, SecureStore, and repository adapters.
 - `web-app/`: Next.js administrator application for properties, inspections, assignments, technicians, and integration monitoring.
 - `backend/`: the single NestJS REST API under `/api/v1`, shared by both clients.
 - `supabase/`: canonical PostgreSQL migrations.
@@ -47,7 +47,7 @@ From the repository root:
 pnpm dev:mobile
 ```
 
-From `mobile-app/`:
+From `mobile/`:
 
 ```bash
 pnpm start
@@ -63,10 +63,10 @@ pnpm dev:mobile:clear     # LAN mode with a one-time Metro cache clear
 pnpm dev:mobile:tunnel    # slower fallback when LAN routing is unavailable
 ```
 
-The launcher always uses `mobile-app/` as the Expo project root and reports its selected private-LAN candidate. It never commits a developer-specific address.
+The launcher always uses `mobile/` as the Expo project root and reports its selected private-LAN candidate. It never commits a developer-specific address.
 
 ```bash
-pnpm --filter @texasrenters/mobile-app dev:client
+pnpm --filter @texasrenters/mobile dev:client
 ```
 
 If port `8081` is already occupied, stop the existing Metro process instead of allowing a second server to use another port.
@@ -108,7 +108,7 @@ EXPO_PUBLIC_ENABLE_DEMO_DATA=true → mock repositories
 unset or any other value          → authenticated REST repositories
 ```
 
-`EXPO_PUBLIC_API_BASE_URL` identifies the shared backend origin, such as `http://localhost:3000`. API adapters do not silently fall back to mock data. Repository interfaces live in `mobile-app/src/repositories/contracts.ts`.
+`EXPO_PUBLIC_API_BASE_URL` identifies the shared backend origin, such as `http://localhost:3000`. API adapters do not silently fall back to mock data. Repository interfaces live in `mobile/src/repositories/contracts.ts`.
 
 Property, owner, and portfolio records remain mastered by the company’s existing external application. A future backend integration layer will normalize its contracts and store external IDs alongside inspection-specific records. The mobile app will continue to call only the TexasRenters REST boundary.
 

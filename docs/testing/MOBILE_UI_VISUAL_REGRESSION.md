@@ -5,12 +5,11 @@
 Run from the repository root:
 
 ```powershell
-pnpm --filter mobile-app lint
-pnpm --filter mobile-app typecheck
-pnpm --filter mobile-app test
-pnpm --filter mobile-app build
-pnpm --dir mobile-app exec expo-doctor
-pnpm dlx @react-native-reusables/cli@latest doctor --cwd mobile-app
+pnpm --filter @texasrenters/mobile lint
+pnpm --filter @texasrenters/mobile typecheck
+pnpm --filter @texasrenters/mobile test
+pnpm --filter @texasrenters/mobile build
+pnpm --dir mobile exec expo-doctor
 ```
 
 Also export an iOS bundle to a temporary directory. Do not commit export artifacts.

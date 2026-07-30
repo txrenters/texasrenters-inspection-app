@@ -1,7 +1,7 @@
 # Repository Structure
 
 ```text
-mobile-app/  Expo technician application
+mobile/  Expo technician application
 web-app/     Next.js administrator application
 backend/     Shared NestJS REST API and provider integrations
 supabase/    Canonical PostgreSQL migrations

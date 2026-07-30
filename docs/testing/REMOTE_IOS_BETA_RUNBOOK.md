@@ -1,7 +1,7 @@
 # Remote iOS Beta — Developer Runbook
 
 Temporary environment for remote technicians while the signed beta is pending. The active
-client is **`mobile-app-v2`**. The legacy `mobile-app` is not launched by this workflow.
+client is **`mobile`**. The legacy `mobile` is not launched by this workflow.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ https://<NGROK_DOMAIN>
         ▼
 Docker remote-beta gateway
         ├── /api/*, /socket.io/* ──► NestJS backend
-        └── every other path ──────► mobile-app-v2 Metro :8082
+        └── every other path ──────► mobile Metro :8082
 ```
 
 Expo uses its documented `EXPO_PACKAGER_PROXY_URL` override. It runs in LAN bind mode so the
@@ -48,7 +48,7 @@ This command:
 3. waits for backend health;
 4. discovers the live Docker-managed ngrok gateway on `127.0.0.1:4041`;
 5. verifies `https://<NGROK_DOMAIN>/api/v1/health`;
-6. updates only the remote-beta routing keys in `mobile-app-v2/.env.local`;
+6. updates only the remote-beta routing keys in `mobile/.env.local`;
 7. starts V2 Metro on port 8082 and prints the Expo Go QR code.
 
 To clear Metro's cache during the same cold start:
@@ -62,7 +62,7 @@ pnpm remote-beta -- --clear
 Use this only when the Docker remote-beta stack is already running with the current gateway:
 
 ```bash
-cd mobile-app-v2
+cd mobile
 pnpm start:tunnel --clear
 ```
 

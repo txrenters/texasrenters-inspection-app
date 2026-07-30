@@ -2,7 +2,7 @@
 
 ## Scope
 
-This audit covers all 23 Expo Router route files in `mobile-app/app`, the shared screen shell,
+This audit covers all 23 Expo Router route files in `mobile/app`, the shared screen shell,
 theme provider, state feedback, reusable controls, portal ownership, and the camera-first room
 recording workflow. It preserves the REST boundary, durable offline queue, one-video-per-approved-
 area rule, human approval of AI output, and latest-intent-wins state consistency.

@@ -8,11 +8,11 @@ The repository has two independent clients and one shared backend:
 Propertyware API
   -> backend/ (NestJS REST API, authorization, integration workers, Prisma)
       -> Supabase PostgreSQL
-      -> mobile-app/ (Expo technician application)
+      -> mobile/ (Expo technician application)
       -> web-app/ (Next.js administrator application)
 ```
 
-`mobile-app/` owns technician authentication, assigned inspections, room workflows, media capture, and upload/processing status. Production-style development uses the REST repositories by default; an explicit local demo repository remains available for isolated product demonstrations and tests:
+`mobile/` owns technician authentication, assigned inspections, room workflows, media capture, and upload/processing status. Production-style development uses the REST repositories by default; an explicit local demo repository remains available for isolated product demonstrations and tests:
 
 ```text
 Expo Router screens

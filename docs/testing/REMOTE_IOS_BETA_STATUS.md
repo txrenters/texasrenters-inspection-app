@@ -7,10 +7,10 @@ deployment and it does not replace a signed development or TestFlight build.
 
 ## Active client
 
-- `mobile-app-v2` is the default technician client.
+- `mobile` is the default technician client.
 - Root mobile scripts (`dev:mobile`, `lint:mobile`, `typecheck:mobile`, `test:mobile`, and
   `build:mobile`) target V2.
-- `mobile-app` remains available only through explicit `:v1` scripts.
+- `mobile` remains available only through explicit `:v1` scripts.
 - Expo SDK: 54.0.36.
 
 ## Remote topology
@@ -46,7 +46,7 @@ The following checks passed on 2026-07-30:
 - The manifest launch asset used the same public ngrok origin.
 - The complete iOS JavaScript bundle was generated and fetched through ngrok with HTTP 200.
 - The terminal QR advertised the public ngrok origin and did not emit `remote gone away`.
-- `cd mobile-app-v2 && pnpm start:tunnel --check` passed against the running stack.
+- `cd mobile && pnpm start:tunnel --check` passed against the running stack.
 
 The first cold bundle was approximately 16.6 MB and took about one minute to generate and
 transfer. Subsequent requests use Metro's cache.
@@ -94,7 +94,7 @@ pnpm remote-beta -- --clear
 When the Docker stack is already current:
 
 ```powershell
-cd mobile-app-v2
+cd mobile
 pnpm start:tunnel --clear
 ```
 

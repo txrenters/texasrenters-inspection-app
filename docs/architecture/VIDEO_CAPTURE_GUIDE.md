@@ -14,7 +14,7 @@ The sequence is chosen by the area's `environment`:
   around the perimeter → fencing/gates/walls/ground/drainage/landscaping/
   structures/damage → avoid unsafe movement or trespassing.
 
-Content and version live in `mobile-app/src/utils/video-capture-guide.ts`
+Content and version live in `mobile/src/utils/video-capture-guide.ts`
 (`VIDEO_GUIDE_VERSION`). The guideline version is persisted onto each recording
 via `InspectionMedia.captureGuidelineVersion` (both the primary walkthrough and
 additional labeled clips carry it).

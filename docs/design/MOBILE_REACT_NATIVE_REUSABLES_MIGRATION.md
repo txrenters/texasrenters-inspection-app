@@ -1,5 +1,10 @@
 # Mobile — React Native Reusables Migration Tracker
 
+> **Superseded.** This tracked the React Native Reusables migration of the legacy `mobile-app`
+> client, which was removed from the repository. The current `mobile/` client does not use React
+> Native Reusables — it composes raw React Native primitives with NativeWind. Paths below refer to
+> the deleted app and are kept only as a record.
+>
 > Historical migration log. The authoritative current implementation and validation status is
 > [`MOBILE_UI_UX_AUDIT_STATUS.md`](./MOBILE_UI_UX_AUDIT_STATUS.md). React Native Reusables,
 > NativeWind, the semantic theme, generated form/feedback/overlay primitives, and screen repairs are
@@ -11,7 +16,7 @@
 
 ## 2. Package manager
 
-**pnpm** (workspace root lockfile; `mobile-app` is a workspace package). Do not switch.
+**pnpm** (workspace root lockfile; `mobile` is a workspace package). Do not switch.
 
 ## 3. Styling system found
 
@@ -118,7 +123,7 @@ Confirmed, not assumed:
 
 Workarounds to try next, in order:
 1. `npx shadcn@4.15.0 add <urls>` — the CLI itself suggests this older version.
-2. Set `node-linker=isolated` for `mobile-app` only, or run the add with
+2. Set `node-linker=isolated` for `mobile` only, or run the add with
    `--package-manager npm` if supported, to sidestep the hoisted reconcile.
 3. Last resort: fetch each registry JSON and write the component files directly, then add the
    listed deps manually. This is a documented registry format, not "copying random snippets" —
@@ -163,7 +168,7 @@ Root: `app/index` · `(app)/_layout`
 
 ### Sequenced plan
 
-1. **Get the doctor to run.** `pnpm add -D @react-native-reusables/cli` inside `mobile-app`,
+1. **Get the doctor to run.** `pnpm add -D @react-native-reusables/cli` inside `mobile`,
    then `pnpm exec @react-native-reusables/cli doctor --log-level all`. The `npx` path hangs
    here.
 2. **Install the styling engine** — NativeWind v4 matched to Expo SDK 54, plus `tailwindcss`,
@@ -200,9 +205,9 @@ separately, so it can be reverted without unwinding component work.
 listening on :3000 (never interrupted — no `node_modules` wipe was performed), **web-app
 typecheck passes**, **mobile-app typecheck passes**.
 
-Changed so far: `mobile-app/{components.json, global.css, tailwind.config.js, babel.config.js,
-metro.config.js, package.json}`, `mobile-app/app/_layout.tsx`,
-`mobile-app/src/lib/{utils,theme}.ts`, root `pnpm-lock.yaml`.
+Changed so far: `mobile/{components.json, global.css, tailwind.config.js, babel.config.js,
+metro.config.js, package.json}`, `mobile/app/_layout.tsx`,
+`mobile/src/lib/{utils,theme}.ts`, root `pnpm-lock.yaml`.
 
 **Not yet done:** zero components installed, zero screens migrated, `src/components/ui.tsx`
 untouched, 24 `StyleSheet.create` files untouched.

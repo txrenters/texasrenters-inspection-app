@@ -13,7 +13,7 @@ describe('shared backend CORS configuration', () => {
     );
   });
 
-  it('allows the mobile-app-v2 web origin when configured in production', () => {
+  it('allows the mobile web origin when configured in production', () => {
     expect(
       allowedCorsOrigins({
         NODE_ENV: 'production',

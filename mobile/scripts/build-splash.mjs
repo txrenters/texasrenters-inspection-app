@@ -4,7 +4,7 @@
  *
  * Re-run this when `docs/texasrenterslogo-transparent.png` changes:
  *
- *   node mobile-app-v2/scripts/build-splash.mjs
+ *   node mobile/scripts/build-splash.mjs
  *
  * Why a dark variant exists: the logo's "TEXAS" and ".com" are dark navy
  * (luminance ~55-62). On the dark theme's #0A0F18 background they are all but
@@ -23,7 +23,7 @@ import sharp from 'sharp';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SOURCE = join(ROOT, 'docs', 'texasrenterslogo-transparent.png');
-const OUT_DIR = join(ROOT, 'mobile-app-v2', 'assets');
+const OUT_DIR = join(ROOT, 'mobile', 'assets');
 
 /** Square canvas: `resizeMode: 'contain'` fits it to screen width on a phone. */
 const CANVAS = 1024;

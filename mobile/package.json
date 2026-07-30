@@ -1,8 +1,8 @@
 {
-  "name": "@texasrenters/mobile-app-v2",
+  "name": "@texasrenters/mobile",
   "main": "expo-router/entry",
   "version": "0.1.0",
-  "description": "TexasRenters technician inspection application v2",
+  "description": "TexasRenters technician inspection application",
   "scripts": {
     "prestart": "pnpm --filter @texasrenters/shared build",
     "start": "expo start --lan --go --port 8082",

@@ -111,7 +111,7 @@ Every screen in the workflow has backing endpoints. Nothing is missing.
 ## Reusing the existing client
 
 The current app already implements this surface in
-`mobile-app/src/repositories/api/repositories.ts` — auth header, base-URL fallback list, 15s
+`mobile/src/repositories/api/repositories.ts` — auth header, base-URL fallback list, 15s
 timeout, `AbortController` wiring, Zod response validation and the offline queue.
 
 **Reuse that file rather than writing a new client.** Rebuilding it is where the subtle bugs

@@ -1,6 +1,5 @@
 packages:
-  - mobile-app
-  - mobile-app-v2
+  - mobile
   - web-app
   - backend
   - shared

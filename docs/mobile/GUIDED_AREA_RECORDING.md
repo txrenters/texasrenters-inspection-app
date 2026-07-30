@@ -26,4 +26,4 @@ height. Preparation is shown once as a blocking Wall 1 overlay; after dismissal,
 and evidence feedback may overlay the viewfinder. Camera permission errors remain actionable without
 hiding or displacing the capture workflow.
 
-Policy values live in `mobile-app/src/capture/guided-capture.ts`.
+Policy values live in `mobile/src/capture/guided-capture.ts`.

@@ -12,7 +12,7 @@ Web keys live in `web-app/lib/queries.ts`:
 - `keys.usersRoot`, `keys.rolesRoot`
 - `keys.propertyware`, `keys.syncRuns`
 
-Mobile keys live in `mobile-app/src/features/queries.ts`:
+Mobile keys live in `mobile/src/features/queries.ts`:
 
 - `queryKeys.all`
 - `queryKeys.inspectionsRoot`, `inspection(id)`, `inspectionContext(id)`
