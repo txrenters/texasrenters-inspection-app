@@ -10,9 +10,19 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-console.log('Before stopping, confirm testers have finished recording and pending uploads are 0.\n');
-const result = spawnSync('docker', [
-  'compose', '--env-file', join(ROOT, 'backend', '.env.local'),
-  '-f', join(ROOT, 'compose.remote-beta.yml'), 'down',
-], { stdio: 'inherit', shell: process.platform === 'win32' });
+console.log(
+  'Before stopping, confirm testers have finished recording and pending uploads are 0.\n',
+);
+const result = spawnSync(
+  'docker',
+  [
+    'compose',
+    '--env-file',
+    join(ROOT, 'backend', '.env.local'),
+    '-f',
+    join(ROOT, 'compose.remote-beta.yml'),
+    'down',
+  ],
+  { stdio: 'inherit' },
+);
 process.exit(result.status ?? 0);

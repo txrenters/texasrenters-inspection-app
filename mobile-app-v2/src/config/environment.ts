@@ -36,9 +36,9 @@ export function resolveDeviceApiBaseUrl(
     if (!['localhost', '127.0.0.1', '::1'].includes(apiUrl.hostname)) return baseUrl;
     const metroHost = extractMetroHost(metroHostUri);
     if (!metroHost) return baseUrl;
-    // The Expo tunnel serves Metro bundles and development assets only. It is
-    // not a reverse proxy for the NestJS REST API. Tunnel startup must inject
-    // the separately discovered Docker/ngrok backend URL.
+    // A legacy Expo-hosted tunnel is not a NestJS reverse proxy. The active
+    // remote-beta workflow injects its Docker/ngrok gateway as baseUrl before
+    // this resolver runs, so it does not enter this localhost rewrite branch.
     if (isExpoTunnelHost(metroHost)) return null;
     if (!isPrivateNetworkHost(metroHost)) return baseUrl;
     apiUrl.hostname = metroHost;

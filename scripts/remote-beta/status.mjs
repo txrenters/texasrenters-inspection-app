@@ -1,54 +1,76 @@
 #!/usr/bin/env node
-/** Safe status snapshot of the remote-beta session. Prints no secrets. */
+/** Safe status snapshot of the V2 remote-beta session. Prints no secrets. */
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const args = ['compose', '--env-file', join(ROOT, 'backend', '.env.local'),
-  '-f', join(ROOT, 'compose.remote-beta.yml')];
-const sh = process.platform === 'win32';
-
-// `json` rather than a Go template: this runs through the shell on Windows, and
-// PowerShell mangles the braces and tabs, so a running stack reads as empty.
-const ps = spawnSync('docker', [...args, 'ps', '--format', 'json'], { encoding: 'utf8', shell: sh });
-const text = (ps.stdout ?? '').trim();
+const ENV_FILE = join(ROOT, 'backend', '.env.local');
+const COMPOSE_FILE = join(ROOT, 'compose.remote-beta.yml');
+const result = spawnSync(
+  'docker',
+  ['compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, 'ps', '--format', 'json'],
+  { encoding: 'utf8' },
+);
+const text = (result.stdout ?? '').trim();
 let rows = [];
 if (text) {
   try {
-    // Compose emits either one object per line or a single array, by version.
     rows = text.startsWith('[')
       ? JSON.parse(text)
-      : text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      : text
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
   } catch {
     rows = [];
   }
 }
+
 console.log(
   'Services:\n' +
     (rows.length
-      ? rows.map((r) => `  ${r.Service}  ${r.State}  ${r.Health || '-'}`).join('\n')
+      ? rows.map((row) => `  ${row.Service}  ${row.State}  ${row.Health || '-'}`).join('\n')
       : '  (none running)'),
 );
 
 let publicUrl = null;
+let upstream = null;
 try {
-  const res = await fetch('http://127.0.0.1:4040/api/tunnels');
-  if (res.ok) {
-    const body = await res.json();
-    publicUrl = (body.tunnels ?? []).find((t) => t.public_url?.startsWith('https://'))?.public_url ?? null;
+  const response = await fetch('http://127.0.0.1:4041/api/tunnels');
+  if (response.ok) {
+    const body = await response.json();
+    const tunnel = (body.tunnels ?? []).find(
+      (candidate) =>
+        candidate.public_url?.startsWith('https://') &&
+        String(candidate?.config?.addr ?? '').includes('gateway'),
+    );
+    publicUrl = tunnel?.public_url ?? null;
+    upstream = tunnel?.config?.addr ?? null;
   }
-} catch { /* agent down */ }
-console.log('\nPublic API: ' + (publicUrl ?? '(ngrok agent unreachable)'));
+} catch {
+  // Agent is not running.
+}
+
+console.log(`\nPublic gateway: ${publicUrl ?? '(ngrok gateway unavailable)'}`);
+console.log(`Tunnel upstream: ${upstream ?? '(unavailable)'}`);
 
 if (publicUrl) {
   try {
     const started = Date.now();
-    const res = await fetch(`${publicUrl}/api/v1/health`, {
+    const response = await fetch(`${publicUrl}/api/v1/health`, {
       headers: { 'ngrok-skip-browser-warning': 'true' },
     });
-    console.log(`Health    : ${res.status} in ${Date.now() - started}ms`);
+    console.log(`REST health    : ${response.status} in ${Date.now() - started}ms`);
   } catch (error) {
-    console.log(`Health    : unreachable (${error.message})`);
+    console.log(`REST health    : unreachable (${error.message})`);
   }
+}
+
+try {
+  const response = await fetch('http://127.0.0.1:8082/status');
+  const body = await response.text();
+  console.log(`V2 Metro       : ${response.status} ${body.trim()}`);
+} catch {
+  console.log('V2 Metro       : stopped');
 }

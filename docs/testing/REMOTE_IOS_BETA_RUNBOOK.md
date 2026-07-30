@@ -1,96 +1,73 @@
 # Remote iOS Beta — Developer Runbook
 
-Temporary environment for remote US technicians while the Apple Developer account is under
-review. Metro reaches phones through the Expo tunnel; the backend reaches them through a
-**separate** Cloudflare Tunnel. Both must be running.
+Temporary environment for remote technicians while the signed beta is pending. The active
+client is **`mobile-app-v2`**. The legacy `mobile-app` is not launched by this workflow.
 
-```
-iPhone ── Expo Go ── Expo tunnel (ngrok) ──────────► Metro (mobile-app)
-iPhone ── EXPO_PUBLIC_API_BASE_URL ── cloudflared ──► backend container ──► Supabase / Stream / R2
+## Architecture
+
+One stable ngrok dev domain and one authenticated ngrok agent session are used:
+
+```text
+iPhone / Expo Go
+        │
+        ▼
+https://<NGROK_DOMAIN>
+        │
+        ▼
+Docker remote-beta gateway
+        ├── /api/*, /socket.io/* ──► NestJS backend
+        └── every other path ──────► mobile-app-v2 Metro :8082
 ```
 
-The Expo tunnel carries **only** the JS bundle, dev assets and Fast Refresh. It never exposes
-the REST API — that is why the second tunnel exists.
+Expo uses its documented `EXPO_PACKAGER_PROXY_URL` override. It runs in LAN bind mode so the
+Docker gateway can reach it, but it does **not** launch `@expo/ngrok` or a second tunnel.
+Cloudflare Tunnel is not part of this workflow.
 
 ## Prerequisites
 
-- Docker Desktop running
-- Node 24 + pnpm (workspace already uses it)
-- Real Supabase / Cloudflare Stream / R2 credentials in `backend/.env.local`
-  (the API tunnel needs no account — see below)
-- The developer machine stays awake and online for the whole session
+- Docker Desktop installed
+- Node and pnpm versions accepted by the root workspace
+- `backend/.env.local` present
+- `NGROK_AUTHTOKEN` and `NGROK_DOMAIN` present in that ignored file
+- Real backend provider credentials already configured there
 
-## One-time setup
+Never put backend credentials in an `EXPO_PUBLIC_*` variable.
 
-There is **no separate remote-beta secret file** and **nothing to add**. Everything comes from
-the existing `backend/.env.local`, which already holds the Supabase, Cloudflare Stream, R2 and
-Propertyware credentials.
+## Cold start (recommended)
 
-The API tunnel runs as a Cloudflare **quick tunnel**: no account, no domain, no token. It issues
-a random `https://<words>.trycloudflare.com` URL on each start, which `pnpm remote-beta` reads
-from the container logs and writes into `mobile-app/.env.local`.
-
-Do **not** set `REMOTE_BETA_API_URL` unless you have a real named-tunnel hostname — a
-placeholder value there makes the health check target a domain that does not exist.
-
-`backend/.env.local` is git-ignored. **Never commit it.**
-
-### What Compose overrides, and why
-
-| variable | value | reason |
-|---|---|---|
-| `HOST` | `0.0.0.0` | loopback is unreachable from the Docker network |
-| `APP_ENV` | `remote-beta` | disables Swagger on the public tunnel |
-| `CACHE_ENABLED` | `false` | `REDIS_URL` points at localhost, which inside a container is the container |
-| `USE_MOCK_AUTH` | `false` | safety net while publicly reachable |
-
-`NODE_ENV` is **not** overridden. Your file sets `development`, and `app.module.ts` registers
-the mock video/transcription/AI providers only outside production — forcing production would
-fail dependency injection for your current `VIDEO_PLATFORM_PROVIDER=mock` configuration.
-
-## Start (recommended)
+From the repository root:
 
 ```bash
 pnpm remote-beta
 ```
 
-Builds the image, waits for container health, reads the public HTTPS URL from the cloudflared
-container logs, verifies `/api/v1/health` through it, writes `EXPO_PUBLIC_APP_ENV` and
-`EXPO_PUBLIC_API_BASE_URL` into `mobile-app/.env.local` (leaving other keys untouched), then
-starts Metro in tunnel mode. It prints no secrets.
+This command:
 
-## Start (manual fallback)
+1. waits up to 60 seconds for Docker Desktop;
+2. builds and starts the backend, routing gateway, and ngrok agent;
+3. waits for backend health;
+4. discovers the live Docker-managed ngrok gateway on `127.0.0.1:4041`;
+5. verifies `https://<NGROK_DOMAIN>/api/v1/health`;
+6. updates only the remote-beta routing keys in `mobile-app-v2/.env.local`;
+7. starts V2 Metro on port 8082 and prints the Expo Go QR code.
 
-```bash
-docker compose --env-file backend/.env.local -f compose.remote-beta.yml up -d --build
-```
-
-```bash
-docker compose --env-file backend/.env.local -f compose.remote-beta.yml ps
-```
+To clear Metro's cache during the same cold start:
 
 ```bash
-docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs -f backend tunnel
+pnpm remote-beta -- --clear
 ```
 
-Get the public URL from the tunnel logs:
+## Metro only
+
+Use this only when the Docker remote-beta stack is already running with the current gateway:
 
 ```bash
-docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs tunnel | grep trycloudflare
+cd mobile-app-v2
+pnpm start:tunnel --clear
 ```
 
-Put it in `mobile-app/.env.local`:
-
-```
-EXPO_PUBLIC_APP_ENV=remote-beta
-EXPO_PUBLIC_API_BASE_URL=https://<words>.trycloudflare.com
-```
-
-Then:
-
-```bash
-cd mobile-app && pnpm run start:tunnel
-```
+The script refuses to continue if the live ngrok agent still points directly at the backend,
+because that old topology cannot carry Metro. Run `pnpm remote-beta` once to recreate it.
 
 ## Status
 
@@ -98,77 +75,63 @@ cd mobile-app && pnpm run start:tunnel
 pnpm remote-beta:status
 ```
 
-## Verify the public endpoint
+The status output reports Docker services, the public gateway, its internal upstream, REST
+health, and whether V2 Metro is listening.
+
+## Manual Docker inspection
 
 ```bash
-curl -s https://<words>.trycloudflare.com/api/v1/health
+docker compose --env-file backend/.env.local -f compose.remote-beta.yml ps
+docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs backend gateway tunnel
 ```
 
-Expect `{"status":"ok","timestamp":"…"}`. Liveness deliberately does **not** touch Supabase, so
-a healthy container never depends on external providers. For dependency state use
-`/api/v1/health/readiness`.
+The ngrok inspection API is local only:
 
-## External cellular test — required before inviting technicians
+```text
+http://127.0.0.1:4041
+```
 
-Simulator-only testing is not sufficient for camera and portal behaviour.
+It can contain captured request payloads and must never be published.
 
-1. Backend and tunnel up; public health returns 200
-2. Metro running in tunnel mode
-3. iPhone on **cellular data, Wi-Fi off**
-4. Open Expo Go, scan the QR
-5. JS bundle loads
-6. Sign in with the assigned beta account
-7. Assigned inspection list loads
-8. Open an area
-9. Create or edit a record — confirm old values do **not** flash back
-10. Record a short video
-11. Capture wide + focused snapshots
-12. Confirm upload progress advances
-13. Confirm media appears in the web app under the correct area
-14. Force-close Expo Go, reopen, confirm state is still correct
-15. Confirm pending uploads reach 0
+## Required cellular validation
+
+Before inviting remote testers:
+
+1. Run `pnpm remote-beta`.
+2. Confirm the printed public REST health result is successful.
+3. On a physical iPhone, disable Wi-Fi and use cellular data.
+4. Scan the V2 QR code in Expo Go.
+5. Confirm the JavaScript bundle loads.
+6. Sign in with a technician beta account.
+7. Confirm assigned inspections load.
+8. Open an area, record a short video, and capture the required snapshots.
+9. Confirm the queue advances and uploads resume after a brief offline interruption.
+10. Confirm the web app receives evidence under the correct inspection area.
+11. Confirm pending uploads return to zero.
+
+Repository and desktop checks cannot prove the final cellular/Expo Go step.
+
+## Troubleshooting
+
+| Symptom                                         | Cause                                           | Action                                                 |
+| ----------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------ |
+| Docker does not become ready                    | Docker Desktop is stopped or still starting     | Start Docker Desktop, wait for the engine, rerun       |
+| `NGROK_AUTHTOKEN` or `NGROK_DOMAIN` missing     | Remote-beta environment is incomplete           | Add it to ignored `backend/.env.local`                 |
+| Backend unhealthy                               | Backend dependency or environment failure       | Inspect `compose ... logs backend`                     |
+| `remote gone away`                              | Old workflow launched a second Expo ngrok agent | Use the current scripts; do not add `--tunnel` to Expo |
+| Tunnel points at `backend` instead of `gateway` | Existing containers predate the gateway change  | Run root `pnpm remote-beta` once                       |
+| Public REST health is 502                       | Gateway or backend is not ready                 | Inspect gateway/backend logs and rerun                 |
+| Public root is 502 while Metro is stopped       | Expected; the non-API route targets port 8082   | Start V2 Metro                                         |
+| Port 8082 is occupied                           | Another V2 Metro process is still running       | Stop that process, then rerun                          |
+| Expo Go loads but API calls fail                | Stale bundle/environment                        | Clear Metro and reload Expo Go                         |
+| Push notifications do not arrive                | Expo Go limitation since SDK 53                 | Use a signed development build for remote push         |
 
 ## Shutdown
+
+Confirm pending uploads are zero, stop Metro with Ctrl+C, then:
 
 ```bash
 pnpm remote-beta:stop
 ```
 
-Confirm testers have finished recording and pending uploads are 0 first. The helper runs
-`docker compose … down` — **never** `down -v`. Volumes are not removed and unsynchronised
-technician work is never discarded.
-
-## Troubleshooting
-
-| symptom | cause | action |
-|---|---|---|
-| `Docker is not available` | Docker Desktop not running | start it and retry |
-| `NGROK_AUTHTOKEN is not set` | key missing from `backend/.env.local` | add it to that file |
-| Backend `unhealthy` | bad credentials or unreachable Supabase | `logs backend`; check `DATABASE_URL` |
-| `P1001 Can't reach database server` | wrong/unreachable Supabase host | verify the pooled connection string |
-| Port already allocated | something else on 3000 | change `PORT` in `backend/.env.local` |
-| No HTTPS tunnel found | ngrok auth failed / limit reached | `logs ngrok` |
-| Phone: network error on every call | stale tunnel URL in `mobile-app/.env.local` | re-run `pnpm remote-beta`, reload Expo Go |
-| Phone: `localhost` errors | `EXPO_PUBLIC_API_BASE_URL` points at loopback | the app logs `[remote-beta] …` explaining it; fix the URL |
-| Push notifications never arrive | Expo Go dropped remote push in SDK 53+ | expected — needs a signed build |
-
-## Recovery
-
-**After a computer restart** — Docker and ngrok both stop. ngrok issues a **new** URL on a free
-plan, so `mobile-app/.env.local` is stale. Re-run `pnpm remote-beta` and have testers reload
-from the new QR code.
-
-**After the ngrok endpoint changes** — same: the URL is not stable across restarts. Never
-hard-code it anywhere.
-
-## Security posture
-
-- Authentication and role authorization stay enabled; `USE_MOCK_AUTH=false` is forced in Compose
-- Swagger is **off** during remote beta (`APP_ENV=remote-beta`); opt in with `ENABLE_SWAGGER=true`
-- Stack traces are never returned in a response body — the exception filter logs them and
-  replies with a generic message for any 5xx, independent of `NODE_ENV`
-- Backend port binds `127.0.0.1` only — ngrok is the single public entry point
-- ngrok agent API binds `127.0.0.1:4040`; it shows captured request/response bodies and must
-  never be published
-- Supabase service-role, Stream API token, R2 keys and the ngrok token are backend-only and
-  never appear in any `EXPO_PUBLIC_*` variable
+The helper does not pass `-v`; it does not delete volumes or device evidence.

@@ -11,7 +11,8 @@ Open the App Store on your iPhone, search **Expo Go**, install it. It's free.
 
 ## 2. Open the TexasRenters app
 
-Your coordinator will send you a **QR code** (or a link) at the start of each session.
+Your coordinator will send you a **QR code** (or a link) at the start of each session. The
+coordinator must start the **V2** beta before sending it.
 
 - Open the iPhone **Camera** app and point it at the QR code, then tap the banner.
 - Or open **Expo Go** and scan it from there.
@@ -73,4 +74,4 @@ so **don't delete anything**.
 - Share the QR code or link outside the test group
 - Share your beta account details
 
-The link stops working after each session ends. You'll get a fresh QR code next time.
+The link works only while the coordinator's Docker and V2 Metro session is running.

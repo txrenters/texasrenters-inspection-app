@@ -1,163 +1,111 @@
-# Remote iOS Beta — Implementation Status
+# Remote iOS Beta - Implementation Status
 
-Temporary remote-beta environment for US technicians while the Apple Developer account is
-under review. **Not production.** No TestFlight, no EAS Build.
+Last verified: 2026-07-30.
 
-Resume by reading this file, checking `git status`, then starting at **§22 Exact next step**.
+This is a temporary Expo Go beta environment for remote technicians. It is not a production
+deployment and it does not replace a signed development or TestFlight build.
 
-## 1. Expo SDK version
+## Active client
 
-**54.0.36** · React Native **0.81.5**.
+- `mobile-app-v2` is the default technician client.
+- Root mobile scripts (`dev:mobile`, `lint:mobile`, `typecheck:mobile`, `test:mobile`, and
+  `build:mobile`) target V2.
+- `mobile-app` remains available only through explicit `:v1` scripts.
+- Expo SDK: 54.0.36.
 
-## 2. Package manager
+## Remote topology
 
-**pnpm** (workspace root lockfile).
+The beta uses one authenticated, Docker-managed ngrok session and one stable ngrok domain:
 
-## 3. Expo Go compatibility classification
+```text
+Expo Go
+   |
+   v
+ngrok HTTPS domain
+   |
+   v
+Docker Nginx gateway
+   |-- /api/* and /socket.io/* --> NestJS backend
+   `-- all other paths ---------> V2 Metro on host port 8082
+```
 
-**`EXPO_GO_PARTIALLY_COMPATIBLE`**
+Expo starts in LAN server mode with `EXPO_PACKAGER_PROXY_URL` set to the live ngrok origin.
+This makes the manifest and QR advertise the public ngrok URL without asking Expo CLI to start
+a second ngrok agent. Cloudflare Tunnel is not used by this workflow.
 
-Every native module is a first-party Expo package bundled in the Expo Go binary, and every
-config plugin (`expo-router`, `expo-secure-store`, `expo-sqlite`, `expo-notifications`,
-`expo-video`, `expo-camera`) is first-party. No custom native code exists.
+## Live verification
 
-| capability | module | Expo Go |
-|---|---|---|
-| Camera preview / recording / mic | `expo-camera` 17.0.10 | ✅ |
-| Motion, gyroscope, magnetometer | `expo-sensors` ~15.0.8 | ✅ |
-| Secure token storage | `expo-secure-store` 15.0.8 | ✅ |
-| File system | `expo-file-system` ~19.0.23 | ✅ |
-| Offline store | `expo-sqlite` 16.0.10 | ✅ |
-| Video playback / thumbnails | `expo-video`, `expo-video-thumbnails` | ✅ |
-| Haptics, linking, document picker | `expo-haptics`, `expo-linking`, `expo-document-picker` | ✅ |
-| Reanimated / Screens / Safe Area / SVG | RN libs bundled in Expo Go | ✅ |
-| NativeWind + RN Primitives | JS-only, no native code | ✅ |
-| **Remote push notifications** | `expo-notifications` ~0.32.17 | ❌ **not supported in Expo Go since SDK 53** |
-| Local / scheduled notifications | `expo-notifications` | ✅ |
+The following checks passed on 2026-07-30:
 
-**The one gap:** `getExpoPushTokenAsync` in `src/realtime/TechnicianRealtimeProvider.tsx`
-cannot obtain a push token in Expo Go. The call is already wrapped in `try/catch` and returns
-`undefined`, so the app degrades gracefully — testers simply will not receive server-initiated
-push. Assignment notifications scheduled locally still work. Deferred until the Apple
-Developer account clears and a signed build is possible.
+- `pnpm remote-beta -- --clear` cold-started Docker, the gateway, ngrok, and V2 Metro.
+- Backend container reached `healthy`.
+- The ngrok agent reported `http://gateway:80` as its upstream.
+- Public `GET /api/v1/health` returned HTTP 200.
+- Local `GET http://127.0.0.1:8082/status` returned `packager-status:running`.
+- The public Expo request returned an `application/expo+json` manifest.
+- The manifest launch asset used the same public ngrok origin.
+- The complete iOS JavaScript bundle was generated and fetched through ngrok with HTTP 200.
+- The terminal QR advertised the public ngrok origin and did not emit `remote gone away`.
+- `cd mobile-app-v2 && pnpm start:tunnel --check` passed against the running stack.
 
-- [x] Compatibility inspected
-- [x] Limitation documented, production implementation preserved
+The first cold bundle was approximately 16.6 MB and took about one minute to generate and
+transfer. Subsequent requests use Metro's cache.
 
-## 4. Metro tunnel status
+## Quality checks
 
-- [x] `@expo/ngrok` present
-- [x] Scripts added — `mobile-app`: `start:tunnel` = `expo start --tunnel --go`,
-      `start:tunnel:clear` = `… --clear`
-- [!] **Not yet verified end-to-end.** See §16.
+| Check                            | Result                     |
+| -------------------------------- | -------------------------- |
+| V2 lint                          | pass                       |
+| V2 typecheck                     | pass                       |
+| V2 tests                         | pass - 4 suites / 11 tests |
+| V2 web export                    | pass                       |
+| Expo Doctor                      | pass - 18/18 checks        |
+| Compose config                   | pass                       |
+| Backend Docker image and startup | pass                       |
 
-## 5. Backend Docker status
+## Expo Go limitation
 
-- [x] Existing multi-stage `backend/Dockerfile` reused and improved
-- [x] `HOST=0.0.0.0` (containers must not bind loopback)
-- [x] `HEALTHCHECK` added — liveness only, so health never depends on Supabase/Cloudflare
-- [x] **OpenSSL installed in both stages** — `node:24-bookworm-slim` omits it and Prisma logged
-      `failed to detect the libssl/openssl version … defaulting to openssl-1.1.x`. Verified
-      resolved (warning count 0 after the fix).
-- [x] Root `.dockerignore` hardened — the build context is the repo root, so `backend/.dockerignore`
-      never applied. Now excludes `**/.env.*` (keeping `*.example`), `mobile-app`, `web-app`,
-      `docs`, `supabase`, media and IDE files.
-- [x] Image builds clean
+Remote push notifications are not supported in Expo Go on current Expo SDKs. Camera,
+recording, secure storage, local persistence, and the application REST workflow remain usable.
+A signed development build is still required to validate production remote push behavior.
 
-## 6. Backend health-check status
+## Remaining physical-device check
 
-- [x] `/api/v1/health` (liveness), `/api/v1/health/readiness`, `/api/v1/health/database` already
-      existed; prefix is `api` + URI versioning default `1`.
-- [x] **Fixed a boot-blocking bug** — see §21.
-- [x] 5 new tests in `backend/src/health/health.controller.spec.ts`
+Repository and host-side checks cannot prove that a particular iPhone opened the project.
+Before calling the beta device-verified, scan the QR on a physical iPhone outside the developer
+LAN and confirm:
 
-## 7. ngrok container status
+1. the V2 login screen opens;
+2. technician authentication succeeds;
+3. an assigned inspection loads;
+4. a test recording queues and uploads;
+5. the Metro terminal shows no runtime or bundle error.
 
-- [x] `compose.remote-beta.yml` service using `ngrok/ngrok:latest`
-- [x] Targets `http://backend:${PORT}` over the Compose network
-- [x] `depends_on: backend: condition: service_healthy`
-- [x] Agent API bound to **`127.0.0.1:4040`** only
-- [x] `NGROK_AUTHTOKEN` required via `${NGROK_AUTHTOKEN:?…}` — fails fast rather than starting
-      an unauthenticated tunnel. Confirmed present in `backend/.env.local`.
-- [!] **Not started** — needs a live session (see §16)
+Record those results in this file after the device test.
 
-## 8. Public backend URL status
+## Commands
 
-- [!] Not yet obtained — requires a live `pnpm remote-beta` session.
+Cold start from the repository root:
 
-## 9. Mobile environment status
+```powershell
+pnpm remote-beta -- --clear
+```
 
-- [x] `EXPO_PUBLIC_APP_ENV` added; existing `EXPO_PUBLIC_API_BASE_URL` retained (the repo's
-      established name — the brief's `EXPO_PUBLIC_API_URL` would have been a second source of truth)
-- [x] `validateRemoteBetaApiUrl()` in `mobile-app/src/config/environment.ts` rejects: missing
-      value, non-HTTPS, `localhost`/`127.0.0.1`/`::1`/`0.0.0.0`, Docker service names, private
-      IPv4, private IPv6. Non-fatal in dev so a stale URL never destroys captured work.
-- [x] 12 new cases in `mobile-app/tests/environment.test.ts`
+When the Docker stack is already current:
 
-## 10–15. Runtime verification
+```powershell
+cd mobile-app-v2
+pnpm start:tunnel --clear
+```
 
-| item | state |
-|---|---|
-| Authentication test | [ ] needs a live session |
-| Supabase connectivity | [ ] needs a live session |
-| Stream upload | [ ] needs a live session · note `VIDEO_PLATFORM_PROVIDER=mock` |
-| R2 upload | [ ] needs a live session · `INSPECTION_MEDIA_STORAGE_PROVIDER=r2` |
-| Webhook | [ ] needs public URL |
-| Offline behaviour | [ ] needs a device session |
+Status:
 
-## 16. External-network test status
+```powershell
+pnpm remote-beta:status
+```
 
-- [ ] **Not performed.** Requires a physical iPhone on cellular data. Checklist is in
-      `REMOTE_IOS_BETA_RUNBOOK.md` §External test. **Cannot be claimed from the repository.**
+Stop Docker beta services after testers have finished and pending uploads are zero:
 
-## 17–20. Validation
-
-| check | result |
-|---|---|
-| Backend lint | **pass** |
-| Backend typecheck | **pass** |
-| Backend tests | **pass — 33 suites / 245 tests** |
-| Backend Docker build | **pass** |
-| Compose config | **pass** (`docker compose config`, exit 0) |
-| Mobile lint | **pass** |
-| Mobile typecheck | **pass** |
-| Mobile tests | **pass — 18 suites / 94 tests** |
-
-## 21. Known blockers
-
-### [x] RESOLVED — uses the existing backend/.env.local
-
-An earlier revision introduced `.env.remote-beta.local` files that duplicated every
-credential. Removed. Compose now reads `backend/.env.local` for both interpolation
-(`NGROK_AUTHTOKEN`) and the backend runtime environment. `docker compose config` validates
-against it, exit 0.
-
-**Compose overrides, deliberately narrow:** `HOST=0.0.0.0`, `APP_ENV=remote-beta`,
-`CACHE_ENABLED=false` (Redis is on localhost, unreachable inside a container),
-`USE_MOCK_AUTH=false` (safety net). `NODE_ENV` is **not** overridden — the file sets
-`development`, and the configured mock video/transcription/AI providers are registered only
-outside production, so forcing production would fail DI.
-
-### [x] FIXED — production builds could not boot
-
-`HealthController` injected `VerticalSliceService` unconditionally, but `app.module.ts:36`
-registers that provider only when `NODE_ENV !== 'production'`. Every production build failed
-with an unresolvable-dependency error at startup. This had gone unnoticed because the backend
-is normally run in development mode.
-
-Fixed by making the injection `@Optional()` and omitting `providers` from the readiness payload
-when the stack is absent. Guarded by a regression test.
-
-### [x] FIXED — Prisma OpenSSL warning in the slim image
-
-See §5.
-
-## 22. Exact next step
-
-1. Confirm `NGROK_AUTHTOKEN` is present in `backend/.env.local` (it is).
-2. `pnpm remote-beta` — builds, waits for health, resolves the public URL, verifies it, writes
-   `mobile-app/.env.local`, then starts the Metro tunnel.
-3. Run the external cellular checklist in the runbook on a physical iPhone.
-4. Report Stream/R2/webhook results back into §10–15.
-
-**Next command:** `pnpm remote-beta`
+```powershell
+pnpm remote-beta:stop
+```

@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 /**
- * Brings up the temporary remote iOS beta environment.
+ * Cold-starts the temporary remote beta and launches mobile-app-v2.
  *
- *   node scripts/remote-beta/start.mjs
+ * One Docker-managed ngrok URL terminates at the remote-beta gateway:
+ *   /api/* and /socket.io/* -> backend container
+ *   every other path        -> V2 Metro on host port 8082
  *
- * Backend and Metro need two separate public paths: the Expo tunnel carries only
- * the JavaScript bundle and dev assets, never the REST API. This script wires the
- * API half (Docker + Cloudflare Tunnel), writes the resulting public URL into the
- * ignored mobile env file, and then hands off to Metro's own Expo/ngrok tunnel.
- *
- * It never prints a secret value.
+ * Expo receives the public URL through EXPO_PACKAGER_PROXY_URL and therefore
+ * does not create a competing ngrok agent session.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,36 +16,53 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const COMPOSE_FILE = join(ROOT, 'compose.remote-beta.yml');
-// One secret file: backend/.env.local holds every backend credential and is used
-// by Compose for both interpolation and the container's runtime environment.
 const ENV_FILE = join(ROOT, 'backend', '.env.local');
-const MOBILE_ENV = join(ROOT, 'mobile-app', '.env.local');
-// cloudflared prints its public URL to stdout; unlike ngrok there is no local
-// agent API to query, so the URL is read back from the container logs.
-const TUNNEL_URL_PATTERN = /https:\/\/[a-z0-9-]+\.(?:trycloudflare\.com|ngrok-free\.(?:app|dev))/i;
+const MOBILE_ENV = join(ROOT, 'mobile-app-v2', '.env.local');
+const NGROK_AGENT_API = 'http://127.0.0.1:4041/api/tunnels';
+const PNPM_CLI = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'pnpm.js');
 
-const log = (msg) => console.log(msg);
-const fail = (msg) => {
-  console.error(`\n✖ ${msg}\n`);
+const log = (message) => console.log(message);
+const fail = (message) => {
+  console.error(`\n✖ ${message}\n`);
   process.exit(1);
 };
 
-function run(cmd, args, opts = {}) {
-  return spawnSync(cmd, args, { encoding: 'utf8', shell: process.platform === 'win32', ...opts });
+function run(command, args, options = {}) {
+  return spawnSync(command, args, {
+    encoding: 'utf8',
+    ...options,
+  });
 }
 
-// --- preflight ---------------------------------------------------------------
-function preflight() {
-  if (run('docker', ['--version']).status !== 0)
-    fail('Docker is not available. Start Docker Desktop and retry.');
-  if (run('docker', ['compose', 'version']).status !== 0)
-    fail('Docker Compose v2 is not available.');
-  if (!existsSync(ENV_FILE))
-    fail(`Missing ${ENV_FILE} — the backend environment file is required.`);
+function readEnvValue(name) {
+  const raw = readFileSync(ENV_FILE, 'utf8').replace(/^\uFEFF/, '');
+  const match = raw.match(new RegExp(`^${name}=(.+)$`, 'm'));
+  return match?.[1]?.trim() ?? '';
+}
 
-  // cloudflared quick tunnels need no account or token, so there is nothing
-  // secret to verify here. ngrok is now used only by Expo for Metro.
-  log('✓ Docker and Compose available');
+async function waitForDocker(timeoutMs = 60_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (run('docker', ['info']).status === 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  return false;
+}
+
+async function preflight() {
+  if (run('docker', ['--version']).status !== 0)
+    fail('Docker CLI is unavailable. Install or start Docker Desktop and retry.');
+  if (run('docker', ['compose', 'version']).status !== 0) fail('Docker Compose v2 is unavailable.');
+  if (!existsSync(ENV_FILE)) fail(`Missing ${ENV_FILE}.`);
+
+  log('▸ Waiting for Docker Desktop…');
+  if (!(await waitForDocker()))
+    fail('Docker Desktop did not become ready within 60 seconds. Start it and retry.');
+
+  if (!readEnvValue('NGROK_AUTHTOKEN')) fail('NGROK_AUTHTOKEN is missing from backend/.env.local.');
+  if (!readEnvValue('NGROK_DOMAIN')) fail('NGROK_DOMAIN is missing from backend/.env.local.');
+
+  log('✓ Docker, Compose, and required ngrok configuration are available');
 }
 
 const compose = (...args) =>
@@ -55,31 +70,31 @@ const compose = (...args) =>
     stdio: 'inherit',
   });
 
-// --- wait for health ---------------------------------------------------------
-/**
- * Reads container health from `ps --format json`.
- *
- * A Go template such as `{{.Service}} {{.Health}}` cannot be used here: this runs
- * through the shell on Windows, and PowerShell mangles the braces and the space,
- * so the output never matches and a perfectly healthy backend reads as a
- * timeout. `json` has no shell-special characters.
- */
 function readServiceHealth() {
-  const out = run('docker', [
-    'compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, 'ps', '--format', 'json',
+  const result = run('docker', [
+    'compose',
+    '--env-file',
+    ENV_FILE,
+    '-f',
+    COMPOSE_FILE,
+    'ps',
+    '--format',
+    'json',
   ]);
-  const text = (out.stdout ?? '').trim();
+  const text = (result.stdout ?? '').trim();
   if (!text) return new Map();
-  // Compose emits either one object per line or a single array, by version.
-  let rows;
+
   try {
-    rows = text.startsWith('[')
+    const rows = text.startsWith('[')
       ? JSON.parse(text)
-      : text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      : text
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+    return new Map(rows.map((row) => [row.Service, (row.Health || '').toLowerCase()]));
   } catch {
     return new Map();
   }
-  return new Map(rows.map((row) => [row.Service, (row.Health || '').toLowerCase()]));
 }
 
 async function waitForBackendHealthy(timeoutMs = 180_000) {
@@ -89,68 +104,58 @@ async function waitForBackendHealthy(timeoutMs = 180_000) {
     if (health === 'healthy') return true;
     if (health === 'unhealthy')
       fail(
-        'Backend container reported unhealthy. Inspect:\n' +
+        'Backend container is unhealthy. Inspect it with:\n' +
           '  docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs backend',
       );
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
   return false;
 }
 
-// --- public URL --------------------------------------------------------------
-/**
- * A named tunnel serves a hostname you own, which never appears in the logs — so
- * it is declared up front via REMOTE_BETA_API_URL. A quick tunnel prints its
- * random *.trycloudflare.com URL to stdout and is read back from there.
- */
-function configuredApiUrl() {
-  const raw = readFileSync(ENV_FILE, 'utf8').replace(/^﻿/, '');
-  // NGROK_DOMAIN pins a stable hostname, so the URL is known up front and needs
-  // no discovery from logs or the agent API.
-  const domain = raw.match(/^NGROK_DOMAIN=(.+)$/m);
-  if (domain?.[1]?.trim()) return `https://${domain[1].trim().replace(/^https?:\/\//, '')}`;
-  const match = raw.match(/^REMOTE_BETA_API_URL=(.+)$/m);
-  if (!match) return null;
-  const value = match[1].trim().replace(/\/$/, '');
-  // Guard against the documentation placeholder being pasted verbatim: trusting
-  // it skips log discovery and every request then targets a domain that does not
-  // exist.
-  if (!value || /yourdomain\.com|example\.com|<.*>/i.test(value)) {
-    log(`  (ignoring placeholder REMOTE_BETA_API_URL: ${value})`);
-    return null;
-  }
-  return value;
-}
-
-/** Reads the quick-tunnel URL the running container is actually serving. */
-async function resolveFromLogs(timeoutMs = 120_000) {
+async function resolvePublicGateway(timeoutMs = 120_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const logs = run('docker', [
-      'compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, 'logs', 'tunnel',
-    ]);
-    const match = `${logs.stdout ?? ''}${logs.stderr ?? ''}`.match(TUNNEL_URL_PATTERN);
-    if (match) return match[0].replace(/\/$/, '');
-    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const response = await fetch(NGROK_AGENT_API, { signal: AbortSignal.timeout(5_000) });
+      if (response.ok) {
+        const payload = await response.json();
+        const tunnels = Array.isArray(payload?.tunnels) ? payload.tunnels : [];
+        const gateway = tunnels.find(
+          (candidate) =>
+            candidate?.proto === 'https' &&
+            typeof candidate?.public_url === 'string' &&
+            String(candidate?.config?.addr ?? '').includes('gateway'),
+        );
+        if (gateway) return new URL(gateway.public_url).origin;
+      }
+    } catch {
+      // The agent can take a few seconds to register after Compose starts it.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   return null;
 }
 
-async function resolvePublicUrl(timeoutMs = 120_000) {
-  return configuredApiUrl() ?? (await resolveFromLogs(timeoutMs));
+async function verifyPublicBackend(publicUrl) {
+  const healthUrl = new URL('/api/v1/health', publicUrl);
+  try {
+    const response = await fetch(healthUrl, {
+      headers: { 'ngrok-skip-browser-warning': 'true' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (response.ok) return;
+    fail(`Public backend health returned HTTP ${response.status} at ${healthUrl}.`);
+  } catch (error) {
+    fail(`Public backend health is unreachable at ${healthUrl}: ${error.message}`);
+  }
 }
 
-// --- mobile env --------------------------------------------------------------
-/** Rewrites only the keys this session owns; every other local value survives. */
 function updateMobileEnv(publicUrl) {
   const managed = {
     EXPO_PUBLIC_APP_ENV: 'remote-beta',
     EXPO_PUBLIC_API_BASE_URL: publicUrl,
   };
-  // Strip a UTF-8 BOM before parsing. An editor-written file starts with EF BB BF,
-  // which stopped the key regex matching line 1 and caused a duplicate
-  // EXPO_PUBLIC_API_BASE_URL to be appended rather than the existing one replaced.
-  const raw = existsSync(MOBILE_ENV) ? readFileSync(MOBILE_ENV, 'utf8').replace(/^﻿/, '') : '';
+  const raw = existsSync(MOBILE_ENV) ? readFileSync(MOBILE_ENV, 'utf8').replace(/^\uFEFF/, '') : '';
   const existing = raw ? raw.split(/\r?\n/) : [];
   const seen = new Set();
   const next = existing.map((line) => {
@@ -161,79 +166,73 @@ function updateMobileEnv(publicUrl) {
     }
     return line;
   });
+
   for (const [key, value] of Object.entries(managed)) {
     if (!seen.has(key)) next.push(`${key}=${value}`);
   }
-  writeFileSync(MOBILE_ENV, next.filter((l, i, a) => l !== '' || i < a.length - 1).join('\n') + '\n');
-  log(`✓ Updated mobile-app/.env.local (${Object.keys(managed).length} managed keys)`);
+
+  writeFileSync(
+    MOBILE_ENV,
+    `${next.filter((line, index, all) => line !== '' || index < all.length - 1).join('\n')}\n`,
+  );
+  log('✓ Updated mobile-app-v2/.env.local (remote-beta routing only)');
 }
 
-// --- main --------------------------------------------------------------------
-preflight();
+await preflight();
 
-log('\n▸ Building and starting backend…');
+log('\n▸ Building and starting backend, gateway, and ngrok…');
 if (compose('up', '-d', '--build').status !== 0) fail('docker compose up failed.');
 
 log('▸ Waiting for backend health…');
 if (!(await waitForBackendHealthy())) fail('Backend did not become healthy in time.');
 log('✓ Backend healthy');
 
-log('▸ Resolving public Cloudflare tunnel URL…');
-const publicUrl = await resolvePublicUrl();
+log('▸ Resolving the live Docker-managed ngrok gateway…');
+const publicUrl = await resolvePublicGateway();
 if (!publicUrl)
   fail(
-    'No Cloudflare tunnel URL found. Check: docker compose ' +
-      '--env-file backend/.env.local -f compose.remote-beta.yml logs tunnel',
+    'No HTTPS ngrok gateway was registered. Inspect it with:\n' +
+      '  docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs tunnel',
   );
 
-log('▸ Verifying the public health endpoint…');
-async function healthy(url) {
-  try {
-    return (await fetch(`${url}/api/v1/health`)).ok;
-  } catch {
-    return false;
-  }
-}
+log('▸ Verifying the public REST health endpoint…');
+await verifyPublicBackend(publicUrl);
+log('✓ Public REST health endpoint responding');
 
-let activeUrl = publicUrl;
-if (!(await healthy(activeUrl))) {
-  // A configured hostname can be stale or wrong. Rather than stopping, fall back
-  // to whatever URL the running tunnel is actually serving.
-  log('  configured URL did not respond — falling back to the live tunnel URL…');
-  const discovered = await resolveFromLogs();
-  if (discovered && discovered !== activeUrl && (await healthy(discovered))) {
-    activeUrl = discovered;
-  } else {
-    fail(
-      `Public health check failed at ${publicUrl}/api/v1/health
-` +
-        '  If REMOTE_BETA_API_URL is set in backend/.env.local, remove it unless it is a real hostname.',
-    );
-  }
-}
-const publicUrlFinal = activeUrl;
-log('✓ Public health endpoint responding');
-
-updateMobileEnv(publicUrlFinal);
+updateMobileEnv(publicUrl);
 
 log(`
 ────────────────────────────────────────────────
  TexasRenters remote beta ready
 
  Backend container : healthy
- Local backend     : http://127.0.0.1:${process.env.PORT ?? 3000}
- Public API        : ${publicUrlFinal}
- Mobile env        : remote-beta
- Tunnel metrics    : http://127.0.0.1:2000  (local only)
+ Local backend     : http://127.0.0.1:3000
+ Public gateway    : ${publicUrl}
+ REST API          : ${publicUrl}/api/v1
+ Mobile client     : mobile-app-v2
+ Tunnel inspector  : http://127.0.0.1:4041 (local only)
 
- Metro             : starting Expo tunnel…
+ Metro             : starting V2 on port 8082
  Next              : open Expo Go and scan the QR code below
 ────────────────────────────────────────────────
 `);
 
-const metro = spawn('pnpm', ['run', 'start:tunnel'], {
-  cwd: join(ROOT, 'mobile-app'),
+const extraArgs = process.argv.slice(2).filter((argument) => argument !== '--');
+if (!existsSync(PNPM_CLI)) {
+  fail(
+    `Corepack's pnpm entrypoint was not found at ${PNPM_CLI}.\n` +
+      'Run corepack enable, then retry pnpm remote-beta.',
+  );
+}
+
+// Launch pnpm through Node instead of pnpm.cmd. Node 24 on Windows can throw
+// spawn EINVAL for .cmd shims when stdio is inherited.
+const metro = spawn(process.execPath, [PNPM_CLI, 'run', 'start:tunnel', ...extraArgs], {
+  cwd: join(ROOT, 'mobile-app-v2'),
   stdio: 'inherit',
-  shell: process.platform === 'win32',
 });
-metro.on('exit', (code) => process.exit(code ?? 0));
+metro.on('error', (error) => fail(`V2 Metro could not be started: ${error.message}`));
+metro.on('exit', (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  process.exit(code ?? 0);
+});

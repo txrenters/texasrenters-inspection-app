@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Starts Metro through Expo's ngrok tunnel while sending app data through the
- * separate Docker/ngrok REST tunnel. The two public URLs have different jobs:
+ * Starts V2 Metro behind the Docker-managed remote-beta gateway.
  *
- *   Expo tunnel  -> JavaScript bundle and development assets
- *   Docker ngrok -> TexasRenters REST API and realtime socket
+ * One ngrok domain serves both concerns without creating a second agent:
+ *   /api/* and /socket.io/* -> NestJS
+ *   every other path        -> Metro on host port 8082
  */
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -39,13 +39,21 @@ async function discoverBackendUrl() {
       (candidate) =>
         candidate?.proto === 'https' &&
         typeof candidate?.public_url === 'string' &&
-        String(candidate?.config?.addr ?? '').includes('backend'),
+        String(candidate?.config?.addr ?? '').includes('gateway'),
     ) ??
     tunnels.find(
       (candidate) => candidate?.proto === 'https' && typeof candidate?.public_url === 'string',
     );
-  if (!tunnel)
-    fail('No HTTPS backend tunnel is registered. Check the Docker tunnel service logs.');
+  if (!tunnel) fail('No HTTPS backend tunnel is registered. Check the Docker tunnel service logs.');
+
+  const upstream = String(tunnel?.config?.addr ?? '');
+  if (!upstream.includes('gateway')) {
+    fail(
+      `The live ngrok tunnel still points to "${upstream || 'an unknown upstream'}" instead of ` +
+        'the remote-beta gateway.\nRun pnpm remote-beta once from the repository root to ' +
+        'recreate the Docker stack with the current configuration.',
+    );
+  }
 
   return new URL(tunnel.public_url).origin;
 }
@@ -69,12 +77,13 @@ const publicApiUrl = await discoverBackendUrl();
 await verifyBackend(publicApiUrl);
 
 console.log('TexasRenters tunnel routing verified:');
-console.log(`  REST API : ${publicApiUrl}`);
+console.log(`  Public URL: ${publicApiUrl}`);
+console.log('  REST API  : /api/v1/* -> Docker backend');
 const checkOnly = process.argv.includes('--check');
 if (checkOnly) {
-  console.log('  Metro    : configuration check only; not started');
+  console.log('  Metro     : configuration check only; not started');
 } else {
-  console.log('  Metro    : starting a separate Expo tunnel on port 8082');
+  console.log('  Metro     : V2 on port 8082 through the same ngrok URL');
 
   const extraArgs = process.argv
     .slice(2)
@@ -82,13 +91,16 @@ if (checkOnly) {
   const expoCli = require.resolve('expo/bin/cli');
   const child = spawn(
     process.execPath,
-    [expoCli, 'start', '--tunnel', '--go', '--port', '8082', ...extraArgs],
+    [expoCli, 'start', '--lan', '--go', '--port', '8082', ...extraArgs],
     {
       cwd: process.cwd(),
       env: {
         ...process.env,
         EXPO_PUBLIC_APP_ENV: 'remote-beta',
         EXPO_PUBLIC_API_BASE_URL: publicApiUrl,
+        // Expo officially supports this override. It changes the manifest/QR
+        // address without launching Expo's own @expo/ngrok agent.
+        EXPO_PACKAGER_PROXY_URL: publicApiUrl,
       },
       stdio: 'inherit',
     },

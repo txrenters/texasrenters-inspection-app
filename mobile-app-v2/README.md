@@ -33,28 +33,32 @@ commit a machine-specific IP address.
 
 ```bash
 pnpm install
-pnpm dev:mobile:v2
+pnpm dev:mobile
 ```
 
-V2 uses Metro port `8082` so it can run without colliding with the original
-mobile app on `8081`.
+V2 is the default root mobile target and uses Metro port `8082`. The legacy
+client is available only through explicit `:v1` commands.
 
 Other root commands:
 
 ```bash
-pnpm dev:mobile:v2:clear
-pnpm dev:mobile:v2:tunnel
-pnpm lint:mobile:v2
-pnpm typecheck:mobile:v2
-pnpm test:mobile:v2
-pnpm build:mobile:v2
+pnpm dev:mobile:clear
+pnpm dev:mobile:tunnel
+pnpm lint:mobile
+pnpm typecheck:mobile
+pnpm test:mobile
+pnpm build:mobile
 ```
 
-Tunnel mode discovers the live Docker backend URL from the ngrok agent on local
-port `4041`, verifies `/api/v1/health`, and injects that public origin into Expo.
-App data therefore travels through the Docker/ngrok REST tunnel while Expo's
-separate tunnel transports only the development JavaScript bundle. Start the
-Docker remote-beta services before running `pnpm dev:mobile:v2:tunnel`.
+Remote-beta mode discovers the live Docker gateway URL from the ngrok agent on
+local port `4041`, verifies `/api/v1/health`, and injects that public origin into
+Expo. One ngrok domain carries both concerns: `/api/*` and `/socket.io/*` route
+to NestJS, while the Expo manifest, bundle, assets, and Fast Refresh route to V2
+Metro on port `8082`. Expo does not start a second ngrok agent.
+
+For a cold start, use `pnpm remote-beta -- --clear` from the repository root.
+When the current Docker gateway is already running, enter `mobile-app-v2` and
+use `pnpm start:tunnel --clear`.
 
 ## Data and evidence flow
 
