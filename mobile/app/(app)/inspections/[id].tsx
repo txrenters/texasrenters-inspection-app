@@ -19,6 +19,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
+import { DetailSkeleton } from '@/src/components/ui/Skeleton';
+import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import {
   deriveAreaStatus,
   pickUpNextArea,
@@ -140,12 +142,12 @@ export default function InspectionOverviewScreen() {
   const actions = useInspectionActions(id);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const isRefreshing = inspection.isRefetching || rooms.isRefetching || findings.isRefetching;
+  const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
 
   if (inspection.isLoading || !inspection.data) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-background">
-        <Text className="text-muted-foreground">Loading inspection…</Text>
+      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+        <DetailSkeleton sections={4} />
       </SafeAreaView>
     );
   }
@@ -170,10 +172,8 @@ export default function InspectionOverviewScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={() =>
-              void Promise.all([inspection.refetch(), rooms.refetch(), findings.refetch()])
-            }
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={isDark ? '#2dd4bf' : '#145347'}
           />
         }

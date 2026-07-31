@@ -12,6 +12,7 @@ import {
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFinding } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 import {
@@ -96,9 +97,8 @@ export default function FindingDetailScreen() {
 
   if (finding.isLoading) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-background px-6">
-        <SparklesIcon size={28} className="text-primary" />
-        <Text className="mt-3 text-base font-semibold text-foreground">Loading finding…</Text>
+      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+        <DetailSkeleton sections={3} />
       </SafeAreaView>
     );
   }

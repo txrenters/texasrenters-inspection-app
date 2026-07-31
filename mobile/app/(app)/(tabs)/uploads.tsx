@@ -20,6 +20,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { UploadItem } from '@/src/domain/models';
 import { useUploadActions, useUploads } from '@/src/features/queries';
 import { useLiveUploadProgress } from '@/src/features/useLiveUploadProgress';
+import { UploadListSkeleton } from '@/src/components/ui/Skeleton';
+import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { evaluateUploadGate } from '@/src/lib/connectivity';
 import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
@@ -198,6 +200,7 @@ function UploadRow({
 
 export default function UploadsScreen() {
   const uploads = useUploads();
+  const pull = usePullToRefresh([uploads.refetch]);
   const actions = useUploadActions();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -233,8 +236,8 @@ export default function UploadsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={uploads.isRefetching}
-            onRefresh={() => void uploads.refetch()}
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={isDark ? '#2dd4bf' : '#145347'}
           />
         }
@@ -353,6 +356,9 @@ export default function UploadsScreen() {
         }
         renderItem={({ item }) => <UploadRow item={item} actions={actions} />}
         ListEmptyComponent={
+          uploads.isLoading ? (
+            <UploadListSkeleton rows={3} />
+          ) : (
           <View className="items-center gap-3 py-16">
             <CheckCircle2Icon size={36} className="text-muted-foreground" />
             <View className="items-center gap-1">
@@ -362,6 +368,7 @@ export default function UploadsScreen() {
               </Text>
             </View>
           </View>
+          )
         }
       />
     </SafeAreaView>
