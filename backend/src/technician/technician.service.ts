@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
@@ -18,6 +18,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
+import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import {
   MediaProcessingService,
@@ -96,6 +97,10 @@ function captureSummaryFromDto(dto: TechnicianMediaUploadDto): Prisma.InputJsonV
     manualConfirmation: dto.manualConfirmation ?? false,
     evidenceComplete: dto.evidenceComplete ?? false,
     snapshotCount: dto.snapshotCount ?? 0,
+    // Read back by media processing, which cuts a still from the video at each
+    // offset. Android cannot photograph mid-recording, so this is how a
+    // technician gets stills without stopping the walkthrough.
+    frameMarkersMs: dto.frameMarkersMs ?? [],
     findingMarkerCount: dto.findingMarkerCount ?? 0,
   };
 }
@@ -125,6 +130,20 @@ function formatUnitLabel(name: string) {
 }
 
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
+
+/**
+ * Statuses that still need the technician on the home screen's queue.
+ *
+ * Stops at TECHNICIAN_SUBMITTED: once the work is handed over, the inspection
+ * belongs to review and should not keep occupying the technician's queue.
+ */
+const TECHNICIAN_ACTIVE_STATUSES: InspectionStatus[] = [
+  InspectionStatus.SCHEDULED,
+  InspectionStatus.IN_PROGRESS,
+];
+
+/** How far ahead the home-screen queue looks, measured from the start of today. */
+const DASHBOARD_QUEUE_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1000;
 
 const technicianRoomSelect = {
   id: true,
@@ -242,7 +261,36 @@ export class TechnicianService {
     private readonly mediaStorage: InspectionMediaStorageService,
     @Inject(MediaProcessingService)
     private readonly mediaProcessing: MediaProcessingService,
+    // Optional so the existing unit tests, which construct this service
+    // directly with four doubles, keep working without a realtime stub.
+    @Optional()
+    @Inject(TechnicianEventsGateway)
+    private readonly technicianEvents?: TechnicianEventsGateway,
   ) {}
+
+  /**
+   * Tells the technician's other devices that an inspection moved.
+   *
+   * The socket room is keyed per technician, not per device, so every session
+   * signed in as this user receives it — including the one that just made the
+   * change, which is harmless and keeps the originating device honest if its
+   * optimistic update was wrong.
+   *
+   * Until now the only publisher in the codebase was admin assignment, so a
+   * technician working on two devices saw nothing of their own activity cross
+   * over: a room completed on one stayed "not started" on the other until the
+   * sixty-second poll or a manual pull-to-refresh.
+   *
+   * Deliberately fire-and-forget and never awaited — a realtime hiccup must not
+   * fail a write that already committed.
+   */
+  private notifyInspectionChanged(user: AuthenticatedUser, inspectionId: string) {
+    try {
+      this.technicianEvents?.publish(user.id, inspectionId, 'UPDATED');
+    } catch {
+      // Best effort. The client still has its poll and pull-to-refresh.
+    }
+  }
 
   async dashboard(user: AuthenticatedUser) {
     const now = new Date();
@@ -259,7 +307,20 @@ export class TechnicianService {
       ...where,
       scheduledAt: { gte: todayStart, lt: tomorrowStart },
     } satisfies Prisma.InspectionWhereInput;
-    const [statusGroups, todayTotal, todayRecords, recentRecords, pendingUploads] =
+    // The technician's active queue, not just today's date bucket.
+    //
+    // `assignments` used to be today-only, while the app rendered it under a
+    // heading called "Upcoming". An inspection scheduled for tomorrow was
+    // therefore invisible the moment it was created, and so was every overdue
+    // one — the two cases a technician most needs on the home screen. The
+    // window now runs from anything still outstanding in the past through the
+    // next week, ordered by schedule so the latest work sorts to the top.
+    const queueWhere = {
+      ...where,
+      status: { in: TECHNICIAN_ACTIVE_STATUSES },
+      scheduledAt: { lt: new Date(todayStart.getTime() + DASHBOARD_QUEUE_LOOKAHEAD_MS) },
+    } satisfies Prisma.InspectionWhereInput;
+    const [statusGroups, todayTotal, queueRecords, recentRecords, pendingUploads] =
       await Promise.all([
         this.prisma.inspection.groupBy({
           by: ['status'],
@@ -269,7 +330,7 @@ export class TechnicianService {
         this.prisma.inspection.count({ where: todayWhere }),
         this.prisma.inspection.findMany({
           relationLoadStrategy: 'join',
-          where: todayWhere,
+          where: queueWhere,
           select: technicianInspectionSummarySelect,
           orderBy: { scheduledAt: 'asc' },
           take: 25,
@@ -300,7 +361,7 @@ export class TechnicianService {
       inProgress: count(InspectionStatus.IN_PROGRESS),
       completed: count(InspectionStatus.COMPLETED),
       pendingUploads,
-      assignments: todayRecords.map((record) => this.mapInspection(record, user.id)),
+      assignments: queueRecords.map((record) => this.mapInspection(record, user.id)),
       recent: recentRecords.map((record) => this.mapInspection(record, user.id)),
     };
   }
@@ -403,6 +464,7 @@ export class TechnicianService {
       data: { status: InspectionStatus.IN_PROGRESS, startedAt: new Date() },
       select: technicianInspectionSummarySelect,
     });
+    this.notifyInspectionChanged(user, record.id);
     return this.mapInspection(updated, user.id);
   }
 
@@ -440,6 +502,7 @@ export class TechnicianService {
     // If every recording finished processing before submission, the
     // inspection is immediately ready for human review.
     await this.mediaProcessing.advanceInspection(id);
+    this.notifyInspectionChanged(user, id);
     return this.mapInspection(updated, user.id);
   }
 
@@ -551,54 +614,83 @@ export class TechnicianService {
     const name = input.name.trim();
     const floorName = input.floorName?.trim() || 'Added areas';
 
-    // Bridge the Propertyware building to an internal Property row (shared id).
-    await this.prisma.property.upsert({
-      where: { id: buildingId },
-      update: {},
-      create: {
-        id: buildingId,
-        organizationId: user.organizationId,
-        name: building.name,
-        addressLine1: building.addressLine1 || 'Address not provided',
-        city: building.city || 'Not provided',
-        state: building.state || 'TX',
-        postalCode: building.postalCode || 'Not provided',
-      },
-    });
+    // Issued together, not one after another.
+    //
+    // None of these four depends on another's result, but they used to run in
+    // series. Every statement is a round trip to a remote pooler costing a few
+    // hundred milliseconds, so adding one area took ~14s of almost entirely
+    // idle waiting — past the app's 15s request timeout. The technician saw a
+    // failure for an area that had in fact been created, and retrying then hit
+    // the duplicate check below.
+    const [, duplicate, highest, existingFloor] = await Promise.all([
+      // Bridge the Propertyware building to an internal Property row (shared id).
+      this.prisma.property.upsert({
+        where: { id: buildingId },
+        update: {},
+        create: {
+          id: buildingId,
+          organizationId: user.organizationId,
+          name: building.name,
+          addressLine1: building.addressLine1 || 'Address not provided',
+          city: building.city || 'Not provided',
+          state: building.state || 'TX',
+          postalCode: building.postalCode || 'Not provided',
+        },
+      }),
+      this.prisma.propertyArea.findFirst({
+        where: {
+          propertyId: buildingId,
+          unitId,
+          name: { equals: name, mode: 'insensitive' },
+          floor: { name: { equals: floorName, mode: 'insensitive' } },
+        },
+        // Whether this area is already part of *this* inspection decides
+        // between an idempotent retry and a genuine name collision.
+        select: {
+          id: true,
+          inspectionAreas: { where: { inspectionId }, select: { id: true }, take: 1 },
+        },
+      }),
+      this.prisma.propertyArea.aggregate({
+        where: { propertyId: buildingId, unitId },
+        _max: { inspectionOrder: true },
+      }),
+      this.prisma.propertyFloor.findFirst({
+        where: { propertyId: buildingId, unitId, name: { equals: floorName, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
 
-    const duplicate = await this.prisma.propertyArea.findFirst({
-      where: {
-        propertyId: buildingId,
-        unitId,
-        name: { equals: name, mode: 'insensitive' },
-        floor: { name: { equals: floorName, mode: 'insensitive' } },
-      },
-      select: { id: true },
-    });
-    if (duplicate)
+    if (duplicate) {
+      const [alreadyInThisInspection] = duplicate.inspectionAreas;
+      // A retry after the first attempt timed out mid-flight. The area exists
+      // and is already part of this inspection, so return what was created
+      // rather than telling the technician their own area is a duplicate —
+      // the same idempotency rule room-video upload already follows.
+      if (alreadyInThisInspection) {
+        const existing = await this.prisma.inspectionArea.findUniqueOrThrow({
+          where: { id: alreadyInThisInspection.id },
+          select: technicianRoomSelect,
+        });
+        return this.mapRoom(existing);
+      }
       throw new ApplicationError(
         409,
         'DUPLICATE_AREA',
         'An area with this name already exists on that floor.',
       );
+    }
 
-    const highest = await this.prisma.propertyArea.aggregate({
-      where: { propertyId: buildingId, unitId },
-      _max: { inspectionOrder: true },
-    });
     const nextOrder = (highest._max.inspectionOrder ?? 0) + 1;
 
     const floor =
-      (await this.prisma.propertyFloor.findFirst({
-        where: { propertyId: buildingId, unitId, name: { equals: floorName, mode: 'insensitive' } },
-        select: { id: true },
-      })) ??
+      existingFloor ??
       (await this.prisma.propertyFloor.create({
         data: { propertyId: buildingId, unitId, name: floorName, sortOrder: nextOrder },
         select: { id: true },
       }));
 
-    const roomId = await this.prisma.$transaction(async (tx) => {
+    const room = await this.prisma.$transaction(async (tx) => {
       const area = await tx.propertyArea.create({
         data: {
           propertyId: buildingId,
@@ -622,7 +714,10 @@ export class TechnicianService {
           propertyAreaId: area.id,
           completionStatus: InspectionAreaCompletionStatus.PENDING,
         },
-        select: { id: true },
+        // Selected here rather than re-read afterwards: the row was just
+        // written inside this transaction, so a second round trip to fetch it
+        // back bought nothing but latency.
+        select: technicianRoomSelect,
       });
       await tx.auditLog.create({
         data: {
@@ -634,13 +729,10 @@ export class TechnicianService {
           metadata: { inspectionId, environment: input.environment, category: input.category ?? null },
         },
       });
-      return inspectionArea.id;
+      return inspectionArea;
     });
 
-    const room = await this.prisma.inspectionArea.findUniqueOrThrow({
-      where: { id: roomId },
-      select: technicianRoomSelect,
-    });
+    this.notifyInspectionChanged(user, inspectionId);
     return this.mapRoom(room);
   }
 
@@ -670,6 +762,7 @@ export class TechnicianService {
       },
       select: technicianRoomSelect,
     });
+    this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
   }
 
@@ -690,6 +783,7 @@ export class TechnicianService {
       },
       select: technicianRoomSelect,
     });
+    this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
   }
 
@@ -833,6 +927,7 @@ export class TechnicianService {
       for (const key of replaced) await this.mediaStorage.delete(key).catch(() => undefined);
       // Kick off transcription + AI analysis without delaying the upload response.
       this.mediaProcessing.queue(record.id, user.organizationId);
+      this.notifyInspectionChanged(user, area.inspectionId);
       return this.mapUploadedMedia(record, area);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
@@ -951,6 +1046,7 @@ export class TechnicianService {
       }
       // Transcribe/analyze independently; the area's completion is unaffected.
       this.mediaProcessing.queue(record.id, user.organizationId);
+      this.notifyInspectionChanged(user, area.inspectionId);
       return this.mapUploadedMedia(record, area);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);

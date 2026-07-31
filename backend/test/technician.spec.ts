@@ -53,6 +53,46 @@ describe('technician mobile data boundary', () => {
     }
   });
 
+  it('puts overdue and next-week work in the queue, not only today', async () => {
+    // The home screen renders `assignments` under a heading called "Upcoming".
+    // It was previously filtered to `scheduledAt` within today, so an
+    // inspection created for tomorrow was invisible the moment it was saved,
+    // and nothing overdue ever appeared either.
+    const prisma = {
+      inspection: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      mediaProcessingDouble(),
+    );
+
+    await service.dashboard(technician);
+
+    const [queueRequest] = prisma.inspection.findMany.mock.calls[0];
+    // No lower bound: an inspection scheduled last week that is still open has
+    // to keep appearing until it is dealt with.
+    expect(queueRequest.where.scheduledAt.gte).toBeUndefined();
+    expect(queueRequest.where.scheduledAt.lt.getTime()).toBeGreaterThan(Date.now());
+    // Only work that still needs the technician — review states belong to the
+    // administrator, not the field queue.
+    expect(queueRequest.where.status).toEqual({
+      in: [InspectionStatus.SCHEDULED, InspectionStatus.IN_PROGRESS],
+    });
+    expect(queueRequest.orderBy).toEqual({ scheduledAt: 'asc' });
+
+    // The "today" tile still counts today alone.
+    const [countRequest] = prisma.inspection.count.mock.calls[0];
+    expect(countRequest.where.scheduledAt.gte).toEqual(expect.any(Date));
+    expect(countRequest.where.scheduledAt.lt).toEqual(expect.any(Date));
+  });
+
   it('returns an empty first-time workspace and scopes inspection reads to current assignments', async () => {
     const prisma = {
       inspection: {
@@ -238,6 +278,75 @@ describe('technician mobile data boundary', () => {
       code: 'ROOM_VIDEO_REQUIRED',
     });
     expect(prisma.inspectionArea.update).not.toHaveBeenCalled();
+  });
+
+  it('tells the technician’s other devices when a room is completed', async () => {
+    // The socket room is keyed per technician, not per device, so publishing
+    // here is what makes a second signed-in device converge. Before this the
+    // only publisher in the codebase was admin assignment, and a technician
+    // working on two devices saw none of their own activity cross over until
+    // the sixty-second poll.
+    const room = {
+      id: 'room-1',
+      inspectionId: 'inspection-1',
+      propertyAreaId: 'area-1',
+      completionStatus: 'PENDING',
+      propertyArea: { baselineConditions: [], floor: { name: 'Ground' }, media: [] },
+      inspection: { inspectionType: 'MOVE_OUT', baselineInspectionId: null },
+      media: [{ uploadStatus: 'UPLOADED', processingStatus: 'READY' }],
+    };
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue(room),
+        update: jest.fn().mockResolvedValue({ ...room, completionStatus: 'COMPLETED' }),
+      },
+    };
+    const events = { publish: jest.fn() };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      mediaProcessingDouble(),
+      events as never,
+    );
+
+    await service.completeRoom(technician, 'room-1');
+
+    expect(events.publish).toHaveBeenCalledWith(technician.id, 'inspection-1', 'UPDATED');
+  });
+
+  it('does not fail a committed write when realtime is unavailable', async () => {
+    // The gateway is optional and best-effort. A socket fault must never turn a
+    // room the technician has already completed into an error.
+    const room = {
+      id: 'room-1',
+      inspectionId: 'inspection-1',
+      propertyAreaId: 'area-1',
+      completionStatus: 'PENDING',
+      propertyArea: { baselineConditions: [], floor: { name: 'Ground' }, media: [] },
+      inspection: { inspectionType: 'MOVE_OUT', baselineInspectionId: null },
+      media: [{ uploadStatus: 'UPLOADED', processingStatus: 'READY' }],
+    };
+    const prisma = {
+      inspectionArea: {
+        findFirst: jest.fn().mockResolvedValue(room),
+        update: jest.fn().mockResolvedValue({ ...room, completionStatus: 'COMPLETED' }),
+      },
+    };
+    const events = {
+      publish: jest.fn(() => {
+        throw new Error('socket gone');
+      }),
+    };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      mediaProcessingDouble(),
+      events as never,
+    );
+
+    await expect(service.completeRoom(technician, 'room-1')).resolves.toBeDefined();
   });
 
   it('maps only active assignment statuses into the technician contract', async () => {

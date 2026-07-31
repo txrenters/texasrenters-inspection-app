@@ -1,6 +1,8 @@
 import { AreaCategory, AreaEnvironment, PhotoCaptureType } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsEnum,
   IsBoolean,
   IsIn,
@@ -15,6 +17,15 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+
+/**
+ * Upper bound on frames one recording may ask the server to cut.
+ *
+ * Declared here rather than beside its helper: decorators evaluate when the
+ * class is defined, so a const declared lower in the file is still in its
+ * temporal dead zone by the time `@ArrayMaxSize` reads it.
+ */
+const MAX_FRAME_MARKERS = 60;
 
 export class TechnicianCreateAreaDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
@@ -84,6 +95,19 @@ export class TechnicianMediaUploadDto {
   @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() manualConfirmation?: boolean;
   @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() evidenceComplete?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) snapshotCount?: number;
+  /**
+   * Video offsets, in milliseconds, where the technician asked for a still.
+   *
+   * Bounded at both ends: a client cannot make the server run unbounded ffmpeg
+   * passes, and a marker past the recording length simply yields no frame.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseFrameMarkers(value))
+  @IsArray()
+  @ArrayMaxSize(MAX_FRAME_MARKERS)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  frameMarkersMs?: number[];
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) findingMarkerCount?: number;
 }
 
@@ -128,6 +152,23 @@ export class TechnicianPhotoUploadDto {
     'SEPARATE_PHOTO_CAPTURE',
   ])
   captureSource?: string;
+}
+
+/**
+ * Parses the comma-separated marker list sent as a multipart field.
+ *
+ * Multipart values are always strings, so the array arrives as "1200,4500".
+ * Anything unparseable is dropped rather than rejected: a bad marker must not
+ * fail an upload that carries the actual room video.
+ */
+function parseFrameMarkers(value: unknown) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return value;
+  const parsed = value
+    .split(',')
+    .map((entry) => Number.parseInt(entry.trim(), 10))
+    .filter((entry) => Number.isInteger(entry) && entry >= 0);
+  return [...new Set(parsed)].sort((left, right) => left - right).slice(0, MAX_FRAME_MARKERS);
 }
 
 function parseMultipartBoolean(value: unknown) {

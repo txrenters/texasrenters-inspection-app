@@ -16,6 +16,8 @@ import {
   useInspectionUrgency,
 } from '@/src/components/InspectionUrgencyBadge';
 import { useCurrentUser, useDashboard } from '@/src/features/queries';
+import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
+import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon, Settings2Icon);
@@ -81,6 +83,9 @@ function AssignedInspectionRow({ inspection }: { inspection: Inspection }) {
 
 export default function HomeScreen() {
   const dashboard = useDashboard();
+  // Bound to a user-initiated pull only. Wiring this to `isRefetching` made the
+  // spinner appear on its own every 60s, when the assignment poll ran.
+  const pull = usePullToRefresh([dashboard.refetch]);
   const user = useCurrentUser();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -103,8 +108,8 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={dashboard.isRefetching}
-            onRefresh={() => void dashboard.refetch()}
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={isDark ? '#2dd4bf' : '#145347'}
           />
         }
@@ -226,6 +231,9 @@ export default function HomeScreen() {
           {assigned.map((inspection) => (
             <AssignedInspectionRow inspection={inspection} key={inspection.id} />
           ))}
+          {dashboard.isLoading && assigned.length === 0 ? (
+            <InspectionListSkeleton rows={3} />
+          ) : null}
           {!dashboard.isLoading && assigned.length === 0 ? (
             <View className="mx-5 items-center gap-2 rounded-2xl bg-card p-6">
               <CheckCircle2Icon size={28} className="text-muted-foreground" />

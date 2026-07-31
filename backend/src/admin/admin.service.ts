@@ -84,6 +84,51 @@ const ADMIN_TRANSACTION_OPTIONS = {
   timeout: 15_000,
 } as const;
 
+/**
+ * Readiness of the object storage that room videos and photos are written to.
+ *
+ * Follows `INSPECTION_MEDIA_STORAGE_PROVIDER` rather than assuming one vendor,
+ * so the panel keeps telling the truth if the backend is pointed elsewhere.
+ * `local` is deliberately reported as degraded: it works, but the container disk
+ * is ephemeral, so evidence stored there is lost on the next redeploy.
+ */
+function mediaStorageReadiness(
+  status: (configured: boolean, ready?: boolean) => 'READY' | 'DEGRADED' | 'NOT_CONFIGURED',
+) {
+  const provider = process.env.INSPECTION_MEDIA_STORAGE_PROVIDER;
+  if (provider === 'r2') {
+    const configured = Boolean(
+      process.env.R2_ACCOUNT_ID &&
+      process.env.R2_ACCESS_KEY_ID &&
+      process.env.R2_SECRET_ACCESS_KEY,
+    );
+    return {
+      provider: 'Cloudflare R2',
+      status: status(configured),
+      detail: configured
+        ? `Inspection media bucket: ${process.env.INSPECTION_MEDIA_BUCKET ?? 'default'}`
+        : 'Room video and photo upload will fail until R2 credentials are set.',
+    };
+  }
+  if (provider === 'supabase') {
+    const configured = Boolean(
+      process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
+    );
+    return {
+      provider: 'Supabase Storage',
+      status: status(configured),
+      detail: configured
+        ? 'Inspection media is stored in Supabase Storage.'
+        : 'Room video and photo upload will fail until Supabase credentials are set.',
+    };
+  }
+  return {
+    provider: 'Inspection media storage',
+    status: status(true, false),
+    detail: 'Using local container disk — evidence is lost on redeploy. Development only.',
+  };
+}
+
 @Injectable()
 export class AdminService {
   constructor(
@@ -1941,17 +1986,14 @@ export class AdminService {
       },
       { provider: 'Anthropic', status: status(Boolean(process.env.ANTHROPIC_API_KEY)) },
       { provider: 'OpenAI', status: status(Boolean(process.env.OPENAI_API_KEY)) },
-      {
-        provider: 'Cloudflare Stream',
-        status: status(
-          Boolean(
-            process.env.CLOUDFLARE_ACCOUNT_ID &&
-            process.env.CLOUDFLARE_STREAM_API_TOKEN &&
-            process.env.CLOUDFLARE_STREAM_WEBHOOK_SECRET,
-          ),
-        ),
-        detail: 'Video upload is unavailable until this provider is configured.',
-      },
+      // Reports the storage backend that actually receives room videos.
+      //
+      // This row used to check Cloudflare Stream and warn "Video upload is
+      // unavailable until this provider is configured." Nothing in the codebase
+      // calls Stream — video goes to R2 through ObjectStorage — so the panel
+      // announced a broken uploader on a system whose uploads worked, and stayed
+      // silent about the credentials that would genuinely break them.
+      mediaStorageReadiness(status),
       { provider: 'Sentry', status: status(Boolean(process.env.SENTRY_DSN)) },
       {
         provider: 'Redis',

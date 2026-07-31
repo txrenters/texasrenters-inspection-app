@@ -1,4 +1,5 @@
 import {
+  GUIDED_CAPTURE_POLICY,
   createRotationTracker,
   evaluateCapture,
   guidedCaptureState,
@@ -8,6 +9,7 @@ import {
   shortestSignedDelta,
   updateRotationTracker,
   type RotationTracker,
+  clampRotationDegrees,
 } from '../src/capture/guided-capture';
 
 function track(
@@ -116,5 +118,38 @@ describe('guided walkthrough motion policy', () => {
       confidence: 'UNAVAILABLE',
       returnedToStart: false,
     });
+  });
+});
+
+describe('clampRotationDegrees', () => {
+  // The upload DTO declares @Max(720) on both rotation fields. The tracker
+  // accumulates every accepted degree and never caps, so a thorough walkthrough
+  // sent a value the API rejects — failing the upload *after* the whole video
+  // had been transferred. Only reachable once the motion sensor actually works.
+  const CONTRACT_MAX = 720;
+
+  it('matches the ceiling the upload contract accepts', () => {
+    expect(GUIDED_CAPTURE_POLICY.maximumReportableRotationDegrees).toBe(CONTRACT_MAX);
+  });
+
+  it('caps a walkthrough that circled the room more than twice', () => {
+    expect(clampRotationDegrees(1080)).toBe(CONTRACT_MAX);
+    expect(clampRotationDegrees(721)).toBe(CONTRACT_MAX);
+  });
+
+  it('leaves an ordinary single loop untouched', () => {
+    expect(clampRotationDegrees(361.4)).toBe(361);
+    expect(clampRotationDegrees(0)).toBe(0);
+  });
+
+  it('never reports a negative or unusable rotation', () => {
+    // @Min(0) is also declared on the DTO, so a bad sample must not become a
+    // second way to fail the upload.
+    expect(clampRotationDegrees(-5)).toBe(0);
+    expect(clampRotationDegrees(Number.NaN)).toBe(0);
+    // Zero, not the ceiling: a non-finite reading means the sensor produced
+    // nonsense, and reporting a full two turns would fabricate coverage the
+    // technician may never have walked.
+    expect(clampRotationDegrees(Number.POSITIVE_INFINITY)).toBe(0);
   });
 });

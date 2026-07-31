@@ -1,4 +1,5 @@
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 
 import {
@@ -8,6 +9,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Logger } from '@nestjs/common';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 import { ApplicationError } from './errors';
@@ -62,6 +64,8 @@ const s3Clients = new Map<string, S3Client>();
  * them never requires touching the database.
  */
 export abstract class ObjectStorage {
+  private static readonly logger = new Logger('ObjectStorage');
+
   protected constructor(private readonly config: ObjectStorageConfig) {}
 
   /** The active backend, recorded on media rows as their `provider`. */
@@ -147,8 +151,8 @@ export abstract class ObjectStorage {
             ContentType: mimeType,
           }),
         );
-      } catch {
-        throw this.writeFailed();
+      } catch (error) {
+        throw this.writeFailed(error, { storageKey, bytes: bytes.byteLength });
       }
       return;
     }
@@ -157,7 +161,7 @@ export abstract class ObjectStorage {
         contentType: mimeType,
         upsert: false,
       });
-      if (error) throw this.writeFailed();
+      if (error) throw this.writeFailed(error, { storageKey, bytes: bytes.byteLength });
       return;
     }
     const path = this.localPath(storageKey);
@@ -167,13 +171,40 @@ export abstract class ObjectStorage {
   }
 
   protected async putFile(storageKey: string, sourcePath: string, mimeType: string) {
-    if (this.providerName() === 'local') {
+    const provider = this.providerName();
+    if (provider === 'local') {
       const path = this.localPath(storageKey);
       await mkdir(dirname(path), { recursive: true });
       await copyFile(sourcePath, path);
       return;
     }
-    // Remote backends need the bytes; videos are spooled to a temp file first.
+    if (provider === 'r2') {
+      // Streamed, not `readFile`d. Room videos are accepted up to 2 GB and this
+      // used to pull the entire file into the heap as one Buffer before sending
+      // it — on top of Node's ~2 GB max Buffer and the container's default heap,
+      // a long walkthrough could exhaust memory *after* the phone had already
+      // sent every byte, which is what a technician sees as a failure at 99%.
+      // R2 needs the length up front, so it is measured rather than buffered.
+      const { size } = await stat(sourcePath);
+      const body = createReadStream(sourcePath);
+      try {
+        await this.s3().send(
+          new PutObjectCommand({
+            Bucket: this.bucketName(),
+            Key: storageKey,
+            Body: body,
+            ContentType: mimeType,
+            ContentLength: size,
+          }),
+        );
+      } catch (error) {
+        throw this.writeFailed(error, { storageKey, bytes: size });
+      } finally {
+        body.destroy();
+      }
+      return;
+    }
+    // Supabase's client takes bytes, so this backend still buffers.
     await this.putBuffer(storageKey, await readFile(sourcePath), mimeType);
   }
 
@@ -225,8 +256,29 @@ export abstract class ObjectStorage {
     return new ApplicationError(404, this.config.notFoundCode, this.config.notFoundMessage);
   }
 
-  private writeFailed() {
-    return new ApplicationError(502, this.config.writeFailedCode, this.config.writeFailedMessage);
+  /**
+   * The technician-facing message stays generic; the cause does not disappear.
+   *
+   * This previously swallowed the storage error entirely (`catch { throw
+   * this.writeFailed() }`), so a failed room-video upload produced a 502 with
+   * nothing in the backend log explaining it — the one place the real reason was
+   * available threw it away. Uploads that die after the phone has sent every
+   * byte are undiagnosable without this.
+   */
+  private writeFailed(cause?: unknown, context?: Record<string, unknown>) {
+    ObjectStorage.logger.error(
+      `Storage write failed (${this.config.writeFailedCode})${
+        context ? ` ${JSON.stringify(context)}` : ''
+      }`,
+      cause instanceof Error ? cause.stack : String(cause),
+    );
+    const error = new ApplicationError(
+      502,
+      this.config.writeFailedCode,
+      this.config.writeFailedMessage,
+    );
+    if (cause !== undefined) (error as { cause?: unknown }).cause = cause;
+    return error;
   }
 
   private notConfigured() {

@@ -27,6 +27,9 @@ import {
   useRoomSummaries,
   useUpdateRoom,
 } from '@/src/features/queries';
+import { HomeButton } from '@/src/components/HomeButton';
+import { DetailSkeleton } from '@/src/components/ui/Skeleton';
+import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { areaCompletionGate, deriveAreaRequirements } from '@/src/utils/area-requirements';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -56,6 +59,7 @@ export default function AreaDetailScreen() {
     room.data?.processingStatus !== 'READY_FOR_REVIEW',
   );
   const updates = useUpdateRoom(inspectionId, id);
+  const pull = usePullToRefresh([room.refetch, media.refetch, photos.refetch, findings.refetch]);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const [note, setNote] = useState<string | null>(null);
@@ -64,8 +68,8 @@ export default function AreaDetailScreen() {
 
   if (room.isLoading || !room.data) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-background">
-        <Text className="text-muted-foreground">Loading room…</Text>
+      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+        <DetailSkeleton sections={3} />
       </SafeAreaView>
     );
   }
@@ -101,10 +105,8 @@ export default function AreaDetailScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={room.isRefetching || media.isRefetching || findings.isRefetching}
-            onRefresh={() =>
-              void Promise.all([room.refetch(), media.refetch(), findings.refetch()])
-            }
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={isDark ? '#2dd4bf' : '#145347'}
           />
         }
@@ -125,6 +127,7 @@ export default function AreaDetailScreen() {
               {item.floorName} · {item.isRequired ? 'Required' : 'Optional'} room
             </Text>
           </View>
+          <HomeButton />
           <View
             className={`rounded-full px-3 py-1 ${
               completionTone === 'chart-3'

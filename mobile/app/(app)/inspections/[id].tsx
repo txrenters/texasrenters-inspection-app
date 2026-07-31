@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import {
@@ -11,6 +12,7 @@ import {
   FileTextIcon,
   MapPinIcon,
   PlayCircleIcon,
+  PlusIcon,
   Settings2Icon,
 } from 'lucide-react-native';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
@@ -19,6 +21,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
+import { AddAreaSheet } from '@/src/components/AddAreaSheet';
+import { HomeButton } from '@/src/components/HomeButton';
+import { DetailSkeleton } from '@/src/components/ui/Skeleton';
+import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import {
   deriveAreaStatus,
   pickUpNextArea,
@@ -36,6 +42,7 @@ registerIcons(
   FileTextIcon,
   MapPinIcon,
   PlayCircleIcon,
+  PlusIcon,
   Settings2Icon,
 );
 
@@ -140,12 +147,13 @@ export default function InspectionOverviewScreen() {
   const actions = useInspectionActions(id);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const isRefreshing = inspection.isRefetching || rooms.isRefetching || findings.isRefetching;
+  const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
+  const [addAreaOpen, setAddAreaOpen] = useState(false);
 
   if (inspection.isLoading || !inspection.data) {
     return (
-      <SafeAreaView className="flex-1 items-center justify-center bg-background">
-        <Text className="text-muted-foreground">Loading inspection…</Text>
+      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+        <DetailSkeleton sections={4} />
       </SafeAreaView>
     );
   }
@@ -161,6 +169,10 @@ export default function InspectionOverviewScreen() {
   const pendingUploads = roomList.filter((room) =>
     ['PENDING', 'UPLOADING', 'PAUSED', 'FAILED'].includes(room.uploadStatus),
   ).length;
+  // Only while the inspection is still the technician's to work on. Once it is
+  // submitted the evidence set is fixed, and adding an area then would mean
+  // handing review a room nobody captured.
+  const canAddArea = item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS';
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -170,10 +182,8 @@ export default function InspectionOverviewScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={() =>
-              void Promise.all([inspection.refetch(), rooms.refetch(), findings.refetch()])
-            }
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={isDark ? '#2dd4bf' : '#145347'}
           />
         }
@@ -193,6 +203,7 @@ export default function InspectionOverviewScreen() {
               Inspection Overview
             </Text>
           </View>
+          <HomeButton />
         </View>
 
         <View className="mx-5 gap-3 rounded-2xl bg-card p-5">
@@ -287,7 +298,21 @@ export default function InspectionOverviewScreen() {
         <View className="mt-5">
           <View className="mb-3 flex-row items-center justify-between px-5">
             <Text className="text-lg font-semibold text-foreground">Areas</Text>
-            <Text className="text-sm text-muted-foreground">{roomList.length} total</Text>
+            <View className="flex-row items-center gap-3">
+              <Text className="text-sm text-muted-foreground">{roomList.length} total</Text>
+              {canAddArea ? (
+                <Pressable
+                  accessibilityHint="For a space that is not on the floor plan"
+                  accessibilityLabel="Add an area"
+                  accessibilityRole="button"
+                  className="min-h-11 flex-row items-center gap-1 rounded-full bg-primary/10 px-3"
+                  onPress={() => setAddAreaOpen(true)}
+                >
+                  <PlusIcon size={14} className="text-primary" />
+                  <Text className="text-sm font-semibold text-primary">Add</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
           {rooms.isError ? (
             <Text className="mx-5 mb-3 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
@@ -435,6 +460,16 @@ export default function InspectionOverviewScreen() {
           </View>
         )}
       </View>
+
+      <AddAreaSheet
+        inspectionId={id}
+        visible={addAreaOpen}
+        onClose={() => setAddAreaOpen(false)}
+        // Straight into the new area: the technician is standing in the room
+        // they just added, and the point of adding it here is to start
+        // recording without waiting on anyone.
+        onAdded={(roomId) => router.push(`/areas/${roomId}`)}
+      />
     </SafeAreaView>
   );
 }

@@ -1,0 +1,134 @@
+import Constants from 'expo-constants';
+import { dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
+
+import { getSupabaseClient } from '../auth/supabase';
+import { demoStorage } from './demo-storage';
+
+const CACHE_PREFIX = 'texasrenters-query-cache-v1';
+
+/**
+ * Restored data older than this is dropped rather than shown.
+ *
+ * Long enough that a technician who opens the app the next morning still gets an
+ * instant screen, short enough that nobody is handed a week-old assignment list
+ * as though it were current.
+ */
+const MAX_AGE_MS = 24 * 60 * 60_000;
+
+/** Coalesces the burst of cache events a screen fires while it settles. */
+const WRITE_DEBOUNCE_MS = 2_000;
+
+type StoredCache = {
+  buster: string;
+  savedAt: number;
+  state: unknown;
+};
+
+/**
+ * Invalidates the whole stored cache whenever the app version changes.
+ *
+ * Restored payloads are not re-validated against their zod schemas — they are
+ * written back into react-query as-is. A release that changes a DTO shape would
+ * otherwise hand screens last version's data and crash on a field that no
+ * longer exists. Tying the cache to the shipped version means an upgrade starts
+ * clean and refills within one refresh.
+ */
+function buster() {
+  return String(Constants.expoConfig?.version ?? 'dev');
+}
+
+/**
+ * Scopes stored data to the signed-in technician.
+ *
+ * Two technicians sharing a device must never see each other's assignments, so
+ * the user id is part of the key rather than a field inside the payload. No
+ * session means there is nothing to read or write — that is an ordinary state
+ * at launch and on the sign-in screen, not an error.
+ */
+async function storageKey() {
+  const { data } = await getSupabaseClient().auth.getSession();
+  const userId = data.session?.user.id;
+  return userId ? `${CACHE_PREFIX}:${userId}` : null;
+}
+
+/**
+ * Repaints the last known screen state from disk before the network answers.
+ *
+ * The app already stored validated DTOs on the device, but `cachedApiRecord`
+ * only ever read them back inside its `catch` for `ApiConnectionError` — a
+ * crash mat, never a fast path. So every launch with working internet started
+ * from an empty react-query cache: spinner, wait for the round trip, then
+ * paint, even though the answer was sitting in SQLite.
+ *
+ * Restored entries keep their original `dataUpdatedAt`, so they are already
+ * stale against the 30s `staleTime` and react-query revalidates each one the
+ * moment its screen mounts. The technician sees yesterday's list instantly and
+ * it corrects itself a beat later, instead of seeing nothing at all.
+ */
+export async function restoreQueryCache(client: QueryClient): Promise<boolean> {
+  const key = await storageKey();
+  if (!key) return false;
+  const stored = await demoStorage.getItem(key);
+  if (!stored) return false;
+
+  try {
+    const payload = JSON.parse(stored) as Partial<StoredCache>;
+    const expired =
+      typeof payload.savedAt !== 'number' || Date.now() - payload.savedAt > MAX_AGE_MS;
+    if (payload.buster !== buster() || expired || !payload.state) {
+      await demoStorage.removeItem(key);
+      return false;
+    }
+    hydrate(client, payload.state);
+    return true;
+  } catch {
+    // A truncated or hand-edited payload must not wedge every future launch.
+    await demoStorage.removeItem(key);
+    return false;
+  }
+}
+
+/**
+ * Mirrors the live query cache to disk so the next launch has something to show.
+ *
+ * Returns an unsubscribe function.
+ */
+export function persistQueryCache(client: QueryClient): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  const write = async () => {
+    const key = await storageKey();
+    if (!key || stopped) return;
+    const state = dehydrate(client, {
+      // Errors and in-flight queries are worthless on the next launch, and a
+      // persisted failure would be restored as a screen that looks broken
+      // before a single request has been made.
+      shouldDehydrateQuery: (query) =>
+        query.state.status === 'success' && query.state.data !== undefined,
+      // Never: a restored pending mutation would re-fire a write the technician
+      // already made — a duplicate finding, or a second submitted room.
+      shouldDehydrateMutation: () => false,
+    });
+    const payload: StoredCache = { buster: buster(), savedAt: Date.now(), state };
+    await demoStorage.setItem(key, JSON.stringify(payload));
+  };
+
+  const unsubscribe = client.getQueryCache().subscribe(() => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void write(), WRITE_DEBOUNCE_MS);
+  });
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    unsubscribe();
+  };
+}
+
+/** Drops the stored cache for the current technician, used on explicit sign-out. */
+export async function clearQueryCache() {
+  const key = await storageKey();
+  if (key) await demoStorage.removeItem(key);
+}

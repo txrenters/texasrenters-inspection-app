@@ -37,7 +37,12 @@ export function UploadQueueRunner() {
   }).allowed;
 
   const flush = useCallback(async () => {
-    if (!allowed || running.current || AppState.currentState !== 'active') return;
+    // Deliberately not gated on AppState. Transfers use a background session,
+    // so one already in flight survives the phone being locked or the app being
+    // switched away — and on Android, where JS can keep running for a while
+    // after backgrounding, refusing to start the next item just wasted that
+    // window. `running` still prevents overlapping drains.
+    if (!allowed || running.current) return;
     running.current = true;
     try {
       // Drain, rather than one recording per interval. `tick()` uploads at most
@@ -46,9 +51,6 @@ export function UploadQueueRunner() {
       // nothing on top of the transfers themselves.
       let uploaded = 0;
       for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
-        // Re-checked each pass: draining can outlast a backgrounding, and the
-        // OS suspends the socket rather than failing it.
-        if (AppState.currentState !== 'active') break;
         if (!(await repositories.uploads.tick())) break;
         uploaded += 1;
         // Refresh the list between items so the screen shows each one land,

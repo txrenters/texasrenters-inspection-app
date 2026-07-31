@@ -16,6 +16,7 @@ type RecordingDraftInput = {
   sizeBytes?: number;
   recordingType?: VideoRecordingType;
   captureSummary?: GuidedCaptureSummary;
+  frameMarkersMs?: number[];
 };
 
 export function buildRecordingDraft({
@@ -27,6 +28,7 @@ export function buildRecordingDraft({
   sizeBytes,
   recordingType = 'PRIMARY_AREA',
   captureSummary,
+  frameMarkersMs,
 }: RecordingDraftInput): LocalMedia {
   const normalizedDuration = Math.max(1, Math.round(durationSeconds));
 
@@ -48,6 +50,14 @@ export function buildRecordingDraft({
     // their upload contract free of 360-completion pressure even if a stale
     // caller accidentally supplies a primary capture summary.
     captureSummary: recordingType === 'PRIMARY_AREA' ? captureSummary : undefined,
+    // Sorted and de-duplicated here rather than at the call site: markers are
+    // appended as the technician taps, and the server extracts frames in the
+    // order it is given. Two taps inside the same second are one frame.
+    frameMarkersMs: frameMarkersMs?.length
+      ? [...new Set(frameMarkersMs.map((value) => Math.max(0, Math.round(value))))].sort(
+          (left, right) => left - right,
+        )
+      : undefined,
   };
 }
 

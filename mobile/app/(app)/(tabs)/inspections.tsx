@@ -18,6 +18,8 @@ import {
   useInspectionUrgency,
 } from '@/src/components/InspectionUrgencyBadge';
 import { useInspections } from '@/src/features/queries';
+import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
+import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
@@ -135,6 +137,7 @@ function InspectionRow({ item }: { item: Inspection }) {
 
 export default function InspectionsScreen() {
   const inspections = useInspections();
+  const pull = usePullToRefresh([inspections.refetch]);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const [filter, setFilter] = useState<'ALL' | InspectionStatus>('ALL');
@@ -162,8 +165,8 @@ export default function InspectionsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={inspections.isRefetching}
-            onRefresh={() => void inspections.refetch()}
+            refreshing={pull.refreshing}
+            onRefresh={pull.onRefresh}
             tintColor={isDark ? '#2dd4bf' : '#145347'}
           />
         }
@@ -231,6 +234,12 @@ export default function InspectionsScreen() {
         }
         renderItem={({ item }) => <InspectionRow item={item} />}
         ListEmptyComponent={
+          // A first load with nothing cached used to render "No inspections
+          // found" for as long as the request took, telling the technician the
+          // opposite of the truth before the list arrived.
+          inspections.isLoading ? (
+            <InspectionListSkeleton rows={4} />
+          ) : (
           <View className="items-center gap-3 py-16">
             <SearchIcon size={36} className="text-muted-foreground" />
             <View className="items-center gap-1">
@@ -240,6 +249,7 @@ export default function InspectionsScreen() {
               </Text>
             </View>
           </View>
+          )
         }
       />
     </SafeAreaView>

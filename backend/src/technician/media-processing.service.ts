@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +12,7 @@ import {
   InspectionStatus,
   InspectionType,
   MediaProcessingStatus,
+  PhotoCaptureType,
   TranscriptionStatus,
 } from '@prisma/client';
 import { z } from 'zod';
@@ -25,6 +27,30 @@ import { InspectionMediaStorageService } from './inspection-media-storage.servic
 const PROMPT_VERSION = '2';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
+
+/** Hard ceiling on frames cut from one recording, whatever the client asked for. */
+const MAX_EXTRACTED_FRAMES = 60;
+
+/**
+ * Reads technician frame markers back out of the stored capture summary.
+ *
+ * Bounded by the recording length: a marker past the end yields no frame, and
+ * trusting a client-supplied offset unchecked would let one recording spawn
+ * arbitrarily many ffmpeg passes.
+ */
+export function readFrameMarkers(captureSummary: unknown, durationSeconds: number): number[] {
+  if (!captureSummary || typeof captureSummary !== 'object') return [];
+  const raw = (captureSummary as { frameMarkersMs?: unknown }).frameMarkersMs;
+  if (!Array.isArray(raw)) return [];
+  const limitMs = Math.max(0, durationSeconds) * 1000;
+  const valid = raw.filter(
+    (value): value is number =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= limitMs,
+  );
+  return [...new Set(valid.map((value) => Math.round(value)))]
+    .sort((left, right) => left - right)
+    .slice(0, MAX_EXTRACTED_FRAMES);
+}
 
 /**
  * Marker for the informational per-room AI summary. Summaries are context for
@@ -177,6 +203,11 @@ export class MediaProcessingService implements OnModuleInit {
           mimeType: true,
           durationSeconds: true,
           processingStatus: true,
+          // Needed to cut technician-marked frames out of the video below.
+          captureSummary: true,
+          inspectionAreaId: true,
+          technicianId: true,
+          organizationId: true,
           inspectionArea: {
             select: {
               propertyArea: {
@@ -261,6 +292,11 @@ export class MediaProcessingService implements OnModuleInit {
       storageKey: string;
       mimeType: string;
       durationSeconds: number;
+      organizationId: string;
+      inspectionId: string;
+      inspectionAreaId: string;
+      technicianId: string;
+      captureSummary: unknown;
     },
     organizationId: string,
   ) {
@@ -287,6 +323,8 @@ export class MediaProcessingService implements OnModuleInit {
       // Generated here because the video bytes are already in memory for audio
       // extraction; fetching them again just for a poster frame would be wasteful.
       await this.generateThumbnail(video, media.mimeType, media.storageKey);
+      // Same bytes, same trip: stills the technician marked while recording.
+      await this.extractMarkerFrames(video, media);
       const audio = await this.extractAudio(video, media.mimeType);
       const transcript = await this.requestTranscription(configuration.apiKey, audio);
       await this.prisma.$transaction([
@@ -335,6 +373,129 @@ export class MediaProcessingService implements OnModuleInit {
    * downloading it. Best-effort by design: a missing thumbnail degrades to a
    * blank poster, so no failure here may interrupt transcription or analysis.
    */
+  /**
+   * Cuts stills out of the video at the offsets the technician marked.
+   *
+   * Android cannot photograph while recording — expo-camera binds either the
+   * image-capture or the video-capture use case, never both — so the shutter
+   * records the moment instead of interrupting a walkthrough that is supposed
+   * to be one continuous clockwise pass. The frames are recovered here.
+   *
+   * Best-effort in the same way the poster frame is: a marker that yields no
+   * frame must never cost the technician their transcript or their findings.
+   */
+  private async extractMarkerFrames(
+    video: Buffer,
+    media: {
+      id: string;
+      providerMediaId: string;
+      mimeType: string;
+      durationSeconds: number;
+      organizationId: string;
+      inspectionId: string;
+      inspectionAreaId: string;
+      technicianId: string;
+      captureSummary: unknown;
+    },
+  ) {
+    const markers = readFrameMarkers(media.captureSummary, media.durationSeconds);
+    if (!markers.length) return;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ffmpegPath = require('ffmpeg-static') as string | null;
+    if (!ffmpegPath) return;
+
+    const directory = await mkdtemp(join(tmpdir(), 'txr-frames-'));
+    const input = join(directory, media.mimeType === 'video/quicktime' ? 'input.mov' : 'input.mp4');
+    try {
+      await writeFile(input, video);
+      let extracted = 0;
+      for (const [index, atMs] of markers.entries()) {
+        // Derived from the media and the offset, so re-processing the same
+        // recording overwrites its own frames instead of duplicating them.
+        const idempotencyKey = `${media.providerMediaId}-frame-${atMs}`;
+        const existing = await this.prisma.inspectionPhoto.findUnique({
+          where: { idempotencyKey },
+          select: { id: true },
+        });
+        if (existing) continue;
+
+        const output = join(directory, `frame-${atMs}.jpg`);
+        await new Promise<void>((resolvePromise) => {
+          const child = spawn(ffmpegPath, [
+            '-y',
+            // Before -i: seeks by keyframe, which is far cheaper than decoding
+            // the whole clip and accurate enough for a walkthrough still.
+            '-ss',
+            (atMs / 1000).toFixed(3),
+            '-i',
+            input,
+            '-frames:v',
+            '1',
+            '-q:v',
+            '3',
+            output,
+          ]);
+          child.on('error', () => resolvePromise());
+          child.on('exit', () => resolvePromise());
+        });
+
+        // The written file decides, not the exit code. Seeking past the end of
+        // a clip makes ffmpeg exit 0 having produced nothing, so trusting the
+        // status would send a missing path to storage and abort the remaining
+        // markers. `durationSeconds` is client-reported and can overstate the
+        // real video, so this case is reachable in practice.
+        const bytes = await stat(output).catch(() => null);
+        if (!bytes?.size) continue;
+
+        // Per marker, so one unwritable frame costs only its own still rather
+        // than every later one in the same recording.
+        try {
+          const storageKey = `${media.organizationId}/${media.inspectionId}/${media.inspectionAreaId}/photos/${randomUUID()}.jpg`;
+          await this.storage.putFromFile(storageKey, output, 'image/jpeg');
+          await this.prisma.inspectionPhoto.create({
+            data: {
+              organizationId: media.organizationId,
+              inspectionId: media.inspectionId,
+              inspectionAreaId: media.inspectionAreaId,
+              capturedById: media.technicianId,
+              provider: this.storage.providerName(),
+              storageKey,
+              // The first marked frame stands in for the room overview; later
+              // ones are context for whatever the technician was pointing at.
+              captureType:
+                index === 0 ? PhotoCaptureType.AREA_OVERVIEW : PhotoCaptureType.FINDING_CONTEXT,
+              sequenceNumber: index + 1,
+              mimeType: 'image/jpeg',
+              sizeBytes: bytes.size,
+              idempotencyKey,
+              metadata: {
+                captureSource: 'VIDEO_FRAME_EXTRACTION',
+                videoTimestampMs: atMs,
+                sourceMediaId: media.id,
+              },
+            },
+          });
+          extracted += 1;
+        } catch (error) {
+          this.logger.warn(
+            `Frame at ${atMs}ms not stored for ${media.id}: ${
+              error instanceof Error ? error.message : 'unknown error'
+            }`,
+          );
+        }
+      }
+      if (extracted) await this.event(media.id, 'FRAMES_EXTRACTED', { count: extracted });
+    } catch (error) {
+      this.logger.warn(
+        `Marker frame extraction skipped for ${media.id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
   private async generateThumbnail(video: Buffer, mimeType: string, storageKey: string) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const ffmpegPath = require('ffmpeg-static') as string | null;
