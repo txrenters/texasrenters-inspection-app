@@ -9,6 +9,11 @@ export const GUIDED_CAPTURE_POLICY = {
   jitterDegrees: 1,
   maximumSampleDeltaDegrees: 45,
   maximumRecommendedDegreesPerSecond: 75,
+  /**
+   * Largest rotation the upload API accepts, mirroring `@Max(720)` on
+   * TechnicianMediaUploadDto. The tracker itself accumulates without bound.
+   */
+  maximumReportableRotationDegrees: 720,
   tooFastWarningDurationMs: 500,
 } as const;
 
@@ -259,6 +264,23 @@ export function evaluateCapture({
     return { status: 'LIKELY_COMPLETE', confidence: 'MEDIUM', returnedToStart: true };
   if (noisy) return { status: 'LOW_CONFIDENCE', confidence: 'LOW', returnedToStart: didReturn };
   return { status: 'INCOMPLETE', confidence: 'LOW', returnedToStart: didReturn };
+}
+
+/**
+ * Brings accumulated rotation inside the range the upload contract accepts.
+ *
+ * `updateRotationTracker` adds every accepted degree of turn and never caps,
+ * so a thorough walkthrough can pass two full circles. Sending that raw failed
+ * DTO validation and rejected the entire upload *after* the video had been
+ * transferred — the worst possible moment. Coverage is judged against 330–420
+ * degrees, so clamping loses nothing that any decision depends on.
+ */
+export function clampRotationDegrees(degrees: number) {
+  if (!Number.isFinite(degrees) || degrees <= 0) return 0;
+  return Math.min(
+    GUIDED_CAPTURE_POLICY.maximumReportableRotationDegrees,
+    Math.round(degrees),
+  );
 }
 
 export function radiansOrDegreesToDegrees(value: number) {

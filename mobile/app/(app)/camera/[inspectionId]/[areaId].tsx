@@ -35,6 +35,7 @@ import { HomeButton } from '@/src/components/HomeButton';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import {
   GUIDED_CAPTURE_POLICY,
+  clampRotationDegrees,
   evaluateCapture,
   guidedCaptureState,
   rotationProgress,
@@ -203,10 +204,16 @@ export default function RoomCameraScreen() {
       startedAt: sessionStartedAtRef.current,
       completedAt: new Date().toISOString(),
       durationSeconds,
-      clockwiseRotationDegrees: Math.round(
+      // Clamped to the upload contract's ceiling. The tracker accumulates every
+      // accepted degree of turn without bound, so a technician who circles the
+      // room more than twice — or backtracks a lot — produced a value the API
+      // rejects outright, failing the whole upload after the video had already
+      // been sent. Coverage is judged against 330–420 degrees, so anything past
+      // two full turns carries no further meaning anyway.
+      clockwiseRotationDegrees: clampRotationDegrees(
         guidedSensor.trackerRef.current.clockwiseRotationDegrees,
       ),
-      counterClockwiseRotationDegrees: Math.round(
+      counterClockwiseRotationDegrees: clampRotationDegrees(
         guidedSensor.trackerRef.current.counterClockwiseRotationDegrees,
       ),
       startHeadingDegrees: guidedSensor.trackerRef.current.startHeadingDegrees,
