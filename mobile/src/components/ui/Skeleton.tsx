@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, View, type ViewStyle } from 'react-native';
 
+import { useReducedMotion } from '../../lib/reduced-motion';
+
 type SkeletonProps = {
   /** Tailwind classes for shape and spacing — height and width belong here. */
   className?: string;
@@ -38,8 +40,16 @@ export function Skeleton({ className = '', style }: SkeletonProps) {
  */
 function usePulse() {
   const value = useRef(new Animated.Value(0.4)).current;
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    // A screen full of blocks breathing in unison is exactly the kind of
+    // ambient motion the setting exists to stop. Held at a readable opacity
+    // instead, so the layout still reads as placeholder content.
+    if (reducedMotion) {
+      value.setValue(0.6);
+      return;
+    }
     const animation = Animated.loop(
       Animated.sequence([
         Animated.timing(value, {
@@ -58,7 +68,7 @@ function usePulse() {
     );
     animation.start();
     return () => animation.stop();
-  }, [value]);
+  }, [reducedMotion, value]);
 
   return value;
 }

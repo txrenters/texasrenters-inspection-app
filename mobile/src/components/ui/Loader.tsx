@@ -3,6 +3,8 @@ import { Animated, Easing, Text, View } from 'react-native';
 import { useColorScheme } from 'nativewind';
 import Svg, { Circle } from 'react-native-svg';
 
+import { useReducedMotion } from '../../lib/reduced-motion';
+
 const AnimatedSvg = Animated.createAnimatedComponent(Svg);
 
 const SIZES = { sm: 18, md: 28, lg: 40 } as const;
@@ -26,6 +28,7 @@ type LoaderProps = {
  */
 export function Loader({ size = 'md', accessibilityLabel = 'Loading' }: LoaderProps) {
   const { colorScheme } = useColorScheme();
+  const reducedMotion = useReducedMotion();
   const tint = colorScheme === 'dark' ? '#2dd4bf' : '#145347';
   const spin = useRef(new Animated.Value(0)).current;
   const diameter = SIZES[size];
@@ -34,6 +37,13 @@ export function Loader({ size = 'md', accessibilityLabel = 'Loading' }: LoaderPr
   const circumference = 2 * Math.PI * radius;
 
   useEffect(() => {
+    // Nothing turns when the OS asks for reduced motion. The ring below still
+    // draws, and the accessible label still says "Loading" — the state is
+    // conveyed without anything moving.
+    if (reducedMotion) {
+      spin.setValue(0);
+      return;
+    }
     const animation = Animated.loop(
       Animated.timing(spin, {
         toValue: 1,
@@ -46,7 +56,7 @@ export function Loader({ size = 'md', accessibilityLabel = 'Loading' }: LoaderPr
     );
     animation.start();
     return () => animation.stop();
-  }, [spin]);
+  }, [reducedMotion, spin]);
 
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
@@ -77,7 +87,7 @@ export function Loader({ size = 'md', accessibilityLabel = 'Loading' }: LoaderPr
         strokeWidth={stroke}
         strokeLinecap="round"
         fill="none"
-        strokeDasharray={`${circumference * 0.28} ${circumference}`}
+        strokeDasharray={`${circumference * (reducedMotion ? 0.75 : 0.28)} ${circumference}`}
       />
     </AnimatedSvg>
   );
