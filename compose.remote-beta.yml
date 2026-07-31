@@ -10,6 +10,20 @@
 # runtime. They are never copied into an image layer or exposed to the clients.
 
 services:
+  # The beta stack's own cache. The `infrastructure/` compose file also defines a
+  # Redis, but that is a separate compose project on a separate network — a
+  # backend started from this file could never reach it, which is why the admin
+  # diagnostics reported Redis as unconfigured while a Redis container was
+  # plainly running. No published port: nothing outside this network needs it.
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: .
@@ -21,10 +35,14 @@ services:
       APP_ENV: remote-beta
       HOST: 0.0.0.0
       PORT: ${PORT:-3000}
-      # backend/.env.local currently points Redis at the host. Disable that
-      # optional cache inside this isolated beta container until it has its own
-      # Docker-network Redis URL.
-      CACHE_ENABLED: 'false'
+      # backend/.env.local points Redis at `localhost`, which inside this
+      # container resolves to the container itself. The stack now runs its own
+      # Redis on the compose network, so the cache is enabled and addressed by
+      # service name. Both values must be set here: compose `environment:`
+      # outranks `env_file:`, so leaving REDIS_URL to .env.local would keep
+      # pointing the backend at itself.
+      CACHE_ENABLED: 'true'
+      REDIS_URL: redis://redis:6379
       # The public beta boundary must always use real authentication.
       USE_MOCK_AUTH: 'false'
       # Expo web for mobile runs on 8082 during remote-beta development.
@@ -32,6 +50,9 @@ services:
     ports:
       # ngrok is the only public entry point. The host binding stays loopback-only.
       - '127.0.0.1:${PORT:-3000}:${PORT:-3000}'
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test:
