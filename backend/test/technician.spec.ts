@@ -53,6 +53,46 @@ describe('technician mobile data boundary', () => {
     }
   });
 
+  it('puts overdue and next-week work in the queue, not only today', async () => {
+    // The home screen renders `assignments` under a heading called "Upcoming".
+    // It was previously filtered to `scheduledAt` within today, so an
+    // inspection created for tomorrow was invisible the moment it was saved,
+    // and nothing overdue ever appeared either.
+    const prisma = {
+      inspection: {
+        groupBy: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      mediaProcessingDouble(),
+    );
+
+    await service.dashboard(technician);
+
+    const [queueRequest] = prisma.inspection.findMany.mock.calls[0];
+    // No lower bound: an inspection scheduled last week that is still open has
+    // to keep appearing until it is dealt with.
+    expect(queueRequest.where.scheduledAt.gte).toBeUndefined();
+    expect(queueRequest.where.scheduledAt.lt.getTime()).toBeGreaterThan(Date.now());
+    // Only work that still needs the technician — review states belong to the
+    // administrator, not the field queue.
+    expect(queueRequest.where.status).toEqual({
+      in: [InspectionStatus.SCHEDULED, InspectionStatus.IN_PROGRESS],
+    });
+    expect(queueRequest.orderBy).toEqual({ scheduledAt: 'asc' });
+
+    // The "today" tile still counts today alone.
+    const [countRequest] = prisma.inspection.count.mock.calls[0];
+    expect(countRequest.where.scheduledAt.gte).toEqual(expect.any(Date));
+    expect(countRequest.where.scheduledAt.lt).toEqual(expect.any(Date));
+  });
+
   it('returns an empty first-time workspace and scopes inspection reads to current assignments', async () => {
     const prisma = {
       inspection: {

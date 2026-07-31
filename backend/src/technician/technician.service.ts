@@ -126,6 +126,20 @@ function formatUnitLabel(name: string) {
 
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
 
+/**
+ * Statuses that still need the technician on the home screen's queue.
+ *
+ * Stops at TECHNICIAN_SUBMITTED: once the work is handed over, the inspection
+ * belongs to review and should not keep occupying the technician's queue.
+ */
+const TECHNICIAN_ACTIVE_STATUSES: InspectionStatus[] = [
+  InspectionStatus.SCHEDULED,
+  InspectionStatus.IN_PROGRESS,
+];
+
+/** How far ahead the home-screen queue looks, measured from the start of today. */
+const DASHBOARD_QUEUE_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1000;
+
 const technicianRoomSelect = {
   id: true,
   inspectionId: true,
@@ -259,7 +273,20 @@ export class TechnicianService {
       ...where,
       scheduledAt: { gte: todayStart, lt: tomorrowStart },
     } satisfies Prisma.InspectionWhereInput;
-    const [statusGroups, todayTotal, todayRecords, recentRecords, pendingUploads] =
+    // The technician's active queue, not just today's date bucket.
+    //
+    // `assignments` used to be today-only, while the app rendered it under a
+    // heading called "Upcoming". An inspection scheduled for tomorrow was
+    // therefore invisible the moment it was created, and so was every overdue
+    // one — the two cases a technician most needs on the home screen. The
+    // window now runs from anything still outstanding in the past through the
+    // next week, ordered by schedule so the latest work sorts to the top.
+    const queueWhere = {
+      ...where,
+      status: { in: TECHNICIAN_ACTIVE_STATUSES },
+      scheduledAt: { lt: new Date(todayStart.getTime() + DASHBOARD_QUEUE_LOOKAHEAD_MS) },
+    } satisfies Prisma.InspectionWhereInput;
+    const [statusGroups, todayTotal, queueRecords, recentRecords, pendingUploads] =
       await Promise.all([
         this.prisma.inspection.groupBy({
           by: ['status'],
@@ -269,7 +296,7 @@ export class TechnicianService {
         this.prisma.inspection.count({ where: todayWhere }),
         this.prisma.inspection.findMany({
           relationLoadStrategy: 'join',
-          where: todayWhere,
+          where: queueWhere,
           select: technicianInspectionSummarySelect,
           orderBy: { scheduledAt: 'asc' },
           take: 25,
@@ -300,7 +327,7 @@ export class TechnicianService {
       inProgress: count(InspectionStatus.IN_PROGRESS),
       completed: count(InspectionStatus.COMPLETED),
       pendingUploads,
-      assignments: todayRecords.map((record) => this.mapInspection(record, user.id)),
+      assignments: queueRecords.map((record) => this.mapInspection(record, user.id)),
       recent: recentRecords.map((record) => this.mapInspection(record, user.id)),
     };
   }

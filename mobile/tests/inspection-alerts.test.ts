@@ -42,8 +42,9 @@ describe('inspectionUrgency', () => {
     expect(inspectionUrgency(later, NOW)).toBe('scheduled');
   });
 
-  it('stops warning once the technician has started the work', () => {
-    // An in-progress inspection is being handled; nagging about it is noise.
+  it('stays quiet about work started a few hours after its slot', () => {
+    // Running over by an afternoon is ordinary; a technician who begins at 9:05
+    // for a 9:00 slot should not be told they are late.
     for (const status of ['IN_PROGRESS', 'COMPLETED', 'CANCELLED'] as const) {
       const started = inspection({
         status,
@@ -51,6 +52,48 @@ describe('inspectionUrgency', () => {
       });
       expect(inspectionUrgency(started, NOW)).toBeNull();
     }
+  });
+
+  it('flags an in-progress inspection left open past its scheduled day', () => {
+    // The case that showed no indicator at all: started, never finished, and
+    // still sitting there days later.
+    const stale = inspection({
+      status: 'IN_PROGRESS',
+      scheduledAt: new Date(NOW - 8 * 24 * HOUR).toISOString(),
+    });
+    expect(inspectionUrgency(stale, NOW)).toBe('overdue');
+  });
+
+  it('never nags about started work inside the one-day grace', () => {
+    const justInside = inspection({
+      status: 'IN_PROGRESS',
+      scheduledAt: new Date(NOW - 23 * HOUR).toISOString(),
+    });
+    const justOutside = inspection({
+      status: 'IN_PROGRESS',
+      scheduledAt: new Date(NOW - 25 * HOUR).toISOString(),
+    });
+    expect(inspectionUrgency(justInside, NOW)).toBeNull();
+    expect(inspectionUrgency(justOutside, NOW)).toBe('overdue');
+  });
+
+  it('never warns about finished or cancelled work, however old', () => {
+    for (const status of ['COMPLETED', 'CANCELLED', 'TECHNICIAN_SUBMITTED'] as const) {
+      const ancient = inspection({
+        status,
+        scheduledAt: new Date(NOW - 30 * 24 * HOUR).toISOString(),
+      });
+      expect(inspectionUrgency(ancient, NOW)).toBeNull();
+    }
+  });
+
+  it('an in-progress inspection is never "due soon"', () => {
+    // It has already started; counting down to its start time is nonsense.
+    const upcoming = inspection({
+      status: 'IN_PROGRESS',
+      scheduledAt: new Date(NOW + MINUTE).toISOString(),
+    });
+    expect(inspectionUrgency(upcoming, NOW)).toBeNull();
   });
 
   it('ignores an unparseable schedule instead of reporting it overdue', () => {
