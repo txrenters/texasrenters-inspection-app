@@ -304,6 +304,7 @@ model Organization {
   aiUsageEvents   AiUsageEvent[]
   roles           Role[]
   roleAssignments UserRoleAssignment[]
+  checklistItems  AreaChecklistItem[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -404,6 +405,7 @@ model UserProfile {
   createdAreas         PropertyArea[]          @relation("AreaCreatedBy")
   markerUpdatedAreas   PropertyArea[]          @relation("AreaMarkerUpdatedBy")
   areaAliases          PropertyAreaAlias[]     @relation("AreaAliasCreatedBy")
+  checklistItems       AreaChecklistItem[]     @relation("ChecklistItemCreatedBy")
   photos               InspectionPhoto[]
   finalizedInspections Inspection[]            @relation("InspectionFinalizedBy")
 }
@@ -555,6 +557,7 @@ model PropertyArea {
   baselineConditions BaselineAreaCondition[]
   findings           InspectionFinding[]
   aliases            PropertyAreaAlias[]
+  checklistItems     AreaChecklistItem[]
 
   // The database index is created NULLS NOT DISTINCT so building-level areas
   // (unitId null) stay unique among themselves.
@@ -565,6 +568,35 @@ model PropertyArea {
 /// Prior/alternate names for an area (rename and merge history). Used to keep
 /// evidence associated after a rename and to match areas during move-in vs
 /// move-out comparison.
+/// An item the technician is expected to cover while recording this area.
+///
+/// Authored by an administrator per area. Ticking is the technician's own
+/// record of coverage — it never gates completing an area, because the
+/// walkthrough video remains the evidence and an untouched checkbox is not
+/// proof that something was missed.
+model AreaChecklistItem {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  propertyAreaId String       @db.Uuid
+  label          String
+  /// Spoken words that count as covering this item, matched against the
+  /// recording's transcript. Empty means the item can only be ticked by hand.
+  keywords       String[]     @default([])
+  sortOrder      Int          @default(0)
+  archivedAt     DateTime?
+  createdById    String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  propertyArea   PropertyArea @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
+  createdBy      UserProfile? @relation("ChecklistItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  /// The same wording twice in one area is a mistake, not a second item.
+  @@unique([propertyAreaId, label])
+  @@index([propertyAreaId, sortOrder])
+  @@index([organizationId])
+}
+
 model PropertyAreaAlias {
   id             String       @id @default(uuid()) @db.Uuid
   propertyAreaId String       @db.Uuid
