@@ -12,12 +12,17 @@ jest.mock('../src/auth/supabase', () => ({
   }),
 }));
 
+// Imported after the mock on purpose: these modules pull in `auth/supabase` at
+// evaluation time, so hoisting them above `jest.mock` would bind the real
+// client before the double is installed.
+/* eslint-disable import/first */
 import { demoStorage } from '../src/storage/demo-storage';
 import {
   clearQueryCache,
   persistQueryCache,
   restoreQueryCache,
 } from '../src/storage/query-cache-persistence';
+/* eslint-enable import/first */
 
 const KEY = 'texasrenters-query-cache-v1:tech-1';
 
