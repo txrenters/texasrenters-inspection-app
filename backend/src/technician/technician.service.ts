@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
@@ -18,6 +18,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
+import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import {
   MediaProcessingService,
@@ -260,7 +261,36 @@ export class TechnicianService {
     private readonly mediaStorage: InspectionMediaStorageService,
     @Inject(MediaProcessingService)
     private readonly mediaProcessing: MediaProcessingService,
+    // Optional so the existing unit tests, which construct this service
+    // directly with four doubles, keep working without a realtime stub.
+    @Optional()
+    @Inject(TechnicianEventsGateway)
+    private readonly technicianEvents?: TechnicianEventsGateway,
   ) {}
+
+  /**
+   * Tells the technician's other devices that an inspection moved.
+   *
+   * The socket room is keyed per technician, not per device, so every session
+   * signed in as this user receives it — including the one that just made the
+   * change, which is harmless and keeps the originating device honest if its
+   * optimistic update was wrong.
+   *
+   * Until now the only publisher in the codebase was admin assignment, so a
+   * technician working on two devices saw nothing of their own activity cross
+   * over: a room completed on one stayed "not started" on the other until the
+   * sixty-second poll or a manual pull-to-refresh.
+   *
+   * Deliberately fire-and-forget and never awaited — a realtime hiccup must not
+   * fail a write that already committed.
+   */
+  private notifyInspectionChanged(user: AuthenticatedUser, inspectionId: string) {
+    try {
+      this.technicianEvents?.publish(user.id, inspectionId, 'UPDATED');
+    } catch {
+      // Best effort. The client still has its poll and pull-to-refresh.
+    }
+  }
 
   async dashboard(user: AuthenticatedUser) {
     const now = new Date();
@@ -434,6 +464,7 @@ export class TechnicianService {
       data: { status: InspectionStatus.IN_PROGRESS, startedAt: new Date() },
       select: technicianInspectionSummarySelect,
     });
+    this.notifyInspectionChanged(user, record.id);
     return this.mapInspection(updated, user.id);
   }
 
@@ -471,6 +502,7 @@ export class TechnicianService {
     // If every recording finished processing before submission, the
     // inspection is immediately ready for human review.
     await this.mediaProcessing.advanceInspection(id);
+    this.notifyInspectionChanged(user, id);
     return this.mapInspection(updated, user.id);
   }
 
@@ -700,6 +732,7 @@ export class TechnicianService {
       return inspectionArea;
     });
 
+    this.notifyInspectionChanged(user, inspectionId);
     return this.mapRoom(room);
   }
 
@@ -729,6 +762,7 @@ export class TechnicianService {
       },
       select: technicianRoomSelect,
     });
+    this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
   }
 
@@ -749,6 +783,7 @@ export class TechnicianService {
       },
       select: technicianRoomSelect,
     });
+    this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
   }
 
@@ -892,6 +927,7 @@ export class TechnicianService {
       for (const key of replaced) await this.mediaStorage.delete(key).catch(() => undefined);
       // Kick off transcription + AI analysis without delaying the upload response.
       this.mediaProcessing.queue(record.id, user.organizationId);
+      this.notifyInspectionChanged(user, area.inspectionId);
       return this.mapUploadedMedia(record, area);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
@@ -1010,6 +1046,7 @@ export class TechnicianService {
       }
       // Transcribe/analyze independently; the area's completion is unaffected.
       this.mediaProcessing.queue(record.id, user.organizationId);
+      this.notifyInspectionChanged(user, area.inspectionId);
       return this.mapUploadedMedia(record, area);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
