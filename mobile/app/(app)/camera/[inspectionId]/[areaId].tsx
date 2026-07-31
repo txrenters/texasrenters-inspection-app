@@ -95,10 +95,8 @@ export default function RoomCameraScreen() {
   const snapshotTypesRef = useRef<PhotoCaptureType[]>([]);
   // Video offsets the technician marked while recording, extracted server-side.
   const frameMarkersRef = useRef<number[]>([]);
-  const motionSupportedRef = useRef(false);
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
-  const [motionResolved, setMotionResolved] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
@@ -121,7 +119,7 @@ export default function RoomCameraScreen() {
   const guidanceState = guidedCaptureState({
     tracker: guidedSensor.tracker,
     recording,
-    sensorSupported: motionResolved ? motionSupportedRef.current : true,
+    sensorSupported: guidedSensor.supported,
     durationSeconds: seconds,
   });
 
@@ -136,7 +134,7 @@ export default function RoomCameraScreen() {
   // Haptic tick at each quarter of the clockwise loop, heavy at completion —
   // progress a technician can feel without looking away from the room.
   useEffect(() => {
-    if (!recording || isAdditional || !motionSupportedRef.current) return;
+    if (!recording || isAdditional || !guidedSensor.supported) return;
     const milestone =
       [100, 75, 50, 25].find(
         (value) => Math.round(rotationProgress(guidedSensor.tracker) * 100) >= value,
@@ -146,7 +144,7 @@ export default function RoomCameraScreen() {
     void Haptics.impactAsync(
       milestone >= 100 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light,
     ).catch(() => undefined);
-  }, [guidedSensor.tracker, isAdditional, recording]);
+  }, [guidedSensor.supported, guidedSensor.tracker, isAdditional, recording]);
 
   // Spoken guidance on state *changes* only, so a screen reader hears the
   // correction once rather than on every sensor sample.
@@ -195,7 +193,7 @@ export default function RoomCameraScreen() {
     const evaluation = evaluateCapture({
       tracker: guidedSensor.trackerRef.current,
       durationSeconds,
-      sensorSupported: motionSupportedRef.current,
+      sensorSupported: guidedSensor.supported,
     });
     const hasOverview = snapshotTypesRef.current.includes('AREA_OVERVIEW');
     return {
@@ -219,7 +217,7 @@ export default function RoomCameraScreen() {
       startHeadingDegrees: guidedSensor.trackerRef.current.startHeadingDegrees,
       endHeadingDegrees: guidedSensor.trackerRef.current.endHeadingDegrees,
       returnedToStart: evaluation.returnedToStart,
-      sensorSupported: motionSupportedRef.current,
+      sensorSupported: guidedSensor.supported,
       sensorConfidence: evaluation.confidence,
       coverageStatus: evaluation.status,
       manualConfirmation: false,
@@ -242,15 +240,10 @@ export default function RoomCameraScreen() {
 
     if (!isAdditional) {
       guidedSensor.reset();
-      // Availability, not permission. The motion prompt asks about physical
-      // activity / fitness, which has nothing to do with reading orientation —
-      // denying it must not turn the 360° guide off.
-      const motionAvailable = await guidedSensor.requestAccess();
-      motionSupportedRef.current = motionAvailable;
-      setMotionResolved(true);
-      if (!motionAvailable) {
-        announce('Motion guidance unavailable. Complete one slow clockwise walkthrough manually.');
-      }
+      // Prompts, but nothing here waits on the answer or on a capability
+      // check — the hook reports guidance as unavailable only if the sensor
+      // actually sends nothing. See use-guided-capture.
+      await guidedSensor.requestAccess();
     }
 
     setRecording(true);
