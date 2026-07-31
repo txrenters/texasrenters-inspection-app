@@ -22,6 +22,7 @@ import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
+import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import {
@@ -202,6 +203,7 @@ export default function InspectionOverviewScreen() {
               Inspection Overview
             </Text>
           </View>
+          <HomeButton />
         </View>
 
         <View className="mx-5 gap-3 rounded-2xl bg-card p-5">

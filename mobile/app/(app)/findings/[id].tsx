@@ -12,6 +12,7 @@ import {
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useFinding } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
@@ -154,6 +155,7 @@ export default function FindingDetailScreen() {
               {item.roomName}
             </Text>
           </View>
+          <HomeButton />
         </View>
 
         <View className={`mx-5 mt-2 rounded-2xl border p-5 ${TONE_SURFACE[tone]}`}>

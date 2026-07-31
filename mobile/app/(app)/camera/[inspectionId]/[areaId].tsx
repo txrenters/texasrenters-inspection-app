@@ -31,6 +31,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { HomeButton } from '@/src/components/HomeButton';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import {
   GUIDED_CAPTURE_POLICY,
@@ -465,6 +466,10 @@ export default function RoomCameraScreen() {
               {isAdditional ? 'Additional evidence clip' : 'Primary room walkthrough'}
             </Text>
           </View>
+          {/* Hidden mid-take: a technician one turn into a walkthrough must not
+              lose it to a mistap, and the back control already doubles as stop
+              while recording. */}
+          {recording ? null : <HomeButton tone="overlay" />}
           <Pressable
             accessibilityLabel="Flashlight"
             accessibilityRole="switch"

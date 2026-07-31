@@ -27,6 +27,7 @@ import {
   useRoomSummaries,
   useUpdateRoom,
 } from '@/src/features/queries';
+import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { areaCompletionGate, deriveAreaRequirements } from '@/src/utils/area-requirements';
@@ -126,6 +127,7 @@ export default function AreaDetailScreen() {
               {item.floorName} · {item.isRequired ? 'Required' : 'Optional'} room
             </Text>
           </View>
+          <HomeButton />
           <View
             className={`rounded-full px-3 py-1 ${
               completionTone === 'chart-3'

@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
+
+import { HomeButton } from '@/src/components/HomeButton';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -116,10 +118,25 @@ export default function RecordingReviewScreen() {
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
       <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 130 }}>
-        <Text className="text-2xl font-bold text-foreground">Review recording</Text>
-        <Text className="mt-1 text-sm text-muted-foreground">
-          {room.data?.name ?? 'Room'} · Stored on this device
-        </Text>
+        <View className="flex-row items-start gap-3">
+          <View className="min-w-0 flex-1">
+            <Text className="text-2xl font-bold text-foreground">Review recording</Text>
+            <Text className="mt-1 text-sm text-muted-foreground">
+              {room.data?.name ?? 'Room'} · Stored on this device
+            </Text>
+          </View>
+          {/* The take is on the device but not submitted; leaving now keeps the
+              file in the queue but abandons this screen's note and confirmation,
+              so it asks first. */}
+          <HomeButton
+            confirm={{
+              title: 'Leave this recording?',
+              detail:
+                'The video stays saved on this device, but the note you have typed here is not kept. You can come back to the area and review it again.',
+              leaveLabel: 'Leave',
+            }}
+          />
+        </View>
         <VideoView
           player={player}
           nativeControls

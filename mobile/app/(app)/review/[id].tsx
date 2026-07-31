@@ -19,6 +19,7 @@ import type { InspectionReportRoom } from '@/src/domain/models';
 import { useInspectionActions, useInspectionReport } from '@/src/features/queries';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { AI_REVIEW_DISCLAIMER } from '@/src/utils/ai-review';
+import { HomeButton } from '@/src/components/HomeButton';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
@@ -216,6 +217,7 @@ export default function InspectionReviewScreen() {
               Verify all evidence before submitting
             </Text>
           </View>
+          <HomeButton />
         </View>
 
         {incompleteRequiredRooms.length > 0 && inspection.status === 'IN_PROGRESS' ? (
