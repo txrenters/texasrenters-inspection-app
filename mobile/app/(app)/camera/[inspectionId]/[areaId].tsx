@@ -231,10 +231,13 @@ export default function RoomCameraScreen() {
 
     if (!isAdditional) {
       guidedSensor.reset();
-      const sensorGranted = await guidedSensor.requestAccess();
-      motionSupportedRef.current = sensorGranted;
+      // Availability, not permission. The motion prompt asks about physical
+      // activity / fitness, which has nothing to do with reading orientation —
+      // denying it must not turn the 360° guide off.
+      const motionAvailable = await guidedSensor.requestAccess();
+      motionSupportedRef.current = motionAvailable;
       setMotionResolved(true);
-      if (!sensorGranted) {
+      if (!motionAvailable) {
         announce('Motion guidance unavailable. Complete one slow clockwise walkthrough manually.');
       }
     }
