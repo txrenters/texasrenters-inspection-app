@@ -1,12 +1,24 @@
-import { Ionicons } from '@expo/vector-icons';
+import {
+  CheckCircle2Icon,
+  GaugeIcon,
+  RefreshCwIcon,
+  Undo2Icon,
+} from 'lucide-react-native';
 import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
+import { registerIcons } from '../lib/icons';
 import {
   rotationProgress,
   type GuidedCaptureState,
   type RotationTracker,
 } from './guided-capture';
+
+// Lucide, not @expo/vector-icons. This file was the only place in the app
+// reaching for Ionicons, and `@expo/vector-icons` is not a declared dependency
+// — it resolved transitively through `expo`, which is why its glyphs rendered
+// as boxes on Android while the other eighteen icon files were fine.
+registerIcons(CheckCircle2Icon, GaugeIcon, RefreshCwIcon, Undo2Icon);
 
 const GUIDANCE_COPY: Record<GuidedCaptureState, { label: string; detail: string }> = {
   READY: {
@@ -51,6 +63,13 @@ const GUIDANCE_COPY: Record<GuidedCaptureState, { label: string; detail: string 
   },
 };
 
+function StateIcon({ complete, state }: { complete: boolean; state: GuidedCaptureState }) {
+  if (complete) return <CheckCircle2Icon color="#FFFFFF" size={18} />;
+  if (state === 'WRONG_DIRECTION') return <Undo2Icon color="#FFFFFF" size={18} />;
+  if (state === 'TOO_FAST') return <GaugeIcon color="#FFFFFF" size={18} />;
+  return <RefreshCwIcon color="#FFFFFF" size={18} />;
+}
+
 export function GuidedCaptureOverlay({
   tracker,
   state,
@@ -72,19 +91,7 @@ export function GuidedCaptureOverlay({
       style={styles.container}
     >
       <View style={[styles.copy, warning && styles.warning, complete && styles.complete]}>
-        <Ionicons
-          color="#FFFFFF"
-          name={
-            complete
-              ? 'checkmark-circle'
-              : state === 'WRONG_DIRECTION'
-                ? 'return-up-back'
-                : state === 'TOO_FAST'
-                  ? 'speedometer-outline'
-                  : 'refresh'
-          }
-          size={18}
-        />
+        <StateIcon complete={complete} state={state} />
         <View style={styles.copyText}>
           <Text numberOfLines={1} style={styles.label}>
             {copy.label}
@@ -119,7 +126,9 @@ export function GuidedCaptureOverlay({
             strokeWidth={4}
           />
         </Svg>
-        <Ionicons color="#FFFFFF" name="refresh" size={17} />
+        {/* Colour is passed as a prop rather than a class: this sits on the
+            camera preview, which has no theme surface behind it. */}
+        <RefreshCwIcon color="#FFFFFF" size={17} />
         <Text style={styles.percent}>
           {state === 'SENSOR_UNAVAILABLE' ? 'GUIDE' : `${Math.round(progress * 100)}%`}
         </Text>
