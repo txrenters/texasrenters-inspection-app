@@ -1,16 +1,27 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useColorScheme } from 'nativewind';
 
 import type { AreaEnvironment } from '../domain/models';
 import { useAddArea } from '../features/queries';
 import { announce } from '../lib/announce';
+import { Loader } from './ui/Loader';
+import type { AddAreaInput } from '../repositories/contracts';
 
 const ENVIRONMENTS: { value: AreaEnvironment; label: string }[] = [
   { value: 'INDOOR', label: 'Indoor' },
   { value: 'OUTDOOR', label: 'Outdoor' },
   { value: 'SEMI_OUTDOOR', label: 'Semi-outdoor' },
 ];
+
+/**
+ * Grace period between confirming and actually writing the area.
+ *
+ * An added area is a draft an administrator has to review, so a mistyped or
+ * accidental one costs somebody else time. Five seconds is long enough to
+ * notice and stop, short enough not to feel like waiting.
+ */
+const UNDO_SECONDS = 5;
 
 /**
  * Lets a technician add an area the floor plan does not have.
@@ -45,45 +56,92 @@ export function AddAreaSheet({
   const [floorName, setFloorName] = useState('');
   const [notes, setNotes] = useState('');
 
-  const trimmedName = name.trim();
-  const canSubmit = Boolean(trimmedName) && !addArea.isPending;
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const queuedRef = useRef<AddAreaInput | null>(null);
 
-  const reset = () => {
+  // Props are read through refs so the countdown effect does not depend on
+  // callback identity: the parent passes inline arrows, and re-running the
+  // effect every render would restart the one-second timer and stall the timer
+  // on screen forever.
+  const callbacks = useRef({ onClose, onAdded });
+  callbacks.current = { onClose, onAdded };
+
+  const trimmedName = name.trim();
+  const counting = countdown !== null;
+  const canSubmit = Boolean(trimmedName) && !addArea.isPending && !counting;
+
+  const reset = useCallback(() => {
     setName('');
     setEnvironment('INDOOR');
     setFloorName('');
     setNotes('');
+    setCountdown(null);
+    queuedRef.current = null;
     addArea.reset();
-  };
+  }, [addArea]);
 
   const close = () => {
     reset();
     onClose();
   };
 
-  const submit = () => {
-    if (!canSubmit) return;
-    addArea.mutate(
-      {
-        name: trimmedName,
-        environment,
-        floorName: floorName.trim() || undefined,
-        notes: notes.trim() || undefined,
-      },
-      {
+  const commit = useCallback(
+    (input: AddAreaInput) => {
+      addArea.mutate(input, {
         onSuccess: (room) => {
-          announce(`${trimmedName} added. Awaiting administrator approval.`);
+          announce(`${input.name} added. Awaiting administrator approval.`);
           const id = room.id;
           reset();
-          onClose();
-          onAdded?.(id);
+          callbacks.current.onClose();
+          callbacks.current.onAdded?.(id);
         },
         // Deliberately no onError: the message is rendered inline below, where
         // it stays on screen next to the field the technician has to change.
         // A duplicate name is the common case and needs a visible correction,
         // not a toast that disappears.
-      },
-    );
+      });
+    },
+    [addArea, reset],
+  );
+
+  // Ticks the grace period down, then writes.
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown <= 0) {
+      const queued = queuedRef.current;
+      queuedRef.current = null;
+      setCountdown(null);
+      if (queued) commit(queued);
+      return;
+    }
+    const timer = setTimeout(() => setCountdown((value) => (value === null ? null : value - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [countdown, commit]);
+
+  // A dismissed sheet must not keep counting toward a write nobody is watching.
+  useEffect(() => {
+    if (!visible) {
+      queuedRef.current = null;
+      setCountdown(null);
+    }
+  }, [visible]);
+
+  const submit = () => {
+    if (!canSubmit) return;
+    queuedRef.current = {
+      name: trimmedName,
+      environment,
+      floorName: floorName.trim() || undefined,
+      notes: notes.trim() || undefined,
+    };
+    setCountdown(UNDO_SECONDS);
+    announce(`Adding ${trimmedName} in ${UNDO_SECONDS} seconds. Cancel is available.`);
+  };
+
+  const cancelPending = () => {
+    queuedRef.current = null;
+    setCountdown(null);
+    announce('Cancelled. Nothing was added.');
   };
 
   return (
@@ -94,6 +152,53 @@ export function AddAreaSheet({
           accessibilityViewIsModal
           className="max-h-[88%] rounded-t-3xl bg-background px-5 pb-10 pt-6"
         >
+          {counting || addArea.isPending ? (
+            <View className="items-center gap-4 py-4">
+              <View className="h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                {counting ? (
+                  <Text
+                    // Announced by the region below, not twice over.
+                    accessibilityElementsHidden
+                    importantForAccessibility="no"
+                    className="text-2xl font-bold text-primary"
+                  >
+                    {countdown}
+                  </Text>
+                ) : (
+                  <Loader size="lg" />
+                )}
+              </View>
+              <View
+                accessibilityLiveRegion="polite"
+                accessibilityRole="progressbar"
+                className="items-center gap-1"
+              >
+                <Text className="text-lg font-bold text-foreground">
+                  Adding “{queuedRef.current?.name ?? trimmedName}”
+                </Text>
+                <Text className="text-center text-sm text-muted-foreground">
+                  {counting
+                    ? `Adding in ${countdown} second${countdown === 1 ? '' : 's'}. Tap cancel to stop.`
+                    : 'Saving…'}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Cancel adding this area"
+                accessibilityRole="button"
+                // Only while the grace period is running: once the request is
+                // in flight there is nothing left to cancel, and offering it
+                // would imply a rollback that will not happen.
+                accessibilityState={{ disabled: !counting }}
+                className={`min-h-12 w-full items-center justify-center rounded-xl border py-3 ${
+                  counting ? 'border-border' : 'border-transparent opacity-0'
+                }`}
+                disabled={!counting}
+                onPress={cancelPending}
+              >
+                <Text className="font-semibold text-foreground">Cancel</Text>
+              </Pressable>
+            </View>
+          ) : (
           <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <Text className="text-xl font-bold text-foreground">Add an area</Text>
             <Text className="mt-2 text-sm leading-5 text-muted-foreground">
@@ -218,6 +323,7 @@ export function AddAreaSheet({
               </Pressable>
             </View>
           </ScrollView>
+          )}
         </View>
       </View>
     </Modal>
