@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,11 +28,6 @@ const PROMPT_VERSION = '2';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
-/**
- * Marker for the informational per-room AI summary. Summaries are context for
- * reviewers, not chargeable findings: queries exclude them from the review
- * queue and from every pending-review count/gate.
- */
 /** Hard ceiling on frames cut from one recording, whatever the client asked for. */
 const MAX_EXTRACTED_FRAMES = 60;
 
@@ -57,6 +52,11 @@ export function readFrameMarkers(captureSummary: unknown, durationSeconds: numbe
     .slice(0, MAX_EXTRACTED_FRAMES);
 }
 
+/**
+ * Marker for the informational per-room AI summary. Summaries are context for
+ * reviewers, not chargeable findings: queries exclude them from the review
+ * queue and from every pending-review count/gate.
+ */
 export const ROOM_SUMMARY_TITLE = 'Room condition summary';
 
 /** Prisma where-fragment matching summary rows. */
@@ -420,7 +420,7 @@ export class MediaProcessingService implements OnModuleInit {
         if (existing) continue;
 
         const output = join(directory, `frame-${atMs}.jpg`);
-        const ok = await new Promise<boolean>((resolvePromise) => {
+        await new Promise<void>((resolvePromise) => {
           const child = spawn(ffmpegPath, [
             '-y',
             // Before -i: seeks by keyframe, which is far cheaper than decoding
@@ -435,36 +435,54 @@ export class MediaProcessingService implements OnModuleInit {
             '3',
             output,
           ]);
-          child.on('error', () => resolvePromise(false));
-          child.on('exit', (code) => resolvePromise(code === 0));
+          child.on('error', () => resolvePromise());
+          child.on('exit', () => resolvePromise());
         });
-        if (!ok) continue;
 
-        const storageKey = `${media.organizationId}/${media.inspectionId}/${media.inspectionAreaId}/photos/${randomUUID()}.jpg`;
-        await this.storage.putFromFile(storageKey, output, 'image/jpeg');
-        await this.prisma.inspectionPhoto.create({
-          data: {
-            organizationId: media.organizationId,
-            inspectionId: media.inspectionId,
-            inspectionAreaId: media.inspectionAreaId,
-            capturedById: media.technicianId,
-            provider: this.storage.providerName(),
-            storageKey,
-            // The first marked frame stands in for the room overview; later
-            // ones are context for whatever the technician was pointing at.
-            captureType:
-              index === 0 ? PhotoCaptureType.AREA_OVERVIEW : PhotoCaptureType.FINDING_CONTEXT,
-            sequenceNumber: index + 1,
-            mimeType: 'image/jpeg',
-            idempotencyKey,
-            metadata: {
-              captureSource: 'VIDEO_FRAME_EXTRACTION',
-              videoTimestampMs: atMs,
-              sourceMediaId: media.id,
+        // The written file decides, not the exit code. Seeking past the end of
+        // a clip makes ffmpeg exit 0 having produced nothing, so trusting the
+        // status would send a missing path to storage and abort the remaining
+        // markers. `durationSeconds` is client-reported and can overstate the
+        // real video, so this case is reachable in practice.
+        const bytes = await stat(output).catch(() => null);
+        if (!bytes?.size) continue;
+
+        // Per marker, so one unwritable frame costs only its own still rather
+        // than every later one in the same recording.
+        try {
+          const storageKey = `${media.organizationId}/${media.inspectionId}/${media.inspectionAreaId}/photos/${randomUUID()}.jpg`;
+          await this.storage.putFromFile(storageKey, output, 'image/jpeg');
+          await this.prisma.inspectionPhoto.create({
+            data: {
+              organizationId: media.organizationId,
+              inspectionId: media.inspectionId,
+              inspectionAreaId: media.inspectionAreaId,
+              capturedById: media.technicianId,
+              provider: this.storage.providerName(),
+              storageKey,
+              // The first marked frame stands in for the room overview; later
+              // ones are context for whatever the technician was pointing at.
+              captureType:
+                index === 0 ? PhotoCaptureType.AREA_OVERVIEW : PhotoCaptureType.FINDING_CONTEXT,
+              sequenceNumber: index + 1,
+              mimeType: 'image/jpeg',
+              sizeBytes: bytes.size,
+              idempotencyKey,
+              metadata: {
+                captureSource: 'VIDEO_FRAME_EXTRACTION',
+                videoTimestampMs: atMs,
+                sourceMediaId: media.id,
+              },
             },
-          },
-        });
-        extracted += 1;
+          });
+          extracted += 1;
+        } catch (error) {
+          this.logger.warn(
+            `Frame at ${atMs}ms not stored for ${media.id}: ${
+              error instanceof Error ? error.message : 'unknown error'
+            }`,
+          );
+        }
       }
       if (extracted) await this.event(media.id, 'FRAMES_EXTRACTED', { count: extracted });
     } catch (error) {
