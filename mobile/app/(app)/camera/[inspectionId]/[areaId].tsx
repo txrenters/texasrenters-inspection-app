@@ -438,12 +438,17 @@ export default function RoomCameraScreen() {
         onMountError={(event) => setError(event.message)}
       />
       <View className="absolute inset-x-0 top-0 h-44 bg-black/45" />
-      <View className="absolute inset-x-0 bottom-0 h-72 bg-black/60" />
+      <View className="absolute inset-x-0 bottom-0 h-64 bg-black/60" />
       <View
         style={{ ...StyleSheet.absoluteFillObject, pointerEvents: 'none' }}
-        className="items-center justify-center"
+        // Padded rather than centred on the whole screen. The chrome is not
+        // symmetrical — the control stack is far taller than the header — so a
+        // true centre put the framing grid underneath the bottom overlay, with
+        // its corner running through the shutter row. Centring inside the
+        // padded band keeps the guides over live picture only.
+        className="items-center justify-center pb-60 pt-24"
       >
-        <View className="h-[48%] w-[82%] rounded-3xl border border-white/30">
+        <View className="h-[42%] w-[84%] rounded-3xl border border-white/30">
           <View className="absolute left-1/3 top-0 h-full w-px bg-white/15" />
           <View className="absolute right-1/3 top-0 h-full w-px bg-white/15" />
           <View className="absolute left-0 top-1/3 h-px w-full bg-white/15" />
@@ -451,6 +456,11 @@ export default function RoomCameraScreen() {
         </View>
       </View>
       <SafeAreaView edges={['top', 'bottom']} className="flex-1 justify-between">
+        {/* Top group: identity first, then live coaching directly beneath it.
+            Guidance used to sit at the bottom among the controls, where the one
+            thing a technician reads while turning was furthest from their eye
+            line and competing with the shutter row. */}
+        <View>
         <View className="flex-row items-center gap-3 px-5 py-3">
           <Pressable
             // While recording this button stops the take rather than leaving,
@@ -504,31 +514,33 @@ export default function RoomCameraScreen() {
           </Pressable>
         </View>
 
-        <View className="items-center px-5 pb-4">
           {/* Live 360° guidance. Only while recording a primary walkthrough, so
               the idle screen keeps its uncluttered layout; additional evidence
               clips are free-form and get no rotation coaching. */}
           {recording && !isAdditional ? (
-            <View className="mb-4 w-full" pointerEvents="none">
+            <View className="px-5 pt-1" pointerEvents="none">
               <GuidedCaptureOverlay state={guidanceState} tracker={guidedSensor.tracker} />
             </View>
           ) : null}
-          {/* The elapsed time is the only signal that recording is actually
-              running. Sighted users get the red REC badge; this gives everyone
-              else the same information without spamming every tick. */}
+        </View>
+
+        <View className="items-center px-5 pb-4">
+          {/* Elapsed time is the only signal that recording is actually running.
+              Kept below the guidance banner: the coaching is what changes
+              moment to moment, the clock is reassurance. */}
           <View
             accessibilityLabel={
               recording ? `Recording, ${formatDuration(seconds)} elapsed` : 'Ready to record'
             }
             accessibilityRole="timer"
-            className="mb-5 rounded-full bg-black/65 px-5 py-2"
+            className="mb-6 rounded-full bg-black/65 px-5 py-2"
           >
             <Text className="text-lg font-bold text-white">
               {formatDuration(seconds)} {recording ? 'REC' : 'READY'}
             </Text>
           </View>
-          <View className="mb-4 w-full">
-            <View className="mb-2 flex-row items-end justify-between">
+          <View className="mb-6 w-full">
+            <View className="mb-2.5 flex-row items-end justify-between">
               <View>
                 <Text className="text-[10px] font-bold uppercase tracking-[2px] text-white/60">
                   Next snapshot
@@ -597,78 +609,102 @@ export default function RoomCameraScreen() {
             <View
               accessibilityLiveRegion="assertive"
               accessibilityRole="alert"
-              className="mb-4 w-full rounded-xl bg-red-950/80 px-4 py-3"
+              className="mb-5 w-full rounded-xl bg-red-950/80 px-4 py-3"
             >
               <Text className="text-center text-xs text-red-100">{error}</Text>
             </View>
           ) : null}
-          <View className="mb-5 flex-row items-center justify-center gap-8">
-            {/* Grouped, or VoiceOver reads "3" and "photos" as two stops. */}
-            <View
-              accessible
-              accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
-              className="items-center"
-            >
-              <Text className="text-2xl font-bold text-white">{photoCount}</Text>
-              <Text className="text-xs text-white/70">photos</Text>
+          {/* One row for the three actions, each with its own caption beneath.
+              Previously the shutter shared a row with a bare photo tally while
+              the record button sat alone underneath — two stacked rows that
+              read as unrelated groups and pushed the controls into the framing
+              grid. Equal thirds keep record optically centred whatever the side
+              captions say. */}
+          <View className="w-full flex-row items-start justify-between">
+            <View className="flex-1 items-center">
+              <Pressable
+                accessibilityHint={
+                  captureType === 'AREA_OVERVIEW'
+                    ? 'Captures a wide shot of the area'
+                    : 'Captures a close-up for a finding'
+                }
+                accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
+                accessibilityRole="button"
+                accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
+                className="h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10"
+                onPress={() => void takeSnapshot()}
+                disabled={!ready || capturingPhoto}
+              >
+                {capturingPhoto ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <CameraIcon size={24} className="text-white" />
+                )}
+              </Pressable>
+              {/* One accessible node, or VoiceOver reads the count and the word
+                  "photos" as two separate stops. */}
+              <Text
+                accessible
+                accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
+                className="mt-2 text-xs font-medium text-white/70"
+              >
+                {photoCount} photo{photoCount === 1 ? '' : 's'}
+              </Text>
             </View>
-            <Pressable
-              accessibilityHint={
-                captureType === 'AREA_OVERVIEW'
-                  ? 'Captures a wide shot of the area'
-                  : 'Captures a close-up for a finding'
-              }
-              accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
-              accessibilityRole="button"
-              accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
-              className="h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-white/15"
-              onPress={() => void takeSnapshot()}
-              disabled={!ready || capturingPhoto}
-            >
-              {capturingPhoto ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <CameraIcon size={27} className="text-white" />
-              )}
-            </Pressable>
-            <Pressable
-              accessibilityLabel="Room capture guide"
-              accessibilityRole="button"
-              className="min-h-11 min-w-11 items-center justify-center"
-              onPress={() =>
-                Alert.alert(
-                  'Room capture guide',
-                  'Start with a wide room overview. Move slowly clockwise, narrate visible conditions, then capture focused context for any finding.',
-                )
-              }
-            >
-              <InfoIcon size={22} className="text-white" />
-              <Text className="mt-1 text-center text-xs text-white/70">Guide</Text>
-            </Pressable>
+
+            <View className="flex-1 items-center">
+              <Pressable
+                accessibilityHint={
+                  recording ? 'Ends the take and opens the review screen' : undefined
+                }
+                accessibilityLabel={
+                  stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
+                }
+                accessibilityRole="button"
+                accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
+                className="h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500"
+                disabled={!ready || stopping}
+                onPress={recording ? stopRecording : () => void beginRecording()}
+              >
+                {recording ? (
+                  <SquareIcon size={26} className="text-white" />
+                ) : (
+                  <View className="h-14 w-14 rounded-full bg-red-500" />
+                )}
+              </Pressable>
+              {/* importantForAccessibility="no": the button above already says
+                  this, and leaving it focusable makes the technician swipe past
+                  a duplicate of the control they just heard. */}
+              <Text
+                importantForAccessibility="no"
+                className="mt-2 text-xs font-semibold text-white"
+              >
+                {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
+              </Text>
+            </View>
+
+            <View className="flex-1 items-center">
+              <Pressable
+                accessibilityLabel="Room capture guide"
+                accessibilityRole="button"
+                className="h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-black/30"
+                onPress={() =>
+                  Alert.alert(
+                    'Room capture guide',
+                    'Start with a wide room overview. Move slowly clockwise, narrate visible conditions, then capture focused context for any finding.',
+                  )
+                }
+              >
+                <InfoIcon size={22} className="text-white" />
+              </Pressable>
+              <Text
+                importantForAccessibility="no"
+                className="mt-2 text-xs font-medium text-white/70"
+              >
+                Guide
+              </Text>
+            </View>
           </View>
-          <Pressable
-            accessibilityHint={recording ? 'Ends the take and opens the review screen' : undefined}
-            accessibilityLabel={
-              stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
-            }
-            accessibilityRole="button"
-            accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
-            className="h-20 w-20 items-center justify-center rounded-full border-4 border-white bg-red-500"
-            disabled={!ready || stopping}
-            onPress={recording ? stopRecording : () => void beginRecording()}
-          >
-            {recording ? (
-              <SquareIcon size={27} className="text-white" />
-            ) : (
-              <View className="h-14 w-14 rounded-full bg-red-500" />
-            )}
-          </Pressable>
-          {/* importantForAccessibility="no": the label above already conveys
-              this, and leaving it focusable makes the technician swipe past a
-              duplicate of the control they just heard. */}
-          <Text importantForAccessibility="no" className="mt-2 text-sm font-semibold text-white">
-            {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
-          </Text>
         </View>
       </SafeAreaView>
     </View>
