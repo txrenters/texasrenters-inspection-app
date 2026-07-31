@@ -25,6 +25,7 @@ import { evaluateUploadGate } from '@/src/lib/connectivity';
 import { clearErrorLog, subscribeToErrorLog, type LoggedError } from '@/src/lib/error-log';
 import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
+import { MotionDiagnostics } from '@/src/capture/MotionDiagnostics';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
@@ -266,6 +267,8 @@ export default function DiagnosticsScreen() {
             status="ok"
           />
         </View>
+
+        <MotionDiagnostics />
 
         <View className="mx-5 mt-4 flex-row gap-3">
           <Pressable
