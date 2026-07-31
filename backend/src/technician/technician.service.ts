@@ -96,6 +96,10 @@ function captureSummaryFromDto(dto: TechnicianMediaUploadDto): Prisma.InputJsonV
     manualConfirmation: dto.manualConfirmation ?? false,
     evidenceComplete: dto.evidenceComplete ?? false,
     snapshotCount: dto.snapshotCount ?? 0,
+    // Read back by media processing, which cuts a still from the video at each
+    // offset. Android cannot photograph mid-recording, so this is how a
+    // technician gets stills without stopping the walkthrough.
+    frameMarkersMs: dto.frameMarkersMs ?? [],
     findingMarkerCount: dto.findingMarkerCount ?? 0,
   };
 }

@@ -91,6 +91,8 @@ export default function RoomCameraScreen() {
   const captureSessionIdRef = useRef(newCaptureSessionId());
   const sessionStartedAtRef = useRef(new Date().toISOString());
   const snapshotTypesRef = useRef<PhotoCaptureType[]>([]);
+  // Video offsets the technician marked while recording, extracted server-side.
+  const frameMarkersRef = useRef<number[]>([]);
   const motionSupportedRef = useRef(false);
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
@@ -227,6 +229,7 @@ export default function RoomCameraScreen() {
     setSeconds(0);
     sessionStartedAtRef.current = new Date().toISOString();
     guidanceMilestoneRef.current = 0;
+    frameMarkersRef.current = [];
     previousGuidanceRef.current = null;
 
     if (!isAdditional) {
@@ -265,6 +268,7 @@ export default function RoomCameraScreen() {
           durationSeconds: Math.max(1, secondsRef.current),
           sizeBytes: stored.sizeBytes,
           recordingType: isAdditional ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
+          frameMarkersMs: frameMarkersRef.current,
           // Rotation coverage travels with the recording so the backend can
           // judge walkthrough completeness alongside the video itself.
           captureSummary: createCaptureSummary(Math.max(1, secondsRef.current)),
@@ -315,7 +319,19 @@ export default function RoomCameraScreen() {
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
     if (recording && Platform.OS === 'android') {
-      setError('On Android, pause after the video to take a still photo for this room.');
+      // Android cannot photograph mid-recording: expo-camera binds either the
+      // image-capture or the video-capture use case, never both, so
+      // takePictureAsync has nothing to shoot with while a video is running.
+      // Rather than making the technician stop the walkthrough — the one thing
+      // a continuous 360° capture must not do — the shutter records the moment
+      // and the server cuts that frame out of the uploaded video.
+      const atMs = secondsRef.current * 1000;
+      frameMarkersRef.current = [...frameMarkersRef.current, atMs];
+      snapshotTypesRef.current.push(captureType);
+      setPhotoCount((count) => count + 1);
+      if (captureType === 'AREA_OVERVIEW') setCaptureType('FINDING_CONTEXT');
+      void Haptics.selectionAsync().catch(() => undefined);
+      announce(`Moment marked at ${formatDuration(secondsRef.current)}. Keep recording.`);
       return;
     }
     setCapturingPhoto(true);

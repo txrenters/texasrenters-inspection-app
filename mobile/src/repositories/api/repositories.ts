@@ -823,6 +823,12 @@ export class ApiUploadRepository implements UploadRepository {
         if (media.captureSummary.endHeadingDegrees !== undefined)
           parameters.endHeadingDegrees = String(media.captureSummary.endHeadingDegrees);
       }
+      // Moments the technician marked while the camera kept rolling. Sent as a
+      // comma-separated list because the upload is multipart form data, where
+      // every parameter is a string anyway.
+      if (!isAdditional && media.frameMarkersMs?.length) {
+        parameters.frameMarkersMs = media.frameMarkersMs.join(',');
+      }
       if (isAdditional) {
         parameters.label = (pending.label ?? media.label ?? 'Additional clip').slice(0, 120);
         if (pending.category ?? media.category)

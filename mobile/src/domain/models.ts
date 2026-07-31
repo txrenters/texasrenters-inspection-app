@@ -226,6 +226,15 @@ export interface LocalMedia {
   recordedAt: string;
   note: string;
   captureSummary?: GuidedCaptureSummary;
+  /**
+   * Video offsets, in milliseconds, where the technician asked for a still.
+   *
+   * Android cannot photograph while recording — expo-camera binds either the
+   * image or the video use case, never both — so the shutter records the moment
+   * instead of interrupting the walkthrough, and the server cuts those frames
+   * out of the uploaded video afterwards.
+   */
+  frameMarkersMs?: number[];
 }
 
 export type PhotoCaptureType =
