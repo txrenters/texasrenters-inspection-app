@@ -446,7 +446,7 @@ export default function RoomCameraScreen() {
         // true centre put the framing grid underneath the bottom overlay, with
         // its corner running through the shutter row. Centring inside the
         // padded band keeps the guides over live picture only.
-        className="items-center justify-center pb-60 pt-24"
+        className="items-center justify-center pb-60 pt-36"
       >
         <View className="h-[42%] w-[84%] rounded-3xl border border-white/30">
           <View className="absolute left-1/3 top-0 h-full w-px bg-white/15" />
@@ -516,9 +516,13 @@ export default function RoomCameraScreen() {
 
           {/* Live 360° guidance. Only while recording a primary walkthrough, so
               the idle screen keeps its uncluttered layout; additional evidence
-              clips are free-form and get no rotation coaching. */}
+              clips are free-form and get no rotation coaching.
+
+              `pt-7` drops it clear of the header: flush against the room name
+              the banner read as part of the title bar, and sat high enough to
+              crowd the status bar. */}
           {recording && !isAdditional ? (
-            <View className="px-5 pt-1" pointerEvents="none">
+            <View className="px-5 pt-7" pointerEvents="none">
               <GuidedCaptureOverlay state={guidanceState} tracker={guidedSensor.tracker} />
             </View>
           ) : null}
