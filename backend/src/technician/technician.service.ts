@@ -578,54 +578,83 @@ export class TechnicianService {
     const name = input.name.trim();
     const floorName = input.floorName?.trim() || 'Added areas';
 
-    // Bridge the Propertyware building to an internal Property row (shared id).
-    await this.prisma.property.upsert({
-      where: { id: buildingId },
-      update: {},
-      create: {
-        id: buildingId,
-        organizationId: user.organizationId,
-        name: building.name,
-        addressLine1: building.addressLine1 || 'Address not provided',
-        city: building.city || 'Not provided',
-        state: building.state || 'TX',
-        postalCode: building.postalCode || 'Not provided',
-      },
-    });
+    // Issued together, not one after another.
+    //
+    // None of these four depends on another's result, but they used to run in
+    // series. Every statement is a round trip to a remote pooler costing a few
+    // hundred milliseconds, so adding one area took ~14s of almost entirely
+    // idle waiting — past the app's 15s request timeout. The technician saw a
+    // failure for an area that had in fact been created, and retrying then hit
+    // the duplicate check below.
+    const [, duplicate, highest, existingFloor] = await Promise.all([
+      // Bridge the Propertyware building to an internal Property row (shared id).
+      this.prisma.property.upsert({
+        where: { id: buildingId },
+        update: {},
+        create: {
+          id: buildingId,
+          organizationId: user.organizationId,
+          name: building.name,
+          addressLine1: building.addressLine1 || 'Address not provided',
+          city: building.city || 'Not provided',
+          state: building.state || 'TX',
+          postalCode: building.postalCode || 'Not provided',
+        },
+      }),
+      this.prisma.propertyArea.findFirst({
+        where: {
+          propertyId: buildingId,
+          unitId,
+          name: { equals: name, mode: 'insensitive' },
+          floor: { name: { equals: floorName, mode: 'insensitive' } },
+        },
+        // Whether this area is already part of *this* inspection decides
+        // between an idempotent retry and a genuine name collision.
+        select: {
+          id: true,
+          inspectionAreas: { where: { inspectionId }, select: { id: true }, take: 1 },
+        },
+      }),
+      this.prisma.propertyArea.aggregate({
+        where: { propertyId: buildingId, unitId },
+        _max: { inspectionOrder: true },
+      }),
+      this.prisma.propertyFloor.findFirst({
+        where: { propertyId: buildingId, unitId, name: { equals: floorName, mode: 'insensitive' } },
+        select: { id: true },
+      }),
+    ]);
 
-    const duplicate = await this.prisma.propertyArea.findFirst({
-      where: {
-        propertyId: buildingId,
-        unitId,
-        name: { equals: name, mode: 'insensitive' },
-        floor: { name: { equals: floorName, mode: 'insensitive' } },
-      },
-      select: { id: true },
-    });
-    if (duplicate)
+    if (duplicate) {
+      const [alreadyInThisInspection] = duplicate.inspectionAreas;
+      // A retry after the first attempt timed out mid-flight. The area exists
+      // and is already part of this inspection, so return what was created
+      // rather than telling the technician their own area is a duplicate —
+      // the same idempotency rule room-video upload already follows.
+      if (alreadyInThisInspection) {
+        const existing = await this.prisma.inspectionArea.findUniqueOrThrow({
+          where: { id: alreadyInThisInspection.id },
+          select: technicianRoomSelect,
+        });
+        return this.mapRoom(existing);
+      }
       throw new ApplicationError(
         409,
         'DUPLICATE_AREA',
         'An area with this name already exists on that floor.',
       );
+    }
 
-    const highest = await this.prisma.propertyArea.aggregate({
-      where: { propertyId: buildingId, unitId },
-      _max: { inspectionOrder: true },
-    });
     const nextOrder = (highest._max.inspectionOrder ?? 0) + 1;
 
     const floor =
-      (await this.prisma.propertyFloor.findFirst({
-        where: { propertyId: buildingId, unitId, name: { equals: floorName, mode: 'insensitive' } },
-        select: { id: true },
-      })) ??
+      existingFloor ??
       (await this.prisma.propertyFloor.create({
         data: { propertyId: buildingId, unitId, name: floorName, sortOrder: nextOrder },
         select: { id: true },
       }));
 
-    const roomId = await this.prisma.$transaction(async (tx) => {
+    const room = await this.prisma.$transaction(async (tx) => {
       const area = await tx.propertyArea.create({
         data: {
           propertyId: buildingId,
@@ -649,7 +678,10 @@ export class TechnicianService {
           propertyAreaId: area.id,
           completionStatus: InspectionAreaCompletionStatus.PENDING,
         },
-        select: { id: true },
+        // Selected here rather than re-read afterwards: the row was just
+        // written inside this transaction, so a second round trip to fetch it
+        // back bought nothing but latency.
+        select: technicianRoomSelect,
       });
       await tx.auditLog.create({
         data: {
@@ -661,13 +693,9 @@ export class TechnicianService {
           metadata: { inspectionId, environment: input.environment, category: input.category ?? null },
         },
       });
-      return inspectionArea.id;
+      return inspectionArea;
     });
 
-    const room = await this.prisma.inspectionArea.findUniqueOrThrow({
-      where: { id: roomId },
-      select: technicianRoomSelect,
-    });
     return this.mapRoom(room);
   }
 

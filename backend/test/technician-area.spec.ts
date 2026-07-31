@@ -51,7 +51,9 @@ const roomRecord = {
 function buildPrisma(overrides: Record<string, unknown> = {}) {
   const tx = {
     propertyArea: { create: jest.fn().mockResolvedValue({ id: 'area-1' }) },
-    inspectionArea: { create: jest.fn().mockResolvedValue({ id: 'room-1' }) },
+    // Returns the whole selected row: createArea now selects the room inside
+    // the transaction instead of re-reading it afterwards.
+    inspectionArea: { create: jest.fn().mockResolvedValue(roomRecord) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
   const prisma = {
@@ -112,7 +114,7 @@ describe('technician manual area creation', () => {
   it('rejects a duplicate area name on the same floor', async () => {
     const { prisma } = buildPrisma({
       propertyArea: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'existing' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'existing', inspectionAreas: [] }),
         aggregate: jest.fn().mockResolvedValue({ _max: { inspectionOrder: 4 } }),
       },
     });
@@ -122,6 +124,60 @@ describe('technician manual area creation', () => {
         environment: 'OUTDOOR' as never,
       }),
     ).rejects.toMatchObject({ status: 409, code: 'DUPLICATE_AREA' });
+  });
+
+  it('returns the existing area when a timed-out attempt is retried', async () => {
+    // The mobile client gives up after 15s. Adding an area used to take ~14s of
+    // serial round trips, so the write landed while the phone was already
+    // showing a failure — and the retry then hit DUPLICATE_AREA for the
+    // technician's own area. If it is already part of this inspection, hand it
+    // back instead.
+    const { prisma, tx } = buildPrisma({
+      propertyArea: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: 'existing', inspectionAreas: [{ id: 'room-1' }] }),
+        aggregate: jest.fn().mockResolvedValue({ _max: { inspectionOrder: 4 } }),
+      },
+    });
+
+    const result = await service(prisma).createArea(technician, 'insp-1', {
+      name: 'Backyard',
+      environment: 'OUTDOOR' as never,
+    });
+
+    expect(result).toMatchObject({ name: 'Backyard', source: 'TECHNICIAN' });
+    // Nothing written twice: no second area, no second audit entry.
+    expect(tx.propertyArea.create).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a name reused from a different inspection', async () => {
+    // Same name on the same floor, but not part of this inspection — a real
+    // collision, not a retry, and it must keep failing.
+    const { prisma } = buildPrisma({
+      propertyArea: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'existing', inspectionAreas: [] }),
+        aggregate: jest.fn().mockResolvedValue({ _max: { inspectionOrder: 4 } }),
+      },
+    });
+    await expect(
+      service(prisma).createArea(technician, 'insp-1', {
+        name: 'Backyard',
+        environment: 'OUTDOOR' as never,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'DUPLICATE_AREA' });
+  });
+
+  it('does not re-read the room it just wrote', async () => {
+    // Every avoided round trip is a few hundred milliseconds against the
+    // pooler, which is the entire reason this endpoint blew the client timeout.
+    const { prisma } = buildPrisma();
+    await service(prisma).createArea(technician, 'insp-1', {
+      name: 'Backyard',
+      environment: 'OUTDOOR' as never,
+    });
+    expect(prisma.inspectionArea.findUniqueOrThrow).not.toHaveBeenCalled();
   });
 
   it('refuses when the inspection has no linked property', async () => {
