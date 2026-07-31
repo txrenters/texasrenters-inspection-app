@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CameraView,
   type CameraType,
@@ -13,7 +13,7 @@ import {
   CameraIcon,
   FocusIcon,
   ImageIcon,
-  InfoIcon,
+  ListChecksIcon,
   RotateCcwIcon,
   SquareIcon,
   ZapIcon,
@@ -21,7 +21,6 @@ import {
 } from 'lucide-react-native';
 import {
   ActivityIndicator,
-  Alert,
   Linking,
   Platform,
   Pressable,
@@ -32,6 +31,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { HomeButton } from '@/src/components/HomeButton';
+import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
+import { checklistForArea, checklistProgress } from '@/src/capture/area-checklist';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import {
   GUIDED_CAPTURE_POLICY,
@@ -56,7 +57,7 @@ registerIcons(
   CameraIcon,
   FocusIcon,
   ImageIcon,
-  InfoIcon,
+  ListChecksIcon,
   RotateCcwIcon,
   SquareIcon,
   ZapIcon,
@@ -108,6 +109,8 @@ export default function RoomCameraScreen() {
   const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
   const [photoCount, setPhotoCount] = useState(0);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
+  const [checklistOpen, setChecklistOpen] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
@@ -116,6 +119,14 @@ export default function RoomCameraScreen() {
   const isAdditional = recordingType === 'ADDITIONAL_ISSUE';
   const hasPermissions = Boolean(cameraPermission?.granted && microphonePermission?.granted);
   const guidedSensor = useGuidedCaptureSensor(recording && !isAdditional);
+  // Derived from the area rather than stored: the real lists will arrive from
+  // the property's inspection template, and keeping this a pure function of the
+  // room means swapping the source later touches one module.
+  const checklist = useMemo(
+    () => checklistForArea({ name: room.data?.name ?? '', environment: room.data?.environment }),
+    [room.data?.name, room.data?.environment],
+  );
+  const checklistCoverage = checklistProgress(checklist, checkedItems);
   const guidanceState = guidedCaptureState({
     tracker: guidedSensor.tracker,
     recording,
@@ -682,28 +693,41 @@ export default function RoomCameraScreen() {
 
             <View className="flex-1 items-center">
               <Pressable
-                accessibilityLabel="Room capture guide"
+                accessibilityHint="Opens the coverage checklist for this area"
+                accessibilityLabel={`Area checklist, ${checklistCoverage.covered} of ${checklistCoverage.total} covered`}
                 accessibilityRole="button"
                 className="h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-black/30"
-                onPress={() =>
-                  Alert.alert(
-                    'Room capture guide',
-                    'Start with a wide room overview. Move slowly clockwise, narrate visible conditions, then capture focused context for any finding.',
-                  )
-                }
+                onPress={() => setChecklistOpen(true)}
               >
-                <InfoIcon size={22} className="text-white" />
+                <ListChecksIcon size={22} className="text-white" />
               </Pressable>
+              {/* The count is the point: a technician glancing down should see
+                  how much of the area they still have to cover without opening
+                  anything. */}
               <Text
                 importantForAccessibility="no"
                 className="mt-2 text-xs font-medium text-white/70"
               >
-                Guide
+                {checklistCoverage.covered}/{checklistCoverage.total} list
               </Text>
             </View>
           </View>
         </View>
       </SafeAreaView>
+
+      <AreaChecklistSheet
+        areaName={room.data?.name ?? 'Area'}
+        checkedIds={checkedItems}
+        items={checklist}
+        onClose={() => setChecklistOpen(false)}
+        onToggle={(id) =>
+          setCheckedItems((current) =>
+            current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+          )
+        }
+        recording={recording}
+        visible={checklistOpen}
+      />
     </View>
   );
 }
