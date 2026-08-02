@@ -23,8 +23,10 @@ import { useFindings, useInspection, useInspectionActions, useRooms } from '@/sr
 import { registerIcons } from '@/src/lib/icons';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
+import { PriorityAuditList } from '@/src/components/PriorityAuditList';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
+import { buildPriorityChecklist, summaryCoverage } from '@/src/utils/inspection-audit';
 import {
   deriveAreaStatus,
   pickUpNextArea,
@@ -173,6 +175,11 @@ export default function InspectionOverviewScreen() {
   // submitted the evidence set is fixed, and adding an area then would mean
   // handing review a room nobody captured.
   const canAddArea = item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS';
+  // The audit ordered by what still needs attention, plus the areas that
+  // finished without the AI producing anything — a gap the pipeline cannot
+  // report on itself.
+  const priorityItems = buildPriorityChecklist(findingList);
+  const coverage = summaryCoverage(roomList, findingList);
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -335,6 +342,15 @@ export default function InspectionOverviewScreen() {
             </Text>
           </View>
         ) : null}
+
+        <PriorityAuditList
+          coverage={coverage}
+          items={priorityItems}
+          onOpenArea={(roomId) => router.push(`/areas/${roomId}`)}
+          onOpenFinding={(findingId) =>
+            router.push(`/findings/${findingId}?inspectionId=${id}`)
+          }
+        />
 
         <View className="mt-5">
           <Text className="mb-3 px-5 text-lg font-semibold text-foreground">Findings</Text>
