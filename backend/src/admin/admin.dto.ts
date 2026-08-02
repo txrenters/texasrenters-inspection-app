@@ -1,6 +1,7 @@
 import { AiProvider, AreaCategory, AreaEnvironment, InspectionType } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsBoolean,
@@ -296,6 +297,38 @@ export class CreatePropertyAreaDto {
   @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
   @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+}
+
+/** Upper bound on keywords per item — a guard against a pasted wall of text. */
+const MAX_CHECKLIST_KEYWORDS = 25;
+
+export class CreateAreaChecklistItemDto {
+  @IsString() @MinLength(1) @MaxLength(200) label!: string;
+  /**
+   * Spoken words that count as covering this item.
+   *
+   * Lowercased and de-duplicated on write so matching never depends on how an
+   * administrator happened to type them, and so the same word twice does not
+   * read as two ways to satisfy the item.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_CHECKLIST_KEYWORDS)
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  keywords?: string[];
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) sortOrder?: number;
+}
+
+export class UpdateAreaChecklistItemDto {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(200) label?: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_CHECKLIST_KEYWORDS)
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  keywords?: string[];
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) sortOrder?: number;
 }
 
 export class UploadFloorPlanDto {

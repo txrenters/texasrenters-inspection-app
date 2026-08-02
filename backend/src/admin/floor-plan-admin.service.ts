@@ -9,7 +9,9 @@ import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import type {
+  CreateAreaChecklistItemDto,
   CreatePropertyAreaDto,
+  UpdateAreaChecklistItemDto,
   UpdateAreaMarkerDto,
   UpdatePropertyAreaDto,
 } from './admin.dto';
@@ -154,6 +156,17 @@ function mapArea(row: PropertyAreaRow) {
       : null,
     boundingBox: bbox,
   };
+}
+
+/**
+ * Lowercased, trimmed and de-duplicated.
+ *
+ * Matching must not depend on how an administrator happened to type a word, and
+ * the same keyword twice does not mean two ways to satisfy an item.
+ */
+function normalizeKeywords(keywords: string[] | undefined): string[] {
+  if (!keywords?.length) return [];
+  return [...new Set(keywords.map((word) => word.trim().toLowerCase()).filter(Boolean))];
 }
 
 @Injectable()
@@ -1093,6 +1106,154 @@ export class FloorPlanAdminService {
         'Select an active unit belonging to this property.',
       );
     return unit;
+  }
+
+  /**
+   * The coverage checklist an administrator has authored for one area.
+   *
+   * Archived items are excluded here but never deleted: an inspection that
+   * already recorded coverage against an item must keep resolving it, so
+   * removal is a soft archive rather than a delete.
+   */
+  async areaChecklist(user: AuthenticatedUser, areaId: string) {
+    await this.requireArea(user.organizationId, areaId);
+    return this.prisma.areaChecklistItem.findMany({
+      where: { propertyAreaId: areaId, archivedAt: null },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, label: true, keywords: true, sortOrder: true },
+    });
+  }
+
+  async createChecklistItem(
+    user: AuthenticatedUser,
+    areaId: string,
+    input: CreateAreaChecklistItemDto,
+  ) {
+    const area = await this.requireArea(user.organizationId, areaId);
+    const label = input.label.trim();
+    const duplicate = await this.prisma.areaChecklistItem.findFirst({
+      where: { propertyAreaId: areaId, label, archivedAt: null },
+      select: { id: true },
+    });
+    if (duplicate)
+      throw new ApplicationError(
+        409,
+        'DUPLICATE_CHECKLIST_ITEM',
+        'This area already has an item with that wording.',
+      );
+
+    // Appended by default, so adding an item never silently reorders the list a
+    // technician has been reading.
+    const last = await this.prisma.areaChecklistItem.aggregate({
+      where: { propertyAreaId: areaId },
+      _max: { sortOrder: true },
+    });
+
+    const item = await this.prisma.areaChecklistItem.create({
+      data: {
+        organizationId: user.organizationId,
+        propertyAreaId: area.id,
+        label,
+        keywords: normalizeKeywords(input.keywords),
+        sortOrder: input.sortOrder ?? (last._max.sortOrder ?? -1) + 1,
+        createdById: user.id,
+      },
+      select: { id: true, label: true, keywords: true, sortOrder: true },
+    });
+    await this.recordChecklistAudit(user, area.id, 'AREA_CHECKLIST_ITEM_ADDED', item.id, { label });
+    return item;
+  }
+
+  async updateChecklistItem(
+    user: AuthenticatedUser,
+    itemId: string,
+    input: UpdateAreaChecklistItemDto,
+  ) {
+    const existing = await this.requireChecklistItem(user.organizationId, itemId);
+    const label = input.label?.trim() ?? existing.label;
+    if (label !== existing.label) {
+      const duplicate = await this.prisma.areaChecklistItem.findFirst({
+        where: {
+          propertyAreaId: existing.propertyAreaId,
+          label,
+          archivedAt: null,
+          NOT: { id: itemId },
+        },
+        select: { id: true },
+      });
+      if (duplicate)
+        throw new ApplicationError(
+          409,
+          'DUPLICATE_CHECKLIST_ITEM',
+          'This area already has an item with that wording.',
+        );
+    }
+
+    const item = await this.prisma.areaChecklistItem.update({
+      where: { id: itemId },
+      data: {
+        label,
+        ...(input.keywords ? { keywords: normalizeKeywords(input.keywords) } : {}),
+        ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }),
+      },
+      select: { id: true, label: true, keywords: true, sortOrder: true },
+    });
+    await this.recordChecklistAudit(
+      user,
+      existing.propertyAreaId,
+      'AREA_CHECKLIST_ITEM_UPDATED',
+      itemId,
+      { label },
+    );
+    return item;
+  }
+
+  /** Soft archive — see `areaChecklist` for why this is not a delete. */
+  async archiveChecklistItem(user: AuthenticatedUser, itemId: string) {
+    const existing = await this.requireChecklistItem(user.organizationId, itemId);
+    await this.prisma.areaChecklistItem.update({
+      where: { id: itemId },
+      data: { archivedAt: new Date() },
+    });
+    await this.recordChecklistAudit(
+      user,
+      existing.propertyAreaId,
+      'AREA_CHECKLIST_ITEM_ARCHIVED',
+      itemId,
+      { label: existing.label },
+    );
+    return { id: itemId, archived: true };
+  }
+
+  private async requireChecklistItem(organizationId: string, id: string) {
+    const item = await this.prisma.areaChecklistItem.findFirst({
+      // Scoped through the area's property, not the denormalized column alone,
+      // so a mismatched organizationId can never widen access.
+      where: { id, archivedAt: null, propertyArea: { property: { organizationId } } },
+      select: { id: true, label: true, propertyAreaId: true },
+    });
+    if (!item)
+      throw new ApplicationError(404, 'CHECKLIST_ITEM_NOT_FOUND', 'Checklist item was not found.');
+    return item;
+  }
+
+  private recordChecklistAudit(
+    user: AuthenticatedUser,
+    areaId: string,
+    action: string,
+    itemId: string,
+    metadata: Record<string, unknown>,
+  ) {
+    return this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action,
+        entityType: 'AreaChecklistItem',
+        entityId: itemId,
+        metadata: { ...metadata, propertyAreaId: areaId },
+      },
+    });
   }
 
   private async requireArea(organizationId: string, id: string) {

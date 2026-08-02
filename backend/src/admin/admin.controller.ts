@@ -47,6 +47,7 @@ import {
   CreateAdminInspectionDto,
   CreateChargeDto,
   PetCandidateReviewDto,
+  CreateAreaChecklistItemDto,
   CreatePropertyAreaDto,
   CreateReportShareDto,
   CreateTechnicianDto,
@@ -67,6 +68,7 @@ import {
   TestMailDto,
   UnitListQueryDto,
   UnassignDto,
+  UpdateAreaChecklistItemDto,
   UpdateAreaMarkerDto,
   UpdatePropertyAreaDto,
   UpdateAdminInspectionDto,
@@ -195,6 +197,38 @@ export class AdminController {
   retryMissingMarkers(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
     return this.floorPlans.retryMissingMarkers(request.user, id);
   }
+  // Coverage checklist for one area. Read is `properties:read` because a
+  // supervisor may need to see what technicians are asked to cover without
+  // being able to change it.
+  @Get('property-areas/:areaId/checklist')
+  @RequirePermissions('properties:read')
+  areaChecklist(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
+    return this.floorPlans.areaChecklist(request.user, id);
+  }
+  @Post('property-areas/:areaId/checklist')
+  @RequirePermissions('properties:manage')
+  createChecklistItem(
+    @Req() request: AuthenticatedRequest,
+    @Param('areaId') id: string,
+    @Body() body: CreateAreaChecklistItemDto,
+  ) {
+    return this.floorPlans.createChecklistItem(request.user, id, body);
+  }
+  @Patch('checklist-items/:itemId')
+  @RequirePermissions('properties:manage')
+  updateChecklistItem(
+    @Req() request: AuthenticatedRequest,
+    @Param('itemId') id: string,
+    @Body() body: UpdateAreaChecklistItemDto,
+  ) {
+    return this.floorPlans.updateChecklistItem(request.user, id, body);
+  }
+  @Delete('checklist-items/:itemId')
+  @RequirePermissions('properties:manage')
+  archiveChecklistItem(@Req() request: AuthenticatedRequest, @Param('itemId') id: string) {
+    return this.floorPlans.archiveChecklistItem(request.user, id);
+  }
+
   @Get('properties/:propertyId/areas')
   @RequirePermissions('properties:read')
   propertyAreas(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
