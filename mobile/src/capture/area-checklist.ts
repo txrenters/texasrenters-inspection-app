@@ -89,7 +89,7 @@ export function checklistForArea(
  * enough to tick something — a decision that belongs with the technician, not
  * with a keyword table.
  */
-export function matchChecklistMentions(items: ChecklistItem[], spoken: string): string[] {
+export function matchChecklistMentions(items: readonly ChecklistItem[], spoken: string): string[] {
   const haystack = ` ${spoken.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ')} `;
   if (haystack.trim().length === 0) return [];
   return items
