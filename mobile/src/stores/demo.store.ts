@@ -24,6 +24,8 @@ interface DemoState {
   snapshots: RoomSnapshot[];
   uploads: UploadItem[];
   findings: Record<string, Finding>;
+  /** Checklist items the technician has marked covered, keyed by area id. */
+  areaChecklist: Record<string, string[]>;
   draftRecording: LocalMedia | null;
   setHasHydrated: (value: boolean) => void;
   selectUser: (id: string) => void;
@@ -38,6 +40,9 @@ interface DemoState {
   removeMedia: (id: string) => void;
   addSnapshot: (snapshot: RoomSnapshot) => void;
   updateSnapshot: (id: string, update: Partial<RoomSnapshot>) => void;
+  toggleChecklistItem: (areaId: string, itemId: string) => void;
+  /** Marks items covered without unticking anything — used by transcript matching. */
+  markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
   enqueueUpload: (item: UploadItem) => void;
   updateUpload: (id: string, update: Partial<UploadItem>) => void;
   removeUpload: (id: string) => void;
@@ -70,6 +75,7 @@ const initialDemoData = () => ({
   snapshots: [] as RoomSnapshot[],
   uploads: seedUploads.map((item) => ({ ...item })),
   findings: findingRecord(),
+  areaChecklist: {} as Record<string, string[]>,
   draftRecording: null as LocalMedia | null,
 });
 
@@ -108,6 +114,23 @@ export const useDemoStore = create<DemoState>()(
         })),
       removeMedia: (id) =>
         set((state) => ({ media: state.media.filter((item) => item.id !== id) })),
+      toggleChecklistItem: (areaId, itemId) =>
+        set((state) => {
+          const current = state.areaChecklist[areaId] ?? [];
+          const next = current.includes(itemId)
+            ? current.filter((value) => value !== itemId)
+            : [...current, itemId];
+          return { areaChecklist: { ...state.areaChecklist, [areaId]: next } };
+        }),
+      markChecklistItemsCovered: (areaId, itemIds) =>
+        set((state) => {
+          const current = state.areaChecklist[areaId] ?? [];
+          // Union, never a replacement: a spoken mention adds coverage but must
+          // not silently untick something the technician set by hand.
+          const next = [...new Set([...current, ...itemIds])];
+          if (next.length === current.length) return state;
+          return { areaChecklist: { ...state.areaChecklist, [areaId]: next } };
+        }),
       addSnapshot: (snapshot) =>
         set((state) => ({
           snapshots: [
@@ -234,6 +257,7 @@ export const useDemoStore = create<DemoState>()(
         snapshots: state.snapshots,
         uploads: state.uploads,
         findings: state.findings,
+        areaChecklist: state.areaChecklist,
         draftRecording: state.draftRecording,
       }),
       onRehydrateStorage: () => (state) => state?.setHasHydrated(true),

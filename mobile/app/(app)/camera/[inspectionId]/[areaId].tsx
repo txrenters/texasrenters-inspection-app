@@ -66,6 +66,11 @@ registerIcons(
 
 const MAX_RECORDING_SECONDS = 10 * 60;
 
+// A stable empty array: returning a fresh [] from the selector would give
+// zustand a new reference every render and loop on "getSnapshot should be
+// cached".
+const EMPTY_CHECKED: string[] = [];
+
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -110,12 +115,16 @@ export default function RoomCameraScreen() {
   const [photoCount, setPhotoCount] = useState(0);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
-  const [checkedItems, setCheckedItems] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
   const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
+  // Persisted per area rather than held on this screen: coverage used to be
+  // component state, so stepping out to review a recording and coming back lost
+  // every tick the technician had made.
+  const checkedItems = useDemoStore((state) => state.areaChecklist[areaId]) ?? EMPTY_CHECKED;
+  const toggleChecklistItem = useDemoStore((state) => state.toggleChecklistItem);
   const isAdditional = recordingType === 'ADDITIONAL_ISSUE';
   const hasPermissions = Boolean(cameraPermission?.granted && microphonePermission?.granted);
   const guidedSensor = useGuidedCaptureSensor(recording && !isAdditional);
@@ -720,11 +729,7 @@ export default function RoomCameraScreen() {
         checkedIds={checkedItems}
         items={checklist}
         onClose={() => setChecklistOpen(false)}
-        onToggle={(id) =>
-          setCheckedItems((current) =>
-            current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
-          )
-        }
+        onToggle={(id) => toggleChecklistItem(areaId, id)}
         recording={recording}
         visible={checklistOpen}
       />
