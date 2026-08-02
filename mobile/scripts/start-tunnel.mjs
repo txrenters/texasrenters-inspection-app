@@ -58,19 +58,95 @@ async function discoverBackendUrl() {
   return new URL(tunnel.public_url).origin;
 }
 
+/** Why a fetch failed, in the terms the person reading it can act on. */
+function describeFetchFailure(error) {
+  if (error?.name === 'TimeoutError') return 'timed out';
+  const code = error?.cause?.code ?? error?.code;
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS lookup failed';
+  if (code === 'ECONNREFUSED') return 'connection refused';
+  if (code === 'ECONNRESET') return 'connection reset';
+  if (code) return code;
+  return error?.message ?? 'unknown error';
+}
+
+/**
+ * Confirms the tunnel actually reaches the API before handing over to Metro.
+ *
+ * Retried rather than judged on one attempt. The first request through a cold
+ * ngrok tunnel routinely takes several seconds — TLS plus the agent's first
+ * upstream connection — and a single 10s timeout turned that ordinary warm-up
+ * into "the tunnel is unreachable", sending people to debug infrastructure that
+ * was working.
+ *
+ * The reason is reported too. This used to `catch {}` without binding the
+ * error, so a timeout, a DNS failure and a refused connection all printed the
+ * same sentence and none of them said which.
+ */
 async function verifyBackend(publicUrl) {
   const healthUrl = new URL('/api/v1/health', publicUrl);
-  let response;
-  try {
-    response = await fetch(healthUrl, {
-      headers: { 'ngrok-skip-browser-warning': 'true' },
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch {
-    fail(`The public backend tunnel is registered but ${healthUrl} is unreachable.`);
+  const attempts = 3;
+  let lastReason = 'unknown error';
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(healthUrl, {
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+        signal: AbortSignal.timeout(15_000),
+      });
+      // A non-OK status is the tunnel working and the API objecting — a
+      // different problem, and retrying it only delays the report.
+      if (!response.ok)
+        fail(`The public backend health check returned HTTP ${response.status} at ${healthUrl}.`);
+      return;
+    } catch (error) {
+      lastReason = describeFetchFailure(error);
+      if (attempt < attempts) {
+        console.warn(
+          `  Health check attempt ${attempt}/${attempts} failed (${lastReason}); retrying…`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1_000));
+      }
+    }
   }
-  if (!response.ok)
-    fail(`The public backend health check returned HTTP ${response.status} at ${healthUrl}.`);
+
+  // The tunnel resolves to several ngrok edge addresses and Node's fetch picks
+  // one without failing over, so a single slow edge can time out repeatedly
+  // from this machine while the tunnel serves the phone perfectly well. If the
+  // backend answers locally, that is what this check was really asking about —
+  // warn with the reason and let Metro start rather than blocking on an edge
+  // the device may never touch.
+  const localHealthy = await backendRespondsLocally();
+  if (localHealthy) {
+    console.warn(
+      `\n  Warning: ${healthUrl} did not respond from this machine after ` +
+        `${attempts} attempts (${lastReason}).\n` +
+        '  The backend is healthy on http://127.0.0.1:3000, so this is most likely a slow\n' +
+        '  ngrok edge rather than a broken tunnel. Starting Metro anyway — if the device\n' +
+        '  cannot reach the API, restart the gateway:\n' +
+        '    docker compose --env-file backend/.env.local -f compose.remote-beta.yml restart gateway\n',
+    );
+    return;
+  }
+
+  fail(
+    `The public backend tunnel is registered but ${healthUrl} did not respond ` +
+      `after ${attempts} attempts (${lastReason}),\n` +
+      'and the backend is not answering on http://127.0.0.1:3000 either.\n' +
+      'Check the containers:\n' +
+      '  docker compose --env-file backend/.env.local -f compose.remote-beta.yml ps',
+  );
+}
+
+/** Is the API up at all, independently of ngrok? */
+async function backendRespondsLocally() {
+  try {
+    const response = await fetch('http://127.0.0.1:3000/api/v1/health', {
+      signal: AbortSignal.timeout(3_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 const publicApiUrl = await discoverBackendUrl();
