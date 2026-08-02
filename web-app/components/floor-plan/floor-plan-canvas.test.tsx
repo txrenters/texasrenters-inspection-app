@@ -196,9 +196,13 @@ function renderChecklist(overrides: Partial<Parameters<typeof FloorPlanChecklist
 describe('FloorPlanChecklist', () => {
   it('marks the selected row pressed and selects on click', () => {
     const { onSelectArea } = renderChecklist();
-    expect(screen.getByRole('button', { name: /Kitchen/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /Garage/ })).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(screen.getByRole('button', { name: /Garage/ }));
+    // Queried by row id, not by accessible name: each row also carries a
+    // checklist trigger whose label contains the area name.
+    const kitchenRow = document.getElementById('fp-row-kitchen');
+    const garageRow = document.getElementById('fp-row-garage');
+    expect(kitchenRow).toHaveAttribute('aria-pressed', 'true');
+    expect(garageRow).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(garageRow!);
     expect(onSelectArea).toHaveBeenCalledWith('garage');
   });
 
@@ -234,7 +238,7 @@ describe('FloorPlanChecklist', () => {
 
   it('retains native button semantics and a pressed state for keyboard selection', () => {
     renderChecklist();
-    const garageButton = screen.getByRole('button', { name: /Garage/ });
+    const garageButton = document.getElementById('fp-row-garage') as HTMLElement;
     garageButton.focus();
     expect(garageButton.tagName).toBe('BUTTON');
     expect(garageButton).toHaveFocus();

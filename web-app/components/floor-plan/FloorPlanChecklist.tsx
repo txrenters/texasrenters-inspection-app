@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/select';
 import { FieldError } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
+import { ListChecks } from 'lucide-react';
+import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
 
 export interface AreaFloorGroup {
   key: string;
@@ -87,6 +89,9 @@ export function FloorPlanChecklist({
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<AreaFilter>('ALL');
   const allAreas = useMemo(() => groups.flatMap((group) => group.areas), [groups]);
+  // Held as the area itself rather than an id so the dialog can show the name
+  // without looking it back up.
+  const [checklistArea, setChecklistArea] = useState<{ id: string; name: string } | null>(null);
   const selectedArea = allAreas.find((area) => area.id === selectedAreaId) ?? null;
   const selectedMarkerStatus = selectedArea ? getMarkerStatus(selectedArea, planId) : null;
   const showFiltering = allAreas.length >= 6;
@@ -274,6 +279,17 @@ export function FloorPlanChecklist({
                           ) : null}
                         </span>
                       </button>
+                      {/* Sibling of the row button, never nested inside it —
+                          a button within a button is invalid markup and breaks
+                          keyboard traversal. */}
+                      <button
+                        type="button"
+                        aria-label={`Edit ${area.name} coverage checklist`}
+                        className="floor-plan-comparison-area-checklist"
+                        onClick={() => setChecklistArea({ id: area.id, name: area.name })}
+                      >
+                        <ListChecks aria-hidden className="h-4 w-4" />
+                      </button>
                     </li>
                   );
                 })}
@@ -320,6 +336,19 @@ export function FloorPlanChecklist({
         <p className="fp-save-message" role="status">
           {saveMessage}
         </p>
+      ) : null}
+
+      {/* Rendered once at the root rather than per row: one dialog driven by
+          which area is selected, not one mounted for every area in the list. */}
+      {checklistArea ? (
+        <AreaChecklistDialog
+          areaId={checklistArea.id}
+          areaName={checklistArea.name}
+          onOpenChange={(open) => {
+            if (!open) setChecklistArea(null);
+          }}
+          open
+        />
       ) : null}
     </div>
   );
