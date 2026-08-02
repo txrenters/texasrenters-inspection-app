@@ -60,6 +60,8 @@ export interface InspectionRepository {
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
   addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;
+  /** Administrator-authored coverage checklist; empty when none is configured. */
+  roomChecklist(roomId: string): Promise<{ id: string; label: string; keywords: string[] }[]>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;

@@ -170,6 +170,10 @@ export const roomPhotoSchema = z
     sequenceNumber: photo.sequenceNumber ?? null,
     label: photo.label ?? null,
   }));
+const checklistSchema = z.array(
+  z.object({ id: z.string(), label: z.string(), keywords: z.array(z.string()).default([]) }),
+);
+
 const uploadSchema = z.object({
   id: z.string(),
   mediaId: z.string(),
@@ -488,6 +492,11 @@ export class ApiInspectionRepository implements InspectionRepository {
       await cachedApiRecord(`room:${roomId}`, roomSchema, () =>
         getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}`),
       ),
+    );
+  }
+  async roomChecklist(roomId: string) {
+    return cachedApiRecord(`roomChecklist:${roomId}`, checklistSchema, () =>
+      getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/checklist`),
     );
   }
   async addArea(inspectionId: string, input: AddAreaInput) {

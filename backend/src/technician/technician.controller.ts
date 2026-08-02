@@ -221,6 +221,12 @@ export class TechnicianController {
   ) {
     return this.service.uploadAdditionalVideo(request.user, id, body, file);
   }
+  @Get('rooms/:roomId/checklist') roomChecklist(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+  ) {
+    return this.service.roomChecklist(request.user, id);
+  }
   @Get('rooms/:roomId/photos') photos(
     @Req() request: AuthenticatedRequest,
     @Param('roomId') id: string,

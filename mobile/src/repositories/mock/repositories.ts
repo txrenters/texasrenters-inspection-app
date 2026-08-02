@@ -199,6 +199,12 @@ export class MockInspectionRepository implements InspectionRepository {
       ),
     );
   }
+  async roomChecklist() {
+    await mockDelay();
+    // Mock mode has no admin-authored lists; the caller falls back to the
+    // generated checklist, which is the same path a real unconfigured area takes.
+    return [];
+  }
   async addArea(inspectionId: string, input: AddAreaInput) {
     await mockDelay();
     ensureMockAvailable();

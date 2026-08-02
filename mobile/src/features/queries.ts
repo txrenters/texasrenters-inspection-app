@@ -43,6 +43,7 @@ export const queryKeys = {
   room: (id: string) => ['room', id] as const,
   media: (roomId: string) => ['media', roomId] as const,
   roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
+  roomChecklist: (roomId: string) => ['roomChecklist', roomId] as const,
   property: (id: string) => ['property', id] as const,
   floorPlan: (id: string) => ['floorPlan', id] as const,
   uploads: ['uploads'] as const,
@@ -294,6 +295,16 @@ export function useFinding(id: string, inspectionId?: string) {
     queryKey: queryKeys.findingForInspection(id, inspectionId),
     queryFn: () => repositories.findings.get(id, inspectionId),
     enabled: Boolean(id),
+  });
+}
+
+export function useRoomChecklist(roomId: string) {
+  return useQuery({
+    queryKey: queryKeys.roomChecklist(roomId),
+    queryFn: () => repositories.inspections.roomChecklist(roomId),
+    enabled: Boolean(roomId),
+    // Checklists change when an administrator edits them, not minute to minute.
+    staleTime: 5 * 60_000,
   });
 }
 

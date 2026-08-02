@@ -736,6 +736,26 @@ export class TechnicianService {
     return this.mapRoom(room);
   }
 
+  /**
+   * The administrator-authored coverage checklist for an assigned area.
+   *
+   * Scoped through `assignedRoom`, so a technician can only read the checklist
+   * of an area they are actually assigned to. Archived items are excluded: a
+   * removed item should stop appearing for new work, while inspections that
+   * already recorded coverage against it keep their record.
+   *
+   * An empty list is a normal answer — most areas have no checklist yet, and
+   * the app falls back to a generated one rather than showing nothing.
+   */
+  async roomChecklist(user: AuthenticatedUser, roomId: string) {
+    const room = await this.assignedRoom(user, roomId);
+    return this.prisma.areaChecklistItem.findMany({
+      where: { propertyAreaId: room.propertyAreaId, archivedAt: null },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, label: true, keywords: true },
+    });
+  }
+
   async room(user: AuthenticatedUser, id: string) {
     const room = await this.assignedRoom(user, id);
     return this.mapRoom(room);

@@ -44,7 +44,7 @@ import {
 } from '@/src/capture/guided-capture';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
-import { useRoom } from '@/src/features/queries';
+import { useRoom, useRoomChecklist } from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
@@ -131,10 +131,19 @@ export default function RoomCameraScreen() {
   // Derived from the area rather than stored: the real lists will arrive from
   // the property's inspection template, and keeping this a pure function of the
   // room means swapping the source later touches one module.
-  const checklist = useMemo(
-    () => checklistForArea({ name: room.data?.name ?? '', environment: room.data?.environment }),
-    [room.data?.name, room.data?.environment],
-  );
+  const authored = useRoomChecklist(areaId);
+  const checklist = useMemo(() => {
+    // Administrator-authored list wins. The generated one is a fallback for
+    // areas nobody has configured yet, so an unconfigured area still guides the
+    // technician rather than showing an empty sheet.
+    if (authored.data?.length)
+      return authored.data.map((item) => ({
+        id: item.id,
+        label: item.label,
+        keywords: item.keywords,
+      }));
+    return checklistForArea({ name: room.data?.name ?? '', environment: room.data?.environment });
+  }, [authored.data, room.data?.name, room.data?.environment]);
   const checklistCoverage = checklistProgress(checklist, checkedItems);
   const guidanceState = guidedCaptureState({
     tracker: guidedSensor.tracker,
