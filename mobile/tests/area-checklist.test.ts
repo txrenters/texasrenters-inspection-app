@@ -2,8 +2,43 @@ import {
   checklistForArea,
   checklistProgress,
   matchChecklistMentions,
+  resolveAreaChecklist,
   type ChecklistItem,
 } from '../src/capture/area-checklist';
+
+describe('resolveAreaChecklist', () => {
+  const AUTHORED = [
+    { id: 'e9c1', label: 'Sink', keywords: ['sink'] },
+    { id: 'a72f', label: 'Counter top', keywords: ['counter', 'top'] },
+  ];
+
+  it('shows what the administrator wrote, not a generated stand-in', () => {
+    // The area screen used to generate its own list while the camera fetched
+    // the authored one, so the two screens disagreed about the same room — and
+    // the auto-tick recorded coverage against items nobody was ever shown.
+    const items = resolveAreaChecklist(AUTHORED, { name: 'Kitchen' });
+    expect(items.map((item) => item.label)).toEqual(['Sink', 'Counter top']);
+    expect(items.map((item) => item.id)).toEqual(['e9c1', 'a72f']);
+  });
+
+  it('falls back to the generated list only when nothing is authored', () => {
+    // An unconfigured area still guides the technician rather than showing an
+    // empty sheet, and an empty array means unconfigured just as undefined does.
+    for (const authored of [undefined, []]) {
+      const items = resolveAreaChecklist(authored, { name: 'Kitchen' });
+      expect(items).toEqual(checklistForArea({ name: 'Kitchen' }));
+      expect(items.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the authored list whatever the area is called', () => {
+    // The generated list is chosen by room name. An authored list must not be
+    // second-guessed by it — an administrator naming an area "Kitchen" and
+    // listing three things gets those three things.
+    expect(resolveAreaChecklist(AUTHORED, { name: 'Patio (right)' })).toHaveLength(2);
+    expect(resolveAreaChecklist(AUTHORED, { name: 'Kitchen' })).toHaveLength(2);
+  });
+});
 
 describe('checklistForArea', () => {
   it('picks the list that matches the room', () => {

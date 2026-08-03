@@ -68,6 +68,27 @@ const BY_NAME: { test: RegExp; items: ChecklistItem[] }[] = [
   { test: /bed|nursery/i, items: BEDROOM },
 ];
 
+/**
+ * Which checklist an area actually shows: the authored one, or a generated
+ * fallback for an area nobody has configured.
+ *
+ * Pure so both the area screen and the camera can reach the same answer, and so
+ * the rule is testable without a renderer. They previously each decided for
+ * themselves, and one of them never fetched the authored list at all.
+ */
+export function resolveAreaChecklist(
+  authored: readonly { id: string; label: string; keywords: string[] }[] | undefined,
+  area: { name?: string | null; environment?: AreaEnvironment },
+): ChecklistItem[] {
+  if (authored?.length)
+    return authored.map((item) => ({
+      id: item.id,
+      label: item.label,
+      keywords: item.keywords,
+    }));
+  return checklistForArea({ name: area.name ?? '', environment: area.environment });
+}
+
 export function checklistForArea(
   area: Pick<InspectionRoom, 'name'> & { environment?: AreaEnvironment },
 ): ChecklistItem[] {

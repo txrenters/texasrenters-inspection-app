@@ -16,7 +16,7 @@ import {
 import { Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { checklistForArea } from '@/src/capture/area-checklist';
+import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AiSummaryCard } from '@/src/components/AiSummaryCard';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
@@ -64,8 +64,8 @@ export default function AreaDetailScreen() {
   const pull = usePullToRefresh([room.refetch, media.refetch, photos.refetch, findings.refetch]);
   // The AI summary is transcript-derived, so what it mentions is what the
   // technician talked through. Ticks coverage automatically; never unticks.
-  const areaChecklist = checklistForArea({
-    name: room.data?.name ?? '',
+  const areaChecklist = useAreaChecklist(id, {
+    name: room.data?.name,
     environment: room.data?.environment,
   });
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
