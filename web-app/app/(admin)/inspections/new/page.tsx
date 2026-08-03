@@ -515,38 +515,60 @@ function CreateInspectionForm() {
           </Field>
         </div>
         {needsAreaSetup ? (
-          <Alert variant="warning" role="alert">
-            <span>
-              This property has no approved inspection areas. Choose how to proceed.
-            </span>
-            {/* Listed first because it keeps the per-area structure the whole
-                review is organised around, where the fallback flattens the
-                property to one area and loses it. */}
-            <div className="mt-3 flex items-start gap-2">
+          /* Reads as a decision, not a warning. Three ways forward at three
+             different visual weights left it unclear that they were
+             alternatives to the same problem, and the amber kept insisting
+             something was wrong after it had been resolved. */
+          <Alert variant={technicianWillCapture ? 'default' : 'warning'} role="alert">
+            <p className="m-0 font-semibold">This property has no approved inspection areas</p>
+            <p className="m-0 mt-1 text-muted-foreground">
+              Choose how this inspection gets them.
+            </p>
+
+            {/* First because it keeps the per-area structure the whole review is
+                organised around, where the fallback flattens the property to one
+                area and loses it. */}
+            <div className="mt-4 flex items-start gap-2.5 rounded-md border border-border bg-background/60 p-3">
               <Checkbox
                 checked={technicianWillCapture}
                 className="mt-0.5"
                 id="technician-area-capture"
                 onCheckedChange={(checked) => setTechnicianWillCapture(checked === true)}
               />
-              <label className="text-sm" htmlFor="technician-area-capture">
-                <strong className="font-semibold">Let the technician survey the areas on site.</strong>{' '}
-                They add each area as they walk the property. Those areas are saved to this
-                property as drafts for you to approve, so the layout is captured once and reused
-                for every later inspection.
-              </label>
+              <div className="min-w-0">
+                <label
+                  className="flex flex-wrap items-center gap-2 font-semibold"
+                  htmlFor="technician-area-capture"
+                >
+                  The technician surveys the areas on site
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
+                    Recommended
+                  </span>
+                </label>
+                <p className="m-0 mt-1 text-xs leading-5 text-muted-foreground">
+                  They add each area as they walk the property. Each one is saved here as a draft
+                  for you to approve, so the layout is captured once and reused by every later
+                  inspection.
+                </p>
+              </div>
             </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
+
+            <div
+              className={`mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-3 text-xs ${
+                technicianWillCapture ? 'opacity-50' : ''
+              }`}
+            >
+              <span className="text-muted-foreground">Or</span>
               <button
                 type="button"
                 className={buttonVariants({ variant: 'secondary', size: 'small' })}
                 disabled={fallbackArea.isPending || technicianWillCapture}
                 onClick={() => fallbackArea.mutate({ propertyId })}
               >
-                {fallbackArea.isPending ? 'Preparing area…' : 'Use entire property for now'}
+                {fallbackArea.isPending ? 'Preparing area…' : 'Inspect it as one single area'}
               </button>
               <Link href={`/properties/${propertyId}#floor-plan-heading`}>
-                Set up detailed floor plan and areas
+                Set up a floor plan first
               </Link>
             </div>
           </Alert>
