@@ -63,14 +63,14 @@ export default function PropertyDetailPage() {
       <Card className="p-[22px] max-[560px]:p-4" asChild>
         <section>
         <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Portfolio</span>
-            <strong>{item.portfolio.name}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Portfolio</span>
+            <strong className="text-base font-semibold leading-tight text-foreground">{item.portfolio.name}</strong>
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Total area</span>
-            <strong>{item.totalArea?.label ?? 'Not provided'}</strong>
-            <small>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Total area</span>
+            <strong className="text-base font-semibold leading-tight text-foreground">{item.totalArea?.label ?? 'Not provided'}</strong>
+            <small className="text-xs leading-snug text-muted-foreground/80">
               {item.totalArea?.source === 'PROPERTYWARE_BUILDING'
                 ? 'From Propertyware'
                 : item.totalArea?.source === 'MANUAL'
@@ -80,16 +80,16 @@ export default function PropertyDetailPage() {
                     : 'No reliable value'}
             </small>
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Lease summary</span>
-            <strong>{item.leaseSummary?.summary ?? 'Lease data not synchronized'}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Lease summary</span>
+            <strong className="text-base font-semibold leading-tight text-foreground">{item.leaseSummary?.summary ?? 'Lease data not synchronized'}</strong>
             {item.leaseSummary?.leaseDataAvailable === false ? (
               // Never let missing data read as "this property has no lease".
-              <small className="detail-warning">
+              <small className="detail-warning text-xs leading-snug">
                 No units have synchronized for this property, so lease status is unknown
               </small>
             ) : item.leaseSummary?.nextLeaseEndDate ? (
-              <small>
+              <small className="text-xs leading-snug text-muted-foreground/80">
                 Next lease ends {formatDate(item.leaseSummary.nextLeaseEndDate)} ·{' '}
                 {leaseExpiryLabel(item.leaseSummary.nextLeaseEndDate).toLowerCase()}
               </small>
@@ -97,17 +97,17 @@ export default function PropertyDetailPage() {
               <small>No upcoming lease end date</small>
             )}
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Source status</span>
-            <strong>{item.sourceStatus ?? 'Not provided'}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Source status</span>
+            <strong className="text-base font-semibold leading-tight text-foreground">{item.sourceStatus ?? 'Not provided'}</strong>
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>External reference</span>
-            <strong>{item.externalId}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">External reference</span>
+            <strong className="text-base font-semibold leading-tight text-foreground">{item.externalId}</strong>
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Last synchronized</span>
-            <strong>{formatDate(item.lastSyncedAt)}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Last synchronized</span>
+            <strong className="text-base font-semibold leading-tight text-foreground">{formatDate(item.lastSyncedAt)}</strong>
           </div>
         </div>
         </section>
