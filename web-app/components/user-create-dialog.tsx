@@ -188,7 +188,9 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 {create.error.message}
               </Alert>
             ) : null}
-            <DialogFooter>
+            {/* Inside the form, so it inherits none of DialogContent's own
+                spacing and would otherwise sit flush against the fieldset. */}
+            <DialogFooter className="mt-[18px]">
               <button
                 className={buttonVariants({ variant: 'secondary' })}
                 type="button"

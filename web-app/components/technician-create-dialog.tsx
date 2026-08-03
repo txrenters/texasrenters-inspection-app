@@ -177,7 +177,10 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                 {create.error.message}
               </Alert>
             ) : null}
-            <DialogFooter>
+            {/* DialogContent spaces its own children, but this footer sits
+                inside the form and so inherits none of it — the buttons ended
+                up flush against the card above them. */}
+            <DialogFooter className="mt-[18px]">
               <button
                 className={buttonVariants({ variant: 'secondary' })}
                 type="button"

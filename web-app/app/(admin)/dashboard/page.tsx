@@ -113,17 +113,29 @@ export default function DashboardPage() {
           </CardHeader>
           {data.lastSync ? (
             <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
-              <div className="rounded-xl bg-background p-3.5">
-                <span>Status</span>
+              {/* Label above value, stated explicitly: without Preflight a bare
+                  span and strong are both inline and ran together. */}
+              <div className="flex flex-col items-start gap-1.5 rounded-xl bg-background p-4">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Status
+                </span>
                 <Badge value={data.lastSync.status} />
               </div>
-              <div className="rounded-xl bg-background p-3.5">
-                <span>Type</span>
-                <strong>{data.lastSync.syncType}</strong>
+              <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Type
+                </span>
+                <strong className="text-base font-semibold leading-tight text-foreground">
+                  {data.lastSync.syncType}
+                </strong>
               </div>
-              <div className="rounded-xl bg-background p-3.5">
-                <span>Completed</span>
-                <strong>{formatDate(data.lastSync.completedAt)}</strong>
+              <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Completed
+                </span>
+                <strong className="text-base font-semibold leading-tight text-foreground">
+                  {formatDate(data.lastSync.completedAt)}
+                </strong>
               </div>
             </div>
           ) : (

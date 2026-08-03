@@ -41,13 +41,23 @@ export default function SettingsPage() {
           <span className="section-eyebrow">Organization</span>
           <CardTitle className="text-[17px]">{membership?.organization.name ?? 'Unavailable'}</CardTitle>
           <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1 compact-grid">
-            <div className="rounded-xl bg-background p-3.5">
-              <span>Organization ID</span>
-              <strong className="mono">{membership?.organization.id ?? 'Unavailable'}</strong>
+            {/* Label above value, stated explicitly: without Preflight a bare
+                span and strong are both inline and ran together. */}
+            <div className="flex min-w-0 flex-col gap-1.5 rounded-xl bg-background p-4">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Organization ID
+              </span>
+              <strong className="mono break-all text-sm font-semibold leading-tight text-foreground">
+                {membership?.organization.id ?? 'Unavailable'}
+              </strong>
             </div>
-            <div className="rounded-xl bg-background p-3.5">
-              <span>Your role</span>
-              <strong>{accessLabel}</strong>
+            <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Your role
+              </span>
+              <strong className="text-base font-semibold leading-tight text-foreground">
+                {accessLabel}
+              </strong>
             </div>
           </div>
           </section>
