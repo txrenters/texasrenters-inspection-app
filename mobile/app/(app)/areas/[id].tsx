@@ -13,8 +13,18 @@ import {
   RotateCwIcon,
   SaveIcon,
 } from 'lucide-react-native';
-import { Modal, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
@@ -71,6 +81,7 @@ export default function AreaDetailScreen() {
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const insets = useSafeAreaInsets();
   const [note, setNote] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
@@ -443,16 +454,30 @@ export default function AreaDetailScreen() {
       <Modal
         animationType="fade"
         transparent
+        // Android draws a transparent modal below the status bar otherwise,
+        // leaving a pale strip above the dimmed backdrop.
+        statusBarTranslucent
         visible={skipOpen}
         onRequestClose={() => setSkipOpen(false)}
       >
-        <View className="flex-1 justify-end bg-black/55">
+        {/* A modal renders outside the screen's SafeAreaView, so it inherits
+            none of its insets. The reason field sits at the bottom of a sheet
+            with a keyboard over it, which left the technician typing an audit
+            reason they could not see, above buttons they could not reach. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          className="flex-1 justify-end bg-black/55"
+        >
           {/* Announced as a dialog so a screen reader reports the context
               switch instead of silently moving focus into a new layer. */}
           <View
             accessibilityRole="alert"
             accessibilityViewIsModal
-            className="rounded-t-3xl bg-background px-5 pb-10 pt-6"
+            className="rounded-t-3xl bg-background px-5 pt-6"
+            // Measured rather than the guessed 40px it replaces: enough to
+            // clear a home indicator where there is one, and not a gap on a
+            // device without one.
+            style={{ paddingBottom: Math.max(insets.bottom, 24) }}
           >
             <Text className="text-xl font-bold text-foreground">Skip this room?</Text>
             <Text
@@ -513,7 +538,7 @@ export default function AreaDetailScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
