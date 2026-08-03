@@ -73,8 +73,29 @@ export interface RotationTracker {
   startHeadingDegrees?: number;
   previousHeadingDegrees?: number;
   endHeadingDegrees?: number;
+  /**
+   * Gross turn in each direction — every accepted degree, counted separately.
+   *
+   * Diagnostics only. Neither may drive progress: sensor noise on a phone held
+   * perfectly still still has a magnitude, so both climb whether or not anyone
+   * turned, and a still phone would fill the ring by itself.
+   */
   clockwiseRotationDegrees: number;
   counterClockwiseRotationDegrees: number;
+  /**
+   * Signed turn, clockwise positive. Noise reverses sign sample to sample and
+   * cancels here, while a real sweep accumulates.
+   */
+  netClockwiseDegrees: number;
+  /**
+   * How far clockwise the sweep ever reached.
+   *
+   * Progress is measured from this rather than the live net so that turning
+   * back to face the door does not undo a lap that was genuinely walked. It is
+   * still noise-immune: a still phone's net wanders around zero, so its peak
+   * creeps up by tens of degrees over a long recording, nowhere near a lap.
+   */
+  peakNetClockwiseDegrees: number;
   recentCounterClockwiseDegrees: number;
   smoothedDegreesPerSecond: number;
   fastRotationDurationMs: number;
@@ -87,6 +108,8 @@ export function createRotationTracker(): RotationTracker {
   return {
     clockwiseRotationDegrees: 0,
     counterClockwiseRotationDegrees: 0,
+    netClockwiseDegrees: 0,
+    peakNetClockwiseDegrees: 0,
     recentCounterClockwiseDegrees: 0,
     smoothedDegreesPerSecond: 0,
     fastRotationDurationMs: 0,
@@ -148,16 +171,21 @@ export function updateRotationTracker(
       ? tracker.fastRotationDurationMs + elapsedMs
       : Math.max(0, tracker.fastRotationDurationMs - elapsedMs * 1.5);
 
+  // DeviceMotion rotation alpha increases counter-clockwise on the platforms
+  // supported by Expo, so a negative signed delta is clockwise — which is why
+  // the net negates the delta to make clockwise the positive direction.
+  const netClockwiseDegrees = tracker.netClockwiseDegrees - delta;
+
   return {
     ...tracker,
     previousHeadingDegrees: heading,
     endHeadingDegrees: heading,
     previousSampleAtMs: sampleAtMs,
-    // DeviceMotion rotation alpha increases counter-clockwise on the platforms
-    // supported by Expo, so a negative signed delta is clockwise.
     clockwiseRotationDegrees: tracker.clockwiseRotationDegrees + (clockwise ? magnitude : 0),
     counterClockwiseRotationDegrees:
       tracker.counterClockwiseRotationDegrees + (clockwise ? 0 : magnitude),
+    netClockwiseDegrees,
+    peakNetClockwiseDegrees: Math.max(tracker.peakNetClockwiseDegrees, netClockwiseDegrees),
     recentCounterClockwiseDegrees,
     smoothedDegreesPerSecond: smoothedSpeed,
     fastRotationDurationMs,
@@ -168,7 +196,8 @@ export function updateRotationTracker(
 export function rotationProgress(tracker: RotationTracker) {
   return Math.min(
     1,
-    tracker.clockwiseRotationDegrees / GUIDED_CAPTURE_POLICY.targetClockwiseDegrees,
+    Math.max(0, tracker.peakNetClockwiseDegrees) /
+      GUIDED_CAPTURE_POLICY.targetClockwiseDegrees,
   );
 }
 
@@ -198,7 +227,7 @@ export function guidedCaptureState({
 
   const progress = rotationProgress(tracker);
   const didReturn =
-    tracker.clockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
+    tracker.peakNetClockwiseDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
     returnedToStart(tracker);
   const evaluation = evaluateCapture({
     tracker,
@@ -248,9 +277,12 @@ export function evaluateCapture({
   if (!sensorSupported)
     return { status: 'SENSOR_UNAVAILABLE', confidence: 'UNAVAILABLE', returnedToStart: false };
 
+  // Judged on the net sweep, never the gross turn: a phone lying still
+  // accumulates gross degrees from noise alone, and this decides whether an
+  // area counts as covered.
   const sufficientRotation =
-    tracker.clockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
-    tracker.clockwiseRotationDegrees <= GUIDED_CAPTURE_POLICY.maximumClockwiseDegrees;
+    tracker.peakNetClockwiseDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
+    tracker.peakNetClockwiseDegrees <= GUIDED_CAPTURE_POLICY.maximumClockwiseDegrees;
   const sufficientDuration = durationSeconds >= GUIDED_CAPTURE_POLICY.minimumDurationSeconds;
   const wrongDirection =
     tracker.counterClockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;

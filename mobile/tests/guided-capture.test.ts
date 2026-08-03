@@ -99,6 +99,50 @@ describe('guided walkthrough motion policy', () => {
     ).toBe('TOO_FAST');
   });
 
+  it('does not advance while the phone is held still', () => {
+    // The reported fault: the ring filled itself with nobody turning. Every
+    // accepted sample added its magnitude to the clockwise total, and noise has
+    // a magnitude whichever way it happens to point, so the total only ever
+    // grew. A minute of 5 Hz samples wobbling a couple of degrees was enough to
+    // report a full lap.
+    const still = [0];
+    for (let index = 1; index <= 300; index += 1) {
+      // Alternating either side of the starting heading: no net movement, but
+      // every step is above the jitter floor and so is accepted.
+      still.push(index % 2 === 0 ? 1.6 : 358.5);
+    }
+    const tracker = track(still, 200);
+
+    expect(tracker.acceptedSamples).toBeGreaterThan(250);
+    // The gross counter still climbs — that is what it measures.
+    expect(tracker.clockwiseRotationDegrees).toBeGreaterThan(360);
+    // What the technician sees does not.
+    expect(tracker.peakNetClockwiseDegrees).toBeLessThan(10);
+    expect(rotationProgress(tracker)).toBeLessThan(0.03);
+    expect(
+      evaluateCapture({ tracker, durationSeconds: 60, sensorSupported: true }).status,
+    ).not.toBe('COMPLETE');
+    expect(
+      guidedCaptureState({
+        tracker,
+        recording: true,
+        sensorSupported: true,
+        durationSeconds: 60,
+      }),
+    ).toBe('ROTATE_CLOCKWISE');
+  });
+
+  it('keeps a completed lap after the technician turns back to the door', () => {
+    // Progress is taken from the furthest point reached, so facing the way you
+    // came does not un-walk the room.
+    const lap = track([0, 330, 300, 270, 240, 210, 180, 150, 120, 90, 60, 30, 0]);
+    expect(rotationProgress(lap)).toBe(1);
+
+    const turnedBack = track([30, 60, 90], 500, lap);
+    expect(turnedBack.netClockwiseDegrees).toBeLessThan(lap.netClockwiseDegrees);
+    expect(rotationProgress(turnedBack)).toBe(1);
+  });
+
   it('rejects sensor jumps and keeps the walkthrough operational without motion access', () => {
     const tracker = track([0, 250], 100);
     expect(tracker.rejectedSamples).toBe(1);
