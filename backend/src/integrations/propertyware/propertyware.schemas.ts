@@ -75,6 +75,13 @@ const propertywarePropertyBaseSchema = z
   .passthrough();
 
 export const propertywareBuildingSchema = propertywarePropertyBaseSchema.extend({
+  /**
+   * Buildings, alone among the property types, come back with a null portfolio.
+   * Requiring one rejected nineteen live properties outright — hiding them from
+   * the whole app rather than importing them unassigned. Units keep the base
+   * schema's requirement: a unit always belongs to a building's portfolio.
+   */
+  portfolioID: propertywareIdSchema.optional().nullable(),
   propertyType: z.string().optional().nullable(),
   // Verified building-level total area, its unit label, and category.
   totalArea: z.number().optional().nullable(),
@@ -192,7 +199,8 @@ export const normalizedPropertywareRecordSchema = z.discriminatedUnion('entityTy
   }),
   normalizedBaseSchema.merge(normalizedAddressSchema).extend({
     entityType: z.literal('buildings'),
-    portfolioExternalId: z.string().min(1),
+    /** Absent for the buildings Propertyware holds without a portfolio. */
+    portfolioExternalId: z.string().min(1).optional(),
     idNumber: z.string().optional(),
     name: z.string().min(1),
     abbreviation: z.string().optional(),

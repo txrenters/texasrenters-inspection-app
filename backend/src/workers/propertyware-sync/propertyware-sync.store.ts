@@ -380,7 +380,13 @@ export class InMemoryPropertywareSyncStore implements PropertywareSyncStore {
       .filter((record) => {
         const active = (type: PropertywareEntity, externalId: string) =>
           this.records.get(`${organizationId}:${type}:${externalId}`)?.record.isActive === true;
-        if (record.entityType === 'buildings' && !active('portfolios', record.portfolioExternalId))
+        // Only a building that claims a portfolio is held to that portfolio
+        // being active. One with none is not orphaned — it never had a parent.
+        if (
+          record.entityType === 'buildings' &&
+          record.portfolioExternalId &&
+          !active('portfolios', record.portfolioExternalId)
+        )
           return false;
         if (
           record.entityType === 'units' &&
@@ -562,6 +568,17 @@ export class InMemoryPropertywareSyncStore implements PropertywareSyncStore {
 }
 
 const date = (input?: string) => (input ? new Date(input) : null);
+
+/**
+ * Keeps buildings whose portfolio is active, plus those that have none.
+ *
+ * A building with no portfolio cannot satisfy a filter on the relation, so
+ * filtering on `portfolio` alone would hide it everywhere. Nested in `AND` so it
+ * composes with a search `OR` on the same query.
+ */
+const PORTFOLIO_VISIBLE = {
+  AND: [{ OR: [{ portfolioId: null }, { portfolio: { isActive: true } }] }],
+};
 
 @Injectable()
 export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
@@ -909,12 +926,17 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
       }
       saved = portfolio;
     } else if (record.entityType === 'buildings') {
-      const portfolio = await this.requirePortfolio(organizationId, record.portfolioExternalId);
+      // A building with no portfolio is imported unassigned rather than
+      // rejected: rejecting it hid the property from the entire app, whereas an
+      // unassigned building is still a real property someone can inspect.
+      const portfolio = record.portfolioExternalId
+        ? await this.requirePortfolio(organizationId, record.portfolioExternalId)
+        : null;
       const data = {
         organizationId,
         externalId: record.externalId,
-        portfolioId: portfolio.id,
-        externalPortfolioId: record.portfolioExternalId,
+        portfolioId: portfolio?.id ?? null,
+        externalPortfolioId: record.portfolioExternalId ?? null,
         idNumber: record.idNumber,
         name: record.name,
         abbreviation: record.abbreviation,
@@ -1077,7 +1099,7 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
         where: {
           organizationId,
           isActive: true,
-          portfolio: { isActive: true },
+          ...PORTFOLIO_VISIBLE,
           externalPortfolioId: filters.portfolioId,
         },
         orderBy: { name: 'asc' },
@@ -1150,7 +1172,7 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
       const where = {
         organizationId,
         isActive: true,
-        portfolio: { isActive: true },
+        ...PORTFOLIO_VISIBLE,
         ...(query.portfolioId ? { externalPortfolioId: query.portfolioId } : {}),
         ...(search
           ? {
@@ -1270,7 +1292,7 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
       });
     if (entity === 'buildings')
       return this.prisma.propertywareBuilding.findFirst({
-        where: { ...identity, portfolio: { isActive: true } },
+        where: { ...identity, ...PORTFOLIO_VISIBLE },
         select: {
           id: true,
           externalId: true,
@@ -1412,6 +1434,14 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
       select: { portfolioId: true, externalPortfolioId: true },
     });
     if (!building) throw new Error(`Missing synchronized building ${buildingId}.`);
+    // Since buildings may be unassigned, this recovery can genuinely come up
+    // empty. Naming that is better than letting Prisma reject a null portfolio
+    // on the lease with a constraint error nobody can act on.
+    if (!building.portfolioId || !building.externalPortfolioId) {
+      throw new Error(
+        `Building ${buildingId} has no portfolio, so a report-sourced lease cannot resolve one.`,
+      );
+    }
     return { id: building.portfolioId, externalId: building.externalPortfolioId };
   }
   private delegateFor(entity: PropertywareEntity) {

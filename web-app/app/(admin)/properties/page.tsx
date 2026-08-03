@@ -162,7 +162,11 @@ export default function PropertiesPage() {
                   </Link>
                 </TableCell>
                 <TableCell>{address(property)}</TableCell>
-                <TableCell>{property.portfolio.name}</TableCell>
+                <TableCell>
+                  {property.portfolio?.name ?? (
+                    <span className="text-muted-foreground">Unassigned</span>
+                  )}
+                </TableCell>
                 <TableCell className="numeric-cell">{property._count?.units ?? 0}</TableCell>
                 <TableCell>
                   {property.totalArea?.label ?? 'Not provided'}

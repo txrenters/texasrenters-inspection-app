@@ -79,7 +79,8 @@ export interface NormalizedAddress {
 export interface NormalizedBuilding extends NormalizedAddress {
   entityType: 'buildings';
   externalId: string;
-  portfolioExternalId: string;
+  /** Absent for buildings Propertyware holds without a portfolio assignment. */
+  portfolioExternalId?: string;
   idNumber?: string;
   name: string;
   abbreviation?: string;

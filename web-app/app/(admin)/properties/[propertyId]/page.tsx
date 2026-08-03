@@ -65,7 +65,12 @@ export default function PropertyDetailPage() {
         <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
           <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
             <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Portfolio</span>
-            <strong className="text-base font-semibold leading-tight text-foreground">{item.portfolio.name}</strong>
+            <strong className="text-base font-semibold leading-tight text-foreground">{item.portfolio?.name ?? 'Unassigned'}</strong>
+            {!item.portfolio ? (
+              <small className="text-xs leading-snug text-muted-foreground/80">
+                Propertyware holds no portfolio for this property
+              </small>
+            ) : null}
           </div>
           <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
             <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Total area</span>

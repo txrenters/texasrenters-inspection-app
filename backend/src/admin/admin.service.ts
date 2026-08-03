@@ -85,6 +85,20 @@ const ADMIN_TRANSACTION_OPTIONS = {
 } as const;
 
 /**
+ * Restricts properties to those whose portfolio is active, without hiding the
+ * ones that have no portfolio at all.
+ *
+ * Propertyware genuinely returns buildings with no portfolio assigned. Filtering
+ * on the relation alone would drop every one of them, because an absent
+ * relation cannot satisfy `isActive` — so an unassigned property would vanish
+ * from the app entirely rather than merely lack an ownership grouping. Nested
+ * in `AND` so it composes with a search `OR` on the same query.
+ */
+const PORTFOLIO_VISIBLE = {
+  AND: [{ OR: [{ portfolioId: null }, { portfolio: { isActive: true } }] }],
+} satisfies Prisma.PropertywareBuildingWhereInput;
+
+/**
  * Readiness of the object storage that room videos and photos are written to.
  *
  * Follows `INSPECTION_MEDIA_STORAGE_PROVIDER` rather than assuming one vendor,
@@ -321,7 +335,7 @@ export class AdminService {
     const where: Prisma.PropertywareBuildingWhereInput = {
       organizationId: user.organizationId,
       isActive: active,
-      portfolio: { isActive: true },
+      ...PORTFOLIO_VISIBLE,
       ...(query.portfolioId ? { portfolioId: query.portfolioId } : {}),
       ...(query.city ? { city: { equals: query.city, mode: 'insensitive' } } : {}),
       ...(query.state ? { state: { equals: query.state, mode: 'insensitive' } } : {}),
@@ -2088,7 +2102,7 @@ export class AdminService {
       where: {
         id,
         organizationId,
-        ...(active ? { isActive: true, portfolio: { isActive: true } } : {}),
+        ...(active ? { isActive: true, ...PORTFOLIO_VISIBLE } : {}),
       },
       select: {
         id: true,
@@ -2550,7 +2564,7 @@ export class AdminService {
         city: property.city,
         state: property.state,
         postalCode: property.postalCode,
-        portfolio: property.portfolio.name,
+        portfolio: property.portfolio?.name ?? 'Unassigned',
       },
       unit,
     };

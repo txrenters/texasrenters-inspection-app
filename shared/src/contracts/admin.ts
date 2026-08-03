@@ -134,7 +134,13 @@ export interface AdminProperty {
   sourceStatus?: string | null;
   isActive: boolean;
   lastSyncedAt: string;
-  portfolio: { id: string; name: string; externalId: string };
+  /**
+   * Null for a property Propertyware holds without a portfolio assignment.
+   * Such a property is still fully inspectable; only the ownership grouping is
+   * missing, so callers show it as unassigned rather than treating it as
+   * malformed.
+   */
+  portfolio: { id: string; name: string; externalId: string } | null;
   totalArea?: PropertyTotalArea;
   leaseSummary?: PropertyLeaseSummary;
   _count?: { units: number; inspections: number };

@@ -13,6 +13,7 @@ import {
 } from '../src/integrations/propertyware/propertyware.mapper';
 import { propertywarePages } from '../src/integrations/propertyware/propertyware.pagination';
 import { propertywareSchemas } from '../src/integrations/propertyware/propertyware.schemas';
+import type { RawPropertywareBuilding } from '../src/integrations/propertyware/propertyware.schemas';
 import type {
   PropertywareConfig,
   PropertywarePageQuery,
@@ -236,7 +237,7 @@ describe('Propertyware pagination and client', () => {
         new Response(
           JSON.stringify([
             mockPropertywareRecords.buildings[0],
-            { ...mockPropertywareRecords.buildings[0], id: 93002, portfolioID: null },
+            { ...mockPropertywareRecords.buildings[0], id: 93002, name: '' },
           ]),
           { status: 200, headers: { 'x-total-count': '2' } },
         ),
@@ -253,9 +254,33 @@ describe('Propertyware pagination and client', () => {
         index: 1,
         externalId: '93002',
         code: 'PROPERTYWARE_SCHEMA_ERROR',
-        detail: expect.stringContaining('portfolioID'),
+        detail: expect.stringContaining('name'),
       },
     ]);
+  });
+
+  it('accepts a building that has no portfolio', async () => {
+    // Propertyware really does return these. Rejecting them hid nineteen live
+    // properties from the whole app, so a null portfolio must survive
+    // validation and be persisted unassigned instead.
+    process.env.PROPERTYWARE_PROVIDER = 'live';
+    process.env.PROPERTYWARE_CLIENT_ID = 'client';
+    process.env.PROPERTYWARE_CLIENT_SECRET = 'secret';
+    process.env.PROPERTYWARE_ORGANIZATION_ID = 'system';
+    global.fetch = jest.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([{ ...mockPropertywareRecords.buildings[0], portfolioID: null }]),
+        { status: 200, headers: { 'x-total-count': '1' } },
+      ),
+    );
+    const page = await new PropertywareClient().fetchPage(
+      'buildings',
+      { offset: 0, limit: 1 },
+      'correlation',
+    );
+    expect(page.validationErrors).toEqual([]);
+    expect(page.records).toHaveLength(1);
+    expect(mapBuilding(page.records[0] as RawPropertywareBuilding).portfolioExternalId).toBeUndefined();
   });
 
   it('validates a single-record building response', async () => {

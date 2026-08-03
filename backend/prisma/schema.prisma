@@ -778,8 +778,10 @@ model PropertywareBuilding {
   organizationId      String                @db.Uuid
   externalId          String
   sourceSystem        String                @default("propertyware")
-  portfolioId         String                @db.Uuid
-  externalPortfolioId String
+  /// Optional: Propertyware exposes buildings with no portfolio assigned, and
+  /// requiring one quarantined nineteen real properties out of the whole app.
+  portfolioId         String?               @db.Uuid
+  externalPortfolioId String?
   idNumber            String?
   name                String
   abbreviation        String?
@@ -809,7 +811,7 @@ model PropertywareBuilding {
   sourceHash          String?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
-  portfolio           PropertywarePortfolio @relation(fields: [portfolioId], references: [id])
+  portfolio           PropertywarePortfolio? @relation(fields: [portfolioId], references: [id])
   units               PropertywareUnit[]
   leases              PropertywareLease[]
   inspections         Inspection[]

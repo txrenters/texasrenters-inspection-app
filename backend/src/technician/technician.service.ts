@@ -1688,7 +1688,8 @@ export class TechnicianService {
     property: {
       id: string;
       externalId: string;
-      externalPortfolioId: string;
+      /** Null for buildings Propertyware holds without a portfolio. */
+      externalPortfolioId: string | null;
       name: string;
       addressLine1: string | null;
       city: string | null;
@@ -1708,7 +1709,7 @@ export class TechnicianService {
       id: property.id,
       externalPropertyId: property.externalId,
       externalOwnerId: '',
-      externalPortfolioId: property.externalPortfolioId,
+      externalPortfolioId: property.externalPortfolioId ?? '',
       name: property.name,
       address: unit?.name ? `${baseAddress} · ${formatUnitLabel(unit.name)}` : baseAddress,
       unitName: unit?.name ?? null,

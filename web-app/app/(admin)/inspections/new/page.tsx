@@ -155,7 +155,9 @@ function CreateInspectionForm() {
 
   useEffect(() => {
     if (prefill.data) {
-      setValue('portfolioId', prefill.data.portfolio.id);
+      // Empty rather than absent: the portfolio field is a filter, and a
+      // property with no portfolio should clear it, not leave a stale one.
+      setValue('portfolioId', prefill.data.portfolio?.id ?? '');
       setSelectedProperty(prefill.data);
     }
   }, [prefill.data, setValue]);
@@ -244,12 +246,12 @@ function CreateInspectionForm() {
               selectedOption={
                 // The auto-filled portfolio is usually absent from the loaded
                 // page of options, so pass it explicitly or the trigger blanks.
-                selectedProperty
+                selectedProperty?.portfolio
                   ? {
                       value: selectedProperty.portfolio.id,
                       label: selectedProperty.portfolio.name,
                     }
-                  : prefill.data
+                  : prefill.data?.portfolio
                     ? { value: prefill.data.portfolio.id, label: prefill.data.portfolio.name }
                     : undefined
               }
@@ -321,7 +323,7 @@ function CreateInspectionForm() {
                 // The portfolio is a property of the property, so derive it
                 // rather than asking the coordinator to state it twice.
                 if (record) {
-                  setValue('portfolioId', record.portfolio.id, { shouldValidate: true });
+                  setValue('portfolioId', record.portfolio?.id ?? '', { shouldValidate: true });
                   setPortfolioSearch('');
                 }
                 setValue('unitId', '');

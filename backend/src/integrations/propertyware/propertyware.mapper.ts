@@ -55,7 +55,7 @@ export function mapBuilding(raw: RawPropertywareBuilding): NormalizedBuilding {
   return {
     entityType: 'buildings',
     externalId: id(raw.id),
-    portfolioExternalId: id(raw.portfolioID),
+    portfolioExternalId: raw.portfolioID == null ? undefined : id(raw.portfolioID),
     idNumber: raw.idNumber == null ? undefined : id(raw.idNumber),
     name: raw.name.trim(),
     abbreviation: value(raw.abbreviation),
