@@ -68,9 +68,13 @@ function DialogContent({
       >
         {children}
         {showCloseButton && (
+          /* This project omits Tailwind Preflight, so a bare <button> keeps the
+             user-agent chrome — the close control rendered as a filled grey box
+             instead of a plain icon. The appearance reset is stated here rather
+             than inherited. */
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className="absolute top-4 right-4 inline-flex size-7 appearance-none items-center justify-center rounded-md border-0 bg-transparent p-0 text-muted-foreground opacity-70 ring-offset-background transition-opacity hover:bg-accent hover:text-foreground hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
           >
             <XIcon />
             <span className="sr-only">Close</span>
@@ -125,7 +129,9 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-lg leading-none font-semibold", className)}
+      // m-0: without Preflight the heading keeps its user-agent margin, which
+      // fights DialogHeader's own gap.
+      className={cn("m-0 text-lg leading-none font-semibold", className)}
       {...props}
     />
   )
@@ -138,7 +144,7 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn("text-sm text-muted-foreground", className)}
+      className={cn("m-0 text-sm text-muted-foreground", className)}
       {...props}
     />
   )
