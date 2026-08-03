@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
@@ -36,11 +37,6 @@ import {
 import { useAdminMutations } from '@/lib/queries';
 import { Badge } from './shared';
 
-function localDateTime(value: string) {
-  const date = new Date(value);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-}
-
 export function InspectionEditDialog({
   inspection,
   onClose,
@@ -48,7 +44,10 @@ export function InspectionEditDialog({
   inspection: AdminInspection;
   onClose: () => void;
 }) {
-  const [scheduledAt, setScheduledAt] = useState(() => localDateTime(inspection.scheduledAt));
+  // The first ten characters of the ISO value, which is its UTC date — the day
+  // the administrator picked. Deriving it from local parts instead would show
+  // the previous day west of Greenwich, since a DATE serialises to midnight UTC.
+  const [scheduledAt, setScheduledAt] = useState(() => inspection.scheduledAt.slice(0, 10));
   const [priority, setPriority] = useState(inspection.priority);
   const [internalNotes, setInternalNotes] = useState(inspection.internalNotes ?? '');
   const mutation = useAdminMutations().updateInspection;
@@ -66,7 +65,7 @@ export function InspectionEditDialog({
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-y-auto sm:max-w-2xl">
         <form onSubmit={(event) => void submit(event)} className="grid gap-4">
           <DialogHeader>
             <div className="flex items-start gap-3">
@@ -99,13 +98,13 @@ export function InspectionEditDialog({
         </div>
 
         <Field>
-          <FieldLabel htmlFor="edit-inspection-schedule">Scheduled date and time</FieldLabel>
-          <Input
+          <FieldLabel htmlFor="edit-inspection-schedule">Scheduled date</FieldLabel>
+          {/* Date only, matching the DATE column. The hour this used to collect
+              was never used by the schedule it claims to control. */}
+          <DatePicker
             id="edit-inspection-schedule"
-            type="datetime-local"
-            required
+            onChange={setScheduledAt}
             value={scheduledAt}
-            onChange={(event) => setScheduledAt(event.target.value)}
           />
           <FieldDescription>
             Controls when this inspection appears in the technician’s schedule.
