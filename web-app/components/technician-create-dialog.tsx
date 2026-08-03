@@ -59,8 +59,7 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
             <div className="grid gap-1">
               <DialogTitle>Create technician account</DialogTitle>
               <DialogDescription>
-                Their mobile sign-in details and a one-time temporary password are emailed to them
-                automatically. You only need to pass anything on by hand if that email fails.
+                Their mobile sign-in details are emailed to them automatically.
               </DialogDescription>
             </div>
           </div>
@@ -165,9 +164,12 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                   <path d="M7 10V8a5 5 0 0 1 10 0v2m-11 0h12v10H6V10Z" />
                 </svg>
               </span>
+              {/* Said once, here. The header used to promise the email and this
+                  note still told the administrator the password was theirs to
+                  pass on, which cannot both be true. */}
               <p>
-                The temporary password is displayed once. The technician must replace it during
-                their first mobile sign-in.
+                They must replace the temporary password when they first sign in. If the email
+                cannot be sent, it is shown here instead — that is the only time you will see it.
               </p>
             </div>
             {create.error ? (

@@ -97,18 +97,31 @@ export default function TechnicianDetailPage() {
       ) : null}
       <Card className="p-[22px] max-[560px]:p-4" asChild>
         <section>
+        {/* Every label and value needs its own line stated explicitly. Without
+            Preflight a bare span and strong are both inline, so these ran
+            together as "Current assignments0". */}
         <div className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Status</span>
+          <div className="flex flex-col items-start gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Status
+            </span>
             <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Current assignments</span>
-            <strong>{item.workload?.current ?? 0}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Current assignments
+            </span>
+            <strong className="text-base font-semibold leading-tight text-foreground">
+              {item.workload?.current ?? 0}
+            </strong>
           </div>
-          <div className="rounded-xl bg-background p-3.5">
-            <span>Account created</span>
-            <strong>{formatDate(item.createdAt)}</strong>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Account created
+            </span>
+            <strong className="text-base font-semibold leading-tight text-foreground">
+              {formatDate(item.createdAt)}
+            </strong>
           </div>
         </div>
         </section>
