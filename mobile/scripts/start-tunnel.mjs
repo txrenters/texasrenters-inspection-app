@@ -58,6 +58,14 @@ async function discoverBackendUrl() {
   return new URL(tunnel.public_url).origin;
 }
 
+/**
+ * Statuses that mean "not ready yet" rather than "the API said no".
+ *
+ * 404 is ngrok's answer for a domain whose tunnel has not finished binding —
+ * which is exactly what a freshly restarted stack serves for a few seconds.
+ */
+const TRANSIENT_HTTP_STATUSES = new Set([404, 429, 502, 503, 504]);
+
 /** Why a fetch failed, in the terms the person reading it can act on. */
 function describeFetchFailure(error) {
   if (error?.name === 'TimeoutError') return 'timed out';
@@ -93,11 +101,16 @@ async function verifyBackend(publicUrl) {
         headers: { 'ngrok-skip-browser-warning': 'true' },
         signal: AbortSignal.timeout(15_000),
       });
-      // A non-OK status is the tunnel working and the API objecting — a
-      // different problem, and retrying it only delays the report.
-      if (!response.ok)
+      if (response.ok) return;
+      // Some non-OK statuses are the edge still warming up rather than the API
+      // objecting. ngrok answers 404 for a domain whose tunnel has not finished
+      // binding, and the gateway answers 502/503 while its upstream is coming
+      // back after a restart — both clear within seconds and both used to fail
+      // the command outright. A status outside this set means something the API
+      // itself decided, which retrying only delays.
+      lastReason = `HTTP ${response.status}`;
+      if (!TRANSIENT_HTTP_STATUSES.has(response.status))
         fail(`The public backend health check returned HTTP ${response.status} at ${healthUrl}.`);
-      return;
     } catch (error) {
       lastReason = describeFetchFailure(error);
       if (attempt < attempts) {
