@@ -4764,3 +4764,24 @@ button:disabled {
     align-items: flex-start;
   }
 }
+
+/* Checklist trigger on an area row. Sits beside the row button rather than
+   inside it, so it needs its own affordance rather than inheriting the card's. */
+.area-evidence-checklist-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+.area-evidence-checklist-button:hover {
+  color: var(--foreground);
+  border-color: var(--ring);
+}

@@ -2,6 +2,9 @@
 
 import type { AreaEvidenceSummaryItem, AreaReviewStatus } from '@texasrenters/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ListChecks } from 'lucide-react';
+
+import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 import {
@@ -117,6 +120,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
 
   // Announce completion for screen readers, which otherwise get no signal that
   // the right-hand panel changed.
+  const [checklistArea, setChecklistArea] = useState<{ id: string; name: string } | null>(null);
   const [announcement, setAnnouncement] = useState('');
   useEffect(() => {
     const area = areas.find((item) => item.id === selectedId);
@@ -230,6 +234,20 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                         ) : null}
                       </span>
                     </button>
+                    {/* Sibling of the row button, never nested inside it — a
+                        button within a button is invalid markup and breaks
+                        keyboard traversal. */}
+                    <button
+                      type="button"
+                      aria-label={`Edit ${area.name} coverage checklist`}
+                      className="area-evidence-checklist-button"
+                      onClick={() =>
+                        setChecklistArea({ id: area.propertyAreaId, name: area.name })
+                      }
+                    >
+                      <ListChecks aria-hidden className="size-4" />
+                      <span>Checklist</span>
+                    </button>
                   </li>
                 );
               })}
@@ -247,6 +265,18 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           )}
         </div>
       </div>
+      {/* One dialog at the root driven by the chosen area, rather than one
+          mounted per row. */}
+      {checklistArea ? (
+        <AreaChecklistDialog
+          areaId={checklistArea.id}
+          areaName={checklistArea.name}
+          onOpenChange={(open) => {
+            if (!open) setChecklistArea(null);
+          }}
+          open
+        />
+      ) : null}
       </section>
     </Card>
   );
