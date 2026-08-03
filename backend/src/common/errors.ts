@@ -61,10 +61,21 @@ export class ApplicationExceptionFilter implements ExceptionFilter {
     const isApplication = exception instanceof ApplicationError;
     const rawMessage =
       exception instanceof HttpException ? exception.message : 'Unexpected server error';
+    // A ValidationPipe rejection carries "Bad Request" as its message and keeps
+    // the constraint text in the response body, which was logged and then
+    // dropped. Clients were left showing "Bad Request" with nothing to act on —
+    // a technician told only that replacing their temporary password failed,
+    // never that it needed twelve characters. These strings name the field and
+    // the rule and never the submitted value, which is why they were already
+    // judged safe to log.
+    const validationDetail = status === 400 ? describeValidationFailure(exception) : null;
     response.status(status).json({
       statusCode: status,
       code: isApplication ? exception.code : status === 400 ? 'VALIDATION_ERROR' : 'REQUEST_FAILED',
-      message: isApplication || status < 500 ? rawMessage : 'The request could not be completed.',
+      message: isApplication
+        ? rawMessage
+        : (validationDetail ??
+          (status < 500 ? rawMessage : 'The request could not be completed.')),
       details: isApplication ? exception.details : [],
       requestId: request.requestId ?? 'unknown',
     });

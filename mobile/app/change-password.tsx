@@ -18,6 +18,28 @@ import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(EyeIcon, EyeOffIcon);
 
+const MINIMUM_PASSWORD_LENGTH = 6;
+
+/**
+ * Mirrors ChangeRequiredPasswordDto, rule for rule and word for word.
+ *
+ * Checked here so a technician is told before the request rather than by it.
+ * The API remains the authority — this only saves a round trip, and the two
+ * lists have to be edited together.
+ */
+const PASSWORD_RULES: { test: (value: string) => boolean; message: string }[] = [
+  {
+    test: (value) => value.length >= MINIMUM_PASSWORD_LENGTH,
+    message: `Use at least ${MINIMUM_PASSWORD_LENGTH} characters.`,
+  },
+  { test: (value) => /[A-Z]/.test(value), message: 'Include at least one capital letter.' },
+  { test: (value) => /[0-9]/.test(value), message: 'Include at least one number.' },
+  {
+    test: (value) => /[^A-Za-z0-9]/.test(value),
+    message: 'Include at least one special character.',
+  },
+];
+
 export default function ChangePasswordScreen() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -29,8 +51,9 @@ export default function ChangePasswordScreen() {
 
   const submit = async () => {
     setValidationError('');
-    if (password.length < 8) {
-      setValidationError('Choose a password with at least 8 characters.');
+    const unmet = PASSWORD_RULES.find((rule) => !rule.test(password));
+    if (unmet) {
+      setValidationError(unmet.message);
       return;
     }
     if (password !== confirmation) {
@@ -70,8 +93,14 @@ export default function ChangePasswordScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <Text className="text-3xl font-bold text-foreground">Secure your account</Text>
+          {/* The requirement belongs here, before anything is typed. Stating it
+              only in a failure message meant finding it out by being rejected. */}
           <Text className="mt-2 text-base leading-6 text-muted-foreground">
             Replace the temporary password before opening assigned inspections.
+          </Text>
+          <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+            At least {MINIMUM_PASSWORD_LENGTH} characters, with a capital letter, a number and a
+            special character.
           </Text>
           {error ? (
             <View
