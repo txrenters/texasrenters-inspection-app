@@ -77,6 +77,12 @@ export class CreateAdminInspectionDto {
   @IsOptional() @IsIn(['STANDARD', 'HIGH']) priority = 'STANDARD';
   @IsOptional() @IsString() @MaxLength(2000) internalNotes?: string;
   @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
+  /**
+   * Schedule without an approved floor plan and let the technician survey the
+   * areas on site. Their areas are written to the property as DRAFT, so an
+   * administrator still approves the permanent layout.
+   */
+  @IsOptional() @IsBoolean() allowTechnicianAreaCapture?: boolean;
 }
 
 export class UpdateAdminInspectionDto {

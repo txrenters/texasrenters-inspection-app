@@ -1046,7 +1046,15 @@ export class AdminService {
             orderBy: { inspectionOrder: 'asc' },
             select: { id: true },
           });
-      if (!approvedAreas.length)
+      // An inspection normally starts from an approved layout. The exception is
+      // a property nobody has surveyed yet: rather than block it, or flatten it
+      // to a single "Entire property" area and lose the per-area structure the
+      // whole review is organised around, the technician builds the list on
+      // site. What they add is still DRAFT on the property, so an administrator
+      // approves the permanent layout — this delegates the survey, not the
+      // approval.
+      const technicianWillCapture = input.allowTechnicianAreaCapture === true;
+      if (!approvedAreas.length && !technicianWillCapture)
         throw new ApplicationError(
           409,
           'NO_APPROVED_AREAS',
@@ -1084,6 +1092,10 @@ export class AdminService {
             internalNotes: input.internalNotes,
             createdById: user.id,
             scheduledAt,
+            // Recorded even when the property turned out to have areas after
+            // all: it is the administrator's instruction to the technician, not
+            // a description of what the property had at the time.
+            allowTechnicianAreaCapture: technicianWillCapture,
             propertySnapshot: this.propertySnapshot(property, unit),
             leaseSnapshot: lease ? this.leaseSnapshot(lease) : Prisma.JsonNull,
             areas: {
@@ -1106,6 +1118,11 @@ export class AdminService {
         priority: input.priority,
         inspectionType: input.inspectionType,
         baselineInspectionId,
+        // Worth an audit entry: it is the decision to inspect a property whose
+        // layout nobody has approved, and it explains an inspection that begins
+        // with no areas at all.
+        allowTechnicianAreaCapture: technicianWillCapture,
+        areasFromApprovedPlan: approvedAreas.length,
       });
       if (input.technicianId)
         await this.createAssignment(

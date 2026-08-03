@@ -332,14 +332,45 @@ export default function InspectionOverviewScreen() {
         </View>
 
         {!roomList.length && !rooms.isLoading ? (
+          // Two different situations that look identical: a property whose
+          // areas nobody has approved yet, and one the administrator has asked
+          // this technician to survey. Telling the second to contact an
+          // administrator sends them back to the person who just asked them.
           <View className="mx-5 mt-5 items-center gap-2 rounded-2xl bg-card p-5">
             <FileTextIcon size={28} className="text-muted-foreground" />
-            <Text className="text-sm font-semibold text-foreground">
-              No approved areas available
-            </Text>
-            <Text className="text-center text-sm text-muted-foreground">
-              Contact an administrator to approve the property’s inspection areas.
-            </Text>
+            {item.allowTechnicianAreaCapture ? (
+              <>
+                <Text className="text-sm font-semibold text-foreground">
+                  Add the areas as you walk the property
+                </Text>
+                <Text className="text-center text-sm text-muted-foreground">
+                  This property has no floor plan yet, so you are building the list. Add each room
+                  or outdoor space as you reach it, then record it as normal. What you add is saved
+                  to the property for an administrator to approve.
+                </Text>
+                {canAddArea ? (
+                  <Pressable
+                    accessibilityHint="Starts the list for a property with no floor plan"
+                    accessibilityLabel="Add the first area"
+                    accessibilityRole="button"
+                    className="mt-2 min-h-12 flex-row items-center gap-2 rounded-xl bg-primary px-5"
+                    onPress={() => setAddAreaOpen(true)}
+                  >
+                    <PlusIcon size={16} className="text-primary-foreground" />
+                    <Text className="font-semibold text-primary-foreground">Add the first area</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Text className="text-sm font-semibold text-foreground">
+                  No approved areas available
+                </Text>
+                <Text className="text-center text-sm text-muted-foreground">
+                  Contact an administrator to approve the property’s inspection areas.
+                </Text>
+              </>
+            )}
           </View>
         ) : null}
 

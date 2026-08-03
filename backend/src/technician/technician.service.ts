@@ -186,6 +186,9 @@ const technicianInspectionSummarySelect = {
   status: true,
   priority: true,
   internalNotes: true,
+  // Tells the app to ask the technician to survey the areas rather than treat
+  // an empty list as an error.
+  allowTechnicianAreaCapture: true,
   propertywareUnit: {
     select: { id: true, name: true, bedrooms: true, bathrooms: true },
   },
@@ -1613,6 +1616,7 @@ export class TechnicianService {
       unitId: record.propertywareUnit?.id ?? null,
       unitName: record.propertywareUnit?.name ?? null,
       roomIds: record.areas.map((area) => area.id),
+      allowTechnicianAreaCapture: record.allowTechnicianAreaCapture,
       propertyNotes: record.internalNotes ?? '',
       property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {

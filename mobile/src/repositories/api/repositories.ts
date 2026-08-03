@@ -65,6 +65,9 @@ const inspectionSchema = z.object({
   ]),
   priority: z.enum(['STANDARD', 'HIGH']),
   roomIds: z.array(z.string()),
+  // Defaulted rather than required: a cached inspection written before this
+  // field existed must still parse, or the whole record is discarded.
+  allowTechnicianAreaCapture: z.boolean().default(false),
   propertyNotes: z.string(),
   property: propertySchema.pick({ id: true, address: true, cityStateZip: true, imageTone: true }),
   progress: z.object({

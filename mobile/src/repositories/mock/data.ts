@@ -208,6 +208,8 @@ export const inspections: Inspection[] = [
     status: 'IN_PROGRESS',
     priority: 'HIGH',
     roomIds: oakRooms.map((room) => room.id),
+    allowTechnicianAreaCapture: false,
+
     propertyNotes: 'Tenant returned keys yesterday. Verify all required rooms before completion.',
     ...inspectionPresentation('property-oak-ridge', {
       completed: 4,
@@ -227,6 +229,8 @@ export const inspections: Inspection[] = [
     status: 'SCHEDULED',
     priority: 'STANDARD',
     roomIds: [],
+    allowTechnicianAreaCapture: false,
+
     propertyNotes: 'Begin after 2:30 PM. Resident has confirmed vacancy.',
     ...inspectionPresentation('property-cedar-bend', {
       completed: 0,
@@ -244,6 +248,8 @@ export const inspections: Inspection[] = [
     status: 'IN_PROGRESS',
     priority: 'STANDARD',
     roomIds: [],
+    allowTechnicianAreaCapture: false,
+
     propertyNotes: 'Upload was paused when the building Wi-Fi became unavailable.',
     ...inspectionPresentation('property-south-congress', {
       completed: 3,
@@ -263,6 +269,8 @@ export const inspections: Inspection[] = [
     status: 'COMPLETED',
     priority: 'STANDARD',
     roomIds: [],
+    allowTechnicianAreaCapture: false,
+
     propertyNotes: 'Completed and ready for management report review.',
     ...inspectionPresentation('property-willow-creek', {
       completed: 6,
@@ -282,6 +290,8 @@ export const inspections: Inspection[] = [
     status: 'SCHEDULED',
     priority: 'STANDARD',
     roomIds: [],
+    allowTechnicianAreaCapture: false,
+
     propertyNotes: 'Unit B entrance is on the east side of the duplex.',
     ...inspectionPresentation('property-willow-creek', {
       completed: 0,
@@ -299,6 +309,8 @@ export const inspections: Inspection[] = [
     status: 'COMPLETED',
     priority: 'STANDARD',
     roomIds: [],
+    allowTechnicianAreaCapture: false,
+
     propertyNotes: 'Archived demo inspection.',
     ...inspectionPresentation('property-cedar-bend', {
       completed: 6,

@@ -34,6 +34,7 @@ import {
   useTechnicians,
   useUnits,
 } from '@/lib/queries';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ApiError } from '@/lib/api';
 import { propertyOptionLabel } from '@/lib/property-label';
 
@@ -152,6 +153,11 @@ function CreateInspectionForm() {
     ) ?? false;
   const needsAreaSetup =
     Boolean(propertyId) && !propertyAreas.isLoading && !propertyAreas.isError && !hasApprovedAreas;
+  // Resets whenever the property changes: it is a decision about one property's
+  // missing floor plan, and carrying it to the next one would schedule a survey
+  // nobody asked for.
+  const [technicianWillCapture, setTechnicianWillCapture] = useState(false);
+  useEffect(() => setTechnicianWillCapture(false), [propertyId]);
 
   useEffect(() => {
     if (prefill.data) {
@@ -190,6 +196,10 @@ function CreateInspectionForm() {
         inspectionType: values.inspectionType,
         priority: values.priority,
         internalNotes: values.internalNotes || undefined,
+        // Only meaningful for a property with no approved areas, and the
+        // checkbox is only offered there — but sent as chosen rather than
+        // re-derived, so the record says what was decided.
+        allowTechnicianAreaCapture: technicianWillCapture || undefined,
         idempotencyKey: crypto.randomUUID(),
       });
       router.push(`/inspections/${created.id}`);
@@ -507,21 +517,38 @@ function CreateInspectionForm() {
         {needsAreaSetup ? (
           <Alert variant="warning" role="alert">
             <span>
-              This property needs at least one approved inspection area before an inspection can be
-              created. If a detailed area list is not ready, continue with one required Entire
-              property area.
+              This property has no approved inspection areas. Choose how to proceed.
             </span>
-            <button
-              type="button"
-              className={buttonVariants({ variant: 'secondary', size: 'small' })}
-              disabled={fallbackArea.isPending}
-              onClick={() => fallbackArea.mutate({ propertyId })}
-            >
-              {fallbackArea.isPending ? 'Preparing area…' : 'Use entire property for now'}
-            </button>{' '}
-            <Link href={`/properties/${propertyId}#floor-plan-heading`}>
-              Set up detailed floor plan and areas
-            </Link>
+            {/* Listed first because it keeps the per-area structure the whole
+                review is organised around, where the fallback flattens the
+                property to one area and loses it. */}
+            <div className="mt-3 flex items-start gap-2">
+              <Checkbox
+                checked={technicianWillCapture}
+                className="mt-0.5"
+                id="technician-area-capture"
+                onCheckedChange={(checked) => setTechnicianWillCapture(checked === true)}
+              />
+              <label className="text-sm" htmlFor="technician-area-capture">
+                <strong className="font-semibold">Let the technician survey the areas on site.</strong>{' '}
+                They add each area as they walk the property. Those areas are saved to this
+                property as drafts for you to approve, so the layout is captured once and reused
+                for every later inspection.
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                className={buttonVariants({ variant: 'secondary', size: 'small' })}
+                disabled={fallbackArea.isPending || technicianWillCapture}
+                onClick={() => fallbackArea.mutate({ propertyId })}
+              >
+                {fallbackArea.isPending ? 'Preparing area…' : 'Use entire property for now'}
+              </button>
+              <Link href={`/properties/${propertyId}#floor-plan-heading`}>
+                Set up detailed floor plan and areas
+              </Link>
+            </div>
           </Alert>
         ) : mutation.error || fallbackArea.error ? (
           <FieldError>
@@ -543,7 +570,7 @@ function CreateInspectionForm() {
               isSubmitting ||
               mutation.isPending ||
               propertyAreas.isLoading ||
-              needsAreaSetup ||
+              (needsAreaSetup && !technicianWillCapture) ||
               units.isLoading ||
               (requiresUnit && !unitId)
             }

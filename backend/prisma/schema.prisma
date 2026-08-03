@@ -647,56 +647,63 @@ model BaselineMedia {
 }
 
 model Inspection {
-  id                      String                  @id @default(uuid()) @db.Uuid
-  organizationId          String                  @db.Uuid
-  propertyId              String?                 @db.Uuid
-  propertywareBuildingId  String?                 @db.Uuid
-  propertywareUnitId      String?                 @db.Uuid
-  propertywareLeaseId     String?                 @db.Uuid
-  inspectionType          InspectionType
-  baselineInspectionId    String?                 @db.Uuid
-  priority                String                  @default("STANDARD")
-  internalNotes           String?
-  createdById             String?                 @db.Uuid
-  status                  InspectionStatus        @default(SCHEDULED)
+  id                         String                  @id @default(uuid()) @db.Uuid
+  organizationId             String                  @db.Uuid
+  propertyId                 String?                 @db.Uuid
+  propertywareBuildingId     String?                 @db.Uuid
+  propertywareUnitId         String?                 @db.Uuid
+  propertywareLeaseId        String?                 @db.Uuid
+  inspectionType             InspectionType
+  baselineInspectionId       String?                 @db.Uuid
+  priority                   String                  @default("STANDARD")
+  internalNotes              String?
+  createdById                String?                 @db.Uuid
+  status                     InspectionStatus        @default(SCHEDULED)
   /// Date only. Inspections are scheduled to a day, never a time — the column
   /// is DATE so no clock value can be stored or implied.
-  scheduledAt             DateTime                @db.Date
-  startedAt               DateTime?
+  scheduledAt                DateTime                @db.Date
+  /// Lets the technician build the area list on site.
+  ///
+  /// Set when a property has no approved floor plan, which is otherwise a hard
+  /// block on scheduling. The areas the technician adds are written to the
+  /// property as DRAFT, so an administrator still approves what becomes the
+  /// property's permanent layout — this delegates the survey, not the approval.
+  allowTechnicianAreaCapture Boolean                 @default(false)
+  startedAt                  DateTime?
   // Technician submission (≠ completion). Only a human administrator finalizes.
-  submittedAt             DateTime?
-  completedAt             DateTime?
-  finalizedAt             DateTime?
-  finalizedById           String?                 @db.Uuid
+  submittedAt                DateTime?
+  completedAt                DateTime?
+  finalizedAt                DateTime?
+  finalizedById              String?                 @db.Uuid
   // Pending-finalization / follow-up workflow (spec §11).
-  completionBlockedReason String?
-  tbdReason               String?
-  followUpRequired        Boolean                 @default(false)
-  followUpDueAt           DateTime?
-  followUpTasks           String?
+  completionBlockedReason    String?
+  tbdReason                  String?
+  followUpRequired           Boolean                 @default(false)
+  followUpDueAt              DateTime?
+  followUpTasks              String?
   // A follow-up inspection points back at the inspection it continues.
-  parentInspectionId      String?                 @db.Uuid
-  inspectionRound         Int                     @default(1)
-  cancelledAt             DateTime?
-  cancellationReason      String?
-  propertySnapshot        Json?
-  leaseSnapshot           Json?
-  createdAt               DateTime                @default(now())
-  updatedAt               DateTime                @updatedAt
-  organization            Organization            @relation(fields: [organizationId], references: [id])
-  property                Property?               @relation(fields: [propertyId], references: [id])
-  propertywareBuilding    PropertywareBuilding?   @relation(fields: [propertywareBuildingId], references: [id])
-  propertywareUnit        PropertywareUnit?       @relation(fields: [propertywareUnitId], references: [id])
-  propertywareLease       PropertywareLease?      @relation(fields: [propertywareLeaseId], references: [id])
-  baselineInspection      Inspection?             @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
-  comparisonInspections   Inspection[]            @relation("InspectionLifecycleBaseline")
-  parentInspection        Inspection?             @relation("InspectionFollowUp", fields: [parentInspectionId], references: [id], onDelete: Restrict)
-  followUpInspections     Inspection[]            @relation("InspectionFollowUp")
-  finalizedBy             UserProfile?            @relation("InspectionFinalizedBy", fields: [finalizedById], references: [id])
-  assignments             InspectionAssignment[]
-  areas                   InspectionArea[]
-  findings                InspectionFinding[]
-  reportShares            InspectionReportShare[]
+  parentInspectionId         String?                 @db.Uuid
+  inspectionRound            Int                     @default(1)
+  cancelledAt                DateTime?
+  cancellationReason         String?
+  propertySnapshot           Json?
+  leaseSnapshot              Json?
+  createdAt                  DateTime                @default(now())
+  updatedAt                  DateTime                @updatedAt
+  organization               Organization            @relation(fields: [organizationId], references: [id])
+  property                   Property?               @relation(fields: [propertyId], references: [id])
+  propertywareBuilding       PropertywareBuilding?   @relation(fields: [propertywareBuildingId], references: [id])
+  propertywareUnit           PropertywareUnit?       @relation(fields: [propertywareUnitId], references: [id])
+  propertywareLease          PropertywareLease?      @relation(fields: [propertywareLeaseId], references: [id])
+  baselineInspection         Inspection?             @relation("InspectionLifecycleBaseline", fields: [baselineInspectionId], references: [id], onDelete: Restrict)
+  comparisonInspections      Inspection[]            @relation("InspectionLifecycleBaseline")
+  parentInspection           Inspection?             @relation("InspectionFollowUp", fields: [parentInspectionId], references: [id], onDelete: Restrict)
+  followUpInspections        Inspection[]            @relation("InspectionFollowUp")
+  finalizedBy                UserProfile?            @relation("InspectionFinalizedBy", fields: [finalizedById], references: [id])
+  assignments                InspectionAssignment[]
+  areas                      InspectionArea[]
+  findings                   InspectionFinding[]
+  reportShares               InspectionReportShare[]
 
   @@index([organizationId, status, scheduledAt])
   @@index([organizationId, scheduledAt(sort: Desc)])
@@ -774,13 +781,13 @@ model PropertywarePortfolioOwner {
 }
 
 model PropertywareBuilding {
-  id                  String                @id @default(uuid()) @db.Uuid
-  organizationId      String                @db.Uuid
+  id                  String                 @id @default(uuid()) @db.Uuid
+  organizationId      String                 @db.Uuid
   externalId          String
-  sourceSystem        String                @default("propertyware")
+  sourceSystem        String                 @default("propertyware")
   /// Optional: Propertyware exposes buildings with no portfolio assigned, and
   /// requiring one quarantined nineteen real properties out of the whole app.
-  portfolioId         String?               @db.Uuid
+  portfolioId         String?                @db.Uuid
   externalPortfolioId String?
   idNumber            String?
   name                String
@@ -801,16 +808,16 @@ model PropertywareBuilding {
   // Administrator override used when Propertyware provides no total area.
   manualTotalArea     Int?
   manualAreaUnit      String?
-  isActive            Boolean               @default(true)
+  isActive            Boolean                @default(true)
   sourceCreatedAt     DateTime?
   sourceUpdatedAt     DateTime?
-  firstSyncedAt       DateTime              @default(now())
-  lastSyncedAt        DateTime              @default(now())
-  lastSeenAt          DateTime              @default(now())
+  firstSyncedAt       DateTime               @default(now())
+  lastSyncedAt        DateTime               @default(now())
+  lastSeenAt          DateTime               @default(now())
   deactivatedAt       DateTime?
   sourceHash          String?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
   portfolio           PropertywarePortfolio? @relation(fields: [portfolioId], references: [id])
   units               PropertywareUnit[]
   leases              PropertywareLease[]

@@ -143,6 +143,12 @@ export interface Inspection {
   status: InspectionStatus;
   priority: Priority;
   roomIds: string[];
+  /**
+   * The administrator scheduled this without an approved floor plan and asked
+   * the technician to survey the areas. An empty area list is then the expected
+   * starting point, not a fault.
+   */
+  allowTechnicianAreaCapture: boolean;
   propertyNotes: string;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };
