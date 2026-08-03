@@ -4,6 +4,7 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@ta
 import { queryKeys } from '../features/queries';
 import { reconcileMobileState } from '../features/state-consistency';
 import { reportError } from '../lib/error-log';
+import { repositories } from '../repositories';
 import { InspectionReminderSync } from '../realtime/InspectionReminderSync';
 import { TechnicianRealtimeProvider } from '../realtime/TechnicianRealtimeProvider';
 import { SessionExpiredError } from '../storage/offline-record-cache';
@@ -19,9 +20,21 @@ import { SessionExpiredError } from '../storage/offline-record-cache';
  */
 function handleQueryError(client: QueryClient, error: unknown, source: string) {
   if (error instanceof SessionExpiredError) {
-    // Remove rather than invalidate — invalidate would refetch with the same
-    // dead session and loop.
-    client.removeQueries({ queryKey: queryKeys.currentUser });
+    // Resolved to null, not removed.
+    //
+    // `removeQueries` looked like it avoided a loop, but the query still had a
+    // mounted observer: removing it dropped the cache entry, react-query
+    // immediately refetched for that observer, the dead session produced
+    // another SessionExpiredError, and round it went. `isLoading` never
+    // settled, so the app sat on "Verifying secure access…" forever with no
+    // way to reach sign-in.
+    //
+    // Writing null instead gives the guard a definite answer on the first
+    // failure, and the router sends the technician to sign-in.
+    client.setQueryData(queryKeys.currentUser, null);
+    // Clears the dead tokens too, so the next launch starts from a clean
+    // session rather than repeating this on every cold start.
+    void repositories.auth.signOut().catch(() => undefined);
     return;
   }
   void reportError(error, { source });
