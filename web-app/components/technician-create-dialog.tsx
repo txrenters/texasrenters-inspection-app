@@ -59,20 +59,31 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
             <div className="grid gap-1">
               <DialogTitle>Create technician account</DialogTitle>
               <DialogDescription>
-                Generate secure mobile access with a one-time temporary password.
+                Their mobile sign-in details and a one-time temporary password are emailed to them
+                automatically. You only need to pass anything on by hand if that email fails.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         <div className="grid gap-4">
-        {create.data ? (
+        {create.data ? (() => {
+          const delivered = create.data.emailDeliveryStatus === 'SENT';
+          return (
           <div className="credential-card" role="status" aria-live="polite">
+            {/* The password is only the administrator's problem when the email
+                did not go out. Showing it either way made relaying it by hand
+                look like the expected next step, and left a live credential on
+                screen for a technician who had already been sent it. */}
             <div className="credential-success-heading">
               <span aria-hidden>✓</span>
               <div>
                 <strong>Account created</strong>
-                <p>Share these credentials through an approved private channel.</p>
+                <p>
+                  {delivered
+                    ? 'Their sign-in details have been emailed to them.'
+                    : 'Share these credentials through an approved private channel.'}
+                </p>
               </div>
             </div>
             <div className="credential-grid">
@@ -84,39 +95,40 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                 <span>Work email</span>
                 <code>{create.data.email}</code>
               </div>
-              <div className="credential-password">
-                <span>Temporary password · shown once</span>
-                <code>{create.data.temporaryPassword}</code>
-              </div>
+              {!delivered ? (
+                <div className="credential-password">
+                  <span>Temporary password · shown once</span>
+                  <code>{create.data.temporaryPassword}</code>
+                </div>
+              ) : null}
             </div>
-            <div
-              className={`alert ${
-                create.data.emailDeliveryStatus === 'SENT' ? 'alert-success' : 'alert-warning'
-              }`}
-            >
-              {create.data.emailDeliveryStatus === 'SENT'
-                ? 'The mobile sign-in instructions were emailed to this technician.'
-                : 'Email delivery was unavailable. Share the temporary password through an approved private channel.'}
+            <div className={`alert ${delivered ? 'alert-success' : 'alert-warning'}`}>
+              {delivered
+                ? `Mobile sign-in instructions and a temporary password were emailed to ${create.data.email}. They must change it on first sign-in. Nothing needs sending by hand.`
+                : 'Email delivery was unavailable, so this password was not sent. Share it through an approved private channel — it is shown only here, only once.'}
             </div>
             <DialogFooter>
-              <button
-                className={buttonVariants({ variant: 'secondary' })}
-                type="button"
-                onClick={() => {
-                  void navigator.clipboard
-                    .writeText(create.data!.temporaryPassword)
-                    .then(() => setCopied(true))
-                    .catch(() => setCopied(false));
-                }}
-              >
-                {copied ? 'Password copied' : 'Copy temporary password'}
-              </button>
+              {!delivered ? (
+                <button
+                  className={buttonVariants({ variant: 'secondary' })}
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(create.data!.temporaryPassword)
+                      .then(() => setCopied(true))
+                      .catch(() => setCopied(false));
+                  }}
+                >
+                  {copied ? 'Password copied' : 'Copy temporary password'}
+                </button>
+              ) : null}
               <button className={buttonVariants({ variant: 'primary' })} type="button" onClick={onClose}>
                 Done
               </button>
             </DialogFooter>
           </div>
-        ) : (
+          );
+        })() : (
           <form onSubmit={(event) => void submit(event)}>
             <div className="form-grid">
               <Field>
