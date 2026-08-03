@@ -68,13 +68,11 @@ function DialogContent({
       >
         {children}
         {showCloseButton && (
-          /* This project omits Tailwind Preflight, so a bare <button> keeps the
-             user-agent chrome — the close control rendered as a filled grey box
-             instead of a plain icon. The appearance reset is stated here rather
-             than inherited. */
+          /* p-0 because the base layer resets a button's background but not the
+             user agent's padding, which would otherwise pad the icon out. */
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 inline-flex size-7 appearance-none items-center justify-center rounded-md border-0 bg-transparent p-0 text-muted-foreground opacity-70 ring-offset-background transition-opacity hover:bg-accent hover:text-foreground hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className="absolute top-4 right-4 inline-flex size-7 appearance-none items-center justify-center rounded-md p-0 text-muted-foreground opacity-70 ring-offset-background transition-opacity hover:bg-accent hover:text-foreground hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
           >
             <XIcon />
             <span className="sr-only">Close</span>

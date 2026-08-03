@@ -137,15 +137,11 @@ export default function UserDetailPage() {
           <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
         </CardHeader>
         <dl className="grid grid-cols-3 gap-4 max-[560px]:grid-cols-1">
-          {/* Every other definition list in the app resets the dd margin in its
-              own CSS class. This one is built from Tailwind, so it inherited
-              the user agent's 40px indent and the badges sat pushed in from
-              their label. */}
           <div className="flex flex-col gap-1.5 rounded-xl bg-background p-4">
             <dt className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Effective permissions
             </dt>
-            <dd className="m-0">
+            <dd>
               <div className="badge-wrap">
                 {item.permissions.length ? (
                   item.permissions.map((permission) => (

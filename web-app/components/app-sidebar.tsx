@@ -82,8 +82,7 @@ export function AppSidebar() {
           aria-label="TexasRenters Inspection Admin — go to dashboard"
           className="group/brand block rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           href="/dashboard"
-          onClick={closeMobileNavigation}
-        >
+          onClick={closeMobileNavigation}>
           {/* No background plate, by preference. The wordmark's dark-blue "TEXAS"
               measures 1.33:1 against the navy sidebar, so a brightness lift plus a
               soft light drop-shadow separates it from the bar without a solid
@@ -116,7 +115,7 @@ export function AppSidebar() {
           <SidebarGroup key={group.title} className="gap-2 p-0">
             <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu className="m-0 list-none p-0">
+              <SidebarMenu>
                 {group.items.map((item) => {
                   const active = isAdminNavigationItemActive(pathname, item.href);
                   const Icon = item.icon;
@@ -125,13 +124,11 @@ export function AppSidebar() {
                       <SidebarMenuButton
                         asChild
                         isActive={active}
-                        tooltip={item.title}
-                      >
+                        tooltip={item.title}>
                         <Link
                           aria-current={active ? 'page' : undefined}
                           href={item.href}
-                          onClick={closeMobileNavigation}
-                        >
+                          onClick={closeMobileNavigation}>
                           <Icon aria-hidden />
                           <span>{item.title}</span>
                         </Link>
@@ -146,7 +143,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter>
-        <SidebarMenu className="m-0 list-none p-0">
+        <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -154,8 +151,7 @@ export function AppSidebar() {
                   aria-label="Open account menu"
                   className="border-0 bg-transparent data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                   size="lg"
-                  tooltip="Account menu"
-                >
+                  tooltip="Account menu">
                   <Avatar className="size-8 rounded-lg">
                     <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
                       {initials(displayName)}
@@ -172,8 +168,7 @@ export function AppSidebar() {
                 align="end"
                 className="min-w-56"
                 side={isMobile ? 'bottom' : 'right'}
-                sideOffset={8}
-              >
+                sideOffset={8}>
                 <DropdownMenuLabel>
                   <span className="block truncate text-foreground">{displayName}</span>
                   <span className="block font-normal capitalize text-muted-foreground">
@@ -199,8 +194,7 @@ export function AppSidebar() {
                 <DropdownMenuItem
                   aria-label="Sign out of administrator workspace"
                   onSelect={() => void signOut()}
-                  variant="destructive"
-                >
+                  variant="destructive">
                   <LogOut aria-hidden />
                   Sign out
                 </DropdownMenuItem>

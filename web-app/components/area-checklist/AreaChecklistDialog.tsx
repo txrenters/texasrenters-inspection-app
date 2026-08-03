@@ -150,7 +150,7 @@ export function AreaChecklistDialog({
           ) : items.length ? (
             <>
               <p className="m-0 mb-2 text-xs font-medium text-muted-foreground">{countLabel}</p>
-              <ul aria-label={`${areaName} checklist items`} className="m-0 list-none space-y-2 p-0">
+              <ul aria-label={`${areaName} checklist items`} className="space-y-2">
                 {items.map((item) => (
                   <li
                     key={item.id}

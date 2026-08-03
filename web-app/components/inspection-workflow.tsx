@@ -136,22 +136,19 @@ export function InspectionWorkflowPanel({
               <button
                 type="button"
                 className={buttonVariants({ variant: 'secondary' })}
-                onClick={() => setAction('under-review')}
-              >
+                onClick={() => setAction('under-review')}>
                 Request more evidence
               </button>
               <button
                 type="button"
                 className={buttonVariants({ variant: 'secondary' })}
-                onClick={() => setAction('follow-up')}
-              >
+                onClick={() => setAction('follow-up')}>
                 Require follow-up
               </button>
               <button
                 type="button"
                 className={buttonVariants({ variant: 'secondary' })}
-                onClick={() => setAction('tbd')}
-              >
+                onClick={() => setAction('tbd')}>
                 Mark TBD
               </button>
             </>
@@ -173,8 +170,7 @@ export function InspectionWorkflowPanel({
 
 const ACTION_COPY: Record<
   WorkflowAction,
-  { title: string; description: string; confirm: string }
-> = {
+  { title: string; description: string; confirm: string }> = {
   tbd: {
     title: 'Mark inspection TBD',
     description:
@@ -301,7 +297,7 @@ export function InspectionAreasPanel({ inspectionId }: { inspectionId: string })
           <CardTitle className="text-[17px]" id="inspection-areas-title">Inspection areas</CardTitle>
           <CardDescription>Rooms and outdoor areas captured for this inspection.</CardDescription>
         </div>
-        {canMerge && (areas.data?.length ?? 0) >= 2 ? (
+        {canMerge && (areas.data?.length ?? 0)>= 2 ? (
           <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setMerging(true)}>
             Merge duplicates
           </button>
@@ -313,7 +309,7 @@ export function InspectionAreasPanel({ inspectionId }: { inspectionId: string })
       ) : areas.isError ? (
         <ErrorState error={areas.error} retry={() => void areas.refetch()} />
       ) : areas.data?.length ? (
-        <ul className="m-0 flex list-none flex-col gap-2 p-0">
+        <ul className="flex flex-col gap-2">
           {areas.data.map((area) => (
             <li key={area.id} className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border px-3.5 py-2.5">
               <div>
@@ -391,8 +387,7 @@ function MergeAreasDialog({
           <span>Source area (merged away)</span>
           <Select
             onValueChange={(next) => setSourceAreaId(next === NONE ? '' : next)}
-            value={sourceAreaId || NONE}
-          >
+            value={sourceAreaId || NONE}>
             <SelectTrigger>
               <SelectValue placeholder="Select an area…" />
             </SelectTrigger>
@@ -414,8 +409,7 @@ function MergeAreasDialog({
           <span>Target area (kept)</span>
           <Select
             onValueChange={(next) => setTargetAreaId(next === NONE ? '' : next)}
-            value={targetAreaId || NONE}
-          >
+            value={targetAreaId || NONE}>
             <SelectTrigger>
               <SelectValue placeholder="Select an area…" />
             </SelectTrigger>
