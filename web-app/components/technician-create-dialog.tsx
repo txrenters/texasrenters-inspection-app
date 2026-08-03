@@ -186,10 +186,15 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
               >
                 Cancel
               </button>
+              {/* Disabled only while the request is in flight. Greying it out
+                  for empty fields washed the primary action out to less weight
+                  than Cancel beside it, and said nothing about what was
+                  missing. Both fields are required and the email is typed, so
+                  submitting an incomplete form points at the field itself. */}
               <button
                 className={buttonVariants({ variant: 'primary' })}
                 type="submit"
-                disabled={create.isPending || !displayName.trim() || !email.trim()}
+                disabled={create.isPending}
               >
                 {create.isPending ? 'Creating…' : 'Create account'}
               </button>
