@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { EyeIcon, EyeOffIcon } from 'lucide-react-native';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -12,11 +13,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
 import { useRequiredPasswordChange } from '@/src/features/queries';
+import { registerIcons } from '@/src/lib/icons';
+
+registerIcons(EyeIcon, EyeOffIcon);
 
 export default function ChangePasswordScreen() {
   const changePassword = useRequiredPasswordChange();
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState('');
 
   const submit = async () => {
@@ -78,22 +83,41 @@ export default function ChangePasswordScreen() {
             disappears the moment typing starts and which several screen
             readers skip entirely. The explicit labels are the only thing
             distinguishing the two password boxes. */}
-          <TextInput
-            accessibilityLabel="New password"
-            className="mt-6 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
-            placeholder="New password"
-            placeholderTextColor="#9a9484"
-            secureTextEntry
-            textContentType="newPassword"
-            value={password}
-            onChangeText={setPassword}
-          />
+          {/* One toggle for both fields, unlike sign-in's single box: the two
+              hold the same secret, and being able to read them together is how
+              a mismatch gets spotted before the error message says so. */}
+          <View className="mt-6 flex-row items-center rounded-xl border border-border bg-card">
+            <TextInput
+              accessibilityLabel="New password"
+              className="min-h-12 flex-1 px-4 py-4 text-base text-foreground"
+              placeholder="New password"
+              placeholderTextColor="#9a9484"
+              secureTextEntry={!showPassword}
+              textContentType="newPassword"
+              value={password}
+              onChangeText={setPassword}
+            />
+            <Pressable
+              accessibilityHint="Applies to both password fields"
+              accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: showPassword }}
+              className="min-h-11 min-w-11 items-center justify-center px-3 py-3"
+              onPress={() => setShowPassword((value) => !value)}
+            >
+              {showPassword ? (
+                <EyeOffIcon size={20} className="text-muted-foreground" />
+              ) : (
+                <EyeIcon size={20} className="text-muted-foreground" />
+              )}
+            </Pressable>
+          </View>
           <TextInput
             accessibilityLabel="Confirm new password"
             className="mt-3 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
             placeholder="Confirm new password"
             placeholderTextColor="#9a9484"
-            secureTextEntry
+            secureTextEntry={!showPassword}
             textContentType="newPassword"
             value={confirmation}
             onChangeText={setConfirmation}
