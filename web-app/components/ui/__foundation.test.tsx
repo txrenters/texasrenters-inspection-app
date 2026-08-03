@@ -53,11 +53,24 @@ describe('tailwind + shadcn foundation', () => {
   });
 
   it('omits preflight so the legacy stylesheet keeps working', () => {
-    // Preflight's signature rules would reset the 490 legacy class selectors.
+    // Preflight's signature rule resets typography across the 490 legacy class
+    // selectors at once. Its absence is what this guards; the paragraph and
+    // heading margins those screens may be spacing themselves with are the
+    // specific thing that must not be swept away without looking at them.
     expect(css).not.toMatch(/blockquote,\s*figure,\s*h1/);
-    expect(css).not.toMatch(/list-style:\s*none/);
     // But the minimum utilities need must still be present.
     expect(css).toMatch(/box-sizing:\s*border-box/);
     expect(css).toMatch(/border-style:\s*solid/);
+  });
+
+  it('applies the verified subset of preflight the app was re-adding by hand', () => {
+    // Each of these was previously fixed per component and forgotten by the
+    // next one written from Tailwind alone. They live in `base` so a utility
+    // still overrides them, and each was checked against the legacy stylesheet
+    // first — no rule there wants a list marker, a dd indent, or a button
+    // wearing the platform's own chrome.
+    expect(css).toMatch(/list-style:\s*none/);
+    expect(css).toMatch(/\bdd\b[^{]*\{[^}]*margin:\s*0/s);
+    expect(css).toMatch(/button\s*\{[^}]*background-color:\s*transparent/s);
   });
 });

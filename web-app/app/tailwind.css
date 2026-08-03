@@ -31,6 +31,52 @@
     border-color: var(--color-border, currentColor);
   }
 
+  /**
+   * The pieces of Preflight that were being re-applied by hand, one component
+   * at a time, and forgotten every time a new one was written from Tailwind
+   * alone: a stray bullet beside an empty state, a checklist indented past its
+   * own fields, permission badges pushed 40px in from their label, a dialog
+   * close control drawn as a grey system button.
+   *
+   * In `base`, so every utility still wins — `list-disc` or `m-4` on the
+   * element overrides these, which is why they belong here rather than in the
+   * unlayered legacy stylesheet, where they would outrank utilities entirely.
+   *
+   * Each is verified against the legacy stylesheet rather than assumed:
+   *
+   * - Lists: nothing in the app sets `list-style: disc|decimal`, and no rule
+   *   targets a bare `ul`/`ol`, so no legacy list wants the marker or the
+   *   40px indent. Eleven class rules already set `list-style: none`, for
+   *   which this is a no-op.
+   * - `dd`: six of the app's seven definition lists already zero this in their
+   *   own class. The seventh was built from Tailwind and kept the indent.
+   * - `button`: without this a bare <button> keeps the platform's own chrome.
+   *   Every legacy button rule sets its own background, and shadcn's variants
+   *   set theirs, so this only reaches buttons that were never styled — where
+   *   system chrome was never the intent.
+   *
+   * Paragraph and heading margins are deliberately NOT reset. Twenty legacy
+   * rules already have opinions about `p`, and whether the ones they miss are
+   * relying on the user-agent margin for their spacing cannot be settled by
+   * reading the stylesheet — that one needs the screens in front of you.
+   */
+  ul,
+  ol,
+  menu {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  dl,
+  dd {
+    margin: 0;
+  }
+
+  button {
+    background-color: transparent;
+    background-image: none;
+  }
 }
 
 /**
