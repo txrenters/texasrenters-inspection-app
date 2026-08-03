@@ -10,6 +10,8 @@ import {
   updateRotationTracker,
   type RotationTracker,
   clampRotationDegrees,
+  sweptDegrees,
+  verticalTurnRate,
 } from '../src/capture/guided-capture';
 
 function track(
@@ -191,6 +193,50 @@ describe('guided walkthrough motion policy', () => {
       confidence: 'UNAVAILABLE',
       returnedToStart: false,
     });
+  });
+});
+
+describe('vertical turn rate', () => {
+  // Gravity as both platforms report it: pointing down, in m/s².
+  const FLAT = { x: 0, y: 0, z: -9.81 };
+  // Portrait, held up to film a wall: down runs along the device's -y axis.
+  const UPRIGHT = { x: 0, y: -9.81, z: 0 };
+
+  it('reads a turn about the vertical however the phone is held', () => {
+    // Lying flat, turning about the room's vertical is a turn about device z.
+    expect(verticalTurnRate({ x: 0, y: 0, z: -30 }, FLAT)).toBeCloseTo(30);
+    // Held upright, the very same turn is about device y instead. Euler yaw
+    // cannot tell these apart — this is the attitude where it locks up.
+    expect(verticalTurnRate({ x: 0, y: -30, z: 0 }, UPRIGHT)).toBeCloseTo(30);
+  });
+
+  it('ignores tilting and panning up and down', () => {
+    // Nodding the phone up and down while upright is rotation about device x,
+    // perpendicular to gravity, so it contributes nothing to the sweep.
+    expect(verticalTurnRate({ x: 45, y: 0, z: 0 }, UPRIGHT)).toBeCloseTo(0);
+  });
+
+  it('declines to guess when gravity is unreadable', () => {
+    // Mid-jolt the vector is the technician's own movement, not down.
+    expect(verticalTurnRate({ x: 0, y: 0, z: 30 }, { x: 0, y: 0, z: 0 })).toBeNull();
+    expect(verticalTurnRate({ x: 0, y: 0, z: 30 }, { x: 0, y: 0, z: 60 })).toBeNull();
+  });
+});
+
+describe('sweep direction', () => {
+  it('counts a lap walked the other way round the room', () => {
+    // Which sign of the sensor means clockwise is a platform convention, and
+    // getting it wrong used to leave the ring at zero for an entire lap. A room
+    // swept anticlockwise is still a room covered.
+    const anticlockwise = track([0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 0]);
+
+    expect(anticlockwise.peakNetClockwiseDegrees).toBe(0);
+    expect(sweptDegrees(anticlockwise)).toBe(360);
+    expect(rotationProgress(anticlockwise)).toBe(1);
+    expect(
+      evaluateCapture({ tracker: anticlockwise, durationSeconds: 20, sensorSupported: true })
+        .status,
+    ).not.toBe('INCOMPLETE');
   });
 });
 

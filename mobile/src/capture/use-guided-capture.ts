@@ -7,7 +7,26 @@ import {
   radiansOrDegreesToDegrees,
   type RotationTracker,
   updateRotationTracker,
+  verticalTurnRate,
+  type Vector3,
 } from './guided-capture';
+
+/**
+ * The gyroscope reading as a vector in the device's own axes.
+ *
+ * expo-sensors labels the three rates differently on each platform: iOS follows
+ * the web naming, where alpha is the rate about z, while Android hands back the
+ * raw sensor triple in axis order as alpha, beta, gamma. Projecting onto
+ * gravity requires the actual axes, so the labels have to be undone here.
+ */
+function angularVelocity(rate: { alpha: number; beta: number; gamma: number }): Vector3 {
+  return Platform.OS === 'ios'
+    ? { x: rate.gamma, y: rate.beta, z: rate.alpha }
+    : { x: rate.alpha, y: rate.beta, z: rate.gamma };
+}
+
+/** Longest gap still treated as continuous, so a stall cannot bank a huge turn. */
+const MAXIMUM_INTEGRATION_STEP_SECONDS = 0.5;
 
 /**
  * How long to wait for a first orientation sample before declaring the device
@@ -56,17 +75,59 @@ export function useGuidedCaptureSensor(active: boolean) {
     DeviceMotion.setUpdateInterval(Platform.OS === 'android' ? 200 : 75);
     let lastRender = 0;
 
+    let integratedHeading = 0;
+    let integratedAtMs = 0;
+    // Chosen once and kept. The two sources are different scales of the same
+    // name, so swapping mid-capture would read as one enormous jump and bank a
+    // turn nobody made.
+    let source: 'gyroscope' | 'attitude' | null = null;
+
     const subscription = DeviceMotion.addListener((measurement) => {
-      // Whether `rotation` arrives is the only question that matters. A device
-      // that cannot report attitude simply never sends it.
-      if (!measurement.rotation) return;
+      const now = Date.now();
+      let heading: number | null = null;
+
+      // Preferred source: the gyroscope, projected onto gravity.
+      //
+      // `rotation.alpha` is Euler yaw on both platforms, and Euler yaw is
+      // degenerate when the device is pitched to ±90° — the attitude a phone is
+      // in whenever it is held up to film a wall. It drifts and jumps there
+      // whether or not the technician turned, which is why the ring could both
+      // fill on a stationary phone and refuse to move during a real lap.
+      const rate = measurement.rotationRate;
+      const gravity = measurement.accelerationIncludingGravity;
+      if (source !== 'attitude' && rate && gravity) {
+        const vertical = verticalTurnRate(angularVelocity(rate), gravity);
+        if (vertical !== null) {
+          const elapsedSeconds = integratedAtMs
+            ? Math.min(MAXIMUM_INTEGRATION_STEP_SECONDS, (now - integratedAtMs) / 1000)
+            : 0;
+          integratedAtMs = now;
+          // Negated so clockwise counts down, matching the heading convention
+          // the tracker already reads deltas in.
+          integratedHeading -= vertical * elapsedSeconds;
+          heading = integratedHeading;
+          source = 'gyroscope';
+        } else if (source === 'gyroscope') {
+          // A jolt too violent to read gravity through. Skip the sample and
+          // resume from here rather than integrating across the gap.
+          integratedAtMs = now;
+          return;
+        }
+      }
+
+      // Fallback for a device that reports attitude but no usable gyroscope or
+      // gravity. Degenerate when held upright, but better than no guide at all.
+      if (heading === null && source !== 'gyroscope' && measurement.rotation) {
+        heading = radiansOrDegreesToDegrees(measurement.rotation.alpha);
+        source = 'attitude';
+      }
+      if (heading === null) return;
+
       if (!receivedSampleRef.current) {
         receivedSampleRef.current = true;
         setSupported(true);
       }
-      const heading = radiansOrDegreesToDegrees(measurement.rotation.alpha);
-      trackerRef.current = updateRotationTracker(trackerRef.current, heading, Date.now());
-      const now = Date.now();
+      trackerRef.current = updateRotationTracker(trackerRef.current, heading, now);
       if (now - lastRender >= 180) {
         lastRender = now;
         setTracker(trackerRef.current);

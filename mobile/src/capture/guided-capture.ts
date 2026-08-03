@@ -110,6 +110,8 @@ export interface RotationTracker {
    * creeps up by tens of degrees over a long recording, nowhere near a lap.
    */
   peakNetClockwiseDegrees: number;
+  /** Furthest the net ever ran the other way, for a sweep taken anticlockwise. */
+  troughNetClockwiseDegrees: number;
   recentCounterClockwiseDegrees: number;
   smoothedDegreesPerSecond: number;
   fastRotationDurationMs: number;
@@ -124,6 +126,7 @@ export function createRotationTracker(): RotationTracker {
     counterClockwiseRotationDegrees: 0,
     netClockwiseDegrees: 0,
     peakNetClockwiseDegrees: 0,
+    troughNetClockwiseDegrees: 0,
     recentCounterClockwiseDegrees: 0,
     smoothedDegreesPerSecond: 0,
     fastRotationDurationMs: 0,
@@ -200,6 +203,7 @@ export function updateRotationTracker(
       tracker.counterClockwiseRotationDegrees + (clockwise ? 0 : magnitude),
     netClockwiseDegrees,
     peakNetClockwiseDegrees: Math.max(tracker.peakNetClockwiseDegrees, netClockwiseDegrees),
+    troughNetClockwiseDegrees: Math.min(tracker.troughNetClockwiseDegrees, netClockwiseDegrees),
     recentCounterClockwiseDegrees,
     smoothedDegreesPerSecond: smoothedSpeed,
     fastRotationDurationMs,
@@ -207,12 +211,22 @@ export function updateRotationTracker(
   };
 }
 
+/**
+ * Furthest the sweep travelled, whichever way it went.
+ *
+ * Direction-agnostic on purpose. Which sign of the sensor means clockwise
+ * depends on a platform convention that has now been wrong twice, and the
+ * failure is silent and total: the ring simply never leaves zero while the
+ * technician walks the whole room. A room swept anticlockwise is still a room
+ * covered, so coverage does not depend on getting that convention right — only
+ * the on-screen prompt does, where being wrong is merely confusing.
+ */
+export function sweptDegrees(tracker: RotationTracker) {
+  return Math.max(tracker.peakNetClockwiseDegrees, -tracker.troughNetClockwiseDegrees, 0);
+}
+
 export function rotationProgress(tracker: RotationTracker) {
-  return Math.min(
-    1,
-    Math.max(0, tracker.peakNetClockwiseDegrees) /
-      GUIDED_CAPTURE_POLICY.targetClockwiseDegrees,
-  );
+  return Math.min(1, sweptDegrees(tracker) / GUIDED_CAPTURE_POLICY.targetClockwiseDegrees);
 }
 
 export function returnedToStart(tracker: RotationTracker) {
@@ -241,7 +255,7 @@ export function guidedCaptureState({
 
   const progress = rotationProgress(tracker);
   const didReturn =
-    tracker.peakNetClockwiseDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
+    sweptDegrees(tracker) >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
     returnedToStart(tracker);
   const evaluation = evaluateCapture({
     tracker,
@@ -294,9 +308,10 @@ export function evaluateCapture({
   // Judged on the net sweep, never the gross turn: a phone lying still
   // accumulates gross degrees from noise alone, and this decides whether an
   // area counts as covered.
+  const swept = sweptDegrees(tracker);
   const sufficientRotation =
-    tracker.peakNetClockwiseDegrees >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
-    tracker.peakNetClockwiseDegrees <= GUIDED_CAPTURE_POLICY.maximumClockwiseDegrees;
+    swept >= GUIDED_CAPTURE_POLICY.minimumClockwiseDegrees &&
+    swept <= GUIDED_CAPTURE_POLICY.maximumClockwiseDegrees;
   const sufficientDuration = durationSeconds >= GUIDED_CAPTURE_POLICY.minimumDurationSeconds;
   const wrongDirection =
     tracker.counterClockwiseRotationDegrees >= GUIDED_CAPTURE_POLICY.wrongDirectionWarningDegrees;
@@ -331,4 +346,43 @@ export function clampRotationDegrees(degrees: number) {
 
 export function radiansOrDegreesToDegrees(value: number) {
   return Math.abs(value) <= Math.PI * 2 + 0.25 ? (value * 180) / Math.PI : value;
+}
+
+export interface Vector3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * How fast the device is turning about the world vertical, in degrees per
+ * second, positive clockwise seen from above.
+ *
+ * This exists because `rotation.alpha` cannot answer the question. Both
+ * platforms derive it from Euler angles — `SensorManager.getOrientation` on
+ * Android, `CMAttitude.yaw` on iOS — and Euler yaw is degenerate when the
+ * device is pitched to ±90°, which is precisely how a phone is held to film
+ * walls. At that attitude yaw and roll are the same rotation and the value
+ * wanders regardless of whether anyone turned.
+ *
+ * The gyroscope has no such singularity. Projecting its angular velocity onto
+ * the measured direction of gravity gives the component of the turn about the
+ * vertical, whatever attitude the phone is held at, and drops the components
+ * from tilting or panning up and down. Gravity is read from
+ * `accelerationIncludingGravity`, which both platforms report pointing down.
+ *
+ * Returns null when gravity is unreadable — during a hard jolt the vector is
+ * dominated by the technician's own movement, and a guess would be worse than
+ * a gap.
+ */
+export function verticalTurnRate(angularVelocity: Vector3, gravity: Vector3): number | null {
+  const magnitude = Math.hypot(gravity.x, gravity.y, gravity.z);
+  // Roughly a quarter to double g: enough to trust it as a vertical reference.
+  if (!Number.isFinite(magnitude) || magnitude < 2.5 || magnitude > 20) return null;
+  const projection =
+    (angularVelocity.x * gravity.x +
+      angularVelocity.y * gravity.y +
+      angularVelocity.z * gravity.z) /
+    magnitude;
+  return Number.isFinite(projection) ? projection : null;
 }
