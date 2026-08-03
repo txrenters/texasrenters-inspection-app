@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
@@ -33,61 +41,80 @@ export default function ChangePasswordScreen() {
     validationError || (changePassword.error instanceof Error ? changePassword.error.message : '');
 
   return (
-    <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background px-6">
-      <View className="flex-1 justify-center">
-        <Text className="text-3xl font-bold text-foreground">Secure your account</Text>
-        <Text className="mt-2 text-base leading-6 text-muted-foreground">
-          Replace the temporary password before opening assigned inspections.
-        </Text>
-        {error ? (
-          <View
-            accessibilityLiveRegion="assertive"
-            accessibilityRole="alert"
-            className="mt-5 rounded-xl bg-destructive/10 px-4 py-3"
-          >
-            <Text className="text-sm text-destructive">{error}</Text>
-          </View>
-        ) : null}
-        {/* These fields have no visible label — only a placeholder, which
+    // Matches the sign-in screen this one follows. Centred content with two
+    // fields and a button was fine until the keyboard opened, which on a
+    // smaller display covered the confirm field and the button under it —
+    // leaving a technician retyping a password they could not see, on the one
+    // screen they cannot skip past to reach their work.
+    <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        className="flex-1"
+      >
+        <ScrollView
+          className="flex-1"
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: 'center',
+            paddingHorizontal: 24,
+            paddingBottom: 48,
+          }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text className="text-3xl font-bold text-foreground">Secure your account</Text>
+          <Text className="mt-2 text-base leading-6 text-muted-foreground">
+            Replace the temporary password before opening assigned inspections.
+          </Text>
+          {error ? (
+            <View
+              accessibilityLiveRegion="assertive"
+              accessibilityRole="alert"
+              className="mt-5 rounded-xl bg-destructive/10 px-4 py-3"
+            >
+              <Text className="text-sm text-destructive">{error}</Text>
+            </View>
+          ) : null}
+          {/* These fields have no visible label — only a placeholder, which
             disappears the moment typing starts and which several screen
             readers skip entirely. The explicit labels are the only thing
             distinguishing the two password boxes. */}
-        <TextInput
-          accessibilityLabel="New password"
-          className="mt-6 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
-          placeholder="New password"
-          placeholderTextColor="#9a9484"
-          secureTextEntry
-          textContentType="newPassword"
-          value={password}
-          onChangeText={setPassword}
-        />
-        <TextInput
-          accessibilityLabel="Confirm new password"
-          className="mt-3 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
-          placeholder="Confirm new password"
-          placeholderTextColor="#9a9484"
-          secureTextEntry
-          textContentType="newPassword"
-          value={confirmation}
-          onChangeText={setConfirmation}
-        />
-        <Pressable
-          accessibilityLabel={changePassword.isPending ? 'Updating password' : 'Update password'}
-          accessibilityRole="button"
-          accessibilityState={{
-            busy: changePassword.isPending,
-            disabled: changePassword.isPending,
-          }}
-          className="mt-5 min-h-12 items-center justify-center rounded-xl bg-primary py-4 active:scale-[0.98]"
-          disabled={changePassword.isPending}
-          onPress={() => void submit()}
-        >
-          <Text className="text-base font-bold text-primary-foreground">
-            {changePassword.isPending ? 'Updating…' : 'Update password'}
-          </Text>
-        </Pressable>
-      </View>
+          <TextInput
+            accessibilityLabel="New password"
+            className="mt-6 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
+            placeholder="New password"
+            placeholderTextColor="#9a9484"
+            secureTextEntry
+            textContentType="newPassword"
+            value={password}
+            onChangeText={setPassword}
+          />
+          <TextInput
+            accessibilityLabel="Confirm new password"
+            className="mt-3 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
+            placeholder="Confirm new password"
+            placeholderTextColor="#9a9484"
+            secureTextEntry
+            textContentType="newPassword"
+            value={confirmation}
+            onChangeText={setConfirmation}
+          />
+          <Pressable
+            accessibilityLabel={changePassword.isPending ? 'Updating password' : 'Update password'}
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: changePassword.isPending,
+              disabled: changePassword.isPending,
+            }}
+            className="mt-5 min-h-12 items-center justify-center rounded-xl bg-primary py-4 active:scale-[0.98]"
+            disabled={changePassword.isPending}
+            onPress={() => void submit()}
+          >
+            <Text className="text-base font-bold text-primary-foreground">
+              {changePassword.isPending ? 'Updating…' : 'Update password'}
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
