@@ -6,7 +6,21 @@ export const GUIDED_CAPTURE_POLICY = {
   returnToStartToleranceDegrees: 20,
   minimumDurationSeconds: 15,
   wrongDirectionWarningDegrees: 25,
-  jitterDegrees: 1,
+  /**
+   * Slowest turn treated as movement, in degrees per second.
+   *
+   * Per second rather than per sample, because the sampling interval differs by
+   * platform: a one-degree per-sample floor meant 5°/s on Android at 200ms but
+   * 13°/s on iOS at 75ms, so an unhurried sweep registered nothing at all on
+   * iOS while working on Android. A technician taking a full minute over a room
+   * turns at 6°/s, which must count.
+   *
+   * Low enough to admit that, high enough to ignore the slow yaw drift of an
+   * IMU with no heading reference, which runs a couple of degrees per minute.
+   * It is not what rejects hand noise — noise is fast, so it passes this gate
+   * and is cancelled instead by the net accumulation in `updateRotationTracker`.
+   */
+  jitterDegreesPerSecond: 2,
   maximumSampleDeltaDegrees: 45,
   maximumRecommendedDegreesPerSecond: 75,
   /**
@@ -145,8 +159,10 @@ export function updateRotationTracker(
 
   const delta = shortestSignedDelta(tracker.previousHeadingDegrees, heading);
   const magnitude = Math.abs(delta);
+  const elapsedMs = Math.max(16, sampleAtMs - (tracker.previousSampleAtMs ?? sampleAtMs - 50));
+  const instantaneousSpeed = magnitude / (elapsedMs / 1000);
   if (
-    magnitude < GUIDED_CAPTURE_POLICY.jitterDegrees ||
+    instantaneousSpeed < GUIDED_CAPTURE_POLICY.jitterDegreesPerSecond ||
     magnitude > GUIDED_CAPTURE_POLICY.maximumSampleDeltaDegrees
   ) {
     return {
@@ -156,8 +172,6 @@ export function updateRotationTracker(
     };
   }
 
-  const elapsedMs = Math.max(16, sampleAtMs - (tracker.previousSampleAtMs ?? sampleAtMs - 50));
-  const instantaneousSpeed = magnitude / (elapsedMs / 1000);
   const smoothedSpeed =
     tracker.acceptedSamples <= 1
       ? instantaneousSpeed

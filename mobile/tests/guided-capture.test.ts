@@ -132,6 +132,35 @@ describe('guided walkthrough motion policy', () => {
     ).toBe('ROTATE_CLOCKWISE');
   });
 
+  it('follows an unhurried sweep at the iOS sampling rate', () => {
+    // Six degrees a second — a full minute spent on one room — sampled every
+    // 75ms, so each step is under half a degree. The floor is stated per second
+    // precisely so this counts as movement on iOS exactly as it does on
+    // Android, where the same turn arrives in steps nearly three times larger.
+    const slow: number[] = [];
+    for (let index = 0; index <= 800; index += 1) slow.push(-index * 0.45);
+    const tracker = track(slow, 75);
+
+    expect(tracker.rejectedSamples).toBe(0);
+    expect(tracker.peakNetClockwiseDegrees).toBeGreaterThan(355);
+    expect(rotationProgress(tracker)).toBe(1);
+  });
+
+  it('never accumulates the slow drift of a sensor with no heading reference', () => {
+    // A tenth of a degree a second, one direction, for five minutes: drift, not
+    // a technician. A per-sample floor only postponed this — the reading was
+    // measured from the last accepted heading, so the gap widened until it
+    // crossed the threshold and was banked as real movement. Judged as a speed
+    // it stays below the floor however long it is left running.
+    const drifting: number[] = [];
+    for (let index = 0; index <= 4000; index += 1) drifting.push(-index * 0.0075);
+    const tracker = track(drifting, 75);
+
+    expect(tracker.acceptedSamples).toBe(1);
+    expect(tracker.peakNetClockwiseDegrees).toBe(0);
+    expect(rotationProgress(tracker)).toBe(0);
+  });
+
   it('keeps a completed lap after the technician turns back to the door', () => {
     // Progress is taken from the furthest point reached, so facing the way you
     // came does not un-walk the room.
