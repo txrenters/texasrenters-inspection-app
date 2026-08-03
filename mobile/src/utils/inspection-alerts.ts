@@ -11,31 +11,62 @@ export type InspectionUrgency = 'overdue' | 'due_soon' | 'scheduled';
 // only kind showing no indicator at all.
 const WARNABLE_STATUSES: readonly Inspection['status'][] = ['SCHEDULED', 'IN_PROGRESS'];
 
-// Started work is judged against the calendar day, not the clock. A technician
-// who begins at 9:05 for a 9:00 slot is not "5m late" in any useful sense —
-// but one still working an inspection dated three days ago is genuinely behind.
-const STARTED_GRACE_MS = 24 * 60 * 60 * 1000;
+// How many days past its date a started inspection may run before it is late.
+// A technician still finishing today's work at 6pm is not behind; one still
+// holding an inspection dated three days ago is.
+const STARTED_GRACE_DAYS = 1;
 
-// A scheduled inspection is "due soon" once it is within this window of its
-// start time, and "overdue" once the start time has passed.
-export const DUE_SOON_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours
 // Lead time for the pre-emptive "upcoming" local notification.
 export const UPCOMING_REMINDER_LEAD_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * Day number for a date-only `scheduledAt`, read in UTC.
+ *
+ * The column is a DATE and Prisma serialises it as midnight UTC, so the day the
+ * administrator picked is the value's *UTC* day. Reading local parts instead
+ * would move it: midnight UTC is the previous evening in Texas, so every
+ * inspection would appear scheduled a day early.
+ */
+function scheduledDayNumber(scheduledAt: string): number | null {
+  const parsed = new Date(scheduledAt);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return Math.floor(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()) / 86_400_000);
+}
+
+/** Day number for "now", read in the technician's own timezone. */
+function currentDayNumber(now: number): number {
+  const local = new Date(now);
+  // Built from local parts so the boundary is the technician's midnight, not
+  // Greenwich's. In Manila the two are eight hours apart, and comparing against
+  // UTC marked today's work overdue from 8am.
+  return Math.floor(Date.UTC(local.getFullYear(), local.getMonth(), local.getDate()) / 86_400_000);
+}
+
+/**
+ * How late an inspection is, in whole days.
+ *
+ * Compared day-to-day rather than instant-to-instant, because an inspection is
+ * now scheduled to a date with no time. Treating midnight as a deadline made
+ * work booked for today read as overdue for most of that day.
+ */
 export function inspectionUrgency(
   inspection: Pick<Inspection, 'status' | 'scheduledAt'>,
   now: number = Date.now(),
 ): InspectionUrgency | null {
   if (!WARNABLE_STATUSES.includes(inspection.status)) return null;
-  const scheduledAt = new Date(inspection.scheduledAt).getTime();
-  if (!Number.isFinite(scheduledAt)) return null;
+  const scheduledDay = scheduledDayNumber(inspection.scheduledAt);
+  if (scheduledDay === null) return null;
+  const today = currentDayNumber(now);
+
   if (inspection.status === 'IN_PROGRESS') {
     // Already started, so "due soon" is meaningless — the only question left is
     // whether it has been open too long.
-    return now - scheduledAt > STARTED_GRACE_MS ? 'overdue' : null;
+    return today - scheduledDay > STARTED_GRACE_DAYS ? 'overdue' : null;
   }
-  if (scheduledAt < now) return 'overdue';
-  if (scheduledAt - now <= DUE_SOON_WINDOW_MS) return 'due_soon';
+  // Overdue only once its day has fully passed. An inspection booked for today
+  // is due today, all day.
+  if (scheduledDay < today) return 'overdue';
+  if (scheduledDay === today) return 'due_soon';
   return 'scheduled';
 }
 

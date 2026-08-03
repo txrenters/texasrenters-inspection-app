@@ -2,13 +2,18 @@ import type { Inspection } from '../src/domain/models';
 import { formatDueIn, formatOverdueFor } from '../src/components/InspectionUrgencyBadge';
 import {
   collectInspectionAlerts,
-  DUE_SOON_WINDOW_MS,
   inspectionUrgency,
 } from '../src/utils/inspection-alerts';
 
 const NOW = new Date('2026-07-31T09:00:00Z').getTime();
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+
+/** A date-only scheduledAt, the shape the DATE column now serialises to. */
+function onDay(offsetDays: number): string {
+  const day = new Date(Date.UTC(2026, 6, 31 + offsetDays));
+  return day.toISOString();
+}
 
 function inspection(overrides: Partial<Inspection> = {}): Inspection {
   return {
@@ -29,15 +34,15 @@ function inspection(overrides: Partial<Inspection> = {}): Inspection {
 }
 
 describe('inspectionUrgency', () => {
-  it('marks a scheduled inspection overdue once its start time has passed', () => {
+  it('marks a scheduled inspection overdue once its day has passed', () => {
     // The reported bug: a past-scheduled inspection showed no indicator at all.
-    const past = inspection({ scheduledAt: new Date(NOW - MINUTE).toISOString() });
+    const past = inspection({ scheduledAt: onDay(-1) });
     expect(inspectionUrgency(past, NOW)).toBe('overdue');
   });
 
-  it('warns inside the two-hour window and stays quiet outside it', () => {
-    const soon = inspection({ scheduledAt: new Date(NOW + DUE_SOON_WINDOW_MS - MINUTE).toISOString() });
-    const later = inspection({ scheduledAt: new Date(NOW + DUE_SOON_WINDOW_MS + MINUTE).toISOString() });
+  it('treats today as due and a future day as merely scheduled', () => {
+    const soon = inspection({ scheduledAt: onDay(0) });
+    const later = inspection({ scheduledAt: onDay(2) });
     expect(inspectionUrgency(soon, NOW)).toBe('due_soon');
     expect(inspectionUrgency(later, NOW)).toBe('scheduled');
   });
@@ -48,7 +53,7 @@ describe('inspectionUrgency', () => {
     for (const status of ['IN_PROGRESS', 'COMPLETED', 'CANCELLED'] as const) {
       const started = inspection({
         status,
-        scheduledAt: new Date(NOW - 5 * HOUR).toISOString(),
+        scheduledAt: onDay(0),
       });
       expect(inspectionUrgency(started, NOW)).toBeNull();
     }
@@ -59,20 +64,16 @@ describe('inspectionUrgency', () => {
     // still sitting there days later.
     const stale = inspection({
       status: 'IN_PROGRESS',
-      scheduledAt: new Date(NOW - 8 * 24 * HOUR).toISOString(),
+      scheduledAt: onDay(-8),
     });
     expect(inspectionUrgency(stale, NOW)).toBe('overdue');
   });
 
   it('never nags about started work inside the one-day grace', () => {
-    const justInside = inspection({
-      status: 'IN_PROGRESS',
-      scheduledAt: new Date(NOW - 23 * HOUR).toISOString(),
-    });
-    const justOutside = inspection({
-      status: 'IN_PROGRESS',
-      scheduledAt: new Date(NOW - 25 * HOUR).toISOString(),
-    });
+    // Counted in whole days now: yesterday's work is still in hand, the day
+    // before that is not.
+    const justInside = inspection({ status: 'IN_PROGRESS', scheduledAt: onDay(-1) });
+    const justOutside = inspection({ status: 'IN_PROGRESS', scheduledAt: onDay(-2) });
     expect(inspectionUrgency(justInside, NOW)).toBeNull();
     expect(inspectionUrgency(justOutside, NOW)).toBe('overdue');
   });
@@ -106,11 +107,11 @@ describe('collectInspectionAlerts', () => {
   it('separates overdue from due-soon and counts both', () => {
     const alerts = collectInspectionAlerts(
       [
-        inspection({ id: 'a', scheduledAt: new Date(NOW - HOUR).toISOString() }),
-        inspection({ id: 'b', scheduledAt: new Date(NOW - 3 * HOUR).toISOString() }),
-        inspection({ id: 'c', scheduledAt: new Date(NOW + 30 * MINUTE).toISOString() }),
-        inspection({ id: 'd', scheduledAt: new Date(NOW + 8 * HOUR).toISOString() }),
-        inspection({ id: 'e', status: 'IN_PROGRESS', scheduledAt: new Date(NOW - HOUR).toISOString() }),
+        inspection({ id: 'a', scheduledAt: onDay(-1) }),
+        inspection({ id: 'b', scheduledAt: onDay(-3) }),
+        inspection({ id: 'c', scheduledAt: onDay(0) }),
+        inspection({ id: 'd', scheduledAt: onDay(4) }),
+        inspection({ id: 'e', status: 'IN_PROGRESS', scheduledAt: onDay(0) }),
       ],
       NOW,
     );
