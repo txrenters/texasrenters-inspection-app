@@ -17,16 +17,18 @@ import {
   archiveChecklistItem,
   createChecklistItem,
   fetchAreaChecklist,
-  parseKeywords,
   type AreaChecklistItem,
 } from '@/lib/area-checklist';
 
 /**
  * Authoring surface for one area's coverage checklist.
  *
- * The list a technician sees while recording that area. Items are what they are
- * asked to cover; keywords are the words that count as having covered it when
- * spoken, matched against the recording's AI summary.
+ * The list a technician sees while recording that area — what they are asked to
+ * cover. An item ticks itself when its own wording is spoken during the
+ * recording, matched against the AI summary, so the label is the whole of what
+ * an administrator writes. The server derives the words to listen for; the API
+ * still accepts explicit keywords for callers that need a synonym the label
+ * does not contain.
  *
  * Removal archives rather than deletes, because an inspection that already
  * recorded coverage against an item still has to resolve it. The copy says so,
@@ -58,7 +60,6 @@ export function AreaChecklistDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [label, setLabel] = useState('');
-  const [keywords, setKeywords] = useState('');
   const labelInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(
@@ -90,13 +91,9 @@ export function AreaChecklistDialog({
     setSaving(true);
     setActionError(null);
     try {
-      const created = await createChecklistItem(areaId, {
-        label: trimmed,
-        keywords: parseKeywords(keywords),
-      });
+      const created = await createChecklistItem(areaId, { label: trimmed });
       setItems((current) => [...current, created]);
       setLabel('');
-      setKeywords('');
       // A checklist is written several items at a time, so hand the caret back
       // rather than making the author click the first field again.
       labelInput.current?.focus();
@@ -129,9 +126,8 @@ export function AreaChecklistDialog({
         <DialogHeader className="shrink-0 pr-8">
           <DialogTitle>{areaName} checklist</DialogTitle>
           <DialogDescription>
-            What the technician is asked to cover while recording this area. Keywords are the words
-            that count as covering an item when spoken, matched against the recording&apos;s AI
-            summary.
+            What the technician is asked to cover while recording this area. Each item ticks itself
+            when its wording is spoken, matched against the recording&apos;s AI summary.
           </DialogDescription>
         </DialogHeader>
 
@@ -161,12 +157,7 @@ export function AreaChecklistDialog({
                     className="flex items-start justify-between gap-3 rounded-md border p-3"
                   >
                     <div className="min-w-0">
-                      <p className="m-0 text-sm font-medium">{item.label}</p>
-                      <p className="m-0 mt-0.5 break-words text-xs text-muted-foreground">
-                        {item.keywords.length
-                          ? item.keywords.join(', ')
-                          : 'No keywords — can only be ticked by hand'}
-                      </p>
+                      <p className="m-0 break-words text-sm font-medium">{item.label}</p>
                     </div>
                     <Button
                       aria-label={`Remove ${item.label}`}
@@ -209,31 +200,16 @@ export function AreaChecklistDialog({
               Item
             </label>
             <Input
+              aria-describedby="checklist-label-hint"
               id="checklist-label"
               onChange={(event) => setLabel(event.target.value)}
               placeholder="Sink, taps and drainage"
               ref={labelInput}
               value={label}
             />
-          </div>
-
-          <div>
-            <label
-              className="mb-1.5 block text-xs font-medium text-muted-foreground"
-              htmlFor="checklist-keywords"
-            >
-              Keywords <span className="font-normal">(optional)</span>
-            </label>
-            <Input
-              aria-describedby="checklist-keywords-hint"
-              id="checklist-keywords"
-              onChange={(event) => setKeywords(event.target.value)}
-              placeholder="sink, tap, faucet, drain"
-              value={keywords}
-            />
-            <p className="m-0 mt-1.5 text-xs text-muted-foreground" id="checklist-keywords-hint">
-              Comma separated, saved lowercase and de-duplicated. Without keywords the item can only
-              be ticked by hand.
+            <p className="m-0 mt-1.5 text-xs text-muted-foreground" id="checklist-label-hint">
+              Word it the way a technician would say it aloud — the item ticks itself when those
+              words appear in the recording.
             </p>
           </div>
 

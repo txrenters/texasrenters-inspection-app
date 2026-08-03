@@ -11,9 +11,13 @@ export function fetchAreaChecklist(areaId: string, signal?: AbortSignal) {
   return api<AreaChecklistItem[]>(`/api/v1/admin/property-areas/${areaId}/checklist`, { signal });
 }
 
+/**
+ * Keywords are optional: omit them and the server derives what to listen for
+ * from the label, which is all the authoring UI asks an administrator to write.
+ */
 export function createChecklistItem(
   areaId: string,
-  input: { label: string; keywords: string[] },
+  input: { label: string; keywords?: string[] },
 ) {
   return api<AreaChecklistItem>(`/api/v1/admin/property-areas/${areaId}/checklist`, {
     method: 'POST',
@@ -38,19 +42,3 @@ export function archiveChecklistItem(itemId: string) {
   });
 }
 
-/**
- * Splits an administrator's comma-separated input into keywords.
- *
- * The server lowercases and de-duplicates too; doing it here as well means the
- * field shows what will actually be saved rather than what was typed.
- */
-export function parseKeywords(value: string): string[] {
-  return [
-    ...new Set(
-      value
-        .split(',')
-        .map((word) => word.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ];
-}

@@ -169,6 +169,46 @@ function normalizeKeywords(keywords: string[] | undefined): string[] {
   return [...new Set(keywords.map((word) => word.trim().toLowerCase()).filter(Boolean))];
 }
 
+/** Words too common to identify anything when spoken aloud. */
+const CHECKLIST_STOP_WORDS = new Set([
+  'and',
+  'any',
+  'are',
+  'for',
+  'its',
+  'not',
+  'the',
+  'their',
+  'this',
+  'with',
+]);
+
+/**
+ * The words an item is matched on when no keywords were authored.
+ *
+ * Administrators asked to write the item only, so the item has to carry its own
+ * matching. Taken from the label because that is the phrase describing what the
+ * technician must cover: "Sink, taps and drainage" listens for sink, tap and
+ * drainage.
+ *
+ * Plurals are reduced to the singular because the matcher accepts either form,
+ * so storing "tap" covers "tap" and "taps" while storing "taps" covers only the
+ * plural. What this cannot do is guess a synonym — a spoken "faucet" will not
+ * satisfy an item labelled "taps" — so authored keywords remain the way to
+ * cover wording the label does not use.
+ */
+function keywordsFromLabel(label: string): string[] {
+  const words = label
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 1 && !CHECKLIST_STOP_WORDS.has(word))
+    // "glass", "status" and "analysis" are not plurals, so a trailing -s counts
+    // as one only when what precedes it is not s, u or i.
+    .map((word) => (word.length > 3 && /[^siu]s$/.test(word) ? word.slice(0, -1) : word));
+  return [...new Set(words)];
+}
+
 @Injectable()
 export class FloorPlanAdminService {
   private readonly logger = new Logger(FloorPlanAdminService.name);
@@ -1149,12 +1189,15 @@ export class FloorPlanAdminService {
       _max: { sortOrder: true },
     });
 
+    // Authored keywords win; otherwise the label supplies its own, so an item
+    // added without them still auto-ticks rather than waiting on a manual tap.
+    const authored = normalizeKeywords(input.keywords);
     const item = await this.prisma.areaChecklistItem.create({
       data: {
         organizationId: user.organizationId,
         propertyAreaId: area.id,
         label,
-        keywords: normalizeKeywords(input.keywords),
+        keywords: authored.length ? authored : keywordsFromLabel(label),
         sortOrder: input.sortOrder ?? (last._max.sortOrder ?? -1) + 1,
         createdById: user.id,
       },

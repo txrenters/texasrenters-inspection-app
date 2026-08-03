@@ -61,28 +61,25 @@ describe('AreaChecklistDialog', () => {
     expect(screen.getAllByText(/Removing an item archives it/).length).toBeGreaterThan(0);
   });
 
-  it('labels both fields visibly rather than by placeholder alone', async () => {
+  it('labels the item field visibly rather than by placeholder alone', async () => {
     open();
     await screen.findByText(/No items yet/);
     // getByLabelText resolves the visible <label for>, so this fails if the
     // field regresses to a placeholder or a bare aria-label.
     expect(screen.getByLabelText('Item')).toHaveAttribute('id', 'checklist-label');
-    expect(screen.getByLabelText(/Keywords/)).toHaveAttribute('id', 'checklist-keywords');
   });
 
-  it('submits on Enter from the keywords field, not just the first one', async () => {
+  it('asks for the item alone, leaving the server to derive what to listen for', async () => {
     open();
     await screen.findByText(/No items yet/);
+    expect(screen.queryByLabelText(/Keywords/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText('Item'), { target: { value: 'Sink, taps' } });
-    fireEvent.change(screen.getByLabelText(/Keywords/), { target: { value: 'Sink, TAP, sink' } });
     fireEvent.submit(form());
 
     await waitFor(() => expect(calls.some((call) => call.method === 'POST')).toBe(true));
     const post = calls.find((call) => call.method === 'POST')!;
-    // Lowercased and de-duplicated before it leaves the field, so what was
-    // shown is what gets saved.
-    expect(JSON.parse(post.body!)).toEqual({ label: 'Sink, taps', keywords: ['sink', 'tap'] });
+    expect(JSON.parse(post.body!)).toEqual({ label: 'Sink, taps' });
   });
 
   it('returns focus to the item field so several can be added in a row', async () => {
