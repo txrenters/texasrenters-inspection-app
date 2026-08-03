@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useColorScheme } from 'nativewind';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { HomeButton } from '@/src/components/HomeButton';
@@ -24,7 +25,13 @@ const ADDITIONAL_CATEGORIES: readonly {
 ];
 
 export default function RecordingReviewScreen() {
-  const { inspectionId = '', areaId = '', recordingType } = useLocalSearchParams<{
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  const {
+    inspectionId = '',
+    areaId = '',
+    recordingType,
+  } = useLocalSearchParams<{
     inspectionId: string;
     areaId: string;
     recordingType?: string;
@@ -41,9 +48,7 @@ export default function RecordingReviewScreen() {
   const [note, setNote] = useState(draft?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
   const [label, setLabel] = useState(draft?.label ?? '');
-  const [category, setCategory] = useState<AdditionalVideoCategory>(
-    draft?.category ?? 'OTHER',
-  );
+  const [category, setCategory] = useState<AdditionalVideoCategory>(draft?.category ?? 'OTHER');
   const player = useVideoPlayer(draft?.uri ?? null, (instance) => {
     instance.loop = false;
   });
@@ -157,7 +162,7 @@ export default function RecordingReviewScreen() {
             multiline
             textAlignVertical="top"
             placeholder="Add context for the reviewer"
-            placeholderTextColor="#9a9484"
+            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
           />
         </View>
         {isAdditional ? (
@@ -172,7 +177,7 @@ export default function RecordingReviewScreen() {
               value={label}
               onChangeText={setLabel}
               placeholder="e.g. Sink leak follow-up"
-              placeholderTextColor="#9a9484"
+              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
             />
             <Text className="mt-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Category
@@ -286,8 +291,8 @@ export default function RecordingReviewScreen() {
               : isAdditional
                 ? 'Save and queue additional evidence'
                 : nextRoom
-                ? `Save and continue to ${nextRoom.name}`
-                : 'Save and return to inspection'
+                  ? `Save and continue to ${nextRoom.name}`
+                  : 'Save and return to inspection'
           }
           accessibilityRole="button"
           accessibilityState={{ busy: save.isPending, disabled: !confirmed || save.isPending }}
@@ -307,8 +312,8 @@ export default function RecordingReviewScreen() {
               : isAdditional
                 ? 'Save & queue evidence'
                 : nextRoom
-                ? `Save & continue to ${nextRoom.name}`
-                : 'Save & return to inspection'}
+                  ? `Save & continue to ${nextRoom.name}`
+                  : 'Save & return to inspection'}
           </Text>
         </Pressable>
       </View>

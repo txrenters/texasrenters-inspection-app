@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useColorScheme } from 'nativewind';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -22,6 +23,8 @@ registerIcons(EyeIcon);
 registerIcons(EyeOffIcon);
 
 export default function LoginScreen() {
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
   const appName = Constants.expoConfig?.name ?? 'TexasRenters Inspect';
   const login = useApiLogin();
   const [email, setEmail] = useState('');
@@ -97,7 +100,7 @@ export default function LoginScreen() {
               accessibilityLabelledBy="login-email-label"
               className="min-h-12 rounded-xl border border-border bg-card px-4 py-3.5 text-base text-foreground"
               placeholder="you@texasrenters.com"
-              placeholderTextColor="#9a9484"
+              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
@@ -120,7 +123,7 @@ export default function LoginScreen() {
                 accessibilityLabelledBy="login-password-label"
                 className="min-h-12 flex-1 px-4 py-3.5 text-base text-foreground"
                 placeholder="Enter your password"
-                placeholderTextColor="#9a9484"
+                placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
