@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Field, FieldError, FieldLabel } from '@/components/ui/field';
@@ -431,7 +432,17 @@ function CreateInspectionForm() {
             {/* Date only. An inspection is booked for a day — the hour and
                 minute the old datetime input collected were never used by any
                 part of the workflow, and the column is now a DATE. */}
-            <Input id="scheduledAt" type="date" {...register('scheduledAt')} />
+            <Controller
+              control={control}
+              name="scheduledAt"
+              render={({ field }) => (
+                <DatePicker
+                  id="scheduledAt"
+                  onChange={field.onChange}
+                  value={field.value}
+                />
+              )}
+            />
             {errors.scheduledAt ? (
               <FieldError>{errors.scheduledAt.message}</FieldError>
             ) : null}
