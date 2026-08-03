@@ -1,20 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useColorScheme } from 'nativewind';
 
 import type { AreaEnvironment } from '../domain/models';
 import { useAddArea } from '../features/queries';
 import { announce } from '../lib/announce';
+import { BottomSheet } from './BottomSheet';
 import { Loader } from './ui/Loader';
 import type { AddAreaInput } from '../repositories/contracts';
 
@@ -60,7 +51,6 @@ export function AddAreaSheet({
 }) {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const insets = useSafeAreaInsets();
   const addArea = useAddArea(inspectionId);
   const [name, setName] = useState('');
   const [environment, setEnvironment] = useState<AreaEnvironment>('INDOOR');
@@ -125,7 +115,10 @@ export function AddAreaSheet({
       if (queued) commit(queued);
       return;
     }
-    const timer = setTimeout(() => setCountdown((value) => (value === null ? null : value - 1)), 1000);
+    const timer = setTimeout(
+      () => setCountdown((value) => (value === null ? null : value - 1)),
+      1000,
+    );
     return () => clearTimeout(timer);
   }, [countdown, commit]);
 
@@ -156,202 +149,194 @@ export function AddAreaSheet({
   };
 
   return (
-    <Modal
+    <BottomSheet
+      accessibilityRole="alert"
       animationType="fade"
-      transparent
-      // Android otherwise leaves a pale strip above the dimmed backdrop.
-      statusBarTranslucent
+      className="max-h-[88%]"
+      onClose={close}
       visible={visible}
-      onRequestClose={close}
     >
-      {/* A modal inherits none of the screen's safe area, and this sheet asks
-          for three typed fields at the bottom of the display. Without this the
-          keyboard covered what was being typed and the buttons under it. */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        className="flex-1 justify-end bg-black/55"
-      >
-        <View
-          accessibilityRole="alert"
-          accessibilityViewIsModal
-          className="max-h-[88%] rounded-t-3xl bg-background px-5 pt-6"
-          // Measured, rather than the guessed 40px it replaces.
-          style={{ paddingBottom: Math.max(insets.bottom, 24) }}
-        >
-          {counting || addArea.isPending ? (
-            <View className="items-center gap-4 py-4">
-              <View className="h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-                {counting ? (
-                  <Text
-                    // Announced by the region below, not twice over.
-                    accessibilityElementsHidden
-                    importantForAccessibility="no"
-                    className="text-2xl font-bold text-primary"
-                  >
-                    {countdown}
-                  </Text>
-                ) : (
-                  <Loader size="lg" />
-                )}
-              </View>
-              <View
-                accessibilityLiveRegion="polite"
-                accessibilityRole="progressbar"
-                className="items-center gap-1"
+      {counting || addArea.isPending ? (
+        <View className="items-center gap-4 py-4">
+          <View className="h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+            {counting ? (
+              <Text
+                // Announced by the region below, not twice over.
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+                className="text-2xl font-bold text-primary"
               >
-                <Text className="text-lg font-bold text-foreground">
-                  Adding “{queuedRef.current?.name ?? trimmedName}”
-                </Text>
-                <Text className="text-center text-sm text-muted-foreground">
-                  {counting
-                    ? `Adding in ${countdown} second${countdown === 1 ? '' : 's'}. Tap cancel to stop.`
-                    : 'Saving…'}
-                </Text>
-              </View>
-              <Pressable
-                accessibilityLabel="Cancel adding this area"
-                accessibilityRole="button"
-                // Only while the grace period is running: once the request is
-                // in flight there is nothing left to cancel, and offering it
-                // would imply a rollback that will not happen.
-                accessibilityState={{ disabled: !counting }}
-                className={`min-h-12 w-full items-center justify-center rounded-xl border py-3 ${
-                  counting ? 'border-border' : 'border-transparent opacity-0'
-                }`}
-                disabled={!counting}
-                onPress={cancelPending}
-              >
-                <Text className="font-semibold text-foreground">Cancel</Text>
-              </Pressable>
-            </View>
-          ) : (
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-            <Text className="text-xl font-bold text-foreground">Add an area</Text>
-            <Text className="mt-2 text-sm leading-5 text-muted-foreground">
-              For a space that is not on the property’s floor plan. It is added as a draft for an
-              administrator to approve, and you can start recording it right away.
+                {countdown}
+              </Text>
+            ) : (
+              <Loader size="lg" />
+            )}
+          </View>
+          <View
+            accessibilityLiveRegion="polite"
+            accessibilityRole="progressbar"
+            className="items-center gap-1"
+          >
+            <Text className="text-lg font-bold text-foreground">
+              Adding “{queuedRef.current?.name ?? trimmedName}”
             </Text>
-
-            <Text nativeID="add-area-name-label" className="mt-5 text-sm font-semibold text-foreground">
-              Area name
+            <Text className="text-center text-sm text-muted-foreground">
+              {counting
+                ? `Adding in ${countdown} second${countdown === 1 ? '' : 's'}. Tap cancel to stop.`
+                : 'Saving…'}
             </Text>
-            <TextInput
-              accessibilityLabel="Area name"
-              accessibilityLabelledBy="add-area-name-label"
-              autoFocus
-              className="mt-2 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              placeholder="Storage shed, hall closet…"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
-              value={name}
-              onChangeText={setName}
-              returnKeyType="done"
-              onSubmitEditing={submit}
-            />
-
-            <Text className="mt-4 text-sm font-semibold text-foreground">Environment</Text>
-            <View className="mt-2 flex-row gap-2">
-              {ENVIRONMENTS.map((option) => {
-                const selected = environment === option.value;
-                return (
-                  <Pressable
-                    accessibilityLabel={option.label}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected }}
-                    className={`min-h-12 flex-1 items-center justify-center rounded-xl border px-2 py-3 ${
-                      selected ? 'border-primary bg-primary/10' : 'border-border bg-card'
-                    }`}
-                    key={option.value}
-                    onPress={() => setEnvironment(option.value)}
-                  >
-                    <Text
-                      className={`text-center text-xs font-semibold ${
-                        selected ? 'text-primary' : 'text-muted-foreground'
-                      }`}
-                    >
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <Text nativeID="add-area-floor-label" className="mt-4 text-sm font-semibold text-foreground">
-              Floor <Text className="font-normal text-muted-foreground">(optional)</Text>
-            </Text>
-            <TextInput
-              accessibilityLabel="Floor, optional"
-              accessibilityLabelledBy="add-area-floor-label"
-              className="mt-2 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              placeholder="Ground floor, Basement…"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
-              value={floorName}
-              onChangeText={setFloorName}
-            />
-            <Text className="mt-1 text-xs text-muted-foreground">
-              Left blank, it is filed under “Added areas”.
-            </Text>
-
-            <Text nativeID="add-area-notes-label" className="mt-4 text-sm font-semibold text-foreground">
-              Notes <Text className="font-normal text-muted-foreground">(optional)</Text>
-            </Text>
-            <TextInput
-              accessibilityLabel="Notes, optional"
-              accessibilityLabelledBy="add-area-notes-label"
-              className="mt-2 min-h-20 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              multiline
-              textAlignVertical="top"
-              placeholder="Why this area needs inspecting"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
-              value={notes}
-              onChangeText={setNotes}
-            />
-
-            {addArea.isError ? (
-              <View
-                accessibilityLiveRegion="polite"
-                className="mt-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3"
-              >
-                <Text className="text-sm text-destructive">
-                  {addArea.error instanceof Error
-                    ? addArea.error.message
-                    : 'The area could not be added.'}
-                </Text>
-              </View>
-            ) : null}
-
-            <View className="mt-5 flex-row gap-3">
-              <Pressable
-                accessibilityLabel="Cancel"
-                accessibilityRole="button"
-                className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border py-3"
-                onPress={close}
-              >
-                <Text className="font-semibold text-foreground">Cancel</Text>
-              </Pressable>
-              <Pressable
-                accessibilityHint={trimmedName ? undefined : 'Enter an area name first'}
-                accessibilityLabel={addArea.isPending ? 'Adding' : 'Add area'}
-                accessibilityRole="button"
-                accessibilityState={{ busy: addArea.isPending, disabled: !canSubmit }}
-                className={`min-h-12 flex-1 items-center justify-center rounded-xl py-3 ${
-                  canSubmit ? 'bg-primary' : 'bg-muted'
-                }`}
-                disabled={!canSubmit}
-                onPress={submit}
-              >
-                <Text
-                  className={`font-bold ${
-                    canSubmit ? 'text-primary-foreground' : 'text-muted-foreground'
-                  }`}
-                >
-                  {addArea.isPending ? 'Adding…' : 'Add area'}
-                </Text>
-              </Pressable>
-            </View>
-          </ScrollView>
-          )}
+          </View>
+          <Pressable
+            accessibilityLabel="Cancel adding this area"
+            accessibilityRole="button"
+            // Only while the grace period is running: once the request is
+            // in flight there is nothing left to cancel, and offering it
+            // would imply a rollback that will not happen.
+            accessibilityState={{ disabled: !counting }}
+            className={`min-h-12 w-full items-center justify-center rounded-xl border py-3 ${
+              counting ? 'border-border' : 'border-transparent opacity-0'
+            }`}
+            disabled={!counting}
+            onPress={cancelPending}
+          >
+            <Text className="font-semibold text-foreground">Cancel</Text>
+          </Pressable>
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <Text className="text-xl font-bold text-foreground">Add an area</Text>
+          <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+            For a space that is not on the property’s floor plan. It is added as a draft for an
+            administrator to approve, and you can start recording it right away.
+          </Text>
+
+          <Text
+            nativeID="add-area-name-label"
+            className="mt-5 text-sm font-semibold text-foreground"
+          >
+            Area name
+          </Text>
+          <TextInput
+            accessibilityLabel="Area name"
+            accessibilityLabelledBy="add-area-name-label"
+            autoFocus
+            className="mt-2 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+            placeholder="Storage shed, hall closet…"
+            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            value={name}
+            onChangeText={setName}
+            returnKeyType="done"
+            onSubmitEditing={submit}
+          />
+
+          <Text className="mt-4 text-sm font-semibold text-foreground">Environment</Text>
+          <View className="mt-2 flex-row gap-2">
+            {ENVIRONMENTS.map((option) => {
+              const selected = environment === option.value;
+              return (
+                <Pressable
+                  accessibilityLabel={option.label}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  className={`min-h-12 flex-1 items-center justify-center rounded-xl border px-2 py-3 ${
+                    selected ? 'border-primary bg-primary/10' : 'border-border bg-card'
+                  }`}
+                  key={option.value}
+                  onPress={() => setEnvironment(option.value)}
+                >
+                  <Text
+                    className={`text-center text-xs font-semibold ${
+                      selected ? 'text-primary' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <Text
+            nativeID="add-area-floor-label"
+            className="mt-4 text-sm font-semibold text-foreground"
+          >
+            Floor <Text className="font-normal text-muted-foreground">(optional)</Text>
+          </Text>
+          <TextInput
+            accessibilityLabel="Floor, optional"
+            accessibilityLabelledBy="add-area-floor-label"
+            className="mt-2 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+            placeholder="Ground floor, Basement…"
+            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            value={floorName}
+            onChangeText={setFloorName}
+          />
+          <Text className="mt-1 text-xs text-muted-foreground">
+            Left blank, it is filed under “Added areas”.
+          </Text>
+
+          <Text
+            nativeID="add-area-notes-label"
+            className="mt-4 text-sm font-semibold text-foreground"
+          >
+            Notes <Text className="font-normal text-muted-foreground">(optional)</Text>
+          </Text>
+          <TextInput
+            accessibilityLabel="Notes, optional"
+            accessibilityLabelledBy="add-area-notes-label"
+            className="mt-2 min-h-20 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+            multiline
+            textAlignVertical="top"
+            placeholder="Why this area needs inspecting"
+            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            value={notes}
+            onChangeText={setNotes}
+          />
+
+          {addArea.isError ? (
+            <View
+              accessibilityLiveRegion="polite"
+              className="mt-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3"
+            >
+              <Text className="text-sm text-destructive">
+                {addArea.error instanceof Error
+                  ? addArea.error.message
+                  : 'The area could not be added.'}
+              </Text>
+            </View>
+          ) : null}
+
+          <View className="mt-5 flex-row gap-3">
+            <Pressable
+              accessibilityLabel="Cancel"
+              accessibilityRole="button"
+              className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border py-3"
+              onPress={close}
+            >
+              <Text className="font-semibold text-foreground">Cancel</Text>
+            </Pressable>
+            <Pressable
+              accessibilityHint={trimmedName ? undefined : 'Enter an area name first'}
+              accessibilityLabel={addArea.isPending ? 'Adding' : 'Add area'}
+              accessibilityRole="button"
+              accessibilityState={{ busy: addArea.isPending, disabled: !canSubmit }}
+              className={`min-h-12 flex-1 items-center justify-center rounded-xl py-3 ${
+                canSubmit ? 'bg-primary' : 'bg-muted'
+              }`}
+              disabled={!canSubmit}
+              onPress={submit}
+            >
+              <Text
+                className={`font-bold ${
+                  canSubmit ? 'text-primary-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                {addArea.isPending ? 'Adding…' : 'Add area'}
+              </Text>
+            </Pressable>
+          </View>
+        </ScrollView>
+      )}
+    </BottomSheet>
   );
 }

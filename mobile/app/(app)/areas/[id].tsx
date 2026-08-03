@@ -13,23 +13,14 @@ import {
   RotateCwIcon,
   SaveIcon,
 } from 'lucide-react-native';
-import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AiSummaryCard } from '@/src/components/AiSummaryCard';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
+import { BottomSheet } from '@/src/components/BottomSheet';
 import { FindingRow } from '@/src/components/FindingRow';
 import {
   useFindings,
@@ -81,7 +72,6 @@ export default function AreaDetailScreen() {
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const insets = useSafeAreaInsets();
   const [note, setNote] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
@@ -451,95 +441,70 @@ export default function AreaDetailScreen() {
         </Pressable>
       </View>
 
-      <Modal
+      {/* 'alert' so a screen reader reports the context switch instead of
+          silently moving focus into a new layer. */}
+      <BottomSheet
+        accessibilityRole="alert"
         animationType="fade"
-        transparent
-        // Android draws a transparent modal below the status bar otherwise,
-        // leaving a pale strip above the dimmed backdrop.
-        statusBarTranslucent
+        onClose={() => setSkipOpen(false)}
         visible={skipOpen}
-        onRequestClose={() => setSkipOpen(false)}
       >
-        {/* A modal renders outside the screen's SafeAreaView, so it inherits
-            none of its insets. The reason field sits at the bottom of a sheet
-            with a keyboard over it, which left the technician typing an audit
-            reason they could not see, above buttons they could not reach. */}
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          className="flex-1 justify-end bg-black/55"
-        >
-          {/* Announced as a dialog so a screen reader reports the context
-              switch instead of silently moving focus into a new layer. */}
-          <View
-            accessibilityRole="alert"
-            accessibilityViewIsModal
-            className="rounded-t-3xl bg-background px-5 pt-6"
-            // Measured rather than the guessed 40px it replaces: enough to
-            // clear a home indicator where there is one, and not a gap on a
-            // device without one.
-            style={{ paddingBottom: Math.max(insets.bottom, 24) }}
+        <Text className="text-xl font-bold text-foreground">Skip this room?</Text>
+        <Text nativeID="skip-reason-label" className="mt-2 text-sm leading-5 text-muted-foreground">
+          Provide a reason for the administrator and audit trail.
+        </Text>
+        <TextInput
+          accessibilityLabel="Reason for skipping this room"
+          accessibilityLabelledBy="skip-reason-label"
+          className="mt-4 min-h-24 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+          multiline
+          textAlignVertical="top"
+          placeholder="Why can this room not be inspected?"
+          placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+          value={skipReason}
+          onChangeText={setSkipReason}
+        />
+        <View className="mt-4 flex-row gap-3">
+          <Pressable
+            accessibilityLabel="Cancel"
+            accessibilityRole="button"
+            className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border py-3"
+            onPress={() => setSkipOpen(false)}
           >
-            <Text className="text-xl font-bold text-foreground">Skip this room?</Text>
+            <Text className="font-semibold text-foreground">Cancel</Text>
+          </Pressable>
+          <Pressable
+            accessibilityHint={skipReason.trim() ? undefined : 'Enter a reason before skipping'}
+            accessibilityLabel={updates.skip.isPending ? 'Saving' : 'Skip room'}
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: updates.skip.isPending,
+              disabled: !skipReason.trim() || updates.skip.isPending,
+            }}
+            className={`min-h-12 flex-1 items-center justify-center rounded-xl py-3 ${
+              skipReason.trim() ? 'bg-primary' : 'bg-muted'
+            }`}
+            disabled={!skipReason.trim() || updates.skip.isPending}
+            onPress={() =>
+              updates.skip.mutate(skipReason.trim(), {
+                onSuccess: () => {
+                  setSkipOpen(false);
+                  setSkipReason('');
+                  router.back();
+                },
+              })
+            }
+          >
             <Text
-              nativeID="skip-reason-label"
-              className="mt-2 text-sm leading-5 text-muted-foreground"
+              className={`font-bold ${
+                skipReason.trim() ? 'text-primary-foreground' : 'text-muted-foreground'
+              }`}
             >
-              Provide a reason for the administrator and audit trail.
+              {updates.skip.isPending ? 'Saving…' : 'Skip Room'}
             </Text>
-            <TextInput
-              accessibilityLabel="Reason for skipping this room"
-              accessibilityLabelledBy="skip-reason-label"
-              className="mt-4 min-h-24 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-              multiline
-              textAlignVertical="top"
-              placeholder="Why can this room not be inspected?"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
-              value={skipReason}
-              onChangeText={setSkipReason}
-            />
-            <View className="mt-4 flex-row gap-3">
-              <Pressable
-                accessibilityLabel="Cancel"
-                accessibilityRole="button"
-                className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border py-3"
-                onPress={() => setSkipOpen(false)}
-              >
-                <Text className="font-semibold text-foreground">Cancel</Text>
-              </Pressable>
-              <Pressable
-                accessibilityHint={skipReason.trim() ? undefined : 'Enter a reason before skipping'}
-                accessibilityLabel={updates.skip.isPending ? 'Saving' : 'Skip room'}
-                accessibilityRole="button"
-                accessibilityState={{
-                  busy: updates.skip.isPending,
-                  disabled: !skipReason.trim() || updates.skip.isPending,
-                }}
-                className={`min-h-12 flex-1 items-center justify-center rounded-xl py-3 ${
-                  skipReason.trim() ? 'bg-primary' : 'bg-muted'
-                }`}
-                disabled={!skipReason.trim() || updates.skip.isPending}
-                onPress={() =>
-                  updates.skip.mutate(skipReason.trim(), {
-                    onSuccess: () => {
-                      setSkipOpen(false);
-                      setSkipReason('');
-                      router.back();
-                    },
-                  })
-                }
-              >
-                <Text
-                  className={`font-bold ${
-                    skipReason.trim() ? 'text-primary-foreground' : 'text-muted-foreground'
-                  }`}
-                >
-                  {updates.skip.isPending ? 'Saving…' : 'Skip Room'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+          </Pressable>
+        </View>
+      </BottomSheet>
     </SafeAreaView>
   );
 }
