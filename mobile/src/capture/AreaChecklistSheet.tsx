@@ -1,5 +1,6 @@
 import { CheckIcon, CircleIcon, MicIcon } from 'lucide-react-native';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { registerIcons } from '../lib/icons';
 import { checklistProgress, type ChecklistItem } from './area-checklist';
@@ -38,13 +39,25 @@ export function AreaChecklistSheet({
 }) {
   const { covered, total } = checklistProgress(items, checkedIds);
   const checked = new Set(checkedIds);
+  const insets = useSafeAreaInsets();
 
   return (
-    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
+    <Modal
+      animationType="slide"
+      transparent
+      // Android otherwise leaves a pale strip above the dimmed backdrop.
+      statusBarTranslucent
+      visible={visible}
+      onRequestClose={onClose}
+    >
       <View className="flex-1 justify-end bg-black/60">
+        {/* No keyboard here — nothing is typed — but a modal still inherits
+            none of the screen's safe area, so the last checklist row sat under
+            the home indicator. */}
         <View
           accessibilityViewIsModal
-          className="max-h-[82%] rounded-t-3xl bg-background px-5 pb-10 pt-6"
+          className="max-h-[82%] rounded-t-3xl bg-background px-5 pt-6"
+          style={{ paddingBottom: Math.max(insets.bottom, 24) }}
         >
           <View className="flex-row items-start justify-between gap-3">
             <View className="min-w-0 flex-1">

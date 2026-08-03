@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColorScheme } from 'nativewind';
 
 import type { AreaEnvironment } from '../domain/models';
@@ -50,6 +60,7 @@ export function AddAreaSheet({
 }) {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
+  const insets = useSafeAreaInsets();
   const addArea = useAddArea(inspectionId);
   const [name, setName] = useState('');
   const [environment, setEnvironment] = useState<AreaEnvironment>('INDOOR');
@@ -145,12 +156,27 @@ export function AddAreaSheet({
   };
 
   return (
-    <Modal animationType="fade" transparent visible={visible} onRequestClose={close}>
-      <View className="flex-1 justify-end bg-black/55">
+    <Modal
+      animationType="fade"
+      transparent
+      // Android otherwise leaves a pale strip above the dimmed backdrop.
+      statusBarTranslucent
+      visible={visible}
+      onRequestClose={close}
+    >
+      {/* A modal inherits none of the screen's safe area, and this sheet asks
+          for three typed fields at the bottom of the display. Without this the
+          keyboard covered what was being typed and the buttons under it. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        className="flex-1 justify-end bg-black/55"
+      >
         <View
           accessibilityRole="alert"
           accessibilityViewIsModal
-          className="max-h-[88%] rounded-t-3xl bg-background px-5 pb-10 pt-6"
+          className="max-h-[88%] rounded-t-3xl bg-background px-5 pt-6"
+          // Measured, rather than the guessed 40px it replaces.
+          style={{ paddingBottom: Math.max(insets.bottom, 24) }}
         >
           {counting || addArea.isPending ? (
             <View className="items-center gap-4 py-4">
@@ -325,7 +351,7 @@ export function AddAreaSheet({
           </ScrollView>
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
