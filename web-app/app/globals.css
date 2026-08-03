@@ -173,10 +173,24 @@ button:disabled {
 .table-link {
   color: var(--blue);
   font-weight: 750;
-}.form-grid {
+}
+
+.form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
+}
+
+/* Grid items default to min-width: auto, so a control whose content is wider
+   than its column refuses to shrink and spills into the neighbouring field —
+   which is how a long property label ended up overlapping the address input.
+   The tracks already use minmax(0, 1fr); the items need the same freedom.
+   `overflow: hidden` is the backstop for anything that still cannot shrink,
+   so a long value is clipped inside its own field rather than drawn over the
+   one beside it. */
+.form-grid > * {
+  min-width: 0;
+  overflow: hidden;
 }
 .form-actions {
   display: flex;

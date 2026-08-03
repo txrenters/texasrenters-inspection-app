@@ -427,8 +427,11 @@ function CreateInspectionForm() {
             ) : null}
           </Field>
           <Field>
-            <FieldLabel htmlFor="scheduledAt">Scheduled date and time</FieldLabel>
-            <Input id="scheduledAt" type="datetime-local" {...register('scheduledAt')} />
+            <FieldLabel htmlFor="scheduledAt">Scheduled date</FieldLabel>
+            {/* Date only. An inspection is booked for a day — the hour and
+                minute the old datetime input collected were never used by any
+                part of the workflow, and the column is now a DATE. */}
+            <Input id="scheduledAt" type="date" {...register('scheduledAt')} />
             {errors.scheduledAt ? (
               <FieldError>{errors.scheduledAt.message}</FieldError>
             ) : null}

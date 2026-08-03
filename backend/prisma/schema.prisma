@@ -659,7 +659,9 @@ model Inspection {
   internalNotes           String?
   createdById             String?                 @db.Uuid
   status                  InspectionStatus        @default(SCHEDULED)
-  scheduledAt             DateTime
+  /// Date only. Inspections are scheduled to a day, never a time — the column
+  /// is DATE so no clock value can be stored or implied.
+  scheduledAt             DateTime                @db.Date
   startedAt               DateTime?
   // Technician submission (≠ completion). Only a human administrator finalizes.
   submittedAt             DateTime?
