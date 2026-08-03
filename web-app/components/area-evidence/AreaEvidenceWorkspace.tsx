@@ -239,14 +239,21 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                         keyboard traversal. */}
                     <button
                       type="button"
-                      aria-label={`Edit ${area.name} coverage checklist`}
+                      aria-label={`Edit ${area.name} coverage checklist, ${area.checklistItemCount || 'no'} item${area.checklistItemCount === 1 ? '' : 's'}`}
                       className="area-evidence-checklist-button"
                       onClick={() =>
                         setChecklistArea({ id: area.propertyAreaId, name: area.name })
                       }
                     >
                       <ListChecks aria-hidden className="size-4" />
-                      <span>Checklist</span>
+                      {/* "Not set" rather than "0": an unconfigured area still
+                          shows the technician a generated fallback, so this is
+                          a prompt to configure, not a fault. */}
+                      <span>
+                        {area.checklistItemCount
+                          ? `Checklist · ${area.checklistItemCount}`
+                          : 'Checklist · not set'}
+                      </span>
                     </button>
                   </li>
                 );

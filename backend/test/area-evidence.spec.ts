@@ -26,6 +26,7 @@ function area(id: string, propertyAreaId: string, overrides: Record<string, unkn
       name: `Area ${id}`,
       environment: 'INDOOR',
       isRequired: true,
+      _count: { checklistItems: 0 },
       floor: { name: 'Ground Floor' },
     },
     ...overrides,

@@ -88,6 +88,10 @@ export class AreaEvidenceService {
             name: true,
             environment: true,
             isRequired: true,
+            // Counted in the same query rather than fetched per area from the
+            // client: the list can hold thirty areas, and thirty extra requests
+            // to render a badge is not worth it.
+            _count: { select: { checklistItems: { where: { archivedAt: null } } } },
             floor: { select: { name: true } },
           },
         },
@@ -177,6 +181,9 @@ export class AreaEvidenceService {
         floorName: area.propertyArea.floor?.name ?? null,
         environment: area.propertyArea.environment,
         isRequired: area.propertyArea.isRequired,
+        // Optional-chained: not every select variant asks for the count, and a
+        // missing badge is not worth crashing the whole evidence list over.
+        checklistItemCount: area.propertyArea._count?.checklistItems ?? 0,
         completionStatus: area.completionStatus,
         reviewStatus: this.reviewStatusFor({
           completionStatus: area.completionStatus,

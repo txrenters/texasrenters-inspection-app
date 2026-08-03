@@ -60,6 +60,12 @@ export interface AreaEvidenceSummaryItem {
   floorName?: string | null;
   environment: 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
   isRequired: boolean;
+  /**
+   * Administrator-authored checklist items for this area, excluding archived
+   * ones. Zero means the technician sees a generated fallback list rather than
+   * nothing, so it is a prompt to configure rather than a fault.
+   */
+  checklistItemCount: number;
   completionStatus: string;
   reviewStatus: AreaReviewStatus;
   counts: AreaEvidenceCounts;
