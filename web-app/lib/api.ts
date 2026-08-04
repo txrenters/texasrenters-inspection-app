@@ -113,7 +113,15 @@ export async function publicApiSend<T>(path: string, init: RequestInit): Promise
   try {
     response = await fetch(resolveApiUrl(baseUrl, path), {
       ...init,
-      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+      headers: {
+        'content-type': 'application/json',
+        // Needed here for the same reason as `api`: without it ngrok answers
+        // with its interstitial, which carries no Access-Control-Allow-Origin,
+        // and the browser reports a CORS failure for a request that never
+        // reached the backend.
+        ...NGROK_SKIP_INTERSTITIAL,
+        ...(init.headers ?? {}),
+      },
     });
   } catch {
     throw new ApiError(0, 'NETWORK_ERROR', 'The request could not be sent. Check your connection.');
@@ -138,7 +146,12 @@ export async function publicApi<T>(path: string, signal?: AbortSignal): Promise<
     throw new ApiError(0, 'API_NOT_CONFIGURED', 'The report service is not configured.');
   let response: Response;
   try {
-    response = await fetch(resolveApiUrl(baseUrl, path), { signal });
+    // Same interstitial trap: a report opened from a share link goes through
+    // the same tunnel, with no authorization header to force a preflight.
+    response = await fetch(resolveApiUrl(baseUrl, path), {
+      headers: { ...NGROK_SKIP_INTERSTITIAL },
+      signal,
+    });
   } catch {
     throw new ApiError(0, 'NETWORK_ERROR', 'The report could not be loaded. Check your connection.');
   }
