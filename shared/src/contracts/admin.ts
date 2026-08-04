@@ -251,7 +251,12 @@ export interface AdminPropertyArea {
   archivedAt?: string | null;
   createdBy?: { id: string; displayName: string } | null;
   floor?: { id: string; name: string; sortOrder: number } | null;
-  _count?: { inspectionAreas: number };
+  /**
+   * `checklistItems` excludes archived ones. Zero means a technician sees a
+   * generated fallback list for this area rather than one an administrator
+   * wrote, which is worth knowing before scheduling work against it.
+   */
+  _count?: { inspectionAreas: number; checklistItems?: number };
   /** The plan version these marker coordinates belong to (null = legacy/manual). */
   sourceFloorPlanId?: string | null;
   sourcePageNumber?: number | null;

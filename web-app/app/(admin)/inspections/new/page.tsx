@@ -153,6 +153,18 @@ function CreateInspectionForm() {
     ) ?? false;
   const needsAreaSetup =
     Boolean(propertyId) && !propertyAreas.isLoading && !propertyAreas.isError && !hasApprovedAreas;
+  // How many of the areas this inspection will cover have a checklist an
+  // administrator wrote. Zero is not an error — the technician gets a generated
+  // list — but it is worth knowing here, because this is where someone decides
+  // what the visit is for and the checklist lives on another screen entirely.
+  const approvedAreas =
+    propertyAreas.data?.filter(
+      (area) =>
+        area.status === 'APPROVED' && (unitId ? !area.unitId || area.unitId === unitId : !area.unitId),
+    ) ?? [];
+  const areasWithChecklist = approvedAreas.filter(
+    (area) => (area._count?.checklistItems ?? 0) > 0,
+  ).length;
   // Resets whenever the property changes: it is a decision about one property's
   // missing floor plan, and carrying it to the next one would schedule a survey
   // nobody asked for.
@@ -514,6 +526,21 @@ function CreateInspectionForm() {
             ) : null}
           </Field>
         </div>
+        {!needsAreaSetup && approvedAreas.length ? (
+          <p className="text-[13px] text-muted-foreground">
+            {areasWithChecklist === approvedAreas.length ? (
+              <>All {approvedAreas.length} areas have a coverage checklist.</>
+            ) : (
+              <>
+                {areasWithChecklist} of {approvedAreas.length} areas have a coverage checklist. The
+                rest fall back to a generated list.{' '}
+                <Link href={`/properties/${propertyId}#floor-plan-heading`}>
+                  Set checklists for this property
+                </Link>
+              </>
+            )}
+          </p>
+        ) : null}
         {needsAreaSetup ? (
           /* Reads as a decision, not a warning. Three ways forward at three
              different visual weights left it unclear that they were

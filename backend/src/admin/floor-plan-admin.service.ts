@@ -91,7 +91,13 @@ const propertyAreaResponseSelect = {
   updatedAt: true,
   createdBy: { select: { id: true, displayName: true } },
   floor: { select: { id: true, name: true, sortOrder: true } },
-  _count: { select: { inspectionAreas: true } },
+  // checklistItems lets a caller see whether an area has a coverage checklist
+  // without fetching one per area. Scheduling is the moment that matters: an
+  // administrator is deciding what a technician will be asked to cover, and
+  // the checklist lives on another screen entirely.
+  _count: {
+    select: { inspectionAreas: true, checklistItems: { where: { archivedAt: null } } },
+  },
 } satisfies Prisma.PropertyAreaSelect;
 
 type PropertyAreaRow = Prisma.PropertyAreaGetPayload<{ select: typeof propertyAreaResponseSelect }>;

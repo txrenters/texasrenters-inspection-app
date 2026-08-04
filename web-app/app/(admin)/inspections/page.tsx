@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { InspectionType } from '@texasrenters/shared';
+import { Alert } from '@/components/ui/alert';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
@@ -199,6 +200,23 @@ export default function InspectionsPage() {
         />
       ) : (
         <>
+          {/* Counted on the page rather than fetched: this covers the loaded
+              page, which is enough to notice the problem exists. A dash per row
+              was easy to scroll past — an inspection scheduled and never
+              assigned reaches nobody, and nothing else raises it. */}
+          {(() => {
+            const unassigned = inspections.data.items.filter(
+              (inspection) => !inspection.assignments.some((assignment) => assignment.isCurrent),
+            ).length;
+            return unassigned ? (
+              <Alert variant="warning" role="status">
+                {unassigned === 1
+                  ? '1 inspection on this page has no technician assigned.'
+                  : `${unassigned} inspections on this page have no technician assigned.`}{' '}
+                They will not appear in anyone&apos;s queue until they do.
+              </Alert>
+            ) : null;
+          })()}
           <DataTable headers={INSPECTION_HEADERS} label="Property inspections">
             {inspections.data.items.map((inspection) => {
               const current = inspection.assignments.find((assignment) => assignment.isCurrent);
@@ -223,7 +241,15 @@ export default function InspectionsPage() {
                   <TableCell>
                     <Badge value={current ? 'ASSIGNED' : 'UNASSIGNED'} />
                   </TableCell>
-                  <TableCell>{current?.technician?.displayName ?? '-'}</TableCell>
+                  <TableCell>
+                    {/* A dash was the only sign nobody had it. An inspection can
+                        be scheduled with "Leave unassigned" and then nothing
+                        ever raises it again, so the one place they are all
+                        listed has to say so in words. */}
+                    {current?.technician?.displayName ?? (
+                      <span className="cell-note is-warning">Unassigned</span>
+                    )}
+                  </TableCell>
                 </TableRow>
               );
             })}
