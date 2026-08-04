@@ -71,6 +71,38 @@ const MODE_LABELS: Record<string, string> = {
   reconciliation: 'Reconcile catalog',
 };
 
+/**
+ * The three modes as a choice, ordered by how often you would want one.
+ *
+ * Worded by occasion rather than mechanism — "what changed since last time"
+ * rather than "incremental" — because the mechanism is only meaningful to
+ * someone who already knows which to pick.
+ */
+const SYNC_MODE_OPTIONS: {
+  mode: SyncMode;
+  title: string;
+  description: string;
+  recommended?: boolean;
+}[] = [
+  {
+    mode: 'incremental',
+    title: 'Recent changes',
+    description: 'Picks up what changed in Propertyware since the last sync. Quick.',
+    recommended: true,
+  },
+  {
+    mode: 'reconcile',
+    title: 'Check for drift',
+    description:
+      'Compares every local record against Propertyware. Use when something looks wrong.',
+  },
+  {
+    mode: 'initial',
+    title: 'Re-import everything',
+    description: 'Pulls the whole catalog again. Rarely needed, and the slowest.',
+  },
+];
+
 // Statuses that represent active, in-progress work — these get the live pulse.
 const ACTIVE_STATUSES = new Set(['RUNNING', 'PENDING']);
 const isActiveStatus = (status?: string | null) => Boolean(status && ACTIVE_STATUSES.has(status));
@@ -119,6 +151,10 @@ export default function PropertywarePage() {
   const canManage = usePermissions().has('integrations:manage');
   const [errorPage, setErrorPage] = useState(1);
   const [pendingMode, setPendingMode] = useState<SyncMode | null>(null);
+  // Choose a mode, then press one button — rather than three buttons each of
+  // which starts something. The everyday mode is preselected so the common case
+  // is a single press, and the rarer two are a deliberate choice away.
+  const [selectedMode, setSelectedMode] = useState<SyncMode>('incremental');
   const status = usePropertywareStatus();
   const schedule = useSyncSchedule();
   const runs = useSyncRuns();
@@ -186,52 +222,77 @@ export default function PropertywarePage() {
             in the middle wearing a filled highlight, which reads as a selected
             option rather than the recommended action — the tag now says which
             it is, so the emphasis means recommended instead of chosen. */}
-        {/* Ordinary buttons, the same ones used everywhere else in the admin
-            app. As bordered panels holding a heading and a paragraph they read
-            as cards describing something rather than controls that do it, and
-            no amount of wording inside a card fixes that. The explanations move
-            below, where they can be read once instead of competing with the
-            labels. */}
-        <div className="flex flex-wrap items-center gap-2.5">
+        {/* The cards are options now, not actions — which is what they always
+            looked like. Choosing one and pressing a single button also removes
+            the question the three-button version asked: which of these am I
+            allowed to press. */}
+        <div
+          aria-label="Synchronization mode"
+          className="grid grid-cols-3 gap-3 max-[760px]:grid-cols-1"
+          role="radiogroup"
+        >
+          {SYNC_MODE_OPTIONS.map((option) => {
+            const active = selectedMode === option.mode;
+            return (
+              <button
+                aria-checked={active}
+                className={`flex flex-col items-start gap-1.5 rounded-xl border p-4 text-left transition-colors ${
+                  active
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border bg-background hover:border-primary/40'
+                } disabled:cursor-not-allowed disabled:opacity-55`}
+                disabled={!canManage || isRunning}
+                key={option.mode}
+                onClick={() => setSelectedMode(option.mode)}
+                role="radio"
+                type="button"
+              >
+                <span className="flex w-full items-center gap-2">
+                  <span
+                    aria-hidden
+                    className={`size-4 shrink-0 rounded-full border-2 ${
+                      active ? 'border-primary bg-primary' : 'border-muted-foreground/50'
+                    }`}
+                  />
+                  <strong className="text-[14px] font-semibold text-foreground">
+                    {option.title}
+                  </strong>
+                  {option.recommended ? (
+                    <span className="ml-auto rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+                      Recommended
+                    </span>
+                  ) : null}
+                </span>
+                <span className="text-[12px] leading-5 text-muted-foreground">
+                  {option.description}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* When it last ran, beside the one control that runs it — so the answer
+            to "does this need pressing" is in the same place as the button. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+          <div className="text-[13px] text-muted-foreground">
+            {latestRun?.completedAt ? (
+              <>Last synchronized {formatDate(latestRun.completedAt)}</>
+            ) : (
+              <>No synchronization has completed yet</>
+            )}
+            <span className="block text-[12px]">
+              Runs on its own daily. Each manual run asks you to confirm first.
+            </span>
+          </div>
           <button
             className={buttonVariants({ variant: 'primary' })}
-            disabled={!canManage || mutation.isPending}
-            onClick={() => setPendingMode('incremental')}
+            disabled={!canManage || isRunning}
+            onClick={() => setPendingMode(selectedMode)}
             type="button"
           >
-            Fetch recent changes
-          </button>
-          <button
-            className={buttonVariants({ variant: 'secondary' })}
-            disabled={!canManage || mutation.isPending}
-            onClick={() => setPendingMode('reconcile')}
-            type="button"
-          >
-            Check for drift
-          </button>
-          <button
-            className={buttonVariants({ variant: 'secondary' })}
-            disabled={!canManage || mutation.isPending}
-            onClick={() => setPendingMode('initial')}
-            type="button"
-          >
-            Re-import everything
+            {isRunning ? 'Synchronizing…' : 'Start synchronization'}
           </button>
         </div>
-        <dl className="grid gap-1.5 text-[13px] text-muted-foreground">
-          <div className="flex flex-wrap gap-x-2">
-            <dt className="font-semibold text-foreground">Fetch recent changes</dt>
-            <dd>picks up what changed since the last sync. Quick, and the everyday one.</dd>
-          </div>
-          <div className="flex flex-wrap gap-x-2">
-            <dt className="font-semibold text-foreground">Check for drift</dt>
-            <dd>compares every local record against Propertyware, when something looks wrong.</dd>
-          </div>
-          <div className="flex flex-wrap gap-x-2">
-            <dt className="font-semibold text-foreground">Re-import everything</dt>
-            <dd>pulls the whole catalog again. Rarely needed, and the slowest.</dd>
-          </div>
-        </dl>
         {/* Says so before the click, not after: the confirmation step is the
             reason it is safe to press one of these to find out what it does. */}
         <p className="text-[13px] text-muted-foreground">
