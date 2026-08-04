@@ -42,26 +42,49 @@ device, which is the single largest gap in this audit.
 | # | Item | Size |
 |---|---|---|
 | 2.1 | **Camera layout is still unmeasured.** `pt-36`/`pb-60` and the 42% grid were reasoned on paper. `archive/camera-rebuild` has a `camera-layout.ts` that solved it properly. Carried over from 4.1. | M |
-| 2.2 | **Writes are not queued.** Half done — see below. | M |
+| 2.2 | ~~**Writes are not queued.**~~ Built — see below. Unverified on a device. | M |
 | 2.3 | **"0 photos" appears twice** on the camera. Carried over from 4.2. | S |
 | 2.4 | **Reduce-motion covers loaders and skeletons only**; `active:scale-*` press states still animate. Carried over from 4.3. | S |
 | 2.5 | **An inspection with no areas reads as broken** unless it was created with technician capture. The empty state now distinguishes the two, but an administrator looking at the same inspection in the web app sees an empty evidence workspace with no explanation. | S |
 
 ### 2.2 in detail — offline writes
 
-Reads survive losing signal; they fall back to the SQLite cache. Writes do
-not: a note, a skip reason or a new area fails with an error and is gone.
+Reads survive losing signal; they fall back to the SQLite cache. Writes did
+not: a note or a skip reason failed with an error and was gone.
 
-**Done.** An `OfflineBanner` over every signed-in screen says the device is
-offline before anything is attempted, and names the distinction that matters
-in the field — recordings are queued durably and send themselves, so seeing
-the banner is not a reason to stop working and go looking for signal.
+**Built, in this order:**
 
-**Remaining.** Queueing the writes so they send themselves.
+1. `OfflineBanner` over every signed-in screen, saying the device is offline
+   before anything is attempted — and naming the distinction that matters in
+   the field: recordings are queued durably and send themselves, so the
+   banner is not a reason to stop working and look for signal.
+2. `pet-observations` keyed, the one technician write that appends.
+3. `mutation-queue.ts` — durable storage, replay, attempt ceiling, survival of
+   corrupt storage.
+4. Note and skip enqueue on `ApiConnectionError` and report that the work is
+   kept rather than that it failed. A 4xx still fails immediately: queueing a
+   refusal would retry forever against an answer that never changes.
+5. `ConnectivitySync` drains on the way back online and at launch, guarded
+   against overlapping passes when a connection flaps. The banner counts what
+   is waiting.
 
-The prerequisite turned out to be far smaller than first assumed. The worry
-was that retrying any write could double-apply one whose response was lost.
-Going through the technician endpoints, almost none are exposed to that:
+**Not verified on a device**, which for this feature is most of the value. The
+three things a real test catches that the suite cannot:
+
+- Whether `ApiConnectionError` is what actually surfaces on a dropped mobile
+  connection, rather than a timeout presenting differently. If it is the
+  latter, writes fail instead of queueing and nothing is held.
+- Whether the drain fires before the queries refetch, which decides whether a
+  technician sees their note reappear or briefly vanish.
+- Whether the count updates when they expect it to, given it refreshes on a
+  connectivity change rather than on enqueue.
+
+Airplane mode, edit a note, turn it off, watch the banner.
+
+**On the idempotency prerequisite**, which turned out far smaller than first
+assumed. The worry was that retrying any write could double-apply one whose
+response was lost. Going through the technician endpoints, almost none are
+exposed to that:
 
 | Endpoint | Retry safety |
 |---|---|
@@ -73,18 +96,18 @@ Going through the technician endpoints, almost none are exposed to that:
 | `POST inspections/:id/areas` | Already returns the existing area when a retry follows a timeout |
 | `POST inspections/:id/pet-observations` | **Appends.** The one endpoint that needs a key |
 
-So the work is one endpoint keyed the way three models already do it, not a
-general idempotency mechanism.
+So it was one endpoint keyed the way three models already do it, not a general
+idempotency mechanism.
 
-**Caveat.** That table was derived from the route list and the services'
-purpose, not by reading each implementation line by line. Confirm that skip,
-note and complete really are pure state-sets before building on it — an audit
-row per call is fine, a second finding or history row is not.
+**Caveat that still stands.** That table was derived from the route list and
+the services' purpose, not by reading each implementation line by line. The
+queue's correctness rests on it: confirm that skip and note really are pure
+state-sets. An audit row per call is fine; a second finding or history row
+would mean a replay is not free after all.
 
-**Order.** Key `pet-observations`; add a SQLite mutation queue beside the
-existing upload queue, drained by `ConnectivitySync`; extend the banner with a
-count of changes waiting. It is worth nothing until it is tested on a phone
-with no signal.
+Only writes that set a value may be queued. Anything that appends needs a key
+first, and the sender map is written out per kind so adding one forces that
+question rather than letting it slide.
 
 ## 3. Correctness risks
 
@@ -118,12 +141,16 @@ Worth recording so it is not re-litigated:
 Closed since this was written: **1.1** (technician areas approve on creation
 and stay correctable), **1.2** and **1.3** (unassigned inspections and missing
 checklists are both visible at last), **3.1** (the password policy is defined
-once, in `shared`), and the visible half of **2.2**.
+once, in `shared`), and **2.2** (offline writes are held and sent).
 
 What is left, in order:
 
-1. **2.2, remaining** — the mutation queue. Smaller than it looked; see above.
-2. **2.1** — camera layout, gated on a physical device rather than effort.
+1. **A device.** Not an audit item, which is the problem. The gyro rewrite,
+   the offline queue, the checklist chain, technician area capture and the
+   three bottom sheets were all built and closed in one stretch, and none has
+   been used on a phone. Two of them — the gyro and the queue — rest on
+   assumptions the test suite cannot check. This outranks writing more code.
+2. **2.1** — camera layout, gated on the same device.
 3. **3.4** — expensive, and the thing most likely to catch a regression nobody predicted.
 4. **1.4, 1.5, 1.6** — simultaneous capture, re-running one area's summary, bulk finding approval.
 
