@@ -186,37 +186,52 @@ export default function PropertywarePage() {
             in the middle wearing a filled highlight, which reads as a selected
             option rather than the recommended action — the tag now says which
             it is, so the emphasis means recommended instead of chosen. */}
-        <div className="sync-action-grid" aria-label="Manual synchronization actions">
+        {/* Ordinary buttons, the same ones used everywhere else in the admin
+            app. As bordered panels holding a heading and a paragraph they read
+            as cards describing something rather than controls that do it, and
+            no amount of wording inside a card fixes that. The explanations move
+            below, where they can be read once instead of competing with the
+            labels. */}
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
-            className="sync-action sync-action-primary"
+            className={buttonVariants({ variant: 'primary' })}
             disabled={!canManage || mutation.isPending}
             onClick={() => setPendingMode('incremental')}
+            type="button"
           >
-            <strong>
-              Fetch recent changes
-              <span className="sync-action-tag">Everyday</span>
-            </strong>
-            <span>Picks up what changed in Propertyware since the last sync. Quick.</span>
+            Fetch recent changes
           </button>
           <button
-            className="sync-action"
+            className={buttonVariants({ variant: 'secondary' })}
             disabled={!canManage || mutation.isPending}
             onClick={() => setPendingMode('reconcile')}
+            type="button"
           >
-            <strong>Check for drift</strong>
-            <span>
-              Compares every local record against Propertyware. Use when something looks wrong.
-            </span>
+            Check for drift
           </button>
           <button
-            className="sync-action"
+            className={buttonVariants({ variant: 'secondary' })}
             disabled={!canManage || mutation.isPending}
             onClick={() => setPendingMode('initial')}
+            type="button"
           >
-            <strong>Re-import everything</strong>
-            <span>Pulls the whole catalog again. Rarely needed, and the slowest.</span>
+            Re-import everything
           </button>
         </div>
+        <dl className="grid gap-1.5 text-[13px] text-muted-foreground">
+          <div className="flex flex-wrap gap-x-2">
+            <dt className="font-semibold text-foreground">Fetch recent changes</dt>
+            <dd>picks up what changed since the last sync. Quick, and the everyday one.</dd>
+          </div>
+          <div className="flex flex-wrap gap-x-2">
+            <dt className="font-semibold text-foreground">Check for drift</dt>
+            <dd>compares every local record against Propertyware, when something looks wrong.</dd>
+          </div>
+          <div className="flex flex-wrap gap-x-2">
+            <dt className="font-semibold text-foreground">Re-import everything</dt>
+            <dd>pulls the whole catalog again. Rarely needed, and the slowest.</dd>
+          </div>
+        </dl>
         {/* Says so before the click, not after: the confirmation step is the
             reason it is safe to press one of these to find out what it does. */}
         <p className="text-[13px] text-muted-foreground">
