@@ -25,6 +25,26 @@ import { leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
  * lease end" for renewal planning; a scheduled move-out is a separate column
  * because it answers a different question and the two can disagree.
  */
+/**
+ * A lease the sync has stopped confirming.
+ *
+ * Leases are exempt from absence-based deactivation, because the published
+ * report is a view rather than a full inventory — one dropping out of a run
+ * does not mean the tenancy ended. So an absent lease stays active and looks
+ * exactly like a confirmed one, and `lastSeenAt` is the only thing that says
+ * otherwise.
+ *
+ * A day and a half, so the daily reconciliation has to miss a lease twice
+ * before it is called out. One skipped run is noise; two is worth a look.
+ */
+const LEASE_STALE_AFTER_MS = 36 * 60 * 60 * 1000;
+
+function isStaleLease(lastSeenAt?: string | null) {
+  if (!lastSeenAt) return false;
+  const seen = new Date(lastSeenAt).getTime();
+  return Number.isFinite(seen) && Date.now() - seen > LEASE_STALE_AFTER_MS;
+}
+
 function LeaseEnd({ endDate }: { endDate?: string | null }) {
   if (!endDate) return <>—</>;
   const status = leaseExpiryStatus(endDate);
@@ -160,7 +180,17 @@ export default function PropertyDetailPage() {
           <DataTable headers={['Lease', 'Status', 'Term start', 'Term ends', 'Scheduled move-out']}>
             {item.leases.map((lease) => (
               <TableRow key={lease.id}>
-                <TableCell>{lease.leaseName ?? lease.externalId}</TableCell>
+                <TableCell>
+                  {lease.leaseName ?? lease.externalId}
+                  {/* Only when it has actually gone stale. A lease confirmed by
+                      the last run needs no annotation, and marking every row
+                      with a date would bury the two that matter. */}
+                  {isStaleLease(lease.lastSeenAt) ? (
+                    <span className="cell-note is-warning">
+                      Not in the last sync · seen {formatDate(lease.lastSeenAt)}
+                    </span>
+                  ) : null}
+                </TableCell>
                 <TableCell>{lease.sourceStatus ?? 'Not provided'}</TableCell>
                 <TableCell>{lease.startDate ? formatDate(lease.startDate) : '—'}</TableCell>
                 <TableCell>

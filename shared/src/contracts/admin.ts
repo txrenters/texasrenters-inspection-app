@@ -295,6 +295,14 @@ export interface AdminLease {
   startDate?: string | null;
   endDate?: string | null;
   scheduledMoveOutDate?: string | null;
+  /**
+   * Last time a sync saw this lease in the Propertyware feed.
+   *
+   * Leases are never deactivated for being absent — the published report is a
+   * view, not a full inventory — so a stale value here is the only sign that a
+   * lease has stopped being confirmed.
+   */
+  lastSeenAt?: string | null;
 }
 
 export interface AdminAssignment {

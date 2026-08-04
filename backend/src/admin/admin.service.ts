@@ -585,6 +585,12 @@ export class AdminService {
             startDate: true,
             endDate: true,
             scheduledMoveOutDate: true,
+            // Leases are exempt from absence-based deactivation: they come from
+            // a published report, which is a view rather than a full inventory,
+            // so one dropping out of a run is not evidence the tenancy ended.
+            // That makes this the only signal that a lease stopped being
+            // confirmed, and it is worth showing rather than leaving buried.
+            lastSeenAt: true,
           },
         },
       },
