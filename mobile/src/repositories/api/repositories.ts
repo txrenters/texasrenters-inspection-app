@@ -328,6 +328,13 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
 const getJson = (path: string) => requestJson(path);
 const writeJson = (path: string, method: 'POST' | 'PATCH', body?: object) =>
   requestJson(path, { method, body: body ? JSON.stringify(body) : undefined });
+/**
+ * The same request path a queued write took when it first failed, exported so
+ * the drain replays it exactly rather than through a second implementation
+ * that could drift from this one.
+ */
+export const sendQueuedWrite = (path: string, method: string, body: unknown) =>
+  requestJson(path, { method, body: body ? JSON.stringify(body) : undefined });
 const unavailable = (message: string): never => {
   throw new Error(message);
 };

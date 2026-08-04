@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { readOfflineWrites } from '../repositories/api/offline-writes';
 import { useNetworkStore } from '../stores/network.store';
 
 /**
@@ -22,6 +24,22 @@ export function OfflineBanner() {
   // object literal here would make a new snapshot every render.
   const isOnline = useNetworkStore((state) => state.isOnline);
   const isResolved = useNetworkStore((state) => state.isResolved);
+  const [waiting, setWaiting] = useState(0);
+
+  // Re-read whenever the connection changes rather than on a timer: the count
+  // only moves when something is queued (offline) or drained (back online),
+  // and both are bracketed by exactly this transition.
+  useEffect(() => {
+    let cancelled = false;
+    void readOfflineWrites()
+      .then((entries) => {
+        if (!cancelled) setWaiting(entries.length);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOnline]);
 
   // Nothing until NetInfo has actually reported. The store starts optimistic so
   // the upload queue is not stalled on launch, and flashing "offline" for that
@@ -37,8 +55,9 @@ export function OfflineBanner() {
     >
       <Text className="text-sm font-semibold text-foreground">No connection</Text>
       <Text className="mt-0.5 text-xs leading-4 text-muted-foreground">
-        Keep recording — uploads are queued and send when you are back. Notes, skips and new areas
-        need a connection to save.
+        {waiting
+          ? `Keep recording — ${waiting} change${waiting === 1 ? '' : 's'} and your uploads will send when you are back.`
+          : 'Keep recording — uploads are queued and send when you are back. Notes and skips are kept too.'}
       </Text>
     </View>
   );
