@@ -25,6 +25,7 @@ import type {
   PropertyRepository,
   UploadRepository,
 } from '../contracts';
+import { queueOnConnectionFailure } from './offline-writes';
 import { resolveApiUrl } from '@texasrenters/shared';
 import { z } from 'zod';
 
@@ -530,20 +531,31 @@ export class ApiInspectionRepository implements InspectionRepository {
     ]);
     return room;
   }
+  // Both are held rather than lost when the network is gone, and both are safe
+  // to replay because they set a value: sending either twice lands on the same
+  // state. An appending write could not be queued this way.
   async updateRoomNote(roomId: string, note: string) {
     const room = roomSchema.parse(
-      await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/note`, 'PATCH', {
-        note,
-      }),
+      await queueOnConnectionFailure(
+        { id: `note:${roomId}`, kind: 'room-note', payload: { roomId, note } },
+        () =>
+          writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/note`, 'PATCH', {
+            note,
+          }),
+      ),
     );
     await this.persistRoom(room);
     return room;
   }
   async skipRoom(roomId: string, reason: string) {
     const room = roomSchema.parse(
-      await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
-        reason,
-      }),
+      await queueOnConnectionFailure(
+        { id: `skip:${roomId}`, kind: 'room-skip', payload: { roomId, reason } },
+        () =>
+          writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
+            reason,
+          }),
+      ),
     );
     await this.persistRoom(room);
     return room;
