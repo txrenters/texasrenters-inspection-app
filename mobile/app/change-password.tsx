@@ -13,32 +13,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 
+import {
+  firstUnmetPasswordRule,
+  PASSWORD_REQUIREMENT_SUMMARY,
+} from '@texasrenters/shared';
+
 import { useRequiredPasswordChange } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(EyeIcon, EyeOffIcon);
 
-const MINIMUM_PASSWORD_LENGTH = 6;
-
-/**
- * Mirrors ChangeRequiredPasswordDto, rule for rule and word for word.
- *
- * Checked here so a technician is told before the request rather than by it.
- * The API remains the authority — this only saves a round trip, and the two
- * lists have to be edited together.
- */
-const PASSWORD_RULES: { test: (value: string) => boolean; message: string }[] = [
-  {
-    test: (value) => value.length >= MINIMUM_PASSWORD_LENGTH,
-    message: `Use at least ${MINIMUM_PASSWORD_LENGTH} characters.`,
-  },
-  { test: (value) => /[A-Z]/.test(value), message: 'Include at least one capital letter.' },
-  { test: (value) => /[0-9]/.test(value), message: 'Include at least one number.' },
-  {
-    test: (value) => /[^A-Za-z0-9]/.test(value),
-    message: 'Include at least one special character.',
-  },
-];
 
 export default function ChangePasswordScreen() {
   const { colorScheme } = useColorScheme();
@@ -51,7 +35,7 @@ export default function ChangePasswordScreen() {
 
   const submit = async () => {
     setValidationError('');
-    const unmet = PASSWORD_RULES.find((rule) => !rule.test(password));
+    const unmet = firstUnmetPasswordRule(password);
     if (unmet) {
       setValidationError(unmet.message);
       return;
@@ -99,8 +83,7 @@ export default function ChangePasswordScreen() {
             Replace the temporary password before opening assigned inspections.
           </Text>
           <Text className="mt-2 text-sm leading-5 text-muted-foreground">
-            At least {MINIMUM_PASSWORD_LENGTH} characters, with a capital letter, a number and a
-            special character.
+            {PASSWORD_REQUIREMENT_SUMMARY}
           </Text>
           {error ? (
             <View

@@ -6,25 +6,10 @@ import { Input } from '@/components/ui/input';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
+import { firstUnmetPasswordRule } from '@texasrenters/shared';
+
 import { api } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
-
-/**
- * Mirrors ChangeRequiredPasswordDto on the API, rule for rule.
- *
- * This page can post to `change-required-password`, which enforces exactly
- * these. Checking eight characters here while the API asked for its own set
- * meant a password could pass the form and be refused by the server.
- */
-const PASSWORD_RULES: { test: (value: string) => boolean; message: string }[] = [
-  { test: (value) => value.length >= 6, message: 'Use at least 6 characters.' },
-  { test: (value) => /[A-Z]/.test(value), message: 'Include at least one capital letter.' },
-  { test: (value) => /[0-9]/.test(value), message: 'Include at least one number.' },
-  {
-    test: (value) => /[^A-Za-z0-9]/.test(value),
-    message: 'Include at least one special character.',
-  },
-];
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState('');
@@ -74,7 +59,7 @@ export default function ResetPasswordPage() {
   }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const unmet = PASSWORD_RULES.find((rule) => !rule.test(password));
+    const unmet = firstUnmetPasswordRule(password);
     if (unmet) {
       setError(unmet.message);
       return;

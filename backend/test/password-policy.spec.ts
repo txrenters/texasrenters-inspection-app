@@ -4,6 +4,8 @@ import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
+import { firstUnmetPasswordRule } from '@texasrenters/shared';
+
 import { ChangeRequiredPasswordDto } from '../src/auth/auth.dto';
 
 async function reject(password: string) {
@@ -40,6 +42,19 @@ describe('required password policy', () => {
 
   it('stops at bcrypt’s ceiling rather than silently ignoring the tail', async () => {
     expect(await reject(`Aa1!${'a'.repeat(69)}`)).toContain('Use no more than 72 characters.');
+  });
+
+  it('agrees with the shared rules the apps check against', async () => {
+    // The drift this guards against is what a person hit twice: the app said a
+    // password was fine and the API refused it. Both now read the same rules,
+    // and this asserts the two paths reach the same verdict rather than merely
+    // importing the same file.
+    const samples = ['Aa1!aa', 'aa1!aa', 'Aaa!aa', 'Aa1aaa', 'Aa1!a', 'Kp7#mq2z'];
+    for (const sample of samples) {
+      const apiRejected = (await reject(sample)).length > 0;
+      const appRejected = firstUnmetPasswordRule(sample) !== null;
+      expect({ sample, apiRejected }).toEqual({ sample, apiRejected: appRejected });
+    }
   });
 
   it('accepts a generated temporary password', async () => {
