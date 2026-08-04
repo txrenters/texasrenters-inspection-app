@@ -93,6 +93,9 @@ export function FloorPlanManager({
     () => scopedAreas.filter((area) => area.status === 'DRAFT'),
     [scopedAreas],
   );
+  // Which approved area is open for correction, if any. One at a time, so the
+  // approved list stays a list rather than becoming a form.
+  const [correctingAreaId, setCorrectingAreaId] = useState<string | null>(null);
   const approved = useMemo(
     () => scopedAreas.filter((area) => area.status === 'APPROVED'),
     [scopedAreas],
@@ -100,9 +103,7 @@ export function FloorPlanManager({
   const currentPlanMarkers = useMemo(
     () =>
       latest
-        ? scopedAreas.filter(
-            (area) => Boolean(area.marker) && area.sourceFloorPlanId === latest.id,
-          )
+        ? scopedAreas.filter((area) => Boolean(area.marker) && area.sourceFloorPlanId === latest.id)
         : [],
     [latest, scopedAreas],
   );
@@ -356,7 +357,9 @@ export function FloorPlanManager({
         <CardHeader className="p-0 pb-5">
           <div>
             <span className="section-eyebrow">Inspection area source</span>
-            <CardTitle className="mt-[5px] text-[17px]" id="floor-plan-heading">{scopeLabel} floor plan</CardTitle>
+            <CardTitle className="mt-[5px] text-[17px]" id="floor-plan-heading">
+              {scopeLabel} floor plan
+            </CardTitle>
             <CardDescription className="mt-[5px] mb-0">
               Maintain the visual reference used to verify and approve this scope&apos;s inspection
               areas.
@@ -429,86 +432,89 @@ export function FloorPlanManager({
             ) : null}
             {canManage ? (
               <>
-              <AlertDialog onOpenChange={setConfirmReplace} open={confirmReplace}>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Replace the active source version?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Existing approved areas stay in history, but their markers will
-                      require review against the new plan before they can be trusted.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      className={buttonVariants({ variant: 'primary' })}
-                      onClick={() => {
-                        setConfirmReplace(false);
-                        void runUpload();
-                      }}
+                <AlertDialog onOpenChange={setConfirmReplace} open={confirmReplace}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Replace the active source version?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Existing approved areas stay in history, but their markers will require
+                        review against the new plan before they can be trusted.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        className={buttonVariants({ variant: 'primary' })}
+                        onClick={() => {
+                          setConfirmReplace(false);
+                          void runUpload();
+                        }}
+                      >
+                        Upload new version
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+                <form onSubmit={upload} className="floor-plan-upload-section">
+                  <div className="floor-plan-control-heading">
+                    <div>
+                      <strong>{latest ? 'Replace source plan' : 'Upload source plan'}</strong>
+                      <span>
+                        {latest
+                          ? 'A replacement becomes the new visual source after upload.'
+                          : 'Add the visual source before defining inspection areas.'}
+                      </span>
+                    </div>
+                  </div>
+                  <label className="floor-plan-file-picker" htmlFor="floor-plan-file">
+                    <input
+                      key={`${scope}-${fileInputVersion}`}
+                      id="floor-plan-file"
+                      type="file"
+                      accept="application/pdf,image/png,image/jpeg"
+                      onChange={(event) => setFile(event.target.files?.[0])}
+                    />
+                    <span className="floor-plan-file-picker-icon" aria-hidden>
+                      +
+                    </span>
+                    <span className="floor-plan-file-picker-copy">
+                      <strong>{file ? file.name : 'Choose a PDF, PNG, or JPEG'}</strong>
+                      <small>
+                        {file
+                          ? `${formatBytes(file.size)} selected`
+                          : 'Secure upload · 20 MB maximum'}
+                      </small>
+                    </span>
+                    <span className="floor-plan-file-picker-action">
+                      {file ? 'Change file' : 'Browse'}
+                    </span>
+                  </label>
+                  {file && latest ? (
+                    <div className="floor-plan-replacement-notice" role="note">
+                      <strong>New source version</strong>
+                      <span>
+                        Existing areas remain in history. Markers must be reviewed against the new
+                        source before they are treated as current.
+                      </span>
+                    </div>
+                  ) : null}
+                  {file ? (
+                    <button
+                      className={cn(
+                        buttonVariants({ variant: 'secondary' }),
+                        'floor-plan-upload-button',
+                      )}
+                      type="submit"
+                      disabled={actions.uploadFloorPlan.isPending}
                     >
-                      Upload new version
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-              <form onSubmit={upload} className="floor-plan-upload-section">
-                <div className="floor-plan-control-heading">
-                  <div>
-                    <strong>{latest ? 'Replace source plan' : 'Upload source plan'}</strong>
-                    <span>
-                      {latest
-                        ? 'A replacement becomes the new visual source after upload.'
-                        : 'Add the visual source before defining inspection areas.'}
-                    </span>
-                  </div>
-                </div>
-                <label className="floor-plan-file-picker" htmlFor="floor-plan-file">
-                  <input
-                    key={`${scope}-${fileInputVersion}`}
-                    id="floor-plan-file"
-                    type="file"
-                    accept="application/pdf,image/png,image/jpeg"
-                    onChange={(event) => setFile(event.target.files?.[0])}
-                  />
-                  <span className="floor-plan-file-picker-icon" aria-hidden>
-                    +
-                  </span>
-                  <span className="floor-plan-file-picker-copy">
-                    <strong>{file ? file.name : 'Choose a PDF, PNG, or JPEG'}</strong>
-                    <small>
-                      {file
-                        ? `${formatBytes(file.size)} selected`
-                        : 'Secure upload · 20 MB maximum'}
-                    </small>
-                  </span>
-                  <span className="floor-plan-file-picker-action">
-                    {file ? 'Change file' : 'Browse'}
-                  </span>
-                </label>
-                {file && latest ? (
-                  <div className="floor-plan-replacement-notice" role="note">
-                    <strong>New source version</strong>
-                    <span>
-                      Existing areas remain in history. Markers must be reviewed against the new
-                      source before they are treated as current.
-                    </span>
-                  </div>
-                ) : null}
-                {file ? (
-                  <button
-                    className={cn(buttonVariants({ variant: 'secondary' }), 'floor-plan-upload-button')}
-                    type="submit"
-                    disabled={actions.uploadFloorPlan.isPending}
-                  >
-                    {actions.uploadFloorPlan.isPending
-                      ? 'Uploading…'
-                      : latest
-                        ? 'Upload new version'
-                        : 'Upload securely'}
-                  </button>
-                ) : null}
-              </form>
+                      {actions.uploadFloorPlan.isPending
+                        ? 'Uploading…'
+                        : latest
+                          ? 'Upload new version'
+                          : 'Upload securely'}
+                    </button>
+                  ) : null}
+                </form>
               </>
             ) : null}
 
@@ -532,11 +538,15 @@ export function FloorPlanManager({
                   </div>
                   <div>
                     <span>Area approval</span>
-                    <strong>{approved.length}/{scopedAreas.length}</strong>
+                    <strong>
+                      {approved.length}/{scopedAreas.length}
+                    </strong>
                   </div>
                   <div>
                     <span>Markers present</span>
-                    <strong>{currentPlanMarkers.length}/{scopedAreas.length}</strong>
+                    <strong>
+                      {currentPlanMarkers.length}/{scopedAreas.length}
+                    </strong>
                   </div>
                   <div>
                     <span>Admin placed</span>
@@ -620,7 +630,9 @@ export function FloorPlanManager({
         <CardHeader className="p-0 pb-4">
           <div>
             <CardTitle className="text-[17px]">{scopeLabel} draft area review</CardTitle>
-            <CardDescription>Edit AI suggestions or add missing rooms before approval.</CardDescription>
+            <CardDescription>
+              Edit AI suggestions or add missing rooms before approval.
+            </CardDescription>
           </div>
           {canManage ? (
             <button
@@ -661,9 +673,7 @@ export function FloorPlanManager({
                 // Partial selection reads as indeterminate rather than unchecked,
                 // so the box never implies "nothing is selected". Radix models this
                 // as a third checked value instead of an imperative DOM property.
-                checked={
-                  allDraftsSelected ? true : selectedCount > 0 ? 'indeterminate' : false
-                }
+                checked={allDraftsSelected ? true : selectedCount > 0 ? 'indeterminate' : false}
                 onCheckedChange={(checked) => setGroupSelected(draftIds, checked === true)}
               />
               <span>{allDraftsSelected ? 'Clear selection' : 'Select all'}</span>
@@ -693,8 +703,9 @@ export function FloorPlanManager({
                     {/* The count is spelled out because the selection may span
                         floors that are scrolled out of view. */}
                     <AlertDialogDescription>
-                      This cannot be undone. Any markers placed on {selectedCount === 1 ? 'it' : 'them'}{' '}
-                      are removed with the {selectedCount === 1 ? 'area' : 'areas'}.
+                      This cannot be undone. Any markers placed on{' '}
+                      {selectedCount === 1 ? 'it' : 'them'} are removed with the{' '}
+                      {selectedCount === 1 ? 'area' : 'areas'}.
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
@@ -770,7 +781,9 @@ export function FloorPlanManager({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">No draft areas are waiting for review in this scope.</p>
+          <p className="text-xs text-muted-foreground">
+            No draft areas are waiting for review in this scope.
+          </p>
         )}
       </Card>
 
@@ -778,7 +791,9 @@ export function FloorPlanManager({
         <CardHeader className="p-0 pb-4">
           <div>
             <CardTitle className="text-[17px]">{scopeLabel} approved master areas</CardTitle>
-            <CardDescription>Only these areas are copied into newly created inspections for this scope.</CardDescription>
+            <CardDescription>
+              Only these areas are copied into newly created inspections for this scope.
+            </CardDescription>
           </div>
           <Badge value={`${approved.length} APPROVED`} />
         </CardHeader>
@@ -788,14 +803,71 @@ export function FloorPlanManager({
               <section key={group.key} className="floor-area-group">
                 <FloorGroupHeading label={group.label} count={group.areas.length} />
                 <div className="approved-area-grid">
-                  {group.areas.map((area) => (
-                    <article key={area.id}>
-                      <strong>{area.name}</strong>
-                      <small>
-                        #{area.inspectionOrder} · {area.isRequired ? 'Required' : 'Optional'}
-                      </small>
-                    </article>
-                  ))}
+                  {group.areas.map((area) =>
+                    /* A technician-added area is the one approved area nobody
+                       reviewed before approving — it is approved because the
+                       person adding it was standing in it. So it is the only
+                       one worth offering to correct here, and the API refuses
+                       the rest. Editing swaps the row for the same editor the
+                       drafts use rather than building a second one. */
+                    correctingAreaId === area.id ? (
+                      // Spans the grid: the editor is a full-width row of
+                      // fields, and the approved list is four narrow columns.
+                      <div className="col-span-full" key={area.id}>
+                        <AreaReviewRow
+                          area={area}
+                          deleting={false}
+                          floorNames={floorNames}
+                          onArchive={() =>
+                            actions.archivePropertyArea.mutateAsync({ propertyId, areaId: area.id })
+                          }
+                          // Approving and rejecting belong to the draft queue; an
+                          // approved area has already been through that.
+                          onDelete={() => Promise.resolve()}
+                          onReject={() => Promise.resolve()}
+                          onSave={async (input) => {
+                            const saved = await actions.updatePropertyArea.mutateAsync({
+                              propertyId,
+                              areaId: area.id,
+                              expectedUpdatedAt: area.updatedAt,
+                              ...input,
+                            });
+                            setCorrectingAreaId(null);
+                            return saved;
+                          }}
+                          readOnly={!canManage}
+                          saving={
+                            actions.updatePropertyArea.isPending &&
+                            actions.updatePropertyArea.variables?.areaId === area.id
+                          }
+                        />
+                        <button
+                          className={buttonVariants({ variant: 'secondary', size: 'small' })}
+                          onClick={() => setCorrectingAreaId(null)}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <article key={area.id}>
+                        <strong>{area.name}</strong>
+                        <small>
+                          #{area.inspectionOrder} · {area.isRequired ? 'Required' : 'Optional'}
+                          {area.source === 'TECHNICIAN' ? ' · Technician-added' : ''}
+                        </small>
+                        {canManage && area.source === 'TECHNICIAN' ? (
+                          <button
+                            className={buttonVariants({ variant: 'secondary', size: 'small' })}
+                            onClick={() => setCorrectingAreaId(area.id)}
+                            type="button"
+                          >
+                            Correct details
+                          </button>
+                        ) : null}
+                      </article>
+                    ),
+                  )}
                 </div>
               </section>
             ))}
@@ -806,9 +878,7 @@ export function FloorPlanManager({
           </p>
         )}
       </Card>
-      {isExtracting ? (
-        <ExtractionProgressModal elapsedSeconds={extractionSeconds} />
-      ) : null}
+      {isExtracting ? <ExtractionProgressModal elapsedSeconds={extractionSeconds} /> : null}
       {isComparisonOpen && latest ? (
         <FloorPlanComparisonModal
           scopeLabel={scopeLabel}
@@ -950,19 +1020,15 @@ function FloorPlanComparisonModal({
   const missingMarkerCount = allAreas.filter(
     (area) => !area.marker || area.sourceFloorPlanId !== planId,
   ).length;
-  const reviewPercent = allAreas.length
-    ? Math.round((approvedCount / allAreas.length) * 100)
-    : 0;
+  const reviewPercent = allAreas.length ? Math.round((approvedCount / allAreas.length) * 100) : 0;
   const currentMarker =
-    selectedArea?.marker && selectedArea.sourceFloorPlanId === planId
-      ? selectedArea.marker
-      : null;
+    selectedArea?.marker && selectedArea.sourceFloorPlanId === planId ? selectedArea.marker : null;
   const hasUnsavedMarkerChanges = Boolean(
     editingAreaId &&
-      draftMarker &&
-      (!currentMarker ||
-        Math.abs(currentMarker.x - draftMarker.x) > 0.000001 ||
-        Math.abs(currentMarker.y - draftMarker.y) > 0.000001),
+    draftMarker &&
+    (!currentMarker ||
+      Math.abs(currentMarker.x - draftMarker.x) > 0.000001 ||
+      Math.abs(currentMarker.y - draftMarker.y) > 0.000001),
   );
   const hasUnsavedMarkerChangesRef = useRef(hasUnsavedMarkerChanges);
   hasUnsavedMarkerChangesRef.current = hasUnsavedMarkerChanges;
@@ -1118,9 +1184,8 @@ function FloorPlanComparisonModal({
           <AlertDialogHeader>
             <AlertDialogTitle>Discard the unsaved marker position?</AlertDialogTitle>
             <AlertDialogDescription>
-              The marker you moved has not been saved. Continuing to{' '}
-              {pendingDiscard?.what} discards that change and keeps the position
-              already stored for this area.
+              The marker you moved has not been saved. Continuing to {pendingDiscard?.what} discards
+              that change and keeps the position already stored for this area.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1177,7 +1242,10 @@ function FloorPlanComparisonModal({
             ) : null}
             <button
               type="button"
-              className={cn(buttonVariants({ variant: 'secondary', size: 'small' }), 'fp-review-panel-toggle')}
+              className={cn(
+                buttonVariants({ variant: 'secondary', size: 'small' }),
+                'fp-review-panel-toggle',
+              )}
               aria-pressed={isReviewPanelOpen}
               disabled={Boolean(editingAreaId)}
               onClick={() => setIsReviewPanelOpen((value) => !value)}
@@ -1266,9 +1334,18 @@ function FloorPlanComparisonModal({
             </div>
             {supportsMarkers && showAllMarkers ? (
               <div className="fp-marker-legend" aria-label="Marker legend">
-                <span><i className="is-selected" aria-hidden />Selected</span>
-                <span><i className="is-suggested" aria-hidden />AI suggested</span>
-                <span><i className="is-admin" aria-hidden />Admin placed</span>
+                <span>
+                  <i className="is-selected" aria-hidden />
+                  Selected
+                </span>
+                <span>
+                  <i className="is-suggested" aria-hidden />
+                  AI suggested
+                </span>
+                <span>
+                  <i className="is-admin" aria-hidden />
+                  Admin placed
+                </span>
               </div>
             ) : null}
 
@@ -1344,7 +1421,6 @@ function FloorPlanComparisonModal({
   );
 }
 
-
 function ScopeButton({
   label,
   selected,
@@ -1399,7 +1475,9 @@ function FloorGroupHeading({
         <h3>{label}</h3>
       )}
       <span>
-        {selectedCount ? `${selectedCount} of ${count} selected` : `${count} area${count === 1 ? '' : 's'}`}
+        {selectedCount
+          ? `${selectedCount} of ${count} selected`
+          : `${count} area${count === 1 ? '' : 's'}`}
       </span>
     </div>
   );
