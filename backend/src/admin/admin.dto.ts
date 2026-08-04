@@ -173,6 +173,13 @@ export class PetObservationDto {
   @IsOptional() @IsArray() @IsUUID('4', { each: true }) photoIds?: string[];
   @IsOptional() @IsArray() @IsUUID('4', { each: true }) mediaIds?: string[];
   @IsOptional() @IsUUID() possibleDuplicateOfId?: string;
+  /**
+   * Client-supplied, so a retried submission records one sighting.
+   *
+   * Optional: a caller that omits it behaves exactly as before. The mobile
+   * app sends one because it will be retrying these from a queue.
+   */
+  @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
 }
 
 /** A reviewer's determination for a pet candidate (uniqueness + authorization). */

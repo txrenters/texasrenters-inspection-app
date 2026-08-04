@@ -44,6 +44,60 @@ describe('pet observation + dedup (spec §13)', () => {
     ).rejects.toMatchObject({ status: 422, code: 'PET_OBSERVATION_OCCUPIED_ONLY' });
   });
 
+  it('records one sighting when the same submission arrives twice', async () => {
+    // The only technician write that appends rather than sets a value, so it
+    // is the only one a queued retry could double-apply — and a duplicate pet
+    // becomes a charge somebody has to argue about.
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'insp-1', inspectionType: 'OCCUPIED' }),
+      },
+      petObservation: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'obs-1' }),
+      },
+    };
+    const service = new ChargeService(prisma as never);
+    const submission = {
+      temporaryLabel: 'Brown dog',
+      species: 'Dog',
+      idempotencyKey: 'key-1',
+    };
+
+    await expect(service.recordObservation(technician, 'insp-1', submission)).resolves.toEqual({
+      id: 'obs-1',
+    });
+
+    // The retry finds the first one and returns it rather than erroring: a
+    // repeated request is not a conflict, it is the same request.
+    prisma.petObservation.findUnique.mockResolvedValue({ id: 'obs-1' });
+    await expect(service.recordObservation(technician, 'insp-1', submission)).resolves.toEqual({
+      id: 'obs-1',
+    });
+    expect(prisma.petObservation.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still records every sighting when no key is sent', async () => {
+    // Omitting the key has to behave exactly as before, or an older client
+    // silently loses observations.
+    const prisma = {
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'insp-1', inspectionType: 'OCCUPIED' }),
+      },
+      petObservation: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'should-not-be-consulted' }),
+        create: jest.fn().mockResolvedValue({ id: 'obs-2' }),
+      },
+    };
+    const service = new ChargeService(prisma as never);
+    const submission = { temporaryLabel: 'Grey cat', species: 'Cat' };
+
+    await service.recordObservation(technician, 'insp-1', submission);
+    await service.recordObservation(technician, 'insp-1', submission);
+    expect(prisma.petObservation.findUnique).not.toHaveBeenCalled();
+    expect(prisma.petObservation.create).toHaveBeenCalledTimes(2);
+  });
+
   it('groups a pet seen in three rooms into one candidate and different animals separately', async () => {
     const created: Array<{ data: Record<string, unknown> }> = [];
     const tx = {

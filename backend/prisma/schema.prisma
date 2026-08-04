@@ -1365,6 +1365,15 @@ model ChargeRule {
 /// only — the technician never determines uniqueness, authorization, or charges.
 model PetObservation {
   id                    String        @id @default(uuid()) @db.Uuid
+  /// Client-supplied, so a retried submission records one sighting.
+  ///
+  /// This is the only technician write that appends rather than sets a value:
+  /// note, skip and complete all land on the same state whether applied once
+  /// or twice, and media and area creation already carry keys. Without this
+  /// one, a request whose response was lost would record the same animal
+  /// again on retry — and a duplicate pet is a charge somebody has to argue
+  /// about.
+  idempotencyKey        String?       @unique
   organizationId        String        @db.Uuid
   inspectionId          String        @db.Uuid
   propertyAreaId        String?       @db.Uuid

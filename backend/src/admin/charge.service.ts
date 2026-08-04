@@ -111,8 +111,21 @@ export class ChargeService {
         'PET_OBSERVATION_OCCUPIED_ONLY',
         'Pet observations are recorded during occupied inspections.',
       );
+    // A retry after the first attempt's response was lost must record one
+    // sighting, not two. This is the only technician write that appends rather
+    // than sets a value, and a duplicate pet becomes a charge somebody has to
+    // argue about. Returning the original rather than erroring matches the
+    // rule room-video upload already follows: a retry is not a conflict.
+    if (input.idempotencyKey) {
+      const existing = await this.prisma.petObservation.findUnique({
+        where: { idempotencyKey: input.idempotencyKey },
+        select: { id: true },
+      });
+      if (existing) return { id: existing.id };
+    }
     const observation = await this.prisma.petObservation.create({
       data: {
+        idempotencyKey: input.idempotencyKey ?? null,
         organizationId: actor.organizationId,
         inspectionId,
         propertyAreaId: input.propertyAreaId ?? null,
