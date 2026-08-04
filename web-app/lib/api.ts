@@ -98,6 +98,39 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
   return response.blob();
 }
 
+/**
+ * Unauthenticated write for the few endpoints reachable while signed out.
+ *
+ * `api` demands a session and rejects with "Your session has expired." before
+ * it sends anything — which is exactly what a signed-out visitor asking to
+ * reset their password does not have. Separate from `publicApi` because that
+ * one is GET-only and words its failures in terms of reports.
+ */
+export async function publicApiSend<T>(path: string, init: RequestInit): Promise<T | undefined> {
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
+  if (!baseUrl) throw new ApiError(0, 'API_NOT_CONFIGURED', 'The service is not configured.');
+  let response: Response;
+  try {
+    response = await fetch(resolveApiUrl(baseUrl, path), {
+      ...init,
+      headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+    });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'The request could not be sent. Check your connection.');
+  }
+  if (!response.ok) {
+    const error = (await response.json().catch(() => null)) as ApiErrorContract | null;
+    throw new ApiError(
+      response.status,
+      error?.code ?? 'REQUEST_FAILED',
+      error?.message ?? 'The request could not be completed.',
+      error?.requestId ?? undefined,
+    );
+  }
+  // 204 is the normal answer here, and has no body to parse.
+  return response.status === 204 ? undefined : ((await response.json()) as T);
+}
+
 /** Unauthenticated fetch for public capability-URL endpoints (homeowner reports). */
 export async function publicApi<T>(path: string, signal?: AbortSignal): Promise<T> {
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');

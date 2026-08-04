@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
-import { api } from '@/lib/api';
+import { publicApiSend } from '@/lib/api';
 
 
 export default function ForgotPasswordPage() {
@@ -22,7 +22,7 @@ export default function ForgotPasswordPage() {
     // with the service role and sends it through the same mailer as every other
     // message from the product.
     try {
-      await api<void>('/api/v1/auth/request-password-reset', {
+      await publicApiSend<void>('/api/v1/auth/request-password-reset', {
         method: 'POST',
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
