@@ -81,3 +81,88 @@
     border-radius: 18px;
   }
 }
+
+/**
+ * Split panel for sign-in.
+ *
+ * Scoped to `.auth-split` rather than changing `.auth-card` itself, because
+ * forgot-password and reset-password use that class as a standalone card and
+ * should keep looking like one. Inside the shell it gives up its own border,
+ * radius and shadow to the shell around it.
+ */
+.auth-split {
+  width: min(1000px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1.02fr) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.auth-split .auth-card {
+  width: auto;
+  padding: 44px 40px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.auth-aside {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 44px 40px;
+  border-right: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(29, 68, 146, 0.22), transparent 55%),
+    radial-gradient(circle at 88% 96%, rgba(133, 196, 63, 0.18), transparent 52%),
+    var(--surface);
+}
+.auth-aside-copy {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.6;
+}
+.auth-aside-points {
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.auth-aside-points li {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 9px;
+  align-items: start;
+  line-height: 1.5;
+}
+.auth-aside-points li::before {
+  content: '';
+  margin-top: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--green);
+}
+
+/* One column below the width where two would squeeze the form. The supporting
+   points go with it — on a phone the form is the whole reason for the screen. */
+@media (max-width: 860px) {
+  .auth-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .auth-aside {
+    gap: 18px;
+    padding: 30px 26px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .auth-aside-points {
+    display: none;
+  }
+  .auth-split .auth-card {
+    padding: 30px 26px;
+  }
+}
