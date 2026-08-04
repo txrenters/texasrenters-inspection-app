@@ -705,7 +705,16 @@ export class TechnicianService {
           inspectionOrder: nextOrder,
           isRequired: true,
           source: 'TECHNICIAN',
-          status: PropertyAreaStatus.DRAFT,
+          // Approved on creation. A technician adding an area is standing in
+          // it, which is better evidence of the property's layout than an
+          // administrator reading a floor plan from an office — and holding it
+          // as a draft meant the area they had just walked into was not part of
+          // the property until somebody else agreed it existed.
+          //
+          // This is a human decision made with the best available information,
+          // not an automated one: the area still carries `source: TECHNICIAN`
+          // and a TECHNICIAN_AREA_ADDED audit entry naming who added it.
+          status: PropertyAreaStatus.APPROVED,
           environment: input.environment,
           category: input.category ?? null,
           notes: input.notes?.trim() || null,

@@ -79,7 +79,7 @@ function service(prisma: unknown) {
 }
 
 describe('technician manual area creation', () => {
-  it('creates a DRAFT technician-sourced area and links it to the inspection', async () => {
+  it('creates an approved technician-sourced area and links it to the inspection', async () => {
     const { prisma, tx } = buildPrisma();
     const result = await service(prisma).createArea(technician, 'insp-1', {
       name: 'Backyard',
@@ -92,7 +92,10 @@ describe('technician manual area creation', () => {
         data: expect.objectContaining({
           propertyId: 'bld-1',
           source: 'TECHNICIAN',
-          status: 'DRAFT',
+          // Approved on creation: the technician is standing in the area, which
+          // is better evidence of the layout than a plan read from an office.
+          // It stays attributable through `source` and the audit entry.
+          status: 'APPROVED',
           environment: 'OUTDOOR',
           category: 'YARD',
           isRequired: true,
