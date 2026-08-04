@@ -76,10 +76,13 @@ describe('technician mobile data boundary', () => {
     await service.dashboard(technician);
 
     const [queueRequest] = prisma.inspection.findMany.mock.calls[0];
-    // No lower bound: an inspection scheduled last week that is still open has
-    // to keep appearing until it is dealt with.
-    expect(queueRequest.where.scheduledAt.gte).toBeUndefined();
-    expect(queueRequest.where.scheduledAt.lt.getTime()).toBeGreaterThan(Date.now());
+    // No bound in either direction. An inspection scheduled last week that is
+    // still open has to keep appearing until it is dealt with, and one three
+    // weeks out has to appear at all — a week's lookahead hid work a technician
+    // had genuinely been assigned, with nothing on the screen to say why.
+    // `take` is what bounds this query.
+    expect(queueRequest.where.scheduledAt).toBeUndefined();
+    expect(queueRequest.take).toBe(25);
     // Only work that still needs the technician — review states belong to the
     // administrator, not the field queue.
     expect(queueRequest.where.status).toEqual({

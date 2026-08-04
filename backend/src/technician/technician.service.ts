@@ -142,8 +142,6 @@ const TECHNICIAN_ACTIVE_STATUSES: InspectionStatus[] = [
   InspectionStatus.IN_PROGRESS,
 ];
 
-/** How far ahead the home-screen queue looks, measured from the start of today. */
-const DASHBOARD_QUEUE_LOOKAHEAD_MS = 7 * 24 * 60 * 60 * 1000;
 
 const technicianRoomSelect = {
   id: true,
@@ -318,10 +316,14 @@ export class TechnicianService {
     // one — the two cases a technician most needs on the home screen. The
     // window now runs from anything still outstanding in the past through the
     // next week, ordered by schedule so the latest work sorts to the top.
+    // No upper bound on the schedule. A week's lookahead silently hid work a
+    // technician had genuinely been assigned — an inspection three weeks out
+    // was missing from the home screen with nothing to say why, which reads as
+    // the assignment having failed. `take` already bounds the query, and
+    // ordering by schedule means the soonest work is what fills it.
     const queueWhere = {
       ...where,
       status: { in: TECHNICIAN_ACTIVE_STATUSES },
-      scheduledAt: { lt: new Date(todayStart.getTime() + DASHBOARD_QUEUE_LOOKAHEAD_MS) },
     } satisfies Prisma.InspectionWhereInput;
     const [statusGroups, todayTotal, queueRecords, recentRecords, pendingUploads] =
       await Promise.all([
