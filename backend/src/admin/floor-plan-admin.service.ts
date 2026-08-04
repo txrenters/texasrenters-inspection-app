@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
+import { FloorPlanStatus, InspectionStatus, PropertyAreaStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
@@ -745,11 +745,37 @@ export class FloorPlanAdminService {
     });
   }
 
+  /** Whether any completed inspection already refers to this area. */
+  private async areaIsFinalized(areaId: string) {
+    const finalized = await this.prisma.inspectionArea.count({
+      where: { propertyAreaId: areaId, inspection: { status: InspectionStatus.COMPLETED } },
+    });
+    return finalized > 0;
+  }
+
   async updateArea(user: AuthenticatedUser, areaId: string, input: UpdatePropertyAreaDto) {
     const area = await this.requireArea(user.organizationId, areaId);
     this.assertExpectedAreaRevision(area.updatedAt, input.expectedUpdatedAt);
-    if (area.status !== PropertyAreaStatus.DRAFT)
-      throw new ApplicationError(409, 'AREA_ALREADY_APPROVED', 'Approved areas cannot be edited.');
+    // Approved areas are frozen so a property's layout cannot shift under
+    // inspections that are already using it. A technician-added area is the
+    // exception: it is approved on creation precisely because nobody reviewed
+    // it first, so this is the only opportunity anyone gets to correct a name
+    // typed one-handed in somebody's back garden.
+    //
+    // That exception ends once an inspection referencing it has been completed.
+    // Renaming an area then would relabel evidence in a finished report, which
+    // is the audit trail rather than the layout.
+    if (area.status !== PropertyAreaStatus.DRAFT) {
+      const correctable = area.source === 'TECHNICIAN' && !(await this.areaIsFinalized(area.id));
+      if (!correctable)
+        throw new ApplicationError(
+          409,
+          'AREA_ALREADY_APPROVED',
+          area.source === 'TECHNICIAN'
+            ? 'This area appears in a completed inspection and can no longer be renamed.'
+            : 'Approved areas cannot be edited.',
+        );
+    }
     const floorName = input.floorName?.trim() || area.floor?.name || 'Ground Floor';
     const name = input.name?.trim() || area.name;
     await this.assertUniqueArea(area.propertyId, area.unitId, floorName, name, area.id);

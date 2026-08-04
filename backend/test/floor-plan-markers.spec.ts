@@ -283,3 +283,55 @@ describe('updateAreaMarker (spec §12/§18/§19)', () => {
     expect(result.marker).toBeTruthy();
   });
 });
+
+describe('editing a technician-added area', () => {
+  // Technician areas are approved on creation — nobody reviewed them first —
+  // so this is the only chance anyone gets to fix a name typed one-handed in
+  // somebody's back garden. AI-extracted areas keep the freeze: those were
+  // reviewed before approval.
+  const prismaFor = (area: Record<string, unknown>, finalizedCount: number) => ({
+    propertyArea: {
+      // First call resolves the area being edited; the next is the uniqueness
+      // check, which must find nothing or every rename looks like a duplicate.
+      findFirst: jest.fn().mockResolvedValueOnce(areaRow(area)).mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      update: jest.fn().mockResolvedValue(areaRow(area)),
+    },
+    inspectionArea: { count: jest.fn().mockResolvedValue(finalizedCount) },
+    auditLog: { create: jest.fn().mockResolvedValue({}) },
+    $transaction: jest.fn(async (run: (tx: unknown) => unknown) =>
+      run({
+        propertyArea: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          findFirst: jest.fn().mockResolvedValue(areaRow(area)),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(areaRow(area)),
+        },
+        auditLog: { create: jest.fn().mockResolvedValue({}) },
+      }),
+    ),
+  });
+
+  it('refuses an approved area that an administrator approved', async () => {
+    const prisma = prismaFor({ source: 'AI_FLOOR_PLAN' }, 0);
+    await expect(
+      service(prisma).updateArea(admin, 'area-1', { name: 'Kitchenette' } as never),
+    ).rejects.toMatchObject({ code: 'AREA_ALREADY_APPROVED' });
+  });
+
+  it('refuses once the area appears in a completed inspection', async () => {
+    // Renaming then would relabel evidence in a finished report — that is the
+    // audit trail, not the layout.
+    const prisma = prismaFor({ source: 'TECHNICIAN' }, 1);
+    await expect(
+      service(prisma).updateArea(admin, 'area-1', { name: 'Back garden' } as never),
+    ).rejects.toMatchObject({ code: 'AREA_ALREADY_APPROVED' });
+  });
+
+  it('allows correcting one before any inspection using it has completed', async () => {
+    const prisma = prismaFor({ source: 'TECHNICIAN' }, 0);
+    await expect(
+      service(prisma).updateArea(admin, 'area-1', { name: 'Back garden' } as never),
+    ).resolves.toBeDefined();
+  });
+});
