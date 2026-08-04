@@ -1,6 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
@@ -53,17 +54,25 @@ export default function LoginPage() {
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="brand auth-brand">
-          <div className="brand-mark">★</div>
-          <div>
-            <strong>
-              <span>Texas</span>Renters
-            </strong>
-            <small>Inspection Administration</small>
-          </div>
+        {/* The real wordmark, not a star glyph standing in for it. "Inspection"
+            is set as its own line beneath rather than run on: the logo already
+            says who this is, so the line under it only has to say which product
+            — and the two used to collide into "TexasRentersInspection". */}
+        <div className="flex flex-col items-start gap-2.5">
+          <Image
+            alt="TexasRenters.com"
+            className="h-auto w-[220px] max-w-full"
+            height={64}
+            priority
+            src="/texasrenterslogo-transparent.png"
+            width={220}
+          />
+          <span className="text-[13px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            Inspection
+          </span>
         </div>
         <div>
-          <span className="auth-eyebrow">SECURE ADMINISTRATOR ACCESS</span>
+          <span className="auth-eyebrow">Secure administrator access</span>
           <h1>Welcome back</h1>
           <p>Sign in to manage properties, inspections, assignments, and integrations.</p>
         </div>
