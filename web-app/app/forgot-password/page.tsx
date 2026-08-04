@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
-import { supabase } from '@/lib/supabase';
+import { api } from '@/lib/api';
+
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -15,11 +16,22 @@ export default function ForgotPasswordPage() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(undefined);
-    const result = await supabase().auth.resetPasswordForEmail(email, {
-      redirectTo: `${location.origin}/reset-password`,
-    });
-    if (result.error) setError(result.error.message);
-    else setSent(true);
+    // Ours rather than Supabase's resetPasswordForEmail: that sent the stock
+    // template, and tied the link to a verifier held only by this browser, so
+    // opening the mail on a phone could never complete. The API mints the link
+    // with the service role and sends it through the same mailer as every other
+    // message from the product.
+    try {
+      await api<void>('/api/v1/auth/request-password-reset', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim().toLowerCase() }),
+      });
+      // Always the same outcome. Whether the address has an account is not
+      // something this form is willing to tell an anonymous visitor.
+      setSent(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The reset email could not be sent.');
+    }
   };
   return (
     <main className="auth-page">

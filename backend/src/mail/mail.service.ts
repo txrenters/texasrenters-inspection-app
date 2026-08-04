@@ -62,6 +62,32 @@ export class MailService {
     });
   }
 
+  /**
+   * Password reset, sent by us rather than by Supabase's stock template.
+   *
+   * The link is minted server-side with the service role, so it carries no PKCE
+   * verifier and works in whatever browser the mail is opened in — the stock
+   * flow could only be completed in the browser that asked for it.
+   */
+  sendPasswordReset(input: { to: string; displayName?: string | null; resetUrl: string }) {
+    const greeting = input.displayName ? `Hello ${escapeHtml(input.displayName)},` : 'Hello,';
+    const safeUrl = escapeHtml(input.resetUrl);
+    return this.deliver({
+      to: input.to,
+      subject: 'Reset your TexasRenters password',
+      html: this.layout(
+        'Reset your password',
+        `<p>${greeting}</p>
+         <p>Someone asked to reset the password for this TexasRenters administrator account.
+            Choose a new one using the link below.</p>
+         <p><a href="${safeUrl}">Choose a new password</a></p>
+         <p>The link can be used once and expires shortly. If you did not ask for this, no
+            action is needed — your current password still works and nothing has changed.</p>`,
+      ),
+      template: 'password-reset',
+    });
+  }
+
   sendAccountInvitation(input: {
     to: string;
     displayName: string;

@@ -1,4 +1,4 @@
-import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 /**
  * Policy for replacing a temporary password.
@@ -19,4 +19,11 @@ export class ChangeRequiredPasswordDto {
   @Matches(/[0-9]/, { message: 'Include at least one number.' })
   @Matches(/[^A-Za-z0-9]/, { message: 'Include at least one special character.' })
   password!: string;
+}
+
+/** Only the address; the response is identical whether or not it matches. */
+export class RequestPasswordResetDto {
+  @IsEmail()
+  @MaxLength(320)
+  email!: string;
 }
