@@ -181,32 +181,47 @@ export default function PropertywarePage() {
             pulse={isRunning}
           />
         </CardHeader>
+        {/* Ordered by how often you would reach for them, and worded by when to
+            use each rather than what each does internally. The everyday one was
+            in the middle wearing a filled highlight, which reads as a selected
+            option rather than the recommended action — the tag now says which
+            it is, so the emphasis means recommended instead of chosen. */}
         <div className="sync-action-grid" aria-label="Manual synchronization actions">
-          <button
-            className="sync-action"
-            disabled={!canManage || mutation.isPending}
-            onClick={() => setPendingMode('initial')}
-          >
-            <strong>Initial sync</strong>
-            <span>Import the complete active catalog</span>
-          </button>
           <button
             className="sync-action sync-action-primary"
             disabled={!canManage || mutation.isPending}
             onClick={() => setPendingMode('incremental')}
           >
-            <strong>Incremental sync</strong>
-            <span>Retrieve only recent source changes</span>
+            <strong>
+              Fetch recent changes
+              <span className="sync-action-tag">Everyday</span>
+            </strong>
+            <span>Picks up what changed in Propertyware since the last sync. Quick.</span>
           </button>
           <button
             className="sync-action"
             disabled={!canManage || mutation.isPending}
             onClick={() => setPendingMode('reconcile')}
           >
-            <strong>Reconcile catalog</strong>
-            <span>Validate active and deactivated records</span>
+            <strong>Check for drift</strong>
+            <span>
+              Compares every local record against Propertyware. Use when something looks wrong.
+            </span>
+          </button>
+          <button
+            className="sync-action"
+            disabled={!canManage || mutation.isPending}
+            onClick={() => setPendingMode('initial')}
+          >
+            <strong>Re-import everything</strong>
+            <span>Pulls the whole catalog again. Rarely needed, and the slowest.</span>
           </button>
         </div>
+        {/* Says so before the click, not after: the confirmation step is the
+            reason it is safe to press one of these to find out what it does. */}
+        <p className="text-[13px] text-muted-foreground">
+          Each asks you to confirm before it starts, and only one sync runs at a time.
+        </p>
         {!canManage ? (
           <p className="text-[13px] text-muted-foreground">You have read-only integration access.</p>
         ) : null}

@@ -4785,3 +4785,28 @@ button:disabled {
   color: var(--foreground);
   border-color: var(--ring);
 }
+
+/* "Everyday" beside the recommended sync action. Inline in the strong, so the
+   label and the tag share a baseline instead of the tag claiming its own row. */
+.sync-action strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sync-action-tag {
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: rgba(255, 255, 255, 0.16);
+  /* Overrides the muted colour every other span in the card inherits, which on
+     the filled recommended button is close to unreadable. */
+  color: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* These now carry a sentence about when to reach for each, which 10px asks the
+   reader to squint at. */
+.sync-action span:not(.sync-action-tag) {
+  font-size: 11px;
+}
