@@ -2,6 +2,7 @@ import { Redirect, Stack } from 'expo-router';
 
 import { createErrorBoundary } from '@/src/components/AppErrorBoundary';
 import { ConnectivitySync } from '@/src/components/ConnectivitySync';
+import { OfflineBanner } from '@/src/components/OfflineBanner';
 import { UploadQueueRunner } from '@/src/components/UploadQueueRunner';
 import { ScreenLoader } from '@/src/components/ui/Loader';
 import { useCurrentUser } from '@/src/features/queries';
@@ -25,6 +26,9 @@ export default function AppLayout() {
   return (
     <>
       <ConnectivitySync />
+      {/* Above the navigator so it sits over every screen — being offline is
+          not the concern of any one of them. */}
+      <OfflineBanner />
       <UploadQueueRunner />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
