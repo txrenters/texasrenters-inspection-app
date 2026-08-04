@@ -46,7 +46,7 @@ export class AuthService {
     }).auth.admin;
 
     const link = await admin.generateLink({ type: 'recovery', email, options: { redirectTo } });
-    if (link.error || !link.data.properties?.action_link) {
+    if (link.error || !link.data.properties?.hashed_token) {
       // Includes "user not found", which is not an error the caller may see.
       this.logger.warn({ event: 'password_reset_link_unavailable' });
       return;
@@ -56,10 +56,19 @@ export class AuthService {
       where: { email },
       select: { displayName: true },
     });
+    // Built here rather than using `action_link`, which routes through
+    // Supabase's own verify endpoint and lands wherever that project's redirect
+    // allowlist permits — so a dashboard setting nobody on the team can edit
+    // decided where our users ended up, and an empty allowlist sent them to the
+    // API's root. This link names our app because we wrote it, and the page
+    // redeems the token itself with verifyOtp.
+    const resetUrl = `${redirectTo}?token_hash=${encodeURIComponent(
+      link.data.properties.hashed_token,
+    )}&type=recovery`;
     const delivery = await this.mailer?.sendPasswordReset({
       to: email,
       displayName: profile?.displayName ?? null,
-      resetUrl: link.data.properties.action_link,
+      resetUrl,
     });
     if (delivery?.status !== 'SENT')
       this.logger.warn({ event: 'password_reset_email_failed', status: delivery?.status });

@@ -47,7 +47,20 @@ export default function ResetPasswordPage() {
     // whatever Supabase said about a missing session — which is why resetting a
     // password never worked, though the email itself arrived fine.
     const code = params.get('code');
+    const tokenHash = params.get('token_hash');
     void (async () => {
+      // Our own link: the API mails a token_hash pointing straight here, so the
+      // session is established without Supabase's verify endpoint or the
+      // redirect allowlist behind it.
+      if (tokenHash) {
+        const verified = await supabase().auth.verifyOtp({
+          token_hash: tokenHash,
+          type: 'recovery',
+        });
+        setLinkState(verified.error ? 'invalid' : 'ready');
+        return;
+      }
+      // Kept for a link minted by the browser flow, which arrives as ?code=.
       if (code) {
         const exchanged = await supabase().auth.exchangeCodeForSession(code);
         setLinkState(exchanged.error ? 'invalid' : 'ready');
