@@ -62,8 +62,13 @@ export function RoleEditorDialog({
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-3xl">
-        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
+      {/* Bounded and column-laid, so the permission catalogue scrolls inside
+          the dialog instead of growing it past the viewport. There are two
+          dozen permissions across six groups; unbounded, the title scrolled off
+          the top of the screen and Save was somewhere below the fold with no
+          way to reach it. */}
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-3xl">
+        <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-col gap-4">
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit role' : 'Create role'}</DialogTitle>
             <DialogDescription>
@@ -98,6 +103,11 @@ export function RoleEditorDialog({
             </Field>
           </div>
 
+          {/* The only part that scrolls. min-h-0 is load-bearing: a flex child
+              defaults to min-height:auto and refuses to shrink below its
+              content, so without it the list pushes the dialog open again and
+              the overflow never engages. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
           {catalog.isLoading ? (
             <p className="text-[13px] text-muted-foreground">Loading permissions…</p>
           ) : catalog.data ? (
@@ -124,7 +134,10 @@ export function RoleEditorDialog({
               ))}
             </div>
           ) : null}
+          </div>
 
+          {/* Outside the scroll region: the running count is the one thing you
+              need while working down a long list, so it stays put. */}
           <p className="text-[13px] text-muted-foreground">{permissions.size} permission(s) selected</p>
 
           {mutation.error ? (
