@@ -1,3 +1,4 @@
+import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
@@ -721,6 +722,30 @@ export class TechnicianService {
           createdById: user.id,
         },
         select: { id: true },
+      });
+      // The area arrives with the house-standard checklist already on it.
+      //
+      // In the same transaction as the area, because an area that exists
+      // without its checklist is the state the technician would walk into —
+      // they add a room on site and start recording it seconds later. The
+      // template is deterministic, so this needs no network and cannot fail
+      // separately from the area itself.
+      const templateItems = checklistTemplateFor({
+        name,
+        category: input.category ?? null,
+        environment: input.environment,
+      });
+      await tx.areaChecklistItem.createMany({
+        data: templateItems.map((label, index) => ({
+          organizationId: user.organizationId,
+          propertyAreaId: area.id,
+          label,
+          // Derived from the label, exactly as an administrator-authored item
+          // is — the matcher does not care where the words came from.
+          keywords: keywordsFromLabel(label),
+          sortOrder: index,
+          createdById: user.id,
+        })),
       });
       const inspectionArea = await tx.inspectionArea.create({
         data: {

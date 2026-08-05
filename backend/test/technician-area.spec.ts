@@ -51,6 +51,8 @@ const roomRecord = {
 function buildPrisma(overrides: Record<string, unknown> = {}) {
   const tx = {
     propertyArea: { create: jest.fn().mockResolvedValue({ id: 'area-1' }) },
+    // The area is written with its default checklist in the same transaction.
+    areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     // Returns the whole selected row: createArea now selects the room inside
     // the transaction instead of re-reading it afterwards.
     inspectionArea: { create: jest.fn().mockResolvedValue(roomRecord) },
@@ -79,6 +81,34 @@ function service(prisma: unknown) {
 }
 
 describe('technician manual area creation', () => {
+  it('gives a technician-added area its default checklist on the spot', async () => {
+    // The case this exists for: no floor plan, so nobody classified the area
+    // and no administrator will see it before the technician records it. The
+    // list has to arrive with the area, in the same transaction, or they walk
+    // into a room with nothing to cover.
+    const { prisma, tx } = buildPrisma();
+    await service(prisma).createArea(technician, 'insp-1', {
+      name: 'Guest bathroom',
+      environment: 'INDOOR' as never,
+    });
+
+    const [call] = tx.areaChecklistItem.createMany.mock.calls;
+    const labels = (call[0].data as { label: string }[]).map((item) => item.label);
+    // Base set plus what a bathroom needs, read from the name alone.
+    expect(labels).toContain('Doors and locks');
+    expect(labels).toContain('Toilet and roll holder');
+    // Keywords are derived the same way an administrator's own item would be,
+    // so a generated item ticks itself under the same conditions.
+    const toilet = (call[0].data as { label: string; keywords: string[] }[]).find(
+      (item) => item.label === 'Toilet and roll holder',
+    );
+    expect(toilet?.keywords).toContain('toilet');
+    // Ordered as the technician should walk them.
+    expect((call[0].data as { sortOrder: number }[]).map((item) => item.sortOrder)).toEqual(
+      labels.map((_, index) => index),
+    );
+  });
+
   it('creates an approved technician-sourced area and links it to the inspection', async () => {
     const { prisma, tx } = buildPrisma();
     const result = await service(prisma).createArea(technician, 'insp-1', {

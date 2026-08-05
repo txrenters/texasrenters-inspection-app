@@ -62,3 +62,4 @@ export interface ApiErrorContract {
 export * from './admin.js';
 export * from './area-evidence.js';
 export * from './password-policy.js';
+export * from './area-checklist-template.js';

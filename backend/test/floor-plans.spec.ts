@@ -338,6 +338,8 @@ describe('administrator floor plans', () => {
     const tx = {
       propertyArea: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
       propertyFloorPlan: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      // Approval now also writes each area's default checklist.
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const prisma = {
@@ -349,6 +351,8 @@ describe('administrator floor plans', () => {
             areaIds.map((id) => ({ id, propertyId: building.id, status: 'DRAFT' })),
           ),
       },
+      // Nothing has a checklist yet, so every approved area gets the default.
+      areaChecklistItem: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
     const service = new FloorPlanAdminService(
@@ -363,8 +367,14 @@ describe('administrator floor plans', () => {
 
     expect(prisma.propertyArea.findMany).toHaveBeenCalledWith({
       where: { id: { in: areaIds }, propertyId: building.id, status: 'DRAFT' },
-      select: { id: true },
+      // Name, category and environment ride along because approval is where an
+      // extracted area gets its default checklist, and the template reads all
+      // three to choose a list.
+      select: { id: true, name: true, category: true, environment: true },
     });
+    // Approval is where an extracted area gets the same house-standard list a
+    // technician-added area gets on creation.
+    expect(tx.areaChecklistItem.createMany).toHaveBeenCalled();
     expect(tx.propertyArea.updateMany).toHaveBeenCalledWith({
       where: { id: { in: areaIds } },
       data: { status: 'APPROVED' },

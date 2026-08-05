@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
 import { FloorPlanStatus, InspectionStatus, PropertyAreaStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
@@ -175,46 +176,9 @@ function normalizeKeywords(keywords: string[] | undefined): string[] {
   return [...new Set(keywords.map((word) => word.trim().toLowerCase()).filter(Boolean))];
 }
 
-/** Words too common to identify anything when spoken aloud. */
-const CHECKLIST_STOP_WORDS = new Set([
-  'and',
-  'any',
-  'are',
-  'for',
-  'its',
-  'not',
-  'the',
-  'their',
-  'this',
-  'with',
-]);
-
-/**
- * The words an item is matched on when no keywords were authored.
- *
- * Administrators asked to write the item only, so the item has to carry its own
- * matching. Taken from the label because that is the phrase describing what the
- * technician must cover: "Sink, taps and drainage" listens for sink, tap and
- * drainage.
- *
- * Plurals are reduced to the singular because the matcher accepts either form,
- * so storing "tap" covers "tap" and "taps" while storing "taps" covers only the
- * plural. What this cannot do is guess a synonym — a spoken "faucet" will not
- * satisfy an item labelled "taps" — so authored keywords remain the way to
- * cover wording the label does not use.
- */
-function keywordsFromLabel(label: string): string[] {
-  const words = label
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((word) => word.length > 1 && !CHECKLIST_STOP_WORDS.has(word))
-    // "glass", "status" and "analysis" are not plurals, so a trailing -s counts
-    // as one only when what precedes it is not s, u or i.
-    .map((word) => (word.length > 3 && /[^siu]s$/.test(word) ? word.slice(0, -1) : word));
-  return [...new Set(words)];
-}
-
+// keywordsFromLabel now lives in @texasrenters/shared, beside the checklist
+// template that generates labels, so generated and hand-written items derive
+// their keywords identically.
 @Injectable()
 export class FloorPlanAdminService {
   private readonly logger = new Logger(FloorPlanAdminService.name);
@@ -1053,7 +1017,10 @@ export class FloorPlanAdminService {
       );
     const selected = await this.prisma.propertyArea.findMany({
       where: { id: { in: uniqueIds }, propertyId: buildingId, status: PropertyAreaStatus.DRAFT },
-      select: { id: true },
+      // Name, category and environment come back too: approval is where an
+      // extracted area gets its default checklist, and the template reads all
+      // three to decide which list an area takes.
+      select: { id: true, name: true, category: true, environment: true },
     });
     if (selected.length !== uniqueIds.length)
       throw new ApplicationError(
@@ -1061,11 +1028,45 @@ export class FloorPlanAdminService {
         'INVALID_AREA_SELECTION',
         'Select only draft areas for this property.',
       );
+    // Only areas nobody has written a checklist for. An administrator who
+    // authored one before approving has said what this area needs; appending
+    // the house standard underneath would duplicate half of it and reorder the
+    // rest.
+    const alreadyListed = new Set(
+      (
+        await this.prisma.areaChecklistItem.findMany({
+          where: { propertyAreaId: { in: uniqueIds }, archivedAt: null },
+          select: { propertyAreaId: true },
+          distinct: ['propertyAreaId'],
+        })
+      ).map((item) => item.propertyAreaId),
+    );
+
     await this.prisma.$transaction(async (tx) => {
       await tx.propertyArea.updateMany({
         where: { id: { in: uniqueIds } },
         data: { status: PropertyAreaStatus.APPROVED },
       });
+      // Approval is the moment an extracted area becomes part of the property,
+      // so it is where the default checklist belongs — the same list a
+      // technician-added area gets on creation, from the same table.
+      const generated = selected
+        .filter((area) => !alreadyListed.has(area.id))
+        .flatMap((area) =>
+          checklistTemplateFor({
+            name: area.name,
+            category: area.category,
+            environment: area.environment,
+          }).map((label, index) => ({
+            organizationId: user.organizationId,
+            propertyAreaId: area.id,
+            label,
+            keywords: keywordsFromLabel(label),
+            sortOrder: index,
+            createdById: user.id,
+          })),
+        );
+      if (generated.length) await tx.areaChecklistItem.createMany({ data: generated });
       await tx.propertyFloorPlan.updateMany({
         where: { propertyId: buildingId, status: FloorPlanStatus.REVIEW_REQUIRED },
         data: { status: FloorPlanStatus.APPROVED },

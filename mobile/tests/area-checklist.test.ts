@@ -41,31 +41,50 @@ describe('resolveAreaChecklist', () => {
 });
 
 describe('checklistForArea', () => {
+  // The fallback now comes from the shared template rather than tables kept
+  // here, so these assert the house-standard wording — and that the offline
+  // list is the same one the server would have generated.
   it('picks the list that matches the room', () => {
-    expect(checklistForArea({ name: 'Kitchen' }).map((item) => item.id)).toContain('appliances');
-    expect(checklistForArea({ name: 'Main Bathroom' }).map((item) => item.id)).toContain('toilet');
-    expect(checklistForArea({ name: 'Bedroom 2' }).map((item) => item.id)).toContain('storage');
+    expect(checklistForArea({ name: 'Kitchen' }).map((item) => item.label)).toContain(
+      'Sink, taps and spouts',
+    );
+    expect(checklistForArea({ name: 'Main Bathroom' }).map((item) => item.label)).toContain(
+      'Toilet and roll holder',
+    );
+    expect(checklistForArea({ name: 'Bedroom 2' }).map((item) => item.label)).toContain(
+      'Built-ins and mirrors',
+    );
   });
 
   it('does not read an en-suite as a bedroom', () => {
     // "Master Bedroom Ensuite" contains "bed"; the bathroom rule has to win or
     // the technician gets asked about wardrobes in a shower room.
-    const items = checklistForArea({ name: 'Master Bedroom Ensuite' }).map((item) => item.id);
-    expect(items).toContain('shower');
-    expect(items).not.toContain('storage');
+    const items = checklistForArea({ name: 'Master Bedroom Ensuite' }).map((item) => item.label);
+    expect(items).toContain('Bath, shower and taps');
+    expect(items).not.toContain('Built-ins and mirrors');
   });
 
   it('lets an outdoor classification override the name', () => {
     // The floor plan knows this is outside even though it is called a room.
     const items = checklistForArea({ name: 'Garden Room', environment: 'OUTDOOR' }).map(
-      (item) => item.id,
+      (item) => item.label,
     );
-    expect(items).toContain('boundary');
+    expect(items).toContain('Gates and fences');
+    expect(items).not.toContain('Walls and ceilings');
   });
 
-  it('falls back to a general list for an unrecognised area', () => {
-    const items = checklistForArea({ name: 'Landing' }).map((item) => item.id);
-    expect(items).toEqual(expect.arrayContaining(['walls', 'flooring', 'doors']));
+  it('falls back to the base set for an unrecognised area', () => {
+    const items = checklistForArea({ name: 'Landing' }).map((item) => item.label);
+    expect(items).toEqual(
+      expect.arrayContaining(['Doors and locks', 'Walls and ceilings', 'Floor and coverings']),
+    );
+  });
+
+  it('derives keywords so a generated item can tick itself', () => {
+    const sink = checklistForArea({ name: 'Kitchen' }).find(
+      (item) => item.label === 'Sink, taps and spouts',
+    );
+    expect(sink?.keywords).toEqual(expect.arrayContaining(['sink', 'tap', 'spout']));
   });
 
   it('never returns an empty checklist', () => {

@@ -1,3 +1,5 @@
+import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
+
 import type { AreaEnvironment, InspectionRoom } from '../domain/models';
 
 export interface ChecklistItem {
@@ -13,60 +15,9 @@ export interface ChecklistItem {
   keywords: string[];
 }
 
-/**
- * Mock checklists, keyed off the area's name and environment.
- *
- * Deliberately generated rather than fetched: the real lists will come from the
- * property's inspection template, and nothing in the schema models them yet.
- * Keeping the shape identical to what an API would return means wiring the real
- * source later is a repository change, not a rewrite of the screen.
- */
-const KITCHEN: ChecklistItem[] = [
-  { id: 'appliances', label: 'Appliances present and working', keywords: ['appliance', 'oven', 'stove', 'fridge', 'refrigerator', 'microwave', 'dishwasher'] },
-  { id: 'sink', label: 'Sink, taps and drainage', keywords: ['sink', 'tap', 'faucet', 'drain', 'drainage'] },
-  { id: 'counters', label: 'Counters and splashback', keywords: ['counter', 'countertop', 'worktop', 'splashback', 'backsplash'] },
-  { id: 'cabinets', label: 'Cabinets and drawers', keywords: ['cabinet', 'cupboard', 'drawer'] },
-  { id: 'leaks', label: 'Under-sink leaks or water damage', keywords: ['leak', 'water damage', 'damp', 'mould', 'mold'] },
-];
-
-const BATHROOM: ChecklistItem[] = [
-  { id: 'toilet', label: 'Toilet condition and flush', keywords: ['toilet', 'flush', 'cistern'] },
-  { id: 'shower', label: 'Shower or bath and seals', keywords: ['shower', 'bath', 'tub', 'seal', 'grout', 'silicone'] },
-  { id: 'basin', label: 'Basin, taps and drainage', keywords: ['basin', 'sink', 'tap', 'faucet', 'drain'] },
-  { id: 'ventilation', label: 'Extractor or ventilation', keywords: ['extractor', 'vent', 'ventilation', 'fan'] },
-  { id: 'damp', label: 'Damp, mould or water staining', keywords: ['damp', 'mould', 'mold', 'stain', 'water damage'] },
-];
-
-const BEDROOM: ChecklistItem[] = [
-  { id: 'walls', label: 'Walls and paintwork', keywords: ['wall', 'paint', 'paintwork', 'scuff', 'mark'] },
-  { id: 'flooring', label: 'Flooring condition', keywords: ['floor', 'flooring', 'carpet', 'laminate', 'tile'] },
-  { id: 'windows', label: 'Windows, locks and blinds', keywords: ['window', 'lock', 'blind', 'curtain', 'latch'] },
-  { id: 'storage', label: 'Wardrobe or storage', keywords: ['wardrobe', 'closet', 'storage', 'shelf'] },
-  { id: 'outlets', label: 'Sockets, switches and lighting', keywords: ['socket', 'outlet', 'switch', 'light', 'lighting'] },
-];
-
-const EXTERIOR: ChecklistItem[] = [
-  { id: 'surfaces', label: 'Walls, render and roofline', keywords: ['wall', 'render', 'brick', 'roof', 'roofline', 'gutter'] },
-  { id: 'ground', label: 'Paths, driveway and drainage', keywords: ['path', 'driveway', 'paving', 'drain', 'drainage'] },
-  { id: 'boundary', label: 'Fencing, gates and boundary', keywords: ['fence', 'fencing', 'gate', 'boundary', 'wall'] },
-  { id: 'vegetation', label: 'Vegetation and overgrowth', keywords: ['grass', 'lawn', 'hedge', 'tree', 'overgrown', 'weed'] },
-  { id: 'rubbish', label: 'Rubbish or items left outside', keywords: ['rubbish', 'trash', 'bin', 'debris', 'left behind'] },
-];
-
-const GENERAL: ChecklistItem[] = [
-  { id: 'walls', label: 'Walls and ceiling', keywords: ['wall', 'ceiling', 'paint', 'crack'] },
-  { id: 'flooring', label: 'Flooring condition', keywords: ['floor', 'flooring', 'carpet', 'laminate', 'tile'] },
-  { id: 'doors', label: 'Doors, handles and locks', keywords: ['door', 'handle', 'lock', 'hinge'] },
-  { id: 'outlets', label: 'Sockets, switches and lighting', keywords: ['socket', 'outlet', 'switch', 'light', 'lighting'] },
-  { id: 'damage', label: 'Any visible damage', keywords: ['damage', 'broken', 'crack', 'hole', 'stain'] },
-];
-
-/** Ordered most specific first — "master bathroom" must not match the bedroom list. */
-const BY_NAME: { test: RegExp; items: ChecklistItem[] }[] = [
-  { test: /bath|shower|w\.?c\.?|toilet|ensuite|en-suite/i, items: BATHROOM },
-  { test: /kitchen|kitchenette|pantry|utility/i, items: KITCHEN },
-  { test: /bed|nursery/i, items: BEDROOM },
-];
+// The per-area tables that used to live here are gone: the shared template in
+// @texasrenters/shared is now the single source, so the offline fallback and
+// the list the server generates cannot disagree.
 
 /**
  * Which checklist an area actually shows: the authored one, or a generated
@@ -89,14 +40,27 @@ export function resolveAreaChecklist(
   return checklistForArea({ name: area.name ?? '', environment: area.environment });
 }
 
+/**
+ * The fallback list for an area the API has not sent one for.
+ *
+ * Built from the shared template — the same table the server generates from —
+ * so a fallback shown offline matches the list that area will have once its
+ * checklist arrives. The lists that used to live in this file were written
+ * independently and said different things: a technician who lost signal saw a
+ * different kitchen from the one an administrator had approved.
+ *
+ * Ids are the labels, so a locally ticked item keeps its meaning if the real
+ * items arrive mid-walkthrough; `checklistProgress` already counts only ids
+ * still on the list, so anything that no longer matches is simply dropped.
+ */
 export function checklistForArea(
   area: Pick<InspectionRoom, 'name'> & { environment?: AreaEnvironment },
 ): ChecklistItem[] {
-  // Outdoors wins over the name: a "garden room" that the plan classifies as
-  // OUTDOOR wants the exterior list, not the bedroom one.
-  if (area.environment === 'OUTDOOR') return EXTERIOR;
-  const matched = BY_NAME.find((entry) => entry.test.test(area.name));
-  return matched ? matched.items : GENERAL;
+  return checklistTemplateFor({ name: area.name, environment: area.environment }).map((label) => ({
+    id: label,
+    label,
+    keywords: keywordsFromLabel(label),
+  }));
 }
 
 /**
