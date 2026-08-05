@@ -6,10 +6,18 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENV_FILE = join(ROOT, 'backend', '.env.local');
-const COMPOSE_FILE = join(ROOT, 'compose.remote-beta.yml');
+// The web image inlines NEXT_PUBLIC_* at build time, and interpolation only
+// reads --env-file and the root .env — never a service's env_file.
+const WEB_ENV_FILE = join(ROOT, 'web-app', '.env.local');
+const COMPOSE_FILES = [
+  '-f',
+  join(ROOT, 'compose.yaml'),
+  '-f',
+  join(ROOT, 'compose.remote-beta.yaml'),
+];
 const result = spawnSync(
   'docker',
-  ['compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, 'ps', '--format', 'json'],
+  ['compose', '--env-file', ENV_FILE, '--env-file', WEB_ENV_FILE, ...COMPOSE_FILES, 'ps', '--format', 'json'],
   { encoding: 'utf8' },
 );
 const text = (result.stdout ?? '').trim();

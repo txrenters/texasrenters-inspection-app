@@ -1,31 +1,51 @@
+# Single build-context filter for the whole repository.
+#
+# Both Dockerfiles build from the repository root, so this is the only
+# .dockerignore Docker ever reads. A per-package file such as backend/.dockerignore
+# is silently ignored — do not add one back.
+
 .git
 .github
+
+# Dependencies and build output are reproduced inside the image.
 node_modules
 **/node_modules
 **/dist
 **/coverage
-**/.expo
-.env
-**/.env
-tmp
-*.log
+**/.next
+**/.next-dev
+**/.next-build
+**/.turbo
+**/build
+**/*.tsbuildinfo
 
 # Never let a real secret file reach a build layer.
+.env
+**/.env
 **/.env.*
 !**/.env.example
 !**/.env.*.example
 
-# Local artefacts that only inflate the context.
-**/.next
-**/.turbo
-**/build
+# Editor, tooling, and test artefacts that only inflate the context.
 **/.vscode
 **/.idea
 **/test-results
 **/playwright-report
+tmp
+*.log
+
+# Expo/native output. mobile/ itself stays in context because its package.json is
+# required for `pnpm install --frozen-lockfile` to match the workspace lockfile.
+**/.expo
+mobile/android
+mobile/ios
+
+# Locally captured inspection media.
 **/*.mp4
 **/*.mov
-mobile
-web-app
+backend/.local-floor-plans
+backend/.local-inspection-media
+
+# Not consumed by any image build.
 docs
 supabase

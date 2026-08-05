@@ -1,0 +1,64 @@
+# Local development overlay.
+#
+# Compose loads this file automatically alongside compose.yaml whenever no
+# explicit -f flags are given, so `docker compose up -d --build` is the whole
+# local workflow. It is intentionally NOT loaded by the remote-beta command,
+# which names its files explicitly.
+#
+# Host ports are shifted away from the well-known defaults so a Postgres or
+# Redis already installed on the workstation does not collide with the stack.
+# Nothing inside the Compose network uses these numbers — services address each
+# other by name on the container port, so these exist only for inspecting the
+# containers from the host.
+#
+# Overridable, and the defaults moved once already: the first pair collided
+# with another Compose project on the same workstation, which the shift was
+# supposed to prevent. A workstation running several stacks will exhaust any
+# fixed choice eventually, so set REDIS_PORT or POSTGRES_PORT rather than
+# editing this file.
+
+services:
+  redis:
+    ports:
+      - '${REDIS_PORT:-56380}:6379'
+
+  postgres:
+    ports:
+      - '${POSTGRES_PORT:-55433}:5432'
+
+  backend:
+    environment:
+      NODE_ENV: development
+      APP_ENV: local
+      # Real authentication, because the admin app in this workspace signs in
+      # against a real Supabase project and talks to a real database.
+      #
+      # Mock auth does not verify the bearer token at all — it ignores whoever
+      # signed in and resolves a hardcoded id, defaulting to the technician
+      # seed. So a real administrator signing in was answered as a deactivated
+      # @local.test technician, which surfaced as "Account is disabled" on a
+      # perfectly good account. Two halves of one login disagreeing about who
+      # the user is.
+      #
+      # Set USE_MOCK_AUTH=true to work against the seeded mock users instead,
+      # and pair it with MOCK_AUTH_DEFAULT_USER_ID — the default resolves to a
+      # technician, which the administrator app cannot use.
+      USE_MOCK_AUTH: ${USE_MOCK_AUTH:-false}
+      FLOOR_PLAN_EXTRACTION_PROVIDER: mock
+      VIDEO_PLATFORM_PROVIDER: mock
+      TRANSCRIPTION_PROVIDER: mock
+      AI_ANALYSIS_PROVIDER: mock
+      JOB_QUEUE_PROVIDER: memory
+      FLOOR_PLAN_STORAGE_PROVIDER: local
+    # DATABASE_URL and DIRECT_URL are deliberately absent here. Compose
+    # `environment:` outranks `env_file:`, so setting them would silently
+    # override the Supabase credentials in backend/.env.local. To run against
+    # the profile-gated Postgres container instead, point those two variables at
+    # `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public`
+    # inside backend/.env.local and start with `--profile local-db`.
+    ports:
+      - '${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}'
+
+  web:
+    ports:
+      - '${WEB_PORT:-5454}:${WEB_PORT:-5454}'

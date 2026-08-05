@@ -81,8 +81,8 @@ health, and whether V2 Metro is listening.
 ## Manual Docker inspection
 
 ```bash
-docker compose --env-file backend/.env.local -f compose.remote-beta.yml ps
-docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs backend gateway tunnel
+docker compose --env-file backend/.env.local -f compose.yaml -f compose.remote-beta.yaml ps
+docker compose --env-file backend/.env.local -f compose.yaml -f compose.remote-beta.yaml logs backend gateway tunnel
 ```
 
 The ngrok inspection API is local only:

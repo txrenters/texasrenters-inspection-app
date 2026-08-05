@@ -15,8 +15,16 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const COMPOSE_FILE = join(ROOT, 'compose.remote-beta.yml');
+const COMPOSE_FILES = [
+  '-f',
+  join(ROOT, 'compose.yaml'),
+  '-f',
+  join(ROOT, 'compose.remote-beta.yaml'),
+];
 const ENV_FILE = join(ROOT, 'backend', '.env.local');
+// The web image inlines NEXT_PUBLIC_* at build time, and interpolation only
+// reads --env-file and the root .env — never a service's env_file.
+const WEB_ENV_FILE = join(ROOT, 'web-app', '.env.local');
 const MOBILE_ENV = join(ROOT, 'mobile', '.env.local');
 const NGROK_AGENT_API = 'http://127.0.0.1:4041/api/tunnels';
 const PNPM_CLI = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'pnpm.js');
@@ -66,7 +74,7 @@ async function preflight() {
 }
 
 const compose = (...args) =>
-  run('docker', ['compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, ...args], {
+  run('docker', ['compose', '--env-file', ENV_FILE, '--env-file', WEB_ENV_FILE, ...COMPOSE_FILES, ...args], {
     stdio: 'inherit',
   });
 
@@ -75,8 +83,9 @@ function readServiceHealth() {
     'compose',
     '--env-file',
     ENV_FILE,
-    '-f',
-    COMPOSE_FILE,
+    '--env-file',
+    WEB_ENV_FILE,
+    ...COMPOSE_FILES,
     'ps',
     '--format',
     'json',
@@ -105,7 +114,7 @@ async function waitForBackendHealthy(timeoutMs = 180_000) {
     if (health === 'unhealthy')
       fail(
         'Backend container is unhealthy. Inspect it with:\n' +
-          '  docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs backend',
+          '  docker compose --env-file backend/.env.local -f compose.yaml -f compose.remote-beta.yaml logs backend',
       );
     await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
@@ -192,7 +201,7 @@ const publicUrl = await resolvePublicGateway();
 if (!publicUrl)
   fail(
     'No HTTPS ngrok gateway was registered. Inspect it with:\n' +
-      '  docker compose --env-file backend/.env.local -f compose.remote-beta.yml logs tunnel',
+      '  docker compose --env-file backend/.env.local -f compose.yaml -f compose.remote-beta.yaml logs tunnel',
   );
 
 log('▸ Verifying the public REST health endpoint…');

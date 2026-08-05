@@ -135,7 +135,34 @@ pnpm dev:backend
 - Health: `http://localhost:3000/api/v1/health`
 - Swagger: `http://localhost:3000/api/docs`
 
-The backend connects to the managed Supabase PostgreSQL project through Prisma. Local PostgreSQL and Docker are not part of the application setup. Copy the project-specific transaction-pooler `DATABASE_URL` and session-pooler `DIRECT_URL` from **Supabase Dashboard > Connect > ORM > Prisma** into `backend/.env.local`.
+The backend connects to the managed Supabase PostgreSQL project through Prisma. Copy the project-specific transaction-pooler `DATABASE_URL` and session-pooler `DIRECT_URL` from **Supabase Dashboard > Connect > ORM > Prisma** into `backend/.env.local`. Docker is optional for this path; see [Containerized stack](#containerized-stack) for the full local stack and the offline PostgreSQL option.
+
+## Containerized stack
+
+Every container belongs to one Compose project named `texasrenters`, declared by the `name:` key in `compose.yaml`. Do not add a second compose file that runs its own copy of a service — services in separate projects sit on separate networks and cannot reach each other.
+
+| File | Role |
+| --- | --- |
+| `compose.yaml` | Base definitions: `backend`, `web`, `redis`, and a profile-gated `postgres` |
+| `compose.override.yaml` | Loaded automatically; development ports and mock providers |
+| `compose.remote-beta.yaml` | Overlay adding `gateway` and `tunnel` for the remote iOS beta |
+| `docker/backend/Dockerfile` | NestJS API image |
+| `docker/web/Dockerfile` | Next.js admin image (standalone output) |
+| `docker/nginx/remote-beta.conf` | Gateway routing for the beta tunnel |
+
+Both Dockerfiles build from the repository root, so the root `.dockerignore` is the only one Docker reads. A per-package `.dockerignore` has no effect.
+
+```bash
+pnpm docker:up            # backend + web + redis, against Supabase
+pnpm docker:up:local-db   # ... and a local PostgreSQL container
+pnpm docker:ps
+pnpm docker:logs
+pnpm docker:down
+```
+
+Host ports are shifted away from the defaults so an existing local install does not collide: PostgreSQL on `55432`, Redis on `56379`. Services inside the network address each other by name on the standard container port.
+
+The `local-db` profile is for offline work only. Supabase remains the default in every environment. To use the container, point `DATABASE_URL` and `DIRECT_URL` in `backend/.env.local` at `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public` and start with `pnpm docker:up:local-db`. Compose deliberately does not set those two variables, because a Compose `environment:` entry outranks `env_file:` and would silently override the Supabase credentials.
 
 ### Propertyware synchronization
 

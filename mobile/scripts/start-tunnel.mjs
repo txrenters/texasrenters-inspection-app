@@ -27,7 +27,7 @@ async function discoverBackendUrl() {
   } catch {
     fail(
       `The Docker ngrok agent is not reachable at ${NGROK_AGENT_API}.\n` +
-        'Start compose.remote-beta.yml first, then retry pnpm start:tunnel.',
+        'Run pnpm remote-beta first, then retry pnpm start:tunnel.',
     );
   }
   if (!response.ok) fail(`The Docker ngrok agent returned HTTP ${response.status}.`);
@@ -136,7 +136,7 @@ async function verifyBackend(publicUrl) {
         '  The backend is healthy on http://127.0.0.1:3000, so this is most likely a slow\n' +
         '  ngrok edge rather than a broken tunnel. Starting Metro anyway — if the device\n' +
         '  cannot reach the API, restart the gateway:\n' +
-        '    docker compose --env-file backend/.env.local -f compose.remote-beta.yml restart gateway\n',
+        '    pnpm remote-beta:stop && pnpm remote-beta\n',
     );
     return;
   }
@@ -146,7 +146,7 @@ async function verifyBackend(publicUrl) {
       `after ${attempts} attempts (${lastReason}),\n` +
       'and the backend is not answering on http://127.0.0.1:3000 either.\n' +
       'Check the containers:\n' +
-      '  docker compose --env-file backend/.env.local -f compose.remote-beta.yml ps',
+      '  pnpm remote-beta:status',
   );
 }
 
