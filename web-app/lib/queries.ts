@@ -1,5 +1,6 @@
 'use client';
 
+import type { VideoPlayback } from './playback';
 import type {
   AdminAssignment,
   AdminAssignmentListItem,
@@ -41,6 +42,8 @@ import type {
   AiSettings,
   AiProviderName,
   MailDeliveryResult,
+  AccountDeletionPreflight,
+  AccountDeletionResult,
   AdminDeleteResult,
   AdminBulkDeleteResult,
 } from '@texasrenters/shared';
@@ -115,6 +118,9 @@ export const keys = {
   technicians: (query: object) => ['admin', 'technicians', query] as const,
   technician: (id: string) => ['admin', 'technician', id] as const,
   usersRoot: ['admin', 'access', 'users'] as const,
+  videoPlayback: (mediaId: string) => ['admin', 'video-playback', mediaId] as const,
+  accountDeletionPreflight: (scope: string, id: string) =>
+    ['admin', 'account-deletion-preflight', scope, id] as const,
   users: (query: object) => ['admin', 'access', 'users', query] as const,
   user: (id: string) => ['admin', 'access', 'user', id] as const,
   rolesRoot: ['admin', 'access', 'roles'] as const,
@@ -385,6 +391,54 @@ export const useUser = (id: string) =>
     queryFn: ({ signal }) => api<AdminUserDetail>(`/api/v1/admin/access/users/${id}`, { signal }),
     enabled: Boolean(id),
   });
+/**
+ * What deleting an account would cost, fetched only once the confirmation is
+ * open.
+ *
+ * Deliberately not cached with the account itself: it counts live inspection
+ * records, and a stale answer here would either hide a blocker or promise to
+ * release inspections that have since been reassigned. `staleTime: 0` so
+ * reopening the dialog asks again.
+ */
+export const useAccountDeletionPreflight = (
+  scope: 'CONSOLE' | 'TECHNICIAN',
+  id: string,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: keys.accountDeletionPreflight(scope, id),
+    queryFn: ({ signal }) =>
+      api<AccountDeletionPreflight>(
+        scope === 'TECHNICIAN'
+          ? `/api/v1/admin/technicians/${id}/deletion-preflight`
+          : `/api/v1/admin/access/users/${id}/deletion-preflight`,
+        { signal },
+      ),
+    enabled: enabled && Boolean(id),
+    staleTime: 0,
+    gcTime: 0,
+  });
+/**
+ * A short-lived signed playback URL for one recording.
+ *
+ * Fetched only when a viewer actually opens the recording — a signed token is
+ * minted per request, so requesting one for every thumbnail on an area page
+ * would mint dozens nobody uses.
+ *
+ * `staleTime` sits under the token's own lifetime so react-query re-requests
+ * before it lapses rather than handing the player a dead URL mid-recording.
+ */
+export const useVideoPlayback = (mediaId: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.videoPlayback(mediaId),
+    queryFn: ({ signal }) =>
+      api<VideoPlayback>(`/api/v1/inspection-videos/${mediaId}/playback`, { signal }),
+    enabled: enabled && Boolean(mediaId),
+    staleTime: 60 * 60_000,
+    // Never persisted: a stored playback token would outlive its expiry.
+    gcTime: 0,
+    retry: 1,
+  });
 export const useRoles = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({
     queryKey: keys.roles(query),
@@ -644,6 +698,34 @@ export function useAccessMutations() {
       onError: (_error, id, context) => {
         if (context) failEntityOperation(id, context.operationId);
         refreshRoles(id);
+      },
+    }),
+    /**
+     * Deleting a web user also frees any inspections assigned to them, so the
+     * assignment and dashboard views are refreshed alongside the user list.
+     */
+    deleteUser: useMutation({
+      mutationFn: (id: string) =>
+        api<AccountDeletionResult>(`/api/v1/admin/access/users/${id}`, { method: 'DELETE' }),
+      onMutate: async (id) => {
+        await cancelAffectedQueries(client, [keys.usersRoot, keys.user(id)]);
+        const operationId = beginEntityOperation(id, 'DELETING');
+        removeEntityFromQueries(client, keys.usersRoot, id);
+        return { operationId };
+      },
+      onSuccess: (_data, id, context) => {
+        if (context) completeEntityDeletion(id, context.operationId);
+        void verifyAffectedQueries(client, [
+          keys.usersRoot,
+          keys.rolesRoot,
+          keys.assignmentsRoot,
+          keys.inspectionsRoot,
+          keys.dashboard,
+        ]);
+      },
+      onError: (_error, id, context) => {
+        if (context) failEntityOperation(id, context.operationId);
+        void verifyAffectedQueries(client, [keys.usersRoot, keys.user(id)]);
       },
     }),
   };
@@ -1465,6 +1547,34 @@ export function useAdminMutations() {
       onSuccess: (data, variables) => {
         mergeAuthoritativeEntity(client, keys.all, data);
         refreshInspection(variables.id);
+      },
+    }),
+    /**
+     * Deleting a technician releases their assignments, so every view that
+     * shows who is covering what has to be re-read — the assignment board and
+     * the dashboard queue as much as the technician list.
+     */
+    deleteTechnician: useMutation({
+      mutationFn: (id: string) =>
+        api<AccountDeletionResult>(`/api/v1/admin/technicians/${id}`, { method: 'DELETE' }),
+      onMutate: async (id) => {
+        await cancelAffectedQueries(client, [keys.techniciansRoot, keys.technician(id)]);
+        const operationId = beginEntityOperation(id, 'DELETING');
+        removeEntityFromQueries(client, keys.techniciansRoot, id);
+        return { operationId };
+      },
+      onSuccess: (_data, id, context) => {
+        if (context) completeEntityDeletion(id, context.operationId);
+        void verifyAffectedQueries(client, [
+          keys.techniciansRoot,
+          keys.assignmentsRoot,
+          keys.inspectionsRoot,
+          keys.dashboard,
+        ]);
+      },
+      onError: (_error, id, context) => {
+        if (context) failEntityOperation(id, context.operationId);
+        void verifyAffectedQueries(client, [keys.techniciansRoot, keys.technician(id)]);
       },
     }),
     updateTechnician: useMutation({

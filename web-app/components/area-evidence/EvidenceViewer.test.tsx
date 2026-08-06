@@ -6,6 +6,22 @@ import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 const apiBlob = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({ apiBlob }));
 
+// A recording no longer downloads through the API; it asks for a signed
+// Cloudflare URL. Mocked so the viewer's own behaviour is what is under test.
+vi.mock('@/lib/queries', () => ({
+  useVideoPlayback: () => ({
+    data: {
+      videoId: 'rec-1',
+      provider: 'cloudflare_stream',
+      status: 'ready',
+      iframeUrl: 'https://customer-abc.cloudflarestream.com/signed.token/iframe',
+    },
+    isLoading: false,
+    isError: false,
+    refetch: () => undefined,
+  }),
+}));
+
 const items: EvidenceViewerItem[] = [
   {
     id: 'photo-1',
@@ -79,16 +95,24 @@ describe('EvidenceViewer', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('renders a video element for a recording and an image for a photo', async () => {
+  it('embeds the Cloudflare player for a recording and an image for a photo', async () => {
     const { container, unmount } = render(
       <EvidenceViewer items={items} startIndex={2} onClose={vi.fn()} />,
     );
-    await waitFor(() => expect(container.querySelector('video')).not.toBeNull());
+    // Cloudflare's player, not a <video> fed by a fully downloaded blob — the
+    // whole file no longer has to transfer before the first frame.
+    const frame = await waitFor(() => {
+      const found = container.querySelector('iframe');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(frame.getAttribute('src')).toContain('cloudflarestream.com');
+    expect(container.querySelector('video')).toBeNull();
     unmount();
 
     const photo = render(<EvidenceViewer items={items} startIndex={0} onClose={vi.fn()} />);
     await waitFor(() => expect(photo.container.querySelector('img')).not.toBeNull());
-    expect(photo.container.querySelector('video')).toBeNull();
+    expect(photo.container.querySelector('iframe')).toBeNull();
   });
 
   it('locks background scroll while open and restores it on close', async () => {

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { apiBlob } from '@/lib/api';
+import { RecordingSurface } from './RecordingSurface';
 
 /** Controls sit on a near-black backdrop, where the themed surfaces vanish. */
 const OVERLAY_CONTROL = 'border-white/25 bg-white/10 text-white hover:bg-white/20 hover:text-white';
@@ -24,6 +25,8 @@ export type EvidenceViewerItem = {
   title: string;
   /** Second line: capture type, technician, timestamp. */
   caption?: string;
+  /** Seek target in seconds, for opening a recording at a referenced finding. */
+  startSeconds?: number | null;
   /** Poster frame, already a usable URL, for recordings only. */
   posterUrl?: string | null;
 };
@@ -86,6 +89,15 @@ export function EvidenceViewer({
 
   useEffect(() => {
     if (!item) return;
+    // Recordings are handled by RecordingSurface, which asks the API for a
+    // signed Cloudflare URL instead of downloading the file. Fetching the blob
+    // here as well would pull the whole video down for nothing.
+    if (item.kind === 'recording') {
+      setLoading(false);
+      setError(null);
+      setObjectUrl(null);
+      return;
+    }
     let cancelled = false;
     let created: string | null = null;
     setLoading(true);
@@ -187,14 +199,15 @@ export function EvidenceViewer({
               Retry
             </Button>
           </div>
-        ) : objectUrl && item.kind === 'recording' ? (
-          <video
-            autoPlay
-            className="max-h-full max-w-full rounded-lg"
-            controls
-            poster={item.posterUrl ?? undefined}
-            src={objectUrl}
-          />
+        ) : item.kind === 'recording' ? (
+          <div className="flex w-full max-w-4xl items-center justify-center">
+            <RecordingSurface
+              mediaId={item.id}
+              posterUrl={item.posterUrl}
+              startSeconds={item.startSeconds}
+              title={item.title}
+            />
+          </div>
         ) : objectUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
