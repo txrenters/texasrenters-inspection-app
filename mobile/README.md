@@ -1,4 +1,4 @@
-# TexasRenters Technician App V2
+# TexasRenters Inspection — technician app
 
 This package is the redesigned Expo technician application. It keeps the visual
 work from the supplied prototype while using the same production architecture as
@@ -28,6 +28,34 @@ On a physical device, the development environment derives the backend host from
 Expo's active LAN host when `EXPO_PUBLIC_API_BASE_URL` points at localhost. An
 optional `EXPO_PUBLIC_DEV_LAN_API_BASE_URL` may be supplied as a fallback; do not
 commit a machine-specific IP address.
+
+### Release builds
+
+`.env.local` is a **development** file. EAS builds never read it — the repository
+is archived from git, and it is gitignored.
+
+`EXPO_PUBLIC_*` values are inlined into the bundle at build time, so anything not
+present during the build is absent from the app permanently. `eas.json` sets the
+flags that define the shape of each build (`EXPO_PUBLIC_APP_ENV` and the demo and
+test toggles, pinned off for preview and production). The three values that
+differ per deployment must exist as **EAS environment variables** in the matching
+environment (`eas env:create`, or Project settings → Environment variables):
+
+| Variable | development | preview | production |
+| --- | --- | --- | --- |
+| `EXPO_PUBLIC_API_BASE_URL` | — | ngrok tunnel | public HTTPS API |
+| `EXPO_PUBLIC_SUPABASE_URL` | ✓ | ✓ | ✓ |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | ✓ | ✓ | ✓ |
+
+The anon key is the only Supabase credential the app may ever hold. The
+service-role key, R2 credentials and the JWT secret are backend-only and must
+never appear in an `EXPO_PUBLIC_*` variable — that prefix ships them to every
+device.
+
+If the API address is missing or unreachable from a phone, the app now says so on
+the Diagnostics screen instead of failing as unexplained network errors — see
+`validateApiBaseUrl` in `src/config/environment.ts`. That check cannot run until
+the build exists, so it reports the fault rather than preventing it.
 
 ## Run from the repository root
 

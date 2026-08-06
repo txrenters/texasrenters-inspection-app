@@ -6,12 +6,24 @@ const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
 const LIGHT_BACKGROUND = '#FCFBF8';
 const DARK_BACKGROUND = '#0A0F18';
 
+// The store identity, and the one part of this file that is effectively
+// permanent: `bundleIdentifier` and `package` cannot be changed after the first
+// submission without creating a separate listing and abandoning every install.
+//
+// These carried a `.v2` suffix and an "Inspect V2" display name until release
+// preparation. That came from the period when two mobile packages existed side
+// by side; `mobile-app` was deleted on 2026-07-31 and there has been one client
+// since, so the suffix named a distinction that no longer exists — and it would
+// have been visible on the technician's home screen forever.
+//
+// `inspection`, not `inspect`, to match the repository, the backend, and the
+// web console's own branding.
 const config: ExpoConfig = {
-  name: 'TexasRenters Inspect V2',
-  slug: 'texasrenters-inspect-v2',
+  name: 'TexasRenters Inspection',
+  slug: 'texasrenters-inspection',
   version: '0.1.0',
   orientation: 'portrait',
-  scheme: 'texasrenters-inspect-v2',
+  scheme: 'texasrenters-inspection',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
   plugins: [
@@ -63,14 +75,14 @@ const config: ExpoConfig = {
   },
   ios: {
     supportsTablet: true,
-    bundleIdentifier: 'com.texasrenters.inspect.v2',
+    bundleIdentifier: 'com.texasrenters.inspection',
   },
   android: {
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
       backgroundColor: '#145347',
     },
-    package: 'com.texasrenters.inspect.v2',
+    package: 'com.texasrenters.inspection',
   },
   web: { bundler: 'metro' },
 };
