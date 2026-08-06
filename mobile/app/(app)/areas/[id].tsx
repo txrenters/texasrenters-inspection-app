@@ -244,22 +244,51 @@ export default function AreaDetailScreen() {
             recording and upload independently.
           </Text>
           {media.data?.length ? (
-            media.data.map((recording) => (
-              <View
-                key={recording.id}
-                className="flex-row items-center justify-between rounded-xl bg-muted p-3"
-              >
-                <View className="flex-1">
-                  <Text className="text-sm font-semibold text-foreground">
-                    {recording.label || 'Primary room walkthrough'}
-                  </Text>
-                  <Text className="mt-0.5 text-xs text-muted-foreground">
-                    {recording.durationSeconds}s · {describeRecordingLocation(recording.id)}
-                  </Text>
+            media.data.map((recording) => {
+              // A recording that only exists on this device has nothing on the
+              // server to stream, so it stays a plain row rather than offering
+              // playback that would fail.
+              const uploaded = !recording.id.startsWith('local-media-');
+              const label = recording.label || 'Primary room walkthrough';
+              const body = (
+                <>
+                  <View className="flex-1">
+                    <Text className="text-sm font-semibold text-foreground">{label}</Text>
+                    <Text className="mt-0.5 text-xs text-muted-foreground">
+                      {recording.durationSeconds}s · {describeRecordingLocation(recording.id)}
+                    </Text>
+                  </View>
+                  {uploaded ? (
+                    <PlayCircleIcon size={20} className="text-primary" />
+                  ) : (
+                    <CheckCircle2Icon size={18} className="text-chart-3" />
+                  )}
+                </>
+              );
+              return uploaded ? (
+                <Pressable
+                  accessibilityLabel={`Play ${label}`}
+                  accessibilityRole="button"
+                  className="flex-row items-center justify-between rounded-xl bg-muted p-3 active:scale-[0.99]"
+                  key={recording.id}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(app)/playback/[mediaId]',
+                      params: { mediaId: recording.id, title: label },
+                    })
+                  }
+                >
+                  {body}
+                </Pressable>
+              ) : (
+                <View
+                  className="flex-row items-center justify-between rounded-xl bg-muted p-3"
+                  key={recording.id}
+                >
+                  {body}
                 </View>
-                <CheckCircle2Icon size={18} className="text-chart-3" />
-              </View>
-            ))
+              );
+            })
           ) : (
             <Pressable
               accessibilityHint="Opens the camera for the primary room walkthrough"

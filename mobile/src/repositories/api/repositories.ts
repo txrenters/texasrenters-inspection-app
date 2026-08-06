@@ -30,6 +30,7 @@ import {
   runStreamUpload,
   type StreamUploadSession,
 } from '../../media/stream-upload-runner';
+import type { VideoPlaybackResponse } from '../../media/playback-source';
 import { resolveApiUrl } from '@texasrenters/shared';
 import { z } from 'zod';
 
@@ -661,6 +662,12 @@ export class ApiFloorPlanRepository implements FloorPlanRepository {
 }
 
 export class ApiMediaRepository implements MediaRepository {
+  async playback(mediaId: string) {
+    return (await getJson(
+      `/api/v1/inspection-videos/${encodeURIComponent(mediaId)}/playback`,
+    )) as VideoPlaybackResponse;
+  }
+
   async listForRoom(roomId: string) {
     const localRecords = useDemoStore
       .getState()

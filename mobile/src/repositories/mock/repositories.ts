@@ -272,6 +272,15 @@ export class MockFloorPlanRepository implements FloorPlanRepository {
 }
 
 export class MockMediaRepository implements MediaRepository {
+  async playback(mediaId: string) {
+    // Demo mode has no Cloudflare account; a recording is simply not playable.
+    return {
+      videoId: mediaId,
+      provider: 'cloudflare_stream' as const,
+      status: 'processing' as const,
+    };
+  }
+
   async listForRoom(roomId: string) {
     await mockDelay();
     return useDemoStore.getState().media.filter((item) => item.roomId === roomId);

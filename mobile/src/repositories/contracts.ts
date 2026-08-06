@@ -1,3 +1,4 @@
+import type { VideoPlaybackResponse } from '../media/playback-source';
 import type {
   AreaEnvironment,
   DashboardSummary,
@@ -74,6 +75,14 @@ export interface FloorPlanRepository {
 
 export interface MediaRepository {
   listForRoom(roomId: string): Promise<LocalMedia[]>;
+  /**
+   * Where and how to play one uploaded recording.
+   *
+   * Returns a signed edge URL rather than bytes: the backend never proxies the
+   * video, and the token is short-lived so it is fetched when a technician
+   * opens the recording rather than held.
+   */
+  playback(mediaId: string): Promise<VideoPlaybackResponse>;
   save(input: Omit<LocalMedia, 'id' | 'recordedAt'>): Promise<LocalMedia>;
   /**
    * Photos the server holds for this area.
