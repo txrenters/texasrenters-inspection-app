@@ -35,6 +35,15 @@ import {
   useInspectionFindings,
 } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
+import { inspectionProgress } from '@/lib/inspection-progress';
+
+/** Spoken state for a step that has no more specific detail. */
+const STEP_STATE_LABEL = {
+  complete: 'Complete',
+  active: 'In progress',
+  pending: 'Not started',
+  blocked: 'Blocked',
+} as const;
 
 export default function InspectionDetailPage() {
   const id = useParams<{ inspectionId: string }>().inspectionId;
@@ -144,6 +153,28 @@ export default function InspectionDetailPage() {
             <Badge value={item.priority} />
           </div>
         </div>
+
+        {/* Where the inspection actually is, as four named stages.
+            The status badge above says one thing — "In progress" — that stood
+            equally for capture running, review not started and finalization
+            unavailable, so it appeared in several places meaning something
+            different each time. Each step carries its own label and a written
+            state, never colour alone. */}
+        <ol className="inspection-progress" aria-label="Inspection workflow">
+          {inspectionProgress(item.status).map((step) => (
+            <li className="inspection-progress-step" data-state={step.state} key={step.key}>
+              <span aria-hidden className="inspection-progress-marker">
+                {step.state === 'complete' ? '✓' : step.state === 'blocked' ? '×' : '●'}
+              </span>
+              <div>
+                <strong>{step.label}</strong>
+                {/* The written state is what a screen reader announces, and
+                    what makes the marker meaningful to everyone else. */}
+                <span>{step.detail || STEP_STATE_LABEL[step.state]}</span>
+              </div>
+            </li>
+          ))}
+        </ol>
 
         <dl className="inspection-facts">
           <div className="inspection-fact inspection-fact-primary">

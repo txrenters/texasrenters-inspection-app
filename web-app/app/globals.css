@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3808,6 +3808,13 @@ button:disabled {
   color: var(--text-2);
 }
 
+/* The walkthrough a reviewer came to watch, at the full width of the panel.
+   Capped so it does not become unwatchably tall on a wide monitor — 16/9 of an
+   unbounded width pushes the metadata and controls below the fold. */
+.area-recording-primary {
+  max-width: 920px;
+  margin-bottom: 20px;
+}
 .area-recording-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -4298,6 +4305,70 @@ button:disabled {
 .finding-filter {
   width: 190px;
 }
+/* The four workflow stages, each named and each carrying a written state.
+   Colour is never the only signal: the marker glyph and the state text both
+   differ, so the tracker survives a monochrome screen and a screen reader. */
+.inspection-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 18px 22px 4px;
+  list-style: none;
+}
+.inspection-progress-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+.inspection-progress-step strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+.inspection-progress-step span:last-child {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.inspection-progress-marker {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-2);
+}
+.inspection-progress-step[data-state='complete'] .inspection-progress-marker {
+  color: var(--green);
+}
+/* The one stage that is happening now, given a tinted surface and a ring so it
+   is findable without reading all four. */
+.inspection-progress-step[data-state='active'] {
+  background: var(--blue-soft);
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+.inspection-progress-step[data-state='active'] .inspection-progress-marker {
+  color: var(--blue);
+}
+.inspection-progress-step[data-state='blocked'] .inspection-progress-marker {
+  color: var(--danger);
+}
+@media (max-width: 860px) {
+  .inspection-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .inspection-progress {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* A tab's absence, designed rather than left as a stray grey sentence. Most of
    these states are normal, so they read as information instead of failure. */
 .area-empty-tab {

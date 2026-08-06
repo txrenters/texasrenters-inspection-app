@@ -376,6 +376,15 @@ export function AreaDetailPanel({
   const bundle = evidence.data!;
   const { area, recordings, photoGroups, findings, conditionSummary } = bundle;
   const photoCount = photoGroups.reduce((sum, group) => sum + group.photos.length, 0);
+  // The required walkthrough, separated so it can be shown at full width. An
+  // area should only ever have one; `find` takes the first if data says
+  // otherwise rather than rendering two full-width players.
+  const primaryRecording = recordings.find(
+    (recording) => recording.recordingType === 'PRIMARY_AREA',
+  );
+  const additionalRecordings = recordings.filter(
+    (recording) => recording.id !== primaryRecording?.id,
+  );
 
   return (
     <div className="area-detail">
@@ -447,19 +456,49 @@ export function AreaDetailPanel({
 
         <TabsContent value="recording">
         {recordings.length ? (
-          <div className="area-recording-list">
-            {recordings.map((recording) => (
-              <RecordingCard
-                key={recording.id}
-                activeId={activeRecording}
-                onActivate={setActiveRecording}
-                onExpand={() =>
-                  setViewerIndex(viewerItems.findIndex((entry) => entry.id === recording.id))
-                }
-                recording={recording}
-              />
-            ))}
-          </div>
+          <>
+            {/* The primary walkthrough gets the full panel width. Every
+                recording used to share one auto-fill grid, so the single video
+                most areas have rendered as a 260px card marooned in a wide
+                panel — the evidence a reviewer came to watch, shown smaller
+                than the photos beside it. Additional clips keep the grid. */}
+            {primaryRecording ? (
+              <div className="area-recording-primary">
+                <RecordingCard
+                  activeId={activeRecording}
+                  onActivate={setActiveRecording}
+                  onExpand={() =>
+                    setViewerIndex(
+                      viewerItems.findIndex((entry) => entry.id === primaryRecording.id),
+                    )
+                  }
+                  recording={primaryRecording}
+                />
+              </div>
+            ) : null}
+            {additionalRecordings.length ? (
+              <>
+                {primaryRecording ? (
+                  <SectionHeading count={additionalRecordings.length}>
+                    Additional clips
+                  </SectionHeading>
+                ) : null}
+                <div className="area-recording-list">
+                  {additionalRecordings.map((recording) => (
+                    <RecordingCard
+                      key={recording.id}
+                      activeId={activeRecording}
+                      onActivate={setActiveRecording}
+                      onExpand={() =>
+                        setViewerIndex(viewerItems.findIndex((entry) => entry.id === recording.id))
+                      }
+                      recording={recording}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </>
         ) : (
           <EmptyTab
             title="No walkthrough recorded"
