@@ -45,7 +45,7 @@ const REVIEWABLE: ReadonlyArray<AdminInspection['status']> = [
   'FOLLOW_UP_REQUIRED',
 ];
 
-type WorkflowAction = 'tbd' | 'follow-up' | 'under-review';
+type WorkflowAction = 'tbd' | 'follow-up' | 'under-review' | 'reopen';
 
 /**
  * Administrator review workflow (spec §11/§16): the current lifecycle state plus
@@ -68,7 +68,12 @@ export function InspectionWorkflowPanel({
   const canManage = permissions.has('inspections:manage');
   const canFinalize = permissions.has('inspections:finalize');
   const reviewable = REVIEWABLE.includes(inspection.status);
-  const finalized = inspection.status === 'COMPLETED' || inspection.status === 'CANCELLED';
+  const cancelled = inspection.status === 'CANCELLED';
+  const completed = inspection.status === 'COMPLETED';
+  // Reopening can reverse a finalization, so it rides on `inspections:finalize`
+  // rather than `inspections:manage`. A cancelled inspection is closed rather
+  // than finished — that one is a new inspection, not a status flip.
+  const canReopen = canFinalize && (completed || reviewable);
 
   return (
       <Card className="p-[22px] max-[560px]:p-4" asChild>
@@ -118,10 +123,27 @@ export function InspectionWorkflowPanel({
         ) : null}
       </dl>
 
-      {finalized ? (
+      {cancelled ? (
         <p className="workflow-frozen">
-          This inspection is {inspection.status.toLowerCase()} and can no longer transition.
+          This inspection is cancelled and can no longer transition.
         </p>
+      ) : completed ? (
+        <>
+          <p className="workflow-frozen">
+            This inspection is finalized. Reopening sends it back to the assigned technician to
+            capture another area; everything already collected is kept.
+          </p>
+          {canReopen ? (
+            <div className="workflow-actions">
+              <button
+                type="button"
+                className={buttonVariants({ variant: 'secondary' })}
+                onClick={() => setAction('reopen')}>
+                Reopen inspection
+              </button>
+            </div>
+          ) : null}
+        </>
       ) : !reviewable ? (
         <p className="workflow-frozen">
           Review actions unlock once the technician submits the inspection.
@@ -154,6 +176,14 @@ export function InspectionWorkflowPanel({
                 Mark TBD
               </button>
             </>
+          ) : null}
+          {canReopen ? (
+            <button
+              type="button"
+              className={buttonVariants({ variant: 'secondary' })}
+              onClick={() => setAction('reopen')}>
+              Reopen inspection
+            </button>
           ) : null}
         </div>
       )}
@@ -189,7 +219,18 @@ const ACTION_COPY: Record<
     description: 'Move the inspection into administrator review and note what evidence is needed.',
     confirm: 'Move to review',
   },
+  reopen: {
+    title: 'Reopen inspection',
+    description:
+      'Returns the inspection to the assigned technician so another area can be inspected. Existing recordings, photos and findings are kept. If it was finalized, that finalization is undone.',
+    confirm: 'Reopen inspection',
+  },
 };
+
+// Reopen is the one action whose reason the backend requires, because it can
+// reverse a finalization. Enforced here too so the block is a disabled button
+// with a visible rule rather than a 400 after the fact.
+const REASON_REQUIRED: ReadonlyArray<WorkflowAction> = ['reopen'];
 
 function WorkflowActionDialog({
   inspectionId,
@@ -210,11 +251,18 @@ function WorkflowActionDialog({
       ? mutations.markInspectionTbd
       : action === 'follow-up'
         ? mutations.requireInspectionFollowUp
-        : mutations.markInspectionUnderReview;
+        : action === 'reopen'
+          ? mutations.reopenInspection
+          : mutations.markInspectionUnderReview;
+  const reasonRequired = REASON_REQUIRED.includes(action);
+  const blocked = reasonRequired && reason.trim().length < 2;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (action === 'follow-up') {
+    if (blocked) return;
+    if (action === 'reopen') {
+      await mutations.reopenInspection.mutateAsync({ id: inspectionId, reason: reason.trim() });
+    } else if (action === 'follow-up') {
       await mutations.requireInspectionFollowUp.mutateAsync({
         id: inspectionId,
         dueAt: dueAt ? new Date(dueAt).toISOString() : undefined,
@@ -261,8 +309,19 @@ function WorkflowActionDialog({
         ) : null}
         <Field asChild>
 <label>
-          <span>Reason (optional)</span>
-          <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
+          <span>{reasonRequired ? 'Reason' : 'Reason (optional)'}</span>
+          <textarea
+            autoFocus={reasonRequired}
+            onChange={(event) => setReason(event.target.value)}
+            required={reasonRequired}
+            rows={2}
+            value={reason}
+          />
+          {reasonRequired ? (
+            <span className="text-[13px] text-muted-foreground">
+              Recorded in the audit trail against your name.
+            </span>
+          ) : null}
         </label>
 </Field>
         {mutation.error ? <FieldError>{mutation.error.message}</FieldError> : null}
@@ -270,7 +329,10 @@ function WorkflowActionDialog({
             <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={onClose}>
               Cancel
             </button>
-            <button className={buttonVariants({ variant: 'primary' })} disabled={mutation.isPending}>
+            <button
+              className={buttonVariants({ variant: 'primary' })}
+              disabled={mutation.isPending || blocked}
+            >
               {mutation.isPending ? 'Saving…' : copy.confirm}
             </button>
           </DialogFooter>

@@ -38,6 +38,7 @@ import type {
   InspectionListQueryDto,
   InspectionTbdDto,
   InspectionUnderReviewDto,
+  ReopenInspectionDto,
   LeaseListQueryDto,
   MergeInspectionAreasDto,
   PortfolioListQueryDto,
@@ -65,6 +66,27 @@ const ACTIVE_INSPECTION_STATUSES: InspectionStatus[] = [
 const FROZEN_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.COMPLETED,
   InspectionStatus.CANCELLED,
+];
+
+/**
+ * Statuses an inspection can be reopened from.
+ *
+ * Everything the technician has already handed over, plus COMPLETED — reopening
+ * a finalized inspection is the main reason this exists, so it deliberately
+ * reaches past FROZEN_INSPECTION_STATUSES rather than using assertReviewable.
+ *
+ * SCHEDULED and IN_PROGRESS are absent because there is nothing to reopen, and
+ * CANCELLED because a cancelled inspection is closed rather than finished —
+ * reviving one should be a new inspection, not a status flip.
+ */
+const REOPENABLE_INSPECTION_STATUSES: InspectionStatus[] = [
+  InspectionStatus.TECHNICIAN_SUBMITTED,
+  InspectionStatus.PROCESSING,
+  InspectionStatus.REVIEW_REQUIRED,
+  InspectionStatus.UNDER_REVIEW,
+  InspectionStatus.TBD,
+  InspectionStatus.FOLLOW_UP_REQUIRED,
+  InspectionStatus.COMPLETED,
 ];
 
 // Finalization / TBD / follow-up review actions are only valid after the
@@ -1340,6 +1362,73 @@ export class AdminService {
       action: 'INSPECTION_UNDER_REVIEW',
       data: { completionBlockedReason: input.reason ?? null },
       metadata: { reason: input.reason ?? null },
+    });
+    return this.inspection(user, id);
+  }
+
+  /**
+   * Send an inspection back to the technician for more capture.
+   *
+   * Returns it to IN_PROGRESS, which is what puts it back in the assigned
+   * technician's queue — that queue is SCHEDULED + IN_PROGRESS only, so nothing
+   * short of this makes the inspection actionable on the handset again.
+   *
+   * Evidence is never touched. Existing recordings, photos and findings survive
+   * a reopen; the technician adds to them rather than starting over.
+   *
+   * The submission and finalization stamps are cleared, because leaving them
+   * would leave a record claiming to be finalized while sitting in progress.
+   * Nothing is lost — INSPECTION_FINALIZED and INSPECTION_REOPENED both stay in
+   * the audit trail with their timestamps and actors.
+   *
+   * Review determinations (`tbdReason`, `followUpRequired`, `followUpTasks`) are
+   * deliberately left alone. Reopening is how a follow-up gets actioned, not
+   * evidence that it is resolved, and silently clearing an administrator's
+   * determination would destroy the reason the inspection was held.
+   */
+  async reopenInspection(user: AuthenticatedUser, id: string, input: ReopenInspectionDto) {
+    const existing = await this.requireInspection(user.organizationId, id);
+    if (existing.status === InspectionStatus.CANCELLED)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_CANCELLED',
+        'A cancelled inspection cannot be reopened. Create a new inspection instead.',
+      );
+    if (!REOPENABLE_INSPECTION_STATUSES.includes(existing.status))
+      throw new ApplicationError(
+        409,
+        'INSPECTION_NOT_REOPENABLE',
+        'Only an inspection the technician has already submitted can be reopened.',
+      );
+    // An inspection nobody is assigned to reaches no one once reopened. It is
+    // not an error — the admin may be about to assign it — so this is recorded
+    // rather than refused, and the inspections list already flags unassigned
+    // work on its own.
+    const currentAssignments = await this.prisma.inspectionAssignment.count({
+      where: { inspectionId: id, isCurrent: true },
+    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.inspection.update({
+        where: { id },
+        data: {
+          status: InspectionStatus.IN_PROGRESS,
+          submittedAt: null,
+          completedAt: null,
+          finalizedAt: null,
+          finalizedById: null,
+          completionBlockedReason: null,
+        },
+      });
+      await this.audit(tx, user, 'INSPECTION_REOPENED', id, {
+        fromStatus: existing.status,
+        reason: input.reason,
+        wasFinalized: existing.status === InspectionStatus.COMPLETED,
+        hadCurrentAssignment: currentAssignments > 0,
+      });
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
     });
     return this.inspection(user, id);
   }

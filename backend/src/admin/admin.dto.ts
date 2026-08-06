@@ -119,6 +119,17 @@ export class InspectionUnderReviewDto {
   @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
+/**
+ * Send a submitted or finalized inspection back to the technician (spec §11).
+ *
+ * The reason is required, unlike the other review transitions. This one can
+ * reverse a finalization — the human decision that closed the inspection — so
+ * the audit trail has to say why on every use, not only when overriding.
+ */
+export class ReopenInspectionDto {
+  @IsString() @MinLength(2) @MaxLength(500) reason!: string;
+}
+
 /** Merge a duplicate inspection area into another within the same inspection. */
 export class MergeInspectionAreasDto {
   @IsUUID() sourceAreaId!: string;

@@ -58,6 +58,7 @@ import {
   InspectionListQueryDto,
   InspectionTbdDto,
   InspectionUnderReviewDto,
+  ReopenInspectionDto,
   LeaseListQueryDto,
   MergeInspectionAreasDto,
   PortfolioListQueryDto,
@@ -477,6 +478,20 @@ export class AdminController {
     @Body() body: InspectionUnderReviewDto,
   ) {
     return this.service.markInspectionUnderReview(request.user, id, body);
+  }
+  /**
+   * Gated on `inspections:finalize`, not `inspections:manage`, because this can
+   * reverse a finalization. The permission that closes an inspection is the one
+   * that may reopen it.
+   */
+  @Post('inspections/:inspectionId/reopen')
+  @RequirePermissions('inspections:finalize')
+  reopenInspection(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: ReopenInspectionDto,
+  ) {
+    return this.service.reopenInspection(request.user, id, body);
   }
   /**
    * Area-first evidence index: counts and status for every area, no media.

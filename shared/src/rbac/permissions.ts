@@ -135,7 +135,7 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'inspections:finalize',
         label: 'Finalize inspections',
         description:
-          'Complete (finalize) an inspection. Human-only decision that closes the review workflow.',
+          'Complete (finalize) an inspection, and reopen a submitted or finalized one to send it back to the technician. Human-only decision that closes the review workflow.',
       },
     ],
   },

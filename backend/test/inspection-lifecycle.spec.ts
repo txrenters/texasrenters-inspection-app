@@ -222,6 +222,104 @@ describe('inspection status lifecycle (spec §11)', () => {
       }),
     );
   });
+
+  function reopenPrisma(from: InspectionStatus, currentAssignments = 1) {
+    const tx = {
+      inspection: { update: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      inspection: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(reviewableInspection(from))
+          .mockResolvedValueOnce({ id: 'insp-1', status: InspectionStatus.IN_PROGRESS }),
+      },
+      inspectionAssignment: { count: jest.fn().mockResolvedValue(currentAssignments) },
+      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+    };
+    return { tx, prisma };
+  }
+
+  it('reopens a finalized inspection back to IN_PROGRESS and clears the finalization', async () => {
+    const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
+    const service = new AdminService(prisma as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
+
+    // IN_PROGRESS is the only status that puts the inspection back in the
+    // technician's queue, and the finalization stamps must not outlive it.
+    expect(tx.inspection.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: InspectionStatus.IN_PROGRESS,
+          submittedAt: null,
+          completedAt: null,
+          finalizedAt: null,
+          finalizedById: null,
+        }),
+      }),
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'INSPECTION_REOPENED' }),
+      }),
+    );
+  });
+
+  it('reopens from a mid-review state without clearing the administrator determination', async () => {
+    const { tx, prisma } = reopenPrisma(InspectionStatus.FOLLOW_UP_REQUIRED);
+    const service = new AdminService(prisma as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'Re-shoot the roof' });
+
+    // Reopening is how a follow-up gets actioned, not proof it is resolved:
+    // clearing the determination would destroy why the inspection was held.
+    const { data } = tx.inspection.update.mock.calls[0][0];
+    expect(data.status).toBe(InspectionStatus.IN_PROGRESS);
+    expect(data).not.toHaveProperty('followUpRequired');
+    expect(data).not.toHaveProperty('tbdReason');
+  });
+
+  it.each([InspectionStatus.SCHEDULED, InspectionStatus.IN_PROGRESS])(
+    'refuses to reopen a %s inspection, which was never submitted',
+    async (status) => {
+      const { tx, prisma } = reopenPrisma(status);
+      const service = new AdminService(prisma as never);
+
+      await expect(
+        service.reopenInspection(admin, 'insp-1', { reason: 'nothing to reopen' }),
+      ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_NOT_REOPENABLE' });
+      expect(tx.inspection.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses to reopen a cancelled inspection', async () => {
+    const { tx, prisma } = reopenPrisma(InspectionStatus.CANCELLED);
+    const service = new AdminService(prisma as never);
+
+    await expect(
+      service.reopenInspection(admin, 'insp-1', { reason: 'changed our mind' }),
+    ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_CANCELLED' });
+    expect(tx.inspection.update).not.toHaveBeenCalled();
+  });
+
+  it('records that a reopened inspection has nobody assigned', async () => {
+    const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED, 0);
+    const service = new AdminService(prisma as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'One more room' });
+
+    // Not refused — the admin may be about to assign it — but a reopened
+    // inspection with no technician reaches nobody, so the trail says so.
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({ hadCurrentAssignment: false }),
+        }),
+      }),
+    );
+  });
 });
 
 describe('duplicate area merge (spec §16)', () => {

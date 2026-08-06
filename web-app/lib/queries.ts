@@ -1267,6 +1267,20 @@ export function useAdminMutations() {
         refreshWorkflow(variables.id);
       },
     }),
+    // Reason is required here, unlike the other transitions: this one can undo
+    // a finalization, so the audit trail has to say why every time.
+    reopenInspection: useMutation({
+      mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/reopen`, {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        }),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshWorkflow(variables.id);
+      },
+    }),
     mergeInspectionAreas: useMutation({
       mutationFn: ({
         id,
