@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3806,6 +3806,24 @@ button:disabled {
   margin: 14px 0 7px;
   font-size: 12px;
   color: var(--text-2);
+}
+
+/* Scoped to the detail pane so it cannot catch the area navigator, which is
+   also a tablist. Six labels do not fit a phone, and wrapping them onto two
+   rows pushes the evidence below the fold — so they scroll sideways instead,
+   with the scrollbar hidden because the tabs themselves show there is more. */
+@media (max-width: 640px) {
+  .area-detail [role='tablist'] {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .area-detail [role='tablist']::-webkit-scrollbar {
+    display: none;
+  }
+  .area-detail [role='tab'] {
+    flex: 0 0 auto;
+  }
 }
 
 /* The walkthrough a reviewer came to watch, at the full width of the panel.

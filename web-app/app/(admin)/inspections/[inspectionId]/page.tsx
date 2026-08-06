@@ -198,30 +198,30 @@ export default function InspectionDetailPage() {
           ))}
         </ol>
 
+        {/* Four facts, scannable in a row.
+            Each carried a grey sentence underneath restating what the label
+            already said — "Assigned technician / Currently responsible for this
+            inspection" — so the strip read as eight lines of small text rather
+            than four values. Only the two that add a fact the value does not
+            carry survive: an unassigned inspection needs the consequence
+            spelled out, and the baseline needs its date. */}
         <dl className="inspection-facts">
           <div className="inspection-fact inspection-fact-primary">
             <dt>Assigned technician</dt>
             <dd>{current?.technician?.displayName ?? 'Not assigned'}</dd>
-            <small>
-              {current
-                ? 'Currently responsible for this inspection'
-                : 'Requires assignment before field work'}
-            </small>
+            {current ? null : <small>Required before field work can start</small>}
           </div>
           <div className="inspection-fact">
             <dt>Scheduled</dt>
             <dd>{formatDate(item.scheduledAt)}</dd>
-            <small>Created {formatDate(item.createdAt)}</small>
           </div>
           <div className="inspection-fact">
             <dt>Property scope</dt>
             <dd>{item.propertywareUnit?.name ?? 'Entire property'}</dd>
-            <small>{item.propertywareLease?.leaseName ?? 'No lease selected'}</small>
           </div>
-          <div className="inspection-fact inspection-fact-wide">
+          <div className="inspection-fact">
             <dt>Comparison baseline</dt>
             <dd>{baselineLabel}</dd>
-            <small>Used to identify condition changes across the property lifecycle</small>
           </div>
         </dl>
 
