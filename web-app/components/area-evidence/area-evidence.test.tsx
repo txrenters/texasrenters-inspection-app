@@ -132,6 +132,21 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
+/**
+ * Open one of the evidence tabs.
+ *
+ * `mouseDown` is the event that matters — Radix selects there, not on click, so
+ * a bare `fireEvent.click` leaves the panel on the tab it opened with and the
+ * assertion then fails looking for content that was never mounted. The click is
+ * kept so the sequence still resembles a real interaction.
+ */
+async function openTab(name: RegExp) {
+  const tab = await screen.findByRole('tab', { name });
+  fireEvent.mouseDown(tab, { button: 0 });
+  fireEvent.click(tab);
+  return tab;
+}
+
 describe('area-first inspection evidence', () => {
   it('lists compact area cards without fetching any area evidence up front', async () => {
     renderWorkspace();
@@ -169,6 +184,9 @@ describe('area-first inspection evidence', () => {
   it('renders a poster rather than mounting a video player', async () => {
     renderWorkspace();
     await screen.findByRole('tab', { name: /Foyer/ });
+    // Evidence sits behind tabs now and the panel opens on Overview, so a
+    // reviewer no longer scrolls past photos and findings to reach the video.
+    await openTab(/^Recording/);
     await screen.findByRole('button', { name: /Play recording|Loading/ });
 
     // No <video> exists until the reviewer presses play, and no playback URL
@@ -216,6 +234,7 @@ describe('area-first inspection evidence', () => {
 
     renderWorkspace();
     await screen.findByRole('tab', { name: /Foyer/ });
+    await openTab(/^Findings/);
     // The row collapses its detail until opened.
     const row = await screen.findByRole('button', { name: /Repaint Wall 1/ });
     fireEvent.click(row);

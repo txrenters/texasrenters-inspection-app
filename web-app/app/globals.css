@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4298,6 +4298,47 @@ button:disabled {
 .finding-filter {
   width: 190px;
 }
+/* A tab's absence, designed rather than left as a stray grey sentence. Most of
+   these states are normal, so they read as information instead of failure. */
+.area-empty-tab {
+  padding: 28px 20px;
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  text-align: center;
+}
+.area-empty-tab strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+}
+.area-empty-tab p {
+  margin: 6px auto 0;
+  max-width: 42ch;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* The counts a reviewer would otherwise open every tab to learn. */
+.area-evidence-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.area-evidence-counts dt {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.area-evidence-counts dd {
+  margin: 2px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
 /* Reference material, folded away by default so it stops competing with the
    review workspace. A plain <details> keeps it keyboard-reachable and
    screen-reader-announced without any custom disclosure state. */
@@ -4779,4 +4820,4 @@ button:disabled {
   color: var(--foreground);
   border-color: var(--ring);
 }
-
+

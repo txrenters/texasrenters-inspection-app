@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 
 import { FieldError } from '@/components/ui/field';
 import { Alert } from '@/components/ui/alert';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api, apiBlob } from '@/lib/api';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
@@ -34,6 +35,23 @@ function SectionHeading({ children, count }: { children: string; count?: number 
           {count}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A designed absence rather than a stray grey sentence.
+ *
+ * "No photos were captured for this area." reads like something went wrong.
+ * Most of these states are normal — an area completed on the walkthrough alone,
+ * or analysis that has not run yet — so each says what happened and why it is
+ * expected, and stays compact instead of leaving a tab looking broken.
+ */
+function EmptyTab({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="area-empty-tab">
+      <strong>{title}</strong>
+      <p>{body}</p>
     </div>
   );
 }
@@ -357,6 +375,7 @@ export function AreaDetailPanel({
 
   const bundle = evidence.data!;
   const { area, recordings, photoGroups, findings, conditionSummary } = bundle;
+  const photoCount = photoGroups.reduce((sum, group) => sum + group.photos.length, 0);
 
   return (
     <div className="area-detail">
@@ -376,18 +395,57 @@ export function AreaDetailPanel({
         </Alert>
       ) : null}
 
-      {conditionSummary ? (
-        <section className="mt-5 border-t border-border pt-4">
-          <SectionHeading>Condition summary</SectionHeading>
-          <p>{conditionSummary.description}</p>
-          <span className="text-[13px] text-muted-foreground">
-            Overall context — itemized findings below list the specific work.
-          </span>
-        </section>
-      ) : null}
+      {/* Tabs rather than four stacked sections.
+          Everything used to render at once, so a reviewer scrolled past photos
+          and findings to reach the walkthrough and lost their place moving
+          between areas. Each tab carries its own count, so what is behind it is
+          visible without opening it.
 
-      <section className="mt-5 border-t border-border pt-4">
-        <SectionHeading count={recordings.length}>Recordings</SectionHeading>
+          Checklist and Activity are absent deliberately: the evidence bundle
+          carries neither, and a tab that opens onto nothing is worse than no
+          tab. Checklist currently lives in a dialog on the area list. */}
+      <Tabs className="mt-4" defaultValue="overview">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="recording">Recording{recordings.length ? ` (${recordings.length})` : ''}</TabsTrigger>
+          <TabsTrigger value="photos">Photos{photoCount ? ` (${photoCount})` : ''}</TabsTrigger>
+          <TabsTrigger value="findings">Findings{findings.length ? ` (${findings.length})` : ''}</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview">
+          {conditionSummary ? (
+            <section>
+              <SectionHeading>Condition summary</SectionHeading>
+              <p>{conditionSummary.description}</p>
+              <span className="text-[13px] text-muted-foreground">
+                Overall context — the Findings tab lists the specific work.
+              </span>
+            </section>
+          ) : (
+            <EmptyTab
+              title="No condition summary yet"
+              body="A summary is written once the recording has been transcribed and analysed."
+            />
+          )}
+          {/* The counts a reviewer would otherwise have to open each tab to
+              learn. */}
+          <dl className="area-evidence-counts">
+            <div>
+              <dt>Recordings</dt>
+              <dd>{recordings.length}</dd>
+            </div>
+            <div>
+              <dt>Photos</dt>
+              <dd>{photoCount}</dd>
+            </div>
+            <div>
+              <dt>Findings</dt>
+              <dd>{findings.length}</dd>
+            </div>
+          </dl>
+        </TabsContent>
+
+        <TabsContent value="recording">
         {recordings.length ? (
           <div className="area-recording-list">
             {recordings.map((recording) => (
@@ -403,12 +461,14 @@ export function AreaDetailPanel({
             ))}
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">No recordings were uploaded for this area.</p>
+          <EmptyTab
+            title="No walkthrough recorded"
+            body="This area was completed without a video walkthrough."
+          />
         )}
-      </section>
+        </TabsContent>
 
-      <section className="mt-5 border-t border-border pt-4">
-        <SectionHeading count={photoGroups.reduce((sum, group) => sum + group.photos.length, 0)}>Photos</SectionHeading>
+        <TabsContent value="photos">
         {photoGroups.length ? (
           photoGroups.map((group) => (
             <div key={`${group.key}-${group.findingId ?? 'area'}`} className="area-photo-group">
@@ -431,12 +491,14 @@ export function AreaDetailPanel({
             </div>
           ))
         ) : (
-          <p className="text-xs text-muted-foreground">No photos were captured for this area.</p>
+          <EmptyTab
+            title="No supporting photos"
+            body="The technician completed this area using the primary walkthrough only."
+          />
         )}
-      </section>
+        </TabsContent>
 
-      <section className="mt-5 border-t border-border pt-4">
-        <SectionHeading count={findings.length}>Findings</SectionHeading>
+        <TabsContent value="findings">
         {findings.length ? (
           <ol className="area-finding-list">
             {findings.map((finding, index) => (
@@ -450,13 +512,21 @@ export function AreaDetailPanel({
             ))}
           </ol>
         ) : (
-          <p className="text-xs text-muted-foreground">
-            {recordings.length || photoGroups.length
-              ? 'No issues were reported for this area.'
-              : 'Analysis has not run for this area yet.'}
-          </p>
+          <EmptyTab
+            title={
+              recordings.length || photoGroups.length
+                ? 'No findings reported'
+                : 'Analysis has not run yet'
+            }
+            body={
+              recordings.length || photoGroups.length
+                ? 'No damage or maintenance issues were identified for this area.'
+                : 'Findings appear once the walkthrough has been transcribed and analysed.'
+            }
+          />
         )}
-      </section>
+        </TabsContent>
+      </Tabs>
 
       {viewerIndex !== null && viewerIndex >= 0 ? (
         <EvidenceViewer
