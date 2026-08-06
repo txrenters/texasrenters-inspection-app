@@ -1,5 +1,6 @@
 'use client';
 
+import { ClipboardList, UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import {
@@ -22,6 +23,8 @@ import {
   FilterToolbar,
   PageHeader,
   Pagination,
+  RowAction,
+  RowActions,
   TableLoadingState,
   formatDate,
 } from '@/components/shared';
@@ -29,7 +32,6 @@ import { usePermissions } from '@/lib/auth';
 import { useAssignments, useTechnicians } from '@/lib/queries';
 
 const ASSIGNMENT_HEADERS = [
-  'Inspection',
   'Property',
   'Unit',
   'Technician',
@@ -37,6 +39,7 @@ const ASSIGNMENT_HEADERS = [
   'Assigned',
   'Ended',
   'Status',
+  '',
 ];
 
 // Radix Select rejects an empty string as an item value, so the unfiltered
@@ -167,12 +170,13 @@ export default function AssignmentsPage() {
             {assignments.data.items.map((assignment) => (
               <TableRow key={assignment.id}>
                 <TableCell>
+                  {/* The property names the row, the way it does on every other
+                      list. It used to sit beside a first column whose entire
+                      content was an "Open inspection" link — the actions column
+                      carries that now, so the column went with it. */}
                   <Link className="font-semibold text-primary" href={`/inspections/${assignment.inspectionId}`}>
-                    Open inspection
+                    {assignment.inspection?.propertywareBuilding?.name ?? 'Property unavailable'}
                   </Link>
-                </TableCell>
-                <TableCell>
-                  {assignment.inspection?.propertywareBuilding?.name ?? 'Property unavailable'}
                 </TableCell>
                 <TableCell>{assignment.inspection?.propertywareUnit?.name ?? 'Entire property'}</TableCell>
                 <TableCell>
@@ -191,6 +195,26 @@ export default function AssignmentsPage() {
                           : assignment.status
                     }
                   />
+                </TableCell>
+                <TableCell>
+                  {/* Both ends of the assignment are reachable from the row.
+                      This table is the one place the two are shown together, so
+                      following either without going back to a list is the whole
+                      point of it. */}
+                  <RowActions>
+                    <RowAction
+                      href={`/inspections/${assignment.inspectionId}`}
+                      icon={<ClipboardList aria-hidden className="size-4" />}
+                      label="Inspection"
+                    />
+                    {assignment.technician ? (
+                      <RowAction
+                        href={`/technicians/${assignment.technician.id}`}
+                        icon={<UserRound aria-hidden className="size-4" />}
+                        label="Technician"
+                      />
+                    ) : null}
+                  </RowActions>
                 </TableCell>
               </TableRow>
             ))}

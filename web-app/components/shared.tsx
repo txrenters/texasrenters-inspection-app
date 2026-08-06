@@ -198,6 +198,23 @@ export function BrandLoader({ label = 'Preparing your workspace' }: { label?: st
   );
 }
 
+/**
+ * A column header, shared by the real table and its skeleton so the two never
+ * drift apart.
+ *
+ * An empty string means the actions column. It carries no visible heading — a
+ * word above a pair of icon buttons is noise once every table has the same
+ * column — but it still needs a name in the accessibility tree, or the cells
+ * below it are announced against a blank header.
+ */
+function renderHeaderCell(header: string) {
+  return (
+    <TableHead key={header || 'actions'} scope="col">
+      {header || <span className="sr-only">Actions</span>}
+    </TableHead>
+  );
+}
+
 export function TableLoadingState({
   headers,
   rows = 6,
@@ -228,19 +245,13 @@ export function TableLoadingState({
     <div className="overflow-hidden rounded-2xl border border-border bg-card" aria-busy="true">
       <Table aria-label={label}>
         <TableHeader>
-          <TableRow>
-            {headers.map((header) => (
-              <TableHead key={header} scope="col">
-                {header}
-              </TableHead>
-            ))}
-          </TableRow>
+          <TableRow>{headers.map(renderHeaderCell)}</TableRow>
         </TableHeader>
         <TableBody>
           {Array.from({ length: rows }, (_, rowIndex) => (
             <TableRow key={rowIndex}>
               {headers.map((header, columnIndex) => (
-                <TableCell key={header}>
+                <TableCell key={header || 'actions'}>
                   <Skeleton
                     className="h-2.5"
                     style={{ width: `${Math.max(38, 82 - ((rowIndex + columnIndex) % 4) * 12)}%` }}
@@ -348,13 +359,7 @@ export function DataTable({
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
       <Table aria-label={label}>
         <TableHeader>
-          <TableRow>
-            {headers.map((header) => (
-              <TableHead key={header} scope="col">
-                {header}
-              </TableHead>
-            ))}
-          </TableRow>
+          <TableRow>{headers.map(renderHeaderCell)}</TableRow>
         </TableHeader>
         <TableBody>{children}</TableBody>
       </Table>
@@ -376,3 +381,57 @@ export const address = (item?: {
   item
     ? [item.addressLine1, item.city, item.state].filter(Boolean).join(', ') || 'Not provided'
     : 'Not provided';
+
+/**
+ * The actions column of a data table.
+ *
+ * One control per row, shaped the same on every list, so scanning down a table
+ * does not mean re-reading what each row offers.
+ *
+ * Navigation only, deliberately. Row-level mutations belong on the detail page
+ * where their gating already lives — permissions, inspection state, pending
+ * findings — and a table button that performed one would be an ungated copy of
+ * a gated decision, sitting where it is easiest to click by accident.
+ */
+export function RowActions({ children }: { children: ReactNode }) {
+  return <div className="flex items-center justify-end gap-1">{children}</div>;
+}
+
+/**
+ * One icon action in a table row.
+ *
+ * The label is required and always rendered for assistive technology: an
+ * icon-only control with no accessible name is a button a screen reader
+ * announces as nothing at all. On wider screens the text shows too, because an
+ * unfamiliar glyph is a guess until someone has clicked it once.
+ */
+export function RowAction({
+  href,
+  icon,
+  label,
+  onClick,
+}: {
+  href?: string;
+  icon: ReactNode;
+  label: string;
+  onClick?: () => void;
+}) {
+  const content = (
+    <>
+      {icon}
+      <span className="max-lg:sr-only">{label}</span>
+    </>
+  );
+  const className =
+    'inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-3 focus-visible:outline-[var(--focus)]';
+
+  return href ? (
+    <Link aria-label={label} className={className} href={href}>
+      {content}
+    </Link>
+  ) : (
+    <button aria-label={label} className={className} onClick={onClick} type="button">
+      {content}
+    </button>
+  );
+}

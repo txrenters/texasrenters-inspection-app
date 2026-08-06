@@ -1,5 +1,6 @@
 'use client';
 
+import { Eye } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import {
@@ -22,6 +23,8 @@ import {
   FilterToolbar,
   PageHeader,
   Pagination,
+  RowAction,
+  RowActions,
   TableLoadingState,
 } from '@/components/shared';
 import { TechnicianCreateDialog } from '@/components/technician-create-dialog';
@@ -29,7 +32,7 @@ import { usePermissions } from '@/lib/auth';
 import { useTechnicians } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
-const TECHNICIAN_HEADERS = ['Technician', 'Email', 'Current', 'In progress', 'Completed', 'Status'];
+const TECHNICIAN_HEADERS = ['Technician', 'Email', 'Current', 'In progress', 'Completed', 'Status', ''];
 
 // Radix Select rejects an empty string as an item value, so the unfiltered
 // row carries a sentinel that is translated back to '' for the query.
@@ -176,6 +179,15 @@ export default function TechniciansPage() {
                 <TableCell className="numeric-cell">{item.workload?.completed ?? 0}</TableCell>
                 <TableCell>
                   <Badge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
+                </TableCell>
+                <TableCell>
+                  <RowActions>
+                    <RowAction
+                      href={`/technicians/${item.id}`}
+                      icon={<Eye aria-hidden className="size-4" />}
+                      label="Open"
+                    />
+                  </RowActions>
                 </TableCell>
               </TableRow>
             ))}

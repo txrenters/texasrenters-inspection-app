@@ -1,5 +1,6 @@
 'use client';
 
+import { Eye } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { TableCell, TableRow } from '@/components/ui/table';
@@ -16,6 +17,8 @@ import {
   FilterToolbar,
   PageHeader,
   Pagination,
+  RowAction,
+  RowActions,
   TableLoadingState,
   address,
   formatDate,
@@ -32,6 +35,7 @@ const PROPERTY_HEADERS = [
   'Inspections',
   'Status',
   'Last synced',
+  '',
 ];
 
 export default function PropertiesPage() {
@@ -180,6 +184,15 @@ export default function PropertiesPage() {
                   <Badge value={property.isActive ? 'ACTIVE' : 'INACTIVE'} />
                 </TableCell>
                 <TableCell>{formatDate(property.lastSyncedAt)}</TableCell>
+                <TableCell>
+                  <RowActions>
+                    <RowAction
+                      href={`/properties/${property.id}`}
+                      icon={<Eye aria-hidden className="size-4" />}
+                      label="Open"
+                    />
+                  </RowActions>
+                </TableCell>
               </TableRow>
             ))}
           </DataTable>

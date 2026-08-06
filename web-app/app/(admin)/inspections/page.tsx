@@ -1,5 +1,6 @@
 'use client';
 
+import { Eye } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import { InspectionType } from '@texasrenters/shared';
@@ -25,6 +26,8 @@ import {
   FilterToolbar,
   PageHeader,
   Pagination,
+  RowAction,
+  RowActions,
   TableLoadingState,
   formatDate,
 } from '@/components/shared';
@@ -41,6 +44,7 @@ const INSPECTION_HEADERS = [
   'Status',
   'Assignment',
   'Technician',
+  '',
 ];
 
 // Radix Select rejects an empty string as an item value, so the unfiltered
@@ -249,6 +253,15 @@ export default function InspectionsPage() {
                     {current?.technician?.displayName ?? (
                       <span className="cell-note is-warning">Unassigned</span>
                     )}
+                  </TableCell>
+                  <TableCell>
+                    <RowActions>
+                      <RowAction
+                        href={`/inspections/${inspection.id}`}
+                        icon={<Eye aria-hidden className="size-4" />}
+                        label="Open"
+                      />
+                    </RowActions>
                   </TableCell>
                 </TableRow>
               );
