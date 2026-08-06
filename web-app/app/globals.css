@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4218,6 +4218,14 @@ button:disabled {
   border-radius: 11px;
   background: var(--warning-soft);
   color: var(--warning);
+}
+/* Waiting is not a problem. Amber for "you must act", blue for "this is where
+   things stand" — using one tone for both taught reviewers that the amber
+   banner meant nothing, since it was showing on every unsubmitted inspection. */
+.inspection-attention[data-tone='info'] {
+  border-color: color-mix(in srgb, var(--blue) 32%, var(--border));
+  background: var(--blue-soft);
+  color: var(--blue);
 }
 .inspection-attention > span {
   display: grid;

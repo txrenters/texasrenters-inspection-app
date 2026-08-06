@@ -35,7 +35,7 @@ import {
   useInspectionFindings,
 } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
-import { inspectionProgress, primaryAction } from '@/lib/inspection-progress';
+import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 
 /** Spoken state for a step that has no more specific detail. */
 const STEP_STATE_LABEL = {
@@ -81,6 +81,7 @@ export default function InspectionDetailPage() {
   const current = item.assignments.find((assignment) => assignment.isCurrent);
   const finalized = item.status === 'COMPLETED' || item.status === 'CANCELLED';
   const contextualAction = primaryAction(item.status);
+  const banner = attentionBanner(item.status, pendingFindings.data?.total ?? 0);
   const baselineLabel =
     item.inspectionType === 'MOVE_IN'
       ? 'This inspection establishes the property baseline'
@@ -224,15 +225,12 @@ export default function InspectionDetailPage() {
           </div>
         </dl>
 
-        {(pendingFindings.data?.total ?? 0) > 0 ? (
-          <div className="inspection-attention" role="status">
-            <span aria-hidden>!</span>
+        {banner ? (
+          <div className="inspection-attention" data-tone={banner.tone} role="status">
+            <span aria-hidden>{banner.tone === 'warning' ? '!' : 'i'}</span>
             <div>
-              <strong>Human review required</strong>
-              <p>
-                {pendingFindings.data?.total} AI finding
-                {pendingFindings.data?.total === 1 ? '' : 's'} must be reviewed before completion.
-              </p>
+              <strong>{banner.title}</strong>
+              <p>{banner.body}</p>
             </div>
           </div>
         ) : null}

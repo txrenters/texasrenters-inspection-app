@@ -89,6 +89,40 @@ export function inspectionProgress(status: AdminInspectionStatus): ProgressStep[
 }
 
 /**
+ * The one thing, if any, that an administrator should know before scrolling.
+ *
+ * Replaces a permanently-rendered "Finalization & follow-up" card that occupied
+ * a full section whether or not it was actionable — usually not, since a
+ * technician is normally still capturing. Nothing renders when nothing needs
+ * saying, which is what stops the page teaching people to ignore banners.
+ */
+export function attentionBanner(
+  status: AdminInspectionStatus,
+  pendingFindings: number,
+): { tone: 'info' | 'warning'; title: string; body: string } | null {
+  // The status badge already says these, and a banner repeating it is noise.
+  if (status === 'COMPLETED' || status === 'CANCELLED') return null;
+
+  // Actionable now, so it outranks anything merely being waited on — a
+  // reviewer can decide findings while the technician is still in the property.
+  if (pendingFindings > 0)
+    return {
+      tone: 'warning',
+      title: 'Human review required',
+      body: `${pendingFindings} AI finding${pendingFindings === 1 ? '' : 's'} must be reviewed before this inspection can be completed.`,
+    };
+
+  if (STATUS_POSITION[status] === 0)
+    return {
+      tone: 'info',
+      title: 'Technician submission pending',
+      body: 'Evidence can be reviewed as it arrives. Finalization unlocks once the technician submits the inspection.',
+    };
+
+  return null;
+}
+
+/**
  * The one thing worth emphasising in the header, given where the inspection is.
  *
  * Navigation rather than a mutation. Finalization is gated inside the workflow

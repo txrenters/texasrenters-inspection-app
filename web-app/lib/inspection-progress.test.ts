@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inspectionProgress, primaryAction } from './inspection-progress';
+import { attentionBanner, inspectionProgress, primaryAction } from './inspection-progress';
 
 describe('workflow steps', () => {
   it('marks capture active while the technician is still recording', () => {
@@ -96,5 +96,39 @@ describe('the one action worth emphasising', () => {
     // an ungated copy of a gated decision.
     const statuses = ['SCHEDULED', 'IN_PROGRESS', 'TECHNICIAN_SUBMITTED', 'UNDER_REVIEW'] as const;
     for (const status of statuses) expect(primaryAction(status)?.target).toBeTruthy();
+  });
+});
+
+describe('the attention banner', () => {
+  it('stays silent when nothing needs saying', () => {
+    // A banner that is always there is one people learn to stop reading.
+    expect(attentionBanner('UNDER_REVIEW', 0)).toBeNull();
+    expect(attentionBanner('TECHNICIAN_SUBMITTED', 0)).toBeNull();
+  });
+
+  it('says nothing once the inspection is closed', () => {
+    // The status badge already carries this.
+    expect(attentionBanner('COMPLETED', 0)).toBeNull();
+    expect(attentionBanner('CANCELLED', 3)).toBeNull();
+  });
+
+  it('explains why finalization is unavailable while capture runs', () => {
+    // The finalization card used to occupy a whole section saying this, whether
+    // or not it applied.
+    const banner = attentionBanner('IN_PROGRESS', 0);
+    expect(banner?.tone).toBe('info');
+    expect(banner?.body).toMatch(/unlocks once the technician submits/i);
+  });
+
+  it('puts a decision the reviewer can make now above one they are waiting on', () => {
+    // Findings can be reviewed while the technician is still in the property.
+    const banner = attentionBanner('IN_PROGRESS', 2);
+    expect(banner?.tone).toBe('warning');
+    expect(banner?.title).toMatch(/review required/i);
+  });
+
+  it('counts findings in words a person reads', () => {
+    expect(attentionBanner('REVIEW_REQUIRED', 1)?.body).toMatch(/1 AI finding must/);
+    expect(attentionBanner('REVIEW_REQUIRED', 4)?.body).toMatch(/4 AI findings must/);
   });
 });
