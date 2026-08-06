@@ -1,4 +1,14 @@
 :root {
+  /* The TexasRenters brand green, rgb(133, 200, 84).
+     Kept separate from --green, which carries "success" — a badge going green
+     because something is healthy and a button being green because it is the
+     brand are different meanings, and collapsing them means one cannot change
+     without the other. They are near-identical by design.
+     Paired with near-black text, never white: white on this is 2.0:1 and fails
+     WCAG outright, while #10240a is 8.1:1. */
+  --brand: #85c854;
+  --brand-dark: #6aa73d;
+  --brand-contrast: #10240a;
   --blue: #1d4492;
   --blue-dark: #142f66;
   --blue-soft: #e5ecfa;
@@ -30,6 +40,13 @@
   --focus: rgba(29, 68, 146, 0.28);
 }
 html[data-theme='dark'] {
+  /* Unchanged in dark: the brand colour is the brand colour, and it already
+     carries enough contrast against both surfaces. Only the hover shifts, going
+     lighter rather than darker so the feedback is still visible on a dark
+     background. */
+  --brand: #85c854;
+  --brand-dark: #9ad86e;
+  --brand-contrast: #10240a;
   --blue: #7fa2ec;
   --blue-dark: #5e83d1;
   --blue-soft: #1a2b4e;

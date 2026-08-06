@@ -92,6 +92,10 @@
   --color-card-foreground: var(--text);
   --color-popover: var(--surface);
   --color-popover-foreground: var(--text);
+  /* Stays the blue. The brand green belongs on button *surfaces*, where it sits
+     under near-black text; `primary` is also the link colour on eight screens,
+     and green text on the card measures 2.0:1 — it fails WCAG outright. The
+     button variant reaches for --brand directly instead. */
   --color-primary: var(--blue);
   --color-primary-foreground: #ffffff;
   --color-secondary: var(--muted);

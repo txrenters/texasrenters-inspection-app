@@ -16,7 +16,12 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-primary text-primary-foreground hover:bg-[var(--blue-dark)]',
+        // The brand green, reached for directly rather than through `primary`.
+        // That token is also the link colour across the app, and green text on
+        // the card measures 2.0:1 — the colour only works as a surface, under
+        // the near-black foreground it is paired with here.
+        primary:
+          'bg-[var(--brand)] text-[var(--brand-contrast)] hover:bg-[var(--brand-dark)]',
         secondary: 'border border-border bg-card text-foreground hover:bg-[var(--surface-hover)]',
         // Destructive reads as destructive on intent, not at rest — four solid
         // red buttons down a list dominate everything around them.
