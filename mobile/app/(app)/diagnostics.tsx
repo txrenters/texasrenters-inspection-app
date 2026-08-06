@@ -105,7 +105,7 @@ export default function DiagnosticsScreen() {
   const retainedMb = items
     .filter((item) => item.status !== 'COMPLETED')
     .reduce((total, item) => total + item.estimatedSizeMb, 0);
-  const apiStatus: DiagnosticStatus = environment.remoteBetaApiUrlError
+  const apiStatus: DiagnosticStatus = environment.apiBaseUrlError
     ? 'error'
     : uploads.isError
       ? 'error'
@@ -130,7 +130,7 @@ export default function DiagnosticsScreen() {
       `Upload queue: ${uploadGate.allowed ? 'running' : uploadGate.reason}`,
       `Queue counts: ${pending} pending, ${uploading} uploading, ${failed} failed, ${completed} completed`,
       `Retained locally: ${retainedMb.toFixed(1)} MB`,
-      `API: ${environment.remoteBetaApiUrlError ?? hostLabel()}`,
+      `API: ${environment.apiBaseUrlError ?? hostLabel()}`,
       '',
       errors.length ? 'Recent problems:' : 'Recent problems: none recorded.',
       ...errors.slice(0, 5).map((entry) => `- ${entry.at} [${entry.source}] ${entry.message}`),
@@ -191,7 +191,7 @@ export default function DiagnosticsScreen() {
           <DiagnosticRow
             label="TexasRenters REST API"
             value={
-              environment.remoteBetaApiUrlError ??
+              environment.apiBaseUrlError ??
               `${hostLabel()}${uploads.isFetching ? ' · checking' : ''}`
             }
             status={apiStatus}

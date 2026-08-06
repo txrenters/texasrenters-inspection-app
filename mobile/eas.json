@@ -6,13 +6,31 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "environment": "development",
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "development"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "remote-beta",
+        "EXPO_PUBLIC_ENABLE_DEMO_DATA": "false",
+        "EXPO_PUBLIC_ENABLE_TEST_VIDEO_PICKER": "false",
+        "EXPO_PUBLIC_USE_ADB_REVERSE": "false"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "environment": "production",
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "EXPO_PUBLIC_ENABLE_DEMO_DATA": "false",
+        "EXPO_PUBLIC_ENABLE_TEST_VIDEO_PICKER": "false",
+        "EXPO_PUBLIC_USE_ADB_REVERSE": "false"
+      }
     }
   },
   "submit": {

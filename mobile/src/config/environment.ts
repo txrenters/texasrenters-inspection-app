@@ -151,21 +151,35 @@ function isPrivateNetworkHost(host: string) {
 }
 
 /**
- * Remote beta puts the backend behind a public ngrok tunnel and the testers on
- * cellular data, so an address that merely works on the developer's desk is a
- * silent failure: the phone resolves `localhost` to *itself* and every request
- * dies with a confusing network error. This rejects those addresses up front
- * with an actionable message instead.
+ * Reject, at startup, an API address the phone cannot actually reach.
+ *
+ * Remote beta and production both put the backend on the public internet with
+ * the device on cellular data, so an address that merely works on the
+ * developer's desk is a silent failure: the phone resolves `localhost` to
+ * *itself* and every request dies with a confusing network error.
+ *
+ * Production is held to the same rules, and for one additional reason.
+ * `EXPO_PUBLIC_*` values are inlined at build time, so a release built without
+ * them carries no API address at all — it installs, launches, signs nobody in,
+ * and reports only network errors. Production used to be exempt from this check
+ * entirely, which meant the one build nobody can hot-fix was the only one
+ * nothing verified.
+ *
+ * Development is deliberately exempt: localhost, LAN addresses and adb-reverse
+ * tunnels are all correct there.
  */
-export function validateRemoteBetaApiUrl(
+export function validateApiBaseUrl(
   value: string | null,
   env: AppEnvironment,
 ): { ok: true } | { ok: false; reason: string } {
-  if (env !== 'remote-beta') return { ok: true };
+  if (env === 'development') return { ok: true };
   if (!value)
     return {
       ok: false,
-      reason: 'EXPO_PUBLIC_API_BASE_URL is required in remote-beta mode. Re-run the start helper.',
+      reason:
+        env === 'production'
+          ? 'This build carries no EXPO_PUBLIC_API_BASE_URL. It was built without the production environment variables — set them on the EAS build profile and rebuild.'
+          : 'EXPO_PUBLIC_API_BASE_URL is required in remote-beta mode. Re-run the start helper.',
     };
 
   let url: URL;
@@ -176,13 +190,16 @@ export function validateRemoteBetaApiUrl(
   }
 
   if (url.protocol !== 'https:')
-    return { ok: false, reason: `Remote beta requires HTTPS. Received ${url.protocol}//` };
+    return {
+      ok: false,
+      reason: `${env === 'production' ? 'Production' : 'Remote beta'} requires HTTPS. Received ${url.protocol}//`,
+    };
 
   const host = url.hostname.toLowerCase();
   if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(host))
     return {
       ok: false,
-      reason: `"${host}" is the phone itself, not the developer machine. Use the public ngrok URL.`,
+      reason: `"${host}" is the phone itself, not the server. Use the public API host.`,
     };
   // Compose service names resolve only inside the Docker network.
   if (!host.includes('.'))
@@ -198,16 +215,18 @@ export function validateRemoteBetaApiUrl(
   return { ok: true };
 }
 
-const remoteBetaCheck = validateRemoteBetaApiUrl(apiBaseUrl, appEnv);
-if (!remoteBetaCheck.ok && __DEV__) {
+const apiUrlCheck = validateApiBaseUrl(apiBaseUrl, appEnv);
+if (!apiUrlCheck.ok && __DEV__) {
   // Loud in development, non-fatal: a tester mid-inspection must not lose
-  // captured work because the tunnel URL went stale.
-  console.error(`[remote-beta] ${remoteBetaCheck.reason}`);
+  // captured work because the tunnel URL went stale. In a release build the
+  // reason is still carried on `environment` and surfaced by Diagnostics, which
+  // is the only channel a technician in the field has.
+  console.error(`[config] ${apiUrlCheck.reason}`);
 }
 
 export const environment = {
   appEnv,
-  remoteBetaApiUrlError: remoteBetaCheck.ok ? null : remoteBetaCheck.reason,
+  apiBaseUrlError: apiUrlCheck.ok ? null : apiUrlCheck.reason,
   dataSource: (demoDataEnabled ? 'mock' : 'api') as DataSource,
   apiBaseUrl,
   apiBaseUrls,
