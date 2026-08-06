@@ -87,7 +87,7 @@ function InspectionRow({ item }: { item: Inspection }) {
         item.property.cityStateZip,
         item.type.replaceAll('_', ' ').toLowerCase(),
         `${item.progress.completed} of ${item.progress.total} rooms complete`,
-        config.label.toLowerCase(),
+        config.label,
         // Carried in the row's own label: the badge below sits inside a hidden
         // subtree, so this is the only way it reaches a screen reader.
         urgency?.spoken ?? '',
@@ -119,9 +119,11 @@ function InspectionRow({ item }: { item: Inspection }) {
           <View className="mt-2 flex-row flex-wrap items-center gap-2">
             <View className={`flex-row items-center gap-1 rounded-full px-2.5 py-0.5 ${config.bg}`}>
               <StatusIcon size={12} className={config.text} />
-              <Text className={`text-xs font-semibold capitalize ${config.text}`}>
-                {config.label.toLowerCase()}
-              </Text>
+              {/* The label arrives cased. Lowercasing then `capitalize` used to
+                  round-trip it through the stylesheet, which breaks on a
+                  hyphen — "Follow-up Needed" came back "Follow-Up Needed", and
+                  differently from the detail screen. */}
+              <Text className={`text-xs font-semibold ${config.text}`}>{config.label}</Text>
             </View>
             <InspectionUrgencyBadge inspection={item} />
             <Text className="text-xs text-muted-foreground">
@@ -184,10 +186,15 @@ export default function InspectionsScreen() {
           <View>
             <View className="px-5 pb-2 pt-4">
               <Text className="text-2xl font-bold tracking-tight text-foreground">Inspections</Text>
+              {/* Counts the rows actually on screen. It used to report the
+                  SCHEDULED total no matter which chip was active, so picking
+                  Submitted showed a list of submitted work above the word
+                  "pending" and a number matching none of it. */}
               <Text className="mt-0.5 text-sm text-muted-foreground">
-                {(inspections.data ?? []).length} total ·{' '}
-                {(inspections.data ?? []).filter((item) => item.status === 'SCHEDULED').length}{' '}
-                pending
+                {(inspections.data ?? []).length} total
+                {filter === 'ALL'
+                  ? ` · ${(inspections.data ?? []).filter((item) => item.status === 'SCHEDULED').length} pending`
+                  : ` · ${filtered.length} shown`}
               </Text>
             </View>
             <View className="mx-5 mt-3 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">

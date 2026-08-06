@@ -494,15 +494,39 @@ export default function InspectionOverviewScreen() {
             </Pressable>
           </View>
         ) : (
-          <View className="flex-row items-center gap-3 rounded-xl bg-card p-4">
-            <CheckCircle2Icon size={22} className="text-chart-3" />
-            <View className="flex-1">
-              <Text className="text-sm font-semibold text-foreground">Inspection Complete</Text>
-              <Text className="text-xs text-muted-foreground">
-                All approved evidence remains available for review
-              </Text>
-            </View>
-          </View>
+          // Every remaining status, and they do not all mean the same thing.
+          // This said "Inspection Complete" for all eight — including
+          // FOLLOW_UP_REQUIRED, so the screen showed a red "Follow-up Needed"
+          // pill at the top and declared the work finished at the bottom.
+          (() => {
+            const presentation = inspectionStatusPresentation(item.status);
+            const needsAttention = presentation.tone === 'attention';
+            const StatusIcon = needsAttention ? AlertTriangleIcon : CheckCircle2Icon;
+            return (
+              <View className="flex-row items-center gap-3 rounded-xl bg-card p-4">
+                <StatusIcon
+                  size={22}
+                  className={needsAttention ? 'text-destructive' : 'text-chart-3'}
+                />
+                <View className="flex-1">
+                  <Text className="text-sm font-semibold text-foreground">
+                    {needsAttention
+                      ? 'Follow-up Needed'
+                      : item.status === 'COMPLETED'
+                        ? 'Inspection Complete'
+                        : 'Submitted to Office'}
+                  </Text>
+                  <Text className="text-xs text-muted-foreground">
+                    {needsAttention
+                      ? 'The office has asked for another visit. They will reopen this when it is ready for you.'
+                      : item.status === 'COMPLETED'
+                        ? 'All approved evidence remains available for review'
+                        : 'Your capture is in. Nothing further is needed from you unless the office reopens it.'}
+                  </Text>
+                </View>
+              </View>
+            );
+          })()
         )}
       </View>
 

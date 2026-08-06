@@ -1,5 +1,6 @@
 import type { InspectionStatus } from '../src/domain/models';
 import {
+  INSPECTION_STATUS_TONE_CLASS,
   inspectionStatusLabel,
   inspectionStatusPresentation,
   isFieldActive,
@@ -20,14 +21,39 @@ const ALL_STATUSES: InspectionStatus[] = [
 ];
 
 describe('inspection status presentation', () => {
-  it('never falls back to the raw enum for a known status', () => {
-    // The bug this replaces: a three-entry map whose fallback printed
-    // "TECHNICIAN SUBMITTED" at the exact moment the technician needed to see
-    // that their walkthrough had landed.
+  // Pins every status by name. Asserting only "not the raw enum" passed just
+  // as happily for an implementation that answered "Unknown" ten times — and
+  // COMPLETED could have regressed to a red "Unknown" with the suite green,
+  // which is the exact class of bug this module exists to prevent.
+  it.each([
+    ['SCHEDULED', 'Assigned', 'assigned'],
+    ['IN_PROGRESS', 'In Progress', 'active'],
+    ['TECHNICIAN_SUBMITTED', 'Submitted', 'submitted'],
+    ['PROCESSING', 'With Office', 'review'],
+    ['REVIEW_REQUIRED', 'With Office', 'review'],
+    ['UNDER_REVIEW', 'With Office', 'review'],
+    ['TBD', 'With Office', 'review'],
+    ['FOLLOW_UP_REQUIRED', 'Follow-up Needed', 'attention'],
+    ['COMPLETED', 'Completed', 'done'],
+    ['CANCELLED', 'Cancelled', 'closed'],
+  ] as const)('presents %s as "%s"', (status, label, tone) => {
+    expect(inspectionStatusPresentation(status)).toEqual({ label, tone });
+  });
+
+  it('covers every status in the union, so none can be added without a decision', () => {
+    // Guards the map against drift when a status is added to models.ts.
     for (const status of ALL_STATUSES) {
-      const { label } = inspectionStatusPresentation(status);
-      expect(label).not.toContain('_');
-      expect(label).not.toBe(status);
+      expect(inspectionStatusPresentation(status).label).not.toBe('Unknown');
+    }
+  });
+
+  it('gives every tone a class pair in both slots', () => {
+    // A typo'd class string compiles and renders as nothing, so the shape is
+    // asserted here rather than discovered on a handset.
+    for (const status of ALL_STATUSES) {
+      const style = INSPECTION_STATUS_TONE_CLASS[inspectionStatusPresentation(status).tone];
+      expect(style.bg).toMatch(/^bg-/);
+      expect(style.text).toMatch(/^text-/);
     }
   });
 
