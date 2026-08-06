@@ -53,6 +53,7 @@ function RoomReviewRow({
   room: InspectionReportRoom;
 }) {
   const finished = finishedStatuses.has(room.completionStatus);
+  const findingCount = room.findings?.length ?? 0;
   return (
     <Pressable
       accessibilityRole="button"
@@ -80,9 +81,10 @@ function RoomReviewRow({
         <Text className="text-sm font-semibold text-foreground">{room.name}</Text>
         <Text className="mt-0.5 text-xs text-muted-foreground">
           {room.floorName} · {room.photoCount} photo{room.photoCount === 1 ? '' : 's'}
-          {room.findings.length
-            ? ` · ${room.findings.length} finding${room.findings.length === 1 ? '' : 's'}`
-            : ''}
+          {/* Same restored-cache caveat as the findings list below: a payload
+              written by an older room shape can reach this card without the
+              field. */}
+          {findingCount ? ` · ${findingCount} finding${findingCount === 1 ? '' : 's'}` : ''}
         </Text>
         {/* One line of the AI's own words, so the pre-submit check is a real
             read-through rather than a count of rows. */}
@@ -161,8 +163,14 @@ export default function InspectionReviewScreen() {
     (room) => !finishedStatuses.has(room.completionStatus),
   );
   const canSubmit = inspection.status === 'IN_PROGRESS' && incompleteRequiredRooms.length === 0;
+  // `findings` is required by the report schema, so a live response always has
+  // it. A warm-start restore does not go through that schema — the persisted
+  // react-query cache is written back as-is — so a payload stored by an older
+  // shape can arrive here without the field and take the whole screen down with
+  // it. The cache buster clears those on upgrade; this keeps a technician
+  // standing in a unit from losing the review screen if one ever slips through.
   const findings = rooms.flatMap((room) =>
-    room.findings.map((finding) => ({ ...finding, roomName: room.name })),
+    (room.findings ?? []).map((finding) => ({ ...finding, roomName: room.name })),
   );
   const completedPercent = rooms.length
     ? Math.round((totals.finishedRooms / rooms.length) * 100)

@@ -18,6 +18,7 @@ jest.mock('../src/auth/supabase', () => ({
 /* eslint-disable import/first */
 import { demoStorage } from '../src/storage/demo-storage';
 import {
+  buster,
   clearQueryCache,
   persistQueryCache,
   restoreQueryCache,
@@ -70,7 +71,7 @@ beforeEach(async () => {
 describe('restoreQueryCache', () => {
   it('repaints the last known screen data without a request', async () => {
     await seed({
-      buster: 'dev',
+      buster: buster(),
       savedAt: Date.now(),
       state: dehydratedOneQuery(['dashboard'], { assignments: [{ id: 'insp-1' }] }),
     });
@@ -98,9 +99,32 @@ describe('restoreQueryCache', () => {
     expect(await demoStorage.getItem(KEY)).toBeNull();
   });
 
+  it('drops a cache written by an older shape at the same app version', async () => {
+    // The case the app version could not catch, and the one that actually bit:
+    // `version` sat at 0.1.0 for all of development, so every DTO change shipped
+    // against caches written by the previous shape. The review screen crashed on
+    // `room.findings.map` because the restored rooms predated that field.
+    const [appVersion] = buster().split(':');
+    await seed({
+      buster: `${appVersion}:1`,
+      savedAt: Date.now(),
+      state: dehydratedOneQuery(['dashboard'], { assignments: [] }),
+    });
+
+    const queryClient = client();
+    expect(await restoreQueryCache(queryClient)).toBe(false);
+    expect(await demoStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('carries both the app version and the shape version', async () => {
+    // Either one moving has to invalidate the cache, so neither may be dropped
+    // from the key.
+    expect(buster()).toMatch(/^.+:\d+$/);
+  });
+
   it('drops data older than a day rather than presenting it as current', async () => {
     await seed({
-      buster: 'dev',
+      buster: buster(),
       savedAt: Date.now() - 25 * 60 * 60_000,
       state: dehydratedOneQuery(['dashboard'], { assignments: [{ id: 'stale' }] }),
     });
@@ -120,7 +144,7 @@ describe('restoreQueryCache', () => {
 
   it('reads nothing when no technician is signed in', async () => {
     await seed({
-      buster: 'dev',
+      buster: buster(),
       savedAt: Date.now(),
       state: dehydratedOneQuery(['dashboard'], { assignments: [] }),
     });
@@ -134,7 +158,7 @@ describe('restoreQueryCache', () => {
   it('never hands one technician the cache of another', async () => {
     await seed(
       {
-        buster: 'dev',
+        buster: buster(),
         savedAt: Date.now(),
         state: dehydratedOneQuery(['dashboard'], { assignments: [{ id: 'not-yours' }] }),
       },
@@ -202,7 +226,7 @@ describe('persistQueryCache', () => {
 describe('clearQueryCache', () => {
   it('erases the stored snapshot for the signed-in technician', async () => {
     await seed({
-      buster: 'dev',
+      buster: buster(),
       savedAt: Date.now(),
       state: dehydratedOneQuery(['dashboard'], { assignments: [] }),
     });

@@ -25,16 +25,34 @@ type StoredCache = {
 };
 
 /**
- * Invalidates the whole stored cache whenever the app version changes.
+ * Bump whenever a cached response shape changes.
+ *
+ * The app version alone was doing this job and could not: `version` in
+ * app.config.ts sat at 0.1.0 for the whole of development, so every DTO change
+ * shipped against caches written by the previous shape. That is exactly the
+ * failure the version was meant to prevent — the review screen crashed on
+ * `room.findings.map` after `findings` was added, because the restored rooms
+ * predated the field.
+ *
+ * Kept separate from the app version because the two answer different
+ * questions: `version` is what users are running, this is what the stored
+ * payloads look like. A release with no shape change should not discard a
+ * technician's warm-start cache, and a shape change between two builds of the
+ * same version must.
+ */
+const CACHE_SCHEMA_VERSION = 2;
+
+/**
+ * Invalidates the whole stored cache when either the shipped version or the
+ * cached shape changes.
  *
  * Restored payloads are not re-validated against their zod schemas — they are
- * written back into react-query as-is. A release that changes a DTO shape would
- * otherwise hand screens last version's data and crash on a field that no
- * longer exists. Tying the cache to the shipped version means an upgrade starts
- * clean and refills within one refresh.
+ * written back into react-query as-is, which is what makes a stale shape able to
+ * reach a screen at all. Screens that read restored data therefore treat it as
+ * untrusted; see the review screen's handling of `findings`.
  */
-function buster() {
-  return String(Constants.expoConfig?.version ?? 'dev');
+export function buster() {
+  return `${Constants.expoConfig?.version ?? 'dev'}:${CACHE_SCHEMA_VERSION}`;
 }
 
 /**
