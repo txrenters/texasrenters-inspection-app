@@ -57,12 +57,27 @@ export function TableRow({ className, ...props }: ComponentProps<'tr'>) {
   );
 }
 
+/**
+ * Column rules pair with the row rule on TableRow to make a full grid, in the
+ * same border colour so neither reads as the stronger axis.
+ *
+ * The last column drops its rule: the container around the table already draws
+ * one, and the two would sit a pixel apart and read as a double line. Nothing
+ * is needed on the first column for the same reason — the rules go on the right
+ * of each cell, not the left, so the outer edges stay with the container.
+ *
+ * `border-collapse` on the table means a cell's right rule and its neighbour's
+ * left edge resolve to a single line rather than stacking.
+ */
+const COLUMN_RULE = 'border-r border-border last:border-r-0';
+
 export function TableHead({ className, ...props }: ComponentProps<'th'>) {
   return (
     <th
       data-slot="table-head"
       className={cn(
         'h-10 px-3 text-left align-middle text-xs font-semibold text-muted-foreground whitespace-nowrap',
+        COLUMN_RULE,
         '[&:has([role=checkbox])]:pr-0',
         className,
       )}
@@ -75,7 +90,7 @@ export function TableCell({ className, ...props }: ComponentProps<'td'>) {
   return (
     <td
       data-slot="table-cell"
-      className={cn('p-3 align-middle', '[&:has([role=checkbox])]:pr-0', className)}
+      className={cn('p-3 align-middle', COLUMN_RULE, '[&:has([role=checkbox])]:pr-0', className)}
       {...props}
     />
   );
