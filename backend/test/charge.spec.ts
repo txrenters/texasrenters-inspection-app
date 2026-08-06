@@ -98,40 +98,85 @@ describe('pet observation + dedup (spec §13)', () => {
     expect(prisma.petObservation.create).toHaveBeenCalledTimes(2);
   });
 
-  it('groups a pet seen in three rooms into one candidate and different animals separately', async () => {
-    const created: Array<{ data: Record<string, unknown> }> = [];
+  function petGroupingHarness(observations: ReturnType<typeof observation>[]) {
     const tx = {
-      petCandidate: {
-        create: jest.fn().mockImplementation((args: { data: Record<string, unknown> }) => {
-          created.push(args);
-          return Promise.resolve({ id: `candidate-${created.length}` });
-        }),
-      },
+      petCandidate: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       petObservation: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
       inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'insp-1' }) },
       petObservation: {
-        findMany: jest
-          .fn()
-          .mockResolvedValueOnce([
-            observation('o1', 'Dog', 'Brown dog'),
-            observation('o2', 'Dog', 'brown  dog'), // same, different whitespace/case
-            observation('o3', 'Dog', 'Brown dog'),
-            observation('o4', 'Cat', 'Grey cat'),
-          ])
-          .mockResolvedValueOnce([]),
+        findMany: jest.fn().mockResolvedValueOnce(observations).mockResolvedValueOnce([]),
       },
       petCandidate: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new ChargeService(prisma as never);
+    const candidates = () =>
+      (tx.petCandidate.createMany.mock.calls[0]?.[0]?.data ?? []) as Record<string, unknown>[];
+    return { prisma, tx, candidates };
+  }
 
-    await service.generateCandidates(user, 'insp-1');
+  it('groups a pet seen in three rooms into one candidate and different animals separately', async () => {
+    const { prisma, candidates } = petGroupingHarness([
+      observation('o1', 'Dog', 'Brown dog'),
+      observation('o2', 'Dog', 'brown  dog'), // same, different whitespace/case
+      observation('o3', 'Dog', 'Brown dog'),
+      observation('o4', 'Cat', 'Grey cat'),
+    ]);
+
+    await new ChargeService(prisma as never).generateCandidates(user, 'insp-1');
     // Two candidates: one dog (3 observations), one cat (1 observation).
+    const created = candidates();
     expect(created).toHaveLength(2);
-    expect(created.map((c) => c.data.observationCount).sort()).toEqual([1, 3]);
+    expect(created.map((entry) => entry.observationCount).sort()).toEqual([1, 3]);
+  });
+
+  it('links each observation to the candidate it was grouped into', async () => {
+    // Ids are assigned before the insert now rather than read back from it, so
+    // this guards the part that could silently go wrong: a group linked to the
+    // wrong candidate would merge two animals into one charge.
+    const { prisma, tx, candidates } = petGroupingHarness([
+      observation('o1', 'Dog', 'Brown dog'),
+      observation('o2', 'Dog', 'Brown dog'),
+      observation('o3', 'Cat', 'Grey cat'),
+    ]);
+
+    await new ChargeService(prisma as never).generateCandidates(user, 'insp-1');
+    const [dog, cat] = candidates();
+    const links = tx.petObservation.updateMany.mock.calls.map(
+      ([args]: [{ where: { id: { in: string[] } }; data: { petCandidateId: string } }]) => args,
+    );
+    expect(links).toHaveLength(2);
+    expect(links[0].where.id.in).toEqual(['o1', 'o2']);
+    expect(links[0].data.petCandidateId).toBe(dog.id);
+    expect(links[1].where.id.in).toEqual(['o3']);
+    expect(links[1].data.petCandidateId).toBe(cat.id);
+    expect(dog.id).not.toBe(cat.id);
+  });
+
+  it('writes every candidate in one statement however many animals there are', async () => {
+    // The transaction used to grow two statements per group. Against a remote
+    // pooler each is a few hundred milliseconds, so enough distinct animals
+    // could exhaust the budget mid-flight and roll the whole thing back.
+    const many = Array.from({ length: 12 }, (_, index) =>
+      observation(`o${index}`, `Species ${index}`, `Animal ${index}`),
+    );
+    const { prisma, tx } = petGroupingHarness(many);
+
+    await new ChargeService(prisma as never).generateCandidates(user, 'insp-1');
+    expect(tx.petCandidate.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.petCandidate.createMany.mock.calls[0][0].data).toHaveLength(12);
+  });
+
+  it('does not open a transaction when there is nothing to group', async () => {
+    // The common case: most calls find no new observations, and an empty
+    // transaction is still a round trip.
+    const { prisma, tx } = petGroupingHarness([]);
+
+    await new ChargeService(prisma as never).generateCandidates(user, 'insp-1');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 });
 

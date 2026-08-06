@@ -1,6 +1,7 @@
 import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
+import { TRANSACTION_DEFAULTS } from '../src/database/prisma.service';
 import { TechnicianService } from '../src/technician/technician.service';
 
 const technician: AuthenticatedUser = {
@@ -92,21 +93,66 @@ describe('technician manual area creation', () => {
       environment: 'INDOOR' as never,
     });
 
-    const [call] = tx.areaChecklistItem.createMany.mock.calls;
-    const labels = (call[0].data as { label: string }[]).map((item) => item.label);
+    // Read off the area's own create: the items are nested into that statement
+    // rather than issued as a second one, which is what keeps this to a single
+    // round trip. Nesting is also what makes it atomic without a second write.
+    const [areaCall] = tx.propertyArea.create.mock.calls;
+    const items = (
+      areaCall[0] as {
+        data: {
+          checklistItems: {
+            createMany: { data: { label: string; keywords: string[]; sortOrder: number }[] };
+          };
+        };
+      }
+    ).data.checklistItems.createMany.data;
+    const labels = items.map((item) => item.label);
     // Base set plus what a bathroom needs, read from the name alone.
     expect(labels).toContain('Doors and locks');
     expect(labels).toContain('Toilet and roll holder');
     // Keywords are derived the same way an administrator's own item would be,
     // so a generated item ticks itself under the same conditions.
-    const toilet = (call[0].data as { label: string; keywords: string[] }[]).find(
-      (item) => item.label === 'Toilet and roll holder',
+    expect(items.find((item) => item.label === 'Toilet and roll holder')?.keywords).toContain(
+      'toilet',
     );
-    expect(toilet?.keywords).toContain('toilet');
     // Ordered as the technician should walk them.
-    expect((call[0].data as { sortOrder: number }[]).map((item) => item.sortOrder)).toEqual(
-      labels.map((_, index) => index),
-    );
+    expect(items.map((item) => item.sortOrder)).toEqual(labels.map((_, index) => index));
+    // The nested write is the only one: a separate createMany would be a fifth
+    // round trip inside the transaction, which is what exhausted Prisma's
+    // five-second default against a remote pooler and rolled the area back.
+    expect(tx.areaChecklistItem.createMany).not.toHaveBeenCalled();
+  });
+
+  it('holds the transaction to three statements', async () => {
+    // What broke this was round-trip count, not logic. Every statement is a few
+    // hundred milliseconds against a remote pooler, so a fourth pushed the
+    // transaction past its budget mid-flight; Prisma closed it underneath the
+    // code still using it, the next statement threw "Transaction not found",
+    // and the area a technician was standing in was rolled back.
+    //
+    // The budget itself is set once on the client. This counts the statements,
+    // because that is the part a future change can quietly regress.
+    const { prisma, tx } = buildPrisma();
+    await service(prisma).createArea(technician, 'insp-1', {
+      name: 'Guest bathroom',
+      environment: 'INDOOR' as never,
+    });
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    const statements =
+      tx.propertyArea.create.mock.calls.length +
+      tx.inspectionArea.create.mock.calls.length +
+      tx.auditLog.create.mock.calls.length +
+      tx.areaChecklistItem.createMany.mock.calls.length;
+    expect(statements).toBe(3);
+  });
+
+  it('gives every transaction more room than the five-second Prisma default', () => {
+    // Guards the value itself: reverting it to Prisma's default would restore
+    // the outage across all thirty-odd transaction sites at once, and the
+    // failure it produces does not name a timeout.
+    expect(TRANSACTION_DEFAULTS.timeout).toBeGreaterThan(5_000);
+    expect(TRANSACTION_DEFAULTS.maxWait).toBeGreaterThan(2_000);
   });
 
   it('creates an approved technician-sourced area and links it to the inspection', async () => {

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { Inject, Injectable } from '@nestjs/common';
 import {
   ChargeSource,
@@ -203,33 +205,50 @@ export class ChargeService {
       group.push(observation);
       groups.set(key, group);
     }
-    let created = 0;
-    await this.prisma.$transaction(async (tx) => {
-      for (const group of groups.values()) {
-        const first = group[0];
-        const candidate = await tx.petCandidate.create({
-          data: {
-            organizationId: user.organizationId,
-            inspectionId,
-            species: first.species,
-            label: first.temporaryLabel,
-            description: first.description,
-            observationCount: group.length,
-          },
-          select: { id: true },
+    // Ids are assigned here instead of read back from each insert, which is
+    // what lets every candidate be written in a single statement below.
+    const drafts = [...groups.values()].map((group) => ({ id: randomUUID(), group }));
+
+    // Nothing to group is the common case — most calls find no new
+    // observations — and an empty transaction is still a round trip.
+    if (drafts.length)
+      await this.prisma.$transaction(async (tx) => {
+        // Every candidate in one statement.
+        //
+        // This used to insert them one at a time so it could read each id back
+        // and link that group's observations to it, which made the transaction
+        // grow two statements per group. Against a remote pooler each is a few
+        // hundred milliseconds, so an inspection with enough distinct animals
+        // could exhaust the transaction budget partway through and roll back
+        // work a reviewer had already waited for.
+        await tx.petCandidate.createMany({
+          data: drafts.map(({ id, group }) => {
+            const first = group[0];
+            return {
+              id,
+              organizationId: user.organizationId,
+              inspectionId,
+              species: first.species,
+              label: first.temporaryLabel,
+              description: first.description,
+              observationCount: group.length,
+            };
+          }),
         });
-        await tx.petObservation.updateMany({
-          where: { id: { in: group.map((observation) => observation.id) } },
-          data: { petCandidateId: candidate.id },
-        });
-        created += 1;
-      }
-      if (created)
+        // Still one per candidate: each group points at a different id, and
+        // updateMany sets a single value. Prisma maintains `updatedAt` here,
+        // which a hand-written bulk UPDATE would silently leave stale on
+        // records that go on to justify a charge.
+        for (const { id, group } of drafts)
+          await tx.petObservation.updateMany({
+            where: { id: { in: group.map((observation) => observation.id) } },
+            data: { petCandidateId: id },
+          });
         await this.audit(tx, user, 'PET_CANDIDATES_GENERATED', inspectionId, {
-          created,
+          created: drafts.length,
           observations: ungrouped.length,
         });
-    });
+      });
     return this.listPets(user, inspectionId);
   }
 
