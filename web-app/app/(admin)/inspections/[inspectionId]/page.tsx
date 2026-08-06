@@ -35,7 +35,7 @@ import {
   useInspectionFindings,
 } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
-import { inspectionProgress } from '@/lib/inspection-progress';
+import { inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 
 /** Spoken state for a step that has no more specific detail. */
 const STEP_STATE_LABEL = {
@@ -80,6 +80,7 @@ export default function InspectionDetailPage() {
   const item = inspection.data!;
   const current = item.assignments.find((assignment) => assignment.isCurrent);
   const finalized = item.status === 'COMPLETED' || item.status === 'CANCELLED';
+  const contextualAction = primaryAction(item.status);
   const baselineLabel =
     item.inspectionType === 'MOVE_IN'
       ? 'This inspection establishes the property baseline'
@@ -95,6 +96,26 @@ export default function InspectionDetailPage() {
         breadcrumbs={[{ label: 'Inspections', href: '/inspections' }, { label: 'Detail' }]}
         action={
           <div className="inspection-action-bar">
+            {/* One primary action, chosen by where the inspection actually is.
+                The bar used to offer Reassign, Share report and More at equal
+                weight whatever the state, so nothing indicated what to do next.
+                This only ever navigates — finalization stays gated inside the
+                workflow panel rather than gaining an ungated twin up here. */}
+            {contextualAction ? (
+              <button
+                className={buttonVariants({ variant: 'primary' })}
+                onClick={() => {
+                  const target = document.getElementById(contextualAction.target);
+                  target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  // Focus follows the scroll, so a keyboard user arrives where
+                  // the page just moved rather than back at the top.
+                  target?.focus?.();
+                }}
+                type="button"
+              >
+                {contextualAction.label}
+              </button>
+            ) : null}
             {!finalized && permissions.has('inspections:assign') ? (
               <button className={buttonVariants({ variant: 'secondary' })} onClick={() => setAssigning(true)}>
                 {current ? 'Reassign' : 'Assign technician'}

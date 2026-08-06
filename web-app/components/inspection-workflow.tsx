@@ -76,7 +76,7 @@ export function InspectionWorkflowPanel({
         <CardHeader className="p-0 pb-4">
         <div>
           <span className="block text-xs font-semibold text-muted-foreground">Review workflow</span>
-          <CardTitle className="text-[17px]" id="inspection-workflow-title">Finalization &amp; follow-up</CardTitle>
+          <CardTitle className="text-[17px]" id="inspection-workflow-title" tabIndex={-1}>Finalization &amp; follow-up</CardTitle>
           <CardDescription>
             Submitting is not completing — an administrator finalizes, defers, or requests a
             follow-up.

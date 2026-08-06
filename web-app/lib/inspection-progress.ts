@@ -89,14 +89,21 @@ export function inspectionProgress(status: AdminInspectionStatus): ProgressStep[
 }
 
 /**
- * The one action worth emphasising, given where the inspection is.
+ * The one thing worth emphasising in the header, given where the inspection is.
  *
- * Finalization was previously offered from the moment the page loaded, so the
- * most prominent control was usually one nobody could take.
+ * Navigation rather than a mutation. Finalization is gated inside the workflow
+ * panel — pending findings, permissions, inspection state — and offering it
+ * from the header would put an ungated copy of a decision beside the gated one.
+ * This takes the administrator to the right part of the page and lets the
+ * existing controls decide what they may do there.
  */
-export function primaryActionLabel(status: AdminInspectionStatus): string | null {
+export function primaryAction(
+  status: AdminInspectionStatus,
+): { label: string; target: string } | null {
   if (status === 'COMPLETED' || status === 'CANCELLED') return null;
-  if (STATUS_POSITION[status] === 0) return 'View technician progress';
-  if (STATUS_POSITION[status] === 1) return 'Review evidence';
-  return 'Finalize inspection';
+  // Capture still running or submitted: the evidence is what to look at, and
+  // it is also how an administrator sees the technician's progress.
+  if (STATUS_POSITION[status] <= 1)
+    return { label: 'Review evidence', target: 'area-evidence-heading' };
+  return { label: 'Go to finalization', target: 'inspection-workflow-title' };
 }

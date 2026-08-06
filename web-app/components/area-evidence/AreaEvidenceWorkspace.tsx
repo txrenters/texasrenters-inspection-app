@@ -149,7 +149,7 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
       <CardHeader className="p-0 pb-4">
         <div>
           <span className="block text-xs font-semibold text-muted-foreground">Inspection evidence</span>
-          <CardTitle id="area-evidence-heading" className="text-[17px]">
+          <CardTitle id="area-evidence-heading" className="text-[17px]" tabIndex={-1}>
             Areas
           </CardTitle>
           <CardDescription>

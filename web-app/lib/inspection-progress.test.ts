@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { inspectionProgress, primaryActionLabel } from './inspection-progress';
+import { inspectionProgress, primaryAction } from './inspection-progress';
 
 describe('workflow steps', () => {
   it('marks capture active while the technician is still recording', () => {
@@ -67,23 +67,34 @@ describe('workflow steps', () => {
 });
 
 describe('the one action worth emphasising', () => {
-  it('does not offer finalization before it is possible', () => {
-    // It used to be the most prominent control from page load, usually for an
-    // action nobody could take.
-    expect(primaryActionLabel('IN_PROGRESS')).not.toMatch(/finali/i);
-    expect(primaryActionLabel('SCHEDULED')).not.toMatch(/finali/i);
+  it('does not point at finalization before it is reachable', () => {
+    // It used to be the most prominent thing on the page from load, usually for
+    // a step nobody could take yet.
+    for (const status of ['SCHEDULED', 'IN_PROGRESS'] as const)
+      expect(primaryAction(status)?.label).not.toMatch(/finali/i);
   });
 
-  it('offers review once the technician has submitted', () => {
-    expect(primaryActionLabel('TECHNICIAN_SUBMITTED')).toMatch(/review/i);
+  it('sends the administrator to the evidence while capture is under way', () => {
+    expect(primaryAction('IN_PROGRESS')).toEqual({
+      label: 'Review evidence',
+      target: 'area-evidence-heading',
+    });
   });
 
-  it('offers finalization once review is under way', () => {
-    expect(primaryActionLabel('UNDER_REVIEW')).toMatch(/finali/i);
+  it('points at finalization once review is under way', () => {
+    expect(primaryAction('UNDER_REVIEW')?.target).toBe('inspection-workflow-title');
   });
 
   it('offers nothing once the inspection is closed', () => {
-    expect(primaryActionLabel('COMPLETED')).toBeNull();
-    expect(primaryActionLabel('CANCELLED')).toBeNull();
+    expect(primaryAction('COMPLETED')).toBeNull();
+    expect(primaryAction('CANCELLED')).toBeNull();
+  });
+
+  it('only ever navigates, never triggers a decision', () => {
+    // Finalization is gated inside the workflow panel — pending findings,
+    // permissions, inspection state. A header button that performed it would be
+    // an ungated copy of a gated decision.
+    const statuses = ['SCHEDULED', 'IN_PROGRESS', 'TECHNICIAN_SUBMITTED', 'UNDER_REVIEW'] as const;
+    for (const status of statuses) expect(primaryAction(status)?.target).toBeTruthy();
   });
 });
