@@ -97,14 +97,22 @@ export function InspectionWorkflowPanel({
         </div>
         {inspection.finalizedAt ? (
           <div className="workflow-fact">
-            <dt>Finalized</dt>
+            {/* A reopened inspection keeps its finalization stamp — that is
+                what freezes the evidence behind it — so the label says which
+                of the two this is rather than implying it is still closed. */}
+            <dt>{completed ? 'Finalized' : 'Last finalized'}</dt>
             <dd>
               {formatDate(inspection.finalizedAt)}
               {inspection.finalizedBy ? ` · ${inspection.finalizedBy.displayName}` : ''}
             </dd>
           </div>
         ) : null}
-        {inspection.status === 'FOLLOW_UP_REQUIRED' ? (
+        {/* Shown whenever the data exists, not only in the matching status.
+            Reopening deliberately preserves the follow-up and TBD
+            determinations, and gating these on the status meant they vanished
+            from the screen at the exact moment an admin reopened the
+            inspection to act on them. */}
+        {inspection.followUpRequired || inspection.followUpDueAt || inspection.followUpTasks ? (
           <div className="workflow-fact workflow-fact-wide">
             <dt>Follow-up</dt>
             <dd>
@@ -115,7 +123,7 @@ export function InspectionWorkflowPanel({
             </dd>
           </div>
         ) : null}
-        {inspection.completionBlockedReason ? (
+        {inspection.completionBlockedReason || inspection.tbdReason ? (
           <div className="workflow-fact workflow-fact-wide">
             <dt>{inspection.status === 'TBD' ? 'Pending reason' : 'On hold'}</dt>
             <dd>{inspection.tbdReason ?? inspection.completionBlockedReason}</dd>

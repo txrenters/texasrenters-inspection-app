@@ -127,7 +127,15 @@ export class InspectionUnderReviewDto {
  * the audit trail has to say why on every use, not only when overriding.
  */
 export class ReopenInspectionDto {
-  @IsString() @MinLength(2) @MaxLength(500) reason!: string;
+  // Trimmed before validation, or "  " satisfies MinLength(2) and the audit
+  // trail records whitespace as the justification for reversing a
+  // finalization. The web dialog trims already; the API is where the guarantee
+  // has to hold unconditionally.
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(2)
+  @MaxLength(500)
+  reason!: string;
 }
 
 /** Merge a duplicate inspection area into another within the same inspection. */

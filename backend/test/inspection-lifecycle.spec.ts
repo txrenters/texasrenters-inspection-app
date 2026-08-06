@@ -223,9 +223,9 @@ describe('inspection status lifecycle (spec §11)', () => {
     );
   });
 
-  function reopenPrisma(from: InspectionStatus, currentAssignments = 1) {
+  function reopenPrisma(from: InspectionStatus, currentAssignments = 1, updated = 1) {
     const tx = {
-      inspection: { update: jest.fn().mockResolvedValue({}) },
+      inspection: { updateMany: jest.fn().mockResolvedValue({ count: updated }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
@@ -241,30 +241,76 @@ describe('inspection status lifecycle (spec §11)', () => {
     return { tx, prisma };
   }
 
-  it('reopens a finalized inspection back to IN_PROGRESS and clears the finalization', async () => {
+  it('reopens a finalized inspection back to IN_PROGRESS', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
     const service = new AdminService(prisma as never);
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
 
     // IN_PROGRESS is the only status that puts the inspection back in the
-    // technician's queue, and the finalization stamps must not outlive it.
-    expect(tx.inspection.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          status: InspectionStatus.IN_PROGRESS,
-          submittedAt: null,
-          completedAt: null,
-          finalizedAt: null,
-          finalizedById: null,
-        }),
-      }),
-    );
+    // technician's queue.
+    const [{ data, where }] = tx.inspection.updateMany.mock.calls[0];
+    expect(data.status).toBe(InspectionStatus.IN_PROGRESS);
+    // The finalization stamp OUTLIVES the reopen. Two guards — technician
+    // photo deletion and renaming a technician-created area — key on it, and
+    // nulling it would let a technician hard-delete evidence out of an
+    // inspection that had already been finalized and possibly shared.
+    expect(data).not.toHaveProperty('finalizedAt');
+    expect(data).not.toHaveProperty('finalizedById');
+    expect(data).not.toHaveProperty('completedAt');
+    // Re-asserted in the WHERE clause: the status check ran outside this
+    // transaction, so a concurrent finalize could otherwise slip in between.
+    expect(where.status.in).toContain(InspectionStatus.COMPLETED);
+    expect(where.status.in).not.toContain(InspectionStatus.CANCELLED);
     expect(tx.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ action: 'INSPECTION_REOPENED' }),
       }),
     );
+  });
+
+  it('scopes the lookup to the caller’s organization', async () => {
+    const { prisma } = reopenPrisma(InspectionStatus.COMPLETED);
+    const service = new AdminService(prisma as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'Another area' });
+
+    expect(prisma.inspection.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'insp-1', organizationId: admin.organizationId }),
+      }),
+    );
+  });
+
+  it('records the reason against the actor, which is the point of requiring it', async () => {
+    const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
+    const service = new AdminService(prisma as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actorUserId: admin.id,
+          metadata: expect.objectContaining({
+            reason: 'Garage was never captured',
+            wasFinalized: true,
+            fromStatus: InspectionStatus.COMPLETED,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('refuses, and writes no audit row, when the status changed mid-transaction', async () => {
+    // updateMany matching nothing means a concurrent transition won the race.
+    const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED, 1, 0);
+    const service = new AdminService(prisma as never);
+
+    await expect(
+      service.reopenInspection(admin, 'insp-1', { reason: 'One more room' }),
+    ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_NOT_REOPENABLE' });
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('reopens from a mid-review state without clearing the administrator determination', async () => {
@@ -275,7 +321,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
     // Reopening is how a follow-up gets actioned, not proof it is resolved:
     // clearing the determination would destroy why the inspection was held.
-    const { data } = tx.inspection.update.mock.calls[0][0];
+    const [{ data }] = tx.inspection.updateMany.mock.calls[0];
     expect(data.status).toBe(InspectionStatus.IN_PROGRESS);
     expect(data).not.toHaveProperty('followUpRequired');
     expect(data).not.toHaveProperty('tbdReason');
@@ -290,7 +336,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       await expect(
         service.reopenInspection(admin, 'insp-1', { reason: 'nothing to reopen' }),
       ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_NOT_REOPENABLE' });
-      expect(tx.inspection.update).not.toHaveBeenCalled();
+      expect(tx.inspection.updateMany).not.toHaveBeenCalled();
     },
   );
 
@@ -301,7 +347,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     await expect(
       service.reopenInspection(admin, 'insp-1', { reason: 'changed our mind' }),
     ).rejects.toMatchObject({ status: 409, code: 'INSPECTION_CANCELLED' });
-    expect(tx.inspection.update).not.toHaveBeenCalled();
+    expect(tx.inspection.updateMany).not.toHaveBeenCalled();
   });
 
   it('records that a reopened inspection has nobody assigned', async () => {
@@ -319,6 +365,57 @@ describe('inspection status lifecycle (spec §11)', () => {
         }),
       }),
     );
+  });
+});
+
+describe('evidence behind a finalized inspection survives a reopen', () => {
+  function photoPrisma(status: InspectionStatus, finalizedAt: Date | null) {
+    return {
+      inspectionPhoto: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'photo-1',
+          storageKey: 'k',
+          inspectionArea: { inspection: { status, finalizedAt } },
+        }),
+        delete: jest.fn().mockResolvedValue({}),
+      },
+    };
+  }
+
+  it('refuses deletion once the inspection has been finalized, even while reopened', async () => {
+    // The regression this guards: reopen returns the inspection to
+    // IN_PROGRESS, and a status-only check handed the still-assigned
+    // technician the ability to hard-delete a photo — and its stored object —
+    // out of a report that was already closed and possibly shared.
+    const prisma = photoPrisma(InspectionStatus.IN_PROGRESS, new Date('2026-08-01T00:00:00.000Z'));
+    const objectDelete = jest.fn();
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      { delete: objectDelete } as never,
+      {} as never,
+    );
+
+    await expect(service.deletePhoto(technician, 'photo-1')).rejects.toMatchObject({
+      status: 409,
+      code: 'INSPECTION_FINALIZED',
+    });
+    expect(prisma.inspectionPhoto.delete).not.toHaveBeenCalled();
+    // The stored object matters as much as the row: it is the evidence.
+    expect(objectDelete).not.toHaveBeenCalled();
+  });
+
+  it('still allows deletion on an inspection that was never finalized', async () => {
+    const prisma = photoPrisma(InspectionStatus.IN_PROGRESS, null);
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      { delete: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
+    );
+
+    await expect(service.deletePhoto(technician, 'photo-1')).resolves.toEqual({ deleted: true });
+    expect(prisma.inspectionPhoto.delete).toHaveBeenCalled();
   });
 });
 

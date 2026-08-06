@@ -1376,10 +1376,19 @@ export class AdminService {
    * Evidence is never touched. Existing recordings, photos and findings survive
    * a reopen; the technician adds to them rather than starting over.
    *
-   * The submission and finalization stamps are cleared, because leaving them
-   * would leave a record claiming to be finalized while sitting in progress.
-   * Nothing is lost — INSPECTION_FINALIZED and INSPECTION_REOPENED both stay in
-   * the audit trail with their timestamps and actors.
+   * `finalizedAt` / `finalizedById` / `completedAt` are deliberately KEPT, and
+   * read as "last finalized" rather than "is finalized" — `status` is the only
+   * authority on the current state. Nothing in the backend branches on them;
+   * they are selected for display alone.
+   *
+   * They are load-bearing as history. Two guards protect the evidence behind a
+   * closed inspection — technician photo deletion and renaming a
+   * technician-created area — and both used to key on status === COMPLETED,
+   * which was safe only while COMPLETED was terminal. Reopening would have
+   * re-armed them, letting a technician hard-delete a photo (and its object in
+   * storage) out of an inspection that had already been finalized and possibly
+   * shared with an owner. `finalizedAt` outliving the reopen is what keeps them
+   * shut; an earlier revision of this method nulled it and opened both.
    *
    * Review determinations (`tbdReason`, `followUpRequired`, `followUpTasks`) are
    * deliberately left alone. Reopening is how a follow-up gets actioned, not
@@ -1408,17 +1417,27 @@ export class AdminService {
       where: { inspectionId: id, isCurrent: true },
     });
     await this.prisma.$transaction(async (tx) => {
-      await tx.inspection.update({
-        where: { id },
+      // The status is re-asserted in the WHERE clause. The check above ran on
+      // `this.prisma`, outside this transaction, so Serializable cannot detect
+      // a conflict on a row it never read here — a concurrent finalize could
+      // land in between and this would silently write an audit row claiming
+      // `wasFinalized: false` about a finalization it had just reversed.
+      const { count } = await tx.inspection.updateMany({
+        where: { id, status: { in: REOPENABLE_INSPECTION_STATUSES } },
         data: {
           status: InspectionStatus.IN_PROGRESS,
-          submittedAt: null,
-          completedAt: null,
-          finalizedAt: null,
-          finalizedById: null,
+          // submittedAt is left too: the technician's next submission
+          // overwrites it, and until then it records when the work last left
+          // the field.
           completionBlockedReason: null,
         },
       });
+      if (count === 0)
+        throw new ApplicationError(
+          409,
+          'INSPECTION_NOT_REOPENABLE',
+          'The inspection changed while it was being reopened. Reload and try again.',
+        );
       await this.audit(tx, user, 'INSPECTION_REOPENED', id, {
         fromStatus: existing.status,
         reason: input.reason,

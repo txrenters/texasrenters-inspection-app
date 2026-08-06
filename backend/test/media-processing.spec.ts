@@ -124,7 +124,10 @@ describe('media processing pipeline', () => {
       mediaProcessingEvent: { create: jest.fn().mockResolvedValue({}) },
       inspection: {
         findUnique: jest.fn().mockResolvedValue({ status: 'PROCESSING' }),
-        update: jest.fn().mockResolvedValue({}),
+        // updateMany, not update: the advance re-asserts the status in its
+        // WHERE clause so an administrator's reopen cannot be overwritten by a
+        // late-finishing recording.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       $transaction: jest.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
     };
@@ -198,9 +201,10 @@ describe('media processing pipeline', () => {
       (call) => call[0].data.processingStatus,
     );
     expect(statusUpdates).toEqual(['PROCESSING', 'READY']);
-    // Inspection was PROCESSING with no unfinished media → moves to review.
-    expect(prisma.inspection.update).toHaveBeenCalledWith({
-      where: { id: 'inspection-1' },
+    // Inspection was PROCESSING with no unfinished media → moves to review,
+    // but only while it is still in an advanceable status.
+    expect(prisma.inspection.updateMany).toHaveBeenCalledWith({
+      where: { id: 'inspection-1', status: { in: ['TECHNICIAN_SUBMITTED', 'PROCESSING'] } },
       data: { status: 'REVIEW_REQUIRED' },
     });
     expect(aiSettings.recordUsage).toHaveBeenCalledWith(

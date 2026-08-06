@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
-import { FloorPlanStatus, InspectionStatus, PropertyAreaStatus } from '@prisma/client';
+import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
@@ -715,10 +715,18 @@ export class FloorPlanAdminService {
     });
   }
 
-  /** Whether any completed inspection already refers to this area. */
+  /**
+   * Whether any finalized inspection already refers to this area.
+   *
+   * Keyed on `finalizedAt` rather than status === COMPLETED. An administrator
+   * can reopen a finalized inspection to IN_PROGRESS, and a status-only check
+   * would let the area be renamed while it is reopened — relabelling evidence
+   * in a report that was already finished, permanently, since the rename
+   * survives re-finalization. Having been finalized once is what freezes it.
+   */
   private async areaIsFinalized(areaId: string) {
     const finalized = await this.prisma.inspectionArea.count({
-      where: { propertyAreaId: areaId, inspection: { status: InspectionStatus.COMPLETED } },
+      where: { propertyAreaId: areaId, inspection: { finalizedAt: { not: null } } },
     });
     return finalized > 0;
   }

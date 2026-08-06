@@ -1067,10 +1067,17 @@ export class MediaProcessingService implements OnModuleInit {
       InspectionStatus.PROCESSING,
     ];
     if (inspection && advanceable.includes(inspection.status) && unfinished === 0) {
-      await this.prisma.inspection.update({
-        where: { id: inspectionId },
+      // The status is re-checked in the WHERE clause, not just above it. The
+      // read is not in a transaction, so an administrator's reopen can commit
+      // in between — an unconditional update would then drag the inspection
+      // back to REVIEW_REQUIRED behind the admin's back, out of the technician
+      // queue they had just returned it to. updateMany because update() throws
+      // when its where matches nothing, and losing this race is expected.
+      const { count } = await this.prisma.inspection.updateMany({
+        where: { id: inspectionId, status: { in: advanceable } },
         data: { status: InspectionStatus.REVIEW_REQUIRED },
       });
+      if (count === 0) return;
       // Now that move-out findings are ready, draft the move-in vs move-out
       // comparison (spec §12). Best-effort: a failure never blocks review.
       if (inspection.inspectionType === InspectionType.MOVE_OUT && this.comparison)

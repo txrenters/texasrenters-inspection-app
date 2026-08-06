@@ -1264,13 +1264,25 @@ export class TechnicianService {
       select: {
         id: true,
         storageKey: true,
-        inspectionArea: { select: { inspection: { select: { status: true } } } },
+        inspectionArea: {
+          select: { inspection: { select: { status: true, finalizedAt: true } } },
+        },
       },
     });
     if (!photo) throw new ApplicationError(404, 'PHOTO_NOT_FOUND', 'Photo was not found.');
     // Evidence is only deletable before the inspection is finalized.
-    const status = photo.inspectionArea.inspection.status;
-    if (status === InspectionStatus.COMPLETED || status === InspectionStatus.CANCELLED)
+    //
+    // `finalizedAt` and not status alone: an administrator can reopen a
+    // finalized inspection to IN_PROGRESS, and a status-only check would hand
+    // the technician back the ability to hard-delete a photo — and its object
+    // in storage — out of a report that has already been closed and may have
+    // been shared. Once finalized, the evidence stays, reopen or not.
+    const { status, finalizedAt } = photo.inspectionArea.inspection;
+    if (
+      status === InspectionStatus.COMPLETED ||
+      status === InspectionStatus.CANCELLED ||
+      finalizedAt
+    )
       throw new ApplicationError(
         409,
         'INSPECTION_FINALIZED',
