@@ -130,9 +130,16 @@ export function EvidenceViewer({
     <div
       aria-label={`${item.title}, ${index + 1} of ${count}`}
       aria-modal
-      className="fixed inset-0 z-50 flex flex-col bg-black/95 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex flex-col"
       role="dialog"
     >
+      {/* The backdrop is its own layer, deliberately not an ancestor of the
+          media. `backdrop-filter` establishes a containing block, and Chrome
+          renders a fullscreen element inside one as a black rectangle — the
+          video kept playing, with audio and a moving timeline, and painted
+          nothing. Keeping the blur on a sibling leaves the look intact and the
+          media's ancestor chain free of filters. */}
+      <div aria-hidden className="absolute inset-0 -z-10 bg-black/95 backdrop-blur-sm" />
       <header className="flex items-start gap-3 px-4 py-3 text-white sm:px-6">
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{item.title}</p>

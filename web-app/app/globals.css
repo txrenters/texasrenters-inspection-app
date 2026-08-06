@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1356,7 +1356,7 @@ button:disabled {
   .form-grid,
   .dashboard-grid {
     grid-template-columns: 1fr 1fr;
-  }
+  }
 }
 @media (max-width: 560px) {
   .metric-grid,
@@ -3285,6 +3285,17 @@ button:disabled {
   border-radius: 10px;
   background: #000;
 }
+/* The inline cap must not follow the video into fullscreen: an author
+   max-height keeps constraining the element there, so the frame is drawn into a
+   320px box on a black screen while the controls sit at the bottom of the
+   display — it reads as a broken player rather than a sizing rule. The rounded
+   corner is dropped for the same reason; nothing about the page frame belongs
+   on a fullscreen video. */
+.room-video-player:fullscreen {
+  max-height: none;
+  height: 100%;
+  border-radius: 0;
+}
 .room-video-placeholder {
   display: flex;
   flex-direction: column;
@@ -4741,4 +4752,4 @@ button:disabled {
   color: var(--foreground);
   border-color: var(--ring);
 }
-
+
