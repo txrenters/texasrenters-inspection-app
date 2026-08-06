@@ -28,6 +28,10 @@ import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { buildPriorityChecklist, summaryCoverage } from '@/src/utils/inspection-audit';
 import {
+  INSPECTION_STATUS_TONE_CLASS,
+  inspectionStatusPresentation,
+} from '@/src/utils/inspection-status';
+import {
   deriveAreaStatus,
   pickUpNextArea,
   type AreaStatusDescriptor,
@@ -226,23 +230,17 @@ export default function InspectionOverviewScreen() {
             </View>
             <View
               className={`rounded-full px-3 py-1 ${
-                item.status === 'IN_PROGRESS'
-                  ? 'bg-chart-2/15'
-                  : item.status === 'COMPLETED'
-                    ? 'bg-chart-3/15'
-                    : 'bg-chart-4/15'
+                INSPECTION_STATUS_TONE_CLASS[inspectionStatusPresentation(item.status).tone].bg
               }`}
             >
+              {/* Not `capitalize`: the label is already cased, and forcing it
+                  turned "With Office" into something a stylesheet chose. */}
               <Text
-                className={`text-xs font-semibold capitalize ${
-                  item.status === 'IN_PROGRESS'
-                    ? 'text-chart-2'
-                    : item.status === 'COMPLETED'
-                      ? 'text-chart-3'
-                      : 'text-chart-4'
+                className={`text-xs font-semibold ${
+                  INSPECTION_STATUS_TONE_CLASS[inspectionStatusPresentation(item.status).tone].text
                 }`}
               >
-                {item.status.replaceAll('_', ' ').toLowerCase()}
+                {inspectionStatusPresentation(item.status).label}
               </Text>
             </View>
           </View>

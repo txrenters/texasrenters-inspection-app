@@ -2,12 +2,15 @@ import { useMemo, useState } from 'react';
 import { router } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import {
+  AlertTriangleIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
   ClipboardListIcon,
   MapPinIcon,
   SearchIcon,
   Settings2Icon,
+  UploadCloudIcon,
+  XCircleIcon,
 } from 'lucide-react-native';
 import { FlatList, Pressable, RefreshControl, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,59 +21,61 @@ import {
   useInspectionUrgency,
 } from '@/src/components/InspectionUrgencyBadge';
 import { useInspections } from '@/src/features/queries';
+import {
+  INSPECTION_STATUS_TONE_CLASS,
+  inspectionStatusPresentation,
+  isSubmittedToOffice,
+  type InspectionStatusTone,
+} from '@/src/utils/inspection-status';
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
+  AlertTriangleIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
   ClipboardListIcon,
   MapPinIcon,
   SearchIcon,
   Settings2Icon,
+  UploadCloudIcon,
+  XCircleIcon,
 );
 
-const FILTERS: { key: 'ALL' | InspectionStatus; label: string }[] = [
+/**
+ * "Submitted" covers every post-handover state the technician cannot act on,
+ * so a walkthrough that has gone to the office is findable instead of only
+ * appearing under All. It filters on the same predicate the pill uses.
+ */
+const FILTERS: { key: 'ALL' | InspectionStatus | 'SUBMITTED'; label: string }[] = [
   { key: 'ALL', label: 'All' },
   { key: 'SCHEDULED', label: 'Assigned' },
   { key: 'IN_PROGRESS', label: 'In Progress' },
+  { key: 'SUBMITTED', label: 'Submitted' },
   { key: 'COMPLETED', label: 'Completed' },
 ];
 
-const STATUS_CONFIG: Record<
-  string,
-  { label: string; bg: string; text: string; icon: typeof ClipboardListIcon }
-> = {
-  SCHEDULED: {
-    label: 'Assigned',
-    bg: 'bg-chart-4/15',
-    text: 'text-chart-4',
-    icon: ClipboardListIcon,
-  },
-  IN_PROGRESS: {
-    label: 'In Progress',
-    bg: 'bg-chart-2/15',
-    text: 'text-chart-2',
-    icon: Settings2Icon,
-  },
-  COMPLETED: {
-    label: 'Completed',
-    bg: 'bg-chart-3/15',
-    text: 'text-chart-3',
-    icon: CheckCircle2Icon,
-  },
+// Labels and colours come from src/utils/inspection-status; only the icon
+// choice is local, because this is the one screen that shows one.
+const TONE_ICON: Record<InspectionStatusTone, typeof ClipboardListIcon> = {
+  assigned: ClipboardListIcon,
+  active: Settings2Icon,
+  submitted: UploadCloudIcon,
+  review: ClipboardListIcon,
+  attention: AlertTriangleIcon,
+  done: CheckCircle2Icon,
+  closed: XCircleIcon,
 };
 
 function InspectionRow({ item }: { item: Inspection }) {
   const urgency = useInspectionUrgency(item);
-  const config = STATUS_CONFIG[item.status] ?? {
-    label: item.status.replaceAll('_', ' '),
-    bg: 'bg-muted',
-    text: 'text-muted-foreground',
-    icon: ClipboardListIcon,
+  const presentation = inspectionStatusPresentation(item.status);
+  const config = {
+    ...INSPECTION_STATUS_TONE_CLASS[presentation.tone],
+    label: presentation.label,
   };
-  const StatusIcon = config.icon;
+  const StatusIcon = TONE_ICON[presentation.tone];
   return (
     <Pressable
       // Read as one item. Left ungrouped, VoiceOver stops six times per card —
@@ -140,12 +145,17 @@ export default function InspectionsScreen() {
   const pull = usePullToRefresh([inspections.refetch]);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const [filter, setFilter] = useState<'ALL' | InspectionStatus>('ALL');
+  const [filter, setFilter] = useState<'ALL' | InspectionStatus | 'SUBMITTED'>('ALL');
   const [search, setSearch] = useState('');
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return (inspections.data ?? []).filter((item) => {
-      if (filter !== 'ALL' && item.status !== filter) return false;
+      // SUBMITTED is a group rather than a status: it catches everything handed
+      // to the office, so work does not vanish from the tabs the moment it is
+      // submitted. COMPLETED stays its own chip and is a subset of it.
+      if (filter === 'SUBMITTED') {
+        if (!isSubmittedToOffice(item.status)) return false;
+      } else if (filter !== 'ALL' && item.status !== filter) return false;
       if (!query) return true;
       return [
         item.property.address,
