@@ -1708,6 +1708,11 @@ export class AdminService {
         ...(query.inspectionStatus ? { status: query.inspectionStatus as InspectionStatus } : {}),
       },
       ...(query.technicianId ? { technicianId: query.technicianId } : {}),
+      // Only assignments actually in force, unless history is asked for. A
+      // reassignment leaves the previous row behind; listing it beside the new
+      // one showed two technicians on one inspection and disagreed with the
+      // mobile app, which has always filtered on isCurrent.
+      ...(query.includeSuperseded === 'true' ? {} : { isCurrent: true }),
       ...(query.assignmentStatus && query.assignmentStatus !== 'UNASSIGNED'
         ? { status: query.assignmentStatus }
         : {}),

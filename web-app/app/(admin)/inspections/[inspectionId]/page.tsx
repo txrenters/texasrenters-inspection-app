@@ -54,6 +54,10 @@ export default function InspectionDetailPage() {
   const assignments = useAssignments({
     inspectionId: id,
     includeUnassigned: false,
+    // This panel is the assignment *history*, so it wants the superseded rows
+    // the work lists deliberately hide — who held this inspection before, and
+    // when it changed hands.
+    includeSuperseded: true,
     page: assignmentPage,
     pageSize: 20,
   });

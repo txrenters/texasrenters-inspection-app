@@ -268,6 +268,17 @@ export class AssignmentListQueryDto extends PaginationDto {
   @IsOptional() @IsDateString() from?: string;
   @IsOptional() @IsDateString() to?: string;
   @IsOptional() @IsIn(['true', 'false']) includeUnassigned?: string;
+  /**
+   * Include assignments that have been superseded or ended.
+   *
+   * Off by default, so "assignments" means the ones that are actually in force.
+   * The endpoint used to return every row ever written, which is right for the
+   * history panel on an inspection and wrong everywhere else — after a
+   * reassignment the work list showed the previous technician alongside the
+   * current one, while the mobile app showed only the current one, and the two
+   * appeared not to agree.
+   */
+  @IsOptional() @IsIn(['true', 'false']) includeSuperseded?: string;
 }
 
 export class AuditListQueryDto extends PaginationDto {}

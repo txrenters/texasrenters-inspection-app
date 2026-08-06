@@ -807,3 +807,56 @@ describe('technician account provisioning', () => {
     });
   });
 });
+
+describe('which assignments a work list shows', () => {
+  function harness() {
+    const prisma = {
+      inspectionAssignment: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      // Answered rather than left undefined: without `includeUnassigned:false`
+      // the service also lists inspections that have no assignment at all, and
+      // that is the default path these tests are meant to exercise.
+      inspection: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+    };
+    return { prisma, service: new AdminService(prisma as never) };
+  }
+  const whereOf = (prisma: { inspectionAssignment: { findMany: jest.Mock } }) =>
+    prisma.inspectionAssignment.findMany.mock.calls[0][0].where as Record<string, unknown>;
+
+  it('lists only assignments actually in force by default', async () => {
+    // The endpoint used to return every row ever written, so after a
+    // reassignment the work list showed the previous technician beside the
+    // current one while the mobile app showed only the current one — the two
+    // appeared not to agree about who owned the inspection.
+    const { prisma, service } = harness();
+    await service.assignments(user, { page: 1, pageSize: 20 });
+    expect(whereOf(prisma).isCurrent).toBe(true);
+  });
+
+  it('returns superseded rows when history is asked for', async () => {
+    // The inspection detail panel is a history: who held this before, and when
+    // it changed hands.
+    const { prisma, service } = harness();
+    await service.assignments(user, { page: 1, pageSize: 20, includeSuperseded: 'true' });
+    expect(whereOf(prisma)).not.toHaveProperty('isCurrent');
+  });
+
+  it('treats anything other than an explicit "true" as current-only', async () => {
+    // The filter is the safe default, so a malformed or absent value must not
+    // silently widen the list back to every assignment ever made.
+    for (const includeSuperseded of [undefined, 'false']) {
+      const { prisma, service } = harness();
+      await service.assignments(user, { page: 1, pageSize: 20, includeSuperseded });
+      expect(whereOf(prisma).isCurrent).toBe(true);
+    }
+  });
+
+  it('still narrows by technician alongside the current-only filter', async () => {
+    // A technician's page must not gain their historical assignments back.
+    const { prisma, service } = harness();
+    await service.assignments(user, { page: 1, pageSize: 20, technicianId: 'tech-1' });
+    expect(whereOf(prisma)).toMatchObject({ isCurrent: true, technicianId: 'tech-1' });
+  });
+});
