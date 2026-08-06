@@ -310,6 +310,21 @@ export interface UploadItem {
   lastError?: string;
   attemptCount?: number;
   nextAttemptAt?: string;
+  // --- Cloudflare Stream resumable upload ---
+  // Absent until a session exists, and absent forever on a build with no
+  // Cloudflare credentials, where the multipart path still runs.
+  streamUid?: string;
+  serverVideoId?: string;
+  uploadUrl?: string;
+  uploadUrlExpiresAt?: string;
+  /**
+   * Bytes Cloudflare has confirmed, not bytes this device believes it sent.
+   *
+   * `progress` above is a percentage for display; this is what an interrupted
+   * upload resumes from, which is why it is stored separately and in bytes.
+   */
+  uploadedBytes?: number;
+  fileSize?: number;
   processingStatus: ProcessingStatus;
   processingProgress: number;
   createdAt: string;

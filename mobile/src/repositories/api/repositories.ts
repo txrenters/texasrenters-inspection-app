@@ -26,6 +26,10 @@ import type {
   UploadRepository,
 } from '../contracts';
 import { queueOnConnectionFailure } from './offline-writes';
+import {
+  runStreamUpload,
+  type StreamUploadSession,
+} from '../../media/stream-upload-runner';
 import { resolveApiUrl } from '@texasrenters/shared';
 import { z } from 'zod';
 
@@ -216,6 +220,44 @@ const inspectionContextSchema = z.object({
   rooms: z.array(roomSchema),
   pendingReviewCount: z.number(),
 });
+/**
+ * Ask the backend to reserve a direct-to-Cloudflare upload.
+ *
+ * Returns null when the deployment has no Stream credentials, which the runner
+ * reads as "keep using the multipart path" rather than as a failure. Everything
+ * else throws, because a technician standing in a unit needs the upload retried,
+ * not silently downgraded.
+ */
+async function createStreamUploadSession(input: {
+  baseUrl: string;
+  accessToken: string;
+  inspectionAreaId: string;
+  recordingType: string;
+  filename: string;
+  mimeType: string;
+  fileSize: number;
+  durationSeconds: number;
+  localQueueId: string;
+  idempotencyKey: string;
+}): Promise<StreamUploadSession | null> {
+  const { baseUrl, accessToken, ...body } = input;
+  const response = await fetch(resolveApiUrl(baseUrl, '/api/v1/inspection-videos/upload-session'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'ngrok-skip-browser-warning': 'true',
+    },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 503) return null;
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(detail?.message ?? 'The upload could not be started.');
+  }
+  return (await response.json()) as StreamUploadSession;
+}
+
 const reportSchema = z.object({
   inspection: inspectionSchema,
   property: propertySchema,
@@ -821,7 +863,74 @@ export class ApiUploadRepository implements UploadRepository {
       const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
       if (!baseUrl)
         throw new Error('The TexasRenters API URL is not configured for this app build.');
-      store.updateUpload(pending.id, { status: 'UPLOADING', progress: 0, lastError: undefined });
+      store.updateUpload(pending.id, {
+        status: 'UPLOADING',
+        // Resuming, so progress starts where Cloudflare confirmed it, not at 0.
+        progress: pending.uploadedBytes && pending.fileSize ? pending.progress : 0,
+        lastError: undefined,
+      });
+
+      // Cloudflare Stream first: the bytes go device → Cloudflare and never
+      // through this backend. `unavailable` means the deployment has no Stream
+      // credentials yet, in which case the original multipart path below still
+      // runs — video capture must not stop while an account is being set up.
+      const streamOutcome = await runStreamUpload({
+        item: pending,
+        localUri: media.uri,
+        fileSize: fileInfo.size ?? 0,
+        mimeType: 'video/mp4',
+        filename: `${pending.roomName || 'recording'}.mp4`.replace(/\s+/g, '-').toLowerCase(),
+        signal: undefined,
+        createSession: () =>
+          createStreamUploadSession({
+            baseUrl,
+            accessToken: data.session.access_token,
+            inspectionAreaId: pending.roomId,
+            recordingType: pending.recordingType ?? 'PRIMARY_AREA',
+            filename: `${pending.roomName || 'recording'}.mp4`,
+            mimeType: 'video/mp4',
+            fileSize: fileInfo.size ?? 0,
+            durationSeconds: Math.max(1, Math.round(media.durationSeconds)),
+            localQueueId: pending.id,
+            idempotencyKey: media.id,
+          }),
+        persist: (patch) => store.updateUpload(pending.id, patch),
+      });
+
+      if (streamOutcome.kind === 'uploaded') {
+        // Uploaded, not ready: Cloudflare still has to encode it. Claiming
+        // completion here would tell a technician their evidence was viewable
+        // when it is not.
+        store.updateUpload(pending.id, {
+          status: 'COMPLETED',
+          progress: 100,
+          // The transfer is done; the video is not. VIDEO_PROCESSING is the
+          // existing vocabulary for "Cloudflare still has work to do", and
+          // saying READY here would show a technician a playable recording that
+          // is not yet playable.
+          processingStatus: 'VIDEO_PROCESSING',
+          lastError: undefined,
+        });
+        return true;
+      }
+      if (streamOutcome.kind === 'failed') {
+        store.updateUpload(pending.id, {
+          status: streamOutcome.retryable ? 'PENDING' : 'FAILED',
+          lastError: streamOutcome.message,
+          attemptCount: (pending.attemptCount ?? 0) + 1,
+          // Same curve as `deferForRetry`, but progress is deliberately not
+          // reset: the bytes Cloudflare confirmed are still there, and showing
+          // 0% would tell a technician a 40-minute upload had been thrown away.
+          ...(streamOutcome.retryable
+            ? {
+                nextAttemptAt: new Date(
+                  Date.now() + Math.min(60, 2 ** Math.min((pending.attemptCount ?? 0) + 1, 6)) * 1_000,
+                ).toISOString(),
+              }
+            : {}),
+        });
+        return true;
+      }
       // Additional labeled clips post to a separate endpoint that keeps the
       // primary walkthrough intact and carries the label/category metadata.
       const isAdditional = pending.recordingType === 'ADDITIONAL_ISSUE';
