@@ -49,6 +49,7 @@ import { useRoom } from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
+import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
 import { uploadRoomPhoto } from '@/src/media/photo-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
@@ -100,7 +101,9 @@ export default function RoomCameraScreen() {
   const captureSessionIdRef = useRef(newCaptureSessionId());
   const sessionStartedAtRef = useRef(new Date().toISOString());
   const snapshotTypesRef = useRef<PhotoCaptureType[]>([]);
-  // Video offsets the technician marked while recording, extracted server-side.
+  // Video offsets the technician marked while recording. Turned into photos on
+  // this device once recording stops — Android cannot photograph mid-video, and
+  // a Stream recording never reaches the backend for server-side extraction.
   const frameMarkersRef = useRef<number[]>([]);
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
@@ -278,6 +281,46 @@ export default function RoomCameraScreen() {
       });
       if (!result || !mountedRef.current) return;
       const stored = persistRecording(result.uri, inspectionId, areaId);
+
+      // Turn the moments marked during the walkthrough into real photos.
+      //
+      // Only Android reaches this with markers pending: iOS took a native still
+      // at each one already. The server used to cut these frames with ffmpeg,
+      // but a Cloudflare Stream recording never reaches the backend, so doing it
+      // here is what keeps the two platforms producing the same evidence.
+      //
+      // Runs now, while the file is still on the device — after cleanup the
+      // frames are unrecoverable. Failures are reported, never fatal: a frame
+      // that will not decode must not cost a finished walkthrough.
+      if (frameMarkersRef.current.length) {
+        const { stills, failures } = await extractMarkerStills(
+          stored.uri,
+          pairMarkers(frameMarkersRef.current, snapshotTypesRef.current),
+        );
+        for (const [index, still] of stills.entries()) {
+          const persisted = persistRoomSnapshot(still.uri, inspectionId, areaId);
+          addSnapshot(
+            buildRoomSnapshot({
+              ownerUserId,
+              inspectionId,
+              roomId: areaId,
+              uri: persisted.uri,
+              width: still.width,
+              height: still.height,
+              sizeBytes: persisted.sizeBytes,
+              captureType: still.captureType,
+              recordingSessionId: captureSessionIdRef.current,
+              videoTimestampMs: still.videoTimestampMs,
+              captureSource: 'VIDEO_FRAME_EXTRACTION',
+              sequenceNumber: photoCount + index + 1,
+            }),
+          );
+        }
+        if (failures.length)
+          announce(
+            `${failures.length} marked moment${failures.length === 1 ? '' : 's'} could not be saved as a photo. The recording is unaffected.`,
+          );
+      }
       setDraft(
         buildRecordingDraft({
           ownerUserId,
