@@ -62,13 +62,12 @@ export function RoleEditorDialog({
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      {/* Bounded and column-laid, so the permission catalogue scrolls inside
-          the dialog instead of growing it past the viewport. There are two
-          dozen permissions across six groups; unbounded, the title scrolled off
-          the top of the screen and Save was somewhere below the fold with no
-          way to reach it. */}
-      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-3xl">
-        <form onSubmit={(event) => void submit(event)} className="flex min-h-0 flex-col gap-4">
+      {/* Only the width is overridden. DialogContent lays its children out as a
+          grid and shadcn's scrollable-content pattern works with that rather
+          than against it, so there is nothing here to make the scrolling work —
+          the bound lives on the scroll region itself, below. */}
+      <DialogContent className="sm:max-w-3xl">
+        <form onSubmit={(event) => void submit(event)} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit role' : 'Create role'}</DialogTitle>
             <DialogDescription>
@@ -76,7 +75,6 @@ export function RoleEditorDialog({
               granted until you assign this role to a user.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4">
           <div className="form-grid">
             <Field>
               <FieldLabel htmlFor="role-name">Role name</FieldLabel>
@@ -103,11 +101,25 @@ export function RoleEditorDialog({
             </Field>
           </div>
 
-          {/* The only part that scrolls. min-h-0 is load-bearing: a flex child
-              defaults to min-height:auto and refuses to shrink below its
-              content, so without it the list pushes the dialog open again and
-              the overflow never engages. */}
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          {/* The only part that scrolls — shadcn's scrollable-content pattern.
+              Two dozen permissions across six groups otherwise grow the dialog
+              taller than the screen, and since the primitive centres itself
+              with a -50% translate it bleeds off the top and the bottom at
+              once: the title above the viewport, Save below it, neither
+              reachable.
+
+              The max-height has to be an explicit length. `flex-1` only
+              resolves to a height through an unbroken chain of flex parents
+              carrying min-h-0, which is fragile and was in fact already broken
+              here; a fixed bound needs no such chain and scrolls as a plain
+              grid item.
+
+              -mx-6/px-6 cancels the dialog's own p-6 and reapplies it inside,
+              so the scrollbar rides the dialog edge instead of floating in the
+              padding. shadcn adds `no-scrollbar` here; we deliberately don't —
+              with a list this long the scrollbar is the only thing announcing
+              there is more below, which is the bug this is fixing. */}
+          <div className="-mx-6 max-h-[50vh] overflow-y-auto px-6">
           {catalog.isLoading ? (
             <p className="text-[13px] text-muted-foreground">Loading permissions…</p>
           ) : catalog.data ? (
@@ -162,7 +174,6 @@ export function RoleEditorDialog({
               {mutation.isPending ? 'Saving…' : editing ? 'Save role' : 'Create role'}
             </button>
           </DialogFooter>
-          </div>
         </form>
       </DialogContent>
     </Dialog>
