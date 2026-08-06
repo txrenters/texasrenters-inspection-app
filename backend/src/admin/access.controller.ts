@@ -32,6 +32,7 @@ import {
   UpdateUserStatusDto,
 } from './access.dto';
 import { AccessService } from './access.service';
+import { ProfileDeletionService } from './profile-deletion.service';
 
 /**
  * User management and fully-customizable RBAC. Every route is permission-gated
@@ -43,7 +44,10 @@ import { AccessService } from './access.service';
 @UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller('admin/access')
 export class AccessController {
-  constructor(@Inject(AccessService) private readonly service: AccessService) {}
+  constructor(
+    @Inject(AccessService) private readonly service: AccessService,
+    @Inject(ProfileDeletionService) private readonly deletion: ProfileDeletionService,
+  ) {}
 
   @Get('permissions')
   @RequirePermissions('roles:read')
@@ -131,5 +135,22 @@ export class AccessController {
     @Body() body: SetUserRolesDto,
   ) {
     return this.service.setUserRoles(request.user, id, body);
+  }
+
+  /**
+   * What deleting this user would cost, so the confirmation can state it.
+   * Read-only, and gated on `users:manage` rather than `users:read` because it
+   * exists only to serve a destructive action.
+   */
+  @Get('users/:id/deletion-preflight')
+  @RequirePermissions('users:manage')
+  userDeletionPreflight(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.deletion.preflight(request.user, id, 'CONSOLE');
+  }
+
+  @Delete('users/:id')
+  @RequirePermissions('users:manage')
+  deleteUser(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.deletion.remove(request.user, id, 'CONSOLE');
   }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertDialog,
@@ -18,6 +18,7 @@ import { Alert } from '@/components/ui/alert';
 import { buttonVariants } from '@/components/ui/button';
 
 import { Badge, ErrorState, LoadingState, PageHeader, formatDate } from '@/components/shared';
+import { DeleteAccountDialog } from '@/components/delete-account-dialog';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { usePermissions } from '@/lib/auth';
 import { formatPermission } from '@/lib/access';
@@ -25,11 +26,12 @@ import { useRoles, useUser, useAccessMutations } from '@/lib/queries';
 
 export default function UserDetailPage() {
   const id = useParams<{ userId: string }>().userId;
+  const router = useRouter();
   const { has } = usePermissions();
   const canManage = has('users:manage');
   const user = useUser(id);
   const roles = useRoles({ page: 1, pageSize: 100 });
-  const { setUserRoles, updateUserStatus } = useAccessMutations();
+  const { setUserRoles, updateUserStatus, deleteUser } = useAccessMutations();
 
   const [roleIds, setRoleIds] = useState<Set<string>>(new Set());
 
@@ -76,6 +78,17 @@ export default function UserDetailPage() {
     }
   }
 
+  async function remove() {
+    try {
+      await deleteUser.mutateAsync(id);
+      // This page is about a record that no longer exists.
+      router.push('/users');
+    } catch {
+      // The dialog renders the sanitized API error, including the reason the
+      // account could not be deleted, so the confirmation stays open.
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -84,6 +97,7 @@ export default function UserDetailPage() {
         breadcrumbs={[{ label: 'Users', href: '/users' }, { label: 'Detail' }]}
         action={
           canManage && !item.isSystemAdmin ? (
+            <div className="action-row">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <button
@@ -117,6 +131,15 @@ export default function UserDetailPage() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+            <DeleteAccountDialog
+              scope="CONSOLE"
+              id={id}
+              displayName={item.displayName}
+              isPending={deleteUser.isPending}
+              error={deleteUser.error}
+              onDelete={remove}
+            />
+            </div>
           ) : undefined
         }
       />

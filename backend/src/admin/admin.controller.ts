@@ -82,6 +82,7 @@ import { ChargeService } from './charge.service';
 import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
 import { AreaEvidenceService } from './area-evidence.service';
+import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 import type { ComparisonClassification } from '@prisma/client';
@@ -101,6 +102,7 @@ export class AdminController {
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
+    private readonly profileDeletion: ProfileDeletionService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -665,6 +667,26 @@ export class AdminController {
     @Body() body: TechnicianStatusDto,
   ) {
     return this.service.updateTechnicianStatus(request.user, id, body);
+  }
+
+  /**
+   * What deleting this technician would cost. The ongoing-inspection count
+   * drives the confirmation: those are released back to the unassigned pool,
+   * and an administrator should know how many before agreeing to it.
+   */
+  @Get('technicians/:technicianId/deletion-preflight')
+  @RequirePermissions('technicians:manage')
+  technicianDeletionPreflight(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+  ) {
+    return this.profileDeletion.preflight(request.user, id, 'TECHNICIAN');
+  }
+
+  @Delete('technicians/:technicianId')
+  @RequirePermissions('technicians:manage')
+  deleteTechnician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
+    return this.profileDeletion.remove(request.user, id, 'TECHNICIAN');
   }
 
   @Get('integrations/providers/status')

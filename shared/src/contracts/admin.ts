@@ -277,6 +277,60 @@ export interface AdminBulkDeleteResult {
   deletedAt: string;
 }
 
+/**
+ * One reason an account cannot be deleted, with the count that makes it
+ * concrete. "Cannot delete this technician" is not actionable; "42 video
+ * captures, 8 approved findings" tells an administrator what they would be
+ * erasing and why deactivating is the right action instead.
+ */
+export interface AccountDeletionBlocker {
+  kind:
+    | 'MEDIA_CAPTURED'
+    | 'PHOTOS_CAPTURED'
+    | 'FINDINGS_REVIEWED'
+    | 'INSPECTIONS_FINALIZED'
+    | 'REPORTS_SHARED'
+    | 'WORK_ASSIGNED_TO_OTHERS';
+  count: number;
+  label: string;
+}
+
+/**
+ * What deleting an account would destroy and what it would release, resolved
+ * before anything is destroyed so the confirmation can state consequences
+ * rather than ask for a leap of faith.
+ */
+export interface AccountDeletionPreflight {
+  id: string;
+  displayName: string;
+  email: string;
+  /** False when any blocker is present. Deactivation is always available. */
+  canDelete: boolean;
+  /** Evidence that must stay attributed. Non-empty means deletion is refused. */
+  blockers: AccountDeletionBlocker[];
+  /**
+   * Given up on delete. Assignments are scheduling, not evidence: releasing
+   * them returns each inspection to the unassigned pool for reassignment.
+   */
+  releases: {
+    ongoingInspections: number;
+    totalAssignments: number;
+    roleAssignments: number;
+    mobileDevices: number;
+  };
+}
+
+export interface AccountDeletionResult extends AdminDeleteResult {
+  /** Inspections handed back to the pool, so the caller can say how many. */
+  releasedInspections: number;
+  /**
+   * False when the profile was removed but the sign-in identity outlived it —
+   * the address stays claimed upstream and cannot be re-provisioned until an
+   * administrator clears it.
+   */
+  identityRemoved: boolean;
+}
+
 export interface AdminUnit {
   id: string;
   externalId: string;

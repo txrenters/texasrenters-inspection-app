@@ -15,6 +15,7 @@ import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
 import { AreaEvidenceService } from './area-evidence.service';
+import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
 import {
@@ -36,6 +37,7 @@ import {
     FloorPlanExtractionService,
     FloorPlanStorageService,
     InspectionMediaStorageService,
+    ProfileDeletionService,
     ReportShareService,
     TechnicianProvisioningService,
     SupabaseAdminGateway,

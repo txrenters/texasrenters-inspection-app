@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
   AlertDialog,
@@ -29,22 +29,34 @@ import {
   TableLoadingState,
   formatDate,
 } from '@/components/shared';
+import { DeleteAccountDialog } from '@/components/delete-account-dialog';
 import { usePermissions } from '@/lib/auth';
 import { useAdminMutations, useAssignments, useTechnician } from '@/lib/queries';
 
 export default function TechnicianDetailPage() {
   const id = useParams<{ technicianId: string }>().technicianId;
+  const router = useRouter();
   const canManage = usePermissions().has('technicians:manage');
   const [assignmentPage, setAssignmentPage] = useState(1);
   const technician = useTechnician(id);
   const assignments = useAssignments({ technicianId: id, page: assignmentPage, pageSize: 20 });
-  const mutation = useAdminMutations().updateTechnician;
+  const { updateTechnician: mutation, deleteTechnician: remove } = useAdminMutations();
   if (technician.isLoading) return <LoadingState label="Loading technician…" />;
   if (technician.isError)
     return <ErrorState error={technician.error} retry={() => void technician.refetch()} />;
   const item = technician.data!;
   async function toggle() {
     await mutation.mutateAsync({ id, isActive: !item.isActive });
+  }
+  async function deleteTechnician() {
+    try {
+      await remove.mutateAsync(id);
+      // This page is about a record that no longer exists.
+      router.push('/technicians');
+    } catch {
+      // The dialog renders the sanitized API error, including the reason the
+      // account could not be deleted, so the confirmation stays open.
+    }
   }
   return (
     <>
@@ -54,6 +66,7 @@ export default function TechnicianDetailPage() {
         breadcrumbs={[{ label: 'Technicians', href: '/technicians' }, { label: item.displayName }]}
         action={
           canManage ? (
+            <div className="action-row">
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <button
@@ -87,6 +100,15 @@ export default function TechnicianDetailPage() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+            <DeleteAccountDialog
+              scope="TECHNICIAN"
+              id={id}
+              displayName={item.displayName}
+              isPending={remove.isPending}
+              error={remove.error}
+              onDelete={deleteTechnician}
+            />
+            </div>
           ) : undefined
         }
       />
