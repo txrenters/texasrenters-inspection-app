@@ -62,3 +62,28 @@ services:
   web:
     ports:
       - '${WEB_PORT:-5454}:${WEB_PORT:-5454}'
+
+  # A database browser, local development only.
+  #
+  # Deliberately not in compose.yaml: this is an unauthenticated door to any
+  # database it can reach, and it has no business existing in remote-beta or
+  # anywhere else that is reachable from outside this machine.
+  #
+  # No `postgres` service is defined alongside it and no depends_on is set —
+  # this stack already has one, and Adminer connects to whatever server is typed
+  # at its login screen, including the remote database this app actually uses.
+  #
+  # Bound to 127.0.0.1 rather than every interface. `8090:8080` would publish a
+  # credential-accepting admin tool to the whole LAN, which on a café or office
+  # network means anyone on it can reach a form that talks to production.
+  adminer:
+    image: adminer:5
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${ADMINER_PORT:-8090}:8080'
+    environment:
+      # Prefills the Server field. `postgres` is the container in this stack,
+      # which is NOT where the application's data lives — see the note in
+      # README about connecting to the real database instead.
+      ADMINER_DEFAULT_SERVER: ${ADMINER_DEFAULT_SERVER:-postgres}
+      ADMINER_DESIGN: dracula

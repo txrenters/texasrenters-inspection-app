@@ -99,6 +99,23 @@ A subtle Demo Mode banner remains visible. Settings shows `Data source: Mock rep
 
 Important demo state persists locally through Zustand using SecureStore on native platforms. To restore the initial dataset, open **Settings → Reset demo data** and confirm. This clears the selected user, room changes, notes, local media, uploads, failures, and finding decisions.
 
+## Browsing the database
+
+ starts a database browser at
+<http://127.0.0.1:8090>. It is local-development only — defined in
+, never in the base file — and bound to 127.0.0.1, so a
+tool that accepts database credentials is not published to the network the
+workstation happens to be on.
+
+**Connect to the database the application actually uses, not the container.** This stack runs a local Postgres, but  points at
+hosted Supabase; connecting to the container shows an unrelated and largely
+empty database, which looks alarmingly like data loss.
+
+Read the values from :
+
+\
+Set  to prefill the Server field, and if 8090 is taken.
+
 ## Repository switching
 
 The mobile configuration is intentionally non-throwing:
