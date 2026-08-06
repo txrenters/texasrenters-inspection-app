@@ -23,6 +23,7 @@ import { AiProviderSettingsService } from '../admin/ai-provider-settings.service
 import { ComparisonService } from '../admin/comparison.service';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
+import { deepgramApiKey, requestDeepgramTranscription } from './deepgram-transcription';
 
 const PROMPT_VERSION = '2';
 const SCHEMA_VERSION = '1';
@@ -289,7 +290,10 @@ export class MediaProcessingService implements OnModuleInit {
     media: {
       id: string;
       providerMediaId: string;
-      storageKey: string;
+      // Null for a Stream-backed recording, whose audio is fetched from
+      // Cloudflare rather than from the bucket. Transcription for those is not
+      // wired yet, so this path refuses rather than reading a null key.
+      storageKey: string | null;
       mimeType: string;
       durationSeconds: number;
       organizationId: string;
@@ -300,44 +304,74 @@ export class MediaProcessingService implements OnModuleInit {
     },
     organizationId: string,
   ) {
-    const configuration = await this.aiSettings
-      .resolve(organizationId, AiProvider.OPENAI)
-      .catch(() => null);
-    if (!configuration)
+    // Deepgram when the backend has a key, OpenAI otherwise.
+    //
+    // Resolved before anything else because the two need different credentials:
+    // requiring an OpenAI key here is what made a Deepgram-only deployment
+    // refuse to transcribe at all, with a message naming a provider it was not
+    // going to use.
+    const deepgramKey = deepgramApiKey();
+    const configuration = deepgramKey
+      ? null
+      : await this.aiSettings.resolve(organizationId, AiProvider.OPENAI).catch(() => null);
+    if (!deepgramKey && !configuration)
       throw new ApplicationError(
         503,
         'TRANSCRIPTION_NOT_CONFIGURED',
-        'Video transcription requires a configured OpenAI API key in Settings → AI operations.',
+        'Video transcription needs either DEEPGRAM_API_KEY on the backend or an OpenAI API key in Settings → AI operations.',
       );
+    const provider = deepgramKey ? 'deepgram' : 'openai';
     const job = await this.prisma.transcriptionJob.upsert({
       where: { inspectionMediaId: media.id },
       create: {
         inspectionMediaId: media.id,
         status: TranscriptionStatus.RUNNING,
-        provider: 'openai',
+        provider,
       },
-      update: { status: TranscriptionStatus.RUNNING, provider: 'openai' },
+      update: { status: TranscriptionStatus.RUNNING, provider },
     });
     try {
-      const video = await this.storage.get(media.storageKey);
+      // Transcription still reads the bucket. A Stream-backed recording has no
+      // bucket object, and pulling its audio back out of Cloudflare is a
+      // separate piece of work — refusing here is honest, where reading a null
+      // key would fail deeper with an error that named neither cause nor video.
+      if (!media.storageKey)
+        throw new ApplicationError(
+          501,
+          'TRANSCRIPTION_SOURCE_UNAVAILABLE',
+          'Transcription is not yet wired for Cloudflare Stream recordings.',
+        );
+      const storageKey = media.storageKey;
+      const video = await this.storage.get(storageKey);
       // Generated here because the video bytes are already in memory for audio
       // extraction; fetching them again just for a poster frame would be wasteful.
-      await this.generateThumbnail(video, media.mimeType, media.storageKey);
+      await this.generateThumbnail(video, media.mimeType, storageKey);
       // Same bytes, same trip: stills the technician marked while recording.
       await this.extractMarkerFrames(video, media);
       const audio = await this.extractAudio(video, media.mimeType);
-      const transcript = await this.requestTranscription(configuration.apiKey, audio);
+      const result = deepgramKey
+        ? await requestDeepgramTranscription(deepgramKey, audio, media.durationSeconds)
+        : {
+            text: await this.requestTranscription(configuration!.apiKey, audio),
+            // OpenAI's JSON response carries no timings, so there is nothing
+            // honest to segment by.
+            segments: null,
+            language: null,
+          };
+      const transcript = result.text;
+      // Real per-utterance timings when the provider supplies them. The single
+      // whole-recording segment below is the fallback, and it is why an AI
+      // finding's timestamp used to be a guess — a reviewer seeking to it
+      // landed at the start of the video every time.
+      const segments = result.segments ?? [
+        { startSeconds: 0, endSeconds: media.durationSeconds, text: transcript },
+      ];
       await this.prisma.$transaction([
         this.prisma.transcriptSegment.deleteMany({
           where: { transcriptionJobId: job.id },
         }),
-        this.prisma.transcriptSegment.create({
-          data: {
-            transcriptionJobId: job.id,
-            startSeconds: 0,
-            endSeconds: media.durationSeconds,
-            text: transcript,
-          },
+        this.prisma.transcriptSegment.createMany({
+          data: segments.map((segment) => ({ transcriptionJobId: job.id, ...segment })),
         }),
       ]);
       await this.prisma.transcriptionJob.update({

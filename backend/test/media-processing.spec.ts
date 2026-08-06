@@ -81,6 +81,9 @@ describe('media processing pipeline', () => {
       id: 'media-1',
       inspectionId: 'inspection-1',
       providerMediaId: 'local-key',
+      // Present in the real select; a Stream-backed row has none, and the
+      // pipeline refuses those rather than reading a null key.
+      storageKey: 'inspection-media/org-1/media-1.mp4',
       mimeType: 'video/mp4',
       durationSeconds: 90,
       processingStatus: 'PENDING',
@@ -106,7 +109,9 @@ describe('media processing pipeline', () => {
       },
       transcriptSegment: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-        create: jest.fn().mockResolvedValue({}),
+        // createMany since transcription gained real per-utterance segments:
+        // a provider that reports timings writes several rows, not one.
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       aiAnalysisJob: {
         create: jest.fn().mockResolvedValue({ id: 'job-1' }),
@@ -164,13 +169,17 @@ describe('media processing pipeline', () => {
     await service.process('media-1', ORGANIZATION_ID);
 
     expect(prisma.inspectionFinding.createMany).toHaveBeenCalledTimes(1);
-    expect(prisma.transcriptSegment.create).toHaveBeenCalledWith({
-      data: {
-        transcriptionJobId: 'transcription-1',
-        startSeconds: 0,
-        endSeconds: 90,
-        text: 'There is a scuff mark on the wall near the window.',
-      },
+    // No DEEPGRAM_API_KEY in this test, so the OpenAI path runs and reports no
+    // timings — the whole narration is stored as one whole-recording segment.
+    expect(prisma.transcriptSegment.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          transcriptionJobId: 'transcription-1',
+          startSeconds: 0,
+          endSeconds: 90,
+          text: 'There is a scuff mark on the wall near the window.',
+        },
+      ],
     });
     expect(
       prisma.mediaProcessingEvent.create.mock.calls.find(
@@ -210,6 +219,7 @@ describe('media processing pipeline', () => {
           id: 'media-1',
           inspectionId: 'inspection-1',
           providerMediaId: 'local-key',
+          storageKey: 'inspection-media/org-1/media-1.mp4',
           mimeType: 'video/mp4',
           durationSeconds: 90,
           processingStatus: 'PENDING',
