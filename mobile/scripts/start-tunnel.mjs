@@ -130,13 +130,29 @@ async function verifyBackend(publicUrl) {
   // the device may never touch.
   const localHealthy = await backendRespondsLocally();
   if (localHealthy) {
+    // A 502 and a timeout look alike in the summary and mean opposite things.
+    //
+    // A timeout is the edge being slow, and the device may well be fine. A 502
+    // is the edge answering promptly to say the *gateway* could not reach its
+    // upstream — nothing about that improves by waiting, and the device will
+    // fail exactly the same way. Calling both "most likely a slow ngrok edge"
+    // sent people to restart a tunnel that was working.
+    const gatewayRejected = lastReason === 'HTTP 502' || lastReason === 'HTTP 503';
     console.warn(
       `\n  Warning: ${healthUrl} did not respond from this machine after ` +
         `${attempts} attempts (${lastReason}).\n` +
-        '  The backend is healthy on http://127.0.0.1:3000, so this is most likely a slow\n' +
-        '  ngrok edge rather than a broken tunnel. Starting Metro anyway — if the device\n' +
-        '  cannot reach the API, restart the gateway:\n' +
-        '    pnpm remote-beta:stop && pnpm remote-beta\n',
+        (gatewayRejected
+          ? '  The backend is healthy on http://127.0.0.1:3000, so the tunnel reached the\n' +
+            '  gateway and the gateway could not reach the backend. The usual cause is a\n' +
+            '  rebuilt backend container: nginx caches the address it resolved at startup,\n' +
+            '  so it keeps dialling the old one. The device will fail the same way.\n\n' +
+            '  Check what it is dialling, and reload:\n' +
+            '    docker logs texasrenters-gateway-1 --tail 20\n' +
+            '    docker exec texasrenters-gateway-1 nginx -s reload\n'
+          : '  The backend is healthy on http://127.0.0.1:3000, so this is most likely a slow\n' +
+            '  ngrok edge rather than a broken tunnel — the device may reach it fine.\n' +
+            '  Starting Metro anyway. If the device cannot reach the API, restart the gateway:\n' +
+            '    pnpm remote-beta:stop && pnpm remote-beta\n'),
     );
     return;
   }
