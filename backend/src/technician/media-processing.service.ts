@@ -23,7 +23,12 @@ import { AiProviderSettingsService } from '../admin/ai-provider-settings.service
 import { ComparisonService } from '../admin/comparison.service';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
-import { deepgramApiKey, requestDeepgramTranscription } from './deepgram-transcription';
+import {
+  deepgramApiKey,
+  requestDeepgramTranscription,
+  requestDeepgramTranscriptionFromUrl,
+} from './deepgram-transcription';
+import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 
 const PROMPT_VERSION = '2';
 const SCHEMA_VERSION = '1';
@@ -150,6 +155,9 @@ export class MediaProcessingService implements OnModuleInit {
     private readonly storage: InspectionMediaStorageService,
     @Inject(AiProviderSettingsService) private readonly aiSettings: AiProviderSettingsService,
     @Optional() @Inject(ComparisonService) private readonly comparison?: ComparisonService,
+    // Optional so the pipeline still constructs on a deployment with no
+    // Cloudflare account, where every recording is bucket-backed anyway.
+    @Optional() @Inject(CloudflareStreamService) private readonly stream?: CloudflareStreamService,
   ) {}
 
   /** Recover recordings that were uploaded before this pipeline existed or
@@ -201,6 +209,9 @@ export class MediaProcessingService implements OnModuleInit {
           inspectionId: true,
           providerMediaId: true,
           storageKey: true,
+          // Present only for a Cloudflare Stream recording, which has no bucket
+          // object and is transcribed from a signed provider URL instead.
+          streamUid: true,
           mimeType: true,
           durationSeconds: true,
           processingStatus: true,
@@ -286,14 +297,71 @@ export class MediaProcessingService implements OnModuleInit {
     return { queued: true, processingStatus: MediaProcessingStatus.PROCESSING };
   }
 
+  /**
+   * Transcribe a Cloudflare Stream recording without touching its bytes.
+   *
+   * Cloudflare renders a downloadable MP4 on request; that URL goes to Deepgram,
+   * which fetches the media itself. A first request on a long walkthrough starts
+   * the render and returns nothing, so this fails as retryable rather than
+   * blocking a worker until it finishes — the normal processing retry brings it
+   * back once the render is ready.
+   *
+   * Thumbnails and technician marker frames are not produced here: both are cut
+   * from the video with ffmpeg, and doing that would mean downloading the whole
+   * recording. Cloudflare supplies a thumbnail through the webhook; marker
+   * frames are genuinely unavailable for Stream recordings for now.
+   */
+  private async transcribeStreamRecording(
+    media: { id: string; streamUid: string | null; durationSeconds: number; organizationId: string },
+    job: { id: string },
+    deepgramKey: string,
+  ) {
+    if (!this.stream || !media.streamUid)
+      throw new ApplicationError(
+        503,
+        'TRANSCRIPTION_SOURCE_UNAVAILABLE',
+        'This recording has no Cloudflare video to transcribe.',
+      );
+
+    const mediaUrl = await this.stream.ensureDownloadUrl(media.streamUid);
+    if (!mediaUrl)
+      throw new ApplicationError(
+        503,
+        'TRANSCRIPTION_SOURCE_PREPARING',
+        'Cloudflare is still preparing this recording for transcription.',
+      );
+
+    const result = await requestDeepgramTranscriptionFromUrl(
+      deepgramKey,
+      mediaUrl,
+      media.durationSeconds,
+    );
+    const segments = result.segments ?? [
+      { startSeconds: 0, endSeconds: media.durationSeconds, text: result.text },
+    ];
+    await this.prisma.$transaction([
+      this.prisma.transcriptSegment.deleteMany({ where: { transcriptionJobId: job.id } }),
+      this.prisma.transcriptSegment.createMany({
+        data: segments.map((segment) => ({ transcriptionJobId: job.id, ...segment })),
+      }),
+    ]);
+    await this.prisma.transcriptionJob.update({
+      where: { inspectionMediaId: media.id },
+      data: { status: TranscriptionStatus.COMPLETED, language: null },
+    });
+    return result.text;
+  }
+
   private async transcribe(
     media: {
       id: string;
       providerMediaId: string;
-      // Null for a Stream-backed recording, whose audio is fetched from
-      // Cloudflare rather than from the bucket. Transcription for those is not
-      // wired yet, so this path refuses rather than reading a null key.
+      // Exactly one of these is set. A bucket key means the recording is in R2
+      // and its audio is extracted locally; a Stream uid means the bytes only
+      // ever existed on the device and at Cloudflare, and the provider fetches
+      // the media itself.
       storageKey: string | null;
+      streamUid: string | null;
       mimeType: string;
       durationSeconds: number;
       organizationId: string;
@@ -330,17 +398,25 @@ export class MediaProcessingService implements OnModuleInit {
       },
       update: { status: TranscriptionStatus.RUNNING, provider },
     });
-    try {
-      // Transcription still reads the bucket. A Stream-backed recording has no
-      // bucket object, and pulling its audio back out of Cloudflare is a
-      // separate piece of work — refusing here is honest, where reading a null
-      // key would fail deeper with an error that named neither cause nor video.
-      if (!media.storageKey)
+    // A Cloudflare Stream recording has no bucket object. Deepgram fetches the
+    // media itself from a signed Cloudflare URL, so the bytes still never pass
+    // through this backend — downloading a walkthrough here purely to forward
+    // it would reintroduce the transfer the Stream migration removed.
+    //
+    // This path requires Deepgram for that reason: OpenAI's transcription
+    // endpoint takes bytes, not a URL, so using it would mean proxying the
+    // video after all.
+    if (!media.storageKey) {
+      if (!deepgramKey)
         throw new ApplicationError(
-          501,
-          'TRANSCRIPTION_SOURCE_UNAVAILABLE',
-          'Transcription is not yet wired for Cloudflare Stream recordings.',
+          503,
+          'TRANSCRIPTION_NOT_CONFIGURED',
+          'Transcribing a Cloudflare Stream recording requires DEEPGRAM_API_KEY: only Deepgram can fetch the media itself, and proxying video through this backend is what Stream replaced.',
         );
+      return this.transcribeStreamRecording(media, job, deepgramKey);
+    }
+
+    try {
       const storageKey = media.storageKey;
       const video = await this.storage.get(storageKey);
       // Generated here because the video bytes are already in memory for audio

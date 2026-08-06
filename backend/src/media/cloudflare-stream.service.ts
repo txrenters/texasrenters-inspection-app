@@ -138,6 +138,35 @@ export class CloudflareStreamService {
   }
 
   /**
+   * An MP4 URL for a Stream video, creating it if Cloudflare has not yet.
+   *
+   * Stream serves HLS for playback, which speech APIs do not reliably accept.
+   * Cloudflare will render a downloadable MP4 on request, and that URL is what
+   * gets handed to the transcription provider so it fetches the audio itself —
+   * the alternative is pulling hundreds of megabytes of video through this
+   * backend purely to forward it somewhere else.
+   *
+   * Returns null while the render is still in progress. The caller retries
+   * rather than blocking: a first request on a long recording can take minutes,
+   * and holding a request open for it would tie up a worker for no gain.
+   */
+  async ensureDownloadUrl(streamUid: string): Promise<string | null> {
+    this.assertConfigured();
+    const path = `/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/stream/${encodeURIComponent(streamUid)}/downloads`;
+
+    // POST is idempotent here: asking again for a download that exists returns
+    // the existing one rather than starting a second render.
+    const response = await this.fetchStream(path, { method: 'POST' }, [409]);
+    const body = (await response.json().catch(() => null)) as {
+      result?: { default?: { status?: string; url?: string; percentComplete?: number } };
+    } | null;
+
+    const download = body?.result?.default;
+    if (!download?.url) return null;
+    return download.status === 'ready' ? download.url : null;
+  }
+
+  /**
    * A short-lived signed playback token.
    *
    * Signed locally with the account's RSA key rather than by asking Cloudflare

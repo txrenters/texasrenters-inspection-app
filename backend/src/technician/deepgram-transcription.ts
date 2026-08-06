@@ -106,11 +106,53 @@ export function parseDeepgramResponse(payload: unknown, durationSeconds: number)
   };
 }
 
+/**
+ * Transcribe media Deepgram fetches for itself.
+ *
+ * Used for Cloudflare Stream recordings, whose bytes never touch this backend.
+ * Handing over a URL keeps it that way — downloading a walkthrough here purely
+ * to forward it to Deepgram would reintroduce exactly the transfer the Stream
+ * migration removed, on a server rather than a phone.
+ *
+ * The URL must be reachable by Deepgram, so it carries its own signature and is
+ * short-lived; it is never logged.
+ */
+export async function requestDeepgramTranscriptionFromUrl(
+  apiKey: string,
+  mediaUrl: string,
+  durationSeconds: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<TranscriptionResult> {
+  return callDeepgram(
+    apiKey,
+    { 'Content-Type': 'application/json' },
+    JSON.stringify({ url: mediaUrl }),
+    durationSeconds,
+    fetchImpl,
+  );
+}
+
 export async function requestDeepgramTranscription(
   apiKey: string,
   audio: { bytes: Buffer; type: string },
   durationSeconds: number,
   fetchImpl: typeof fetch = fetch,
+): Promise<TranscriptionResult> {
+  return callDeepgram(
+    apiKey,
+    { 'Content-Type': audio.type },
+    new Uint8Array(audio.bytes),
+    durationSeconds,
+    fetchImpl,
+  );
+}
+
+async function callDeepgram(
+  apiKey: string,
+  headers: Record<string, string>,
+  body: BodyInit,
+  durationSeconds: number,
+  fetchImpl: typeof fetch,
 ): Promise<TranscriptionResult> {
   const query = new URLSearchParams({
     model: 'nova-3',
@@ -128,8 +170,8 @@ export async function requestDeepgramTranscription(
   try {
     response = await fetchImpl(`${API_URL}?${query.toString()}`, {
       method: 'POST',
-      headers: { Authorization: `Token ${apiKey}`, 'Content-Type': audio.type },
-      body: new Uint8Array(audio.bytes),
+      headers: { Authorization: `Token ${apiKey}`, ...headers },
+      body,
     });
   } catch {
     // Deliberately says nothing about the request: its headers carry the key.

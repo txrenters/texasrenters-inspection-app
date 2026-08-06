@@ -2,6 +2,7 @@ import {
   deepgramApiKey,
   parseDeepgramResponse,
   requestDeepgramTranscription,
+  requestDeepgramTranscriptionFromUrl,
 } from '../src/technician/deepgram-transcription';
 
 const ORIGINAL_ENV = { ...process.env };
@@ -137,5 +138,51 @@ describe('provider selection', () => {
     // An empty variable in a .env file must not look like a configured provider.
     process.env.DEEPGRAM_API_KEY = '   ';
     expect(deepgramApiKey()).toBeNull();
+  });
+});
+
+describe('transcribing media Deepgram fetches itself', () => {
+  it('sends a URL instead of bytes', async () => {
+    // Cloudflare Stream recordings never touch this backend. Downloading a
+    // walkthrough here purely to forward it to Deepgram would reintroduce the
+    // transfer the Stream migration removed, on a server rather than a phone.
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload(),
+    });
+    await requestDeepgramTranscriptionFromUrl(
+      'dg-key',
+      'https://customer-abc.cloudflarestream.com/uid/downloads/default.mp4',
+      120,
+      fetchMock as never,
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({
+      url: 'https://customer-abc.cloudflarestream.com/uid/downloads/default.mp4',
+    });
+  });
+
+  it('asks for the same timings as the byte path', async () => {
+    // Both paths must produce segments a finding can be anchored to; a Stream
+    // recording should not silently lose them.
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
+    const result = await requestDeepgramTranscriptionFromUrl('dg-key', 'https://host/a.mp4', 120, fetchMock as never);
+    expect(fetchMock.mock.calls[0][0]).toContain('utterances=true');
+    expect(result.segments).toHaveLength(2);
+  });
+
+  it('never puts the signed media URL in a transport error', async () => {
+    // That URL is a short-lived credential for the recording itself.
+    const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const error = await requestDeepgramTranscriptionFromUrl(
+      'dg-key',
+      'https://host/uid/downloads/default.mp4?sig=secret-signature',
+      120,
+      fetchMock as never,
+    ).catch((thrown: Error) => thrown);
+    expect(`${JSON.stringify(error)}${String(error)}`).not.toContain('secret-signature');
   });
 });

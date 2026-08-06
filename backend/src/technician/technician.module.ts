@@ -8,6 +8,7 @@ import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { MediaProcessingService } from './media-processing.service';
+import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { TechnicianController } from './technician.controller';
 import { TechnicianService } from './technician.service';
 
@@ -19,6 +20,9 @@ import { TechnicianService } from './technician.service';
     FloorPlanStorageService,
     InspectionMediaStorageService,
     MediaProcessingService,
+    // Lets the pipeline ask Cloudflare for a media URL when a recording lives
+    // there rather than in the bucket.
+    CloudflareStreamService,
     AiProviderSettingsService,
     ComparisonService,
     ChargeService,
