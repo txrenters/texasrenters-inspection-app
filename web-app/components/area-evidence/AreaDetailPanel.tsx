@@ -1,7 +1,7 @@
 'use client';
 
 import type { AreaFinding, AreaRecording } from '@texasrenters/shared';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { FieldError } from '@/components/ui/field';
 import { Alert } from '@/components/ui/alert';
@@ -323,12 +323,21 @@ function FindingRow({
 export function AreaDetailPanel({
   inspectionId,
   areaId,
+  tab,
+  onTabChange,
 }: {
   inspectionId: string;
   areaId: string;
+  /** Controlled by the workspace so it survives switching area. */
+  tab: string;
+  onTabChange: (tab: string) => void;
 }) {
   const evidence = useAreaEvidence(inspectionId, areaId);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
+  // Belongs to one area, so it resets when the area does. The panel used to be
+  // remounted for this, which threw away the open tab and every other piece of
+  // state along with it.
+  useEffect(() => setActiveRecording(null), [areaId]);
   // Reviewing is a privileged decision; reading evidence is not.
   const canReview = usePermissions().has('findings:review');
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -413,7 +422,7 @@ export function AreaDetailPanel({
           Checklist and Activity are absent deliberately: the evidence bundle
           carries neither, and a tab that opens onto nothing is worse than no
           tab. Checklist currently lives in a dialog on the area list. */}
-      <Tabs className="mt-4" defaultValue="overview">
+      <Tabs className="area-detail-tabs" onValueChange={onTabChange} value={tab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="recording">Recording{recordings.length ? ` (${recordings.length})` : ''}</TabsTrigger>

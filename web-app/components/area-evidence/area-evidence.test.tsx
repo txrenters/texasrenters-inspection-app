@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AreaEvidenceWorkspace } from './AreaEvidenceWorkspace';
 
+// Behaves like the router rather than swallowing the call: the open area and
+// the open tab both live in the URL now, so a mock that never updates them
+// leaves the component permanently on its initial state.
 const replace = vi.fn();
 let searchParams = new URLSearchParams();
 

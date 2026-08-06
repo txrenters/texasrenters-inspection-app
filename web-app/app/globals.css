@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3683,15 +3683,51 @@ button:disabled {
   margin-top: 16px;
   align-items: start;
 }
+
+/* A real sidebar: it scrolls on its own rather than stretching the card to the
+   height of the longest list. Bounded at both ends — tall enough that two or
+   three areas do not leave a stub beside a tall detail pane, short enough that
+   forty areas do not push the evidence off the screen. */
+.area-evidence-list-pane {
+  min-height: 320px;
+  max-height: clamp(320px, 62vh, 720px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+/* The search and filter stay put while the areas move under them; hunting for
+   the filter by scrolling back up is the thing a long list makes tedious. */
+.area-evidence-filters {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding-bottom: 8px;
+}
+
+/* Tabs span the detail pane and stay in view while its content scrolls, so the
+   way back to another tab does not depend on where the reader has got to. */
+.area-detail-tabs [role='tablist'] {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  background: var(--surface);
+}
+.area-detail-tabs [role='tab'] {
+  flex: 1 1 0;
+}
 /* Below this the panes stop being readable side by side, so the list collapses
    above the detail rather than being squeezed. */
 @media (max-width: 900px) {
   .area-evidence-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* Stacked above the detail here, so it must not reserve a tall block for
+     a short list — the detail is what the reader scrolled down to reach. */
   .area-evidence-list-pane {
+    min-height: 0;
     max-height: 320px;
-    overflow-y: auto;
   }
 }
 

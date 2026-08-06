@@ -127,6 +127,19 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
     [router, searchParams],
   );
 
+  /**
+   * The open tab, held here rather than inside the detail panel.
+   *
+   * That is what makes it survive switching area: a reviewer comparing the same
+   * tab across rooms — recordings, or findings — should not be dropped back to
+   * Overview on every click.
+   *
+   * Deliberately not in the URL like `area` is. The area matters in a shared
+   * link and on refresh; which tab someone had open does not, and putting it
+   * there means every tab click is a router write.
+   */
+  const [activeTab, selectTab] = useState('overview');
+
   // Announce completion for screen readers, which otherwise get no signal that
   // the right-hand panel changed.
   const [checklistArea, setChecklistArea] = useState<{ id: string; name: string } | null>(null);
@@ -298,8 +311,18 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
         </div>
 
         <div className="area-evidence-detail-pane">
+          {/* No `key` on the panel below, deliberately. Keying it by area forced
+              a full remount on every switch, so it tore down and rebuilt its
+              whole tree — losing the open tab and re-running everything — when
+              the only thing that actually changed was which area's data to
+              fetch. The panel resets what genuinely belongs to one area. */}
           {selectedId ? (
-            <AreaDetailPanel key={selectedId} inspectionId={inspectionId} areaId={selectedId} />
+            <AreaDetailPanel
+              areaId={selectedId}
+              inspectionId={inspectionId}
+              onTabChange={selectTab}
+              tab={activeTab}
+            />
           ) : (
             <p className="text-xs text-muted-foreground">Select an area to review its evidence.</p>
           )}
