@@ -30,9 +30,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 
-import { Badge, ErrorState, LoadingState, formatDate } from '@/components/shared';
+import { Badge, formatDate } from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
-import { useAdminMutations, useInspectionAreas } from '@/lib/queries';
+import { useAdminMutations } from '@/lib/queries';
+// Type-only: the merge dialog is handed areas already fetched by its caller.
+import type { useInspectionAreas } from '@/lib/queries';
 
 const REVIEWABLE: ReadonlyArray<AdminInspection['status']> = [
   'TECHNICIAN_SUBMITTED',
@@ -279,71 +281,12 @@ function WorkflowActionDialog({
 }
 
 /**
- * Areas of the inspection, with an administrator control to merge a duplicate
- * area into another (spec §16). All evidence is preserved and reassigned.
+ * Exported so the area navigator in the evidence workspace can own this.
+ * Merging areas is area management, and it belongs beside the area list a
+ * reviewer is actually looking at rather than in a second list further down
+ * the page that existed only to host this one button.
  */
-export function InspectionAreasPanel({ inspectionId }: { inspectionId: string }) {
-  const permissions = usePermissions();
-  const areas = useInspectionAreas(inspectionId);
-  const [merging, setMerging] = useState(false);
-  const canMerge = permissions.has('inspections:manage');
-
-  return (
-      <Card className="p-[22px] max-[560px]:p-4" asChild>
-      <section aria-labelledby="inspection-areas-title">
-        <CardHeader className="p-0 pb-4">
-        <div>
-          <span className="block text-xs font-semibold text-muted-foreground">Areas</span>
-          <CardTitle className="text-[17px]" id="inspection-areas-title">Inspection areas</CardTitle>
-          <CardDescription>Rooms and outdoor areas captured for this inspection.</CardDescription>
-        </div>
-        {canMerge && (areas.data?.length ?? 0)>= 2 ? (
-          <button type="button" className={buttonVariants({ variant: 'secondary' })} onClick={() => setMerging(true)}>
-            Merge duplicates
-          </button>
-        ) : null}
-      </CardHeader>
-
-      {areas.isLoading ? (
-        <LoadingState label="Loading areas…" />
-      ) : areas.isError ? (
-        <ErrorState error={areas.error} retry={() => void areas.refetch()} />
-      ) : areas.data?.length ? (
-        <ul className="flex flex-col gap-2">
-          {areas.data.map((area) => (
-            <li key={area.id} className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-border px-3.5 py-2.5">
-              <div>
-                <strong>{area.name}</strong>
-                {area.floorName ? <span className="text-xs text-muted-foreground"> · {area.floorName}</span> : null}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge value={area.environment} />
-                <Badge value={area.completionStatus} />
-                <span className="text-xs text-muted-foreground">
-                  {area.mediaCount} video{area.mediaCount === 1 ? '' : 's'} · {area.photoCount} photo
-                  {area.photoCount === 1 ? '' : 's'}
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="compact-empty-state">No areas have been captured for this inspection.</div>
-      )}
-
-      {merging && areas.data ? (
-        <MergeAreasDialog
-          inspectionId={inspectionId}
-          areas={areas.data}
-          onClose={() => setMerging(false)}
-        />
-      ) : null}
-      </section>
-      </Card>
-  );
-}
-
-function MergeAreasDialog({
+export function MergeAreasDialog({
   inspectionId,
   areas,
   onClose,

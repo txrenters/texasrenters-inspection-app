@@ -1258,7 +1258,7 @@ button:disabled {
 }
 .integration-control-heading {
   align-items: flex-start;
-}
+}
 .integration-health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4298,6 +4298,33 @@ button:disabled {
 .finding-filter {
   width: 190px;
 }
+/* Reference material, folded away by default so it stops competing with the
+   review workspace. A plain <details> keeps it keyboard-reachable and
+   screen-reader-announced without any custom disclosure state. */
+.inspection-secondary > summary {
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--border);
+  list-style: none;
+}
+.inspection-secondary > summary::-webkit-details-marker {
+  display: none;
+}
+/* A caret drawn here rather than the default marker, which differs between
+   browsers and cannot be positioned. */
+.inspection-secondary > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--text-2);
+  transition: transform 0.15s;
+}
+.inspection-secondary[open] > summary::before {
+  transform: rotate(90deg);
+}
+.inspection-secondary > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
 .inspection-history-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.65fr);
@@ -4752,4 +4779,4 @@ button:disabled {
   color: var(--foreground);
   border-color: var(--ring);
 }
-
+

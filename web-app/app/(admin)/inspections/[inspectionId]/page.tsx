@@ -16,10 +16,7 @@ import { InspectionCompleteDialog } from '@/components/inspection-review';
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
 import { InspectionChargesPanel } from '@/components/inspection-charges';
 import { InspectionComparisonPanel } from '@/components/inspection-comparison';
-import {
-  InspectionAreasPanel,
-  InspectionWorkflowPanel,
-} from '@/components/inspection-workflow';
+import { InspectionWorkflowPanel } from '@/components/inspection-workflow';
 import { ReportShareDialog } from '@/components/report-share-dialog';
 import {
   Badge,
@@ -197,11 +194,14 @@ export default function InspectionDetailPage() {
       </section>
       </Card>
 
-      <InspectionWorkflowPanel inspection={item} onFinalize={() => setCompleting(true)} />
-
       {/* Area-first: recordings, photos, condition summaries and findings are
           read through the area they belong to rather than through four
-          page-wide, media-type-first sections. */}
+          page-wide, media-type-first sections.
+
+          Now the first thing after the summary. Reviewing evidence is what an
+          administrator opens this page to do; finalization used to sit above it
+          even while the technician was still capturing, which put an action
+          nobody could take yet ahead of the work everybody came for. */}
       <AreaEvidenceWorkspace inspectionId={id} />
       {item.inspectionType === 'MOVE_OUT' ? (
         <InspectionComparisonPanel inspectionId={id} />
@@ -209,7 +209,21 @@ export default function InspectionDetailPage() {
       {item.inspectionType === 'OCCUPIED' || item.inspectionType === 'MOVE_OUT' ? (
         <InspectionChargesPanel inspectionId={id} inspectionType={item.inspectionType} />
       ) : null}
-      <InspectionAreasPanel inspectionId={id} />
+      {/* Finalization sits after the evidence, in the order the work happens:
+          read the areas, then decide. */}
+      <InspectionWorkflowPanel inspection={item} onFinalize={() => setCompleting(true)} />
+
+      {/* Assignment history and activity are reference material, not the task.
+          Collapsed by default so they stop competing with the review workspace
+          for attention; `open` on a details element keeps them one click away
+          and keyboard-reachable without any custom disclosure logic. */}
+      <details className="inspection-secondary section-gap">
+        <summary className="cursor-pointer select-none text-[15px] font-semibold text-foreground">
+          Additional information
+          <span className="ml-2 text-[13px] font-normal text-muted-foreground">
+            Assignment history and activity
+          </span>
+        </summary>
 
       <div className="inspection-history-layout section-gap">
         <Card className="p-[22px] max-[560px]:p-4 min-w-0" asChild>
@@ -299,6 +313,7 @@ export default function InspectionDetailPage() {
         </section>
         </Card>
       </div>
+      </details>
 
       {assigning ? (
         <AssignmentDialog inspectionId={id} current={current} onClose={() => setAssigning(false)} />

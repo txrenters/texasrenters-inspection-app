@@ -18,7 +18,10 @@ import { Search } from 'lucide-react';
 
 import { Alert } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
-import { useAreaEvidenceSummary } from '@/lib/queries';
+import { buttonVariants } from '@/components/ui/button';
+import { useAreaEvidenceSummary, useInspectionAreas } from '@/lib/queries';
+import { usePermissions } from '@/lib/auth';
+import { MergeAreasDialog } from '@/components/inspection-workflow';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ErrorState, LoadingState } from '../shared';
 
@@ -81,6 +84,12 @@ function areaAriaLabel(area: AreaEvidenceSummaryItem) {
 
 export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }) {
   const summary = useAreaEvidenceSummary(inspectionId);
+  // A second read of the same areas, in the shape the merge dialog needs. The
+  // evidence summary carries review state the dialog does not use, and the
+  // dialog needs floor/environment detail the summary does not carry.
+  const manageableAreas = useInspectionAreas(inspectionId).data ?? [];
+  const canMerge = usePermissions().has('inspections:manage');
+  const [merging, setMerging] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
   // The open area lives in the URL so refresh restores it, Back steps through
@@ -148,10 +157,34 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
             {countLabel(totals.photos, 'photo')} · {countLabel(totals.findings, 'finding')}
           </CardDescription>
         </div>
-        <span className="section-count">
-          {totals.areasReviewed} of {totals.areas} reviewed
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="section-count">
+            {totals.areasReviewed} of {totals.areas} reviewed
+          </span>
+          {/* Area management belongs beside the area list a reviewer is looking
+              at. This used to sit in a second "Inspection areas" card further
+              down whose only unique capability was this button — the rest of it
+              repeated the navigator below, so the page offered two lists and no
+              way to tell which one to use. */}
+          {canMerge && manageableAreas.length >= 2 ? (
+            <button
+              className={buttonVariants({ variant: 'secondary', size: 'small' })}
+              onClick={() => setMerging(true)}
+              type="button"
+            >
+              Merge duplicates
+            </button>
+          ) : null}
+        </div>
       </CardHeader>
+
+      {merging && manageableAreas.length ? (
+        <MergeAreasDialog
+          areas={manageableAreas}
+          inspectionId={inspectionId}
+          onClose={() => setMerging(false)}
+        />
+      ) : null}
 
       <p aria-live="polite" className="sr-only">
         {announcement}
