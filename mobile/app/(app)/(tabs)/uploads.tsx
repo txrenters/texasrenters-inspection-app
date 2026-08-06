@@ -26,6 +26,7 @@ import { evaluateUploadGate } from '@/src/lib/connectivity';
 import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
 import { progressBarWidth, progressPercent } from '@/src/utils/upload-progress';
+import { describeUpload } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
@@ -86,6 +87,11 @@ function UploadRow({
   item: UploadItem;
   actions: ReturnType<typeof useUploadActions>;
 }) {
+  // Wording comes from `describeUpload`, which is the only place that knows a
+  // finished transfer is not the same as a playable video. The badge colours
+  // and icons stay exactly as they were.
+  const online = useNetworkStore((state) => state.isOnline);
+  const descriptor = describeUpload(item, { online });
   const config = STATUS_CONFIG[item.status] ?? STATUS_CONFIG.PENDING!;
   const StatusIcon = config.icon;
   const complete = item.status === 'COMPLETED';
@@ -107,7 +113,7 @@ function UploadRow({
             </View>
             <View className={`flex-row items-center gap-1 rounded-full px-2.5 py-0.5 ${config.bg}`}>
               <StatusIcon size={11} className={config.text} />
-              <Text className={`text-xs font-semibold ${config.text}`}>{config.label}</Text>
+              <Text className={`text-xs font-semibold ${config.text}`}>{descriptor.label}</Text>
             </View>
           </View>
 
@@ -127,20 +133,31 @@ function UploadRow({
                   style={{ width: progressBarWidth(item.progress) }}
                 />
               </View>
+              {/* Bytes rather than only a percentage: on a large walkthrough
+                  "11.4 MB of 48.0 MB" tells a technician whether it is worth
+                  waiting where a stalled 24% does not. */}
               <Text className="mt-1 text-xs text-muted-foreground">
-                {progressPercent(item.progress)}% ·{' '}
-                {item.processingStatus.replaceAll('_', ' ').toLowerCase()}
+                {descriptor.detail ?? `${progressPercent(item.progress)}%`}
               </Text>
             </View>
           ) : (
             <Text className="mt-1.5 text-xs text-muted-foreground">
-              {item.processingStatus.replaceAll('_', ' ').toLowerCase()}
+              {descriptor.detail ?? descriptor.label}
             </Text>
           )}
-          {item.lastError ? (
+          {/* The failure reason already sits in `descriptor.detail`, so it is
+              only repeated here when there is a raw error worth showing. */}
+          {item.lastError && item.status !== 'FAILED' ? (
             <View className="mt-2 rounded-lg bg-destructive/10 px-3 py-1.5">
               <Text className="text-xs text-destructive">{item.lastError}</Text>
             </View>
+          ) : null}
+          {/* Reassurance that matters most exactly when something has gone
+              wrong: the recording has not been lost with the upload. */}
+          {descriptor.localFileRetained && item.status !== 'PENDING' ? (
+            <Text className="mt-1.5 text-[11px] text-muted-foreground">
+              Saved on this device until the upload finishes.
+            </Text>
           ) : null}
         </View>
       </View>

@@ -34,6 +34,7 @@ import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { areaCompletionGate, deriveAreaRequirements } from '@/src/utils/area-requirements';
+import { describeRecordingLocation } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
@@ -253,7 +254,7 @@ export default function AreaDetailScreen() {
                     {recording.label || 'Primary room walkthrough'}
                   </Text>
                   <Text className="mt-0.5 text-xs text-muted-foreground">
-                    {recording.durationSeconds}s · stored on device
+                    {recording.durationSeconds}s · {describeRecordingLocation(recording.id)}
                   </Text>
                 </View>
                 <CheckCircle2Icon size={18} className="text-chart-3" />
