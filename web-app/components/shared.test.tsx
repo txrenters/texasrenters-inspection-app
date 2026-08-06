@@ -1,5 +1,13 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog';
 
 import { DataTable, FilterToolbar, LoadingState, RowAction, RowActions, TableLoadingState } from './shared';
 
@@ -84,6 +92,36 @@ describe('RowAction', () => {
     expect(button).toHaveAttribute('type', 'button');
     button.click();
     expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('passes disabled through so a pending mutation cannot be fired twice', () => {
+    render(<RowAction disabled icon={<svg />} label="Delete" variant="danger" />);
+
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled();
+  });
+
+  // The roles table hangs its delete confirmation off a RowAction. Radix clones
+  // the trigger onto this component, so the props and ref have to reach the
+  // underlying button — if they stop doing so the dialog silently never opens
+  // and the only symptom is a delete button that does nothing.
+  it('works as an asChild trigger for a Radix dialog', async () => {
+    render(
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <RowAction icon={<svg />} label="Delete" variant="danger" />
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogTitle>Delete this role?</AlertDialogTitle>
+          <AlertDialogDescription>It cannot be undone.</AlertDialogDescription>
+        </AlertDialogContent>
+      </AlertDialog>,
+    );
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alertdialog', { name: 'Delete this role?' })).toBeInTheDocument(),
+    );
   });
 });
 

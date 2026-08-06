@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ComponentProps, type ReactNode } from 'react';
 
 import {
   Table,
@@ -388,10 +388,13 @@ export const address = (item?: {
  * One control per row, shaped the same on every list, so scanning down a table
  * does not mean re-reading what each row offers.
  *
- * Navigation only, deliberately. Row-level mutations belong on the detail page
- * where their gating already lives — permissions, inspection state, pending
- * findings — and a table button that performed one would be an ungated copy of
- * a gated decision, sitting where it is easiest to click by accident.
+ * Mostly navigation. A row action may mutate, but only when it brings its own
+ * gate with it — the permission check and, if the result is destructive, the
+ * confirmation stating what is lost. What must never appear here is an ungated
+ * copy of a decision that is gated elsewhere, sitting where it is easiest to
+ * click by accident. Where a detail page exists it is the better home, because
+ * the gating is already there; roles are the case that has no detail page, so
+ * the row carries `roles:manage` and an AlertDialog instead.
  */
 export function RowActions({ children }: { children: ReactNode }) {
   return <div className="flex items-center justify-end gap-1">{children}</div>;
@@ -404,33 +407,52 @@ export function RowActions({ children }: { children: ReactNode }) {
  * icon-only control with no accessible name is a button a screen reader
  * announces as nothing at all. On wider screens the text shows too, because an
  * unfamiliar glyph is a guess until someone has clicked it once.
+ *
+ * `danger` tints on hover rather than at rest, the way the danger button does:
+ * a red control in every row dominates the table it is meant to sit quietly in.
+ *
+ * Unknown props are spread onto the element so this can be an `asChild` trigger
+ * for a Radix dialog — that is how the roles table hangs its delete
+ * confirmation off one.
  */
 export function RowAction({
   href,
   icon,
   label,
   onClick,
+  variant = 'default',
+  className,
+  ...rest
 }: {
   href?: string;
   icon: ReactNode;
   label: string;
   onClick?: () => void;
-}) {
+  variant?: 'default' | 'danger';
+} & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
   const content = (
     <>
       {icon}
       <span className="max-lg:sr-only">{label}</span>
     </>
   );
-  const className =
-    'inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-3 focus-visible:outline-[var(--focus)]';
+  const classes = cn(
+    'inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[13px]',
+    'font-medium text-foreground transition-colors cursor-pointer',
+    'hover:bg-[var(--surface-hover)] focus-visible:outline-3 focus-visible:outline-[var(--focus)]',
+    'disabled:pointer-events-none disabled:opacity-55',
+    variant === 'danger' &&
+      'text-[var(--danger)] border-[color-mix(in_srgb,var(--danger)_45%,transparent)] ' +
+        'hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]',
+    className,
+  );
 
   return href ? (
-    <Link aria-label={label} className={className} href={href}>
+    <Link aria-label={label} className={classes} href={href}>
       {content}
     </Link>
   ) : (
-    <button aria-label={label} className={className} onClick={onClick} type="button">
+    <button aria-label={label} className={classes} onClick={onClick} type="button" {...rest}>
       {content}
     </button>
   );

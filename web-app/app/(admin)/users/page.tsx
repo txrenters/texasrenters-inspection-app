@@ -1,5 +1,6 @@
 'use client';
 
+import { Eye } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 import {
@@ -22,6 +23,8 @@ import {
   FilterToolbar,
   PageHeader,
   Pagination,
+  RowAction,
+  RowActions,
   TableLoadingState,
 } from '@/components/shared';
 import { UserCreateDialog } from '@/components/user-create-dialog';
@@ -29,7 +32,7 @@ import { usePermissions } from '@/lib/auth';
 import { useUsers } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 
-const USER_HEADERS = ['User', 'Email', 'Assigned roles', 'Status'];
+const USER_HEADERS = ['User', 'Email', 'Assigned roles', 'Status', ''];
 
 // Radix Select rejects an empty string as an item value, so the unfiltered
 // row carries a sentinel that is translated back to '' for the query.
@@ -154,6 +157,15 @@ export default function UsersPage() {
                 </TableCell>
                 <TableCell>
                   <Badge value={user.isActive ? 'ACTIVE' : 'INACTIVE'} />
+                </TableCell>
+                <TableCell>
+                  <RowActions>
+                    <RowAction
+                      href={`/users/${user.id}`}
+                      icon={<Eye aria-hidden className="size-4" />}
+                      label="Open"
+                    />
+                  </RowActions>
                 </TableCell>
               </TableRow>
             ))}

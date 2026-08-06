@@ -1,5 +1,6 @@
 'use client';
 
+import { Pencil, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import {
   AlertDialog,
@@ -25,6 +26,8 @@ import {
   ErrorState,
   PageHeader,
   Pagination,
+  RowAction,
+  RowActions,
   TableLoadingState,
 } from '@/components/shared';
 import { RoleEditorDialog } from '@/components/role-editor-dialog';
@@ -32,7 +35,7 @@ import { usePermissions } from '@/lib/auth';
 import { formatPermission } from '@/lib/access';
 import { useRoles, useAccessMutations } from '@/lib/queries';
 
-const ROLE_HEADERS = ['Role', 'Permissions', 'Assigned users', 'Actions'];
+const ROLE_HEADERS = ['Role', 'Permissions', 'Assigned users', ''];
 
 export default function RolesPage() {
   const [page, setPage] = useState(1);
@@ -107,19 +110,26 @@ export default function RolesPage() {
                 </TableCell>
                 <TableCell className="numeric-cell">{role.assignedUserCount}</TableCell>
                 <TableCell>
+                  {/* The one actions column in the app that mutates. A role has
+                      no detail page — the editor is this dialog — so there is
+                      nowhere else for these to live. They keep their own gate:
+                      `roles:manage` above, and a confirmation below that states
+                      what the deletion costs. */}
                   {canManage ? (
-                    <div className="action-row">
-                      <button className={buttonVariants({ variant: 'secondary' })} onClick={() => setEditing(role)}>
-                        Edit
-                      </button>
+                    <RowActions>
+                      <RowAction
+                        icon={<Pencil aria-hidden className="size-4" />}
+                        label="Edit"
+                        onClick={() => setEditing(role)}
+                      />
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <button
-                            className={buttonVariants({ variant: 'danger' })}
+                          <RowAction
                             disabled={deleteRole.isPending}
-                          >
-                            Delete
-                          </button>
+                            icon={<Trash2 aria-hidden className="size-4" />}
+                            label="Delete"
+                            variant="danger"
+                          />
                         </AlertDialogTrigger>
                         <AlertDialogContent>
                           <AlertDialogHeader>
@@ -141,7 +151,7 @@ export default function RolesPage() {
                           </AlertDialogFooter>
                         </AlertDialogContent>
                       </AlertDialog>
-                    </div>
+                    </RowActions>
                   ) : (
                     <span className="text-[13px] text-muted-foreground">View only</span>
                   )}
