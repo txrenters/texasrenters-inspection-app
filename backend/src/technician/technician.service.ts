@@ -696,6 +696,14 @@ export class TechnicianService {
         select: { id: true },
       }));
 
+    // Deterministic and free of I/O, so it is resolved before the transaction
+    // opens rather than while it is held.
+    const templateItems = checklistTemplateFor({
+      name,
+      category: input.category ?? null,
+      environment: input.environment,
+    });
+
     const room = await this.prisma.$transaction(async (tx) => {
       const area = await tx.propertyArea.create({
         data: {
@@ -720,32 +728,31 @@ export class TechnicianService {
           category: input.category ?? null,
           notes: input.notes?.trim() || null,
           createdById: user.id,
+          // The area arrives with the house-standard checklist already on it,
+          // nested into this write rather than issued as a second one.
+          //
+          // It still has to be atomic with the area: a technician adds a room
+          // on site and starts recording it seconds later, so an area that
+          // briefly exists without its checklist is a state they would walk
+          // into. Nesting keeps that guarantee at one round trip. As a separate
+          // createMany it made this transaction five trips to a remote pooler
+          // instead of four, which pushed it past Prisma's five-second default
+          // and rolled the whole area back.
+          checklistItems: {
+            createMany: {
+              data: templateItems.map((label, index) => ({
+                organizationId: user.organizationId,
+                label,
+                // Derived from the label, exactly as an administrator-authored
+                // item is — the matcher does not care where the words came from.
+                keywords: keywordsFromLabel(label),
+                sortOrder: index,
+                createdById: user.id,
+              })),
+            },
+          },
         },
         select: { id: true },
-      });
-      // The area arrives with the house-standard checklist already on it.
-      //
-      // In the same transaction as the area, because an area that exists
-      // without its checklist is the state the technician would walk into —
-      // they add a room on site and start recording it seconds later. The
-      // template is deterministic, so this needs no network and cannot fail
-      // separately from the area itself.
-      const templateItems = checklistTemplateFor({
-        name,
-        category: input.category ?? null,
-        environment: input.environment,
-      });
-      await tx.areaChecklistItem.createMany({
-        data: templateItems.map((label, index) => ({
-          organizationId: user.organizationId,
-          propertyAreaId: area.id,
-          label,
-          // Derived from the label, exactly as an administrator-authored item
-          // is — the matcher does not care where the words came from.
-          keywords: keywordsFromLabel(label),
-          sortOrder: index,
-          createdById: user.id,
-        })),
       });
       const inspectionArea = await tx.inspectionArea.create({
         data: {
@@ -938,7 +945,10 @@ export class TechnicianService {
       // Only the previous PRIMARY video is replaced; additional videos are kept.
       const replaced = area.media
         .filter((item) => item.recordingType === VideoRecordingType.PRIMARY_AREA)
-        .map((item) => item.storageKey);
+        // Stream-backed recordings carry no bucket object, so there is nothing
+        // here to delete for them.
+        .map((item) => item.storageKey)
+        .filter((key): key is string => Boolean(key));
       let record;
       try {
         record = await this.prisma.$transaction(async (tx) => {

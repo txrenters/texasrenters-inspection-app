@@ -74,6 +74,23 @@ const environmentSchema = z
     R2_ACCOUNT_ID: z.string().optional(),
     R2_ACCESS_KEY_ID: z.string().optional(),
     R2_SECRET_ACCESS_KEY: z.string().optional(),
+    // Cloudflare Stream. Backend-only, every one of them: the API token can
+    // create and delete video in the account, and the signing key mints
+    // playback credentials for any inspection. None of these may ever reach a
+    // client bundle — see the EXPO_PUBLIC_/NEXT_PUBLIC_ prefixes, which ship
+    // whatever they are given to every device.
+    CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
+    CLOUDFLARE_STREAM_API_TOKEN: z.string().optional(),
+    // Verifies that a webhook really came from Cloudflare. Without it the
+    // "video is ready" endpoint would accept anyone's word for it.
+    CLOUDFLARE_STREAM_WEBHOOK_SECRET: z.string().optional(),
+    // The `customer-<code>` subdomain that serves manifests for this account.
+    CLOUDFLARE_STREAM_CUSTOMER_CODE: z.string().optional(),
+    // Signed playback. Required whenever videos are created with
+    // requireSignedURLs, which is the default here — inspection video is
+    // evidence about someone's home and must not be publicly addressable.
+    CLOUDFLARE_STREAM_SIGNING_KEY_ID: z.string().optional(),
+    CLOUDFLARE_STREAM_SIGNING_KEY_PEM: z.string().optional(),
     PROPERTYWARE_PROVIDER: z.enum(['mock', 'live']).default('mock'),
     PROPERTYWARE_STORE: z.enum(['memory', 'prisma']).default('memory'),
     PROPERTYWARE_BASE_URL: z

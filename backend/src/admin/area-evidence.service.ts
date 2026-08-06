@@ -350,7 +350,11 @@ export class AreaEvidenceService {
     // Poster frames only. Playback URLs are minted when a recording is opened.
     const thumbnails = await Promise.all(
       recordings.map((recording) =>
-        this.mediaStorage.signedUrl(thumbnailKeyFor(recording.storageKey)).catch(() => null),
+        // A Stream-backed recording has no derived R2 thumbnail; Cloudflare
+        // supplies one on the media record instead.
+        recording.storageKey
+          ? this.mediaStorage.signedUrl(thumbnailKeyFor(recording.storageKey)).catch(() => null)
+          : Promise.resolve(null),
       ),
     );
 

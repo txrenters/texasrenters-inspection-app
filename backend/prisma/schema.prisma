@@ -104,12 +104,20 @@ enum InspectionAreaCompletionStatus {
   FAILED
 }
 
+/// How far the bytes have got from the device to the storage provider.
+///
+/// Deliberately server-observable only. The device also knows "waiting for
+/// network", "paused" and "retrying", but those are conditions of one phone at
+/// one moment, not facts about the recording — they live in the mobile queue.
+/// Writing them here would mean a technician's flight mode showing up as a
+/// property of the evidence.
 enum MediaUploadStatus {
   PENDING
   SESSION_CREATED
   UPLOADING
   UPLOADED
   FAILED
+  CANCELLED
 }
 
 enum MediaProcessingStatus {
@@ -1086,7 +1094,12 @@ model InspectionMedia {
   // Where the bytes live in the storage bucket. Kept separate from
   // providerMediaId so the storage backend can change without rewriting
   // identity, and so keys can be tenant-scoped like photos and floor plans.
-  storageKey              String
+  //
+  // Nullable since the Stream migration: a video uploaded straight from the
+  // device to Cloudflare Stream never passes through this backend and has no
+  // bucket object. Every pre-migration recording still has one and still plays
+  // from it, which is what keeps legacy evidence viewable.
+  storageKey              String?
   mimeType                String
   durationSeconds         Int
   // PRIMARY_AREA is the one required room walkthrough (one per area, enforced by
@@ -1103,7 +1116,41 @@ model InspectionMedia {
   // Summarized capture metrics only. Raw motion samples stay on the device.
   captureSummary          Json?
   uploadStatus            MediaUploadStatus      @default(PENDING)
+  // Encoding state at the provider, kept distinct from uploadStatus: bytes
+  // arriving and the video being playable are different events, and Stream can
+  // fail the second after succeeding at the first. No third "playbackStatus" —
+  // for Stream, READY here *is* playable, and a duplicate field would only
+  // create two answers to one question and eventually disagree.
   processingStatus        MediaProcessingStatus  @default(PENDING)
+
+  // --- Cloudflare Stream ---
+  // Null for every recording made before the Stream migration; those keep
+  // playing from `storageKey` in R2. Presence of this is what marks a record as
+  // Stream-backed, so no backfill is needed and no legacy evidence is stranded.
+  streamUid               String?                @unique
+  // What the client says it will send, and what the provider has confirmed.
+  // Percentage is derived rather than stored — a stored copy is one more thing
+  // that can disagree with the bytes it summarises.
+  uploadBytesTotal        Int?
+  uploadBytesCompleted    Int?
+  originalFilename        String?
+  // Distinct from createdAt: when the technician recorded it, which can be
+  // hours before a queued upload reaches the API from a property with no signal.
+  recordedAt              DateTime?
+  uploadedAt              DateTime?
+  readyAt                 DateTime?
+  failedAt                DateTime?
+  failureCode             String?
+  failureMessage          String?
+  retryCount              Int                    @default(0)
+  // The device-side queue id, so a technician's stuck upload can be traced from
+  // a support call to a row without guessing.
+  localQueueId            String?
+  // Filled from the ready webhook; the provider is authoritative for these.
+  thumbnailUrl            String?
+  widthPx                 Int?
+  heightPx                Int?
+
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
   inspectionArea          InspectionArea         @relation(fields: [inspectionAreaId], references: [id])

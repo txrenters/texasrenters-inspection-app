@@ -13,6 +13,7 @@ import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
 import { PropertywareModule } from './integrations/propertyware/propertyware.module';
+import { MediaModule } from './media/media.module';
 import { TechnicianModule } from './technician/technician.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import {
@@ -59,6 +60,7 @@ const mockStackProviders = isProduction
     AuthModule,
     PropertywareModule,
     TechnicianModule,
+    MediaModule,
     RealtimeModule,
   ],
   controllers: [HealthController, ...mockStackControllers],

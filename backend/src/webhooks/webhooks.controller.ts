@@ -12,9 +12,12 @@ import { WebhookSignatureGuard } from './webhook-signature.guard';
 @Controller('webhooks')
 export class WebhooksController {
   constructor(@Inject(VerticalSliceService) private readonly service: VerticalSliceService) {}
-  @Post('cloudflare-stream') cloudflare(@Body() body: WebhookDto) {
-    return this.service.processWebhook('cloudflare-stream', body.providerEventId);
-  }
+  // `cloudflare-stream` used to be handled here as a vertical-slice stub that
+  // recorded a providerEventId and nothing else. It now lives on
+  // CloudflareStreamWebhookController, which verifies Cloudflare's own
+  // signature scheme and actually updates the video. Both were mapping the same
+  // path, and Nest resolves such a collision to whichever registered first —
+  // meaning the stub could silently swallow every real notification.
   @Post('transcription') transcription(@Body() body: WebhookDto) {
     return this.service.processWebhook('transcription', body.providerEventId);
   }

@@ -2017,10 +2017,17 @@ export class AdminService {
         provider: 'Supabase',
         status: status(Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)),
       },
-      {
-        provider: 'Deepgram',
-        status: status(Boolean(process.env.DEEPGRAM_API_KEY || process.env.TRANSCRIPTION_API_KEY)),
-      },
+      // There is no Deepgram row, because nothing in this codebase calls
+      // Deepgram.
+      //
+      // This used to report green whenever DEEPGRAM_API_KEY was set, which is
+      // how somebody adds a Deepgram key, sees a healthy transcription
+      // provider, and still never gets a transcript. Transcription runs on
+      // OpenAI (`gpt-4o-mini-transcribe`, falling back to `whisper-1`) using
+      // the key from Settings → AI operations — a database record, not an
+      // environment variable — so this env-only panel cannot honestly report
+      // it at all. Same mistake, and same fix, as the Cloudflare Stream row
+      // removed below.
       { provider: 'Anthropic', status: status(Boolean(process.env.ANTHROPIC_API_KEY)) },
       { provider: 'OpenAI', status: status(Boolean(process.env.OPENAI_API_KEY)) },
       // Reports the storage backend that actually receives room videos.
@@ -2183,7 +2190,11 @@ export class AdminService {
     const thumbnailUrls = await Promise.all(
       records.map((record) =>
         this.mediaStorage
-          ? this.mediaStorage.signedUrl(thumbnailKeyFor(record.storageKey)).catch(() => null)
+          ? // No bucket key means a Stream-backed recording, whose thumbnail
+            // comes from Cloudflare rather than from a derived R2 object.
+            record.storageKey
+            ? this.mediaStorage.signedUrl(thumbnailKeyFor(record.storageKey)).catch(() => null)
+            : Promise.resolve(null)
           : Promise.resolve(null),
       ),
     );
@@ -2220,6 +2231,15 @@ export class AdminService {
     });
     if (!record)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Room video not found.');
+    // The legacy proxy path, kept for recordings that predate Stream. A
+    // Stream-backed video has no bucket object and must not be streamed through
+    // this backend at all — that round trip is the bottleneck Stream replaces.
+    if (!record.storageKey)
+      throw new ApplicationError(
+        409,
+        'MEDIA_NOT_PROXYABLE',
+        'This recording is served by Cloudflare Stream. Request a playback URL instead.',
+      );
     return {
       bytes: await this.mediaStorage.get(record.storageKey),
       mimeType: record.mimeType,
@@ -2248,6 +2268,12 @@ export class AdminService {
     });
     if (!record)
       throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Room video not found.');
+    if (!record.storageKey)
+      throw new ApplicationError(
+        409,
+        'MEDIA_NOT_PROXYABLE',
+        'This recording is served by Cloudflare Stream. Request a playback URL instead.',
+      );
     const expiresInSeconds = 900;
     const url = await this.mediaStorage.signedUrl(record.storageKey, expiresInSeconds);
     return {
