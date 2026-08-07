@@ -8,7 +8,7 @@
  * the gap for older recordings. Videos that already have one are skipped, so the
  * script is safe to re-run, and a failure on one video never stops the rest.
  */
-import { PrismaClient } from '@prisma/client';
+import { ownerPrismaClient } from './owner-prisma.mjs';
 
 const APPLY = process.argv.includes('--apply');
 
@@ -18,7 +18,9 @@ const { InspectionMediaStorageService } = await import(
 const { thumbnailKeyFor } = await import('../dist/common/object-storage.js');
 const { MediaProcessingService } = await import('../dist/technician/media-processing.service.js');
 
-const prisma = new PrismaClient();
+// Owner connection: this script is deliberately cross-organization, and the
+// application role is subject to the tenant-isolation policies.
+const prisma = ownerPrismaClient();
 const storage = new InspectionMediaStorageService();
 // Only the thumbnail generator is exercised; no AI or database work runs.
 const processor = new MediaProcessingService({}, storage, {}, undefined);

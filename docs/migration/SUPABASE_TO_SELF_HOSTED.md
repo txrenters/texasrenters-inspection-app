@@ -380,11 +380,38 @@ become a returned-nothing bug, never a cross-tenant leak.
    `/admin/profile`, `/admin/properties`, `/admin/inspections`,
    `/admin/dashboard` all 200, returning 562 real properties rather than
    silently empty results.
-4. **Handle the five org-less paths** from finding 6 explicitly.
+4. ✅ **The five org-less paths, handled explicitly.** The policies now **fail
+   closed**: an unset tenant matches nothing, so forgetting one returns no rows
+   rather than every row. `'*'` is the explicit system escape hatch, and each
+   use is a named `withSystemTenant()` call rather than the absence of one.
+
+   - boot-time sweeps (`propertyware-sync.coordinator`, media recovery) —
+     system, genuinely cross-organization;
+   - the Cloudflare Stream webhook — system for the `streamUid` lookup, then
+     **narrows** to the recording's organization for everything after;
+   - public report links — system to resolve the share, then narrows to the
+     organization the share names;
+   - `authenticateApplicationUser` — system, because it is the query that
+     *produces* the organization;
+   - post-response work (`queue()`, the sync worker) — re-establishes the
+     organization it was handed rather than using system access.
+
+   Maintenance scripts move to the **owner** connection via
+   `scripts/owner-prisma.mjs`: they are deliberately cross-organization, and
+   under the app role a delete script would have seen nothing and reported
+   success.
 5. **Test the 22 `relationLoadStrategy: 'join'` sites.** With join strategy
    Prisma emits one `LATERAL` query and every nested relation's policy is
    evaluated inside it — a missing policy empties the nested array rather than
    erroring, so it presents as a data bug, not a permissions bug.
+
+**The trap that bit twice, now closed by construction.** `withTenant` and
+`withSystemTenant` `await` inside the store. Handing the callback straight to
+`AsyncLocalStorage.run()` is the obvious version and it is wrong — Prisma
+promises are lazy, so the query runs after the scope exits. It cost two
+concurrent requests their scoping, and then, after being written up here, cost
+a round of 401s when the policies were tightened. Awaiting inside makes it
+unrepresentable.
 
 **Open design question, deliberately not pre-decided:** the RLS predicate can be
 single-valued (parity with today's `memberships[0]`) or set-valued (correct for

@@ -5,6 +5,7 @@ import { FindingReviewStatus, PhotoCaptureType, type Prisma } from '@prisma/clie
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
@@ -293,17 +294,36 @@ export class ReportShareService {
   }
 
   /** Resolves a share token to its inspection, or 404s indistinguishably. */
+  /**
+   * Resolve a homeowner's share token, and adopt the organization it names.
+   *
+   * The token IS the credential here — `GET /reports/:token` carries no user —
+   * so the lookup itself has no organization and runs as the system. Everything
+   * after it does: the share tells us whose inspection this is, and the rest of
+   * the request is scoped to that organization rather than left unscoped.
+   *
+   * `enterTenant` rather than wrapping the callers, so the two public methods
+   * need no restructuring: it binds the rest of this request's async context.
+   */
   private async resolveShare(token: string) {
-    const share = await this.prisma.inspectionReportShare.findUnique({
-      where: { token },
-      select: { inspectionId: true, expiresAt: true, revokedAt: true },
-    });
+    const share = await withSystemTenant(() =>
+      this.prisma.inspectionReportShare.findUnique({
+        where: { token },
+        select: {
+          inspectionId: true,
+          organizationId: true,
+          expiresAt: true,
+          revokedAt: true,
+        },
+      }),
+    );
     if (!share || share.revokedAt || share.expiresAt < new Date())
       throw new ApplicationError(
         404,
         'REPORT_NOT_AVAILABLE',
         'This report link is invalid, expired, or has been revoked.',
       );
+    enterTenant(share.organizationId);
     return share.inspectionId;
   }
 

@@ -22,7 +22,7 @@
  *   node scripts/reset-inspection-data.mjs --confirm
  */
 
-import { PrismaClient } from '@prisma/client';
+import { ownerPrismaClient } from './owner-prisma.mjs';
 
 /**
  * Children before parents.
@@ -63,7 +63,9 @@ const ORDER = [
 ];
 
 const confirmed = process.argv.includes('--confirm');
-const prisma = new PrismaClient();
+// Owner connection: this script is deliberately cross-organization, and the
+// application role is subject to the tenant-isolation policies.
+const prisma = ownerPrismaClient();
 
 try {
   // Named so nobody discovers afterwards that they cleared the wrong database.

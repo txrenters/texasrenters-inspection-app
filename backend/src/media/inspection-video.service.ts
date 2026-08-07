@@ -9,6 +9,7 @@ import {
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
 
 /**
@@ -290,16 +291,27 @@ export class InspectionVideoService {
     const streamUid = payload.uid;
     if (!streamUid) return { accepted: false as const, reason: 'MISSING_UID' };
 
-    const media = await this.prisma.inspectionMedia.findUnique({
-      where: { streamUid },
-      select: { id: true, processingStatus: true, organizationId: true, inspectionId: true },
-    });
+    // Cloudflare authenticates with an HMAC signature, not a session, so
+    // there is no organization until the uid resolves to a recording. The
+    // lookup runs as the system; everything after it is scoped to the
+    // organization that recording belongs to.
+    const media = await withSystemTenant(() =>
+      this.prisma.inspectionMedia.findUnique({
+        where: { streamUid },
+        select: { id: true, processingStatus: true, organizationId: true, inspectionId: true },
+      }),
+    );
     // An unknown uid is not an error worth failing on: Cloudflare retries 5xx,
     // and a video deleted on our side would then be retried forever.
     if (!media) {
       this.logger.warn({ event: 'stream_webhook_unknown_video', streamUid });
       return { accepted: false as const, reason: 'UNKNOWN_VIDEO' };
     }
+
+    // The uid resolved, so the organization is known from here on. Narrowing
+    // now means the writes this handler makes are tenant-checked rather than
+    // running with system access for the rest of the call.
+    enterTenant(media.organizationId);
 
     const state = payload.status?.state ?? 'unknown';
     const processingStatus = STREAM_STATE_TO_PROCESSING[state];

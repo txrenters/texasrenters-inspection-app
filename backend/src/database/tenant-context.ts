@@ -29,8 +29,18 @@ const storage = new AsyncLocalStorage<string>();
  * path needs: it starts with no tenant, resolves one from the share token, and
  * continues under it.
  */
-export function withTenant<T>(organizationId: string, fn: () => T): T {
-  return storage.run(organizationId, fn);
+export async function withTenant<T>(
+  organizationId: string,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  // `await fn()` INSIDE the store, deliberately. Handing `fn` straight to
+  // `run()` and returning its result is the obvious version and it is wrong:
+  // Prisma promises are lazy, so `withTenant(org, () => prisma.x.findFirst())`
+  // returns before the query executes and the scope has already exited. That
+  // mistake produced two concurrent requests reading unscoped data, and then —
+  // after being written up in this very file — produced a round of 401s when
+  // the policies were tightened. Awaiting here makes it unrepresentable.
+  return storage.run(organizationId, async () => fn());
 }
 
 /**
@@ -79,4 +89,44 @@ export function currentTenant() {
  */
 export function withoutTenant<T>(fn: () => T): T {
   return storage.exit(fn);
+}
+
+/**
+ * The sentinel meaning "this work legitimately spans organizations".
+ *
+ * Not a real id, and deliberately not a valid uuid, so it can never collide
+ * with one and never be produced by accident.
+ */
+export const SYSTEM_TENANT = '*';
+
+/**
+ * Run `fn` as the system, seeing every organization.
+ *
+ * There are exactly five kinds of work that have no organization and cannot be
+ * given one, and each is a deliberate call to this:
+ *
+ * - boot-time recovery sweeps, which reclaim stale sync runs and re-queue
+ *   interrupted media across every tenant;
+ * - the Cloudflare Stream webhook, which arrives with a `streamUid` and no
+ *   identity of any kind;
+ * - public homeowner report links, where the share token *is* the credential —
+ *   this resolves the share as the system, then continues under the
+ *   organization the share names;
+ * - password reset and sign-in, which look an account up by email before any
+ *   organization is known;
+ * - the query that resolves the organization in the first place.
+ *
+ * Every one of those is a hole in tenant isolation by construction, which is
+ * why this is a named, greppable call rather than the absence of one. Once the
+ * policies deny an unset tenant, forgetting it fails closed and loudly instead
+ * of silently granting everything.
+ */
+export async function withSystemTenant<T>(fn: () => T | Promise<T>): Promise<T> {
+  // Awaits inside the store, for the same reason as `withTenant`.
+  return storage.run(SYSTEM_TENANT, async () => fn());
+}
+
+/** Same, for a boundary that hands work back to a framework. See `enterTenant`. */
+export function enterSystemTenant() {
+  storage.enterWith(SYSTEM_TENANT);
 }

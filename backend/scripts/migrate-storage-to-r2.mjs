@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { PrismaClient } from '@prisma/client';
+import { ownerPrismaClient } from './owner-prisma.mjs';
 import { createClient } from '@supabase/supabase-js';
 
 const APPLY = process.argv.includes('--apply');
@@ -73,7 +73,9 @@ async function existsInR2(bucket, key) {
 }
 
 async function main() {
-  const prisma = new PrismaClient();
+  // Owner connection: this script is deliberately cross-organization, and the
+  // application role is subject to the tenant-isolation policies.
+  const prisma = ownerPrismaClient();
   const mediaProvider = process.env.INSPECTION_MEDIA_STORAGE_PROVIDER || 'local';
   const planProvider = process.env.FLOOR_PLAN_STORAGE_PROVIDER || 'local';
   if (mediaProvider === 'r2' && planProvider === 'r2')

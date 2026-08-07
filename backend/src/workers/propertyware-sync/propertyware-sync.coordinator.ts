@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
 import { PrismaService } from '../../common/prisma.service';
+import { withSystemTenant, withTenant } from '../../database/tenant-context';
 import type { PropertywareEntity } from '../../integrations/propertyware/propertyware.constants';
 import type { SyncMode } from '../../integrations/propertyware/propertyware.types';
 import { PropertywareSyncWorker } from './propertyware-sync.worker';
@@ -43,7 +44,10 @@ export class PropertywareSyncCoordinator implements OnModuleInit {
    */
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
-    setImmediate(() => void this.reclaimStaleRuns());
+    // Cross-organization by design: a server that died mid-sync left rows
+    // behind in whichever tenants were running, and none of them is 'the'
+    // organization here.
+    setImmediate(() => void withSystemTenant(() => this.reclaimStaleRuns()));
   }
 
   async reclaimStaleRuns(now: Date = new Date()) {
@@ -75,7 +79,14 @@ export class PropertywareSyncCoordinator implements OnModuleInit {
   async enqueue(input: EnqueuePropertywareSync) {
     const request = { entities: input.entities, mode: input.mode, requestedBy: input.requestedBy };
     const run = await this.worker.createRun(input.organizationId, request);
-    setImmediate(() => void this.worker.execute(run.id, input.organizationId, request));
+    // Runs after the response (or from cron), so the request's tenant scope
+    // is gone — but the organization is known, so the sync re-establishes it
+    // rather than running with system access for its whole duration.
+    setImmediate(() =>
+      void withTenant(input.organizationId, () =>
+        this.worker.execute(run.id, input.organizationId, request),
+      ),
+    );
     return { syncRunId: run.id, status: 'PENDING' as const };
   }
 }

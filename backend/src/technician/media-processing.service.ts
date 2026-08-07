@@ -19,6 +19,7 @@ import { z } from 'zod';
 
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { withSystemTenant, withTenant } from '../database/tenant-context';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { ComparisonService } from '../admin/comparison.service';
 import { thumbnailKeyFor } from '../common/object-storage';
@@ -164,32 +165,42 @@ export class MediaProcessingService implements OnModuleInit {
    *  whose processing died with the server (stuck PENDING/PROCESSING). */
   onModuleInit() {
     if (process.env.NODE_ENV === 'test') return;
+    // Cross-organization by design: recordings interrupted by a restart belong
+    // to whichever tenants happened to be mid-upload, and none of them is
+    // "the" organization here.
     setImmediate(() => {
-      void this.prisma.inspectionMedia
-        .findMany({
-          where: {
-            processingStatus: {
-              in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING],
+      void withSystemTenant(() =>
+        this.prisma.inspectionMedia
+          .findMany({
+            where: {
+              processingStatus: {
+                in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING],
+              },
             },
-          },
-          select: { id: true, organizationId: true },
-          take: 25,
-        })
-        .then((stuck) => {
-          if (!stuck.length) return;
-          this.logger.log(`Recovering ${stuck.length} unprocessed recording(s).`);
-          for (const media of stuck) this.queue(media.id, media.organizationId);
-        })
-        .catch((error) => {
-          this.logger.warn(`Startup recovery scan failed: ${String(error)}`);
-        });
+            select: { id: true, organizationId: true },
+            take: 25,
+          })
+          .then((stuck) => {
+            if (!stuck.length) return;
+            this.logger.log(`Recovering ${stuck.length} unprocessed recording(s).`);
+            // Each queued item carries its own organization, so the work that
+            // follows is scoped even though finding it was not.
+            for (const media of stuck) this.queue(media.id, media.organizationId);
+          })
+          .catch((error) => {
+            this.logger.warn(`Startup recovery scan failed: ${String(error)}`);
+          }),
+      );
     });
   }
 
   /** Fire-and-forget: uploads must not wait for transcription and analysis. */
   queue(mediaId: string, organizationId: string) {
     setImmediate(() => {
-      void this.process(mediaId, organizationId).catch((error) => {
+      // Runs after the response, so the request's tenant scope is long gone —
+      // but the organization was passed in, so this re-establishes it rather
+      // than falling back to system access.
+      void withTenant(organizationId, () => this.process(mediaId, organizationId)).catch((error) => {
         this.logger.error(
           `Unhandled processing failure for media ${mediaId}`,
           error instanceof Error ? error.stack : String(error),

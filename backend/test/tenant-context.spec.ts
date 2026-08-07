@@ -38,13 +38,25 @@ describe('tenant context', () => {
     expect(seen).toEqual([ORG, OTHER]);
   });
 
-  it('does NOT reach work that escapes the scope unawaited', () => {
-    // The trap that made two concurrent requests both read unscoped: a Prisma
-    // promise is lazy, so returning one out of withTenant runs it after the
-    // scope has exited. Pinned deliberately — this is the behaviour, and the
-    // reason enterTenant exists.
-    const escaped = withTenant(ORG, () => () => currentTenant());
-    expect(escaped()).toBeUndefined();
+  it('reaches a lazy promise returned from the callback', () => {
+    // The trap this closes. A Prisma promise does not execute when it is
+    // created, only when awaited — so an implementation that handed the
+    // callback to AsyncLocalStorage.run() and returned its value ran the query
+    // after the scope had exited. It cost two concurrent requests their scoping
+    // once, and a round of 401s a second time.
+    //
+    // withTenant awaits inside the store, so a thenable created in the callback
+    // still resolves under the tenant.
+    const lazy = { then: (resolve: (value: unknown) => void) => resolve(currentTenant()) };
+    return expect(withTenant(ORG, () => lazy)).resolves.toBe(ORG);
+  });
+
+  it('still cannot reach a closure invoked after it returns', () => {
+    // The one escape that remains, and honestly so: nothing can scope a
+    // function the caller chooses to run later.
+    return withTenant(ORG, () => () => currentTenant()).then((escaped) => {
+      expect(escaped()).toBeUndefined();
+    });
   });
 
   it('enterTenant reaches work that escapes the call that set it', async () => {

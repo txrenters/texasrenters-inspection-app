@@ -15,6 +15,7 @@ import type { Request } from 'express';
 import { type PermissionKey, resolveEffectivePermissions, UserRole } from '@texasrenters/shared';
 
 import { PrismaService } from './prisma.service';
+import { withSystemTenant } from '../database/tenant-context';
 
 export interface AuthenticatedUser {
   id: string;
@@ -46,18 +47,26 @@ export async function authenticateApplicationUser(
   requestedOrganization?: string,
 ): Promise<AuthenticatedUser> {
   const claims = await verifySupabaseAccessToken(token);
-  const profile = await prisma.userProfile.findUnique({
-    where: { authUserId: claims.sub },
-    select: {
-      id: true,
-      displayName: true,
-      isActive: true,
-      memberships: { select: { organizationId: true, role: true } },
-      roleAssignments: {
-        select: { organizationId: true, role: { select: { permissions: true } } },
+  // The one query that cannot be tenant-scoped, because it is what *produces*
+  // the tenant. `UserProfile` is unpoliced, but the nested `memberships` and
+  // `roleAssignments` are not — and with policies that fail closed, reading
+  // them without a tenant returns nothing, so every request 401s with "No
+  // active organization membership". That is exactly what happened the first
+  // time the policies were tightened.
+  const profile = await withSystemTenant(() =>
+    prisma.userProfile.findUnique({
+      where: { authUserId: claims.sub },
+      select: {
+        id: true,
+        displayName: true,
+        isActive: true,
+        memberships: { select: { organizationId: true, role: true } },
+        roleAssignments: {
+          select: { organizationId: true, role: { select: { permissions: true } } },
+        },
       },
-    },
-  });
+    }),
+  );
   if (!profile?.isActive) throw new UnauthorizedException('No active application profile.');
   const memberships = profile.memberships.filter(
     (membership) => !requestedOrganization || membership.organizationId === requestedOrganization,
