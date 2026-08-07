@@ -26,6 +26,42 @@ services:
     ports:
       - '${POSTGRES_PORT:-55433}:5432'
 
+  # Database administration console.
+  #
+  # Deliberately in this file and not compose.yaml. This overlay is not loaded
+  # by the remote-beta command, so a console with full owner access to the
+  # database cannot reach a deployed environment by being forgotten here — which
+  # is the only reason the credentials below are allowed to have defaults.
+  #
+  # Bound to 127.0.0.1 rather than 0.0.0.0, unlike the other services. Those
+  # publish an API and a web app; this publishes an authenticated shell over the
+  # whole database, and the office network is one where client isolation and
+  # ad-hoc devices are already known quantities. Localhost keeps it on the
+  # workstation running it.
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    environment:
+      # A real domain, because pgAdmin validates this and rejects reserved TLDs
+      # — `.local` fails with "special-use or reserved name" and the container
+      # then restart-loops. It is a local login name, never an address anything
+      # is sent to, and is deliberately not an app account.
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-pgadmin@texasrenters.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-pgadmin}
+      # Left in server mode, which is the image's default. Desktop mode
+      # (SERVER_MODE=False) skips the login screen but moves the listener from
+      # 80 to 5050, so the published port silently answers nothing.
+    volumes:
+      # Pre-registers both connections so nobody has to remember that the host
+      # is `postgres` and the port is 5432 rather than the shifted host port.
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - pgadmin-data:/var/lib/pgadmin
+    ports:
+      - '127.0.0.1:${PGADMIN_PORT:-5480}:80'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
     environment:
       NODE_ENV: development
@@ -66,3 +102,9 @@ services:
   web:
     ports:
       - '${WEB_PORT:-5454}:${WEB_PORT:-5454}'
+
+volumes:
+  # Named, so saved connections and query history survive `docker compose down`.
+  # `down -v` would take it with the database, which is its own reason not to
+  # run that here.
+  pgadmin-data:

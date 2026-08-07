@@ -1,0 +1,24 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "TexasRenters (docker)",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "texasrenters",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "Host is the Compose service name, not localhost: inside pgAdmin's container localhost is pgAdmin itself. Port is 5432, the container port, not the shifted host port. No password is stored here - pgAdmin asks once and can remember it."
+    },
+    "2": {
+      "Name": "TexasRenters (application role)",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "texasrenters",
+      "Username": "texasrenters_app",
+      "SSLMode": "prefer",
+      "Comment": "The least-privilege role the backend actually uses. Connect as this to see what the application sees: row-level security applies, so with no app.organization_id set the policed tables read as empty. That is the fail-closed behaviour working, not a broken connection - the postgres entry above bypasses it because it owns the tables."
+    }
+  }
+}
