@@ -153,16 +153,29 @@ Every container belongs to one Compose project named `texasrenters`, declared by
 Both Dockerfiles build from the repository root, so the root `.dockerignore` is the only one Docker reads. A per-package `.dockerignore` has no effect.
 
 ```bash
-pnpm docker:up            # backend + web + redis, against Supabase
-pnpm docker:up:local-db   # ... and a local PostgreSQL container
+pnpm docker:up            # backend + web + redis + postgres
 pnpm docker:ps
 pnpm docker:logs
 pnpm docker:down
 ```
 
-Host ports are shifted away from the defaults so an existing local install does not collide: PostgreSQL on `55432`, Redis on `56379`. Services inside the network address each other by name on the standard container port.
+Host ports are shifted away from the defaults so an existing local install does not collide: PostgreSQL on `55433`, Redis on `56380`. Services inside the network address each other by name on the standard container port.
 
-The `local-db` profile is for offline work only. Supabase remains the default in every environment. To use the container, point `DATABASE_URL` and `DIRECT_URL` in `backend/.env.local` at `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public` and start with `pnpm docker:up:local-db`. Compose deliberately does not set those two variables, because a Compose `environment:` entry outranks `env_file:` and would silently override the Supabase credentials.
+### Database
+
+The platform is migrating off Supabase onto this Postgres container — see [docs/migration/SUPABASE_TO_SELF_HOSTED.md](docs/migration/SUPABASE_TO_SELF_HOSTED.md). The container now starts by default; it used to sit behind a `local-db` profile.
+
+**`DATABASE_URL` decides which database is live.** Compose deliberately sets neither `DATABASE_URL` nor `DIRECT_URL`, because a Compose `environment:` entry outranks `env_file:` and would silently override `backend/.env.local` — during a migration, which of two databases is in use has to stay under one file's control.
+
+To point at the container, set both in `backend/.env.local` to `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public`. The host is `postgres`, the service name; `localhost` would resolve to the backend container itself.
+
+```bash
+pnpm db:migrate-to-local            # dry run: compare both databases
+pnpm db:migrate-to-local --confirm  # copy `public` across, then verify
+pnpm db:migrate-to-local --verify   # compare only
+```
+
+The copy runs `pg_dump` inside the Postgres container, so no host Postgres install is needed and the client version always matches. It verifies row counts per table plus index, unique-index and foreign-key totals, and repoints nothing — switching over stays a deliberate edit.
 
 ### Propertyware synchronization
 

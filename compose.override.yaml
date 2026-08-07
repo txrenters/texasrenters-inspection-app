@@ -52,10 +52,14 @@ services:
       FLOOR_PLAN_STORAGE_PROVIDER: local
     # DATABASE_URL and DIRECT_URL are deliberately absent here. Compose
     # `environment:` outranks `env_file:`, so setting them would silently
-    # override the Supabase credentials in backend/.env.local. To run against
-    # the profile-gated Postgres container instead, point those two variables at
+    # override whatever backend/.env.local holds — and during the migration off
+    # Supabase, which of the two databases is live is exactly the thing that
+    # must stay under one file's control.
+    #
+    # To run against the Postgres container, set both in backend/.env.local to
     # `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public`
-    # inside backend/.env.local and start with `--profile local-db`.
+    # (host `postgres`, the service name — `localhost` would resolve to the
+    # backend container itself). See docs/migration/SUPABASE_TO_SELF_HOSTED.md.
     ports:
       - '${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}'
 

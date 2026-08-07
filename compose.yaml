@@ -7,7 +7,6 @@
 # its own Redis on its own network.
 #
 #   Local development      docker compose up -d --build
-#   ... with local Postgres docker compose --profile local-db up -d --build
 #   Remote iOS beta        docker compose -f compose.yaml -f compose.remote-beta.yaml up -d --build
 #
 # compose.override.yaml is loaded automatically and holds development-only
@@ -59,16 +58,24 @@ services:
       timeout: 5s
       retries: 10
 
-  # Supabase is the default database for every environment. This container is
-  # opt-in for offline work and is only created with `--profile local-db`.
+  # The application database.
   #
-  # No depends_on edge points at this service on purpose: a dependency on a
-  # profile-gated service behaves differently across Compose releases. The
-  # backend's `restart: unless-stopped` covers the short window where Postgres
-  # is still accepting connections.
+  # Was `profiles: ['local-db']` — opt-in, while Supabase was the default for
+  # every environment. It is now a first-class service, because the target
+  # deployment is a VPS running its own Postgres and the migration off Supabase
+  # is underway (docs/migration/SUPABASE_TO_SELF_HOSTED.md).
+  #
+  # Still no depends_on edge from the backend. It is no longer profile-gated, so
+  # one would now be safe, but the backend tolerates a database that is not yet
+  # accepting connections and `restart: unless-stopped` covers the startup
+  # window. Adding the edge would serialise every boot behind the healthcheck
+  # for no benefit.
+  #
+  # DATABASE_URL decides what is actually used. Pointing it at Supabase and
+  # leaving this container running is a valid state, and is exactly the state
+  # during the migration.
   postgres:
     image: postgres:17-alpine
-    profiles: ['local-db']
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-texasrenters}

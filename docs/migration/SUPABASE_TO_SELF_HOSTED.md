@@ -150,15 +150,35 @@ signatures keeps `admin-operations.spec.ts`, `profile-deletion.spec.ts` and
 Supabase Auth stays; only `DATABASE_URL` moves. Fully reversible by pointing the
 URL back.
 
-1. Promote the existing `local-db` compose profile (`postgres:17-alpine`) to a
-   first-class service with a named volume and a healthcheck.
-2. `pg_dump --schema=public --no-owner --no-privileges` from Supabase.
-3. Restore, then verify **row counts per table** against the source.
-4. Repoint `DATABASE_URL`, restart, smoke-test.
+**Done:**
 
-Note the dump must be `--schema=public`. The `auth`, `storage`, `realtime`,
-`vault` and `graphql` schemas are Supabase's own and do not belong in the new
-database — except for `auth.users`, which Phase 2 needs separately.
+1. ✅ Postgres promoted out of the `local-db` profile to a first-class service.
+2. ✅ `backend/scripts/migrate-to-local-postgres.mjs` — copies `public` and
+   verifies the result. `pnpm db:migrate-to-local[ --confirm | --verify]`.
+3. ✅ Copy run and verified: **53 tables, 1797 rows, 138 indexes, 90 unique
+   indexes, 79 foreign keys**, all matching the source.
+
+**Remaining — the cutover itself:**
+
+4. Stop writes, re-run `--confirm` to pick up anything since the copy, set
+   `DATABASE_URL` and `DIRECT_URL` in `backend/.env.local` to
+   `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public`,
+   restart, smoke-test.
+5. Change the container's Postgres password from the `postgres:postgres`
+   default before this is anything but local.
+
+Implementation notes worth keeping:
+
+- `pg_dump` and `psql` run **inside the container**, so no host Postgres install
+  is needed and the client version cannot drift from the server.
+- The source is `DIRECT_URL`, not `DATABASE_URL`. The latter is the transaction
+  pooler on 6543, where `pg_dump` cannot hold a consistent snapshot — and
+  `?pgbouncer=true` is Prisma-only, which `psql` rejects outright.
+- Only `public` is copied. `auth`, `storage`, `realtime`, `vault` and `graphql`
+  are Supabase's own. `auth.users` is Phase 2's problem and wants its password
+  hashes migrated rather than the schema dumped wholesale.
+- `--no-owner --no-privileges`: Supabase's grants reference `anon`,
+  `authenticated` and `service_role`, none of which exist on a plain image.
 
 ### Phase 2 — Self-hosted auth
 
