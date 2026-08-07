@@ -1,5 +1,5 @@
 import { PrismaClient, UserRole } from '@prisma/client';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
@@ -11,14 +11,14 @@ export const superAdminSeedEnvironmentSchema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     SEED_SUPER_ADMIN_EMAIL: z.string().email().default('appdev@texasrenters.com'),
     SEED_SUPER_ADMIN_LEGACY_EMAILS: z.string().default('appdev@texasrenters.wom'),
-    SEED_SUPER_ADMIN_PASSWORD: z.string().min(1),
+    // Optional. Left unset, the seed mints a random temporary password and
+    // prints it once — which is the better default, because a password written
+    // in an env file is a shared secret that outlives the person who set it.
+    SEED_SUPER_ADMIN_PASSWORD: z.string().min(1).optional(),
     SEED_SUPER_ADMIN_RESET_PASSWORD: z.enum(['true', 'false']).default('false'),
     SEED_SUPER_ADMIN_DISPLAY_NAME: z.string().min(1).default('TexasRenters Super Admin'),
     SEED_SUPER_ADMIN_ORGANIZATION_ID: z.string().uuid().default(defaultOrganizationId),
-    SEED_SUPER_ADMIN_ORGANIZATION_NAME: z
-      .string()
-      .min(1)
-      .default('TexasRenters Development'),
+    SEED_SUPER_ADMIN_ORGANIZATION_NAME: z.string().min(1).default('TexasRenters Development'),
   })
   .superRefine((environment, context) => {
     if (environment.NODE_ENV === 'production')
@@ -88,11 +88,34 @@ export async function upsertSystemAdminProfileWithPrisma(
 }
 
 /**
+ * Alphabet with the ambiguous glyphs removed — no O/0, no I/l/1.
+ *
+ * This gets read off a terminal and typed into a browser. A temporary password
+ * that fails because a zero was read as an O ends up pasted into a chat message
+ * instead, which is the one place it must never go.
+ */
+const TEMPORARY_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+
+/**
+ * ~24 characters from a 56-symbol alphabet, so roughly 139 bits.
+ *
+ * `randomInt` rather than `randomBytes(n)[i] % length`: 256 is not a multiple
+ * of 56, so the modulo would quietly favour the first 32 symbols. It does not
+ * matter much for a password with a one-login lifetime, but it costs nothing to
+ * be right and this is the function someone will copy.
+ */
+function generateTemporaryPassword() {
+  return Array.from(
+    { length: 24 },
+    () => TEMPORARY_PASSWORD_ALPHABET[randomInt(0, TEMPORARY_PASSWORD_ALPHABET.length)],
+  ).join('');
+}
+
+/**
  * Bootstrap the development super-admin against our own credential store.
  *
- * Was Supabase Auth. This is the only way to get a usable account onto a fresh
- * database, so it had to move with everything else — otherwise a clean install
- * has a profile nobody can sign in as.
+ * This is the only way to get a usable account onto a fresh database —
+ * otherwise a clean install has a profile nobody can sign in as.
  *
  * Writes through Prisma on the OWNER connection: the credential and the profile
  * are created together, and the seed is deliberately cross-organization, which
@@ -110,7 +133,9 @@ export async function seedSuperAdmin(environment: NodeJS.ProcessEnv = process.en
       select: { authUserId: true },
     });
     const authUserId = existing?.authUserId ?? randomUUID();
-    const passwordHash = await hash(config.SEED_SUPER_ADMIN_PASSWORD, 10);
+    const temporaryPassword = config.SEED_SUPER_ADMIN_PASSWORD ?? generateTemporaryPassword();
+    const generated = !config.SEED_SUPER_ADMIN_PASSWORD;
+    const passwordHash = await hash(temporaryPassword, 10);
 
     const profile = await upsertSystemAdminProfileWithPrisma(prisma, {
       authUserId,
@@ -126,16 +151,31 @@ export async function seedSuperAdmin(environment: NodeJS.ProcessEnv = process.en
     // An existing password is left alone unless the seed is asked to reset it.
     // Re-running this to repair a membership should not silently change the
     // password of an account someone is using.
+    //
+    // `mustChangePassword` is true whenever this seed sets a password. Whatever
+    // it wrote is known to a script, a terminal buffer, and possibly an env
+    // file — so it is a way in exactly once, and the account's real password is
+    // one the seed never saw. RolesGuard refuses every role-protected route
+    // until that change happens, so the flag is enforcement rather than advice.
+    const wrotePassword = !existing || config.SEED_SUPER_ADMIN_RESET_PASSWORD === 'true';
     await prisma.authCredential.upsert({
       where: { authUserId },
-      create: { authUserId, email, passwordHash, mustChangePassword: false },
+      create: { authUserId, email, passwordHash, mustChangePassword: true },
       update:
         config.SEED_SUPER_ADMIN_RESET_PASSWORD === 'true'
-          ? { email, passwordHash, mustChangePassword: false }
+          ? { email, passwordHash, mustChangePassword: true }
           : { email },
     });
 
-    return profile;
+    return {
+      ...profile,
+      email,
+      // Only when this run actually set it, and only when the seed chose it.
+      // Echoing a password the caller already put in an env file tells them
+      // nothing and puts it on one more screen.
+      temporaryPassword: wrotePassword && generated ? temporaryPassword : null,
+      mustChangePassword: wrotePassword,
+    };
   } finally {
     await prisma.$disconnect();
   }
@@ -143,8 +183,25 @@ export async function seedSuperAdmin(environment: NodeJS.ProcessEnv = process.en
 
 if (require.main === module)
   void seedSuperAdmin()
-    .then(() => console.log('Development super-admin seed completed.'))
+    .then((result) => {
+      console.log('Development super-admin seed completed.');
+      console.log(`  email    : ${result.email}`);
+      if (result.temporaryPassword) {
+        console.log(`  password : ${result.temporaryPassword}`);
+        console.log('  This is a temporary password, shown once and stored nowhere.');
+        console.log('  Signing in with it goes straight to the change-password screen.');
+      } else if (result.mustChangePassword) {
+        console.log('  password : as supplied in SEED_SUPER_ADMIN_PASSWORD');
+        console.log('  A change is still required at first sign-in.');
+      } else {
+        console.log(
+          '  password : unchanged (set SEED_SUPER_ADMIN_RESET_PASSWORD=true to replace it)',
+        );
+      }
+    })
     .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : 'Development super-admin seed failed.');
+      console.error(
+        error instanceof Error ? error.message : 'Development super-admin seed failed.',
+      );
       process.exit(1);
     });
