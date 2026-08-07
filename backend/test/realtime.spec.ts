@@ -11,7 +11,7 @@ function accessToken(authUserId: string) {
   const payload = encode({
     sub: authUserId,
     aud: 'authenticated',
-    iss: 'https://example.supabase.co/auth/v1',
+    iss: 'https://api.texasrenters.com/auth',
     exp: Math.floor(Date.now() / 1000) + 60,
   });
   const signature = createHmac('sha256', 'test-secret')
@@ -22,13 +22,13 @@ function accessToken(authUserId: string) {
 
 describe('technician realtime authorization', () => {
   beforeEach(() => {
-    process.env.SUPABASE_URL = 'https://example.supabase.co';
-    process.env.SUPABASE_JWT_SECRET = 'test-secret';
+    process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
+    process.env.AUTH_JWT_SECRET = 'test-secret';
   });
 
   afterEach(() => {
-    delete process.env.SUPABASE_URL;
-    delete process.env.SUPABASE_JWT_SECRET;
+    delete process.env.AUTH_JWT_ISSUER;
+    delete process.env.AUTH_JWT_SECRET;
   });
 
   it('joins only the technician room derived from the authenticated profile', async () => {

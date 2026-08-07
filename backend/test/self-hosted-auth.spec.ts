@@ -1,6 +1,6 @@
 import { hashSync } from 'bcryptjs';
 
-import { verifySupabaseJwt } from '../src/common/auth';
+import { verifyAccessTokenSignature } from '../src/common/auth';
 import { LocalIdentityProvider } from '../src/auth/local-identity.provider';
 import { PasswordResetService } from '../src/auth/password-reset.service';
 import { SessionService } from '../src/auth/session.service';
@@ -62,7 +62,7 @@ describe('self-hosted token issuing', () => {
       mustChangePassword: false,
     });
 
-    const claims = verifySupabaseJwt(token);
+    const claims = verifyAccessTokenSignature(token);
     expect(claims.sub).toBe(AUTH_USER_ID);
     expect(claims.iss).toBe('https://api.texasrenters.com/auth');
   });
@@ -76,7 +76,7 @@ describe('self-hosted token issuing', () => {
       mustChangePassword: true,
     });
 
-    expect(verifySupabaseJwt(token).app_metadata?.must_change_password).toBe(true);
+    expect(verifyAccessTokenSignature(token).app_metadata?.must_change_password).toBe(true);
   });
 
   it('is rejected by a deployment configured for a different issuer', () => {
@@ -86,7 +86,7 @@ describe('self-hosted token issuing', () => {
     });
 
     process.env.AUTH_JWT_ISSUER = 'https://someone-else.example/auth';
-    expect(() => verifySupabaseJwt(token)).toThrow();
+    expect(() => verifyAccessTokenSignature(token)).toThrow();
   });
 
   it('honours a configured access-token lifetime', () => {

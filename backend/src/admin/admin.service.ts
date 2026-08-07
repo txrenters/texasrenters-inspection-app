@@ -146,18 +146,6 @@ function mediaStorageReadiness(
         : 'Room video and photo upload will fail until R2 credentials are set.',
     };
   }
-  if (provider === 'supabase') {
-    const configured = Boolean(
-      process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
-    );
-    return {
-      provider: 'Supabase Storage',
-      status: status(configured),
-      detail: configured
-        ? 'Inspection media is stored in Supabase Storage.'
-        : 'Room video and photo upload will fail until Supabase credentials are set.',
-    };
-  }
   return {
     provider: 'Inspection media storage',
     status: status(true, false),
@@ -2126,10 +2114,10 @@ export class AdminService {
           ),
         ),
       },
-      {
-        provider: 'Supabase',
-        status: status(Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)),
-      },
+      // There is no Supabase row either. The database is dockerized Postgres
+      // and authentication is our own credential store, so a row here could
+      // only ever report red for a vendor this deployment no longer uses.
+      //
       // There is no Deepgram row, because nothing in this codebase calls
       // Deepgram.
       //

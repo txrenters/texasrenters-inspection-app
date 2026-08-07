@@ -45,7 +45,7 @@ export async function authenticateApplicationUser(
   token: string,
   requestedOrganization?: string,
 ): Promise<AuthenticatedUser> {
-  const claims = await verifySupabaseAccessToken(token);
+  const claims = await verifyAccessToken(token);
   // The one query that cannot be tenant-scoped, because it is what *produces*
   // the tenant. `UserProfile` is unpoliced, but the nested `memberships` and
   // `roleAssignments` are not — and with policies that fail closed, reading
@@ -175,7 +175,7 @@ export class ApiAuthGuard implements CanActivate {
   }
 }
 
-interface SupabaseClaims {
+interface AccessTokenClaims {
   sub: string;
   aud?: string | string[];
   iss?: string;
@@ -193,31 +193,29 @@ function bearerToken(header?: string) {
 /**
  * The issuer and audience an access token must carry.
  *
- * Both were hardcoded to Supabase's shapes — `${SUPABASE_URL}/auth/v1` and the
- * literal `authenticated`. They are configuration now, defaulting to exactly
- * those values, so tokens minted today keep verifying unchanged and the
- * self-hosted issuer becomes an env change rather than a code change.
+ * Both are configuration. There used to be a fallback here that derived the
+ * issuer from `SUPABASE_URL`, kept so tokens minted before the migration would
+ * still verify. Nothing issues those any more — every token in circulation is
+ * signed by this backend — and leaving it meant a stray `SUPABASE_URL` could
+ * quietly redefine which issuer is trusted.
  *
  * Derived per call rather than cached: the tests set these in `beforeEach`, and
  * a module-level constant would freeze whichever value happened to be present
  * when the module was first imported.
  */
 export function expectedTokenIssuer() {
-  const configured = process.env.AUTH_JWT_ISSUER?.trim();
-  if (configured) return configured.replace(/\/$/, '');
-  const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
-  return supabaseUrl ? `${supabaseUrl}/auth/v1` : '';
+  return process.env.AUTH_JWT_ISSUER?.trim().replace(/\/$/, '') ?? '';
 }
 
 export function expectedTokenAudience() {
   return process.env.AUTH_JWT_AUDIENCE?.trim() || 'authenticated';
 }
 
-export function verifySupabaseJwt(token: string): SupabaseClaims {
-  const secret = process.env.AUTH_JWT_SECRET?.trim() || process.env.SUPABASE_JWT_SECRET;
+export function verifyAccessTokenSignature(token: string): AccessTokenClaims {
+  const secret = process.env.AUTH_JWT_SECRET?.trim();
   const issuer = expectedTokenIssuer();
   if (!secret || !issuer)
-    throw new UnauthorizedException('Supabase authentication is not configured.');
+    throw new UnauthorizedException('Authentication is not configured.');
   const parts = token.split('.');
   if (parts.length !== 3) throw new UnauthorizedException('Invalid access token.');
   try {
@@ -227,7 +225,7 @@ export function verifySupabaseJwt(token: string): SupabaseClaims {
     const actual = Buffer.from(parts[2]!, 'base64url');
     if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
       throw new Error('Invalid signature.');
-    const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as SupabaseClaims;
+    const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as AccessTokenClaims;
     const now = Math.floor(Date.now() / 1000);
     if (!claims.sub || !Number.isFinite(claims.exp) || claims.exp <= now)
       throw new Error('Expired.');
@@ -253,10 +251,10 @@ export function verifySupabaseJwt(token: string): SupabaseClaims {
  * An asymmetric token now fails here rather than being sent anywhere, which is
  * the correct answer for a token this deployment cannot have issued.
  */
-export async function verifySupabaseAccessToken(token: string): Promise<SupabaseClaims> {
+export async function verifyAccessToken(token: string): Promise<AccessTokenClaims> {
   if (tokenAlgorithm(token) !== 'HS256')
     throw new UnauthorizedException('Invalid or expired access token.');
-  return verifySupabaseJwt(token);
+  return verifyAccessTokenSignature(token);
 }
 
 function tokenAlgorithm(token: string) {
@@ -276,7 +274,7 @@ function tokenAlgorithm(token: string) {
 export class RequiredPasswordAuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<RequiredPasswordRequest>();
-    const claims = await verifySupabaseAccessToken(bearerToken(request.header('authorization')));
+    const claims = await verifyAccessToken(bearerToken(request.header('authorization')));
     if (claims.app_metadata?.must_change_password !== true)
       throw new ForbiddenException('This account does not require a password replacement.');
     request.auth = { authUserId: claims.sub, mustChangePassword: true };

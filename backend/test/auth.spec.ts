@@ -6,8 +6,8 @@ import { UserRole } from '@texasrenters/shared';
 import {
   RequiredPasswordAuthGuard,
   RolesGuard,
-  verifySupabaseAccessToken,
-  verifySupabaseJwt,
+  verifyAccessToken,
+  verifyAccessTokenSignature,
 } from '../src/common/auth';
 
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -19,36 +19,38 @@ function token(payload: Record<string, unknown>, secret = 'test-secret') {
   return `${header}.${body}.${signature}`;
 }
 
-describe('Supabase access-token validation', () => {
+describe('access-token validation', () => {
   beforeEach(() => {
-    process.env.SUPABASE_URL = 'https://example.supabase.co';
-    process.env.SUPABASE_JWT_SECRET = 'test-secret';
+    process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
+    process.env.AUTH_JWT_SECRET = 'test-secret';
   });
 
   afterEach(() => {
-    delete process.env.SUPABASE_URL;
-    delete process.env.SUPABASE_JWT_SECRET;
     delete process.env.AUTH_JWT_ISSUER;
     delete process.env.AUTH_JWT_AUDIENCE;
     delete process.env.AUTH_JWT_SECRET;
   });
 
-  // The seam for moving off Supabase Auth: issuer, audience and signing key are
-  // configurable, and default to the Supabase shapes so nothing changes until
-  // they are set. See docs/migration/SUPABASE_TO_SELF_HOSTED.md.
-  describe('self-hosted issuer seam', () => {
-    it('defaults to the Supabase issuer and audience when unconfigured', () => {
-      // Guards the migration: a default that drifted would reject every token
-      // in circulation the moment this shipped, with no config change made.
-      const claims = verifySupabaseJwt(
-        token({
-          sub: 'auth-user',
-          iss: 'https://example.supabase.co/auth/v1',
-          aud: 'authenticated',
-          exp: Math.floor(Date.now() / 1000) + 60,
-        }),
-      );
-      expect(claims.sub).toBe('auth-user');
+  // Issuer, audience and signing key are all configuration. They used to fall
+  // back to the Supabase shapes so tokens minted before the migration kept
+  // verifying; that fallback is gone, so the guarantee worth pinning now is the
+  // opposite one — unconfigured means refuse, not guess.
+  describe('issuer configuration', () => {
+    it('refuses to verify anything when no issuer is configured', () => {
+      // Fail closed. A missing issuer must not degrade into accepting whatever
+      // issuer a token happens to name.
+      delete process.env.AUTH_JWT_ISSUER;
+
+      expect(() =>
+        verifyAccessTokenSignature(
+          token({
+            sub: 'auth-user',
+            iss: 'https://api.texasrenters.com/auth',
+            aud: 'authenticated',
+            exp: Math.floor(Date.now() / 1000) + 60,
+          }),
+        ),
+      ).toThrow(UnauthorizedException);
     });
 
     it('accepts a token from our own issuer, audience and signing key', () => {
@@ -56,7 +58,7 @@ describe('Supabase access-token validation', () => {
       process.env.AUTH_JWT_AUDIENCE = 'texasrenters';
       process.env.AUTH_JWT_SECRET = 'self-hosted-secret';
 
-      const claims = verifySupabaseJwt(
+      const claims = verifyAccessTokenSignature(
         token(
           {
             sub: 'auth-user',
@@ -70,13 +72,11 @@ describe('Supabase access-token validation', () => {
       expect(claims.sub).toBe('auth-user');
     });
 
-    it('rejects a Supabase token once the issuer has moved', () => {
-      // The cutover has to be a real boundary: after switching, a token minted
-      // by the old issuer must stop working rather than quietly still passing.
-      process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
-
+    it('rejects a token minted by the old Supabase issuer', () => {
+      // The cutover has to be a real boundary: a token minted by the issuer we
+      // migrated off must stop working rather than quietly still passing.
       expect(() =>
-        verifySupabaseJwt(
+        verifyAccessTokenSignature(
           token({
             sub: 'auth-user',
             iss: 'https://example.supabase.co/auth/v1',
@@ -90,7 +90,7 @@ describe('Supabase access-token validation', () => {
     it('tolerates a trailing slash on the configured issuer', () => {
       process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth/';
 
-      const claims = verifySupabaseJwt(
+      const claims = verifyAccessTokenSignature(
         token({
           sub: 'auth-user',
           iss: 'https://api.texasrenters.com/auth',
@@ -102,12 +102,12 @@ describe('Supabase access-token validation', () => {
     });
   });
 
-  it('accepts a valid authenticated Supabase token', () => {
-    const claims = verifySupabaseJwt(
+  it('accepts a valid authenticated token', () => {
+    const claims = verifyAccessTokenSignature(
       token({
         sub: 'auth-user-id',
         aud: 'authenticated',
-        iss: 'https://example.supabase.co/auth/v1',
+        iss: 'https://api.texasrenters.com/auth',
         exp: Math.floor(Date.now() / 1000) + 60,
       }),
     );
@@ -115,11 +115,11 @@ describe('Supabase access-token validation', () => {
   });
 
   it('preserves the required-password-change claim', () => {
-    const claims = verifySupabaseJwt(
+    const claims = verifyAccessTokenSignature(
       token({
         sub: 'auth-user-id',
         aud: 'authenticated',
-        iss: 'https://example.supabase.co/auth/v1',
+        iss: 'https://api.texasrenters.com/auth',
         exp: Math.floor(Date.now() / 1000) + 60,
         app_metadata: { must_change_password: true },
       }),
@@ -127,12 +127,12 @@ describe('Supabase access-token validation', () => {
     expect(claims.app_metadata?.must_change_password).toBe(true);
   });
 
-  it('supports legacy symmetric tokens through the shared async verifier', async () => {
-    const claims = await verifySupabaseAccessToken(
+  it('verifies HS256 tokens through the shared async verifier', async () => {
+    const claims = await verifyAccessToken(
       token({
         sub: 'auth-user-id',
         aud: 'authenticated',
-        iss: 'https://example.supabase.co/auth/v1',
+        iss: 'https://api.texasrenters.com/auth',
         exp: Math.floor(Date.now() / 1000) + 60,
       }),
     );
@@ -144,12 +144,12 @@ describe('Supabase access-token validation', () => {
     ['expired token', 'test-secret', Math.floor(Date.now() / 1000) - 1],
   ])('rejects a %s', (_label, secret, exp) => {
     expect(() =>
-      verifySupabaseJwt(
+      verifyAccessTokenSignature(
         token(
           {
             sub: 'auth-user-id',
             aud: 'authenticated',
-            iss: 'https://example.supabase.co/auth/v1',
+            iss: 'https://api.texasrenters.com/auth',
             exp,
           },
           secret as string,
@@ -158,9 +158,9 @@ describe('Supabase access-token validation', () => {
     ).toThrow(UnauthorizedException);
   });
 
-  it('rejects a token issued for another Supabase project', () => {
+  it('rejects a token issued by an unrelated issuer', () => {
     expect(() =>
-      verifySupabaseJwt(
+      verifyAccessTokenSignature(
         token({
           sub: 'auth-user-id',
           aud: 'authenticated',
@@ -174,15 +174,13 @@ describe('Supabase access-token validation', () => {
 
 describe('temporary-password authorization boundary', () => {
   beforeEach(() => {
-    process.env.SUPABASE_URL = 'https://example.supabase.co';
-    process.env.SUPABASE_ANON_KEY = 'test-anon-key';
-    process.env.SUPABASE_JWT_SECRET = 'test-secret';
+    process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
+    process.env.AUTH_JWT_SECRET = 'test-secret';
   });
 
   afterEach(() => {
-    delete process.env.SUPABASE_URL;
-    delete process.env.SUPABASE_ANON_KEY;
-    delete process.env.SUPABASE_JWT_SECRET;
+    delete process.env.AUTH_JWT_ISSUER;
+    delete process.env.AUTH_JWT_SECRET;
   });
 
   it('authenticates the temporary identity without requiring an application profile', async () => {
@@ -191,7 +189,7 @@ describe('temporary-password authorization boundary', () => {
         `Bearer ${token({
           sub: 'auth-user-id',
           aud: 'authenticated',
-          iss: 'https://example.supabase.co/auth/v1',
+          iss: 'https://api.texasrenters.com/auth',
           exp: Math.floor(Date.now() / 1000) + 60,
           app_metadata: { must_change_password: true },
         })}`,

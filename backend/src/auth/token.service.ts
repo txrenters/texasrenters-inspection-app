@@ -9,7 +9,7 @@ import { ApplicationError } from '../common/errors';
  * Mints the access and refresh tokens that replace Supabase's.
  *
  * HS256, hand-rolled on `node:crypto`, and deliberately without a JWT library:
- * `verifySupabaseJwt` in common/auth.ts already verifies this shape with
+ * `verifyAccessTokenSignature` in common/auth.ts already verifies this shape with
  * `createHmac` and a `timingSafeEqual`, so minting is that same operation in
  * reverse. A dependency here would add a second implementation of an algorithm
  * we already have, and the two could drift.
@@ -44,12 +44,12 @@ export class TokenService {
   /**
    * The signing key, resolved the same way verification resolves it.
    *
-   * Same fallback chain as `verifySupabaseJwt` on purpose — if the two ever
-   * disagreed, this service would happily mint tokens the guard rejects, and
-   * every sign-in would succeed then fail on the next request.
+   * Same key as `verifyAccessTokenSignature` reads, on purpose — if the two
+   * ever disagreed, this service would happily mint tokens the guard rejects,
+   * and every sign-in would succeed then fail on the next request.
    */
   private secret() {
-    const secret = process.env.AUTH_JWT_SECRET?.trim() || process.env.SUPABASE_JWT_SECRET;
+    const secret = process.env.AUTH_JWT_SECRET?.trim();
     if (!secret)
       throw new ApplicationError(
         503,
