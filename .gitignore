@@ -122,3 +122,7 @@ Desktop.ini
 *.bak
 *.orig
 *.tgz
+
+# Database dumps. These contain password hashes and full tenant data.
+backups/
+*.dump
