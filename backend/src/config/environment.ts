@@ -53,6 +53,17 @@ const environmentSchema = z
     USE_MOCK_AUTH: z.enum(['true', 'false']).default('false'),
     SUPABASE_URL: z.string().url().optional(),
     SUPABASE_JWT_SECRET: z.string().optional(),
+    // Required by password reset and account provisioning, which 503 without
+    // it. It was read straight from process.env and never validated, so the
+    // failure only surfaced when an administrator tried to create a user.
+    SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
+    SUPABASE_ANON_KEY: z.string().optional(),
+    // Token identity, defaulting to Supabase's shapes so nothing changes until
+    // these are set. The seam that lets the issuer move off Supabase without
+    // touching verification code. See docs/migration/SUPABASE_TO_SELF_HOSTED.md.
+    AUTH_JWT_ISSUER: z.string().optional(),
+    AUTH_JWT_AUDIENCE: z.string().optional(),
+    AUTH_JWT_SECRET: z.string().optional(),
     FLOOR_PLAN_EXTRACTION_PROVIDER: z
       .enum(['disabled', 'mock', 'anthropic', 'openai'])
       .default('disabled'),

@@ -28,6 +28,78 @@ describe('Supabase access-token validation', () => {
   afterEach(() => {
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_JWT_SECRET;
+    delete process.env.AUTH_JWT_ISSUER;
+    delete process.env.AUTH_JWT_AUDIENCE;
+    delete process.env.AUTH_JWT_SECRET;
+  });
+
+  // The seam for moving off Supabase Auth: issuer, audience and signing key are
+  // configurable, and default to the Supabase shapes so nothing changes until
+  // they are set. See docs/migration/SUPABASE_TO_SELF_HOSTED.md.
+  describe('self-hosted issuer seam', () => {
+    it('defaults to the Supabase issuer and audience when unconfigured', () => {
+      // Guards the migration: a default that drifted would reject every token
+      // in circulation the moment this shipped, with no config change made.
+      const claims = verifySupabaseJwt(
+        token({
+          sub: 'auth-user',
+          iss: 'https://example.supabase.co/auth/v1',
+          aud: 'authenticated',
+          exp: Math.floor(Date.now() / 1000) + 60,
+        }),
+      );
+      expect(claims.sub).toBe('auth-user');
+    });
+
+    it('accepts a token from our own issuer, audience and signing key', () => {
+      process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
+      process.env.AUTH_JWT_AUDIENCE = 'texasrenters';
+      process.env.AUTH_JWT_SECRET = 'self-hosted-secret';
+
+      const claims = verifySupabaseJwt(
+        token(
+          {
+            sub: 'auth-user',
+            iss: 'https://api.texasrenters.com/auth',
+            aud: 'texasrenters',
+            exp: Math.floor(Date.now() / 1000) + 60,
+          },
+          'self-hosted-secret',
+        ),
+      );
+      expect(claims.sub).toBe('auth-user');
+    });
+
+    it('rejects a Supabase token once the issuer has moved', () => {
+      // The cutover has to be a real boundary: after switching, a token minted
+      // by the old issuer must stop working rather than quietly still passing.
+      process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
+
+      expect(() =>
+        verifySupabaseJwt(
+          token({
+            sub: 'auth-user',
+            iss: 'https://example.supabase.co/auth/v1',
+            aud: 'authenticated',
+            exp: Math.floor(Date.now() / 1000) + 60,
+          }),
+        ),
+      ).toThrow(UnauthorizedException);
+    });
+
+    it('tolerates a trailing slash on the configured issuer', () => {
+      process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth/';
+
+      const claims = verifySupabaseJwt(
+        token({
+          sub: 'auth-user',
+          iss: 'https://api.texasrenters.com/auth',
+          aud: 'authenticated',
+          exp: Math.floor(Date.now() / 1000) + 60,
+        }),
+      );
+      expect(claims.sub).toBe('auth-user');
+    });
   });
 
   it('accepts a valid authenticated Supabase token', () => {

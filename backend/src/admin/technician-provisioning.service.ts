@@ -10,9 +10,18 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import type { CreateTechnicianDto } from './admin.dto';
+import type { IdentityProvider } from './identity-provider';
 
+/**
+ * Supabase Auth as the credential store.
+ *
+ * Declared `implements IdentityProvider` so the contract is checked at compile
+ * time rather than by convention — the replacement provider has to match, and
+ * a drift in either direction fails the build. See
+ * docs/migration/SUPABASE_TO_SELF_HOSTED.md.
+ */
 @Injectable()
-export class SupabaseAdminGateway {
+export class SupabaseAdminGateway implements IdentityProvider {
   private admin() {
     const url = process.env.SUPABASE_URL;
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

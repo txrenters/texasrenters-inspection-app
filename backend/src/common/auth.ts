@@ -185,10 +185,33 @@ function bearerToken(header?: string) {
   return match[1];
 }
 
-export function verifySupabaseJwt(token: string): SupabaseClaims {
-  const secret = process.env.SUPABASE_JWT_SECRET;
+/**
+ * The issuer and audience an access token must carry.
+ *
+ * Both were hardcoded to Supabase's shapes — `${SUPABASE_URL}/auth/v1` and the
+ * literal `authenticated`. They are configuration now, defaulting to exactly
+ * those values, so tokens minted today keep verifying unchanged and the
+ * self-hosted issuer becomes an env change rather than a code change.
+ *
+ * Derived per call rather than cached: the tests set these in `beforeEach`, and
+ * a module-level constant would freeze whichever value happened to be present
+ * when the module was first imported.
+ */
+export function expectedTokenIssuer() {
+  const configured = process.env.AUTH_JWT_ISSUER?.trim();
+  if (configured) return configured.replace(/\/$/, '');
   const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
-  if (!secret || !supabaseUrl)
+  return supabaseUrl ? `${supabaseUrl}/auth/v1` : '';
+}
+
+export function expectedTokenAudience() {
+  return process.env.AUTH_JWT_AUDIENCE?.trim() || 'authenticated';
+}
+
+export function verifySupabaseJwt(token: string): SupabaseClaims {
+  const secret = process.env.AUTH_JWT_SECRET?.trim() || process.env.SUPABASE_JWT_SECRET;
+  const issuer = expectedTokenIssuer();
+  if (!secret || !issuer)
     throw new UnauthorizedException('Supabase authentication is not configured.');
   const parts = token.split('.');
   if (parts.length !== 3) throw new UnauthorizedException('Invalid access token.');
@@ -204,9 +227,9 @@ export function verifySupabaseJwt(token: string): SupabaseClaims {
     if (!claims.sub || !Number.isFinite(claims.exp) || claims.exp <= now)
       throw new Error('Expired.');
     if (claims.nbf && claims.nbf > now) throw new Error('Not active.');
-    if (claims.iss !== `${supabaseUrl}/auth/v1`) throw new Error('Invalid issuer.');
+    if (claims.iss !== issuer) throw new Error('Invalid issuer.');
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!audiences.includes('authenticated')) throw new Error('Invalid audience.');
+    if (!audiences.includes(expectedTokenAudience())) throw new Error('Invalid audience.');
     return claims;
   } catch {
     throw new UnauthorizedException('Invalid or expired access token.');
@@ -235,7 +258,7 @@ export async function verifySupabaseAccessToken(token: string): Promise<Supabase
     const { data, error } = await verificationClient.auth.getClaims(token);
     if (error || !data?.claims) throw new Error('Token verification failed.');
     const claims = data.claims as unknown as SupabaseClaims;
-    validateClaims(claims, supabaseUrl);
+    validateClaims(claims);
     return claims;
   } catch {
     throw new UnauthorizedException('Invalid or expired access token.');
@@ -254,13 +277,13 @@ function tokenAlgorithm(token: string) {
   }
 }
 
-function validateClaims(claims: SupabaseClaims, supabaseUrl: string) {
+function validateClaims(claims: SupabaseClaims) {
   const now = Math.floor(Date.now() / 1000);
   if (!claims.sub || !Number.isFinite(claims.exp) || claims.exp <= now) throw new Error('Expired.');
   if (claims.nbf && claims.nbf > now) throw new Error('Not active.');
-  if (claims.iss !== `${supabaseUrl}/auth/v1`) throw new Error('Invalid issuer.');
+  if (claims.iss !== expectedTokenIssuer()) throw new Error('Invalid issuer.');
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!audiences.includes('authenticated')) throw new Error('Invalid audience.');
+  if (!audiences.includes(expectedTokenAudience())) throw new Error('Invalid audience.');
 }
 
 @Injectable()
