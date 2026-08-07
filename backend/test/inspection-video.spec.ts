@@ -332,13 +332,27 @@ describe('playback', () => {
   });
 
   it('scopes an ordinary technician to their own assigned inspection', async () => {
+    // Reached through `inspectionArea`. InspectionMedia has no `inspection`
+    // relation — only a bare `inspectionId` column — so filtering on
+    // `inspection` is an invalid query, not a narrower one, and Prisma rejects
+    // the entire call.
+    //
+    // This test asserted that broken shape and passed, because the harness
+    // mocks Prisma and nothing here validates a query against the real schema.
+    // Every technician playback request returned 500 while this was green;
+    // administrators were unaffected, since the branch does not apply to them.
+    // The compile-time guard is the real fix — see the annotated
+    // `Prisma.InspectionMediaWhereInput` in the service, which now rejects the
+    // mistake at build time.
     const { service, prisma } = playbackHarness(readyMedia);
     await service.getPlayback(technician, 'media-1');
     expect(prisma.inspectionMedia.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           organizationId: technician.organizationId,
-          inspection: { assignments: { some: { technicianId: technician.id, isCurrent: true } } },
+          inspectionArea: {
+            inspection: { assignments: { some: { technicianId: technician.id, isCurrent: true } } },
+          },
         }),
       }),
     );
@@ -349,7 +363,7 @@ describe('playback', () => {
     // would lock the console out of every video it exists to review.
     const { service, prisma } = playbackHarness(readyMedia);
     await service.getPlayback(admin, 'media-1');
-    expect(prisma.inspectionMedia.findFirst.mock.calls[0][0].where.inspection).toBeUndefined();
+    expect(prisma.inspectionMedia.findFirst.mock.calls[0][0].where.inspectionArea).toBeUndefined();
   });
 
   it('reports a video that is not yet encoded as processing, not as an error', async () => {

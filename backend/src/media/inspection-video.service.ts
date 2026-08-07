@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import {
   InspectionStatus,
   MediaProcessingStatus,
@@ -195,6 +196,21 @@ export class InspectionVideoService {
    * evidence about somebody's home.
    */
   async getPlayback(user: AuthenticatedUser, videoId: string) {
+    /**
+     * Annotated, and that is the point.
+     *
+     * This filter was written inline inside a conditional spread, which widens
+     * the object's type and switches off excess-property checking — so
+     * `inspection: { … }`, a relation InspectionMedia does not have, compiled
+     * cleanly and failed at runtime for every technician. Naming it with an
+     * explicit Prisma type puts the check back: get the relation wrong here and
+     * it will not build.
+     */
+    const assignedToCaller: Prisma.InspectionMediaWhereInput = {
+      inspectionArea: {
+        inspection: { assignments: { some: { technicianId: user.id, isCurrent: true } } },
+      },
+    };
     const media = await this.prisma.inspectionMedia.findFirst({
       where: {
         id: videoId,
@@ -203,13 +219,9 @@ export class InspectionVideoService {
         // technician this inspection is currently assigned to. Expressed in the
         // query so an unauthorized caller gets a plain not-found and cannot use
         // the endpoint to discover which video ids exist.
-        ...(user.permissions.includes('inspections:read')
-          ? {}
-          : {
-              inspection: {
-                assignments: { some: { technicianId: user.id, isCurrent: true } },
-              },
-            }),
+        // Administrators see any video in their organization; everyone else
+        // only what they are currently assigned.
+        ...(user.permissions.includes('inspections:read') ? {} : assignedToCaller),
       },
       select: {
         id: true,
