@@ -10,6 +10,7 @@ import {
   type DatabaseConnectionSummary,
 } from './database-connection';
 import { QueryPerformanceContext } from './query-performance.context';
+import { currentTenant } from './tenant-context';
 
 type InstrumentedPrismaOptions = Prisma.PrismaClientOptions & {
   log: [{ emit: 'event'; level: 'query' }];
@@ -40,6 +41,26 @@ type InstrumentedPrismaOptions = Prisma.PrismaClientOptions & {
  */
 export const TRANSACTION_DEFAULTS = { timeout: 20_000, maxWait: 10_000 } as const;
 
+/**
+ * Whether every query carries its organization onto the database session.
+ *
+ * On by default; RLS_TENANT_SCOPE_ENABLED=false turns it off. The escape hatch
+ * exists because the mechanism is not free: measured on this database, a scoped
+ * findMany costs 4.29 ms against 1.25 ms unscoped — the query becomes a
+ * transaction, so one round trip becomes four. That is 3 ms per operation,
+ * which is cheap next to a cellular round trip and not cheap inside a page that
+ * issues a dozen queries.
+ *
+ * Turning it off does not disable the policies; it stops the tenant reaching
+ * them, and the policies allow an unset tenant. So this trades the second wall
+ * for latency, and leaves the application-level organizationId filters — which
+ * were audited and found correct — as the only enforcement, exactly as before
+ * Phase 3.
+ */
+function tenantScopeEnabled() {
+  return process.env.RLS_TENANT_SCOPE_ENABLED?.trim().toLowerCase() !== 'false';
+}
+
 export interface DatabaseReadiness {
   ready: boolean;
   startupDurationMs: number | null;
@@ -67,7 +88,48 @@ export class PrismaService
       transactionOptions: TRANSACTION_DEFAULTS,
     });
     this.connectionSummary = connectionSummary;
+    // Registered BEFORE extending, deliberately. `$extends` returns a client
+    // that forwards model calls and subclass members but does **not** expose
+    // `$on`, so subscribing afterwards is impossible and query metrics would
+    // silently stop. The listener attaches to the shared engine, so events keep
+    // arriving through the extended client.
     this.$on('query', (event) => this.recordQuery(event));
+
+    if (!tenantScopeEnabled()) return;
+
+    // Returning an object from a constructor replaces `this`. Every service
+    // injects PrismaService and calls `this.prisma.<model>.<op>()`, so this is
+    // what lets ~20 services and several hundred call sites stay untouched
+    // while every one of their queries becomes tenant-scoped.
+    return this.$extends({
+      query: {
+        $allModels: {
+          // An arrow function on purpose: it captures the constructor's `this`,
+          // which is the UNEXTENDED client. That is the one that must open the
+          // transaction — `this` inside a method here would not be the client
+          // at all, and aliasing it to a local was the same thing said worse.
+          $allOperations: async ({ args, query }) => {
+            const organizationId = currentTenant();
+            // No tenant is a normal state — boot sweeps, the Cloudflare
+            // webhook, public report links, password reset, and the query that
+            // resolves the organization itself all run without one. Those go
+            // straight through, and the policies allow an unset tenant.
+            if (!organizationId) return query(args);
+
+            // The array form runs both statements on one connection inside one
+            // transaction, which is what makes `set_config(..., true)` — local
+            // to the transaction — reach this query and nothing after it. A
+            // session-level SET would leak to whichever request borrowed the
+            // connection next.
+            const [, result] = await this.$transaction([
+              this.$executeRaw`select set_config('app.organization_id', ${organizationId}, true)`,
+              query(args),
+            ]);
+            return result as unknown;
+          },
+        },
+      },
+    }) as unknown as PrismaService;
   }
 
   async onModuleInit() {

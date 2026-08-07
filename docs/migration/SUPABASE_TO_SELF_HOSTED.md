@@ -324,11 +324,32 @@ become a returned-nothing bug, never a cross-tenant leak.
    owner still read 1 row after `FORCE`. That is fine and expected; migrations
    need it. What protects the data is that the *runtime* connection is a role
    which cannot bypass anything. Do not rely on `FORCE` as the safeguard.
-2. **Set the tenant GUC per request.** With transaction-mode pooling a
-   session-level `SET` leaks across tenants, so it must be `SET LOCAL` inside a
-   transaction. We control the pooling now, so decide session vs transaction
-   pooling *before* writing policies — it determines whether every single
-   statement has to become a `$transaction`.
+2. ✅ **Tenant GUC per request.** `AsyncLocalStorage` carries the organization;
+   a Prisma client extension puts it on the session with
+   `set_config('app.organization_id', …, true)` in the same transaction as the
+   query; a global interceptor sets it from `request.user`.
+
+   The extension is installed by **returning the extended client from
+   `PrismaService`'s constructor**, which is what let ~20 services and several
+   hundred call sites stay untouched. Two sharp edges, both measured:
+   `$extends` does **not** expose `$on`, so the query-metrics listener has to be
+   registered *before* extending or it silently stops; and the extended client
+   forwards subclass fields and methods, so lifecycle hooks still work.
+
+   **The bug this nearly shipped with.** Prisma promises are lazy and Nest
+   subscribes to an interceptor's Observable *after* it returns, so
+   `storage.run(org, () => …)` had already exited before either ran. Measured
+   against a live policy: two concurrent requests scoped to different
+   organizations **both read the unscoped result**. `enterWith` binds the
+   request's async context instead and fixes it — verified 3 rows vs 0. Both
+   the trap and the fix are pinned by tests.
+
+   **Cost, measured on this database:** a scoped `findMany` is **4.29 ms**
+   against **1.25 ms** unscoped — one round trip becomes four. That is +3 ms per
+   operation: negligible next to a cellular round trip, real inside a page
+   issuing a dozen queries. `RLS_TENANT_SCOPE_ENABLED=false` turns the
+   mechanism off without touching the policies, leaving the application-level
+   filters as the only enforcement, exactly as before Phase 3.
 3. **Policies**, in three shapes: 25 models with a direct `organizationId`, 22
    reachable transitively (deepest is `BaselineMedia`, 3 hops), and 5 genuinely
    global (`Organization`, `UserProfile`, `WebhookEvent`,

@@ -11,6 +11,7 @@ import { RequestIdMiddleware } from './common/request-id.middleware';
 import { RequestPerformanceInterceptor } from './common/request-performance.interceptor';
 import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
+import { TenantScopeInterceptor } from './database/tenant-scope.interceptor';
 import { HealthController } from './health/health.controller';
 import { PropertywareModule } from './integrations/propertyware/propertyware.module';
 import { MediaModule } from './media/media.module';
@@ -66,6 +67,9 @@ const mockStackProviders = isProduction
   controllers: [HealthController, ...mockStackControllers],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: RequestPerformanceInterceptor },
+    // Global, so a new controller is scoped without anyone remembering to opt
+    // in. Runs after the guards, which is what makes request.user available.
+    { provide: APP_INTERCEPTOR, useClass: TenantScopeInterceptor },
     ApiAuthGuard,
     RolesGuard,
     ...mockStackProviders,
