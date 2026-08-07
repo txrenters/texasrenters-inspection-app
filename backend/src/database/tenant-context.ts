@@ -100,6 +100,30 @@ export function withoutTenant<T>(fn: () => T): T {
 export const SYSTEM_TENANT = '*';
 
 /**
+ * Whether every query carries its organization onto the database session.
+ *
+ * On by default. `RLS_TENANT_SCOPE_ENABLED=false` turns it off, and it has to
+ * do two things at once, because the policies **fail closed**: stopping the
+ * per-query `SET LOCAL` on its own would leave every query with no tenant, and
+ * a fail-closed policy answers that with nothing at all. The switch would be a
+ * kill switch rather than an escape hatch.
+ *
+ * So when it is off, `database-connection` puts `app.organization_id = '*'` on
+ * the connection instead — once per connection rather than once per query, and
+ * safe precisely because with scoping disabled there is no per-tenant
+ * distinction left to leak between requests. The policies then pass everything
+ * and the application is back to relying on its own `organizationId` filters,
+ * which is exactly where it stood before Phase 3.
+ *
+ * The cost it avoids is real: a scoped `findMany` measured 4.29 ms against
+ * 1.25 ms unscoped, because the query becomes a transaction and one round trip
+ * becomes four.
+ */
+export function tenantScopeEnabled(environment: NodeJS.ProcessEnv = process.env) {
+  return environment.RLS_TENANT_SCOPE_ENABLED?.trim().toLowerCase() !== 'false';
+}
+
+/**
  * Run `fn` as the system, seeing every organization.
  *
  * There are exactly five kinds of work that have no organization and cannot be

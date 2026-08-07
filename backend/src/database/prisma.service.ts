@@ -10,7 +10,7 @@ import {
   type DatabaseConnectionSummary,
 } from './database-connection';
 import { QueryPerformanceContext } from './query-performance.context';
-import { currentTenant } from './tenant-context';
+import { currentTenant, tenantScopeEnabled } from './tenant-context';
 
 type InstrumentedPrismaOptions = Prisma.PrismaClientOptions & {
   log: [{ emit: 'event'; level: 'query' }];
@@ -40,26 +40,6 @@ type InstrumentedPrismaOptions = Prisma.PrismaClientOptions & {
  * fault and should fail rather than hold a pooled connection indefinitely.
  */
 export const TRANSACTION_DEFAULTS = { timeout: 20_000, maxWait: 10_000 } as const;
-
-/**
- * Whether every query carries its organization onto the database session.
- *
- * On by default; RLS_TENANT_SCOPE_ENABLED=false turns it off. The escape hatch
- * exists because the mechanism is not free: measured on this database, a scoped
- * findMany costs 4.29 ms against 1.25 ms unscoped — the query becomes a
- * transaction, so one round trip becomes four. That is 3 ms per operation,
- * which is cheap next to a cellular round trip and not cheap inside a page that
- * issues a dozen queries.
- *
- * Turning it off does not disable the policies; it stops the tenant reaching
- * them, and the policies allow an unset tenant. So this trades the second wall
- * for latency, and leaves the application-level organizationId filters — which
- * were audited and found correct — as the only enforcement, exactly as before
- * Phase 3.
- */
-function tenantScopeEnabled() {
-  return process.env.RLS_TENANT_SCOPE_ENABLED?.trim().toLowerCase() !== 'false';
-}
 
 export interface DatabaseReadiness {
   ready: boolean;

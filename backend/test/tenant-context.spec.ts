@@ -1,8 +1,10 @@
 import { of } from 'rxjs';
 
+import { preparePersistentDatabaseEnvironment } from '../src/database/database-connection';
 import {
   currentTenant,
   enterTenant,
+  tenantScopeEnabled,
   withTenant,
   withoutTenant,
 } from '../src/database/tenant-context';
@@ -100,6 +102,58 @@ describe('tenant context', () => {
       });
       expect(currentTenant()).toBe(ORG);
     });
+  });
+});
+
+describe('RLS_TENANT_SCOPE_ENABLED', () => {
+  const base = 'postgresql://app:secret@db:5432/texasrenters?schema=public';
+
+  // URLSearchParams encodes the space in `-c app.organization_id=*` as `+`,
+  // not `%20`. Both reach Postgres as a space — verified against the real
+  // database, since RFC 3986 says `+` is a literal plus and libpq could
+  // reasonably have read it that way.
+  const readable = (url: string) => decodeURIComponent(url.replace(/\+/g, ' '));
+
+  it('sets no connection option while scoping is on', () => {
+    // Scoping on means the per-query SET LOCAL is the only thing establishing a
+    // tenant. A connection-level default here would hand every unscoped query
+    // system access and quietly undo fail-closed.
+    const environment = { DATABASE_URL: base } as NodeJS.ProcessEnv;
+    preparePersistentDatabaseEnvironment(environment);
+    expect(environment.DATABASE_URL).not.toContain('options=');
+  });
+
+  it('pins the system tenant on the connection when scoping is off', () => {
+    // The switch has to relax the policies as well as stop the per-query
+    // transaction. Without this it would be a kill switch: the policies fail
+    // closed, so a query with no tenant matches nothing.
+    const environment = {
+      DATABASE_URL: base,
+      RLS_TENANT_SCOPE_ENABLED: 'false',
+    } as NodeJS.ProcessEnv;
+    preparePersistentDatabaseEnvironment(environment);
+    expect(readable(environment.DATABASE_URL!)).toContain('-c app.organization_id=*');
+  });
+
+  it('leaves a deliberately configured options value alone', () => {
+    const environment = {
+      DATABASE_URL: `${base}&options=${encodeURIComponent('-c statement_timeout=5000')}`,
+      RLS_TENANT_SCOPE_ENABLED: 'false',
+    } as NodeJS.ProcessEnv;
+    preparePersistentDatabaseEnvironment(environment);
+    expect(readable(environment.DATABASE_URL!)).toContain('statement_timeout=5000');
+    expect(readable(environment.DATABASE_URL!)).not.toContain('app.organization_id');
+  });
+
+  it('treats anything but "false" as enabled', () => {
+    for (const value of ['true', 'TRUE', '1', '', 'yes']) {
+      expect(tenantScopeEnabled({ RLS_TENANT_SCOPE_ENABLED: value } as NodeJS.ProcessEnv)).toBe(
+        true,
+      );
+    }
+    expect(tenantScopeEnabled({ RLS_TENANT_SCOPE_ENABLED: 'FALSE ' } as NodeJS.ProcessEnv)).toBe(
+      false,
+    );
   });
 });
 
