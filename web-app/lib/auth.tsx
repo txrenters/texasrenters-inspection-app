@@ -1,6 +1,5 @@
 'use client';
 
-import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import type { AdminProfile } from '@texasrenters/shared';
 import { useRouter } from 'next/navigation';
 import {
@@ -16,10 +15,15 @@ import {
 
 import { api } from './api';
 import { adminGuardRedirect, sessionRequiresPasswordChange } from './auth-session';
-import { supabase } from './supabase';
+import {
+  getSession,
+  onSessionChange,
+  signOut as endSession,
+  type AppSession,
+} from './session';
 
 interface AuthState {
-  session: Session | null;
+  session: AppSession | null;
   profile: AdminProfile | null;
   loading: boolean;
   error: string | null;
@@ -35,7 +39,7 @@ interface AuthRefreshResult {
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<AppSession | null>(null);
   const [profile, setProfile] = useState<AdminProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,31 +49,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const requestId = (refreshRequestId.current += 1);
     setLoading(true);
     setError(null);
-    const { data } = await supabase().auth.getSession();
+    const next = await getSession();
     if (requestId !== refreshRequestId.current) return { profile: null, error: null };
-    setSession(data.session);
-    if (!data.session) {
+    setSession(next);
+    if (!next) {
       setProfile(null);
       setLoading(false);
       return { profile: null, error: null };
     }
-    if (sessionRequiresPasswordChange(data.session)) {
+    if (sessionRequiresPasswordChange(next)) {
       setProfile(null);
       setLoading(false);
       return { profile: null, error: null };
     }
     try {
-      const next = await api<AdminProfile>('/api/v1/admin/profile');
+      const profileData = await api<AdminProfile>('/api/v1/admin/profile');
       if (requestId !== refreshRequestId.current) return { profile: null, error: null };
-      if (!next.isActive) throw new Error('Your administrator account is disabled.');
+      if (!profileData.isActive) throw new Error('Your administrator account is disabled.');
       // SYSTEM_ADMIN is the bootstrap account. Every other web user needs at
       // least one effective permission from an administrator-created role.
       const authorized =
-        next.memberships.some(({ role }) => role === 'SYSTEM_ADMIN') || next.permissions.length > 0;
+        profileData.memberships.some(({ role }) => role === 'SYSTEM_ADMIN') || profileData.permissions.length > 0;
       if (!authorized)
         throw new Error('This account is not authorized for the administrator application.');
-      setProfile(next);
-      return { profile: next, error: null };
+      setProfile(profileData);
+      return { profile: profileData, error: null };
     } catch (reason) {
       const message =
         reason instanceof Error ? reason.message : 'Administrator access could not be verified.';
@@ -84,18 +88,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
-    const { data } = supabase().auth.onAuthStateChange(
-      (_event: AuthChangeEvent, nextSession: Session | null) => {
-        setSession(nextSession);
-        if (!nextSession) {
-          refreshRequestId.current += 1;
-          setProfile(null);
-          setError(null);
-          setLoading(false);
-        }
-      },
-    );
-    return () => data.subscription.unsubscribe();
+    // Signing out in one tab must clear the others. Cookies raise no event, so
+    // this watches the value rather than subscribing to one.
+    return onSessionChange((nextSession) => {
+      setSession(nextSession);
+      if (!nextSession) {
+        refreshRequestId.current += 1;
+        setProfile(null);
+        setError(null);
+        setLoading(false);
+      }
+    });
   }, [refresh]);
 
   const value = useMemo<AuthState>(
@@ -107,7 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refresh,
       signOut: async () => {
         refreshRequestId.current += 1;
-        await supabase().auth.signOut({ scope: 'local' });
+        await endSession();
         setSession(null);
         setProfile(null);
         setError(null);

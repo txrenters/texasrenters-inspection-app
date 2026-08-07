@@ -8,8 +8,8 @@ import { buttonVariants } from '@/components/ui/button';
 
 import { firstUnmetPasswordRule } from '@texasrenters/shared';
 
-import { api } from '@/lib/api';
-import { supabase } from '@/lib/supabase';
+import { api, publicApiSend } from '@/lib/api';
+import { signOut } from '@/lib/session';
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState('');
@@ -18,6 +18,13 @@ export default function ResetPasswordPage() {
   const [linkState, setLinkState] = useState<'checking' | 'ready' | 'invalid'>('checking');
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string>();
+  // The token is redeemed at submit, not exchanged for a session on arrival.
+  // The Supabase flow it replaces turned the emailed link into a full sign-in
+  // before the form was even filled in — so anyone holding the mail was
+  // authenticated and merely trusted to change the password. There is no
+  // session anywhere in this flow now, and nothing to validate up front:
+  // checking the token early would have to consume it.
+  const [token, setToken] = useState<string | null>(null);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const isRequired = params.get('required') === '1';
@@ -26,37 +33,11 @@ export default function ResetPasswordPage() {
       setLinkState('ready');
       return;
     }
-    // The browser client uses PKCE, so a recovery link arrives as ?code= and
-    // has to be exchanged for a session before updateUser will do anything.
-    // Without this the form submitted against no session at all and failed with
-    // whatever Supabase said about a missing session — which is why resetting a
-    // password never worked, though the email itself arrived fine.
-    const code = params.get('code');
-    const tokenHash = params.get('token_hash');
-    void (async () => {
-      // Our own link: the API mails a token_hash pointing straight here, so the
-      // session is established without Supabase's verify endpoint or the
-      // redirect allowlist behind it.
-      if (tokenHash) {
-        const verified = await supabase().auth.verifyOtp({
-          token_hash: tokenHash,
-          type: 'recovery',
-        });
-        setLinkState(verified.error ? 'invalid' : 'ready');
-        return;
-      }
-      // Kept for a link minted by the browser flow, which arrives as ?code=.
-      if (code) {
-        const exchanged = await supabase().auth.exchangeCodeForSession(code);
-        setLinkState(exchanged.error ? 'invalid' : 'ready');
-        return;
-      }
-      // No code: either the link was opened in a different browser from the one
-      // that asked, or it has already been used.
-      const session = await supabase().auth.getSession();
-      setLinkState(session.data.session ? 'ready' : 'invalid');
-    })();
+    const linkToken = params.get('token');
+    setToken(linkToken);
+    setLinkState(linkToken ? 'ready' : 'invalid');
   }, []);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const unmet = firstUnmetPasswordRule(password);
@@ -75,10 +56,15 @@ export default function ResetPasswordPage() {
           method: 'POST',
           body: JSON.stringify({ password }),
         });
-        await supabase().auth.signOut({ scope: 'local' });
+        // The password changed, so every session opened with the old one is
+        // now dead server-side. Clearing the cookies here keeps this tab from
+        // acting signed in until its next request finds out.
+        await signOut();
       } else {
-        const result = await supabase().auth.updateUser({ password });
-        if (result.error) throw result.error;
+        await publicApiSend<void>('/api/v1/auth/reset-password', {
+          method: 'POST',
+          body: JSON.stringify({ token, password }),
+        });
       }
       setDone(true);
     } catch (reason) {

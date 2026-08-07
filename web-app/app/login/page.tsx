@@ -12,7 +12,7 @@ import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { buttonVariants } from '@/components/ui/button';
 
 import { useAuth } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
+import { signIn } from '@/lib/session';
 
 const schema = z.object({
   email: z.email('Enter a valid email address.'),
@@ -31,12 +31,14 @@ export default function LoginPage() {
   const submit = form.handleSubmit(async (values) => {
     setError(undefined);
     setErrorTitle('Sign in failed');
-    const result = await supabase().auth.signInWithPassword(values);
-    if (result.error) {
-      setError(result.error.message);
+    let session;
+    try {
+      session = await signIn(values.email, values.password);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Sign in failed.');
       return;
     }
-    if (result.data.user?.app_metadata.must_change_password === true) {
+    if (session.mustChangePassword) {
       router.replace('/reset-password?required=1');
       return;
     }

@@ -2,7 +2,7 @@
 
 import { resolveApiUrl, type ApiErrorContract, type Paginated } from '@texasrenters/shared';
 
-import { supabase } from './supabase';
+import { getSession, signOut } from './session';
 
 /**
  * Bypasses ngrok's free-tier browser interstitial.
@@ -37,8 +37,11 @@ export async function api<T>(
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
   if (!baseUrl)
     throw new ApiError(0, 'API_NOT_CONFIGURED', 'The administrator API is not configured.');
-  const { data } = await supabase().auth.getSession();
-  if (!data.session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+  // Refreshes in place when the token is close to expiry, which is what makes
+  // renewal automatic — the Supabase client did this inside its own
+  // getSession() and nothing ever called refreshSession() explicitly.
+  const session = await getSession();
+  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
   let response: Response;
   try {
     const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
@@ -47,7 +50,7 @@ export async function api<T>(
       headers: {
         ...(isFormData ? {} : { 'content-type': 'application/json' }),
         ...NGROK_SKIP_INTERSTITIAL,
-        authorization: `Bearer ${data.session.access_token}`,
+        authorization: `Bearer ${session.accessToken}`,
         ...options.headers,
       },
     });
@@ -56,7 +59,7 @@ export async function api<T>(
   }
   if (!response.ok) {
     const error = (await response.json().catch(() => null)) as ApiErrorContract | null;
-    if (response.status === 401) await supabase().auth.signOut({ scope: 'local' });
+    if (response.status === 401) await signOut();
     throw new ApiError(
       response.status,
       error?.code ?? 'REQUEST_FAILED',
@@ -72,15 +75,18 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
   if (!baseUrl)
     throw new ApiError(0, 'API_NOT_CONFIGURED', 'The administrator API is not configured.');
-  const { data } = await supabase().auth.getSession();
-  if (!data.session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+  // Refreshes in place when the token is close to expiry, which is what makes
+  // renewal automatic — the Supabase client did this inside its own
+  // getSession() and nothing ever called refreshSession() explicitly.
+  const session = await getSession();
+  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
   let response: Response;
   try {
     response = await fetch(resolveApiUrl(baseUrl, path), {
       signal,
       headers: {
         ...NGROK_SKIP_INTERSTITIAL,
-        authorization: `Bearer ${data.session.access_token}`,
+        authorization: `Bearer ${session.accessToken}`,
       },
     });
   } catch {
