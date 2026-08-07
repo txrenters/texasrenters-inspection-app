@@ -1,14 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { DemoRole, FindingStatus, InspectionStatus, LocalMedia } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
+import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
 // import graph, and adding `useDemoStore` left the binding undefined at
 // evaluation time — the app crashed on launch with
 // `Property 'useDemoStore' doesn't exist`. Screens that need live device state
 // import it themselves; see `useLiveUploadProgress`.
-import type { AddAreaInput, FindingKind } from '../repositories/contracts';
+import type { AddAreaInput, FindingKind, InspectionListFilters } from '../repositories/contracts';
 // Safe where the store was not: this pulls in only `auth/session` and
 // `demo-storage`, both of which `offline-record-cache` already loads on the way
 // into `repositories`, so nothing new joins the cycle.
@@ -26,6 +27,16 @@ import {
 // Socket events, push notifications, app foreground, and mutations are the primary refresh paths.
 // This minute-level poll is only a bounded safety net when realtime delivery is interrupted.
 const assignmentRefreshInterval = process.env.NODE_ENV === 'test' ? false : 60_000;
+
+/**
+ * Alerts and reminders need every open assignment in one go, not a page.
+ *
+ * 100 is the server's maximum page size. A technician holding more than a
+ * hundred *simultaneously open* inspections is not a real caseload, so this is
+ * a single request in practice — unlike the 25 it replaces, which a normal
+ * week's history exceeded.
+ */
+const ACTIVE_INSPECTION_PAGE_SIZE = 100;
 
 export const queryKeys = {
   all: [] as const,
@@ -118,7 +129,44 @@ export function useDashboard() {
     refetchIntervalInBackground: false,
   });
 }
-export function useInspections(filters: { status?: InspectionStatus; search?: string } = {}) {
+/**
+ * One page of inspections at a time, filtered by the server.
+ *
+ * `useInfiniteQuery` rather than `useQuery` because the list is unbounded: the
+ * server orders oldest-first, so a single fixed page showed the twenty-five
+ * oldest records and nothing else — newly scheduled work simply never appeared.
+ *
+ * The filters are part of the key, so each chip keeps its own pages and
+ * switching back to one does not refetch from scratch.
+ */
+export function useInspectionPages(filters: InspectionListFilters = {}) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.inspections(filters),
+    queryFn: ({ pageParam }) => repositories.inspections.listPage({ ...filters, page: pageParam }),
+    initialPageParam: 1,
+    // Driven by the server's own totalPages rather than "did I get a full
+    // page", which mis-detects the end whenever the total is an exact multiple
+    // of the page size.
+    getNextPageParam: (last) => (last.page < last.totalPages ? last.page + 1 : undefined),
+    refetchInterval: assignmentRefreshInterval,
+    refetchIntervalInBackground: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/**
+ * The work the technician still owns — SCHEDULED and IN_PROGRESS.
+ *
+ * Alerts and reminder scheduling both want exactly this set and nothing else,
+ * and both were reading the unfiltered list. That list is oldest-first and was
+ * capped at twenty-five, so a technician with enough history got alerts and
+ * device reminders computed over records that were mostly finished work, while
+ * the newly scheduled inspections those features exist for had fallen off the
+ * end. Asking the server for the statuses that matter fixes the truncation and
+ * the relevance at once.
+ */
+export function useActiveInspections() {
+  const filters = { statuses: FIELD_ACTIVE_STATUSES, pageSize: ACTIVE_INSPECTION_PAGE_SIZE };
   return useQuery({
     queryKey: queryKeys.inspections(filters),
     queryFn: () => repositories.inspections.list(filters),

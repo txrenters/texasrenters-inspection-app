@@ -40,7 +40,12 @@ type StoredCache = {
  * technician's warm-start cache, and a shape change between two builds of the
  * same version must.
  */
-const CACHE_SCHEMA_VERSION = 2;
+// 3: the inspection list became paged. Its cached value changed from a bare
+// `Inspection[]` to react-query's infinite shape (`{ pages, pageParams }`, each
+// page a `{ items, total, … }` envelope), and the row `status` widened to
+// accept the four server statuses the old schema rejected. A restored v2 cache
+// would hand the list screen an array where it now reads `.pages`.
+const CACHE_SCHEMA_VERSION = 3;
 
 /**
  * Invalidates the whole stored cache when either the shipped version or the

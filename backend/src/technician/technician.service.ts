@@ -381,7 +381,12 @@ export class TechnicianService {
   ) {
     const where = {
       organizationId: user.organizationId,
-      status: query.status ? (query.status as InspectionStatus) : visibleStatuses,
+      // An explicit filter is always a subset of what the list may show:
+      // CANCELLED is not accepted by the DTO, so `in` cannot widen visibility
+      // past `visibleStatuses`.
+      status: query.status?.length
+        ? { in: query.status as InspectionStatus[] }
+        : visibleStatuses,
       assignments: { some: { technicianId: user.id, isCurrent: true } },
       ...(query.search
         ? {

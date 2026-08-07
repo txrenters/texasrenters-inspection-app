@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { router } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import {
@@ -12,19 +12,28 @@ import {
   UploadCloudIcon,
   XCircleIcon,
 } from 'lucide-react-native';
-import { FlatList, Pressable, RefreshControl, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { Inspection, InspectionStatus } from '@/src/domain/models';
+import type { Inspection } from '@/src/domain/models';
 import {
   InspectionUrgencyBadge,
   useInspectionUrgency,
 } from '@/src/components/InspectionUrgencyBadge';
-import { useInspections } from '@/src/features/queries';
+import { useInspectionPages } from '@/src/features/queries';
 import {
   INSPECTION_STATUS_TONE_CLASS,
   inspectionStatusPresentation,
-  isSubmittedToOffice,
+  statusesForFilter,
+  type InspectionFilterKey,
   type InspectionStatusTone,
 } from '@/src/utils/inspection-status';
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
@@ -46,15 +55,39 @@ registerIcons(
 /**
  * "Submitted" covers every post-handover state the technician cannot act on,
  * so a walkthrough that has gone to the office is findable instead of only
- * appearing under All. It filters on the same predicate the pill uses.
+ * appearing under All.
+ *
+ * Each chip resolves to a set of statuses the *server* filters on
+ * (`statusesForFilter`). Filtering on-device instead meant every chip shared
+ * one 25-record window: because that window is the oldest work and Submitted
+ * covers seven statuses, a technician's history crowded out the Assigned and
+ * In Progress chips they actually work from.
  */
-const FILTERS: { key: 'ALL' | InspectionStatus | 'SUBMITTED'; label: string }[] = [
+const FILTERS: { key: InspectionFilterKey; label: string }[] = [
   { key: 'ALL', label: 'All' },
   { key: 'SCHEDULED', label: 'Assigned' },
   { key: 'IN_PROGRESS', label: 'In Progress' },
   { key: 'SUBMITTED', label: 'Submitted' },
   { key: 'COMPLETED', label: 'Completed' },
 ];
+
+/**
+ * Typing pause before the search reaches the server.
+ *
+ * Search is server-side for the same reason the chips are: matching on-device
+ * only ever searched the pages already loaded, so an address further down the
+ * list looked like it did not exist.
+ */
+const SEARCH_DEBOUNCE_MS = 300;
+
+function useDebounced<T>(value: T, delayMs: number) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return settled;
+}
 
 // Labels and colours come from src/utils/inspection-status; only the icon
 // choice is local, because this is the one screen that shows one.
@@ -143,38 +176,53 @@ function InspectionRow({ item }: { item: Inspection }) {
 }
 
 export default function InspectionsScreen() {
-  const inspections = useInspections();
-  const pull = usePullToRefresh([inspections.refetch]);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const [filter, setFilter] = useState<'ALL' | InspectionStatus | 'SUBMITTED'>('ALL');
+  const [filter, setFilter] = useState<InspectionFilterKey>('ALL');
   const [search, setSearch] = useState('');
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return (inspections.data ?? []).filter((item) => {
-      // SUBMITTED is a group rather than a status: it catches everything handed
-      // to the office, so work does not vanish from the tabs the moment it is
-      // submitted. COMPLETED stays its own chip and is a subset of it.
-      if (filter === 'SUBMITTED') {
-        if (!isSubmittedToOffice(item.status)) return false;
-      } else if (filter !== 'ALL' && item.status !== filter) return false;
-      if (!query) return true;
-      return [
-        item.property.address,
-        item.property.cityStateZip,
-        item.unitName ?? '',
-        item.type,
-      ].some((value) => value.toLowerCase().includes(query));
-    });
-  }, [filter, inspections.data, search]);
+  const debouncedSearch = useDebounced(search.trim(), SEARCH_DEBOUNCE_MS);
+
+  const inspections = useInspectionPages({
+    statuses: statusesForFilter(filter),
+    search: debouncedSearch || undefined,
+  });
+  const pull = usePullToRefresh([inspections.refetch]);
+
+  // Flattened for the list; `total` comes from the server, so it counts every
+  // matching record rather than the ones currently held on the device.
+  const rows = useMemo(
+    () => inspections.data?.pages.flatMap((page) => page.items) ?? [],
+    [inspections.data],
+  );
+  const total = inspections.data?.pages[0]?.total ?? 0;
+
+  // A settling search is still the previous result set. Saying so beats
+  // flashing "No inspections found" at someone mid-keystroke.
+  const searchPending = search.trim() !== debouncedSearch;
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <FlatList
-        data={filtered}
+        data={rows}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
+        // Half a screen of runway, so the next page is usually in hand before
+        // the technician reaches the bottom.
+        onEndReachedThreshold={0.5}
+        onEndReached={() => {
+          // Guarded: FlatList fires this repeatedly while near the end, and an
+          // unguarded call would queue duplicate requests for the same page.
+          if (inspections.hasNextPage && !inspections.isFetchingNextPage)
+            void inspections.fetchNextPage();
+        }}
+        ListFooterComponent={
+          inspections.isFetchingNextPage ? (
+            <View className="py-6">
+              <ActivityIndicator color={isDark ? '#2dd4bf' : '#145347'} />
+            </View>
+          ) : null
+        }
         refreshControl={
           <RefreshControl
             refreshing={pull.refreshing}
@@ -186,15 +234,17 @@ export default function InspectionsScreen() {
           <View>
             <View className="px-5 pb-2 pt-4">
               <Text className="text-2xl font-bold tracking-tight text-foreground">Inspections</Text>
-              {/* Counts the rows actually on screen. It used to report the
-                  SCHEDULED total no matter which chip was active, so picking
-                  Submitted showed a list of submitted work above the word
-                  "pending" and a number matching none of it. */}
+              {/* The server's count for the active chip and search, so it is
+                  the real number. It reported the length of whatever page was
+                  in hand before, which saturated at 25 forever — a technician
+                  with three hundred inspections read "25 total".
+
+                  "shown" only appears while there is more to load, because
+                  once every page is in, shown and total are the same number and
+                  printing both invites the reader to look for a difference. */}
               <Text className="mt-0.5 text-sm text-muted-foreground">
-                {(inspections.data ?? []).length} total
-                {filter === 'ALL'
-                  ? ` · ${(inspections.data ?? []).filter((item) => item.status === 'SCHEDULED').length} pending`
-                  : ` · ${filtered.length} shown`}
+                {total} total
+                {rows.length < total ? ` · ${rows.length} loaded` : ''}
               </Text>
             </View>
             <View className="mx-5 mt-3 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
@@ -253,8 +303,9 @@ export default function InspectionsScreen() {
         ListEmptyComponent={
           // A first load with nothing cached used to render "No inspections
           // found" for as long as the request took, telling the technician the
-          // opposite of the truth before the list arrived.
-          inspections.isLoading ? (
+          // opposite of the truth before the list arrived. A search still
+          // settling is the same situation, now that matching happens server-side.
+          inspections.isLoading || searchPending ? (
             <InspectionListSkeleton rows={4} />
           ) : (
           <View className="items-center gap-3 py-16">

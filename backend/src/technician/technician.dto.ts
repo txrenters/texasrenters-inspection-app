@@ -27,6 +27,36 @@ import {
  */
 const MAX_FRAME_MARKERS = 60;
 
+/**
+ * Statuses a technician may filter their own list by.
+ *
+ * CANCELLED is deliberately absent. The list is scoped to `visibleStatuses`
+ * (`not: CANCELLED`), and accepting it here would let a client ask for work the
+ * unfiltered list refuses to show — turning a filter into a way around the
+ * visibility rule.
+ *
+ * The rest of the enum is present because the handset groups statuses: its
+ * "Submitted" chip covers everything handed to the office, which is
+ * TECHNICIAN_SUBMITTED, PROCESSING, REVIEW_REQUIRED, UNDER_REVIEW, TBD,
+ * FOLLOW_UP_REQUIRED and COMPLETED. The previous list held five of those and
+ * could not express TECHNICIAN_SUBMITTED at all, so that chip had no
+ * server-side filter available and fell back to slicing 25 records on-device.
+ *
+ * Declared above the class for the same temporal-dead-zone reason as
+ * MAX_FRAME_MARKERS.
+ */
+export const TECHNICIAN_FILTERABLE_STATUSES = [
+  'SCHEDULED',
+  'IN_PROGRESS',
+  'TECHNICIAN_SUBMITTED',
+  'PROCESSING',
+  'REVIEW_REQUIRED',
+  'UNDER_REVIEW',
+  'TBD',
+  'FOLLOW_UP_REQUIRED',
+  'COMPLETED',
+] as const;
+
 export class TechnicianCreateAreaDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
@@ -42,9 +72,30 @@ export class TechnicianCreateAreaDto {
 export class TechnicianInspectionListQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 25;
+  /**
+   * One status, or several as a comma-separated list.
+   *
+   * Plural because the handset's chips are groups, not statuses — "Submitted"
+   * is seven of them. Sending the set lets the server do the filtering, so a
+   * chip sees every matching record instead of whichever ones happened to land
+   * in the first page.
+   *
+   * Express also hands back an array for a repeated `?status=A&status=B`, so
+   * both spellings are normalised to the same thing rather than one of them
+   * silently validating as a string and matching nothing.
+   */
   @IsOptional()
-  @IsIn(['SCHEDULED', 'IN_PROGRESS', 'PROCESSING', 'REVIEW_REQUIRED', 'COMPLETED'])
-  status?: string;
+  @Transform(({ value }) => {
+    const raw: unknown[] = Array.isArray(value) ? value : [value];
+    return raw
+      .flatMap((entry) => (typeof entry === 'string' ? entry.split(',') : [entry]))
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : entry))
+      .filter((entry) => entry !== '');
+  })
+  @IsArray()
+  @ArrayMaxSize(TECHNICIAN_FILTERABLE_STATUSES.length)
+  @IsIn(TECHNICIAN_FILTERABLE_STATUSES, { each: true })
+  status?: string[];
   @IsOptional()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()

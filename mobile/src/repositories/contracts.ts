@@ -50,9 +50,52 @@ export interface CatalogRepository {
   leases(unitId: string): Promise<LeaseSummary[]>;
 }
 
+/**
+ * How many inspections one page asks for.
+ *
+ * Lives with the contract rather than the API client so the demo repository can
+ * share it without importing expo-file-system and a session along with it.
+ *
+ * The list pages rather than truncating now, so this is a batch size and not a
+ * ceiling. It was effectively a ceiling before: `pageSize=25` with the server
+ * ordering `scheduledAt: 'asc'` meant the twenty-five *oldest* records filled
+ * the only page, and newly scheduled work never arrived at all.
+ */
+export const INSPECTION_PAGE_SIZE = 25;
+
+/**
+ * What the technician list endpoint filters by.
+ *
+ * `statuses` is plural because the screen's chips are groups: "Submitted"
+ * covers every post-handover status. Sending the set means the server filters
+ * and paginates, instead of the device slicing whatever arrived first.
+ */
+export interface InspectionListFilters {
+  statuses?: readonly InspectionStatus[];
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * One page, with the server's `total` carried through.
+ *
+ * The total used to be dropped on the floor by a `z.object({ items })` schema,
+ * so the list header could only ever count the rows it happened to be holding
+ * and read "25 total" for a technician with hundreds of inspections.
+ */
+export interface InspectionPage {
+  items: Inspection[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface InspectionRepository {
   dashboard(): Promise<DashboardSummary>;
-  list(filters?: { status?: InspectionStatus; search?: string }): Promise<Inspection[]>;
+  listPage(filters?: InspectionListFilters): Promise<InspectionPage>;
+  list(filters?: InspectionListFilters): Promise<Inspection[]>;
   get(id: string): Promise<Inspection>;
   context(id: string): Promise<InspectionContext>;
   report(id: string): Promise<InspectionReport>;

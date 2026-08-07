@@ -1,4 +1,8 @@
-import { findingSchema, roomPhotoSchema } from '../src/repositories/api/repositories';
+import {
+  findingSchema,
+  inspectionPageSchema,
+  roomPhotoSchema,
+} from '../src/repositories/api/repositories';
 
 /**
  * `cachedApiRecord` stores the *parsed* value and re-parses it with the same
@@ -89,5 +93,75 @@ describe('findingSchema round trip', () => {
     expect(() =>
       findingSchema.parse({ ...serverFinding, comparisonResult: 'MADE_UP' }),
     ).toThrow();
+  });
+});
+
+describe('inspectionPageSchema round trip', () => {
+  const serverInspection = {
+    id: 'insp-1',
+    externalInspectionId: 'PW-1',
+    propertyId: 'prop-1',
+    type: 'MOVE_OUT',
+    scheduledAt: '2026-08-01T00:00:00.000Z',
+    assignedUserId: 'tech-1',
+    status: 'TECHNICIAN_SUBMITTED',
+    priority: 'STANDARD',
+    roomIds: ['room-1'],
+    propertyNotes: '',
+    property: {
+      id: 'prop-1',
+      address: '1 Main St',
+      cityStateZip: 'Austin, TX 78701',
+      imageTone: 'teal',
+    },
+    progress: { completed: 1, total: 3, hasFailedUpload: false },
+  };
+  const serverPage = {
+    items: [serverInspection],
+    page: 1,
+    pageSize: 25,
+    total: 312,
+    totalPages: 13,
+  };
+
+  it('produces an identical value on the second parse', () => {
+    const { first, second } = roundTrip(inspectionPageSchema, serverPage);
+    expect(second).toEqual(first);
+  });
+
+  it('keeps the server total instead of the page length', () => {
+    // The old schema was `z.object({ items })`, so `total` was parsed away and
+    // the header counted rows in hand — permanently "25 total".
+    const parsed = inspectionPageSchema.parse(serverPage);
+    expect(parsed.total).toBe(312);
+    expect(parsed.items).toHaveLength(1);
+  });
+
+  it('accepts every status the server can send, not the six it used to list', () => {
+    // TECHNICIAN_SUBMITTED, UNDER_REVIEW, TBD and FOLLOW_UP_REQUIRED were all
+    // missing from the enum while the list is scoped to "not CANCELLED". One
+    // submitted inspection therefore failed the parse for the *whole* list —
+    // and the "Submitted" chip exists to show exactly those records.
+    for (const status of [
+      'TECHNICIAN_SUBMITTED',
+      'UNDER_REVIEW',
+      'TBD',
+      'FOLLOW_UP_REQUIRED',
+    ]) {
+      const page = { ...serverPage, items: [{ ...serverInspection, status }] };
+      expect(inspectionPageSchema.parse(page).items[0]!.status).toBe(status);
+    }
+  });
+
+  it('keeps an unrecognised status rather than dropping the whole page', () => {
+    // A status this build has never heard of still describes real work. The
+    // presentation layer renders it as "Unknown"; losing the list would be worse.
+    const page = { ...serverPage, items: [{ ...serverInspection, status: 'SOME_FUTURE_STATE' }] };
+    expect(inspectionPageSchema.parse(page).items[0]!.status).toBe('SOME_FUTURE_STATE');
+  });
+
+  it('rejects a page whose envelope has no total rather than caching a broken count', () => {
+    const { total: _total, ...withoutTotal } = serverPage;
+    expect(() => inspectionPageSchema.parse(withoutTotal)).toThrow();
   });
 });

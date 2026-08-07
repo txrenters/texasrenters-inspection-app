@@ -4,11 +4,14 @@ import type {
   FindingKind,
   FindingRepository,
   FloorPlanRepository,
+  InspectionListFilters,
+  InspectionPage,
   InspectionRepository,
   MediaRepository,
   PropertyRepository,
   UploadRepository,
 } from '../contracts';
+import { INSPECTION_PAGE_SIZE } from '../contracts';
 import type { DemoRole, DemoUser, Finding, InspectionRoom, LocalMedia } from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
 import { isRoomSummary } from '../../utils/ai-review';
@@ -96,15 +99,29 @@ export class MockInspectionRepository implements InspectionRepository {
       recent: inspections.filter((item) => item.status === 'COMPLETED').slice(0, 2),
     };
   }
-  async list(filters: { status?: string; search?: string } = {}) {
+  async listPage(filters: InspectionListFilters = {}): Promise<InspectionPage> {
     await mockDelay();
     ensureMockAvailable();
-    return inspections.filter(
+    const search = filters.search?.trim().toLowerCase();
+    // Mirrors the server: filter first, then slice. Filtering after the slice
+    // is the bug this whole change is about, so the demo must not model it.
+    const matched = inspections.filter(
       (inspection) =>
-        (!filters.status || inspection.status === filters.status) &&
-        (!filters.search ||
-          inspection.property.address.toLowerCase().includes(filters.search.toLowerCase())),
+        (!filters.statuses?.length || filters.statuses.includes(inspection.status)) &&
+        (!search || inspection.property.address.toLowerCase().includes(search)),
     );
+    const page = filters.page ?? 1;
+    const pageSize = filters.pageSize ?? INSPECTION_PAGE_SIZE;
+    return {
+      items: matched.slice((page - 1) * pageSize, page * pageSize),
+      page,
+      pageSize,
+      total: matched.length,
+      totalPages: Math.max(1, Math.ceil(matched.length / pageSize)),
+    };
+  }
+  async list(filters: InspectionListFilters = {}) {
+    return (await this.listPage(filters)).items;
   }
   async get(id: string) {
     await mockDelay();

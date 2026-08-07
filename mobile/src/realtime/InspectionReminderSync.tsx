@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
 import { isDemoMode } from '../config/environment';
-import { useInspections } from '../features/queries';
+import { useActiveInspections } from '../features/queries';
 import { usePreferencesStore } from '../stores/preferences.store';
 import { syncInspectionReminders } from './inspection-reminders';
 
@@ -11,7 +11,11 @@ import { syncInspectionReminders } from './inspection-reminders';
  * reminders are (re)scheduled on launch and whenever assignments change.
  */
 export function InspectionReminderSync(): null {
-  const inspections = useInspections();
+  // Reminders are only ever scheduled for SCHEDULED work, so the open-assignment
+  // query is both the right set and one the server can return whole. The
+  // unfiltered list it used to read was capped at the 25 oldest records, which
+  // meant a newly scheduled inspection could get no reminder at all.
+  const inspections = useActiveInspections();
   const data = inspections.data;
   // Depending on the preference matters: toggling notifications off has to
   // re-run the sync so it can cancel reminders already sitting on the device,

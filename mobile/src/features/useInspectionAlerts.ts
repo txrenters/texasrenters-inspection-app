@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { collectInspectionAlerts, type InspectionAlerts } from '../utils/inspection-alerts';
-import { useInspections } from './queries';
+import { useActiveInspections } from './queries';
 
 /**
  * Derives overdue / due-soon assignment counts for the signed-in technician.
@@ -9,7 +9,9 @@ import { useInspections } from './queries';
  * without a refetch. Read-only — scheduling notifications lives elsewhere.
  */
 export function useInspectionAlerts(): InspectionAlerts {
-  const inspections = useInspections();
+  // Only SCHEDULED and IN_PROGRESS can be late, which is exactly what this
+  // asks the server for — see WARNABLE_STATUSES in utils/inspection-alerts.
+  const inspections = useActiveInspections();
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {

@@ -3,7 +3,12 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { getSession, signIn, signOut } from '../../auth/session';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
-import type { LocalMedia, PhotoCaptureType, UploadItem } from '../../domain/models';
+import type {
+  InspectionStatus,
+  LocalMedia,
+  PhotoCaptureType,
+  UploadItem,
+} from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
 import {
   ApiConnectionError,
@@ -20,11 +25,14 @@ import type {
   FindingKind,
   FindingRepository,
   FloorPlanRepository,
+  InspectionListFilters,
+  InspectionPage,
   InspectionRepository,
   MediaRepository,
   PropertyRepository,
   UploadRepository,
 } from '../contracts';
+import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { queueOnConnectionFailure } from './offline-writes';
 import {
   runStreamUpload,
@@ -61,14 +69,16 @@ const inspectionSchema = z.object({
   baselineScheduledAt: z.string().optional(),
   scheduledAt: z.string(),
   assignedUserId: z.string(),
-  status: z.enum([
-    'SCHEDULED',
-    'IN_PROGRESS',
-    'PROCESSING',
-    'REVIEW_REQUIRED',
-    'COMPLETED',
-    'CANCELLED',
-  ]),
+  // Permissive for the same reason as captureType, and it had already broken:
+  // this enum listed six statuses while the server has ten. TECHNICIAN_SUBMITTED,
+  // UNDER_REVIEW, TBD and FOLLOW_UP_REQUIRED were all missing, and the list is
+  // scoped to "not CANCELLED" — so one submitted inspection failed the parse for
+  // the *entire* list, not one row. That is the screen a technician uses to find
+  // their work, and the "Submitted" chip exists precisely to show those records.
+  //
+  // An unrecognised status now reaches inspectionStatusPresentation, which
+  // already renders it as "Unknown" rather than implying the work is finished.
+  status: z.string().transform((value) => value as InspectionStatus),
   priority: z.enum(['STANDARD', 'HIGH']),
   roomIds: z.array(z.string()),
   // Defaulted rather than required: a cached inspection written before this
@@ -83,6 +93,21 @@ const inspectionSchema = z.object({
   }),
   updatedAt: z.string().optional(),
 });
+/**
+ * A page of inspections, `total` included.
+ *
+ * The old schema was `z.object({ items })`, which parsed the envelope and threw
+ * the count away — so the header could only count rows in hand. Carrying it
+ * changes the cached shape, which is why CACHE_SCHEMA_VERSION moved with this.
+ */
+export const inspectionPageSchema = z.object({
+  items: z.array(inspectionSchema),
+  page: z.number(),
+  pageSize: z.number(),
+  total: z.number(),
+  totalPages: z.number(),
+});
+
 const roomSchema = z.object({
   id: z.string(),
   inspectionId: z.string(),
@@ -484,16 +509,21 @@ export class ApiInspectionRepository implements InspectionRepository {
       getJson('/api/v1/technician/dashboard'),
     );
   }
-  async list(filters: { status?: string; search?: string } = {}) {
-    const query = new URLSearchParams({ page: '1', pageSize: '25' });
-    if (filters.status) query.set('status', filters.status);
+  async listPage(filters: InspectionListFilters = {}): Promise<InspectionPage> {
+    const page = filters.page ?? 1;
+    const pageSize = filters.pageSize ?? INSPECTION_PAGE_SIZE;
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    // One `status` carrying the whole set, which the backend splits. A chip is
+    // a group of statuses, so filtering it server-side is the only way the
+    // chip sees work beyond the first page.
+    if (filters.statuses?.length) query.set('status', filters.statuses.join(','));
     if (filters.search?.trim()) query.set('search', filters.search.trim());
-    const schema = z.object({ items: z.array(inspectionSchema) });
-    return (
-      await cachedApiRecord(`inspections:${query.toString()}`, schema, () =>
-        getJson(`/api/v1/technician/inspections?${query.toString()}`),
-      )
-    ).items;
+    return cachedApiRecord(`inspections:${query.toString()}`, inspectionPageSchema, () =>
+      getJson(`/api/v1/technician/inspections?${query.toString()}`),
+    );
+  }
+  async list(filters: InspectionListFilters = {}) {
+    return (await this.listPage(filters)).items;
   }
   async get(id: string) {
     return cachedApiRecord(`inspection:${id}`, inspectionSchema, () =>

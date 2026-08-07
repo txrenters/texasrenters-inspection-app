@@ -1,10 +1,13 @@
 import type { InspectionStatus } from '../src/domain/models';
 import {
+  FIELD_ACTIVE_STATUSES,
   INSPECTION_STATUS_TONE_CLASS,
+  INSPECTION_STATUSES,
   inspectionStatusLabel,
   inspectionStatusPresentation,
   isFieldActive,
   isSubmittedToOffice,
+  statusesForFilter,
 } from '../src/utils/inspection-status';
 
 const ALL_STATUSES: InspectionStatus[] = [
@@ -97,5 +100,57 @@ describe('inspection status presentation', () => {
     // A cancelled inspection was never submitted; showing it as handed over
     // would credit work that did not happen.
     expect(isSubmittedToOffice('CANCELLED')).toBe(false);
+  });
+});
+
+/**
+ * The chips are what the server gets asked to filter by. They used to be
+ * applied on-device over a fixed 25-record page, so every chip shared one
+ * window of the *oldest* work — and "Submitted", covering seven statuses,
+ * crowded the Assigned and In Progress chips a technician works from.
+ */
+describe('statusesForFilter', () => {
+  it('asks the server for nothing on All, so the server applies its own visibility rule', () => {
+    // Not "every status": the list must keep hiding CANCELLED, and that
+    // decision belongs to the server rather than a list the client maintains.
+    expect(statusesForFilter('ALL')).toBeUndefined();
+  });
+
+  it('expands Submitted to every handed-over status', () => {
+    expect(statusesForFilter('SUBMITTED')).toEqual(ALL_STATUSES.filter(isSubmittedToOffice));
+    // The chip's whole purpose: a walkthrough that has just gone to the office.
+    expect(statusesForFilter('SUBMITTED')).toContain('TECHNICIAN_SUBMITTED');
+  });
+
+  it('passes a single-status chip through unchanged', () => {
+    expect(statusesForFilter('SCHEDULED')).toEqual(['SCHEDULED']);
+    expect(statusesForFilter('IN_PROGRESS')).toEqual(['IN_PROGRESS']);
+    expect(statusesForFilter('COMPLETED')).toEqual(['COMPLETED']);
+  });
+
+  it('never asks for CANCELLED, which the server refuses', () => {
+    const chips = ['ALL', 'SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'COMPLETED'] as const;
+    for (const chip of chips) expect(statusesForFilter(chip) ?? []).not.toContain('CANCELLED');
+  });
+
+  it('covers the whole enum across Assigned, In Progress and Submitted', () => {
+    // Nothing except CANCELLED may be unreachable: a status no chip can show is
+    // work that exists on the server and cannot be found on the handset.
+    const reachable = new Set([
+      ...statusesForFilter('SCHEDULED')!,
+      ...statusesForFilter('IN_PROGRESS')!,
+      ...statusesForFilter('SUBMITTED')!,
+    ]);
+    expect(ALL_STATUSES.filter((status) => !reachable.has(status))).toEqual(['CANCELLED']);
+  });
+});
+
+describe('status groups sent to the server', () => {
+  it('derives the field-active set from the same predicate the badges use', () => {
+    expect(FIELD_ACTIVE_STATUSES).toEqual(ALL_STATUSES.filter(isFieldActive));
+  });
+
+  it('lists every status the app knows, so a new one cannot be silently unroutable', () => {
+    expect([...INSPECTION_STATUSES].sort()).toEqual([...ALL_STATUSES].sort());
   });
 });

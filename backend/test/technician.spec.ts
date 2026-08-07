@@ -1,7 +1,15 @@
-﻿import { InspectionStatus } from '@prisma/client';
+﻿// Required before the DTO is imported: its decorators read design-time type
+// metadata, which does not exist until this polyfill has run.
+import 'reflect-metadata';
+
+import { InspectionStatus } from '@prisma/client';
 import { UserRole } from '@texasrenters/shared';
 
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+
 import type { AuthenticatedUser } from '../src/common/auth';
+import { TechnicianInspectionListQueryDto } from '../src/technician/technician.dto';
 import { TechnicianService } from '../src/technician/technician.service';
 
 const technician: AuthenticatedUser = {
@@ -771,5 +779,100 @@ describe('technician mobile data boundary', () => {
       code: 'ASSIGNED_PROPERTY_NOT_FOUND',
     });
     expect(storage.get).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The handset's list chips are groups of statuses, not single ones — "Submitted"
+ * alone is seven. Before this, `status` accepted one value out of five, so the
+ * app could not express a chip server-side and filtered a fixed 25-record page
+ * on-device instead. Oldest-first ordering meant that page was the technician's
+ * history, and the chips they work from came back empty.
+ */
+describe('technician inspection list filtering', () => {
+  function serviceWith() {
+    const prisma = {
+      inspection: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+    };
+    return {
+      prisma,
+      service: new TechnicianService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        mediaProcessingDouble(),
+      ),
+    };
+  }
+  const whereOf = (prisma: { inspection: { findMany: jest.Mock } } ) =>
+    prisma.inspection.findMany.mock.calls[0]![0].where;
+
+  it('filters on every status a chip asks for, not just the first', async () => {
+    const { prisma, service } = serviceWith();
+    const submitted = [
+      InspectionStatus.TECHNICIAN_SUBMITTED,
+      InspectionStatus.PROCESSING,
+      InspectionStatus.REVIEW_REQUIRED,
+      InspectionStatus.UNDER_REVIEW,
+      InspectionStatus.TBD,
+      InspectionStatus.FOLLOW_UP_REQUIRED,
+      InspectionStatus.COMPLETED,
+    ];
+
+    await service.inspections(technician, { page: 1, pageSize: 25, status: submitted });
+
+    expect(whereOf(prisma).status).toEqual({ in: submitted });
+    // The count has to see the same predicate, or "N total" describes a
+    // different set than the rows underneath it.
+    expect(prisma.inspection.count.mock.calls[0]![0].where.status).toEqual({ in: submitted });
+  });
+
+  it('still hides cancelled work when no status is requested', async () => {
+    const { prisma, service } = serviceWith();
+
+    await service.inspections(technician, { page: 1, pageSize: 25 });
+
+    expect(whereOf(prisma).status).toEqual({ not: InspectionStatus.CANCELLED });
+  });
+
+  it('pages rather than truncating, so page two is not page one', async () => {
+    const { prisma, service } = serviceWith();
+
+    await service.inspections(technician, { page: 3, pageSize: 25 });
+
+    expect(prisma.inspection.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 50, take: 25 }),
+    );
+  });
+});
+
+describe('technician list query validation', () => {
+  const parse = (query: Record<string, unknown>) =>
+    plainToInstance(TechnicianInspectionListQueryDto, query, {
+      enableImplicitConversion: false,
+    });
+
+  it('accepts a comma-separated status list and a repeated parameter alike', async () => {
+    for (const value of ['SCHEDULED,IN_PROGRESS', ['SCHEDULED', 'IN_PROGRESS']]) {
+      const dto = parse({ status: value });
+      await expect(validate(dto)).resolves.toEqual([]);
+      expect(dto.status).toEqual(['SCHEDULED', 'IN_PROGRESS']);
+    }
+  });
+
+  it('refuses CANCELLED, which the unfiltered list never shows', async () => {
+    // Otherwise a filter becomes a way around the visibility rule: the list is
+    // scoped to `not: CANCELLED`, and an explicit `in: [CANCELLED]` would
+    // return work the same endpoint hides by default.
+    const errors = await validate(parse({ status: 'CANCELLED' }));
+    expect(errors).not.toEqual([]);
+  });
+
+  it('rejects a status it has never heard of instead of matching nothing', async () => {
+    const errors = await validate(parse({ status: 'SCHEDULED,NOT_A_STATUS' }));
+    expect(errors).not.toEqual([]);
   });
 });

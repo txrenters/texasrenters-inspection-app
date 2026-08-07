@@ -100,3 +100,49 @@ export const isFieldActive = (status: InspectionStatus | string) =>
  */
 export const isSubmittedToOffice = (status: InspectionStatus | string) =>
   !isFieldActive(status) && status !== 'CANCELLED';
+
+/**
+ * Every status this build knows, as a runtime list.
+ *
+ * Taken from PRESENTATION's keys rather than written out again, because that
+ * record is already exhaustive over InspectionStatus — adding a status to the
+ * type forces an entry there, and it lands here for free.
+ *
+ * Declared at the bottom of the file: these are evaluated when the module
+ * loads, so they have to sit below the predicates they call.
+ */
+export const INSPECTION_STATUSES = Object.keys(PRESENTATION) as InspectionStatus[];
+
+/**
+ * The statuses each list chip stands for, sent to the server so it can do the
+ * filtering.
+ *
+ * Derived from the same predicates the pills use, so a chip and the badge on
+ * the row it shows can never disagree about what "submitted" means. Writing the
+ * set out by hand would have to be revisited every time the enum grows; this
+ * does not.
+ */
+export const FIELD_ACTIVE_STATUSES: readonly InspectionStatus[] = FIELD_ACTIVE;
+export const SUBMITTED_STATUSES: readonly InspectionStatus[] =
+  INSPECTION_STATUSES.filter(isSubmittedToOffice);
+
+/**
+ * Chips the list offers. Narrower than InspectionStatus on purpose: CANCELLED
+ * is not offered, and the server refuses it, so it must not be spellable here.
+ */
+export type InspectionFilterKey =
+  | 'ALL'
+  | 'SUBMITTED'
+  | 'SCHEDULED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED';
+
+/**
+ * Statuses to request for a chip, or `undefined` for "let the server decide" —
+ * which is everything except CANCELLED.
+ */
+export function statusesForFilter(key: InspectionFilterKey): readonly InspectionStatus[] | undefined {
+  if (key === 'ALL') return undefined;
+  if (key === 'SUBMITTED') return SUBMITTED_STATUSES;
+  return [key];
+}
