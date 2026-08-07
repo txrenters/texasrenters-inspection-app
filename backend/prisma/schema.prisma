@@ -416,6 +416,90 @@ model UserProfile {
   checklistItems       AreaChecklistItem[]     @relation("ChecklistItemCreatedBy")
   photos               InspectionPhoto[]
   finalizedInspections Inspection[]            @relation("InspectionFinalizedBy")
+  credential           AuthCredential?
+}
+
+/// Sign-in credentials, replacing Supabase's `auth.users`.
+///
+/// Separate from UserProfile on purpose. The hash must never ride along in a
+/// profile read — a single `select: { … }` that forgot to exclude it, or one
+/// `include`, would carry it into an API response. Keeping it in its own table
+/// means only code that explicitly asks for a credential can ever see one.
+///
+/// `authUserId` holds the SAME value Supabase issued, so every existing
+/// `UserProfile.authUserId` link and every JWT `sub` in circulation stays
+/// valid. It is the foreign key as well as the identity — the profile's own
+/// `authUserId` is unique, so this is a true 1:1 and the database now enforces
+/// what was previously only convention across two systems.
+model AuthCredential {
+  id String @id @default(uuid()) @db.Uuid
+
+  authUserId String @unique
+
+  /// Login is by email, so this is the lookup key. Kept here rather than read
+  /// through the profile: an account must be able to fail authentication
+  /// without the profile being loaded at all.
+  email String @unique
+
+  /// bcrypt. Supabase's `$2a$` hashes import unchanged, so nobody is forced to
+  /// reset a working password.
+  passwordHash String
+
+  /// Moved out of the JWT's `app_metadata`. Supabase's copy could only be
+  /// cleared by minting a new token; here it is a column, and the two clients
+  /// stop disagreeing about where to read it.
+  mustChangePassword Boolean @default(false)
+
+  /// Null until the first successful sign-in. Not security-critical — it exists
+  /// so a dormant account is visible without reading the audit log.
+  lastSignInAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile       UserProfile        @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
+  refreshTokens AuthRefreshToken[]
+
+  @@index([email])
+}
+
+/// One issued refresh token.
+///
+/// Stored hashed, never in the clear: this table is a list of live sessions,
+/// and a leaked backup of plaintext tokens would be as good as a leaked
+/// password for every signed-in user.
+///
+/// Rotation is why `replacedById` exists. Each refresh issues a new token and
+/// retires the old one, so a token presented after being replaced means it was
+/// captured and replayed — detectable precisely because the used row is kept
+/// rather than deleted.
+model AuthRefreshToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  authUserId String
+
+  /// SHA-256 of the token. Unique so a replay cannot quietly create a second
+  /// live session, and indexed because it is the only lookup key.
+  tokenHash String @unique
+
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  /// The token issued in this one's place. Set on rotation; null while live.
+  replacedById String? @db.Uuid
+
+  /// Recorded to make a stolen-token investigation possible. Deliberately not
+  /// used for validation — pinning a session to an IP breaks every technician
+  /// moving between cellular and site Wi-Fi.
+  userAgent String?
+  ipAddress String?
+
+  createdAt DateTime @default(now())
+
+  credential AuthCredential @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
+
+  @@index([authUserId])
+  @@index([expiresAt])
 }
 
 model MobilePushDevice {

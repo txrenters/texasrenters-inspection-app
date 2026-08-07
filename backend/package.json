@@ -38,7 +38,8 @@
     "propertyware:verify:db": "ts-node src/integrations/propertyware/propertyware.cli.ts verify-db",
     "stream:webhook": "node --env-file-if-exists=.env.local scripts/configure-cloudflare-stream-webhook.mjs",
     "db:reset-inspections": "node --env-file-if-exists=.env.local scripts/reset-inspection-data.mjs",
-    "db:migrate-to-local": "node --env-file-if-exists=.env.local scripts/migrate-to-local-postgres.mjs"
+    "db:migrate-to-local": "node --env-file-if-exists=.env.local scripts/migrate-to-local-postgres.mjs",
+    "db:import-credentials": "node --env-file-if-exists=.env.local scripts/import-supabase-credentials.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1095.0",
