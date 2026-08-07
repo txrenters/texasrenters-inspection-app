@@ -34,3 +34,36 @@ export class RequestPasswordResetDto {
   @MaxLength(320)
   email!: string;
 }
+
+/**
+ * Sign-in.
+ *
+ * The password carries no format rules here on purpose. This is a comparison
+ * against a stored hash, not a policy check — rejecting a short password before
+ * comparing would tell an anonymous caller that the stored one is longer, and
+ * accounts predating a policy change must still be able to sign in and be told
+ * to update. `ChangeRequiredPasswordDto` is where the policy belongs.
+ */
+export class SignInDto {
+  @IsEmail()
+  @MaxLength(320)
+  email!: string;
+
+  @IsString()
+  @MaxLength(MAXIMUM_PASSWORD_LENGTH)
+  password!: string;
+}
+
+/**
+ * A refresh or sign-out request.
+ *
+ * 43 characters is 32 bytes in base64url; the bound is generous either side
+ * rather than exact, since the point is to reject something that cannot
+ * possibly be one of our tokens before it reaches a database lookup.
+ */
+export class RefreshTokenDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(512)
+  refreshToken!: string;
+}

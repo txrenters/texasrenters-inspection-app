@@ -185,16 +185,40 @@ Implementation notes worth keeping:
 The large phase. Ordered so the backend can serve both old and new tokens during
 the transition.
 
-1. **Password store.** Export `auth.users` (id, email, `encrypted_password`,
-   `app_metadata`). The hashes are bcrypt, so they migrate as-is and **nobody is
-   forced to reset**. Keep `authUserId` values identical so every existing
-   `UserProfile` row still links.
-2. **Token issuing.** Mint HS256 with our own secret, issuer and audience.
-   Access + refresh with rotation.
-3. **Backend endpoints** — none of these exist today; clients currently talk to
-   Supabase directly: `POST /auth/login`, `POST /auth/refresh`,
-   `POST /auth/logout`.
+1. ✅ **Password store.** `AuthCredential` + `AuthRefreshToken`. 3 accounts
+   imported from `auth.users`, hashes verified byte for byte. `authUserId`
+   preserved, so both systems resolve the same person.
+   `pnpm db:import-credentials`.
+2. ✅ **Token issuing.** `TokenService` mints HS256 through the Phase 0 seam.
+   Hand-rolled on `node:crypto` rather than adding a JWT library, because
+   `verifySupabaseJwt` already implements this exact algorithm and two
+   implementations would drift. A round-trip test pins mint → verify: if they
+   ever disagree, every sign-in succeeds and the next request 401s.
+3. ✅ **Backend endpoints.** `POST /auth/login`, `/auth/refresh`, `/auth/logout`.
+   Refresh rotates; a retired token presented again is a replay and ends every
+   session for that account.
 4. **Replace the identity provider** behind the Phase 0 interface.
+
+Verified against the real imported rows: all three are `$2a$` cost 10, and
+bcryptjs parses them. bcryptjs emits `$2b$`, which differs from `$2a$` only in a
+wraparound fix for passwords ≥ 256 bytes — irrelevant here, and `$2a$` verifies.
+
+Deliberate choices worth keeping:
+
+- **bcrypt for passwords, SHA-256 for refresh tokens.** Opposite answers to
+  opposite problems: a password is low-entropy and human-chosen, which is what
+  a work factor defends; a refresh token is 256 bits of CSPRNG output with no
+  dictionary to attack, and refresh runs on every expired access token where a
+  slow hash would be felt.
+- **Refresh tokens stored hashed.** The table is a list of live sessions;
+  plaintext there would be as good as a password for every signed-in user.
+- **One 401 for every sign-in failure** — unknown address, wrong password,
+  deactivated profile. The active check happens *after* the hash comparison,
+  and a miss compares against a real throwaway hash, so neither the message nor
+  the timing identifies an account.
+- **`must_change_password` is minted from the column** into the claim the
+  guards already read. The column becomes authoritative while nothing that
+  reads the claim has to change.
 5. **Recovery tokens** — replace `generateLink({type:'recovery'})` with our own
    single-use, expiring, hashed token. Delivery is already ours.
 6. **Clients.** The two hard parts:
