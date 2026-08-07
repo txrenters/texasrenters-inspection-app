@@ -2,7 +2,6 @@ import { randomInt } from 'node:crypto';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { Prisma, UserRole } from '@prisma/client';
-import { createClient } from '@supabase/supabase-js';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
@@ -11,78 +10,6 @@ import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import type { CreateTechnicianDto } from './admin.dto';
 import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider';
-
-/**
- * Supabase Auth as the credential store.
- *
- * Declared `implements IdentityProvider` so the contract is checked at compile
- * time rather than by convention — the replacement provider has to match, and
- * a drift in either direction fails the build. See
- * docs/migration/SUPABASE_TO_SELF_HOSTED.md.
- */
-@Injectable()
-export class SupabaseAdminGateway implements IdentityProvider {
-  private admin() {
-    const url = process.env.SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !serviceRoleKey)
-      throw new ApplicationError(
-        503,
-        'ACCOUNT_PROVISIONING_NOT_CONFIGURED',
-        'Technician account provisioning is not configured.',
-      );
-    return createClient(url, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    }).auth.admin;
-  }
-
-  async createTechnicianIdentity(email: string, password: string, displayName: string) {
-    return this.createIdentity(email, password, displayName, 'technician');
-  }
-
-  async createWebUserIdentity(email: string, password: string, displayName: string) {
-    return this.createIdentity(email, password, displayName, 'web user');
-  }
-
-  private async createIdentity(
-    email: string,
-    password: string,
-    displayName: string,
-    accountType: 'technician' | 'web user',
-  ) {
-    const result = await this.admin().createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { display_name: displayName },
-      app_metadata: { must_change_password: true },
-    });
-    if (result.error || !result.data.user)
-      throw new ApplicationError(
-        409,
-        accountType === 'technician'
-          ? 'TECHNICIAN_IDENTITY_NOT_CREATED'
-          : 'USER_IDENTITY_NOT_CREATED',
-        `A ${accountType} account could not be created for that email address.`,
-      );
-    return { authUserId: result.data.user.id };
-  }
-
-  async deleteIdentity(authUserId: string) {
-    await this.admin().deleteUser(authUserId);
-  }
-
-  async identityExists(authUserId: string) {
-    const result = await this.admin().getUserById(authUserId);
-    if (result.data.user) return true;
-    if (result.error?.status === 404 || result.error?.code === 'user_not_found') return false;
-    throw new ApplicationError(
-      502,
-      'IDENTITY_LOOKUP_FAILED',
-      'The existing account could not be verified safely.',
-    );
-  }
-}
 
 @Injectable()
 export class TechnicianProvisioningService {

@@ -12,7 +12,6 @@ import {
   ResetPasswordDto,
   SignInDto,
 } from './auth.dto';
-import { AuthService } from './auth.service';
 import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
 
@@ -37,7 +36,6 @@ function clientContext(request: Request) {
 @Controller('auth')
 export class AuthController {
   constructor(
-    private readonly service: AuthService,
     private readonly sessions: SessionService,
     private readonly passwordReset: PasswordResetService,
   ) {}
@@ -117,6 +115,6 @@ export class AuthController {
     @Req() request: RequiredPasswordRequest,
     @Body() body: ChangeRequiredPasswordDto,
   ) {
-    await this.service.changeRequiredPassword(request.auth.authUserId, body.password);
+    await this.passwordReset.changeRequiredPassword(request.auth.authUserId, body.password);
   }
 }

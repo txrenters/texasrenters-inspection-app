@@ -51,24 +51,18 @@ const environmentSchema = z
     ),
     MAIL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
     USE_MOCK_AUTH: z.enum(['true', 'false']).default('false'),
-    SUPABASE_URL: z.string().url().optional(),
-    SUPABASE_JWT_SECRET: z.string().optional(),
-    // Required by password reset and account provisioning, which 503 without
-    // it. It was read straight from process.env and never validated, so the
-    // failure only surfaced when an administrator tried to create a user.
-    SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
-    SUPABASE_ANON_KEY: z.string().optional(),
-    // Token identity, defaulting to Supabase's shapes so nothing changes until
-    // these are set. The seam that lets the issuer move off Supabase without
-    // touching verification code. See docs/migration/SUPABASE_TO_SELF_HOSTED.md.
+    // Token identity. AUTH_JWT_SECRET signs and verifies every access token, so
+    // it is required outside mock auth — see the refinement below.
+    // AUTH_IDENTITY_PROVIDER is gone: there is one credential store now.
     AUTH_JWT_ISSUER: z.string().optional(),
     AUTH_JWT_AUDIENCE: z.string().optional(),
     AUTH_JWT_SECRET: z.string().optional(),
-    // Which credential store provisioning writes to. Defaults to Supabase so
-    // the self-hosted path ships inert.
-    AUTH_IDENTITY_PROVIDER: z.enum(['supabase', 'local']).default('supabase'),
     AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
     AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    AUTH_PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+    // Turns off per-query tenant scoping AND relaxes the RLS policies with it,
+    // so it degrades rather than locking the application out.
+    RLS_TENANT_SCOPE_ENABLED: z.enum(['true', 'false']).default('true'),
     FLOOR_PLAN_EXTRACTION_PROVIDER: z
       .enum(['disabled', 'mock', 'anthropic', 'openai'])
       .default('disabled'),
@@ -81,9 +75,9 @@ const environmentSchema = z
     JOB_QUEUE_PROVIDER: z.literal('memory').default('memory'),
     // Validated so a typo cannot silently fall back to `local`, which is the
     // container's ephemeral disk and loses every upload on redeploy.
-    FLOOR_PLAN_STORAGE_PROVIDER: z.enum(['local', 'supabase', 'r2']).default('local'),
+    FLOOR_PLAN_STORAGE_PROVIDER: z.enum(['local', 'r2']).default('local'),
     FLOOR_PLAN_STORAGE_BUCKET: z.string().default('floor-plans'),
-    INSPECTION_MEDIA_STORAGE_PROVIDER: z.enum(['local', 'supabase', 'r2']).default('local'),
+    INSPECTION_MEDIA_STORAGE_PROVIDER: z.enum(['local', 'r2']).default('local'),
     INSPECTION_MEDIA_STORAGE_BUCKET: z.string().default('inspection-media'),
     WEBHOOK_SIGNING_SECRET: z.string().optional(),
     // Cloudflare R2 (S3-compatible). Required only when a provider is set to r2.
@@ -159,11 +153,14 @@ const environmentSchema = z
         message: 'Credentialed production CORS must use explicit origins.',
         path: ['CORS_ALLOWED_ORIGINS'],
       });
-    if (config.USE_MOCK_AUTH === 'false' && (!config.SUPABASE_URL || !config.SUPABASE_JWT_SECRET))
+    // Was "Supabase URL and JWT secret are required". The signing key is ours
+    // now, and it is the one value without which nothing can sign in: no token
+    // can be minted and none can be verified.
+    if (config.USE_MOCK_AUTH === 'false' && !config.AUTH_JWT_SECRET)
       context.addIssue({
         code: 'custom',
-        message: 'Supabase URL and JWT secret are required when mock authentication is disabled.',
-        path: ['SUPABASE_URL'],
+        message: 'AUTH_JWT_SECRET is required when mock authentication is disabled.',
+        path: ['AUTH_JWT_SECRET'],
       });
     if (
       config.PROPERTYWARE_PROVIDER === 'live' &&

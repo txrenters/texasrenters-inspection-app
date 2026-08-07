@@ -1,5 +1,7 @@
 import { PrismaClient, UserRole } from '@prisma/client';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'node:crypto';
+
+import { hash } from 'bcryptjs';
 import { z } from 'zod';
 
 const defaultOrganizationId = '10000000-0000-4000-8000-000000000001';
@@ -7,8 +9,6 @@ const defaultOrganizationId = '10000000-0000-4000-8000-000000000001';
 export const superAdminSeedEnvironmentSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-    SUPABASE_URL: z.string().url(),
-    SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
     SEED_SUPER_ADMIN_EMAIL: z.string().email().default('appdev@texasrenters.com'),
     SEED_SUPER_ADMIN_LEGACY_EMAILS: z.string().default('appdev@texasrenters.wom'),
     SEED_SUPER_ADMIN_PASSWORD: z.string().min(1),
@@ -28,196 +28,6 @@ export const superAdminSeedEnvironmentSchema = z
         path: ['NODE_ENV'],
       });
   });
-
-interface SeedAuthUser {
-  id: string;
-  email?: string;
-  app_metadata?: Record<string, unknown>;
-}
-
-interface SeedAuthAdmin {
-  listUsers(options: {
-    page: number;
-    perPage: number;
-  }): Promise<{ data: { users: SeedAuthUser[] }; error: { message: string } | null }>;
-  createUser(attributes: {
-    email: string;
-    password: string;
-    email_confirm: boolean;
-    user_metadata: { display_name: string };
-    app_metadata: { must_change_password: boolean };
-  }): Promise<{ data: { user: SeedAuthUser | null }; error: { message: string } | null }>;
-  updateUserById(
-    id: string,
-    attributes: {
-      email: string;
-      password?: string;
-      email_confirm: boolean;
-      user_metadata: { display_name: string };
-      app_metadata?: Record<string, unknown>;
-    },
-  ): Promise<{ data: { user: SeedAuthUser | null }; error: { message: string } | null }>;
-}
-
-function applicationDatabaseSeedError(error: { code?: string } | null, fallback: string) {
-  if (error?.code === 'PGRST205')
-    return new Error(
-      'The Supabase foundation schema is missing. Apply the foundation and canonical migrations before rerunning this seed.',
-    );
-  return new Error(fallback);
-}
-
-export async function ensureSupabaseAuthUser(
-  admin: SeedAuthAdmin,
-  input: {
-    email: string;
-    legacyEmails?: string[];
-    password: string;
-    displayName: string;
-    resetPassword?: boolean;
-  },
-) {
-  const perPage = 1000;
-  let existing: SeedAuthUser | undefined;
-  let legacyExisting: SeedAuthUser | undefined;
-  const legacyEmails = new Set(input.legacyEmails?.map((email) => email.toLowerCase()) ?? []);
-
-  for (let page = 1; page <= 100; page += 1) {
-    const result = await admin.listUsers({ page, perPage });
-    if (result.error) throw new Error('Unable to list Supabase Auth users for the seed.');
-    existing = result.data.users.find(
-      (user) => user.email?.toLowerCase() === input.email.toLowerCase(),
-    );
-    legacyExisting ??= result.data.users.find((user) =>
-      legacyEmails.has(user.email?.toLowerCase() ?? ''),
-    );
-    if (existing || result.data.users.length < perPage) break;
-  }
-  existing ??= legacyExisting;
-
-  const profileAttributes = {
-    email: input.email,
-    email_confirm: true,
-    user_metadata: { display_name: input.displayName },
-  };
-  const result = existing
-    ? await admin.updateUserById(existing.id, {
-        ...profileAttributes,
-        ...(input.resetPassword
-          ? {
-              password: input.password,
-              app_metadata: {
-                ...existing.app_metadata,
-                must_change_password: true,
-              },
-            }
-          : {}),
-      })
-    : await admin.createUser({
-        ...profileAttributes,
-        password: input.password,
-        app_metadata: { must_change_password: true },
-      });
-  if (result.error || !result.data.user)
-    throw new Error(
-      existing
-        ? 'Unable to update the Supabase Auth user for the seed.'
-        : 'Unable to create the Supabase Auth user for the seed.',
-    );
-  return result.data.user;
-}
-
-export async function upsertSystemAdminProfile(
-  supabase: SupabaseClient,
-  input: {
-    authUserId: string;
-    email: string;
-    displayName: string;
-    organizationId: string;
-    organizationName: string;
-  },
-) {
-  const organization = await supabase
-    .from('Organization')
-    .upsert(
-      { id: input.organizationId, name: input.organizationName },
-      { onConflict: 'id' },
-    );
-  if (organization.error)
-    throw applicationDatabaseSeedError(
-      organization.error,
-      'Unable to seed the development organization.',
-    );
-
-  const authProfile = await supabase
-    .from('UserProfile')
-    .select('id, authUserId, email')
-    .eq('authUserId', input.authUserId)
-    .maybeSingle();
-  if (authProfile.error)
-    throw applicationDatabaseSeedError(
-      authProfile.error,
-      'Unable to find the seeded application profile.',
-    );
-
-  const emailProfile = authProfile.data
-    ? { data: null, error: null }
-    : await supabase
-        .from('UserProfile')
-        .select('id, authUserId, email')
-        .eq('email', input.email)
-        .maybeSingle();
-  if (emailProfile.error)
-    throw applicationDatabaseSeedError(
-      emailProfile.error,
-      'Unable to find the seeded application profile.',
-    );
-
-  const existing = authProfile.data ?? emailProfile.data;
-  const profileResult = existing
-    ? await supabase
-        .from('UserProfile')
-        .update({
-          authUserId: input.authUserId,
-          email: input.email,
-          displayName: input.displayName,
-          isActive: true,
-          updatedAt: new Date().toISOString(),
-        })
-        .eq('id', existing.id)
-        .select('id')
-        .single()
-    : await supabase
-        .from('UserProfile')
-        .insert({
-          authUserId: input.authUserId,
-          email: input.email,
-          displayName: input.displayName,
-          isActive: true,
-        })
-        .select('id')
-        .single();
-  if (profileResult.error || !profileResult.data)
-    throw applicationDatabaseSeedError(
-      profileResult.error,
-      'Unable to seed the application profile.',
-    );
-
-  const membership = await supabase.from('OrganizationMember').upsert(
-    {
-      organizationId: input.organizationId,
-      userProfileId: profileResult.data.id,
-      role: UserRole.SYSTEM_ADMIN,
-    },
-    { onConflict: 'organizationId,userProfileId,role', ignoreDuplicates: true },
-  );
-  if (membership.error)
-    throw applicationDatabaseSeedError(
-      membership.error,
-      'Unable to grant the SYSTEM_ADMIN membership.',
-    );
-  return profileResult.data;
-}
 
 export async function upsertSystemAdminProfileWithPrisma(
   prisma: PrismaClient,
@@ -277,29 +87,55 @@ export async function upsertSystemAdminProfileWithPrisma(
   });
 }
 
+/**
+ * Bootstrap the development super-admin against our own credential store.
+ *
+ * Was Supabase Auth. This is the only way to get a usable account onto a fresh
+ * database, so it had to move with everything else — otherwise a clean install
+ * has a profile nobody can sign in as.
+ *
+ * Writes through Prisma on the OWNER connection: the credential and the profile
+ * are created together, and the seed is deliberately cross-organization, which
+ * the least-privilege application role is not permitted to be.
+ */
 export async function seedSuperAdmin(environment: NodeJS.ProcessEnv = process.env) {
   const config = superAdminSeedEnvironmentSchema.parse(environment);
-  const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
+  const prisma = new PrismaClient({
+    datasources: { db: { url: environment.DIRECT_URL ?? environment.DATABASE_URL } },
   });
-  const authUser = await ensureSupabaseAuthUser(supabase.auth.admin, {
-    email: config.SEED_SUPER_ADMIN_EMAIL,
-    legacyEmails: config.SEED_SUPER_ADMIN_LEGACY_EMAILS.split(',')
-      .map((email) => email.trim())
-      .filter(Boolean),
-    password: config.SEED_SUPER_ADMIN_PASSWORD,
-    displayName: config.SEED_SUPER_ADMIN_DISPLAY_NAME,
-    resetPassword: config.SEED_SUPER_ADMIN_RESET_PASSWORD === 'true',
-  });
-  const prisma = new PrismaClient();
   try {
-    return await upsertSystemAdminProfileWithPrisma(prisma, {
-      authUserId: authUser.id,
-      email: config.SEED_SUPER_ADMIN_EMAIL,
+    const email = config.SEED_SUPER_ADMIN_EMAIL.trim().toLowerCase();
+    const existing = await prisma.authCredential.findUnique({
+      where: { email },
+      select: { authUserId: true },
+    });
+    const authUserId = existing?.authUserId ?? randomUUID();
+    const passwordHash = await hash(config.SEED_SUPER_ADMIN_PASSWORD, 10);
+
+    const profile = await upsertSystemAdminProfileWithPrisma(prisma, {
+      authUserId,
+      email,
       displayName: config.SEED_SUPER_ADMIN_DISPLAY_NAME,
       organizationId: config.SEED_SUPER_ADMIN_ORGANIZATION_ID,
       organizationName: config.SEED_SUPER_ADMIN_ORGANIZATION_NAME,
     });
+
+    // The credential comes second: it references UserProfile.authUserId, so the
+    // profile has to exist first.
+    //
+    // An existing password is left alone unless the seed is asked to reset it.
+    // Re-running this to repair a membership should not silently change the
+    // password of an account someone is using.
+    await prisma.authCredential.upsert({
+      where: { authUserId },
+      create: { authUserId, email, passwordHash, mustChangePassword: false },
+      update:
+        config.SEED_SUPER_ADMIN_RESET_PASSWORD === 'true'
+          ? { email, passwordHash, mustChangePassword: false }
+          : { email },
+    });
+
+    return profile;
   } finally {
     await prisma.$disconnect();
   }

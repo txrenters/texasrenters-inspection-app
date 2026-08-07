@@ -5,7 +5,6 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
-import { AuthService } from './auth.service';
 import { LocalIdentityProvider } from './local-identity.provider';
 
 /**
@@ -35,21 +34,8 @@ export class PasswordResetService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(LocalIdentityProvider) private readonly identities: LocalIdentityProvider,
-    @Inject(AuthService) private readonly supabase: AuthService,
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
-
-  /**
-   * Whether resets run against our own tokens or still against Supabase.
-   *
-   * The same switch that selects the identity provider, read here rather than
-   * in the controller: which credential store holds the password and which
-   * system mints the reset link have to be the same answer, and a second flag
-   * would eventually be set to disagree with the first.
-   */
-  private usingLocalProvider() {
-    return process.env.AUTH_IDENTITY_PROVIDER?.trim().toLowerCase() === 'local';
-  }
 
   private ttlMs() {
     const raw = Number(process.env.AUTH_PASSWORD_RESET_TTL_MINUTES);
@@ -70,8 +56,6 @@ export class PasswordResetService {
    * answered identically to a hit.
    */
   async request(email: string) {
-    if (!this.usingLocalProvider()) return this.supabase.requestPasswordReset(email);
-
     const normalized = email.trim().toLowerCase();
     const credential = await this.prisma.authCredential.findUnique({
       where: { email: normalized },
@@ -116,6 +100,37 @@ export class PasswordResetService {
   }
 
   /**
+   * Replace a temporary password.
+   *
+   * Every provisioned account starts with one and cannot do anything until it
+   * is replaced — the permission guards refuse while `mustChangePassword` is
+   * set. So this is the single step between "account created" and "account
+   * usable", and it was the last thing still reaching for Supabase: after the
+   * cutover it answered 502 and locked out every new technician.
+   *
+   * The requirement is re-checked against the database rather than trusted from
+   * the token. The guard that admits the caller reads the claim, which is fixed
+   * at sign-in; the column is what `setPassword` clears, and the two would
+   * disagree for the life of a token otherwise.
+   */
+  async changeRequiredPassword(authUserId: string, password: string) {
+    const credential = await this.prisma.authCredential.findUnique({
+      where: { authUserId },
+      select: { mustChangePassword: true },
+    });
+    if (!credential)
+      throw new ApplicationError(404, 'ACCOUNT_NOT_FOUND', 'That account no longer exists.');
+    if (!credential.mustChangePassword)
+      throw new ApplicationError(
+        403,
+        'PASSWORD_CHANGE_NOT_REQUIRED',
+        'This account does not require a password replacement.',
+      );
+    // Clears the flag and revokes every session in one transaction.
+    await this.identities.setPassword(authUserId, password);
+  }
+
+  /**
    * Redeem a reset token for a new password.
    *
    * Single use, and every session is revoked on success. Someone resetting a
@@ -124,16 +139,6 @@ export class PasswordResetService {
    * `setPassword` handles as part of the same transaction.
    */
   async reset(token: string, password: string) {
-    // While Supabase still mints the links, no token here can be ours. Refusing
-    // outright beats a lookup that always misses and reports "invalid link" for
-    // a link that was perfectly good.
-    if (!this.usingLocalProvider())
-      throw new ApplicationError(
-        503,
-        'RESET_NOT_AVAILABLE',
-        'Password reset is handled by the identity provider for this deployment.',
-      );
-
     const record = await this.prisma.authPasswordResetToken.findUnique({
       where: { tokenHash: this.hash(token) },
       select: {

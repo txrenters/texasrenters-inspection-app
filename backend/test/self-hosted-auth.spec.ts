@@ -448,7 +448,6 @@ describe('password reset', () => {
   }
 
   const identities = () => ({ setPassword: jest.fn().mockResolvedValue(undefined) });
-  const supabase = () => ({ requestPasswordReset: jest.fn().mockResolvedValue(undefined) });
   const mailer = () => ({ sendPasswordReset: jest.fn().mockResolvedValue({ status: 'SENT' }) });
 
   const liveToken = (overrides: Record<string, unknown> = {}) => ({
@@ -466,12 +465,7 @@ describe('password reset', () => {
       profile: { displayName: 'Ada', isActive: true },
     });
     const mail = mailer();
-    const service = new PasswordResetService(
-      prisma as never,
-      identities() as never,
-      supabase() as never,
-      mail as never,
-    );
+    const service = new PasswordResetService(prisma as never, identities() as never, mail as never);
 
     await service.request('ada@example.com');
 
@@ -488,12 +482,7 @@ describe('password reset', () => {
       authUserId: AUTH_USER_ID,
       profile: { displayName: 'Ada', isActive: true },
     });
-    const service = new PasswordResetService(
-      prisma as never,
-      identities() as never,
-      supabase() as never,
-      mailer() as never,
-    );
+    const service = new PasswordResetService(prisma as never, identities() as never, mailer() as never);
 
     await service.request('ada@example.com');
 
@@ -505,12 +494,7 @@ describe('password reset', () => {
   it('sends nothing for an unknown address, and says nothing either', async () => {
     const prisma = resetPrisma(null, null);
     const mail = mailer();
-    const service = new PasswordResetService(
-      prisma as never,
-      identities() as never,
-      supabase() as never,
-      mail as never,
-    );
+    const service = new PasswordResetService(prisma as never, identities() as never, mail as never);
 
     await expect(service.request('nobody@example.com')).resolves.toBeUndefined();
     expect(mail.sendPasswordReset).not.toHaveBeenCalled();
@@ -524,12 +508,7 @@ describe('password reset', () => {
       profile: { displayName: 'Ada', isActive: false },
     });
     const mail = mailer();
-    const service = new PasswordResetService(
-      prisma as never,
-      identities() as never,
-      supabase() as never,
-      mail as never,
-    );
+    const service = new PasswordResetService(prisma as never, identities() as never, mail as never);
 
     await service.request('ada@example.com');
     expect(mail.sendPasswordReset).not.toHaveBeenCalled();
@@ -538,12 +517,7 @@ describe('password reset', () => {
   it('redeems a live token for a password change', async () => {
     const prisma = resetPrisma(liveToken());
     const identity = identities();
-    const service = new PasswordResetService(
-      prisma as never,
-      identity as never,
-      supabase() as never,
-      mailer() as never,
-    );
+    const service = new PasswordResetService(prisma as never, identity as never, mailer() as never);
 
     await service.reset(RESET_TOKEN, PASSWORD);
 
@@ -554,12 +528,7 @@ describe('password reset', () => {
     const prisma = resetPrisma(liveToken());
     prisma.authPasswordResetToken.updateMany.mockResolvedValue({ count: 0 });
     const identity = identities();
-    const service = new PasswordResetService(
-      prisma as never,
-      identity as never,
-      supabase() as never,
-      mailer() as never,
-    );
+    const service = new PasswordResetService(prisma as never, identity as never, mailer() as never);
 
     // Losing the race must not set a password: the winner's would be silently
     // overwritten by the loser's.
@@ -574,12 +543,7 @@ describe('password reset', () => {
   ])('refuses a token that is %s', async (_label, overrides) => {
     const prisma = resetPrisma(liveToken(overrides));
     const identity = identities();
-    const service = new PasswordResetService(
-      prisma as never,
-      identity as never,
-      supabase() as never,
-      mailer() as never,
-    );
+    const service = new PasswordResetService(prisma as never, identity as never, mailer() as never);
 
     await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({
       status: 400,
@@ -592,12 +556,7 @@ describe('password reset', () => {
     // Distinguishing "never existed" from "expired" tells someone guessing
     // tokens which guesses were closer.
     const prisma = resetPrisma(null);
-    const service = new PasswordResetService(
-      prisma as never,
-      identities() as never,
-      supabase() as never,
-      mailer() as never,
-    );
+    const service = new PasswordResetService(prisma as never, identities() as never, mailer() as never);
 
     await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({
       status: 400,
@@ -605,23 +564,59 @@ describe('password reset', () => {
     });
   });
 
-  it('delegates to Supabase while it is still the configured provider', async () => {
-    process.env.AUTH_IDENTITY_PROVIDER = 'supabase';
-    const prisma = resetPrisma(null);
-    const legacy = supabase();
+});
+
+describe('replacing a temporary password', () => {
+  // The step between "account created" and "account usable": every provisioned
+  // account starts with mustChangePassword and the guards refuse until it is
+  // cleared. It went through Supabase until the cutover, after which it
+  // answered 502 and locked out every new technician — found by provisioning
+  // one and trying to use it, which no unit test was doing.
+  function prisma(credential: unknown) {
+    return { authCredential: { findUnique: jest.fn().mockResolvedValue(credential) } };
+  }
+  const identities = () => ({ setPassword: jest.fn().mockResolvedValue(undefined) });
+
+  it('sets the password when the account requires it', async () => {
+    const identity = identities();
     const service = new PasswordResetService(
-      prisma as never,
-      identities() as never,
-      legacy as never,
-      mailer() as never,
+      prisma({ mustChangePassword: true }) as never,
+      identity as never,
+      undefined as never,
     );
 
-    await service.request('ada@example.com');
+    await service.changeRequiredPassword(AUTH_USER_ID, PASSWORD);
 
-    expect(legacy.requestPasswordReset).toHaveBeenCalledWith('ada@example.com');
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    // And a token cannot be redeemed here, because none was minted here.
-    await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({ status: 503 });
+    // setPassword clears the flag and revokes every session in one transaction.
+    expect(identity.setPassword).toHaveBeenCalledWith(AUTH_USER_ID, PASSWORD);
+  });
+
+  it('refuses when the account does not require one', async () => {
+    // Re-checked against the column, not the token. The guard admits on a claim
+    // fixed at sign-in, so a token minted before the change would otherwise
+    // keep working as a password-reset endpoint for the life of that token.
+    const identity = identities();
+    const service = new PasswordResetService(
+      prisma({ mustChangePassword: false }) as never,
+      identity as never,
+      undefined as never,
+    );
+
+    await expect(service.changeRequiredPassword(AUTH_USER_ID, PASSWORD)).rejects.toMatchObject({
+      status: 403,
+      code: 'PASSWORD_CHANGE_NOT_REQUIRED',
+    });
+    expect(identity.setPassword).not.toHaveBeenCalled();
+  });
+
+  it('refuses for an account that no longer exists', async () => {
+    const identity = identities();
+    const service = new PasswordResetService(prisma(null) as never, identity as never, undefined as never);
+
+    await expect(service.changeRequiredPassword(AUTH_USER_ID, PASSWORD)).rejects.toMatchObject({
+      status: 404,
+    });
+    expect(identity.setPassword).not.toHaveBeenCalled();
   });
 });
 

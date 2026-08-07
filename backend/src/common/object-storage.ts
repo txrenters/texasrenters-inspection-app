@@ -10,11 +10,10 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Logger } from '@nestjs/common';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 import { ApplicationError } from './errors';
 
-export type StorageProvider = 'local' | 'supabase' | 'r2';
+export type StorageProvider = 'local' | 'r2';
 
 /**
  * Poster-frame key for a video object. Derived rather than stored: a thumbnail is
@@ -52,14 +51,13 @@ export interface ObjectStorageConfig {
 
 // Clients are cached per credential set: constructing one per request wasted a
 // TLS handshake on every upload and download.
-const supabaseClients = new Map<string, SupabaseClient>();
 const s3Clients = new Map<string, S3Client>();
 
 /**
  * Object storage with three interchangeable backends.
  *
  * `local` writes to the container's disk and is development-only — that disk is
- * ephemeral, so anything stored there is lost on redeploy. `supabase` and `r2`
+ * ephemeral, so anything stored there is lost on redeploy. `r2`
  * are durable. Storage keys are identical across backends, so migrating between
  * them never requires touching the database.
  */
@@ -71,7 +69,7 @@ export abstract class ObjectStorage {
   /** The active backend, recorded on media rows as their `provider`. */
   providerName(): StorageProvider {
     const value = process.env[this.config.providerEnv];
-    return value === 'supabase' || value === 'r2' ? value : 'local';
+    return value === 'r2' ? value : 'local';
   }
 
   async get(storageKey: string): Promise<Buffer> {
@@ -88,11 +86,6 @@ export abstract class ObjectStorage {
         throw this.notFound();
       }
     }
-    if (provider === 'supabase') {
-      const { data, error } = await this.supabaseBucket().download(storageKey);
-      if (error || !data) throw this.notFound();
-      return Buffer.from(await data.arrayBuffer());
-    }
     try {
       return await readFile(this.localPath(storageKey));
     } catch {
@@ -106,10 +99,6 @@ export abstract class ObjectStorage {
       await this.s3().send(
         new DeleteObjectCommand({ Bucket: this.bucketName(), Key: storageKey }),
       );
-      return;
-    }
-    if (provider === 'supabase') {
-      await this.supabaseBucket().remove([storageKey]);
       return;
     }
     await rm(this.localPath(storageKey), { force: true });
@@ -127,14 +116,6 @@ export abstract class ObjectStorage {
         new GetObjectCommand({ Bucket: this.bucketName(), Key: storageKey }),
         { expiresIn: expiresInSeconds },
       );
-    }
-    if (provider === 'supabase') {
-      const { data, error } = await this.supabaseBucket().createSignedUrl(
-        storageKey,
-        expiresInSeconds,
-      );
-      if (error || !data?.signedUrl) return null;
-      return data.signedUrl;
     }
     return null;
   }
@@ -154,14 +135,6 @@ export abstract class ObjectStorage {
       } catch (error) {
         throw this.writeFailed(error, { storageKey, bytes: bytes.byteLength });
       }
-      return;
-    }
-    if (provider === 'supabase') {
-      const { error } = await this.supabaseBucket().upload(storageKey, bytes, {
-        contentType: mimeType,
-        upsert: false,
-      });
-      if (error) throw this.writeFailed(error, { storageKey, bytes: bytes.byteLength });
       return;
     }
     const path = this.localPath(storageKey);
@@ -204,7 +177,7 @@ export abstract class ObjectStorage {
       }
       return;
     }
-    // Supabase's client takes bytes, so this backend still buffers.
+    // The client takes bytes, so this backend still buffers.
     await this.putBuffer(storageKey, await readFile(sourcePath), mimeType);
   }
 
@@ -229,20 +202,6 @@ export abstract class ObjectStorage {
     return client;
   }
 
-  private supabaseBucket() {
-    const url = process.env.SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !serviceRoleKey) throw this.notConfigured();
-    const cacheKey = `${url}:${serviceRoleKey.slice(-8)}`;
-    let client = supabaseClients.get(cacheKey);
-    if (!client) {
-      client = createClient(url, serviceRoleKey, {
-        auth: { autoRefreshToken: false, persistSession: false },
-      });
-      supabaseClients.set(cacheKey, client);
-    }
-    return client.storage.from(this.bucketName());
-  }
 
   private localPath(storageKey: string) {
     const root = this.config.localRoot;

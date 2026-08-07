@@ -4,7 +4,6 @@ import { DatabaseModule } from '../database/database.module';
 import { MailModule } from '../mail/mail.module';
 import { RequiredPasswordAuthGuard } from '../common/auth';
 import { AuthController } from './auth.controller';
-import { AuthService } from './auth.service';
 import { LocalIdentityProvider } from './local-identity.provider';
 import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
@@ -19,7 +18,6 @@ import { TokenService } from './token.service';
   // end existing sessions — a new password that leaves old sessions alive has
   // not really replaced anything.
   providers: [
-    AuthService,
     LocalIdentityProvider,
     PasswordResetService,
     SessionService,

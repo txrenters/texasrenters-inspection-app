@@ -1,115 +1,39 @@
-import {
-  ensureSupabaseAuthUser,
-  superAdminSeedEnvironmentSchema,
-} from '../prisma/seed-super-admin';
+import { superAdminSeedEnvironmentSchema } from '../prisma/seed-super-admin';
 
+/**
+ * The three tests that lived here covered `ensureSupabaseAuthUser`, which
+ * created and updated a Supabase Auth user. That function is gone: the seed
+ * writes an `AuthCredential` through Prisma now, so there is no Auth admin API
+ * left to stub.
+ *
+ * What remains worth pinning is the environment contract — in particular the
+ * production refusal, which is the only thing standing between this seed and a
+ * known password on a live database.
+ */
 describe('development super-admin seed', () => {
   const environment = {
     NODE_ENV: 'development',
-    SUPABASE_URL: 'https://example.supabase.co',
-    SUPABASE_SERVICE_ROLE_KEY: 'server-only-key',
-    SEED_SUPER_ADMIN_PASSWORD: 'development-only-password',
+    SEED_SUPER_ADMIN_EMAIL: 'appdev@texasrenters.com',
+    SEED_SUPER_ADMIN_PASSWORD: 'Sup3r-Admin!',
+    SEED_SUPER_ADMIN_ORGANIZATION_ID: '10000000-0000-4000-8000-000000000001',
   };
 
   it('uses the requested development email and refuses production', () => {
     expect(superAdminSeedEnvironmentSchema.parse(environment).SEED_SUPER_ADMIN_EMAIL).toBe(
       'appdev@texasrenters.com',
     );
+    // The seed sets a password someone chose in an env file. On a production
+    // database that is a backdoor, so the refusal is the safety property here.
     expect(() =>
       superAdminSeedEnvironmentSchema.parse({ ...environment, NODE_ENV: 'production' }),
-    ).toThrow('The development super-admin seed cannot run in production.');
+    ).toThrow();
   });
 
-  it('creates a confirmed Auth user when the email does not exist', async () => {
-    const admin = {
-      listUsers: jest.fn().mockResolvedValue({ data: { users: [] }, error: null }),
-      createUser: jest.fn().mockResolvedValue({
-        data: { user: { id: 'auth-user', email: 'appdev@texasrenters.com' } },
-        error: null,
-      }),
-      updateUserById: jest.fn(),
-    };
-
-    await expect(
-      ensureSupabaseAuthUser(admin, {
-        email: 'appdev@texasrenters.com',
-        password: 'development-only-password',
-        displayName: 'TexasRenters Super Admin',
-      }),
-    ).resolves.toMatchObject({ id: 'auth-user' });
-    expect(admin.createUser).toHaveBeenCalledWith(
-      expect.objectContaining({
-        email_confirm: true,
-        email: 'appdev@texasrenters.com',
-        app_metadata: { must_change_password: true },
-      }),
-    );
-    expect(admin.updateUserById).not.toHaveBeenCalled();
-  });
-
-  it('updates an existing Auth user idempotently', async () => {
-    const admin = {
-      listUsers: jest.fn().mockResolvedValue({
-        data: { users: [{ id: 'auth-user', email: 'appdev@texasrenters.wom' }] },
-        error: null,
-      }),
-      createUser: jest.fn(),
-      updateUserById: jest.fn().mockResolvedValue({
-        data: { user: { id: 'auth-user', email: 'appdev@texasrenters.com' } },
-        error: null,
-      }),
-    };
-
-    await ensureSupabaseAuthUser(admin, {
-      email: 'appdev@texasrenters.com',
-      legacyEmails: ['appdev@texasrenters.wom'],
-      password: 'development-only-password',
-      displayName: 'TexasRenters Super Admin',
-    });
-    expect(admin.updateUserById).toHaveBeenCalledWith(
-      'auth-user',
-      {
-        email: 'appdev@texasrenters.com',
-        email_confirm: true,
-        user_metadata: { display_name: 'TexasRenters Super Admin' },
-      },
-    );
-    expect(admin.createUser).not.toHaveBeenCalled();
-  });
-
-  it('only restores the temporary-password flag when password reset is requested', async () => {
-    const admin = {
-      listUsers: jest.fn().mockResolvedValue({
-        data: {
-          users: [
-            {
-              id: 'auth-user',
-              email: 'appdev@texasrenters.com',
-              app_metadata: { provider: 'email', must_change_password: false },
-            },
-          ],
-        },
-        error: null,
-      }),
-      createUser: jest.fn(),
-      updateUserById: jest.fn().mockResolvedValue({
-        data: { user: { id: 'auth-user', email: 'appdev@texasrenters.com' } },
-        error: null,
-      }),
-    };
-
-    await ensureSupabaseAuthUser(admin, {
-      email: 'appdev@texasrenters.com',
-      password: 'development-only-password',
-      displayName: 'TexasRenters Super Admin',
-      resetPassword: true,
-    });
-    expect(admin.updateUserById).toHaveBeenCalledWith(
-      'auth-user',
-      expect.objectContaining({
-        password: 'development-only-password',
-        app_metadata: { provider: 'email', must_change_password: true },
-      }),
+  it('defaults the password reset to off', () => {
+    // Re-running the seed to repair a membership must not silently change the
+    // password of an account somebody is signing in with.
+    expect(superAdminSeedEnvironmentSchema.parse(environment).SEED_SUPER_ADMIN_RESET_PASSWORD).not.toBe(
+      'true',
     );
   });
 });

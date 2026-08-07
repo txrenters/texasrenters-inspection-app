@@ -9,7 +9,6 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Request } from 'express';
 
 import { type PermissionKey, resolveEffectivePermissions, UserRole } from '@texasrenters/shared';
@@ -185,9 +184,6 @@ interface SupabaseClaims {
   app_metadata?: Record<string, unknown>;
 }
 
-let verificationClient: SupabaseClient | undefined;
-let verificationClientKey: string | undefined;
-
 function bearerToken(header?: string) {
   const match = header?.match(/^Bearer\s+(.+)$/i);
   if (!match?.[1]) throw new UnauthorizedException('A bearer access token is required.');
@@ -245,33 +241,22 @@ export function verifySupabaseJwt(token: string): SupabaseClaims {
   }
 }
 
+/**
+ * Verify an access token.
+ *
+ * HS256 only. This used to branch: HS256 verified locally, while ES256/RS256
+ * were handed to a Supabase client that fetched the project's JWKS — a
+ * migration shim from when Supabase moved to per-project asymmetric signing
+ * keys. Nothing issues those tokens any more, so the branch verified nothing
+ * and only kept the Supabase SDK on the authentication path.
+ *
+ * An asymmetric token now fails here rather than being sent anywhere, which is
+ * the correct answer for a token this deployment cannot have issued.
+ */
 export async function verifySupabaseAccessToken(token: string): Promise<SupabaseClaims> {
-  const algorithm = tokenAlgorithm(token);
-  if (algorithm === 'HS256') return verifySupabaseJwt(token);
-  if (!['ES256', 'RS256'].includes(algorithm))
+  if (tokenAlgorithm(token) !== 'HS256')
     throw new UnauthorizedException('Invalid or expired access token.');
-
-  const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, '');
-  const apiKey = process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !apiKey)
-    throw new UnauthorizedException('Supabase authentication is not configured.');
-
-  try {
-    const clientKey = `${supabaseUrl}:${apiKey}`;
-    if (!verificationClient || verificationClientKey !== clientKey) {
-      verificationClient = createClient(supabaseUrl, apiKey, {
-        auth: { autoRefreshToken: false, persistSession: false },
-      });
-      verificationClientKey = clientKey;
-    }
-    const { data, error } = await verificationClient.auth.getClaims(token);
-    if (error || !data?.claims) throw new Error('Token verification failed.');
-    const claims = data.claims as unknown as SupabaseClaims;
-    validateClaims(claims);
-    return claims;
-  } catch {
-    throw new UnauthorizedException('Invalid or expired access token.');
-  }
+  return verifySupabaseJwt(token);
 }
 
 function tokenAlgorithm(token: string) {
@@ -286,14 +271,6 @@ function tokenAlgorithm(token: string) {
   }
 }
 
-function validateClaims(claims: SupabaseClaims) {
-  const now = Math.floor(Date.now() / 1000);
-  if (!claims.sub || !Number.isFinite(claims.exp) || claims.exp <= now) throw new Error('Expired.');
-  if (claims.nbf && claims.nbf > now) throw new Error('Not active.');
-  if (claims.iss !== expectedTokenIssuer()) throw new Error('Invalid issuer.');
-  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-  if (!audiences.includes(expectedTokenAudience())) throw new Error('Invalid audience.');
-}
 
 @Injectable()
 export class RequiredPasswordAuthGuard implements CanActivate {
