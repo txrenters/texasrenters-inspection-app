@@ -50,6 +50,6 @@ export async function POST(request: NextRequest) {
     mustChangePassword: boolean;
   };
   const response = NextResponse.json({ mustChangePassword: session.mustChangePassword });
-  applySession(response, session, request.nextUrl.origin);
+  applySession(response, session);
   return response;
 }

@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
   // The tokens themselves are not returned to the page. It reads what it needs
   // from the access cookie; the refresh token stays out of script entirely.
   const response = NextResponse.json({ mustChangePassword: session.mustChangePassword });
-  applySession(response, session, request.nextUrl.origin);
+  applySession(response, session);
   return response;
 }
 

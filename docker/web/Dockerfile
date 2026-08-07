@@ -24,15 +24,14 @@ COPY shared ./shared
 COPY web-app ./web-app
 
 # NEXT_PUBLIC_* values are inlined into the client bundle at build time, so they
-# must be present here rather than at runtime. All four are browser-readable by
-# definition; a service-role key must never be passed as a build arg.
+# must be present here rather than at runtime. Both are browser-readable by
+# definition; a secret must never be passed as a build arg.
+#
+# The Supabase pair is gone — the console signs in against our own backend and
+# holds its session in cookies, so no auth value reaches the bundle at all.
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
-ARG NEXT_PUBLIC_SUPABASE_URL=
-ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=
 ARG NEXT_PUBLIC_ENABLE_DEMO_DATA=false
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
-ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_PUBLIC_ENABLE_DEMO_DATA=$NEXT_PUBLIC_ENABLE_DEMO_DATA
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production

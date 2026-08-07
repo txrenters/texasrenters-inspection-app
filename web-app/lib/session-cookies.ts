@@ -17,18 +17,22 @@ export interface IssuedSession {
 }
 
 /**
- * `Secure` everywhere except plain-HTTP localhost, which cannot set it.
+ * `Secure`, always.
  *
- * Derived from the request rather than NODE_ENV: the remote beta runs a
- * production build over an HTTPS tunnel, and keying this off the build mode
- * would drop `Secure` on exactly the deployment that is actually exposed.
+ * This started as a heuristic that dropped `Secure` for localhost, and the
+ * heuristic was wrong: inside the container the request origin is
+ * `http://0.0.0.0:5454`, not localhost, so it set `Secure` anyway — and would
+ * equally have *cleared* it on some real deployment whose origin happened to
+ * look local. That is the wrong direction to fail in.
+ *
+ * Unconditional is both simpler and safer. Browsers treat `localhost` as a
+ * trustworthy origin and accept `Secure` cookies there over plain HTTP, so
+ * local development works; every real deployment is HTTPS. The one setup this
+ * refuses is plain HTTP on a non-localhost host, which is not a deployment
+ * anyone should have.
  */
-function secureFor(origin: string) {
-  return !origin.startsWith('http://localhost') && !origin.startsWith('http://127.0.0.1');
-}
-
-export function applySession(response: NextResponse, session: IssuedSession, origin: string) {
-  const secure = secureFor(origin);
+export function applySession(response: NextResponse, session: IssuedSession) {
+  const secure = true;
 
   // Readable by script: lib/api.ts puts it in an Authorization header on every
   // request. Short-lived, so an exfiltrated one buys only its remaining life.
@@ -60,9 +64,27 @@ export function clearSession(response: NextResponse) {
   response.cookies.set(REFRESH_COOKIE, '', { path: '/api/session', maxAge: 0 });
 }
 
-/** The backend base URL, as the route handlers see it. */
+/**
+ * The backend base URL **as the server sees it**, which is not the same URL the
+ * browser uses.
+ *
+ * `NEXT_PUBLIC_API_BASE_URL` is inlined into the bundle for the browser, and in
+ * the container stack it is `http://localhost:3000`. These route handlers run
+ * server-side *inside the web container*, where `localhost` is the web
+ * container itself — so using it made every sign-in fail with "The
+ * administrator API could not be reached", which is precisely the mistake
+ * compose.yaml warns about for REDIS_URL.
+ *
+ * `API_INTERNAL_BASE_URL` is a runtime variable, never inlined, and names the
+ * backend by its compose service name. It falls back to the public URL because
+ * outside the stack — `next dev` on a workstation — the two really are the same
+ * host.
+ */
 export function apiBaseUrl() {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
-  if (!base) throw new Error('NEXT_PUBLIC_API_BASE_URL is not configured.');
+  const base = (
+    process.env.API_INTERNAL_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
+  )?.replace(/\/$/, '');
+  if (!base)
+    throw new Error('Neither API_INTERNAL_BASE_URL nor NEXT_PUBLIC_API_BASE_URL is configured.');
   return base;
 }
