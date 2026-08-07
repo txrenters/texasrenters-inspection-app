@@ -1,8 +1,8 @@
 import * as SecureStore from 'expo-secure-store';
 import SQLiteStorage from 'expo-sqlite/kv-store';
 
-// Supabase sessions hold access and refresh tokens, so they belong in the
-// device keychain/keystore, not plaintext SQLite. SecureStore values are
+// A session holds access and refresh tokens, so it belongs in the device
+// keychain/keystore, not plaintext SQLite. SecureStore values are
 // limited to ~2 KB on some platforms, and a serialized session exceeds that,
 // so values are split across numbered chunks with a chunk-count marker.
 const CHUNK_SIZE = 1800;

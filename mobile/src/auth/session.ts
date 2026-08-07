@@ -6,15 +6,9 @@ import { sessionStorage } from './session-storage';
 /**
  * The technician's session, held on the device.
  *
- * Replaces the Supabase client. Tokens are stored through the same chunked
- * SecureStore adapter the Supabase session used — keychain/keystore rather than
- * plaintext SQLite, split across numbered chunks because SecureStore caps
- * values near 2 KB. Nothing about that changes; only what is stored in it does.
- *
- * **Devices already signed in will have to sign in once more.** A Supabase
- * refresh token cannot be exchanged for one of ours, so there is no way to
- * carry a live session across. The app is not yet released, so this costs the
- * handful of test devices one sign-in.
+ * Tokens live in the chunked SecureStore adapter — keychain/keystore rather
+ * than plaintext SQLite, split across numbered chunks because SecureStore caps
+ * values near 2 KB.
  */
 
 const STORAGE_KEY = 'texasrenters.session';
@@ -213,7 +207,7 @@ export async function signOut() {
   }).catch(() => undefined);
 }
 
-/** Replaces Supabase's `onAuthStateChange`, used to reconnect the socket. */
+/** Notifies on sign-in, sign-out and refresh, so the socket can reconnect. */
 export function onSessionChange(listener: Listener) {
   listeners.add(listener);
   return () => listeners.delete(listener);

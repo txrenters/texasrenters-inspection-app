@@ -4,7 +4,8 @@ This package is the redesigned Expo technician application. It keeps the visual
 work from the supplied prototype while using the same production architecture as
 `mobile`:
 
-- Supabase technician authentication with mandatory first-login password change
+- technician authentication against the TexasRenters API, with mandatory
+  first-login password change
 - authenticated TexasRenters REST API calls only
 - locally durable room recordings and snapshots
 - resumable background upload queue
@@ -20,8 +21,6 @@ Copy `.env.example` to `.env.local` and provide:
 
 ```dotenv
 EXPO_PUBLIC_API_BASE_URL=http://localhost:3000
-EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-EXPO_PUBLIC_SUPABASE_ANON_KEY=your-public-anon-key
 ```
 
 On a physical device, the development environment derives the backend host from
@@ -37,20 +36,20 @@ is archived from git, and it is gitignored.
 `EXPO_PUBLIC_*` values are inlined into the bundle at build time, so anything not
 present during the build is absent from the app permanently. `eas.json` sets the
 flags that define the shape of each build (`EXPO_PUBLIC_APP_ENV` and the demo and
-test toggles, pinned off for preview and production). The three values that
-differ per deployment must exist as **EAS environment variables** in the matching
+test toggles, pinned off for preview and production). The one value that differs
+per deployment must exist as an **EAS environment variable** in the matching
 environment (`eas env:create`, or Project settings → Environment variables):
 
 | Variable | development | preview | production |
 | --- | --- | --- | --- |
 | `EXPO_PUBLIC_API_BASE_URL` | — | ngrok tunnel | public HTTPS API |
-| `EXPO_PUBLIC_SUPABASE_URL` | ✓ | ✓ | ✓ |
-| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | ✓ | ✓ | ✓ |
 
-The anon key is the only Supabase credential the app may ever hold. The
-service-role key, R2 credentials and the JWT secret are backend-only and must
-never appear in an `EXPO_PUBLIC_*` variable — that prefix ships them to every
-device.
+**The app holds no provider credential of any kind.** It authenticates against
+the TexasRenters API and receives a token; nothing else. Database passwords, the
+JWT signing secret, R2 keys and the Cloudflare Stream API token and signing key
+are backend-only and must never appear in an `EXPO_PUBLIC_*` variable — that
+prefix ships whatever it is given to every device, permanently, in a build that
+cannot be recalled.
 
 If the API address is missing or unreachable from a phone, the app now says so on
 the Diagnostics screen instead of failing as unexplained network errors — see

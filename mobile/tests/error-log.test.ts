@@ -4,7 +4,7 @@ const entry = (error: unknown, source = 'test') =>
   buildEntry({ error, source, at: '2026-07-31T00:00:00.000Z', id: 'fixed-id' });
 
 describe('redact', () => {
-  it('removes JWTs, which appear verbatim in Supabase auth errors', () => {
+  it('removes JWTs, which appear verbatim in auth errors', () => {
     const token =
       'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
     const output = redact(`Request failed with ${token} attached`);

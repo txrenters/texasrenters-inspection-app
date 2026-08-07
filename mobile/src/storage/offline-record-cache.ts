@@ -13,7 +13,7 @@ export class ApiConnectionError extends Error {
 }
 
 /**
- * The technician's Supabase session is gone or unrefreshable.
+ * The technician's session is gone or unrefreshable.
  *
  * Distinct from a generic Error so the app can react once, centrally, by
  * routing back to sign-in. Previously every query surfaced the raw text

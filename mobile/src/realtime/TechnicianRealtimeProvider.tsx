@@ -72,9 +72,8 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       refreshAssignments();
       if (!socket?.connected) connectSafely();
     });
-    // Replaces Supabase's onAuthStateChange: the socket authenticates with a
-    // token captured at connect, so it has to be rebuilt when the session
-    // changes and torn down when it goes.
+    // The socket authenticates with a token captured at connect, so it has to
+    // be rebuilt when the session changes and torn down when it goes.
     const unsubscribeSession = onSessionChange((session) => {
       if (session) connectSafely();
       else {

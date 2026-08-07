@@ -335,8 +335,8 @@ const dashboardSchema = z.object({
 export async function requestJson(path: string, options: RequestInit = {}): Promise<unknown> {
   if (!environment.apiBaseUrl)
     throw new Error('The TexasRenters API URL is not configured for this app build.');
-  // Refreshes in place when the token is close to expiry. Supabase's client
-  // did this inside its own getSession(); nothing else keeps tokens alive.
+  // Refreshes in place when the token is close to expiry. This is the only
+  // thing that keeps a token alive — nothing refreshes on a timer.
   const session = await getSession();
   if (!session) throw new SessionExpiredError();
   const method = (options.method ?? 'GET').toUpperCase();
@@ -429,9 +429,11 @@ export class ApiAuthRepository implements AuthRepository {
    * Ask the office to mail a reset link.
    *
    * The link points at the admin console, which is where the form lives — the
-   * app registers no deep-link handler, so it could not receive one. Previously
-   * this called Supabase with no redirect at all and had no caller anywhere in
-   * the app; it now at least reaches the right endpoint if one is added.
+   * app registers no deep-link handler, so it could not receive one.
+   *
+   * Reachable only through `usePasswordReset`, which no screen renders — the
+   * sign-in screen offers no "forgot password" route, so a technician asks the
+   * office. Kept because this is the endpoint that route should call.
    */
   async resetPassword(email: string) {
     await writeJson('/api/v1/auth/request-password-reset', 'POST', { email });

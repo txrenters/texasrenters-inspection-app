@@ -35,8 +35,8 @@ const listeners = new Set<(entries: LoggedError[]) => void>();
  * Strip anything credential-shaped before it is persisted.
  *
  * Testers are instructed to paste diagnostics into a chat message, so this text
- * leaves the device by design. A Supabase access token in an error message
- * would be a real leak, and tokens do appear in thrown API errors.
+ * leaves the device by design. An access token in an error message would be a
+ * real leak, and tokens do appear verbatim in thrown API errors.
  */
 export function redact(text: string): string {
   return (
