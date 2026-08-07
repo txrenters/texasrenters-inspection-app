@@ -39,7 +39,8 @@
     "stream:webhook": "node --env-file-if-exists=.env.local scripts/configure-cloudflare-stream-webhook.mjs",
     "db:reset-inspections": "node --env-file-if-exists=.env.local scripts/reset-inspection-data.mjs",
     "db:migrate-to-local": "node --env-file-if-exists=.env.local scripts/migrate-to-local-postgres.mjs",
-    "db:import-credentials": "node --env-file-if-exists=.env.local scripts/import-supabase-credentials.mjs"
+    "db:import-credentials": "node --env-file-if-exists=.env.local scripts/import-supabase-credentials.mjs",
+    "db:setup-app-role": "node --env-file-if-exists=.env.local scripts/setup-app-database-role.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1095.0",

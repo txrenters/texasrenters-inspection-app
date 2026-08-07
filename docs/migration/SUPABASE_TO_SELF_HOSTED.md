@@ -288,9 +288,25 @@ assignments persist for the next on a shared device.
 Every application-level `organizationId` filter stays. A missed filter should
 become a returned-nothing bug, never a cross-tenant leak.
 
-1. **Create a dedicated application role** — not the table owner, without
-   `BYPASSRLS`, with explicit grants. Without this, nothing below has any
-   effect. Add `FORCE ROW LEVEL SECURITY` so even the owner is subject to it.
+1. ✅ **Dedicated application role.** `pnpm db:setup-app-role`, idempotent,
+   creates `texasrenters_app`: `NOSUPERUSER`, `NOBYPASSRLS`, owns nothing, DML
+   on every table and no DDL — so it cannot drop a policy that constrains it.
+   `ALTER DEFAULT PRIVILEGES` covers tables added later, or the next migration
+   produces a table the app silently cannot read.
+
+   Two connections, which is what Prisma's `directUrl` already exists for:
+   `DATABASE_URL` → this role, subject to policies; `DIRECT_URL` → the owner,
+   migrations only.
+
+   **Demonstrated rather than assumed.** With a deny-all policy on
+   `Organization`: the app role read **0** rows while the owner read **1**.
+
+   **Correction to an earlier assumption in this document:** `FORCE ROW LEVEL
+   SECURITY` does *not* make the current owner subject to policies, because
+   `postgres` is a **superuser** and superuser bypass is absolute — measured, the
+   owner still read 1 row after `FORCE`. That is fine and expected; migrations
+   need it. What protects the data is that the *runtime* connection is a role
+   which cannot bypass anything. Do not rely on `FORCE` as the safeguard.
 2. **Set the tenant GUC per request.** With transaction-mode pooling a
    session-level `SET` leaks across tenants, so it must be `SET LOCAL` inside a
    transaction. We control the pooling now, so decide session vs transaction
