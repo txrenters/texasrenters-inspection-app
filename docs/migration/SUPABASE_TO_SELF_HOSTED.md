@@ -197,7 +197,21 @@ the transition.
 3. ✅ **Backend endpoints.** `POST /auth/login`, `/auth/refresh`, `/auth/logout`.
    Refresh rotates; a retired token presented again is a replay and ends every
    session for that account.
-4. **Replace the identity provider** behind the Phase 0 interface.
+4. ✅ **Replace the identity provider.** `LocalIdentityProvider` implements the
+   Phase 0 interface; `AUTH_IDENTITY_PROVIDER=local` selects it, defaulting to
+   `supabase` so it ships inert and flips back the same way.
+
+   It creates the `UserProfile` alongside the credential, which looks like a
+   layering violation and is a faithful port: Supabase ran a `SECURITY DEFINER`
+   trigger (`handle_texasrenters_auth_user`) that inserted a profile on every
+   `auth.users` insert. That is *why* both provisioning services already contain
+   "claim the triggered profile" logic — so this keeps that path live and no
+   caller changed. It is also what the foreign key requires, and both rows are
+   written in one transaction.
+
+   Verified end to end against the real Postgres, not only mocks: provision →
+   sign in → wrong password → refresh → replay → password change → cascade
+   cleanup, 13/13.
 
 Verified against the real imported rows: all three are `$2a$` cost 10, and
 bcryptjs parses them. bcryptjs emits `$2b$`, which differs from `$2a$` only in a

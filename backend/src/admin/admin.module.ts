@@ -18,10 +18,30 @@ import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
+import { LocalIdentityProvider } from '../auth/local-identity.provider';
+import { IDENTITY_PROVIDER } from './identity-provider';
 import {
   SupabaseAdminGateway,
   TechnicianProvisioningService,
 } from './technician-provisioning.service';
+
+/**
+ * Which credential store provisioning writes to.
+ *
+ * Defaults to Supabase, so this ships inert and the switch is one environment
+ * variable rather than a deploy. Set `AUTH_IDENTITY_PROVIDER=local` once the
+ * credentials are imported and the clients sign in against this backend.
+ *
+ * Both are registered, so flipping back is the same one-line change — which
+ * matters while Supabase is still the fallback.
+ * See docs/migration/SUPABASE_TO_SELF_HOSTED.md.
+ */
+const identityProvider = {
+  provide: IDENTITY_PROVIDER,
+  inject: [SupabaseAdminGateway, LocalIdentityProvider],
+  useFactory: (supabase: SupabaseAdminGateway, local: LocalIdentityProvider) =>
+    process.env.AUTH_IDENTITY_PROVIDER?.trim().toLowerCase() === 'local' ? local : supabase,
+};
 
 @Module({
   imports: [RealtimeModule, MailModule],
@@ -41,6 +61,8 @@ import {
     ReportShareService,
     TechnicianProvisioningService,
     SupabaseAdminGateway,
+    LocalIdentityProvider,
+    identityProvider,
     ApiAuthGuard,
     PermissionsGuard,
   ],

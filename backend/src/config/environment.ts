@@ -64,6 +64,11 @@ const environmentSchema = z
     AUTH_JWT_ISSUER: z.string().optional(),
     AUTH_JWT_AUDIENCE: z.string().optional(),
     AUTH_JWT_SECRET: z.string().optional(),
+    // Which credential store provisioning writes to. Defaults to Supabase so
+    // the self-hosted path ships inert.
+    AUTH_IDENTITY_PROVIDER: z.enum(['supabase', 'local']).default('supabase'),
+    AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
+    AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     FLOOR_PLAN_EXTRACTION_PROVIDER: z
       .enum(['disabled', 'mock', 'anthropic', 'openai'])
       .default('disabled'),

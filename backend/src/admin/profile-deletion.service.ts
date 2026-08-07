@@ -6,7 +6,7 @@ import type { AccountDeletionBlocker, AccountDeletionPreflight } from '@texasren
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { SupabaseAdminGateway } from './technician-provisioning.service';
+import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider';
 
 /**
  * Everything that makes an account undeletable, in one table.
@@ -91,7 +91,7 @@ export type ProfileScope = 'CONSOLE' | 'TECHNICIAN';
 export class ProfileDeletionService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(SupabaseAdminGateway) private readonly identities: SupabaseAdminGateway,
+    @Inject(IDENTITY_PROVIDER) private readonly identities: IdentityProvider,
   ) {}
 
   /**

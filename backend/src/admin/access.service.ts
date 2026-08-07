@@ -20,7 +20,7 @@ import type {
   SetUserRolesDto,
   UpdateRoleDto,
 } from './access.dto';
-import { SupabaseAdminGateway } from './technician-provisioning.service';
+import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider';
 
 // Web-console access levels. INSPECTION_TECHNICIAN is deliberately excluded:
 // technician (mobile) accounts are created and managed on the Technicians page,
@@ -38,7 +38,7 @@ const CONSOLE_MEMBERSHIP_ROLE = UserRole.PROPERTY_ADMIN;
 export class AccessService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(SupabaseAdminGateway) private readonly identities: SupabaseAdminGateway,
+    @Inject(IDENTITY_PROVIDER) private readonly identities: IdentityProvider,
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 

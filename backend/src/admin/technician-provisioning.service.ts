@@ -10,7 +10,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 import type { CreateTechnicianDto } from './admin.dto';
-import type { IdentityProvider } from './identity-provider';
+import { IDENTITY_PROVIDER, type IdentityProvider } from './identity-provider';
 
 /**
  * Supabase Auth as the credential store.
@@ -88,7 +88,7 @@ export class SupabaseAdminGateway implements IdentityProvider {
 export class TechnicianProvisioningService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(SupabaseAdminGateway) private readonly identities: SupabaseAdminGateway,
+    @Inject(IDENTITY_PROVIDER) private readonly identities: IdentityProvider,
     @Optional()
     @Inject(CacheInvalidationService)
     private readonly cacheInvalidation?: CacheInvalidationService,

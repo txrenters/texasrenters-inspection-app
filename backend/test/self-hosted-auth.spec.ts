@@ -1,6 +1,7 @@
 import { hashSync } from 'bcryptjs';
 
 import { verifySupabaseJwt } from '../src/common/auth';
+import { LocalIdentityProvider } from '../src/auth/local-identity.provider';
 import { SessionService } from '../src/auth/session.service';
 import { TokenService } from '../src/auth/token.service';
 
@@ -281,6 +282,122 @@ describe('refresh rotation', () => {
     const service = new SessionService(prisma as never, new TokenService());
 
     await expect(service.refresh('token')).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe('local identity provider', () => {
+  function providerPrisma() {
+    const tx = {
+      userProfile: { create: jest.fn().mockResolvedValue({ id: 'profile-1' }) },
+      authCredential: { create: jest.fn().mockResolvedValue({}), update: jest.fn() },
+      authRefreshToken: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    };
+    const prisma = {
+      authCredential: {
+        count: jest.fn().mockResolvedValue(0),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+    };
+    return { prisma, tx };
+  }
+
+  it('writes the profile and the credential in one transaction', async () => {
+    // The credential's foreign key points at the profile, so a two-step create
+    // could leave a credential that authenticates and is then refused — the
+    // exact seed drift already sitting in this database.
+    const { prisma, tx } = providerPrisma();
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    const { authUserId } = await provider.createTechnicianIdentity(
+      ' Tech@Example.COM ',
+      PASSWORD,
+      'Tech Person',
+    );
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tx.userProfile.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ authUserId, email: 'tech@example.com' }),
+      }),
+    );
+    expect(tx.authCredential.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ authUserId, email: 'tech@example.com' }),
+      }),
+    );
+  });
+
+  it('stores a bcrypt hash, never the password', async () => {
+    const { prisma, tx } = providerPrisma();
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    await provider.createWebUserIdentity('user@example.com', PASSWORD, 'User');
+
+    const { passwordHash } = tx.authCredential.create.mock.calls[0][0].data;
+    expect(passwordHash).not.toBe(PASSWORD);
+    expect(passwordHash).toMatch(/^\$2[aby]\$10\$/);
+  });
+
+  it('starts every provisioned account needing a password change', async () => {
+    const { prisma, tx } = providerPrisma();
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    await provider.createTechnicianIdentity('tech@example.com', PASSWORD, 'Tech');
+
+    // The account is created with a temporary password an administrator can
+    // read, so it is not usable until the holder replaces it.
+    expect(tx.authCredential.create.mock.calls[0][0].data.mustChangePassword).toBe(true);
+  });
+
+  it('reports a taken address as the caller already expects', async () => {
+    const { prisma } = providerPrisma();
+    prisma.$transaction = jest.fn().mockRejectedValue(new Error('unique constraint'));
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    // Same code the Supabase gateway raised, so the provisioning services and
+    // their tests do not change.
+    await expect(
+      provider.createTechnicianIdentity('taken@example.com', PASSWORD, 'Tech'),
+    ).rejects.toMatchObject({ status: 409, code: 'TECHNICIAN_IDENTITY_NOT_CREATED' });
+  });
+
+  it('answers identityExists from the database rather than failing open', async () => {
+    const { prisma } = providerPrisma();
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    expect(await provider.identityExists('nobody')).toBe(false);
+    prisma.authCredential.count.mockResolvedValue(1);
+    expect(await provider.identityExists('somebody')).toBe(true);
+  });
+
+  it('ends every session when the password is replaced', async () => {
+    // A password changed because it may have been exposed has not been replaced
+    // at all if sessions opened with the old one keep working.
+    const { prisma, tx } = providerPrisma();
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    await provider.setPassword(AUTH_USER_ID, PASSWORD);
+
+    expect(tx.authCredential.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ mustChangePassword: false }) }),
+    );
+    expect(tx.authRefreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { authUserId: AUTH_USER_ID, revokedAt: null } }),
+    );
+  });
+
+  it('deletes the credential, leaving the profile to its own service', async () => {
+    const { prisma } = providerPrisma();
+    const provider = new LocalIdentityProvider(prisma as never);
+
+    await provider.deleteIdentity(AUTH_USER_ID);
+
+    // ProfileDeletionService owns whether the profile may go — it refuses
+    // accounts with history. Refresh tokens follow the credential by cascade.
+    expect(prisma.authCredential.deleteMany).toHaveBeenCalledWith({
+      where: { authUserId: AUTH_USER_ID },
+    });
   });
 });
 
