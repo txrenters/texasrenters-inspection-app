@@ -308,5 +308,16 @@ if (mismatches || shapeMismatches) {
 }
 
 console.log(`\nEvery one of ${tables} tables matches (${copied} rows carrying data).`);
+
+if (CONFIRM) {
+  // Measured, not assumed: the dump emits `DROP SCHEMA public`, and both the
+  // table grants and the pg_default_acl entries are keyed on that namespace, so
+  // they cascade away with it. ALTER DEFAULT PRIVILEGES does not survive
+  // either. A copy therefore leaves the application role able to read nothing.
+  console.log(
+    '\nThe restore recreated the `public` schema, which dropped every GRANT on it.' +
+      '\nRe-run `pnpm db:setup-app-role --confirm` or the application role can read nothing.',
+  );
+}
 console.log('\nData is copied and verified. Nothing is repointed yet —');
 console.log('switch DATABASE_URL deliberately, and keep Supabase alive until Phase 2 lands.');

@@ -158,14 +158,31 @@ URL back.
 3. ✅ Copy run and verified: **53 tables, 1797 rows, 138 indexes, 90 unique
    indexes, 79 foreign keys**, all matching the source.
 
-**Remaining — the cutover itself:**
+4. ✅ **Cut over, 2026-08-07.** `DATABASE_URL` and `DIRECT_URL` in
+   `backend/.env.local` now name the container; the Supabase values are kept
+   directly above them, commented, so rolling back is uncommenting two lines.
+   The backend reports `connection.category: "direct"` and answers
+   `/health/database` in **1.3 ms** — against roughly 380 ms through the
+   Supabase pooler.
 
-4. Stop writes, re-run `--confirm` to pick up anything since the copy, set
-   `DATABASE_URL` and `DIRECT_URL` in `backend/.env.local` to
-   `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public`,
-   restart, smoke-test.
-5. Change the container's Postgres password from the `postgres:postgres`
-   default before this is anything but local.
+5. **Still to do: change the `postgres:postgres` password** before this is
+   anything but local.
+
+**A trap this cutover found.** `pg_dump --clean` emits `DROP SCHEMA public`, and
+both the table `GRANT`s and the `pg_default_acl` rows are keyed on that
+namespace — so a copy silently leaves `texasrenters_app` able to read nothing,
+and `ALTER DEFAULT PRIVILEGES` does not survive either. **Re-run
+`pnpm db:setup-app-role --confirm` after every copy.** The migration script now
+says so on completion.
+
+**The stack is deliberately mixed right now: new database, old code.** The
+running images predate Phase 2, so they still verify Supabase tokens — which
+works, because the `UserProfile` rows were copied with identical `authUserId`
+values, so a Supabase token resolves the same person out of the local database.
+That state is coherent and was worth keeping while the database move settles.
+
+Rebuilding (`pnpm docker:up`) deploys Phase 2 as well, at which point sign-in
+moves to `/auth/login` and **everyone signs in again once**.
 
 Implementation notes worth keeping:
 
