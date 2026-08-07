@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { AppState, Platform } from 'react-native';
 import { io, type Socket } from 'socket.io-client';
 
-import { getSupabaseClient } from '../auth/supabase';
+import { getSession, onSessionChange } from '../auth/session';
 import { environment, isDemoMode, resolveEasProjectId } from '../config/environment';
 import { queryKeys } from '../features/queries';
 import { verifyQueries } from '../features/state-consistency';
@@ -41,14 +41,14 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
     const connect = async () => {
       const baseUrl = environment.realtimeBaseUrls[0];
       if (!baseUrl || disposed) return;
-      const { data } = await getSupabaseClient().auth.getSession();
-      if (!data.session || disposed) return;
+      const session = await getSession();
+      if (!session || disposed) return;
       if (!registeredPushToken) {
         registeredPushToken = await registerRemotePushDevice();
       }
       socket?.disconnect();
       socket = io(`${baseUrl}/technician-events`, {
-        auth: { accessToken: data.session.access_token },
+        auth: { accessToken: session.accessToken },
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 1_000,
@@ -72,7 +72,10 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       refreshAssignments();
       if (!socket?.connected) connectSafely();
     });
-    const auth = getSupabaseClient().auth.onAuthStateChange((_event, session) => {
+    // Replaces Supabase's onAuthStateChange: the socket authenticates with a
+    // token captured at connect, so it has to be rebuilt when the session
+    // changes and torn down when it goes.
+    const unsubscribeSession = onSessionChange((session) => {
       if (session) connectSafely();
       else {
         socket?.disconnect();
@@ -95,7 +98,7 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       disposed = true;
       socket?.disconnect();
       appState.remove();
-      auth.data.subscription.unsubscribe();
+      unsubscribeSession();
       notificationResponse?.remove();
     };
   }, [queryClient]);

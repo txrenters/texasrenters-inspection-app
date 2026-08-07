@@ -1,6 +1,6 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
-import { getSupabaseClient } from '../../auth/supabase';
+import { getSession, signIn, signOut } from '../../auth/session';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type { LocalMedia, PhotoCaptureType, UploadItem } from '../../domain/models';
@@ -310,8 +310,10 @@ const dashboardSchema = z.object({
 export async function requestJson(path: string, options: RequestInit = {}): Promise<unknown> {
   if (!environment.apiBaseUrl)
     throw new Error('The TexasRenters API URL is not configured for this app build.');
-  const { data } = await getSupabaseClient().auth.getSession();
-  if (!data.session) throw new SessionExpiredError();
+  // Refreshes in place when the token is close to expiry. Supabase's client
+  // did this inside its own getSession(); nothing else keeps tokens alive.
+  const session = await getSession();
+  if (!session) throw new SessionExpiredError();
   const method = (options.method ?? 'GET').toUpperCase();
   const canFallback = method === 'GET' || method === 'HEAD';
   const baseUrls = environment.apiBaseUrls.length
@@ -332,7 +334,7 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
         signal: controller.signal,
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${data.session.access_token}`,
+          authorization: `Bearer ${session.accessToken}`,
           ...options.headers,
         },
       });
@@ -386,28 +388,37 @@ export class ApiAuthRepository implements AuthRepository {
   listDemoUsers = async () => unavailable('Demo accounts are disabled in this app build.');
   signIn = async () => unavailable('Demo sign-in is disabled in this app build.');
   async signInWithPassword(email: string, password: string) {
-    const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password });
-    if (error || !data.session) throw new Error(error?.message ?? 'Sign-in failed.');
+    await signIn(email, password);
     const user = await this.currentUser();
     if (!user) throw new Error('No active TexasRenters profile or organization membership.');
     return user;
   }
   async changeRequiredPassword(password: string) {
     await writeJson('/api/v1/auth/change-required-password', 'POST', { password });
-    await getSupabaseClient().auth.signOut({ scope: 'local' });
+    // The password changed, so every session opened with the old one is dead
+    // server-side; drop the local tokens rather than let the next request
+    // discover it.
+    await signOut();
   }
+  /**
+   * Ask the office to mail a reset link.
+   *
+   * The link points at the admin console, which is where the form lives — the
+   * app registers no deep-link handler, so it could not receive one. Previously
+   * this called Supabase with no redirect at all and had no caller anywhere in
+   * the app; it now at least reaches the right endpoint if one is added.
+   */
   async resetPassword(email: string) {
-    const { error } = await getSupabaseClient().auth.resetPasswordForEmail(email);
-    if (error) throw new Error(error.message);
+    await writeJson('/api/v1/auth/request-password-reset', 'POST', { email });
   }
   async currentUser() {
-    const { data } = await getSupabaseClient().auth.getSession();
-    if (!data.session) return null;
+    const session = await getSession();
+    if (!session) return null;
     const profile = await cachedApiRecord('auth:profile', profileSchema, () =>
       getJson('/api/v1/auth/me'),
     );
     if (!profile.roles.includes('INSPECTION_TECHNICIAN')) {
-      await getSupabaseClient().auth.signOut({ scope: 'local' });
+      await signOut();
       throw new Error('TexasRenters Inspection Mobile is available only to technicians.');
     }
     useDemoStore.getState().selectUser(profile.id);
@@ -438,9 +449,8 @@ export class ApiAuthRepository implements AuthRepository {
         await pushDeviceStorage.clear();
       }
     }
-    const { error } = await getSupabaseClient().auth.signOut({ scope: 'local' });
+    await signOut();
     useDemoStore.getState().signOut();
-    if (error) throw new Error(error.message);
   }
 }
 
@@ -647,13 +657,13 @@ export class ApiFloorPlanRepository implements FloorPlanRepository {
       await getJson(`/api/v1/technician/properties/${encodeURIComponent(propertyId)}/floor-plan`),
     );
     if (!plan) return null;
-    const { data } = await getSupabaseClient().auth.getSession();
-    if (!data.session) throw new SessionExpiredError();
+    const session = await getSession();
+    if (!session) throw new SessionExpiredError();
     return {
       ...plan,
       contentSources: environment.apiBaseUrls.map((baseUrl) => ({
         uri: resolveApiUrl(baseUrl, plan.contentPath),
-        headers: { authorization: `Bearer ${data.session.access_token}` },
+        headers: { authorization: `Bearer ${session.accessToken}` },
       })),
     };
   }
@@ -865,8 +875,8 @@ export class ApiUploadRepository implements UploadRepository {
         });
         return true;
       }
-      const { data } = await getSupabaseClient().auth.getSession();
-      if (!data.session) throw new SessionExpiredError();
+      const session = await getSession();
+      if (!session) throw new SessionExpiredError();
       const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
       if (!baseUrl)
         throw new Error('The TexasRenters API URL is not configured for this app build.');
@@ -891,7 +901,7 @@ export class ApiUploadRepository implements UploadRepository {
         createSession: () =>
           createStreamUploadSession({
             baseUrl,
-            accessToken: data.session.access_token,
+            accessToken: session.accessToken,
             inspectionAreaId: pending.roomId,
             recordingType: pending.recordingType ?? 'PRIMARY_AREA',
             filename: `${pending.roomName || 'recording'}.mp4`,
@@ -993,7 +1003,7 @@ export class ApiUploadRepository implements UploadRepository {
           fieldName: 'file',
           mimeType: 'video/mp4',
           parameters,
-          headers: { authorization: `Bearer ${data.session.access_token}` },
+          headers: { authorization: `Bearer ${session.accessToken}` },
           // Stated explicitly rather than relying on the default: an in-flight
           // transfer must survive the technician locking the phone or switching
           // apps mid-room. The native session keeps going and retries through

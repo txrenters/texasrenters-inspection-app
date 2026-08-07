@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { dehydrate, hydrate, type QueryClient } from '@tanstack/react-query';
 
-import { getSupabaseClient } from '../auth/supabase';
+import { getSession } from '../auth/session';
 import { demoStorage } from './demo-storage';
 
 const CACHE_PREFIX = 'texasrenters-query-cache-v1';
@@ -64,9 +64,8 @@ export function buster() {
  * at launch and on the sign-in screen, not an error.
  */
 async function storageKey() {
-  const { data } = await getSupabaseClient().auth.getSession();
-  const userId = data.session?.user.id;
-  return userId ? `${CACHE_PREFIX}:${userId}` : null;
+  const session = await getSession();
+  return session ? `${CACHE_PREFIX}:${session.authUserId}` : null;
 }
 
 /**

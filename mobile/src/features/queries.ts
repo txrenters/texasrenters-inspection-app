@@ -9,7 +9,7 @@ import { repositories } from '../repositories';
 // `Property 'useDemoStore' doesn't exist`. Screens that need live device state
 // import it themselves; see `useLiveUploadProgress`.
 import type { AddAreaInput, FindingKind } from '../repositories/contracts';
-// Safe where the store was not: this pulls in only `auth/supabase` and
+// Safe where the store was not: this pulls in only `auth/session` and
 // `demo-storage`, both of which `offline-record-cache` already loads on the way
 // into `repositories`, so nothing new joins the cycle.
 import { clearQueryCache } from '../storage/query-cache-persistence';

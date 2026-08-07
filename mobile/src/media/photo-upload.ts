@@ -1,7 +1,7 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { resolveApiUrl } from '@texasrenters/shared';
 
-import { getSupabaseClient } from '../auth/supabase';
+import { getSession } from '../auth/session';
 import { environment } from '../config/environment';
 import type { PhotoCaptureType } from '../domain/models';
 import type { SnapshotCaptureSource } from '../capture/guided-capture';
@@ -28,8 +28,8 @@ export interface UploadRoomPhotoInput {
  * the snapshot FAILED and can retry with the same idempotency key.
  */
 export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id: string }> {
-  const { data } = await getSupabaseClient().auth.getSession();
-  if (!data.session) throw new SessionExpiredError();
+  const session = await getSession();
+  if (!session) throw new SessionExpiredError();
   const baseUrl = environment.apiBaseUrls[0] ?? environment.apiBaseUrl;
   if (!baseUrl) throw new Error('The TexasRenters API URL is not configured for this app build.');
 
@@ -56,7 +56,7 @@ export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id
           : {}),
         ...(input.findingId ? { findingId: input.findingId } : {}),
       },
-      headers: { authorization: `Bearer ${data.session.access_token}` },
+      headers: { authorization: `Bearer ${session.accessToken}` },
     },
   );
   const result = await task.uploadAsync();

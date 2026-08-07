@@ -247,7 +247,19 @@ Deliberate choices worth keeping:
 
    Verified end to end against the real Postgres: 10/10, including that the old
    password stops working and every prior session dies.
-6. **Clients.** The two hard parts:
+6. ✅ **Clients.** Both are off Supabase; the packages are removed from all
+   three `package.json` files and every `*_SUPABASE_*` variable is gone.
+
+   **This is the point the migration stops being inert.** `SessionService`
+   authenticates against `AuthCredential` regardless of
+   `AUTH_IDENTITY_PROVIDER`, so once a client posts to `/auth/login` it is using
+   self-hosted auth. Rollback is reverting those two commits.
+
+   **Devices already signed in must sign in once more.** A Supabase refresh
+   token cannot be exchanged for one of ours, so no live session carries across.
+   The app is unreleased, so this costs the test handsets one sign-in.
+
+   Original notes on the two hard parts, and how each was handled:
    - **Web** stores the session in **cookies** (`@supabase/ssr` hardcodes this),
      and `middleware.ts` reads those cookies server-side. Two independent
      consumers of one credential. A localStorage-only replacement silently

@@ -2,19 +2,15 @@ import { QueryClient } from '@tanstack/react-query';
 
 let mockSessionUserId: string | null = 'tech-1';
 
-jest.mock('../src/auth/supabase', () => ({
-  getSupabaseClient: () => ({
-    auth: {
-      getSession: async () => ({
-        data: { session: mockSessionUserId ? { user: { id: mockSessionUserId } } : null },
-      }),
-    },
-  }),
+jest.mock('../src/auth/session', () => ({
+  getSession: async () =>
+    mockSessionUserId ? { authUserId: mockSessionUserId, accessToken: 'token' } : null,
+  onSessionChange: () => () => undefined,
 }));
 
-// Imported after the mock on purpose: these modules pull in `auth/supabase` at
+// Imported after the mock on purpose: these modules pull in `auth/session` at
 // evaluation time, so hoisting them above `jest.mock` would bind the real
-// client before the double is installed.
+// module before the double is installed.
 /* eslint-disable import/first */
 import { demoStorage } from '../src/storage/demo-storage';
 import {

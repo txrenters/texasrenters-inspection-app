@@ -22,7 +22,6 @@ const apiBaseUrls = resolveDeviceApiBaseUrls(
 );
 const apiBaseUrl = apiBaseUrls[0] ?? null;
 const realtimeBaseUrls = resolveRealtimeBaseUrls(apiBaseUrls);
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim() || null;
 const appEnv = (process.env.EXPO_PUBLIC_APP_ENV?.trim() || 'development') as AppEnvironment;
 
 export function resolveDeviceApiBaseUrl(
@@ -231,7 +230,6 @@ export const environment = {
   apiBaseUrl,
   apiBaseUrls,
   realtimeBaseUrls,
-  supabaseUrl,
   enableTestVideoPicker: process.env.EXPO_PUBLIC_ENABLE_TEST_VIDEO_PICKER === 'true',
 } as const;
 

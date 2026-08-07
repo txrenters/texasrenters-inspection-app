@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 
-import { getSupabaseClient } from '../auth/supabase';
+import { getSession } from '../auth/session';
 import { demoStorage } from './demo-storage';
 
 const CACHE_PREFIX = 'texasrenters-offline-records-v1';
@@ -115,8 +115,8 @@ export async function updateExistingApiRecord<TSchema extends z.ZodType>(
 }
 
 async function cacheKey(key: string) {
-  const { data } = await getSupabaseClient().auth.getSession();
-  const userId = data.session?.user.id;
+  const session = await getSession();
+  const userId = session?.authUserId;
   if (!userId) throw new SessionExpiredError();
   return `${CACHE_PREFIX}:${userId}:${key}`;
 }
