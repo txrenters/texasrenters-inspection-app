@@ -111,6 +111,7 @@ export class SessionService {
         authUserId: true,
         expiresAt: true,
         revokedAt: true,
+        replacedById: true,
         credential: {
           select: { mustChangePassword: true, profile: { select: { isActive: true } } },
         },
@@ -119,15 +120,26 @@ export class SessionService {
 
     if (!existing) throw REJECTED;
 
-    if (existing.revokedAt) {
-      // Reuse of a retired token. Nothing legitimate does this, so end every
-      // session for the account and make the holder sign in again.
+    // A revoked token is not automatically an attack, and the difference is
+    // `replacedById`.
+    //
+    // Set means this token was retired by a rotation — its holder was handed a
+    // replacement, so presenting the old one again means someone else kept a
+    // copy. That is a replay, and every session for the account goes.
+    //
+    // Null means something revoked it deliberately: a sign-out, a password
+    // change, an administrator. The legitimate client finding out its token is
+    // dead is the *expected* outcome there, and treating it as an intrusion
+    // fired a warning for every device after every password reset — noise that
+    // would bury the real signal this check exists to raise.
+    if (existing.revokedAt && existing.replacedById) {
       await this.revokeAllFor(existing.authUserId, 'refresh token reuse');
       this.logger.warn(
         `Refresh token reuse detected for ${existing.authUserId}; all sessions revoked.`,
       );
       throw REJECTED;
     }
+    if (existing.revokedAt) throw REJECTED;
 
     if (existing.expiresAt.getTime() <= Date.now()) throw REJECTED;
     if (!existing.credential.profile.isActive) throw REJECTED;

@@ -18,6 +18,7 @@ import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
+import { AuthModule } from '../auth/auth.module';
 import { LocalIdentityProvider } from '../auth/local-identity.provider';
 import { IDENTITY_PROVIDER } from './identity-provider';
 import {
@@ -44,7 +45,9 @@ const identityProvider = {
 };
 
 @Module({
-  imports: [RealtimeModule, MailModule],
+  // AuthModule for LocalIdentityProvider, so provisioning and the password
+  // flows share one instance rather than each registering their own.
+  imports: [RealtimeModule, MailModule, AuthModule],
   controllers: [AdminController, AccessController, ReportsController],
   providers: [
     AdminService,
@@ -61,7 +64,6 @@ const identityProvider = {
     ReportShareService,
     TechnicianProvisioningService,
     SupabaseAdminGateway,
-    LocalIdentityProvider,
     identityProvider,
     ApiAuthGuard,
     PermissionsGuard,

@@ -2,6 +2,7 @@ import { hashSync } from 'bcryptjs';
 
 import { verifySupabaseJwt } from '../src/common/auth';
 import { LocalIdentityProvider } from '../src/auth/local-identity.provider';
+import { PasswordResetService } from '../src/auth/password-reset.service';
 import { SessionService } from '../src/auth/session.service';
 import { TokenService } from '../src/auth/token.service';
 
@@ -244,11 +245,14 @@ describe('refresh rotation', () => {
     expect(session.refreshToken).toBeTruthy();
   });
 
-  it('ends every session when an already-retired token is presented', async () => {
-    // Nothing legitimate replays a retired token: the real holder moved on to
-    // its replacement. So this is a captured token, and the account's other
-    // sessions cannot be trusted either.
-    const { prisma, tx } = refreshPrisma(liveToken({ revokedAt: new Date() }));
+  it('ends every session when a rotated-away token is replayed', async () => {
+    // `replacedById` set means this token was retired by a rotation, so its
+    // holder already received the replacement. Presenting the old one means
+    // someone else kept a copy, and the account's other sessions cannot be
+    // trusted either.
+    const { prisma, tx } = refreshPrisma(
+      liveToken({ revokedAt: new Date(), replacedById: 'refresh-2' }),
+    );
     const service = new SessionService(prisma as never, new TokenService());
 
     await expect(service.refresh('stolen-token')).rejects.toMatchObject({ status: 401 });
@@ -256,6 +260,18 @@ describe('refresh rotation', () => {
       expect.objectContaining({ where: { authUserId: AUTH_USER_ID, revokedAt: null } }),
     );
     expect(tx.authRefreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it('treats a deliberately revoked token as expired, not as an attack', async () => {
+    // Revoked with no replacement means a sign-out, a password change, or an
+    // administrator. The legitimate client discovering its token is dead is the
+    // expected outcome — raising an intrusion warning here fired once per
+    // device after every password reset and would bury the real signal.
+    const { prisma } = refreshPrisma(liveToken({ revokedAt: new Date(), replacedById: null }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.refresh('signed-out-token')).rejects.toMatchObject({ status: 401 });
+    expect(prisma.authRefreshToken.updateMany).not.toHaveBeenCalled();
   });
 
   it('rejects an expired token without revoking the account', async () => {
@@ -398,6 +414,214 @@ describe('local identity provider', () => {
     expect(prisma.authCredential.deleteMany).toHaveBeenCalledWith({
       where: { authUserId: AUTH_USER_ID },
     });
+  });
+});
+
+describe('password reset', () => {
+  const RESET_TOKEN = 'a'.repeat(43);
+
+  beforeEach(() => {
+    process.env.AUTH_IDENTITY_PROVIDER = 'local';
+    process.env.WEB_APP_ORIGIN = 'https://admin.example.com';
+  });
+  afterEach(() => {
+    delete process.env.AUTH_IDENTITY_PROVIDER;
+    delete process.env.WEB_APP_ORIGIN;
+  });
+
+  function resetPrisma(tokenRow: Record<string, unknown> | null, credential: unknown = {}) {
+    const tx = {
+      authPasswordResetToken: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        create: jest.fn().mockResolvedValue({}),
+      },
+    };
+    return {
+      authCredential: { findUnique: jest.fn().mockResolvedValue(credential) },
+      authPasswordResetToken: {
+        findUnique: jest.fn().mockResolvedValue(tokenRow),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+      __tx: tx,
+    };
+  }
+
+  const identities = () => ({ setPassword: jest.fn().mockResolvedValue(undefined) });
+  const supabase = () => ({ requestPasswordReset: jest.fn().mockResolvedValue(undefined) });
+  const mailer = () => ({ sendPasswordReset: jest.fn().mockResolvedValue({ status: 'SENT' }) });
+
+  const liveToken = (overrides: Record<string, unknown> = {}) => ({
+    id: 'reset-1',
+    authUserId: AUTH_USER_ID,
+    expiresAt: new Date(Date.now() + 60_000),
+    consumedAt: null,
+    credential: { profile: { isActive: true } },
+    ...overrides,
+  });
+
+  it('mails a link carrying a token that is only stored hashed', async () => {
+    const prisma = resetPrisma(null, {
+      authUserId: AUTH_USER_ID,
+      profile: { displayName: 'Ada', isActive: true },
+    });
+    const mail = mailer();
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      supabase() as never,
+      mail as never,
+    );
+
+    await service.request('ada@example.com');
+
+    const { resetUrl } = mail.sendPasswordReset.mock.calls[0][0];
+    const sentToken = new URL(resetUrl).searchParams.get('token');
+    expect(sentToken).toBeTruthy();
+    const { tokenHash } = prisma.__tx.authPasswordResetToken.create.mock.calls[0][0].data;
+    expect(tokenHash).not.toBe(sentToken);
+  });
+
+  it('retires outstanding links before issuing another', async () => {
+    // Otherwise asking twice leaves two live credentials in two mailboxes.
+    const prisma = resetPrisma(null, {
+      authUserId: AUTH_USER_ID,
+      profile: { displayName: 'Ada', isActive: true },
+    });
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      supabase() as never,
+      mailer() as never,
+    );
+
+    await service.request('ada@example.com');
+
+    expect(prisma.__tx.authPasswordResetToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { authUserId: AUTH_USER_ID, consumedAt: null } }),
+    );
+  });
+
+  it('sends nothing for an unknown address, and says nothing either', async () => {
+    const prisma = resetPrisma(null, null);
+    const mail = mailer();
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      supabase() as never,
+      mail as never,
+    );
+
+    await expect(service.request('nobody@example.com')).resolves.toBeUndefined();
+    expect(mail.sendPasswordReset).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing to a deactivated account', async () => {
+    // Mailing a working reset link to someone whose access was revoked would
+    // undo the revocation.
+    const prisma = resetPrisma(null, {
+      authUserId: AUTH_USER_ID,
+      profile: { displayName: 'Ada', isActive: false },
+    });
+    const mail = mailer();
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      supabase() as never,
+      mail as never,
+    );
+
+    await service.request('ada@example.com');
+    expect(mail.sendPasswordReset).not.toHaveBeenCalled();
+  });
+
+  it('redeems a live token for a password change', async () => {
+    const prisma = resetPrisma(liveToken());
+    const identity = identities();
+    const service = new PasswordResetService(
+      prisma as never,
+      identity as never,
+      supabase() as never,
+      mailer() as never,
+    );
+
+    await service.reset(RESET_TOKEN, PASSWORD);
+
+    expect(identity.setPassword).toHaveBeenCalledWith(AUTH_USER_ID, PASSWORD);
+  });
+
+  it('consumes the token conditionally, so two simultaneous redemptions cannot both win', async () => {
+    const prisma = resetPrisma(liveToken());
+    prisma.authPasswordResetToken.updateMany.mockResolvedValue({ count: 0 });
+    const identity = identities();
+    const service = new PasswordResetService(
+      prisma as never,
+      identity as never,
+      supabase() as never,
+      mailer() as never,
+    );
+
+    // Losing the race must not set a password: the winner's would be silently
+    // overwritten by the loser's.
+    await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({ status: 400 });
+    expect(identity.setPassword).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['already used', { consumedAt: new Date() }],
+    ['expired', { expiresAt: new Date(Date.now() - 1000) }],
+    ['for a deactivated account', { credential: { profile: { isActive: false } } }],
+  ])('refuses a token that is %s', async (_label, overrides) => {
+    const prisma = resetPrisma(liveToken(overrides));
+    const identity = identities();
+    const service = new PasswordResetService(
+      prisma as never,
+      identity as never,
+      supabase() as never,
+      mailer() as never,
+    );
+
+    await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({
+      status: 400,
+      code: 'RESET_TOKEN_INVALID',
+    });
+    expect(identity.setPassword).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown token with the identical error', async () => {
+    // Distinguishing "never existed" from "expired" tells someone guessing
+    // tokens which guesses were closer.
+    const prisma = resetPrisma(null);
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      supabase() as never,
+      mailer() as never,
+    );
+
+    await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({
+      status: 400,
+      code: 'RESET_TOKEN_INVALID',
+    });
+  });
+
+  it('delegates to Supabase while it is still the configured provider', async () => {
+    process.env.AUTH_IDENTITY_PROVIDER = 'supabase';
+    const prisma = resetPrisma(null);
+    const legacy = supabase();
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      legacy as never,
+      mailer() as never,
+    );
+
+    await service.request('ada@example.com');
+
+    expect(legacy.requestPasswordReset).toHaveBeenCalledWith('ada@example.com');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    // And a token cannot be redeemed here, because none was minted here.
+    await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({ status: 503 });
   });
 });
 

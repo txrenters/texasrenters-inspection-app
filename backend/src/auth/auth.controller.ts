@@ -9,9 +9,11 @@ import {
   ChangeRequiredPasswordDto,
   RefreshTokenDto,
   RequestPasswordResetDto,
+  ResetPasswordDto,
   SignInDto,
 } from './auth.dto';
 import { AuthService } from './auth.service';
+import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
 
 /**
@@ -37,6 +39,7 @@ export class AuthController {
   constructor(
     private readonly service: AuthService,
     private readonly sessions: SessionService,
+    private readonly passwordReset: PasswordResetService,
   ) {}
 
   /**
@@ -89,7 +92,22 @@ export class AuthController {
   @Post('request-password-reset')
   @HttpCode(204)
   async requestPasswordReset(@Body() body: RequestPasswordResetDto) {
-    await this.service.requestPasswordReset(body.email.trim().toLowerCase());
+    // Routed inside the service: which credential store holds the password and
+    // which system mints the link must be the same answer.
+    await this.passwordReset.request(body.email.trim().toLowerCase());
+  }
+
+  /**
+   * Redeem a reset link.
+   *
+   * Unauthenticated, because the token is the credential — but unlike the
+   * Supabase flow it replaces, redeeming it grants a password change and not a
+   * session. Whoever resets still has to sign in afterwards.
+   */
+  @Post('reset-password')
+  @HttpCode(204)
+  async resetPassword(@Body() body: ResetPasswordDto) {
+    await this.passwordReset.reset(body.token, body.password);
   }
 
   @Post('change-required-password')

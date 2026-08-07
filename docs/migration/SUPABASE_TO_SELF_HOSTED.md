@@ -233,8 +233,20 @@ Deliberate choices worth keeping:
 - **`must_change_password` is minted from the column** into the claim the
   guards already read. The column becomes authoritative while nothing that
   reads the claim has to change.
-5. **Recovery tokens** — replace `generateLink({type:'recovery'})` with our own
-   single-use, expiring, hashed token. Delivery is already ours.
+5. ✅ **Recovery tokens.** `AuthPasswordResetToken` + `PasswordResetService`,
+   with a new `POST /auth/reset-password`. Routed by the same
+   `AUTH_IDENTITY_PROVIDER` switch, so it still delegates to Supabase today.
+
+   Deliberately does **less** than what it replaces. Supabase's token was
+   redeemed with `verifyOtp` for a full **session**, so anyone holding the email
+   was signed in and then merely expected to change the password. Ours buys a
+   password change and nothing else — a link sent in the clear is not a login.
+   Single use, one hour, stored as SHA-256, and requesting another retires the
+   outstanding one so asking twice does not leave two live credentials in two
+   mailboxes.
+
+   Verified end to end against the real Postgres: 10/10, including that the old
+   password stops working and every prior session dies.
 6. **Clients.** The two hard parts:
    - **Web** stores the session in **cookies** (`@supabase/ssr` hardcodes this),
      and `middleware.ts` reads those cookies server-side. Two independent

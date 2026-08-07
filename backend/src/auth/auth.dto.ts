@@ -67,3 +67,26 @@ export class RefreshTokenDto {
   @MaxLength(512)
   refreshToken!: string;
 }
+
+/**
+ * Redeeming a password-reset link.
+ *
+ * The password carries the full policy — unlike sign-in, this is where a new
+ * password is chosen, so it is exactly the place the rules belong. Reuses the
+ * same shared constants as ChangeRequiredPasswordDto so the form and the API
+ * cannot drift apart again.
+ */
+export class ResetPasswordDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(512)
+  token!: string;
+
+  @IsString()
+  @MinLength(MINIMUM_PASSWORD_LENGTH, { message: PASSWORD_MESSAGES.tooShort })
+  @MaxLength(MAXIMUM_PASSWORD_LENGTH, { message: PASSWORD_MESSAGES.tooLong })
+  @Matches(PASSWORD_PATTERNS.capital, { message: PASSWORD_MESSAGES.capital })
+  @Matches(PASSWORD_PATTERNS.number, { message: PASSWORD_MESSAGES.number })
+  @Matches(PASSWORD_PATTERNS.special, { message: PASSWORD_MESSAGES.special })
+  password!: string;
+}

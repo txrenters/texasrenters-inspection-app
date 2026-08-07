@@ -457,10 +457,41 @@ model AuthCredential {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  profile       UserProfile        @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
+  profile       UserProfile              @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
   refreshTokens AuthRefreshToken[]
+  resetTokens   AuthPasswordResetToken[]
 
   @@index([email])
+}
+
+/// One outstanding password-reset link.
+///
+/// Replaces Supabase's `generateLink({ type: 'recovery' })`, and deliberately
+/// does less than it did. Supabase's token was redeemed with `verifyOtp` for a
+/// full **session**, so anyone holding the email could sign in and then had to
+/// be trusted to change the password. This one is exchanged for a password
+/// change and nothing else — a link mailed in the clear should never be a login.
+model AuthPasswordResetToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  authUserId String
+
+  /// SHA-256, same reasoning as refresh tokens: the row is a live credential
+  /// until it is used, and a leaked backup must not be redeemable.
+  tokenHash String @unique
+
+  expiresAt DateTime
+
+  /// Set the moment it is redeemed. Kept rather than deleted so a second
+  /// attempt is distinguishable from a token that never existed.
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  credential AuthCredential @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
+
+  @@index([authUserId])
+  @@index([expiresAt])
 }
 
 /// One issued refresh token.

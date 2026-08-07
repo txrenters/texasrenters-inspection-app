@@ -5,6 +5,8 @@ import { MailModule } from '../mail/mail.module';
 import { RequiredPasswordAuthGuard } from '../common/auth';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { LocalIdentityProvider } from './local-identity.provider';
+import { PasswordResetService } from './password-reset.service';
 import { SessionService } from './session.service';
 import { TokenService } from './token.service';
 
@@ -16,7 +18,14 @@ import { TokenService } from './token.service';
   // SessionService is exported so account provisioning and password changes can
   // end existing sessions — a new password that leaves old sessions alive has
   // not really replaced anything.
-  providers: [AuthService, SessionService, TokenService, RequiredPasswordAuthGuard],
-  exports: [SessionService, TokenService],
+  providers: [
+    AuthService,
+    LocalIdentityProvider,
+    PasswordResetService,
+    SessionService,
+    TokenService,
+    RequiredPasswordAuthGuard,
+  ],
+  exports: [LocalIdentityProvider, SessionService, TokenService],
 })
 export class AuthModule {}
