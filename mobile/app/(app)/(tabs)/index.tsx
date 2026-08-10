@@ -17,7 +17,11 @@ import {
 } from '@/src/components/InspectionUrgencyBadge';
 import { useCurrentUser, useDashboard } from '@/src/features/queries';
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
+import { HomeEmptyState } from '@/src/components/HomeEmptyState';
+import { hasNeverBeenAssigned } from '@/src/utils/home-state';
+import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
+import { greetingFor } from '@/src/utils/greeting';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon, Settings2Icon);
@@ -90,7 +94,14 @@ export default function HomeScreen() {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const firstName = user.data?.name.split(/\s+/)[0] || 'Technician';
-  const today = new Date().toLocaleDateString('en-US', {
+  // Both of these read the device's own clock and time zone, so they are
+  // already right whether the technician is in Texas or Manila. Ticking rather
+  // than computed once at render: this screen stays open, and it used to keep
+  // saying "Good morning" into the evening and show yesterday's date after
+  // midnight.
+  const now = useLocalNow();
+  const greeting = greetingFor(now);
+  const today = now.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
     day: 'numeric',
@@ -99,6 +110,18 @@ export default function HomeScreen() {
   const assigned = assignments.filter((item) => item.status === 'SCHEDULED');
   const inProgress = assignments.filter((item) => item.status === 'IN_PROGRESS');
   const completed = dashboard.data?.recent ?? [];
+  // Only meaningful once the dashboard has answered: mid-load every count is
+  // zero, which would flash the welcome screen at an established technician on
+  // every cold start.
+  const neverAssigned =
+    !dashboard.isLoading &&
+    hasNeverBeenAssigned({
+      assignedCount: assigned.length,
+      inProgressCount: inProgress.length,
+      inProgressTotal: dashboard.data?.inProgress ?? 0,
+      completedTotal: dashboard.data?.completed ?? 0,
+      recentCount: completed.length,
+    });
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -117,10 +140,18 @@ export default function HomeScreen() {
         <View className="px-5 pb-2 pt-4">
           <Text className="text-sm text-muted-foreground">{today}</Text>
           <Text className="mt-1 text-2xl font-bold tracking-tight text-foreground">
-            Good morning, {firstName}
+            {greeting}, {firstName}
           </Text>
+          {/* "Ready for your inspections today" is a strange thing to read on a
+              screen with no inspections on it — and the first thing a new
+              technician sees. It only claims that when there is something to
+              be ready for. */}
           <Text className="mt-0.5 text-sm text-muted-foreground">
-            Ready for your inspections today
+            {neverAssigned
+              ? 'Nothing assigned to you yet'
+              : assigned.length + inProgress.length > 0
+                ? 'Ready for your inspections today'
+                : 'No inspections pending right now'}
           </Text>
         </View>
 
@@ -235,12 +266,7 @@ export default function HomeScreen() {
             <InspectionListSkeleton rows={3} />
           ) : null}
           {!dashboard.isLoading && assigned.length === 0 ? (
-            <View className="mx-5 items-center gap-2 rounded-2xl bg-card p-6">
-              <CheckCircle2Icon size={28} className="text-muted-foreground" />
-              <Text className="text-center text-sm text-muted-foreground">
-                All caught up — no pending inspections
-              </Text>
-            </View>
+            <HomeEmptyState neverAssigned={neverAssigned} />
           ) : null}
         </View>
 
