@@ -19,6 +19,12 @@ export type SubmittableRoom = {
   summary?: string | null;
   /** When the technician attested the summary matches; undefined if not yet. */
   summaryConfirmedAt?: string;
+  /**
+   * A summary is still on its way for this area. Server-computed, and already
+   * bounded there: a pipeline that dies mid-run stops reporting pending rather
+   * than blocking submission forever.
+   */
+  analysisPending?: boolean;
 };
 
 /**
@@ -41,6 +47,8 @@ export type SubmissionGate = {
   blockedReason?: string;
   incompleteRequiredRooms: SubmittableRoom[];
   unconfirmedSummaryRooms: SubmittableRoom[];
+  /** Areas whose summary has not arrived yet. Clears without the technician. */
+  analysisPendingRooms: SubmittableRoom[];
 };
 
 export function evaluateSubmissionGate(
@@ -62,20 +70,46 @@ export function evaluateSubmissionGate(
    */
   const unconfirmedSummaryRooms = rooms.filter((room) => room.summary && !room.summaryConfirmedAt);
 
+  /**
+   * Areas whose summary has not arrived yet.
+   *
+   * Without this the confirmation step loses a race it cannot see. Analysis
+   * lands roughly twenty seconds after an upload, and a technician who submits
+   * inside that window has no summary to confirm — the check above passes
+   * honestly, they submit, and the summary appears afterwards with nobody
+   * having read it.
+   *
+   * Waiting is safe to require because it is the one blocking condition that
+   * clears without the technician doing anything, and the server bounds it: a
+   * stalled pipeline stops reporting pending, so this can never become the
+   * permanent block the old gate was.
+   */
+  const analysisPendingRooms = rooms.filter((room) => room.analysisPending);
+
   const canSubmit =
     inspectionStatus === 'IN_PROGRESS' &&
     incompleteRequiredRooms.length === 0 &&
+    analysisPendingRooms.length === 0 &&
     unconfirmedSummaryRooms.length === 0;
 
-  // Ordered the way the technician has to resolve it: recording comes before
-  // confirming, because an area with no evidence has no summary to read yet.
+  // Ordered the way the technician has to resolve it: record, then wait for the
+  // summary, then read it. An area with no evidence has no summary coming, and
+  // a summary still being written cannot be confirmed yet.
   const blockedReason = canSubmit
     ? undefined
     : incompleteRequiredRooms.length
       ? 'Complete required rooms first'
-      : unconfirmedSummaryRooms.length
-        ? 'Confirm AI summaries first'
-        : 'Submission unavailable';
+      : analysisPendingRooms.length
+        ? 'Waiting for AI analysis'
+        : unconfirmedSummaryRooms.length
+          ? 'Confirm AI summaries first'
+          : 'Submission unavailable';
 
-  return { canSubmit, blockedReason, incompleteRequiredRooms, unconfirmedSummaryRooms };
+  return {
+    canSubmit,
+    blockedReason,
+    incompleteRequiredRooms,
+    unconfirmedSummaryRooms,
+    analysisPendingRooms,
+  };
 }

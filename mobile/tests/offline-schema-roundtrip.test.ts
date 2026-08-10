@@ -190,6 +190,7 @@ const serverRoom = {
   source: 'AI_FLOOR_PLAN',
   areaStatus: 'APPROVED',
   summaryConfirmedAt: '2026-08-11T09:00:00.000Z',
+  analysisPending: false,
 };
 
 describe('roomSchema round trip', () => {
@@ -203,6 +204,15 @@ describe('roomSchema round trip', () => {
     // a technician a confirmation prompt for a summary they already signed off.
     const { second } = roundTrip(roomSchema, serverRoom);
     expect(second).toMatchObject({ summaryConfirmedAt: '2026-08-11T09:00:00.000Z' });
+  });
+
+  it('defaults analysisPending to false when the backend cannot report it', () => {
+    // This field gates submission. An older backend that omits it must not be
+    // read as "maybe still analyzing", or every submission against it blocks.
+    const { analysisPending: _omitted, ...older } = serverRoom;
+    const { first, second } = roundTrip(roomSchema, older);
+    expect(first).toMatchObject({ analysisPending: false });
+    expect(second).toEqual(first);
   });
 
   it('treats an absent confirmation as unconfirmed rather than failing', () => {

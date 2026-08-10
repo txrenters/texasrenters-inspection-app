@@ -8,6 +8,7 @@ import {
   CircleIcon,
   Clock3Icon,
   FileTextIcon,
+  Loader2Icon,
   MapPinIcon,
   SendIcon,
   ShieldCheckIcon,
@@ -33,6 +34,7 @@ registerIcons(
   CircleIcon,
   Clock3Icon,
   FileTextIcon,
+  Loader2Icon,
   MapPinIcon,
   SendIcon,
   ShieldCheckIcon,
@@ -159,8 +161,13 @@ export default function InspectionReviewScreen() {
   }
 
   const { inspection, property, rooms, totals, generatedAt } = report.data;
-  const { canSubmit, blockedReason, incompleteRequiredRooms, unconfirmedSummaryRooms } =
-    evaluateSubmissionGate(rooms, inspection.status);
+  const {
+    canSubmit,
+    blockedReason,
+    incompleteRequiredRooms,
+    unconfirmedSummaryRooms,
+    analysisPendingRooms,
+  } = evaluateSubmissionGate(rooms, inspection.status);
   // `findings` is required by the report schema, so a live response always has
   // it. A warm-start restore does not go through that schema — the persisted
   // react-query cache is written back as-is — so a payload stored by an older
@@ -234,6 +241,26 @@ export default function InspectionReviewScreen() {
               <Text className="mt-0.5 text-xs leading-5 text-chart-4">
                 {incompleteRequiredRooms.length} required room
                 {incompleteRequiredRooms.length === 1 ? '' : 's'} still need documentation.
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Deliberately not tappable and not phrased as a task: nothing here is
+            the technician's to do. The screen polls while this is showing, so
+            it clears itself — saying how long it usually takes is what stops a
+            short wait reading as a stuck button. */}
+        {analysisPendingRooms.length > 0 && inspection.status === 'IN_PROGRESS' ? (
+          <View className="mx-5 mt-2 flex-row items-center gap-3 rounded-2xl border border-border bg-card p-4">
+            <Loader2Icon size={20} className="text-muted-foreground" />
+            <View className="min-w-0 flex-1">
+              <Text className="text-sm font-semibold text-foreground">
+                Analyzing {analysisPendingRooms.length} area
+                {analysisPendingRooms.length === 1 ? '' : 's'}
+              </Text>
+              <Text className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                Summaries usually arrive within a minute. This updates on its own — you do not need
+                to do anything.
               </Text>
             </View>
           </View>

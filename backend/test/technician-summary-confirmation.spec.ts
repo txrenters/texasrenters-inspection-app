@@ -174,6 +174,65 @@ describe('technician AI summary confirmation', () => {
     });
   });
 
+  describe('analysisPending', () => {
+    function mapped(media: Record<string, unknown>[]) {
+      const { service } = build({ room: roomRecord({ media }) });
+      return service.room(technician, ROOM_ID);
+    }
+
+    it('is true while a recording is still being processed', async () => {
+      // What closes the race: PENDING and "no recording at all" both reach the
+      // client as processingStatus NOT_STARTED, so without this flag it cannot
+      // tell an empty area from one seconds away from producing a summary.
+      for (const processingStatus of ['PENDING', 'PROCESSING']) {
+        await expect(
+          mapped([{ uploadStatus: 'UPLOADED', processingStatus, updatedAt: new Date() }]),
+        ).resolves.toMatchObject({ analysisPending: true });
+      }
+    });
+
+    it('is false once processing reaches a terminal state', async () => {
+      for (const processingStatus of ['READY', 'FAILED']) {
+        await expect(
+          mapped([{ uploadStatus: 'UPLOADED', processingStatus, updatedAt: new Date() }]),
+        ).resolves.toMatchObject({ analysisPending: false });
+      }
+    });
+
+    it('is false for an area with no recording', async () => {
+      await expect(mapped([])).resolves.toMatchObject({ analysisPending: false });
+    });
+
+    it('releases the gate when processing has evidently stalled', async () => {
+      // The satisfiability bound. A pipeline that dies mid-run leaves the row
+      // in PROCESSING forever; without this the technician would be blocked by
+      // a stage that is never going to finish.
+      await expect(
+        mapped([
+          {
+            uploadStatus: 'UPLOADED',
+            processingStatus: 'PROCESSING',
+            updatedAt: new Date(Date.now() - 6 * 60_000),
+          },
+        ]),
+      ).resolves.toMatchObject({ analysisPending: false });
+    });
+
+    it('still waits on processing that is merely slow', async () => {
+      // A minute in is normal, not stalled — expiring here would let the
+      // technician submit before a summary that was still coming.
+      await expect(
+        mapped([
+          {
+            uploadStatus: 'UPLOADED',
+            processingStatus: 'PROCESSING',
+            updatedAt: new Date(Date.now() - 60_000),
+          },
+        ]),
+      ).resolves.toMatchObject({ analysisPending: true });
+    });
+  });
+
   it('looks the summary up within the caller-scoped area, not by room id alone', async () => {
     const { prisma, service } = build();
 

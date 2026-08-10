@@ -218,6 +218,20 @@ export function useInspectionReport(id: string) {
     queryKey: queryKeys.inspectionReport(id),
     queryFn: () => repositories.inspections.report(id),
     enabled: Boolean(id),
+    /**
+     * Polls only while an area is still being analyzed.
+     *
+     * Submission waits on that, and waiting is only reasonable if the screen
+     * releases itself. Without this the technician would sit on "Waiting for AI
+     * analysis" until they thought to pull-to-refresh, which reads as a stuck
+     * gate rather than a pipeline that finishes in seconds.
+     *
+     * Stops as soon as nothing is pending, so a report sitting open does not
+     * poll the backend indefinitely.
+     */
+    refetchInterval: (query) =>
+      query.state.data?.rooms.some((room) => room.analysisPending) ? 5_000 : false,
+    refetchIntervalInBackground: false,
   });
 }
 export function useInspectionActions(id: string) {

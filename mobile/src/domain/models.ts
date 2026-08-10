@@ -131,6 +131,12 @@ export interface InspectionRoom {
    * which are not awaiting anything.
    */
   summaryConfirmedAt?: string;
+  /**
+   * A summary is still on its way for this area. Server-computed, because
+   * `processingStatus` cannot express it — PENDING and "no recording" both
+   * arrive as NOT_STARTED.
+   */
+  analysisPending?: boolean;
   // Area classification and provenance (Phase 2). Optional so pre-Phase-2 mock
   // data stays valid; the API always populates them (schema defaults).
   environment?: AreaEnvironment;

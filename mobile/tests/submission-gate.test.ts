@@ -104,6 +104,80 @@ describe('inspection submission gate', () => {
     expect(evaluateSubmissionGate(remedied, 'IN_PROGRESS').canSubmit).toBe(true);
   });
 
+  describe('the analysis race', () => {
+    /**
+     * The defect this closes: a summary arrives roughly twenty seconds after an
+     * upload lands, and a technician who submits inside that window has nothing
+     * to confirm. Every room-level check passes honestly, they submit, and the
+     * summary shows up afterwards with nobody having read it.
+     */
+    it('blocks while a summary is still being written', () => {
+      const gate = evaluateSubmissionGate(
+        [room({ analysisPending: true })],
+        'IN_PROGRESS',
+      );
+
+      expect(gate.canSubmit).toBe(false);
+      expect(gate.blockedReason).toBe('Waiting for AI analysis');
+      expect(gate.analysisPendingRooms).toHaveLength(1);
+      // Nothing to confirm *yet* — the area must not also be reported as
+      // awaiting the technician, or the screen shows two tasks for one wait.
+      expect(gate.unconfirmedSummaryRooms).toHaveLength(0);
+    });
+
+    it('hands over to the confirm step once the summary lands', () => {
+      const analyzing = room({ analysisPending: true });
+      expect(evaluateSubmissionGate([analyzing], 'IN_PROGRESS').blockedReason).toBe(
+        'Waiting for AI analysis',
+      );
+
+      const landed = { ...analyzing, analysisPending: false, summary: 'Lights not working.' };
+      expect(evaluateSubmissionGate([landed], 'IN_PROGRESS').blockedReason).toBe(
+        'Confirm AI summaries first',
+      );
+
+      const confirmed = { ...landed, summaryConfirmedAt: '2026-08-11T09:00:00.000Z' };
+      expect(evaluateSubmissionGate([confirmed], 'IN_PROGRESS').canSubmit).toBe(true);
+    });
+
+    it('does not block when analysis produced nothing and stopped', () => {
+      // The pipeline can finish with no summary — unusable audio, a provider
+      // outage. `analysisPending` false is the server saying "not coming".
+      const gate = evaluateSubmissionGate(
+        [room({ analysisPending: false, summary: null })],
+        'IN_PROGRESS',
+      );
+
+      expect(gate.canSubmit).toBe(true);
+    });
+
+    it('treats an absent flag as nothing pending', () => {
+      // An older backend cannot report this. Absent must mean "not waiting" —
+      // defaulting the other way would block every submission against it.
+      expect(evaluateSubmissionGate([room()], 'IN_PROGRESS').canSubmit).toBe(true);
+    });
+
+    it('still resolves when waiting and confirming are both outstanding', () => {
+      // Two areas at different stages. Whatever the gate names has to be
+      // clearable, including when the remedies differ per area.
+      const rooms = [
+        room({ id: 'a', analysisPending: true }),
+        room({ id: 'b', summary: 'Cracked tile.' }),
+      ];
+      expect(evaluateSubmissionGate(rooms, 'IN_PROGRESS').blockedReason).toBe(
+        'Waiting for AI analysis',
+      );
+
+      const settled = rooms.map((item) => ({
+        ...item,
+        analysisPending: false,
+        summary: item.summary ?? 'Lights out.',
+        summaryConfirmedAt: '2026-08-11T09:00:00.000Z',
+      }));
+      expect(evaluateSubmissionGate(settled, 'IN_PROGRESS').canSubmit).toBe(true);
+    });
+  });
+
   it('reports incomplete rooms before unconfirmed summaries', () => {
     // An area with no evidence has no summary to read yet, so sending the
     // technician to confirm first would be advice they cannot act on.

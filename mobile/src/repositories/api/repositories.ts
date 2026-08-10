@@ -150,6 +150,10 @@ export const roomSchema = z.object({
   // confirmed, and absent is exactly that. Round-trips cleanly because the
   // mapper drops it rather than writing null.
   summaryConfirmedAt: z.string().optional(),
+  // Defaulted false rather than optional: this one gates submission, and a room
+  // from an older backend that cannot report it is not "maybe still analyzing",
+  // it is a room nothing is waiting on. Absent must not block.
+  analysisPending: z.boolean().default(false),
   // Defaults keep older cached rooms (pre-Phase-2) parseable.
   environment: z.enum(['INDOOR', 'OUTDOOR', 'SEMI_OUTDOOR']).default('INDOOR'),
   category: z.string().nullable().optional(),

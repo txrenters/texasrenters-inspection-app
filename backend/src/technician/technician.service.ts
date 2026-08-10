@@ -173,9 +173,25 @@ const technicianRoomSelect = {
   media: {
     orderBy: { createdAt: 'desc' as const },
     take: 1,
-    select: { uploadStatus: true, processingStatus: true },
+    // `updatedAt` carries the stall bound for `analysisPending`: it is the last
+    // time the pipeline touched this recording, so an analysis that died
+    // mid-flight stops holding up submission instead of stranding the
+    // technician behind a stage that will never finish.
+    select: { uploadStatus: true, processingStatus: true, updatedAt: true },
   },
 } satisfies Prisma.InspectionAreaSelect;
+
+/**
+ * How long a recording may sit mid-analysis before submission stops waiting on
+ * it.
+ *
+ * Analysis normally completes in well under a minute — transcription then
+ * findings. This is not a deadline for the pipeline; it is the point at which a
+ * technician standing in a unit should no longer be blocked by a stage that has
+ * evidently stopped making progress. Deliberately generous, because expiring
+ * early would let them submit before a summary that was still coming.
+ */
+const ANALYSIS_STALL_AFTER_MS = 5 * 60_000;
 
 const technicianInspectionSummarySelect = {
   id: true,
@@ -1672,6 +1688,9 @@ export class TechnicianService {
         // technician has no way to clear — the gate must stay satisfiable.
         unconfirmedSummaries: rooms.filter((room) => room.summary && !room.summaryConfirmedAt)
           .length,
+        // Areas whose summary has not arrived yet. Distinct from the count
+        // above: nothing is awaiting the technician here, the pipeline is.
+        areasAwaitingAnalysis: rooms.filter((room) => room.analysisPending).length,
         defectFindings: rooms.reduce((sum, room) => sum + room.findings.length, 0),
         photos: rooms.reduce((sum, room) => sum + room.photoCount, 0),
         pendingReviewCount: record._count.findings,
@@ -1821,6 +1840,24 @@ export class TechnicianService {
       note: record.technicianNote ?? undefined,
       skipReason: record.skipReason ?? undefined,
       summaryConfirmedAt: record.summaryConfirmedAt?.toISOString() ?? undefined,
+      /**
+       * A summary is still on its way for this area.
+       *
+       * Exists because `processingStatus` cannot express it: PENDING and "no
+       * recording at all" both map to NOT_STARTED, so the client could not tell
+       * an empty area from one whose analysis is seconds from producing a
+       * summary. That ambiguity is what let a technician submit inside the
+       * ~20-second window between an upload landing and its findings arriving,
+       * skipping the confirmation step entirely.
+       *
+       * Bounded by ANALYSIS_STALL_AFTER_MS so a pipeline that dies mid-run
+       * releases the gate rather than holding it forever.
+       */
+      analysisPending: latestMedia
+        ? (latestMedia.processingStatus === MediaProcessingStatus.PENDING ||
+            latestMedia.processingStatus === MediaProcessingStatus.PROCESSING) &&
+          Date.now() - latestMedia.updatedAt.getTime() < ANALYSIS_STALL_AFTER_MS
+        : false,
     };
   }
 
