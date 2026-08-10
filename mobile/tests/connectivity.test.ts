@@ -132,3 +132,58 @@ describe('evaluateUploadGate', () => {
     ).toBe(true);
   });
 });
+
+/**
+ * The reachability probe decides the "No connection" banner, and its default
+ * target is not our API.
+ *
+ * NetInfo HEADs https://clients3.google.com/generate_204 every 60 seconds and
+ * flips isInternetReachable to false the first time that one request fails. On
+ * a network that throttles or blocks Google, the app announced "No connection"
+ * on stable Wi-Fi and recovered seconds later, in a loop, while the backend was
+ * reachable throughout. Pointing the probe at our own health endpoint is what
+ * makes "online" mean the thing the app depends on.
+ */
+/* eslint-disable @typescript-eslint/no-require-imports -- the module configures NetInfo at import time, so it must be re-required after jest.doMock; a static import would bind before the mock exists. */
+describe('reachability probe configuration', () => {
+  it('probes the TexasRenters API, never a third party', () => {
+    jest.resetModules();
+    const configure = jest.fn();
+    jest.doMock('@react-native-community/netinfo', () => ({
+      __esModule: true,
+      default: { configure, addEventListener: jest.fn(), fetch: jest.fn() },
+    }));
+    jest.doMock('../src/config/environment', () => ({
+      environment: { apiBaseUrl: 'https://backend.example.test' },
+    }));
+
+    require('../src/lib/connectivity');
+
+    expect(configure).toHaveBeenCalledTimes(1);
+    const options = configure.mock.calls[0]![0] as {
+      reachabilityUrl: string;
+      reachabilityMethod: string;
+    };
+    expect(options.reachabilityUrl).toBe('https://backend.example.test/api/v1/health');
+    expect(options.reachabilityUrl).not.toContain('google');
+    // HEAD, because the endpoint answers it and a body buys nothing on a probe
+    // that runs on every technician's device every minute.
+    expect(options.reachabilityMethod).toBe('HEAD');
+  });
+
+  it('leaves NetInfo alone when no API base URL is configured', () => {
+    // A build with no API URL has nothing useful to probe, and configuring an
+    // empty target would report every device permanently offline.
+    jest.resetModules();
+    const configure = jest.fn();
+    jest.doMock('@react-native-community/netinfo', () => ({
+      __esModule: true,
+      default: { configure, addEventListener: jest.fn(), fetch: jest.fn() },
+    }));
+    jest.doMock('../src/config/environment', () => ({ environment: { apiBaseUrl: null } }));
+
+    require('../src/lib/connectivity');
+
+    expect(configure).not.toHaveBeenCalled();
+  });
+});

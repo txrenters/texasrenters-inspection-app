@@ -1,5 +1,44 @@
 import NetInfo, { type NetInfoState } from '@react-native-community/netinfo';
 
+import { environment } from '../config/environment';
+
+/**
+ * Probe our own API rather than Google's captive-portal endpoint.
+ *
+ * NetInfo decides `isInternetReachable` by HEADing
+ * `https://clients3.google.com/generate_204` every 60 seconds with a 15 second
+ * timeout, and flipping to false the first time that one request fails. On a
+ * network that throttles or blocks Google — an office router doing client
+ * isolation is a reliable way to get there — the app announced "No connection"
+ * on stable Wi-Fi, recovered on the next 5 second retry, and did it again a
+ * minute later. The API it actually needs was reachable throughout.
+ *
+ * Asking the API directly makes "online" mean the only thing the app cares
+ * about: can we reach the backend. It also removes a request to a third party
+ * from every technician's device every minute.
+ *
+ * Configured at module scope so it is in place before anything subscribes —
+ * NetInfo applies configuration to the next probe, not retroactively.
+ */
+const reachabilityUrl = environment.apiBaseUrl
+  ? `${environment.apiBaseUrl.replace(/\/$/, '')}/api/v1/health`
+  : null;
+
+if (reachabilityUrl)
+  NetInfo.configure({
+    reachabilityUrl,
+    // The endpoint is unauthenticated and answers HEAD, so this costs a header
+    // exchange rather than a body.
+    reachabilityMethod: 'HEAD',
+    reachabilityTest: (response) => Promise.resolve(response.status === 200),
+    // A tunnelled request from a phone is slower than a Google 204 — measured
+    // around half a second, but a cold edge or a congested cell is not. The
+    // default 15s was tight enough that one slow response read as offline.
+    reachabilityRequestTimeout: 20_000,
+    reachabilityLongTimeout: 60_000,
+    reachabilityShortTimeout: 5_000,
+  });
+
 /**
  * Real device connectivity, as the upload queue needs to see it.
  *
