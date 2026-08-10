@@ -66,6 +66,17 @@ export interface AreaEvidenceSummaryItem {
    * nothing, so it is a prompt to configure rather than a fault.
    */
   checklistItemCount: number;
+  /**
+   * Items the technician actually assessed — at least one of Clean, Undamaged
+   * or Working answered.
+   *
+   * Counted independently of `checklistItemCount` rather than derived from it,
+   * because an area can hold assessments against items an administrator has
+   * since archived. The report still prints those rows, so a reviewer comparing
+   * the two numbers may legitimately see assessed exceed the current item
+   * count; that is a signal the checklist changed mid-inspection, not an error.
+   */
+  checklistAssessedCount: number;
   completionStatus: string;
   reviewStatus: AreaReviewStatus;
   counts: AreaEvidenceCounts;

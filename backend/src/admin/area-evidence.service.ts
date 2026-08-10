@@ -112,7 +112,7 @@ export class AreaEvidenceService {
         unassigned: { recordings: 0, photos: 0 },
       };
 
-    const [media, photoGroups, findingGroups, summaryFindings] = await Promise.all([
+    const [media, photoGroups, findingGroups, summaryFindings, checklistGroups] = await Promise.all([
       // Recordings are few per inspection; the rows carry the flags needed for
       // primary-presence and processing state in one pass.
       this.prisma.inspectionMedia.findMany({
@@ -142,9 +142,34 @@ export class AreaEvidenceService {
         where: { inspectionId, ...ROOM_SUMMARY_WHERE },
         _count: { _all: true },
       }),
+      /**
+       * How many checklist items carry an actual assessment.
+       *
+       * "Assessed" means at least one axis was answered. A row where the
+       * technician answered only Clean still says something about the room,
+       * and the printed reports the office issues contain exactly such
+       * partial rows — requiring all three would report real work as missing.
+       * A comment alone does not count: a note without a verdict is context,
+       * not an assessment.
+       */
+      this.prisma.inspectionAreaChecklistResponse.groupBy({
+        by: ['inspectionAreaId'],
+        where: {
+          inspectionArea: { inspectionId },
+          OR: [
+            { isClean: { not: null } },
+            { isUndamaged: { not: null } },
+            { isWorking: { not: null } },
+          ],
+        },
+        _count: { _all: true },
+      }),
     ]);
 
     const summaryAreas = new Set(summaryFindings.map((row) => row.propertyAreaId));
+    const checklistAssessedByArea = new Map(
+      checklistGroups.map((row) => [row.inspectionAreaId, row._count._all]),
+    );
     const items = areas.map((area) => {
       const areaMedia = media.filter((row) => row.inspectionAreaId === area.id);
       const areaPhotos = photoGroups.filter((row) => row.inspectionAreaId === area.id);
@@ -184,6 +209,11 @@ export class AreaEvidenceService {
         // Optional-chained: not every select variant asks for the count, and a
         // missing badge is not worth crashing the whole evidence list over.
         checklistItemCount: area.propertyArea._count?.checklistItems ?? 0,
+        // How much of that checklist the technician actually scored. Counted
+        // here rather than derived from the item count, because an area can
+        // carry assessments against items an administrator has since archived
+        // — the report still shows them, so the reviewer must see them too.
+        checklistAssessedCount: checklistAssessedByArea.get(area.id) ?? 0,
         completionStatus: area.completionStatus,
         reviewStatus: this.reviewStatusFor({
           completionStatus: area.completionStatus,

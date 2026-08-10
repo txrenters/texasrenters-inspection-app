@@ -47,6 +47,9 @@ function summaryPrisma(overrides: Record<string, unknown> = {}) {
     inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
     inspectionPhoto: { groupBy: jest.fn().mockResolvedValue([]) },
     inspectionFinding: { groupBy: jest.fn().mockResolvedValue([]) },
+    // Checklist assessments are counted in the same grouped pass as everything
+    // else, so the double has to answer for them too.
+    inspectionAreaChecklistResponse: { groupBy: jest.fn().mockResolvedValue([]) },
     ...overrides,
   };
 }
@@ -144,6 +147,7 @@ describe('derived area review status', () => {
       },
       inspectionMedia: { findMany: jest.fn().mockResolvedValue(options.media ?? []) },
       inspectionPhoto: { groupBy: jest.fn().mockResolvedValue(options.photos ?? []) },
+      inspectionAreaChecklistResponse: { groupBy: jest.fn().mockResolvedValue([]) },
       inspectionFinding: {
         groupBy: jest
           .fn()

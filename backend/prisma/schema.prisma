@@ -299,20 +299,21 @@ enum ChargeSource {
 }
 
 model Organization {
-  id              String                    @id @default(uuid()) @db.Uuid
-  name            String
-  createdAt       DateTime                  @default(now())
-  updatedAt       DateTime                  @updatedAt
-  members         OrganizationMember[]
-  properties      Property[]
-  inspections     Inspection[]
-  auditLogs       AuditLog[]
-  aiSettings      OrganizationAiSettings?
-  aiProviders     AiProviderConfiguration[]
-  aiUsageEvents   AiUsageEvent[]
-  roles           Role[]
-  roleAssignments UserRoleAssignment[]
-  checklistItems  AreaChecklistItem[]
+  id                 String                            @id @default(uuid()) @db.Uuid
+  name               String
+  createdAt          DateTime                          @default(now())
+  updatedAt          DateTime                          @updatedAt
+  members            OrganizationMember[]
+  properties         Property[]
+  inspections        Inspection[]
+  auditLogs          AuditLog[]
+  aiSettings         OrganizationAiSettings?
+  aiProviders        AiProviderConfiguration[]
+  aiUsageEvents      AiUsageEvent[]
+  roles              Role[]
+  roleAssignments    UserRoleAssignment[]
+  checklistItems     AreaChecklistItem[]
+  checklistResponses InspectionAreaChecklistResponse[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -697,22 +698,58 @@ model PropertyArea {
 /// record of coverage — it never gates completing an area, because the
 /// walkthrough video remains the evidence and an untouched checkbox is not
 /// proof that something was missed.
+/// One item's condition, as assessed during a specific inspection.
+///
+/// The three axes mirror the printed report the office already issues: every
+/// row is scored Clean / Undamaged / Working, with a comment for anything that
+/// needs words. They are **nullable on purpose** — the existing reports leave
+/// rows blank, and "not assessed" is a different claim from "No". Collapsing
+/// the two would invent findings nobody made.
+///
+/// Keyed to InspectionArea rather than PropertyArea: the same room is assessed
+/// again at every inspection, and last quarter's answers must not appear as
+/// this quarter's.
+model InspectionAreaChecklistResponse {
+  id               String            @id @default(uuid()) @db.Uuid
+  organizationId   String            @db.Uuid
+  inspectionAreaId String            @db.Uuid
+  checklistItemId  String            @db.Uuid
+  isClean          Boolean?
+  isUndamaged      Boolean?
+  isWorking        Boolean?
+  comment          String?
+  recordedById     String?           @db.Uuid
+  recordedAt       DateTime          @default(now())
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  inspectionArea   InspectionArea    @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
+  checklistItem    AreaChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
+
+  /// One assessment per item per area. Re-scoring updates it rather than
+  /// stacking a second opinion the report would have to choose between.
+  @@unique([inspectionAreaId, checklistItemId])
+  @@index([inspectionAreaId])
+  @@index([organizationId])
+}
+
 model AreaChecklistItem {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
-  propertyAreaId String       @db.Uuid
+  id             String                            @id @default(uuid()) @db.Uuid
+  organizationId String                            @db.Uuid
+  propertyAreaId String                            @db.Uuid
   label          String
   /// Spoken words that count as covering this item, matched against the
   /// recording's transcript. Empty means the item can only be ticked by hand.
-  keywords       String[]     @default([])
-  sortOrder      Int          @default(0)
+  keywords       String[]                          @default([])
+  sortOrder      Int                               @default(0)
   archivedAt     DateTime?
-  createdById    String?      @db.Uuid
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  propertyArea   PropertyArea @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
-  createdBy      UserProfile? @relation("ChecklistItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById    String?                           @db.Uuid
+  createdAt      DateTime                          @default(now())
+  updatedAt      DateTime                          @updatedAt
+  organization   Organization                      @relation(fields: [organizationId], references: [id])
+  propertyArea   PropertyArea                      @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
+  createdBy      UserProfile?                      @relation("ChecklistItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  responses      InspectionAreaChecklistResponse[]
 
   /// The same wording twice in one area is a mistake, not a second item.
   @@unique([propertyAreaId, label])
@@ -1165,28 +1202,29 @@ model InspectionAssignment {
 }
 
 model InspectionArea {
-  id                   String                         @id @default(uuid()) @db.Uuid
-  inspectionId         String                         @db.Uuid
-  propertyAreaId       String                         @db.Uuid
-  completionStatus     InspectionAreaCompletionStatus @default(PENDING)
-  skipReason           String?
-  technicianNote       String?
-  completedAt          DateTime?
+  id                               String                            @id @default(uuid()) @db.Uuid
+  inspectionId                     String                            @db.Uuid
+  propertyAreaId                   String                            @db.Uuid
+  completionStatus                 InspectionAreaCompletionStatus    @default(PENDING)
+  skipReason                       String?
+  technicianNote                   String?
+  completedAt                      DateTime?
   // The technician's attestation that the AI's narrative summary matches the
   // walkthrough they performed. Deliberately NOT InspectionFinding.reviewedBy:
   // that pair records an admin approving or rejecting a finding, and a
   // technician must never write to it. This says only "I read this and it
   // reflects what I saw" — it changes no finding's review status.
-  summaryConfirmedAt   DateTime?
-  summaryConfirmedById String?                        @db.Uuid
-  createdAt            DateTime                       @default(now())
-  updatedAt            DateTime                       @updatedAt
-  inspection           Inspection                     @relation(fields: [inspectionId], references: [id])
-  propertyArea         PropertyArea                   @relation(fields: [propertyAreaId], references: [id])
-  media                InspectionMedia[]
-  photos               InspectionPhoto[]
-  statusHistory        InspectionAreaStatusHistory[]
-  uploadSessions       MediaUploadSession[]
+  summaryConfirmedAt               DateTime?
+  summaryConfirmedById             String?                           @db.Uuid
+  createdAt                        DateTime                          @default(now())
+  updatedAt                        DateTime                          @updatedAt
+  inspection                       Inspection                        @relation(fields: [inspectionId], references: [id])
+  propertyArea                     PropertyArea                      @relation(fields: [propertyAreaId], references: [id])
+  media                            InspectionMedia[]
+  photos                           InspectionPhoto[]
+  statusHistory                    InspectionAreaStatusHistory[]
+  uploadSessions                   MediaUploadSession[]
+  checklistResponses               InspectionAreaChecklistResponse[]
 
   @@unique([inspectionId, propertyAreaId])
   @@index([inspectionId])

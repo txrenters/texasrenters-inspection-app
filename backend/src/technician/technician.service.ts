@@ -837,11 +837,128 @@ export class TechnicianService {
    */
   async roomChecklist(user: AuthenticatedUser, roomId: string) {
     const room = await this.assignedRoom(user, roomId);
-    return this.prisma.areaChecklistItem.findMany({
-      where: { propertyAreaId: room.propertyAreaId, archivedAt: null },
-      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-      select: { id: true, label: true, keywords: true },
+    const [items, responses] = await Promise.all([
+      this.prisma.areaChecklistItem.findMany({
+        where: { propertyAreaId: room.propertyAreaId, archivedAt: null },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, label: true, keywords: true },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.findMany({
+        where: { inspectionAreaId: roomId },
+        select: {
+          checklistItemId: true,
+          isClean: true,
+          isUndamaged: true,
+          isWorking: true,
+          comment: true,
+          recordedAt: true,
+        },
+      }),
+    ]);
+    const byItem = new Map(responses.map((response) => [response.checklistItemId, response]));
+    // Each item carries its own assessment so the app never has to join two
+    // lists, and an unassessed item is plainly unassessed rather than absent.
+    return items.map((item) => {
+      const response = byItem.get(item.id);
+      return {
+        ...item,
+        isClean: response?.isClean ?? null,
+        isUndamaged: response?.isUndamaged ?? null,
+        isWorking: response?.isWorking ?? null,
+        comment: response?.comment ?? null,
+        recordedAt: response?.recordedAt?.toISOString() ?? null,
+      };
     });
+  }
+
+  /**
+   * Records how one checklist item was found during this inspection.
+   *
+   * Three axes plus a comment, mirroring the printed report the office issues.
+   * Each is optional and **nullable**: leaving an axis unanswered is a real
+   * answer — the existing reports leave rows blank, and storing `false` for
+   * "not assessed" would invent a defect nobody observed. Passing `null`
+   * clears an axis back to unassessed.
+   *
+   * Upserts on (area, item), so re-scoring corrects the record rather than
+   * stacking a second opinion the report would have to choose between.
+   */
+  async recordRoomChecklistItem(
+    user: AuthenticatedUser,
+    roomId: string,
+    itemId: string,
+    input: {
+      isClean?: boolean | null;
+      isUndamaged?: boolean | null;
+      isWorking?: boolean | null;
+      comment?: string | null;
+    },
+  ) {
+    const room = await this.assignedRoom(user, roomId);
+
+    // `finalizedAt`, not status alone — the same rule that governs photo
+    // deletion. An administrator can reopen a finalized inspection, and a
+    // status-only check would reopen the assessments behind a report that has
+    // already been closed and possibly shared.
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: room.inspectionId },
+      select: { status: true, finalizedAt: true },
+    });
+    if (
+      inspection?.finalizedAt ||
+      inspection?.status === InspectionStatus.COMPLETED ||
+      inspection?.status === InspectionStatus.CANCELLED
+    )
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'The checklist cannot be changed after the inspection is finalized.',
+      );
+
+    // The item has to belong to *this* area. Without this a technician could
+    // score an item from another property entirely, and the report would show
+    // an assessment against a room nobody inspected.
+    const item = await this.prisma.areaChecklistItem.findFirst({
+      where: { id: itemId, propertyAreaId: room.propertyAreaId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!item)
+      throw new ApplicationError(
+        404,
+        'CHECKLIST_ITEM_NOT_FOUND',
+        'That checklist item does not belong to this area.',
+      );
+
+    const comment = input.comment?.trim() || null;
+    const values = {
+      isClean: input.isClean ?? null,
+      isUndamaged: input.isUndamaged ?? null,
+      isWorking: input.isWorking ?? null,
+      comment,
+    };
+    const response = await this.prisma.inspectionAreaChecklistResponse.upsert({
+      where: {
+        inspectionAreaId_checklistItemId: { inspectionAreaId: roomId, checklistItemId: itemId },
+      },
+      create: {
+        organizationId: user.organizationId,
+        inspectionAreaId: roomId,
+        checklistItemId: itemId,
+        recordedById: user.id,
+        ...values,
+      },
+      update: { recordedById: user.id, recordedAt: new Date(), ...values },
+      select: {
+        checklistItemId: true,
+        isClean: true,
+        isUndamaged: true,
+        isWorking: true,
+        comment: true,
+        recordedAt: true,
+      },
+    });
+    this.notifyInspectionChanged(user, room.inspectionId);
+    return { ...response, recordedAt: response.recordedAt.toISOString() };
   }
 
   async room(user: AuthenticatedUser, id: string) {

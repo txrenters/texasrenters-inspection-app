@@ -2,7 +2,7 @@
 
 import type { AreaEvidenceSummaryItem, AreaReviewStatus } from '@texasrenters/shared';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ListChecks } from 'lucide-react';
+import { Check, ListChecks } from 'lucide-react';
 
 import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -285,7 +285,11 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                         keyboard traversal. */}
                     <button
                       type="button"
-                      aria-label={`Edit ${area.name} coverage checklist, ${area.checklistItemCount || 'no'} item${area.checklistItemCount === 1 ? '' : 's'}`}
+                      aria-label={
+                        area.checklistItemCount
+                          ? `Edit ${area.name} checklist, ${area.checklistAssessedCount} of ${area.checklistItemCount} items assessed`
+                          : `Edit ${area.name} coverage checklist, no items`
+                      }
                       className="area-evidence-checklist-button"
                       onClick={() =>
                         setChecklistArea({ id: area.propertyAreaId, name: area.name })
@@ -294,12 +298,21 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                       <ListChecks aria-hidden className="size-4" />
                       {/* "Not set" rather than "0": an unconfigured area still
                           shows the technician a generated fallback, so this is
-                          a prompt to configure, not a fault. */}
+                          a prompt to configure, not a fault.
+
+                          Once configured this reads as progress — assessed of
+                          total — because the question a reviewer actually has
+                          is whether the technician scored the room, not how
+                          many rows the checklist happens to contain. */}
                       <span>
                         {area.checklistItemCount
-                          ? `Checklist · ${area.checklistItemCount}`
+                          ? `Checklist · ${area.checklistAssessedCount}/${area.checklistItemCount}`
                           : 'Checklist · not set'}
                       </span>
+                      {area.checklistItemCount &&
+                      area.checklistAssessedCount >= area.checklistItemCount ? (
+                        <Check aria-hidden className="size-3.5 text-emerald-600" />
+                      ) : null}
                     </button>
                   </li>
                 );

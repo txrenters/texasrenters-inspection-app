@@ -228,6 +228,25 @@ function parseMultipartBoolean(value: unknown) {
   return value;
 }
 
+/**
+ * One checklist item's assessment, as the printed report scores it.
+ *
+ * **Replace semantics.** The route is a PUT and this payload is the complete
+ * assessment for that item: an omitted axis is stored as unassessed, not left
+ * at its previous value. That keeps the stored row and the submitted form the
+ * same thing, so a technician who clears a checkbox sees it cleared.
+ *
+ * Each axis is a nullable tri-state — true, false, or unassessed. The office's
+ * existing reports leave rows blank, and "not assessed" is a different claim
+ * from "No"; coercing the two would invent a defect nobody observed.
+ */
+export class ChecklistAssessmentDto {
+  @IsOptional() @IsBoolean() isClean?: boolean | null;
+  @IsOptional() @IsBoolean() isUndamaged?: boolean | null;
+  @IsOptional() @IsBoolean() isWorking?: boolean | null;
+  @IsOptional() @IsString() @MaxLength(2000) comment?: string | null;
+}
+
 export class TechnicianNoteDto {
   @IsString() @MaxLength(2000) note!: string;
 }

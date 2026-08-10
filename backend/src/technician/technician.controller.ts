@@ -11,6 +11,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   StreamableFile,
@@ -29,15 +30,16 @@ import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../c
 import { MobilePushService } from '../realtime/mobile-push.service';
 import { MediaProcessingService } from './media-processing.service';
 import {
+  ChecklistAssessmentDto,
   MobilePushDeviceDto,
   RemoveMobilePushDeviceDto,
   TechnicianAdditionalVideoDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
+  TechnicianInspectionListQueryDto,
   TechnicianMediaUploadDto,
   TechnicianNoteDto,
   TechnicianPhotoUploadDto,
-  TechnicianInspectionListQueryDto,
   TechnicianReasonDto,
 } from './technician.dto';
 import { TechnicianService, type UploadedRoomVideo } from './technician.service';
@@ -234,6 +236,19 @@ export class TechnicianController {
     @UploadedFile() file?: UploadedRoomVideo,
   ) {
     return this.service.uploadAdditionalVideo(request.user, id, body, file);
+  }
+  /**
+   * PUT, not PATCH: the body is the item's complete assessment, so clearing a
+   * checkbox in the app clears it on the server rather than leaving a stale
+   * value the report would still print.
+   */
+  @Put('rooms/:roomId/checklist/:itemId') recordRoomChecklistItem(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') roomId: string,
+    @Param('itemId') itemId: string,
+    @Body() body: ChecklistAssessmentDto,
+  ) {
+    return this.service.recordRoomChecklistItem(request.user, roomId, itemId, body);
   }
   @Get('rooms/:roomId/checklist') roomChecklist(
     @Req() request: AuthenticatedRequest,
