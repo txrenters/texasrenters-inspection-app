@@ -23,10 +23,10 @@ Copy `.env.example` to `.env.local` and provide:
 EXPO_PUBLIC_API_BASE_URL=http://localhost:3000
 ```
 
-On a physical device, the development environment derives the backend host from
-Expo's active LAN host when `EXPO_PUBLIC_API_BASE_URL` points at localhost. An
-optional `EXPO_PUBLIC_DEV_LAN_API_BASE_URL` may be supplied as a fallback; do not
-commit a machine-specific IP address.
+A device reaches the backend through the Cloudflare Tunnel, never the LAN.
+`pnpm start` sets `EXPO_PUBLIC_API_BASE_URL` from `CLOUDFLARE_TUNNEL_HOSTNAME` in
+`backend/.env.local`, so the value in this file only matters for a simulator
+running on the same machine as the backend.
 
 ### Release builds
 
@@ -42,7 +42,7 @@ environment (`eas env:create`, or Project settings → Environment variables):
 
 | Variable | development | preview | production |
 | --- | --- | --- | --- |
-| `EXPO_PUBLIC_API_BASE_URL` | — | ngrok tunnel | public HTTPS API |
+| `EXPO_PUBLIC_API_BASE_URL` | — | tunnel hostname | public HTTPS API |
 
 **The app holds no provider credential of any kind.** It authenticates against
 the TexasRenters API and receives a token; nothing else. Database passwords, the
@@ -70,22 +70,25 @@ Other root commands:
 
 ```bash
 pnpm dev:mobile:clear
-pnpm dev:mobile:tunnel
 pnpm lint:mobile
 pnpm typecheck:mobile
 pnpm test:mobile
 pnpm build:mobile
 ```
 
-Remote-beta mode discovers the live Docker gateway URL from the ngrok agent on
-local port `4041`, verifies `/api/v1/health`, and injects that public origin into
-Expo. One ngrok domain carries both concerns: `/api/*` and `/socket.io/*` route
-to NestJS, while the Expo manifest, bundle, assets, and Fast Refresh route to V2
-Metro on port `8082`. Expo does not start a second ngrok agent.
+There is one way to start Metro, and it always goes through the tunnel. `pnpm
+start` reads two published hostnames from `backend/.env.local` and hands them to
+Expo: `CLOUDFLARE_TUNNEL_HOSTNAME` becomes the API origin, and
+`CLOUDFLARE_METRO_HOSTNAME` becomes `EXPO_PACKAGER_PROXY_URL`, so the manifest,
+bundle and Fast Refresh are served over the tunnel too.
+
+They must be different hostnames. The API host answers 404 for every path Metro
+needs, so pointing both at it leaves Expo Go unable to download the app with
+nothing explaining why — the script refuses to start rather than let that happen.
 
 For a cold start, use `pnpm remote-beta -- --clear` from the repository root.
 When the current Docker gateway is already running, enter `mobile` and
-use `pnpm start:tunnel --clear`.
+use `pnpm start:clear`.
 
 ## Data and evidence flow
 

@@ -53,180 +53,21 @@ From `mobile/`:
 pnpm start
 ```
 
-The default opens Expo over LAN on the fixed Metro port `8081` for a fast Expo Go launch. A custom development client can be started with:
+Metro runs on port `8082` and is served through the Cloudflare Tunnel, not the
+LAN. That is the only mode: the office network isolates clients, so LAN never
+worked there, and every hostname is published through the tunnel now.
 
-Normal LAN mode preserves Metro's cache. Use the explicit commands below when troubleshooting:
+`pnpm start` reads `CLOUDFLARE_TUNNEL_HOSTNAME` and `CLOUDFLARE_METRO_HOSTNAME`
+from `backend/.env.local` and hands both to Expo — the first as the API origin,
+the second as `EXPO_PACKAGER_PROXY_URL`. Bring the stack up first with
+`pnpm remote-beta`, which starts the backend and the tunnel and then runs the
+same command.
 
-```bash
-pnpm dev:mobile:lan       # explicit LAN mode
-pnpm dev:mobile:clear     # LAN mode with a one-time Metro cache clear
-pnpm dev:mobile:tunnel    # slower fallback when LAN routing is unavailable
-```
-
-The launcher always uses `mobile/` as the Expo project root and reports its selected private-LAN candidate. It never commits a developer-specific address.
-
-```bash
-pnpm --filter @texasrenters/mobile dev:client
-```
-
-If port `8081` is already occupied, stop the existing Metro process instead of allowing a second server to use another port.
-
-On Windows, Metro requires a Private-network inbound firewall allowance. From an **Administrator PowerShell**, create the narrow Node/TCP/8081 rule with:
+To clear Metro's cache once:
 
 ```bash
-pnpm windows:mobile:lan:firewall
+pnpm dev:mobile:clear
 ```
 
-The helper affects only Private networks, the resolved `node.exe`, and TCP port `8081`. Remove it with `pnpm windows:mobile:lan:firewall:remove`. Never disable Windows Firewall globally.
-
-The mobile launcher derives the active private LAN API address at startup. In tunnel mode, safe
-read requests use the HTTPS Metro proxy first and automatically retry through that LAN address if
-the proxy temporarily returns a gateway error. Start the backend before Expo and restart Expo when
-the computer changes networks so the derived address stays current. Write requests are never
-automatically replayed.
-
-## Optional demo mode and roles
-
-Set `EXPO_PUBLIC_ENABLE_DEMO_DATA=true` to expose the local Demo Login screen and choose one of these users:
-
-| Demo user      | Role                   | Primary preview                        |
-| -------------- | ---------------------- | -------------------------------------- |
-| Maya Rodriguez | Inspection Technician  | Dashboard and room inspection workflow |
-| Jordan Lee     | Condition Reviewer     | Findings and review decisions          |
-| Alex Morgan    | Property Administrator | Property and approved-room context     |
-
-A subtle Demo Mode banner remains visible. Settings shows `Data source: Mock repositories` and `Backend status: Not required`.
-
-Important demo state persists locally through Zustand using SecureStore on native platforms. To restore the initial dataset, open **Settings → Reset demo data** and confirm. This clears the selected user, room changes, notes, local media, uploads, failures, and finding decisions.
-
-## Repository switching
-
-The mobile configuration is intentionally non-throwing:
-
-```text
-EXPO_PUBLIC_ENABLE_DEMO_DATA=true → mock repositories
-unset or any other value          → authenticated REST repositories
-```
-
-`EXPO_PUBLIC_API_BASE_URL` identifies the shared backend origin, such as `http://localhost:3000`. API adapters do not silently fall back to mock data. Repository interfaces live in `mobile/src/repositories/contracts.ts`.
-
-Property, owner, and portfolio records remain mastered by the company’s existing external application. A future backend integration layer will normalize its contracts and store external IDs alongside inspection-specific records. The mobile app will continue to call only the TexasRenters REST boundary.
-
-## Simulated behavior
-
-- Four properties and five inspections: two completed, two in progress, and one scheduled
-- Oak Ridge House with two floors, eleven approved rooms, baselines, existing defects, and evidence placeholders
-- One room-specific media record per recording review
-- Upload transfer progress and retained failure/retry states
-- Offline uploads remain pending while properties, inspections, and recording stay available
-- Video processing, transcription, room analysis, baseline comparison, findings preparation, and ready-for-review stages
-- Bedroom 1 findings for wall scratches, carpet stain, and closet hinge evidence
-- Human review changes persist locally; no action approves charges or legal responsibility
-
-## Optional backend development
-
-The shared backend remains independently available:
-
-```bash
-pnpm dev:backend
-```
-
-- API: `http://localhost:3000/api/v1`
-- Health: `http://localhost:3000/api/v1/health`
-- Swagger: `http://localhost:3000/api/docs`
-
-The backend connects to the managed Supabase PostgreSQL project through Prisma. Copy the project-specific transaction-pooler `DATABASE_URL` and session-pooler `DIRECT_URL` from **Supabase Dashboard > Connect > ORM > Prisma** into `backend/.env.local`. Docker is optional for this path; see [Containerized stack](#containerized-stack) for the full local stack and the offline PostgreSQL option.
-
-## Containerized stack
-
-Every container belongs to one Compose project named `texasrenters`, declared by the `name:` key in `compose.yaml`. Do not add a second compose file that runs its own copy of a service — services in separate projects sit on separate networks and cannot reach each other.
-
-| File | Role |
-| --- | --- |
-| `compose.yaml` | Base definitions: `backend`, `web`, `redis`, and a profile-gated `postgres` |
-| `compose.override.yaml` | Loaded automatically; development ports and mock providers |
-| `compose.remote-beta.yaml` | Overlay adding `gateway` and `tunnel` for the remote iOS beta |
-| `docker/backend/Dockerfile` | NestJS API image |
-| `docker/web/Dockerfile` | Next.js admin image (standalone output) |
-| `docker/nginx/remote-beta.conf` | Gateway routing for the beta tunnel |
-
-Both Dockerfiles build from the repository root, so the root `.dockerignore` is the only one Docker reads. A per-package `.dockerignore` has no effect.
-
-```bash
-pnpm docker:up            # backend + web + redis + postgres
-pnpm docker:ps
-pnpm docker:logs
-pnpm docker:down
-```
-
-Host ports are shifted away from the defaults so an existing local install does not collide: PostgreSQL on `55433`, Redis on `56380`. Services inside the network address each other by name on the standard container port.
-
-### Database
-
-The platform is migrating off Supabase onto this Postgres container — see [docs/migration/SUPABASE_TO_SELF_HOSTED.md](docs/migration/SUPABASE_TO_SELF_HOSTED.md). The container now starts by default; it used to sit behind a `local-db` profile.
-
-**`DATABASE_URL` decides which database is live.** Compose deliberately sets neither `DATABASE_URL` nor `DIRECT_URL`, because a Compose `environment:` entry outranks `env_file:` and would silently override `backend/.env.local` — during a migration, which of two databases is in use has to stay under one file's control.
-
-To point at the container, set both in `backend/.env.local` to `postgresql://postgres:postgres@postgres:5432/texasrenters?schema=public`. The host is `postgres`, the service name; `localhost` would resolve to the backend container itself.
-
-```bash
-pnpm db:migrate-to-local            # dry run: compare both databases
-pnpm db:migrate-to-local --confirm  # copy `public` across, then verify
-pnpm db:migrate-to-local --verify   # compare only
-```
-
-The copy runs `pg_dump` inside the Postgres container, so no host Postgres install is needed and the client version always matches. It verifies row counts per table plus index, unique-index and foreign-key totals, and repoints nothing — switching over stays a deliberate edit.
-
-### Propertyware synchronization
-
-The backend now includes a read-only Propertyware v1 integration for portfolios, owner summaries, buildings, units, and move-out-relevant leases. Mock fixture mode and an in-memory store remain the safe local defaults; mobile clients receive normalized data only through `/api/v1`.
-
-```bash
-pnpm --filter @texasrenters/backend propertyware:sync:mock
-pnpm --filter @texasrenters/backend propertyware:reconcile:mock
-pnpm --filter @texasrenters/backend propertyware:status
-```
-
-Live mode requires all backend-only credentials documented in [PROPERTYWARE_OPERATIONS.md](docs/integrations/PROPERTYWARE_OPERATIONS.md). Apply the canonical Supabase migration in `supabase/migrations` before selecting `PROPERTYWARE_STORE=prisma`. No Propertyware write operation is implemented.
-
-## Administrator web application
-
-The Next.js administrator application lives in `web-app/`. It uses Supabase authentication, verifies an active admin organization membership through the shared backend, and accesses operational data only through `/api/v1/admin`.
-
-```bash
-Copy-Item web-app/.env.example web-app/.env.local
-pnpm dev:backend
-pnpm dev:web
-```
-
-The admin app runs at `http://localhost:5454`. Apply the Prisma foundation migration to the configured Supabase project first, then the Supabase migrations through `202607180005_add_admin_inspection_assignment_schema.sql` before scheduling or assigning inspections. See [ADMIN_WEB_RUNBOOK.md](docs/operations/ADMIN_WEB_RUNBOOK.md) for setup and troubleshooting.
-
-## Quality commands
-
-```bash
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm test:mobile
-pnpm build:mobile
-pnpm test:web
-pnpm build:web
-```
-
-The frontend build is an Expo web export. Native binary builds require platform toolchains or EAS.
-
-## Known limitations
-
-- Recording and playback are polished simulations by default; live camera integration is not the primary demo path.
-- Floor-plan geometry, OCR, and automated extraction are placeholders; approved room tags drive navigation.
-- Upload and processing advance while their status screens are active; production background upload is deferred.
-- API repository classes are explicit skeletons pending final REST and external-property contract alignment.
-- SecureStore-backed Zustand persistence is suitable for demo metadata, not production video bytes or large evidence payloads.
-- Role-specific route authorization, final reports, tenant charge calculation, and financial approval remain outside this frontend ticket.
-
-## Proposal and next ticket
-
-The unchanged source PDF remains at `docs/Mobile Move-Out Inspection System Proposal (1).pdf`; its canonical copy is `docs/product/MVP_PROPOSAL.pdf`.
-
-Next recommended UI ticket: **TRI-UI-002 — Add real-device camera capture behind the MediaRepository, including permission-denied recovery and recording-review playback, while preserving the current mock simulator and one-video-per-room rule.**
+If port `8082` is occupied, stop the existing Metro process rather than letting
+a second server pick another port — the tunnel route names 8082 specifically.

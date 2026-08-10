@@ -46,7 +46,7 @@ The following checks passed on 2026-07-30:
 - The manifest launch asset used the same public ngrok origin.
 - The complete iOS JavaScript bundle was generated and fetched through ngrok with HTTP 200.
 - The terminal QR advertised the public ngrok origin and did not emit `remote gone away`.
-- `cd mobile && pnpm start:tunnel --check` passed against the running stack.
+- `cd mobile && pnpm start --check` passed against the running stack.
 
 The first cold bundle was approximately 16.6 MB and took about one minute to generate and
 transfer. Subsequent requests use Metro's cache.
@@ -95,7 +95,7 @@ When the Docker stack is already current:
 
 ```powershell
 cd mobile
-pnpm start:tunnel --clear
+pnpm start:clear
 ```
 
 Status:

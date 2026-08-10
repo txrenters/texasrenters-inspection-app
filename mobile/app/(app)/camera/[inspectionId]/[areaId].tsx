@@ -45,7 +45,7 @@ import {
 } from '@/src/capture/guided-capture';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
-import { useRoom } from '@/src/features/queries';
+import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
@@ -93,6 +93,42 @@ export default function RoomCameraScreen() {
     recordingType?: string;
   }>();
   const room = useRoom(areaId);
+  /**
+   * Put the inspection in progress before any evidence is captured.
+   *
+   * The backend refuses evidence for an inspection that has not started —
+   * `409 INSPECTION_NOT_IN_PROGRESS` — and until now nothing stopped a
+   * technician reaching this screen first. Adding an area is allowed while an
+   * inspection is still SCHEDULED, and doing so navigates straight here, so the
+   * common path was: add a room, film it, and have every upload refused
+   * forever. One technician did exactly that and ended up with 162 MB of
+   * recordings that could never leave the phone.
+   *
+   * Started here rather than guarded here because this screen is the choke
+   * point every route into capture passes through, and because opening the
+   * camera on a room *is* starting the job. Refusing instead would send someone
+   * who just added a room back to press a button to be allowed to film it.
+   *
+   * Idempotent in effect: the mutation only fires for a SCHEDULED inspection,
+   * and `startedRef` keeps a re-render from firing it twice while the first
+   * request is in flight.
+   */
+  const inspection = useInspection(inspectionId);
+  const inspectionActions = useInspectionActions(inspectionId);
+  const startedRef = useRef(false);
+  const startInspection = inspectionActions.start;
+  useEffect(() => {
+    if (inspection.data?.status !== 'SCHEDULED' || startedRef.current) return;
+    startedRef.current = true;
+    startInspection.mutate(undefined, {
+      // Let it retry on the next mount rather than stranding the technician in
+      // a screen that silently cannot save what they record.
+      onError: () => {
+        startedRef.current = false;
+      },
+    });
+  }, [inspection.data?.status, startInspection]);
+
   const [camera, setCamera] = useState<CameraView | null>(null);
   const secondsRef = useRef(0);
   const mountedRef = useRef(true);

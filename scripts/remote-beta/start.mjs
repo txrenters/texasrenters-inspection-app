@@ -271,7 +271,9 @@ if (!existsSync(PNPM_CLI)) {
 
 // Launch pnpm through Node instead of pnpm.cmd. Node 24 on Windows can throw
 // spawn EINVAL for .cmd shims when stdio is inherited.
-const metro = spawn(process.execPath, [PNPM_CLI, 'run', 'start:tunnel', ...extraArgs], {
+// The same command a developer runs by hand. There is one way to start Metro
+// now, so this cannot drift from it.
+const metro = spawn(process.execPath, [PNPM_CLI, 'run', 'start', ...extraArgs], {
   cwd: join(ROOT, 'mobile'),
   stdio: 'inherit',
 });

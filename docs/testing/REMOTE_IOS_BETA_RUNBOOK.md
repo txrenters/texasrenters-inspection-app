@@ -63,7 +63,7 @@ Use this only when the Docker remote-beta stack is already running with the curr
 
 ```bash
 cd mobile
-pnpm start:tunnel --clear
+pnpm start:clear
 ```
 
 The script refuses to continue if the live ngrok agent still points directly at the backend,
