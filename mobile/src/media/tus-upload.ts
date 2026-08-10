@@ -171,6 +171,18 @@ async function request(url: string, init: RequestInit & { headers?: Record<strin
     // worth another attempt once the phone has a network again.
     if ((error as { name?: string }).name === 'AbortError')
       throw new TusUploadError('Upload was paused.', 'retryable');
-    throw new TusUploadError('The upload could not reach Cloudflare.', 'retryable');
+    // Names the host and the underlying reason. "Could not reach Cloudflare"
+    // was true but undiagnosable: it did not distinguish a phone with no
+    // signal from a network that blocks upload.cloudflarestream.com
+    // specifically, and those need different answers from whoever is helping.
+    const host = (() => {
+      try {
+        return new URL(url).host;
+      } catch {
+        return 'Cloudflare';
+      }
+    })();
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new TusUploadError(`The upload could not reach ${host} (${reason}).`, 'retryable');
   }
 }

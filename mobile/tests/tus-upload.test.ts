@@ -225,3 +225,36 @@ describe('resumable upload', () => {
     expect(seen[seen.length - 1]).toBe(CHUNK_ALIGNMENT);
   });
 });
+
+describe('network failure reporting', () => {
+  it('names the host it could not reach instead of saying "Network request failed"', async () => {
+    // React Native throws a bare TypeError with no URL. Passing that through
+    // left every stuck upload showing the same six words, which cannot
+    // distinguish a phone with no signal from a network that blocks
+    // upload.cloudflarestream.com specifically — different problems, different
+    // fixes, same message.
+    const fetchMock = jest.fn().mockRejectedValue(new TypeError('Network request failed'));
+    const original = global.fetch;
+    global.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await expect(
+        fetchUploadOffset('https://upload.cloudflarestream.com/abc123'),
+      ).rejects.toThrow(/upload\.cloudflarestream\.com/);
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  it('still reports a paused upload as paused, not as a network fault', async () => {
+    const abort = Object.assign(new Error('Aborted'), { name: 'AbortError' });
+    const original = global.fetch;
+    global.fetch = jest.fn().mockRejectedValue(abort) as unknown as typeof fetch;
+    try {
+      await expect(fetchUploadOffset('https://upload.cloudflarestream.com/abc')).rejects.toThrow(
+        /paused/i,
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+});

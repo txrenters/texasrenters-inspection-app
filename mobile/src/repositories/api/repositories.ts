@@ -267,19 +267,38 @@ async function createStreamUploadSession(input: {
   idempotencyKey: string;
 }): Promise<StreamUploadSession | null> {
   const { baseUrl, accessToken, ...body } = input;
-  const response = await fetch(resolveApiUrl(baseUrl, '/api/v1/inspection-videos/upload-session'), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-      'ngrok-skip-browser-warning': 'true',
-    },
-    body: JSON.stringify(body),
-  });
+  const url = resolveApiUrl(baseUrl, '/api/v1/inspection-videos/upload-session');
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    /**
+     * The only fetch in the upload path that had no catch, so React Native's
+     * bare "Network request failed" reached the queue verbatim and was shown
+     * on every retry. That string names no host, no stage and no cause, which
+     * makes a queue stuck against a wrong or unreachable API indistinguishable
+     * from one stuck against Cloudflare — the two have completely different
+     * fixes.
+     *
+     * Reported as an ApiConnectionError so the queue treats it as transient and
+     * keeps the recording, and so the offline cache path recognises it.
+     */
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ApiConnectionError(
+      `Could not reach ${new URL(url).host} to start the upload (${reason}). ` +
+        'The recording is safe on this device and will retry.',
+    );
+  }
   if (response.status === 503) return null;
   if (!response.ok) {
     const detail = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(detail?.message ?? 'The upload could not be started.');
+    throw new Error(
+      detail?.message ?? `The upload could not be started (${response.status} from ${new URL(url).host}).`,
+    );
   }
   return (await response.json()) as StreamUploadSession;
 }
