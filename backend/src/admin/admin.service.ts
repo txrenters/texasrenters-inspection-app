@@ -24,6 +24,9 @@ import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
+// A pure function, not the service: the panel needs Stream's definition of
+// "ready" without AdminModule depending on MediaModule.
+import { cloudflareStreamReadiness } from '../media/cloudflare-stream.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
@@ -121,7 +124,11 @@ const PORTFOLIO_VISIBLE = {
 } satisfies Prisma.PropertywareBuildingWhereInput;
 
 /**
- * Readiness of the object storage that room videos and photos are written to.
+ * Readiness of the object storage that inspection **photos** are written to.
+ *
+ * Photos, not room video. Video goes to Cloudflare Stream and is reported
+ * separately — this bucket holds the technician's stills and the resized
+ * variants generated from them.
  *
  * Follows `INSPECTION_MEDIA_STORAGE_PROVIDER` rather than assuming one vendor,
  * so the panel keeps telling the truth if the backend is pointed elsewhere.
@@ -139,15 +146,15 @@ function mediaStorageReadiness(
       process.env.R2_SECRET_ACCESS_KEY,
     );
     return {
-      provider: 'Cloudflare R2',
+      provider: 'Cloudflare R2 (photos)',
       status: status(configured),
       detail: configured
-        ? `Inspection media bucket: ${process.env.INSPECTION_MEDIA_BUCKET ?? 'default'}`
-        : 'Room video and photo upload will fail until R2 credentials are set.',
+        ? `Inspection photo bucket: ${process.env.INSPECTION_MEDIA_BUCKET ?? 'default'}`
+        : 'Inspection photo upload will fail until R2 credentials are set.',
     };
   }
   return {
-    provider: 'Inspection media storage',
+    provider: 'Inspection photo storage',
     status: status(true, false),
     detail: 'Using local container disk — evidence is lost on redeploy. Development only.',
   };
@@ -2131,15 +2138,22 @@ export class AdminService {
       // removed below.
       { provider: 'Anthropic', status: status(Boolean(process.env.ANTHROPIC_API_KEY)) },
       { provider: 'OpenAI', status: status(Boolean(process.env.OPENAI_API_KEY)) },
-      // Reports the storage backend that actually receives room videos.
+      // Room video. Restored after being removed on the belief that "nothing in
+      // the codebase calls Stream — video goes to R2". That was true once and is
+      // not now: uploads go device → Stream over tus, and playback is a signed
+      // customer-<code>.cloudflarestream.com URL this backend mints.
       //
-      // This row used to check Cloudflare Stream and warn "Video upload is
-      // unavailable until this provider is configured." Nothing in the codebase
-      // calls Stream — video goes to R2 through ObjectStorage — so the panel
-      // announced a broken uploader on a system whose uploads worked, and stayed
-      // silent about the credentials that would genuinely break them.
+      // Its own module owns the definition of "ready" (see
+      // cloudflareStreamReadiness) so this panel cannot drift from it a third
+      // time.
+      cloudflareStreamReadiness(),
+      // Photos and their resized variants. Not room video, which is the line
+      // the previous version of this panel blurred.
       mediaStorageReadiness(status),
-      { provider: 'Sentry', status: status(Boolean(process.env.SENTRY_DSN)) },
+      // There is no Sentry row. Nothing imports @sentry or reads SENTRY_DSN
+      // anywhere else in this codebase, so the row could only ever report on
+      // whether a variable was set — green for an error reporter that does not
+      // exist. Exactly the Deepgram failure described above.
       {
         provider: 'Redis',
         status: status(cacheStatus?.enabled ?? false, cacheStatus?.state === 'connected'),

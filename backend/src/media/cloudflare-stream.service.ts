@@ -39,6 +39,63 @@ export interface StreamVideoState {
   errorReasonText: string | null;
 }
 
+/**
+ * Readiness of the video pipeline, for the administrator's provider panel.
+ *
+ * Exported as a plain function rather than a method so the panel can report it
+ * without AdminModule taking a dependency on MediaModule — and, more to the
+ * point, so there is one place that knows which variables Stream needs. The
+ * panel previously kept its own idea of that and got it wrong in both
+ * directions: it once warned that video upload was broken while uploads worked,
+ * and the row was then deleted on the belief that nothing called Stream at all.
+ * Stream is the video path.
+ *
+ * Three stages fail independently, which is why this reports which one:
+ *
+ *   - account id + API token   → the device can be given an upload URL
+ *   - webhook secret           → a finished upload is ever marked ready
+ *   - customer code + signing  → a ready video can be played
+ *
+ * Missing the last two looks like "uploads work but nothing ever plays", which
+ * is a much harder thing to diagnose from the outside than a failed upload.
+ */
+export function cloudflareStreamReadiness() {
+  const missing = (
+    [
+      ['CLOUDFLARE_ACCOUNT_ID', 'upload'],
+      ['CLOUDFLARE_STREAM_API_TOKEN', 'upload'],
+      ['CLOUDFLARE_STREAM_WEBHOOK_SECRET', 'completion'],
+      ['CLOUDFLARE_STREAM_CUSTOMER_CODE', 'playback'],
+      ['CLOUDFLARE_STREAM_SIGNING_KEY_ID', 'playback'],
+      ['CLOUDFLARE_STREAM_SIGNING_KEY_PEM', 'playback'],
+    ] as const
+  ).filter(([name]) => !process.env[name]?.trim());
+
+  const stages = new Set(missing.map(([, stage]) => stage));
+  if (stages.has('upload'))
+    return {
+      provider: 'Cloudflare Stream',
+      status: 'NOT_CONFIGURED' as const,
+      detail: 'Room video upload will fail until the account id and API token are set.',
+    };
+  if (stages.size > 0)
+    return {
+      provider: 'Cloudflare Stream',
+      status: 'DEGRADED' as const,
+      // Named, because "degraded" on its own sends someone to the wrong half of
+      // the pipeline: uploads are fine, and it is everything after them that
+      // is not.
+      detail: `Uploads work. ${
+        stages.has('completion') ? 'Video never leaves processing' : 'Playback URLs cannot be signed'
+      } — missing ${missing.map(([name]) => name).join(', ')}.`,
+    };
+  return {
+    provider: 'Cloudflare Stream',
+    status: 'READY' as const,
+    detail: 'Signed playback, direct upload, and completion webhook all configured.',
+  };
+}
+
 @Injectable()
 export class CloudflareStreamService {
   private readonly logger = new Logger(CloudflareStreamService.name);

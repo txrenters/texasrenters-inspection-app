@@ -24,6 +24,7 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
     "db:seed:super-admin": "node --env-file-if-exists=.env.local -r ts-node/register/transpile-only prisma/seed-super-admin.ts",
+    "db:seed:roles": "node --env-file-if-exists=.env.local -r ts-node/register/transpile-only prisma/seed-roles.ts",
     "propertyware:sync:mock": "ts-node src/integrations/propertyware/propertyware.cli.ts initial mock",
     "propertyware:reconcile:mock": "ts-node src/integrations/propertyware/propertyware.cli.ts reconcile mock",
     "propertyware:sync:live": "ts-node src/integrations/propertyware/propertyware.cli.ts initial live",
