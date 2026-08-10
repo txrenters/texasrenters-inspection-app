@@ -130,7 +130,28 @@ export default function DiagnosticsScreen() {
       `Upload queue: ${uploadGate.allowed ? 'running' : uploadGate.reason}`,
       `Queue counts: ${pending} pending, ${uploading} uploading, ${failed} failed, ${completed} completed`,
       `Retained locally: ${retainedMb.toFixed(1)} MB`,
-      `API: ${environment.apiBaseUrlError ?? hostLabel()}`,
+      // The full URL, not just the host. A build pointed at the wrong scheme or
+      // carrying a stale path looks identical to a correct one when only the
+      // host is shown, and that is precisely the case worth catching.
+      `API: ${environment.apiBaseUrlError ?? environment.apiBaseUrl ?? 'Not configured'}`,
+      '',
+      /**
+       * Why an upload is stuck, per item.
+       *
+       * The error log holds what was thrown, but a queue item keeps the message
+       * it stopped on — and those differ. An item retried an hour ago still
+       * shows its reason here long after the log entry has rotated out, which
+       * is usually the only record of why a technician's evidence is sitting on
+       * their phone.
+       */
+      ...(() => {
+        const stuck = items.filter((item) => item.lastError);
+        if (!stuck.length) return ['Stuck uploads: none.'];
+        return [
+          'Stuck uploads:',
+          ...stuck.slice(0, 5).map((item) => `- ${item.status} ${item.roomName}: ${item.lastError}`),
+        ];
+      })(),
       '',
       errors.length ? 'Recent problems:' : 'Recent problems: none recorded.',
       ...errors.slice(0, 5).map((entry) => `- ${entry.at} [${entry.source}] ${entry.message}`),
