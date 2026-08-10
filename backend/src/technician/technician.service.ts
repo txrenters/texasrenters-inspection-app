@@ -1823,10 +1823,23 @@ export class TechnicianService {
     if (status === InspectionStatus.CANCELLED) return 'CANCELLED';
     throw new ApplicationError(500, 'INVALID_INSPECTION_STATUS', 'Invalid inspection status.');
   }
+  /**
+   * The area's progress, in the vocabulary the handset speaks.
+   *
+   * UPLOADED used to fall through to NOT_STARTED, along with every other state
+   * the mapper did not name — so an area whose walkthrough had reached
+   * Cloudflare reported itself untouched, and the Review screen refused to
+   * submit an inspection that was in fact finished. Each state now maps to
+   * something distinct, and FAILED says so rather than pretending nothing
+   * happened.
+   */
   private mapRoomStatus(status: InspectionAreaCompletionStatus) {
     if (status === InspectionAreaCompletionStatus.SKIPPED) return 'SKIPPED';
     if (status === InspectionAreaCompletionStatus.COMPLETED) return 'COMPLETED';
+    if (status === InspectionAreaCompletionStatus.UPLOADED) return 'UPLOADED';
     if (status === InspectionAreaCompletionStatus.RECORDED) return 'RECORDING_SAVED';
+    if (status === InspectionAreaCompletionStatus.FAILED) return 'FAILED';
+    // PENDING and RECORDING: nothing has left the device yet.
     return 'NOT_STARTED';
   }
   private mapUploadStatus(status: MediaUploadStatus) {

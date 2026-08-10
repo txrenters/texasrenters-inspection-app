@@ -71,26 +71,30 @@ describe('deriveAreaStatus', () => {
     expect(paused.needsAttention).toBe(false);
   });
 
-  it('distinguishes analyzing from ready-to-complete after a recording is saved', () => {
-    expect(
-      deriveAreaStatus(
-        room({
-          completionStatus: 'RECORDING_SAVED',
-          uploadStatus: 'COMPLETED',
-          processingStatus: 'ANALYZING',
-        }),
-      ).status,
-    ).toBe('PROCESSING');
+  it('reports a saved-but-unconfirmed recording as queued, not as work outstanding', () => {
+    // RECORDING_SAVED means the walkthrough is submitted and the queue owns it.
+    // It used to render as "Ready to complete", which described a button that
+    // no longer exists and made finished work look outstanding. Completion is
+    // now the upload succeeding, so nothing here needs the technician.
+    const queued = deriveAreaStatus(
+      room({
+        completionStatus: 'RECORDING_SAVED',
+        uploadStatus: 'COMPLETED',
+        processingStatus: 'ANALYZING',
+      }),
+    );
+    expect(queued.status).toBe('PENDING_UPLOAD');
+    expect(queued.needsAttention).toBe(false);
+  });
 
-    expect(
-      deriveAreaStatus(
-        room({
-          completionStatus: 'RECORDING_SAVED',
-          uploadStatus: 'COMPLETED',
-          processingStatus: 'READY_FOR_REVIEW',
-        }),
-      ).status,
-    ).toBe('READY_TO_COMPLETE');
+  it('treats a server-confirmed upload as complete', () => {
+    // The webhook settles on COMPLETED now, but rows written before that change
+    // still carry UPLOADED and mean the same thing: the evidence arrived.
+    for (const status of ['COMPLETED', 'UPLOADED'] as const) {
+      const area = deriveAreaStatus(room({ completionStatus: status }));
+      expect(area.status).toBe('COMPLETED');
+      expect(area.needsAttention).toBe(false);
+    }
   });
 
   it('only flags an unstarted area as needing attention when it is required', () => {

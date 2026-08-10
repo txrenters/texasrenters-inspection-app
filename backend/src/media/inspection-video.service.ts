@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
+  InspectionAreaCompletionStatus,
   InspectionStatus,
   MediaProcessingStatus,
   MediaUploadStatus,
@@ -196,6 +197,31 @@ export class InspectionVideoService {
       select: { id: true },
     });
 
+    /**
+     * The area now holds a recording, so say so.
+     *
+     * `InspectionAreaCompletionStatus` has seven values and, before this, three
+     * were ever written: PENDING at creation, SKIPPED, and COMPLETED — the last
+     * set inline by the old multipart upload endpoint. A Stream upload never
+     * reaches that endpoint, so an area with a finished walkthrough sat at
+     * PENDING, which the technician app renders as "not started". That is why
+     * Review & submit showed untouched rooms after a full walkthrough, and why
+     * its gate could never be satisfied.
+     *
+     * RECORDED here, UPLOADED when Cloudflare confirms, COMPLETED when the
+     * technician says so. Only forward: a second clip for an area that is
+     * already uploaded or completed must not drag it backwards.
+     */
+    await this.prisma.inspectionArea.updateMany({
+      where: {
+        id: area.id,
+        completionStatus: {
+          in: [InspectionAreaCompletionStatus.PENDING, InspectionAreaCompletionStatus.RECORDING],
+        },
+      },
+      data: { completionStatus: InspectionAreaCompletionStatus.RECORDED },
+    });
+
     this.logger.log({
       event: 'stream_upload_session_created',
       mediaId: media.id,
@@ -364,6 +390,9 @@ export class InspectionVideoService {
           readyAt: true,
           organizationId: true,
           inspectionId: true,
+          // The area this recording belongs to, so its completion state can
+          // move forward with the upload.
+          inspectionAreaId: true,
         },
       }),
     );
@@ -437,6 +466,37 @@ export class InspectionVideoService {
      * re-queueing on each one would transcribe the same video repeatedly at
      * cost.
      */
+    /**
+     * The bytes reached Cloudflare, so the area is done.
+     *
+     * Completion is the upload succeeding, not a separate confirmation. The
+     * technician already made the decision when they submitted the walkthrough;
+     * asking them to press a second button afterwards adds a step that can only
+     * be forgotten, and an area left un-pressed blocks submission of an
+     * inspection whose evidence is safely stored.
+     *
+     * Only forward, and never over a SKIPPED area — a skip is a deliberate
+     * statement about the room and a late webhook must not overwrite it.
+     */
+    if (state !== 'pendingupload')
+      await this.prisma.inspectionArea.updateMany({
+        where: {
+          id: media.inspectionAreaId,
+          completionStatus: {
+            in: [
+              InspectionAreaCompletionStatus.PENDING,
+              InspectionAreaCompletionStatus.RECORDING,
+              InspectionAreaCompletionStatus.RECORDED,
+              InspectionAreaCompletionStatus.UPLOADED,
+            ],
+          },
+        },
+        data: {
+          completionStatus: InspectionAreaCompletionStatus.COMPLETED,
+          completedAt: new Date(),
+        },
+      });
+
     if (encoded && !media.readyAt) this.mediaProcessing?.queue(media.id, media.organizationId);
 
     this.logger.log({

@@ -6,6 +6,7 @@ import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type {
   InspectionStatus,
   LocalMedia,
+  RoomCompletionStatus,
   PhotoCaptureType,
   UploadItem,
 } from '../../domain/models';
@@ -123,7 +124,13 @@ const roomSchema = z.object({
     existingDefects: z.array(z.string()),
     evidenceCount: z.number(),
   }),
-  completionStatus: z.enum(['NOT_STARTED', 'RECORDING_SAVED', 'COMPLETED', 'SKIPPED']),
+  // Permissive for the same reason as `status` above: this enum just grew two
+  // members the server can send, and a strict list here would have rejected
+  // the whole area rather than one field. The screens fall back to
+  // NOT_STARTED for anything they do not recognise.
+  completionStatus: z
+    .string()
+    .transform((value) => value as RoomCompletionStatus),
   uploadStatus: z.enum(['PENDING', 'UPLOADING', 'PAUSED', 'FAILED', 'COMPLETED']),
   processingStatus: z.enum([
     'NOT_STARTED',

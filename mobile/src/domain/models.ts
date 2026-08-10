@@ -14,7 +14,13 @@ export type InspectionStatus =
   | 'COMPLETED'
   | 'CANCELLED';
 export type Priority = 'STANDARD' | 'HIGH';
-export type RoomCompletionStatus = 'NOT_STARTED' | 'RECORDING_SAVED' | 'COMPLETED' | 'SKIPPED';
+export type RoomCompletionStatus =
+  | 'NOT_STARTED'
+  | 'RECORDING_SAVED'
+  | 'UPLOADED'
+  | 'COMPLETED'
+  | 'SKIPPED'
+  | 'FAILED';
 export type UploadStatus = 'PENDING' | 'UPLOADING' | 'PAUSED' | 'FAILED' | 'COMPLETED';
 export type ProcessingStatus =
   | 'NOT_STARTED'

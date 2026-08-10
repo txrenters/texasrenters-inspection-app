@@ -36,7 +36,20 @@ registerIcons(
   ShieldCheckIcon,
 );
 
-const finishedStatuses = new Set(['COMPLETED', 'SKIPPED', 'RECORDING_SAVED']);
+/**
+ * What counts as finished for the purpose of submitting.
+ *
+ * `RECORDING_SAVED` is deliberately absent, and `UPLOADED` deliberately
+ * present. A recording still on the phone is not evidence the office can
+ * review — submitting on it hands over an inspection whose video may never
+ * arrive. Once Cloudflare has the bytes, it is.
+ *
+ * The set previously read COMPLETED | SKIPPED | RECORDING_SAVED and could not
+ * be satisfied at all: nothing wrote any of them for a Stream upload, so every
+ * area reported NOT_STARTED and the button stayed disabled no matter how much
+ * work had been done.
+ */
+const finishedStatuses = new Set(['COMPLETED', 'SKIPPED', 'UPLOADED']);
 
 function readable(value: string) {
   return value

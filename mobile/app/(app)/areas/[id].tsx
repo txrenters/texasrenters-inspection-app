@@ -390,49 +390,29 @@ export default function AreaDetailScreen() {
           </View>
         ) : null}
 
+        {/* There is no "Mark Complete" here any more.
+
+            Completion is the upload succeeding. The technician already decided
+            when they submitted the walkthrough, and a second button afterwards
+            could only be forgotten — leaving an area that blocks submission of
+            an inspection whose evidence is safely stored. The status line above
+            says where the upload has got to instead.
+
+            Adding more video stays available at every stage, including after
+            the area completes: noticing something else in a room is normal, and
+            an extra clip does not undo the walkthrough. */}
         {hasRecording ? (
-          <View className="mx-5 mt-4 flex-row gap-3">
+          <View className="mx-5 mt-4">
             <Pressable
               accessibilityHint="Records an extra clip without replacing the main walkthrough"
               accessibilityLabel="Add additional video"
               accessibilityRole="button"
-              className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border bg-card py-3"
+              className="min-h-12 items-center justify-center rounded-xl border border-border bg-card py-3"
               onPress={() =>
                 router.push(`/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`)
               }
             >
               <Text className="font-semibold text-foreground">Add Additional Video</Text>
-            </Pressable>
-            {/* Gated on real evidence. Previously this completed an area
-                whatever its state, which is exactly the "submitted ≠ complete"
-                line the spec draws. */}
-            <Pressable
-              accessibilityHint={gate.canComplete ? undefined : gate.reason}
-              accessibilityLabel={
-                updates.complete.isPending
-                  ? 'Marking area complete'
-                  : gate.canComplete
-                    ? 'Mark area complete'
-                    : 'Mark area complete, unavailable'
-              }
-              accessibilityRole="button"
-              accessibilityState={{
-                busy: updates.complete.isPending,
-                disabled: !gate.canComplete || updates.complete.isPending,
-              }}
-              className={`min-h-12 flex-1 items-center justify-center rounded-xl py-3 ${
-                gate.canComplete ? 'bg-card' : 'bg-muted'
-              }`}
-              disabled={!gate.canComplete || updates.complete.isPending}
-              onPress={() => updates.complete.mutate()}
-            >
-              <Text
-                className={`font-semibold ${
-                  gate.canComplete ? 'text-foreground' : 'text-muted-foreground'
-                }`}
-              >
-                Mark Complete
-              </Text>
             </Pressable>
           </View>
         ) : null}

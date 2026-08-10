@@ -43,6 +43,9 @@ function build(overrides: {
   const prisma = {
     inspectionArea: {
       findFirst: jest.fn().mockResolvedValue('area' in overrides ? overrides.area : areaRecord),
+      // The area's completion state moves with the upload: RECORDED when the
+      // session is created, COMPLETED when Cloudflare confirms the bytes.
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
     inspectionMedia: {
       findUnique: jest.fn().mockResolvedValue(overrides.existing ?? null),
@@ -262,6 +265,41 @@ describe('stream webhook', () => {
     await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
 
     expect(mediaProcessing.queue).not.toHaveBeenCalled();
+  });
+
+  it('completes the area once Cloudflare confirms the bytes', async () => {
+    /**
+     * The bug this whole change exists for. Nothing wrote the area's completion
+     * state for a Stream upload — the old multipart endpoint did it inline, and
+     * Stream never reaches that endpoint — so an area with a finished
+     * walkthrough sat at PENDING, rendered as "not started", and could never
+     * satisfy the Review screen's submit gate.
+     */
+    const { service, prisma } = build();
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow());
+
+    await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
+
+    const [call] = prisma.inspectionArea.updateMany.mock.calls.filter(
+      ([argument]: [{ data: { completionStatus?: string } }]) =>
+        argument.data.completionStatus === 'COMPLETED',
+    );
+    expect(call).toBeDefined();
+    expect(call[0].data.completedAt).toBeInstanceOf(Date);
+    // Never over a skip: that is a deliberate statement about the room, and a
+    // late webhook must not overwrite it.
+    expect(call[0].where.completionStatus.in).not.toContain('SKIPPED');
+  });
+
+  it('leaves the area alone while the upload has not started', async () => {
+    // pendingupload means Cloudflare has the session but no bytes. Completing
+    // on that would mark an area done before anything was sent.
+    const { service, prisma } = build();
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('PENDING'));
+
+    await service.applyWebhook({ uid: 'uid-1', status: { state: 'pendingupload' } });
+
+    expect(prisma.inspectionArea.updateMany).not.toHaveBeenCalled();
   });
 
   it('records an encoding failure with the provider reason', async () => {

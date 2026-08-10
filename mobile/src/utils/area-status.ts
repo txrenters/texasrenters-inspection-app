@@ -66,6 +66,39 @@ export function deriveAreaStatus(room: InspectionRoom): AreaStatusDescriptor {
       needsAttention: false,
     };
 
+  /**
+   * The walkthrough is safely off the device, and the technician has not yet
+   * confirmed the area.
+   *
+   * Placed above the in-flight states because it outranks them: the server has
+   * told us the bytes arrived, which is a stronger fact than whatever the
+   * device's own queue last recorded. This state did not exist before — the
+   * server reported UPLOADED and the mapper turned it into NOT_STARTED, so a
+   * finished walkthrough read as untouched work.
+   */
+  // A transitional state the server no longer settles on — the webhook goes
+  // straight to COMPLETED — but rows written before that change still carry it,
+  // and it means the same thing: the evidence arrived.
+  if (room.completionStatus === 'UPLOADED')
+    return {
+      status: 'COMPLETED',
+      label: 'Completed',
+      detail: 'Walkthrough uploaded',
+      tone: 'success',
+      icon: 'check',
+      needsAttention: false,
+    };
+
+  if (room.completionStatus === 'FAILED')
+    return {
+      status: 'UPLOAD_FAILED',
+      label: 'Failed',
+      detail: 'This area could not be processed — record it again',
+      tone: 'danger',
+      icon: 'alert-triangle',
+      needsAttention: true,
+    };
+
   if (room.completionStatus !== 'NOT_STARTED' && room.uploadStatus === 'FAILED')
     return {
       status: 'UPLOAD_FAILED',
@@ -112,27 +145,24 @@ export function deriveAreaStatus(room: InspectionRoom): AreaStatusDescriptor {
       needsAttention: false,
     };
 
-  if (room.completionStatus === 'RECORDING_SAVED') {
-    const analyzing =
-      room.processingStatus !== 'READY_FOR_REVIEW' && room.processingStatus !== 'NOT_STARTED';
-    if (analyzing)
-      return {
-        status: 'PROCESSING',
-        label: 'Analyzing',
-        detail: 'Uploaded — analysis is running',
-        tone: 'progress',
-        icon: 'loader',
-        needsAttention: false,
-      };
+  /**
+   * The walkthrough is submitted and on its way.
+   *
+   * Not an action for the technician: the queue delivers it and the area
+   * completes itself when Cloudflare confirms the bytes. This used to say
+   * "Ready to complete — review and mark this area complete", which described a
+   * button that no longer exists and made a finished walkthrough look like
+   * outstanding work.
+   */
+  if (room.completionStatus === 'RECORDING_SAVED')
     return {
-      status: 'READY_TO_COMPLETE',
-      label: 'Ready to complete',
-      detail: 'Recording saved — review and mark this area complete',
+      status: 'PENDING_UPLOAD',
+      label: 'Upload queued',
+      detail: 'Submitted — this area completes once the upload finishes',
       tone: 'info',
-      icon: 'video',
-      needsAttention: true,
+      icon: 'cloud-upload',
+      needsAttention: false,
     };
-  }
 
   return {
     status: 'NOT_STARTED',
