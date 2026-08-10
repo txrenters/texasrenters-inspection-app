@@ -184,10 +184,6 @@ export class VerticalSliceService {
     };
   }
 
-  me(user: AuthenticatedUser) {
-    return user;
-  }
-
   listProperties(user: AuthenticatedUser) {
     return this.properties.filter((property) => property.organizationId === user.organizationId);
   }

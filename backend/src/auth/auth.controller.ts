@@ -1,10 +1,15 @@
 /* DTO classes and guards are runtime imports required by Nest metadata. */
 /* eslint-disable @typescript-eslint/consistent-type-imports */
-import { Body, Controller, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 
-import { RequiredPasswordAuthGuard, type RequiredPasswordRequest } from '../common/auth';
+import {
+  ApiAuthGuard,
+  RequiredPasswordAuthGuard,
+  type AuthenticatedRequest,
+  type RequiredPasswordRequest,
+} from '../common/auth';
 import {
   ChangeRequiredPasswordDto,
   RefreshTokenDto,
@@ -39,6 +44,31 @@ export class AuthController {
     private readonly sessions: SessionService,
     private readonly passwordReset: PasswordResetService,
   ) {}
+
+  /**
+   * Who the bearer token belongs to.
+   *
+   * The mobile app calls this on every launch to decide whether the signed-in
+   * account may use it at all. It was only ever served by
+   * VerticalSliceController, which app.module.ts registers *exclusively outside
+   * production* alongside the mock providers — so the moment the backend ran
+   * with NODE_ENV=production the route vanished and the app failed at startup
+   * with "Cannot GET /api/v1/auth/me". Nothing about identity belongs in a
+   * controller named "mock vertical slice"; it lives here now and exists in
+   * every environment.
+   *
+   * The response is the resolved principal rather than the token's claims:
+   * `roles` and `permissions` come from the database at request time, so an
+   * account deactivated or re-roled mid-session is reflected without waiting
+   * for the token to expire.
+   */
+  @Get('me')
+  @UseGuards(ApiAuthGuard)
+  me(@Req() request: AuthenticatedRequest) {
+    const { id, authUserId, organizationId, displayName, roles, permissions, mustChangePassword } =
+      request.user;
+    return { id, authUserId, organizationId, displayName, roles, permissions, mustChangePassword };
+  }
 
   /**
    * Sign in.

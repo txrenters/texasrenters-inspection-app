@@ -44,9 +44,12 @@ const PROPERTY_MANAGERS = [
 export class VerticalSliceController {
   constructor(@Inject(VerticalSliceService) private readonly service: VerticalSliceService) {}
 
-  @Get('auth/me') me(@Req() request: AuthenticatedRequest) {
-    return this.service.me(request.user);
-  }
+  // `auth/me` used to be here. It moved to AuthController, because this
+  // controller is registered only outside production — so the route that the
+  // mobile app calls on every launch disappeared the moment the backend ran
+  // with NODE_ENV=production. Leaving a copy here would have meant dev served
+  // one implementation and production another, which is how the gap survived
+  // unnoticed in the first place.
 
   @Post('properties')
   @Roles(UserRole.SYSTEM_ADMIN, UserRole.PROPERTY_ADMIN)
