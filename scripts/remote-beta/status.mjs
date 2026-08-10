@@ -78,7 +78,7 @@ console.log(
       : `${readyConnections} ready connection${readyConnections === 1 ? '' : 's'}`
   }`,
 );
-console.log(`Public gateway: ${publicUrl ?? '(no CLOUDFLARE_TUNNEL_HOSTNAME configured)'}`);
+console.log(`Public API   : ${publicUrl ?? '(no CLOUDFLARE_TUNNEL_HOSTNAME configured)'}`);
 
 if (publicUrl) {
   try {

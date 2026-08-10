@@ -35,24 +35,20 @@ services:
       # The admin app is not part of the tester-facing tunnel.
       - '127.0.0.1:${WEB_PORT:-5454}:${WEB_PORT:-5454}'
 
-  # Path-routes one hostname across the REST API, websockets, and Metro.
+  # There is no nginx gateway any more.
   #
-  # Originally here because a free ngrok account gets one agent session, so
-  # everything had to share a URL. Cloudflare removes that constraint — a
-  # hostname per service is fine now — but one origin serving both Metro and the
-  # API is still the simplest thing to point a test device at.
-  gateway:
-    image: nginx:1.29-alpine
-    volumes:
-      - ./docker/nginx/remote-beta.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      backend:
-        condition: service_healthy
-    # Docker Desktop provides this name automatically. The explicit mapping also
-    # keeps the file usable on modern Linux Docker engines.
-    extra_hosts:
-      - 'host.docker.internal:host-gateway'
-    restart: unless-stopped
+  # It existed for one reason: a free ngrok account gets a single agent session,
+  # so the REST API, websockets and Metro all had to share one URL and be split
+  # apart again by path. Cloudflare publishes a hostname per service, so each
+  # one now points straight at what serves it and nothing passes through a
+  # proxy we maintain.
+  #
+  # Deleting it removed a real failure mode, not just a container. nginx
+  # resolved its upstreams once at startup, so rebuilding the backend gave it a
+  # new address that nginx kept missing — every request 502'd while the backend
+  # itself was perfectly healthy, which reads as a broken tunnel. The workaround
+  # was a `resolver` directive and hostnames held in variables. cloudflared
+  # resolves per request and needs none of it.
 
   # Cloudflare Tunnel, replacing ngrok.
   #
@@ -67,37 +63,41 @@ services:
   # container sits on the Compose network, a public hostname can point at any of
   # these service URLs:
   #
-  #   http://gateway:80                 one hostname, path-routed:
-  #                                       /api/ and /socket.io/ → backend
-  #                                       everything else       → Metro
-  #   http://backend:3000               the REST API and websockets on their own
-  #   http://web:5454                   the administrator app on its own
-  #   http://host.docker.internal:8082  Metro directly
+  #   http://backend:3000               REST API and websockets
+  #   http://host.docker.internal:8082  Metro (runs on the host, not a container)
+  #   http://web:5454                   the administrator app
   #
-  # Per-hostname routing is the better shape now that Cloudflare can do it:
-  # the gateway existed to multiplex a single ngrok URL, and nothing forces that
-  # compromise any more. It stays because Metro and the API sharing one origin is
-  # still convenient for a device on a phone network.
+  # Currently published:
+  #   backend.erniecodev.win -> http://backend:3000
+  #   mobile.erniecodev.win  -> http://host.docker.internal:8082
   tunnel:
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN is missing from backend/.env.local}
+    # Metro runs on the Windows host, not in a container, so the hostname routed
+    # to it names host.docker.internal. Docker Desktop supplies that
+    # automatically; the explicit mapping is what keeps this working on a Linux
+    # engine.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     depends_on:
-      gateway:
-        condition: service_started
+      backend:
+        condition: service_healthy
     ports:
       # cloudflared's own metrics, which is where /ready lives — the readiness
       # signal that replaces ngrok's tunnel-listing API. Loopback only: it
       # reports connection state, not a public surface.
       - '127.0.0.1:2000:2000'
-    healthcheck:
-      # /ready is 200 once at least one edge connection is registered, so the
-      # container is unhealthy while the tunnel is genuinely down rather than
-      # merely running.
-      test: ['CMD-SHELL', 'cloudflared --version >/dev/null 2>&1 || exit 1']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
+    # No healthcheck, deliberately.
+    #
+    # The image is distroless: there is no /bin/sh and no curl, so CMD-SHELL
+    # cannot run and nothing in the container can reach its own /ready endpoint.
+    # A first attempt here used CMD-SHELL and reported the tunnel `unhealthy`
+    # for its whole life while it was carrying traffic perfectly well — a
+    # healthcheck that lies is worse than none.
+    #
+    # The real signal is /ready on the published metrics port, which reports
+    # registered edge connections rather than merely that a process exists.
+    # `pnpm remote-beta` and `pnpm remote-beta:status` both read it.
     restart: unless-stopped

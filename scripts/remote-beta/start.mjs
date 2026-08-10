@@ -12,9 +12,7 @@
  * it reads CLOUDFLARE_TUNNEL_HOSTNAME, and treats an absent one as "the routes
  * have not been added yet" rather than a failure.
  *
- * The gateway still path-routes one hostname when that is what is published:
- *   /api/* and /socket.io/* -> backend container
- *   every other path        -> Metro on host port 8082
+ * Each service is published on its own hostname; there is no proxy in between.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -200,7 +198,7 @@ function updateMobileEnv(publicUrl) {
 
 await preflight();
 
-log('\n▸ Building and starting backend, gateway, and the Cloudflare tunnel…');
+log('\n▸ Building and starting the backend and the Cloudflare tunnel…');
 if (compose('up', '-d', '--build').status !== 0) fail('docker compose up failed.');
 
 log('▸ Waiting for backend health…');
@@ -238,10 +236,9 @@ if (publicUrl) {
       '  Add a public hostname in Zero Trust → Networks → Tunnels → Public Hostnames,\n' +
       '  pointing at one of these Compose service URLs:\n' +
       '\n' +
-      '    http://gateway:80                 API + websockets + Metro on one host\n' +
-      '    http://backend:3000               REST API and websockets only\n' +
-      '    http://web:5454                   administrator app only\n' +
-      '    http://host.docker.internal:8082  Metro only\n' +
+      '    http://backend:3000               REST API and websockets\n' +
+      '    http://host.docker.internal:8082  Metro\n' +
+      '    http://web:5454                   administrator app\n' +
       '\n' +
       '  Then set CLOUDFLARE_TUNNEL_HOSTNAME in backend/.env.local and re-run.',
   );
@@ -254,7 +251,7 @@ log(`
  Backend container : healthy
  Local backend     : http://127.0.0.1:3000
  Tunnel            : connected, ${tunnel.connections ?? '?'} edge connections
- Public gateway    : ${publicUrl ?? '(no CLOUDFLARE_TUNNEL_HOSTNAME set yet)'}
+ Public API       : ${publicUrl ?? '(no CLOUDFLARE_TUNNEL_HOSTNAME set yet)'}
  REST API          : ${publicUrl ? `${publicUrl}/api/v1` : '(pending a public hostname)'}
  Mobile client     : mobile
  Tunnel metrics    : http://127.0.0.1:2000/ready (local only)
