@@ -691,6 +691,16 @@ export interface PublicReportPhoto {
   contentPath: string;
 }
 
+/** One checklist row as the printed report shows it. */
+export interface PublicReportChecklistItem {
+  id: string;
+  label: string;
+  isClean: boolean | null;
+  isUndamaged: boolean | null;
+  isWorking: boolean | null;
+  comment?: string | null;
+}
+
 export interface PublicInspectionReport {
   brand: PublicReportBrand;
   property: {
@@ -714,6 +724,16 @@ export interface PublicInspectionReport {
     completionStatus: string;
     skipReason?: string | null;
     completedAt?: string | null;
+    /**
+     * The condition checklist as the technician scored it, in the order the
+     * printed report prints it.
+     *
+     * Every axis is a **tri-state**: true, false, or null for "not assessed".
+     * The report renders null as an empty cell, exactly as the office's
+     * existing reports do — printing "No" for an unassessed row would publish
+     * a defect nobody observed.
+     */
+    checklist: PublicReportChecklistItem[];
   }>;
   findings: Array<{
     id: string;

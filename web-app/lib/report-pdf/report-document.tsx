@@ -125,6 +125,17 @@ const styles = StyleSheet.create({
     fontSize: 8.5,
   },
   emptyRoom: { color: C.muted, fontSize: 8.5 },
+  // The condition table. Column widths are fixed rather than proportional so
+  // the three verdict columns line up down the page the way the office's
+  // printed reports do.
+  checklistTable: { marginBottom: 8 },
+  checklistRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderBottomColor: C.border },
+  checklistHeadRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.border },
+  checklistHeadCell: { fontSize: 7, color: C.muted, paddingVertical: 3, paddingHorizontal: 4 },
+  checklistCell: { fontSize: 8, paddingVertical: 3, paddingHorizontal: 4 },
+  checklistLabel: { width: '32%' },
+  checklistAxis: { width: '11%', textAlign: 'center' },
+  checklistComment: { width: '35%', color: C.muted },
   quietRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -205,12 +216,46 @@ function Finding({ finding }: { finding: ReportFindingView }) {
   );
 }
 
+/**
+ * The condition table, printed before the photographs.
+ *
+ * An unassessed axis renders as an empty cell rather than "N" — the view model
+ * already made that decision, so this renderer and the HTML page cannot
+ * disagree about what a blank means.
+ */
+function ChecklistTable({ room }: { room: ReportRoomView }) {
+  if (!room.checklist.length) return null;
+  return (
+    <View style={styles.checklistTable}>
+      <View style={styles.checklistHeadRow}>
+        <Text style={[styles.checklistHeadCell, styles.checklistLabel]}>Room / item</Text>
+        <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Clean</Text>
+        <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Undam.</Text>
+        <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Working</Text>
+        <Text style={[styles.checklistHeadCell, styles.checklistComment]}>Comments</Text>
+      </View>
+      {room.checklist.map((row) => (
+        <View key={row.id} style={styles.checklistRow} wrap={false}>
+          <Text style={[styles.checklistCell, styles.checklistLabel]}>{row.label}</Text>
+          <Text style={[styles.checklistCell, styles.checklistAxis]}>{row.clean}</Text>
+          <Text style={[styles.checklistCell, styles.checklistAxis]}>{row.undamaged}</Text>
+          <Text style={[styles.checklistCell, styles.checklistAxis]}>{row.working}</Text>
+          <Text style={[styles.checklistCell, styles.checklistComment]}>{row.comment}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) {
   const photos = room.photos.filter((photo) => images.has(photo.id));
   return (
     // Small rooms stay whole on one page; large ones are allowed to split
     // rather than leaving most of a page blank.
-    <View style={styles.roomCard} wrap={photos.length + room.findings.length > 4}>
+    <View
+      style={styles.roomCard}
+      wrap={room.checklist.length + photos.length + room.findings.length > 4}
+    >
       <View style={styles.roomHeader}>
         <View>
           <Text style={styles.roomName}>{room.name}</Text>
@@ -219,6 +264,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
         <Chip label={room.statusLabel} tone={room.inspected ? INSPECTED_TONE : QUIET_TONE} />
       </View>
       <View style={styles.roomBody}>
+        <ChecklistTable room={room} />
         {photos.length ? (
           <View style={styles.photoGrid}>
             {photos.map((photo) => (
@@ -233,7 +279,7 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
         {room.findings.map((finding) => (
           <Finding key={finding.id} finding={finding} />
         ))}
-        {!photos.length && !room.findings.length ? (
+        {!room.checklist.length && !photos.length && !room.findings.length ? (
           <Text style={styles.emptyRoom}>
             {room.skipReason
               ? `Not inspected — ${room.skipReason}`

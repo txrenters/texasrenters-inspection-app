@@ -42,6 +42,27 @@ const REPORT: PublicInspectionReport = {
       completionStatus: 'COMPLETED',
       skipReason: null,
       completedAt: '2026-07-23T17:00:00.000Z',
+      // Deliberately mixed: a fully scored row, a partial one, and a comment.
+      // The partial row is what proves an unassessed axis prints blank rather
+      // than as "N", which would claim a defect nobody observed.
+      checklist: [
+        {
+          id: 'item-1',
+          label: 'Doors and locks',
+          isClean: false,
+          isUndamaged: false,
+          isWorking: true,
+          comment: 'scratches on door need to be painted',
+        },
+        {
+          id: 'item-2',
+          label: 'Smoke alarms',
+          isClean: true,
+          isUndamaged: null,
+          isWorking: null,
+          comment: null,
+        },
+      ],
     },
     {
       id: 'area-2',
@@ -50,6 +71,8 @@ const REPORT: PublicInspectionReport = {
       completionStatus: 'SKIPPED',
       skipReason: 'Tenant vehicle blocking access',
       completedAt: null,
+      // A skipped room was never assessed.
+      checklist: [],
     },
   ],
   findings: [

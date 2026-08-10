@@ -6,6 +6,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiError, publicApi } from '@/lib/api';
 import { buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport, ReportFindingView, ReportRoomView } from '@texasrenters/shared';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 /**
  * Homeowner-facing report. Presentation only: what appears, in what order, and
@@ -68,6 +76,41 @@ function Room({ room }: { room: ReportRoomView }) {
           {room.statusLabel}
         </span>
       </header>
+
+      {/* The condition table, first in the room and before the photographs —
+          the same order the office's printed reports use, because the table is
+          the record and the photographs are its evidence.
+
+          An empty cell means the technician did not assess that axis. It is
+          deliberately blank rather than "N": the two are different claims, and
+          printing "N" would publish a defect nobody observed. */}
+      {room.checklist.length ? (
+        <Table className="report-checklist">
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">Room / item</TableHead>
+              <TableHead scope="col">Clean</TableHead>
+              <TableHead scope="col">Undamaged</TableHead>
+              <TableHead scope="col">Working</TableHead>
+              <TableHead scope="col">Comments</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {room.checklist.map((row) => (
+              <TableRow key={row.id}>
+                <TableHead scope="row">{row.label}</TableHead>
+                {/* Spoken as "Not assessed" so a blank cell is not silence to
+                    a screen reader — the distinction from "No" matters as much
+                    aloud as it does in print. */}
+                <TableCell aria-label={row.clean || 'Not assessed'}>{row.clean}</TableCell>
+                <TableCell aria-label={row.undamaged || 'Not assessed'}>{row.undamaged}</TableCell>
+                <TableCell aria-label={row.working || 'Not assessed'}>{row.working}</TableCell>
+                <TableCell className="report-checklist-comment">{row.comment}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : null}
 
       {room.photos.length ? (
         <div className="report-photo-grid">
