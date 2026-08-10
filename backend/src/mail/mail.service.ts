@@ -119,6 +119,53 @@ export class MailService {
     });
   }
 
+  /**
+   * Tells a technician an inspection is theirs.
+   *
+   * The socket event and the push notification both reach a running app on a
+   * device that is online. This is the one that survives a flat battery, a
+   * reinstall, or a technician who has not opened the app since Friday — so it
+   * carries the address and the date rather than "you have a new assignment",
+   * which would only be useful next to the app it is standing in for.
+   */
+  sendInspectionAssignment(input: {
+    to: string;
+    displayName: string;
+    propertyLabel: string;
+    unitLabel: string | null;
+    inspectionType: string;
+    scheduledAt: Date;
+  }) {
+    // Date only. `scheduledAt` is a DATE column serialised as midnight UTC, so
+    // rendering a time would invent one, and reading it in local time would
+    // move it to the previous evening in Texas.
+    const scheduled = input.scheduledAt.toLocaleDateString('en-US', {
+      timeZone: 'UTC',
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    const readableType = input.inspectionType.replaceAll('_', ' ').toLowerCase();
+    const where = input.unitLabel
+      ? `${escapeHtml(input.propertyLabel)} — ${escapeHtml(input.unitLabel)}`
+      : escapeHtml(input.propertyLabel);
+    return this.deliver({
+      to: input.to,
+      subject: `New inspection assigned — ${input.propertyLabel}`,
+      html: this.layout(
+        'You have a new inspection',
+        `<p>Hello ${escapeHtml(input.displayName)},</p>
+         <p>An inspection has been assigned to you.</p>
+         <p><strong>Property:</strong> ${where}<br>
+         <strong>Type:</strong> ${escapeHtml(readableType)}<br>
+         <strong>Scheduled:</strong> ${escapeHtml(scheduled)}</p>
+         <p>Open the TexasRenters mobile application to begin.</p>`,
+      ),
+      template: 'inspection-assignment',
+    });
+  }
+
   sendReportShare(input: { to: string; reportUrl: string; expiresAt: Date }) {
     const expiry = input.expiresAt.toLocaleDateString('en-US', {
       year: 'numeric',

@@ -17,6 +17,25 @@ export interface TechnicianInspectionEvent {
   occurredAt: string;
 }
 
+/**
+ * A technician added an area on site, broadcast to the administrators watching
+ * that organization.
+ *
+ * Carries enough to render a notification without a follow-up fetch. A toast
+ * that says "an area was added" and forces someone to go looking is worse than
+ * no toast: the whole point is that a property with no floor plan is gaining
+ * its layout from the field, and the office wants to see it happening.
+ */
+export interface AreaAddedEvent {
+  inspectionId: string;
+  areaId: string;
+  areaName: string;
+  floorName: string | null;
+  propertyName: string | null;
+  technicianName: string;
+  occurredAt: string;
+}
+
 type TechnicianSocket = Socket & { data: { user?: AuthenticatedUser } };
 
 @Injectable()
@@ -29,15 +48,33 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
     @Optional() @Inject(MobilePushService) private readonly mobilePush?: MobilePushService,
   ) {}
 
+  /**
+   * Two audiences on one namespace, in rooms that never overlap.
+   *
+   * A technician joins only their own room and receives only their own
+   * assignments. An administrator joins only the organization room and receives
+   * what happens across it. Membership is derived from the authenticated user —
+   * never from anything the client sends — so a technician cannot ask to watch
+   * the organization, and neither can an administrator of another one.
+   *
+   * This used to reject every non-technician outright, which is why the web app
+   * had no realtime at all.
+   */
   async handleConnection(client: TechnicianSocket) {
     try {
       const token = this.accessToken(client);
       const user = await authenticateApplicationUser(this.prisma, token);
-      if (user.mustChangePassword || !user.roles.includes(UserRole.INSPECTION_TECHNICIAN)) {
-        throw new Error('Technician access is required.');
-      }
+      if (user.mustChangePassword) throw new Error('A password change is required.');
+
+      const isTechnician = user.roles.includes(UserRole.INSPECTION_TECHNICIAN);
+      // The same permission the inspection list requires, so what a socket can
+      // hear cannot exceed what the same account could already fetch.
+      const watchesOrganization = user.permissions.includes('inspections:read');
+      if (!isTechnician && !watchesOrganization) throw new Error('No realtime audience.');
+
       client.data.user = user;
-      await client.join(this.room(user.id));
+      if (isTechnician) await client.join(this.technicianRoom(user.id));
+      if (watchesOrganization) await client.join(this.organizationRoom(user.organizationId));
       client.emit('technician:ready', { connectedAt: new Date().toISOString() });
     } catch {
       client.emit('technician:error', { message: 'Realtime authentication failed.' });
@@ -51,8 +88,15 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
       kind,
       occurredAt: new Date().toISOString(),
     };
-    this.server?.to(this.room(technicianId)).emit('inspection:changed', event);
+    this.server?.to(this.technicianRoom(technicianId)).emit('inspection:changed', event);
     if (kind === 'ASSIGNED') void this.mobilePush?.sendAssignment(technicianId, inspectionId);
+  }
+
+  /** Broadcast to the organization's administrators, not to any technician. */
+  publishAreaAdded(organizationId: string, event: Omit<AreaAddedEvent, 'occurredAt'>) {
+    this.server
+      ?.to(this.organizationRoom(organizationId))
+      .emit('area:added', { ...event, occurredAt: new Date().toISOString() } satisfies AreaAddedEvent);
   }
 
   private accessToken(client: Socket) {
@@ -61,7 +105,11 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
     return token;
   }
 
-  private room(technicianId: string) {
+  private technicianRoom(technicianId: string) {
     return `technician:${technicianId}`;
+  }
+
+  private organizationRoom(organizationId: string) {
+    return `organization:${organizationId}`;
   }
 }

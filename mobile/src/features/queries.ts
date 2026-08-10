@@ -155,6 +155,30 @@ export function useInspectionPages(filters: InspectionListFilters = {}) {
 }
 
 /**
+ * How many inspections are assigned and not yet started, for the tab badge.
+ *
+ * Asks for a single row and reads the server's `total` rather than counting a
+ * page. A badge is a count, so it must not be the length of whatever happened
+ * to be fetched — that is the bug the list itself had, and on a badge it would
+ * silently cap at the page size.
+ *
+ * SCHEDULED only. IN_PROGRESS is work the technician has already picked up and
+ * knows about; badging it would leave a number sitting there all day with
+ * nothing to act on, which is how people learn to ignore badges.
+ */
+export function useAssignedInspectionCount() {
+  const filters = { statuses: ['SCHEDULED'] as const, pageSize: 1 };
+  return useQuery({
+    queryKey: queryKeys.inspections({ ...filters, view: 'badge' }),
+    queryFn: () => repositories.inspections.listPage({ ...filters }),
+    select: (page) => page.total,
+    refetchInterval: assignmentRefreshInterval,
+    refetchIntervalInBackground: false,
+    placeholderData: (previous) => previous,
+  });
+}
+
+/**
  * The work the technician still owns — SCHEDULED and IN_PROGRESS.
  *
  * Alerts and reminder scheduling both want exactly this set and nothing else,

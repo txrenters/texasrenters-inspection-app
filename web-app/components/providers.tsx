@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 
 import { AuthProvider } from '@/lib/auth';
+import { AdminRealtimeProvider } from '@/lib/realtime';
 import { reconcileServerState } from '@/lib/state-consistency';
 import { ThemeProvider } from '@/lib/theme';
 
@@ -26,7 +27,12 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <QueryClientProvider client={client}>
-        <AuthProvider>{children}</AuthProvider>
+        {/* Inside AuthProvider, which owns the access token the socket
+            authenticates with, and inside QueryClientProvider, whose cache it
+            invalidates when an event lands. */}
+        <AuthProvider>
+          <AdminRealtimeProvider>{children}</AdminRealtimeProvider>
+        </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

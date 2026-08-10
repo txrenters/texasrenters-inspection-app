@@ -784,6 +784,26 @@ export class TechnicianService {
     });
 
     this.notifyInspectionChanged(user, inspectionId);
+    // Separately to the organization, because this is the one thing a
+    // technician does that the office needs to see as it happens: a property
+    // with no floor plan has no areas until someone standing in it adds them,
+    // and until now the only way to notice was to reload the page.
+    //
+    // Best effort, like the technician notification above — the area is already
+    // committed, and a realtime failure must not turn a saved area into an
+    // error on the handset.
+    try {
+      this.technicianEvents?.publishAreaAdded(user.organizationId, {
+        inspectionId,
+        areaId: room.propertyAreaId,
+        areaName: name,
+        floorName,
+        propertyName: building.name ?? building.addressLine1 ?? null,
+        technicianName: user.displayName,
+      });
+    } catch {
+      // Deliberately silent; the admin list still refreshes on its own.
+    }
     return this.mapRoom(room);
   }
 

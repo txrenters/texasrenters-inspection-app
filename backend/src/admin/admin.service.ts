@@ -1162,8 +1162,10 @@ export class AdminService {
         });
       return { id: inspection.id };
     }, ADMIN_TRANSACTION_OPTIONS);
-    if (inspection && input.technicianId)
+    if (inspection && input.technicianId) {
       this.technicianEvents?.publish(input.technicianId, inspection.id, 'ASSIGNED');
+      this.notifyAssignmentByEmail(user.organizationId, inspection.id, input.technicianId);
+    }
     await this.cacheInvalidation?.publish({
       type: 'inspection.changed',
       organizationId: user.organizationId,
@@ -1693,8 +1695,10 @@ export class AdminService {
       });
       return { assignment, shouldNotify: true };
     }, ADMIN_TRANSACTION_OPTIONS);
-    if (outcome.shouldNotify)
+    if (outcome.shouldNotify) {
       this.technicianEvents?.publish(input.technicianId, inspectionId, 'ASSIGNED');
+      this.notifyAssignmentByEmail(user.organizationId, inspectionId, input.technicianId);
+    }
     await this.cacheInvalidation?.publish({
       type: 'inspection.changed',
       organizationId: user.organizationId,
@@ -1757,6 +1761,7 @@ export class AdminService {
       if (outcome.previousTechnicianId)
         this.technicianEvents?.publish(outcome.previousTechnicianId, inspectionId, 'REASSIGNED');
       this.technicianEvents?.publish(input.technicianId, inspectionId, 'ASSIGNED');
+      this.notifyAssignmentByEmail(user.organizationId, inspectionId, input.technicianId);
     }
     await this.cacheInvalidation?.publish({
       type: 'inspection.changed',
@@ -2169,6 +2174,55 @@ export class AdminService {
 
   private cacheRead<T>(options: CacheReadOptions<T>) {
     return this.cache ? this.cache.getOrLoad(options) : options.loader();
+  }
+
+  /**
+   * Emails the technician that an inspection is theirs.
+   *
+   * Fire-and-forget, after the transaction has committed. Two reasons it must
+   * not be awaited inside one: Microsoft Graph is a network call to a third
+   * party, and holding a database transaction open across it is how a slow
+   * mailbox becomes a lock-timeout on the assignment itself; and an assignment
+   * that succeeded must not be rolled back because an email bounced.
+   *
+   * The socket event and the push already cover a running app. This is for the
+   * technician who has not opened it since Friday.
+   */
+  private notifyAssignmentByEmail(organizationId: string, inspectionId: string, technicianId: string) {
+    if (!this.mailer) return;
+    void (async () => {
+      try {
+        const [technician, inspection] = await Promise.all([
+          this.prisma.userProfile.findUnique({
+            where: { id: technicianId },
+            select: { email: true, displayName: true, isActive: true },
+          }),
+          this.prisma.inspection.findFirst({
+            where: { id: inspectionId, organizationId },
+            select: {
+              inspectionType: true,
+              scheduledAt: true,
+              propertywareBuilding: { select: { name: true, addressLine1: true } },
+              propertywareUnit: { select: { name: true } },
+            },
+          }),
+        ]);
+        if (!technician?.email || !technician.isActive || !inspection) return;
+        await this.mailer!.sendInspectionAssignment({
+          to: technician.email,
+          displayName: technician.displayName,
+          propertyLabel:
+            inspection.propertywareBuilding?.name ??
+            inspection.propertywareBuilding?.addressLine1 ??
+            'an assigned property',
+          unitLabel: inspection.propertywareUnit?.name ?? null,
+          inspectionType: inspection.inspectionType,
+          scheduledAt: inspection.scheduledAt,
+        });
+      } catch {
+        // Best effort. The assignment stands; realtime and push already fired.
+      }
+    })();
   }
 
   private async createAssignment(
