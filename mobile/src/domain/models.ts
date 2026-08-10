@@ -387,3 +387,26 @@ export interface DashboardSummary {
   assignments: Inspection[];
   recent: Inspection[];
 }
+
+/**
+ * How one checklist item was found, as the printed report scores it.
+ *
+ * Every axis is a **tri-state**: true, false, or null for "not assessed".
+ * The office's reports leave such cells blank, and treating null as false
+ * would publish a defect the technician never observed.
+ */
+export interface ChecklistAssessment {
+  isClean: boolean | null;
+  isUndamaged: boolean | null;
+  isWorking: boolean | null;
+  comment: string | null;
+}
+
+/** A checklist item together with this inspection's assessment of it. */
+export interface ChecklistItemWithAssessment extends ChecklistAssessment {
+  id: string;
+  label: string;
+  keywords: string[];
+  /** When it was scored; null while unassessed. */
+  recordedAt: string | null;
+}

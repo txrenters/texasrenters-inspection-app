@@ -222,6 +222,11 @@ export class MockInspectionRepository implements InspectionRepository {
     // generated checklist, which is the same path a real unconfigured area takes.
     return [];
   }
+  async recordChecklistItem() {
+    await mockDelay();
+    // Nothing to score against without authored items — see roomChecklist.
+    return [];
+  }
   async addArea(inspectionId: string, input: AddAreaInput) {
     await mockDelay();
     ensureMockAvailable();

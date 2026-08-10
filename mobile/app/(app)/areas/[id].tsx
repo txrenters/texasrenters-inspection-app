@@ -20,13 +20,17 @@ import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AiSummaryCard } from '@/src/components/AiSummaryCard';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
+import { AreaConditionChecklist } from '@/src/components/AreaConditionChecklist';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { FindingRow } from '@/src/components/FindingRow';
 import {
   useFindings,
+  useInspection,
   useRoom,
   useRoomMedia,
   useRoomPhotos,
+  useRecordChecklistItem,
+  useRoomChecklist,
   useRoomSummaries,
   useUpdateRoom,
 } from '@/src/features/queries';
@@ -71,6 +75,29 @@ export default function AreaDetailScreen() {
     environment: room.data?.environment,
   });
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
+  /**
+   * The condition checklist, scored per item.
+   *
+   * Read straight from `useRoomChecklist` rather than through
+   * `useAreaChecklist`: that hook falls back to a *generated* list for areas
+   * with no authored checklist, and those synthetic ids do not exist on the
+   * server — scoring one would 404. Only authored items can be assessed, so
+   * only authored items are offered.
+   */
+  const conditionChecklist = useRoomChecklist(id);
+  const recordChecklistItem = useRecordChecklistItem(id);
+  /**
+   * The checklist is writable until the office closes the inspection.
+   *
+   * Mirrors the server's rule rather than inventing a client-side one: it
+   * refuses on COMPLETED, CANCELLED or a set `finalizedAt`. Guessing from the
+   * *area's* status instead would lock the form on a finished area while the
+   * inspection was still open, which is exactly when a technician goes back to
+   * correct a score.
+   */
+  const inspection = useInspection(inspectionId);
+  const checklistClosed =
+    inspection.data?.status === 'COMPLETED' || inspection.data?.status === 'CANCELLED';
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const [note, setNote] = useState<string | null>(null);
@@ -355,6 +382,21 @@ export default function AreaDetailScreen() {
         {alreadyFinished ? null : (
           <AreaCompletionChecklist requirements={requirements} blockedReason={gate.reason} />
         )}
+
+        {/* Before the AI summary on purpose: this is the technician's own
+            observation, and the report is built from it. Reading the machine's
+            narrative first would anchor what they record here. */}
+        <AreaConditionChecklist
+          disabled={checklistClosed}
+          disabledReason="This inspection is closed. The office can reopen it to change the checklist."
+          items={conditionChecklist.data ?? []}
+          onChange={(itemId, assessment) => recordChecklistItem.mutate({ itemId, assessment })}
+        />
+        {recordChecklistItem.error ? (
+          <Text className="mx-5 mt-2 text-xs leading-5 text-muted-foreground">
+            {recordChecklistItem.error.message}
+          </Text>
+        ) : null}
 
         <AiSummaryCard
           summary={summaries.byRoomId.get(item.id)}

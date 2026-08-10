@@ -59,6 +59,19 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
       send(`/api/v1/technician/rooms/${encodeURIComponent(String(payload.roomId))}/skip`, 'POST', {
         reason: payload.reason,
       }),
+    // Safe to replay: the route upserts on (area, item), so a duplicate writes
+    // the same assessment rather than stacking a second opinion.
+    'checklist-assessment': (payload, send) =>
+      send(
+        `/api/v1/technician/rooms/${encodeURIComponent(String(payload.roomId))}/checklist/${encodeURIComponent(String(payload.itemId))}`,
+        'PUT',
+        {
+          isClean: payload.isClean ?? null,
+          isUndamaged: payload.isUndamaged ?? null,
+          isWorking: payload.isWorking ?? null,
+          comment: payload.comment ?? null,
+        },
+      ),
     // Safe to replay: the server keeps the first confirmation's timestamp, so a
     // duplicate cannot rewrite when the technician actually read the summary.
     'room-confirm-summary': (payload, send) =>

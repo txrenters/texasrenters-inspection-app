@@ -4,10 +4,11 @@ import { getSession, signIn, signOut } from '../../auth/session';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type {
+  ChecklistAssessment,
   InspectionStatus,
   LocalMedia,
-  RoomCompletionStatus,
   PhotoCaptureType,
+  RoomCompletionStatus,
   UploadItem,
 } from '../../domain/models';
 import { useDemoStore } from '../../stores/demo.store';
@@ -34,7 +35,7 @@ import type {
   UploadRepository,
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
-import { queueOnConnectionFailure } from './offline-writes';
+import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
 import {
   runStreamUpload,
   type StreamUploadSession,
@@ -221,8 +222,27 @@ export const roomPhotoSchema = z
     sequenceNumber: photo.sequenceNumber ?? null,
     label: photo.label ?? null,
   }));
-const checklistSchema = z.array(
-  z.object({ id: z.string(), label: z.string(), keywords: z.array(z.string()).default([]) }),
+/**
+ * A checklist item and how this inspection found it.
+ *
+ * The three axes are **nullable tri-states**, not booleans: null means nobody
+ * assessed that axis, which is a different claim from "No". The printed report
+ * leaves such cells blank, so defaulting them to false here would publish a
+ * defect the technician never observed.
+ */
+export const checklistSchema = z.array(
+  z.object({
+    id: z.string(),
+    label: z.string(),
+    keywords: z.array(z.string()).default([]),
+    // Defaulted null so a response from a backend that predates assessments
+    // still parses — as unassessed, which is exactly what it is.
+    isClean: z.boolean().nullable().default(null),
+    isUndamaged: z.boolean().nullable().default(null),
+    isWorking: z.boolean().nullable().default(null),
+    comment: z.string().nullable().default(null),
+    recordedAt: z.string().nullable().default(null),
+  }),
 );
 
 const uploadSchema = z.object({
@@ -432,7 +452,7 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
 }
 
 const getJson = (path: string) => requestJson(path);
-const writeJson = (path: string, method: 'POST' | 'PATCH', body?: object) =>
+const writeJson = (path: string, method: 'POST' | 'PATCH' | 'PUT', body?: object) =>
   requestJson(path, { method, body: body ? JSON.stringify(body) : undefined });
 /**
  * The same request path a queued write took when it first failed, exported so
@@ -630,6 +650,57 @@ export class ApiInspectionRepository implements InspectionRepository {
     return cachedApiRecord(`roomChecklist:${roomId}`, checklistSchema, () =>
       getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/checklist`),
     );
+  }
+  /**
+   * Records how one checklist item was found.
+   *
+   * Queued when the network is gone, like a skip or a note — a technician
+   * standing in a unit with no signal is exactly who is filling this in, and
+   * losing the assessment would mean walking the room again.
+   *
+   * The queue id is per item, so a re-score before the queue drains replaces
+   * the pending entry rather than sending two conflicting assessments.
+   */
+  async recordChecklistItem(roomId: string, itemId: string, assessment: ChecklistAssessment) {
+    const body = {
+      isClean: assessment.isClean ?? null,
+      isUndamaged: assessment.isUndamaged ?? null,
+      isWorking: assessment.isWorking ?? null,
+      comment: assessment.comment ?? null,
+    };
+    try {
+      await queueOnConnectionFailure(
+        {
+          id: `checklist:${roomId}:${itemId}`,
+          kind: 'checklist-assessment',
+          payload: { roomId, itemId, ...body },
+        },
+        () =>
+          writeJson(
+            `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/checklist/${encodeURIComponent(itemId)}`,
+            'PUT',
+            body,
+          ),
+      );
+    } catch (error) {
+      /**
+       * A queued write still has to show on screen.
+       *
+       * Offline is the normal case for this form — a technician in a unit with
+       * no signal is exactly who is filling it in. Letting the error through
+       * untouched would leave the cached list saying "unassessed", so their
+       * answers would visibly vanish the moment they looked away, even though
+       * the queue is holding them safely.
+       */
+      if (error instanceof QueuedOfflineError)
+        await updateExistingApiRecord(`roomChecklist:${roomId}`, checklistSchema, (current) =>
+          current.map((item) => (item.id === itemId ? { ...item, ...body } : item)),
+        );
+      throw error;
+    }
+    // Re-read rather than patching the cached list by hand: the server is the
+    // authority on what was stored, including the trimmed comment.
+    return this.roomChecklist(roomId);
   }
   async addArea(inspectionId: string, input: AddAreaInput) {
     const room = withLocalRoomState(

@@ -1,6 +1,8 @@
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type {
   AreaEnvironment,
+  ChecklistAssessment,
+  ChecklistItemWithAssessment,
   DashboardSummary,
   DemoRole,
   DemoUser,
@@ -9,10 +11,10 @@ import type {
   Inspection,
   InspectionContext,
   InspectionReport,
-  InspectionStatus,
   InspectionRoom,
-  LocalMedia,
+  InspectionStatus,
   LeaseSummary,
+  LocalMedia,
   PortfolioSummary,
   Property,
   RoomPhoto,
@@ -105,7 +107,17 @@ export interface InspectionRepository {
   room(roomId: string): Promise<InspectionRoom>;
   addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;
   /** Administrator-authored coverage checklist; empty when none is configured. */
-  roomChecklist(roomId: string): Promise<{ id: string; label: string; keywords: string[] }[]>;
+  roomChecklist(roomId: string): Promise<ChecklistItemWithAssessment[]>;
+  /**
+   * Records how one checklist item was found. The payload is the item's
+   * complete assessment — an omitted axis is stored as unassessed, matching
+   * the route's replace semantics.
+   */
+  recordChecklistItem(
+    roomId: string,
+    itemId: string,
+    assessment: ChecklistAssessment,
+  ): Promise<ChecklistItemWithAssessment[]>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
