@@ -22,6 +22,18 @@ const API_ROOT = 'https://api.cloudflare.com/client/v4';
 /** Cloudflare returns the video id in this response header on a tus create. */
 const STREAM_UID_HEADER = 'stream-media-id';
 
+/**
+ * How long to wait for Cloudflare to render a downloadable MP4.
+ *
+ * Only transcription needs one, and it runs in the background, so a couple of
+ * minutes of patience costs nothing a technician can see — and is the
+ * difference between a transcript existing and not.
+ */
+const DOWNLOAD_READY_TIMEOUT_MS = 3 * 60_000;
+
+/** Long enough for the backend to pull a walkthrough once, and no longer. */
+const DOWNLOAD_TOKEN_TTL_SECONDS = 30 * 60;
+
 export interface StreamDirectUpload {
   streamUid: string;
   uploadUrl: string;
@@ -211,16 +223,64 @@ export class CloudflareStreamService {
     this.assertConfigured();
     const path = `/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/stream/${encodeURIComponent(streamUid)}/downloads`;
 
-    // POST is idempotent here: asking again for a download that exists returns
-    // the existing one rather than starting a second render.
-    const response = await this.fetchStream(path, { method: 'POST' }, [409]);
-    const body = (await response.json().catch(() => null)) as {
-      result?: { default?: { status?: string; url?: string; percentComplete?: number } };
-    } | null;
+    /**
+     * Cloudflare renders the downloadable MP4 asynchronously, so this waits.
+     *
+     * It used to POST once and return null unless the render happened to be
+     * finished already — which, immediately after an encode, it never is. The
+     * caller reads null as "still preparing" and fails the whole job, so
+     * transcription failed on every recording with a message that sounded like
+     * a temporary condition and was in fact permanent.
+     *
+     * POST is idempotent here: asking again for a download that already exists
+     * returns it rather than starting a second render, so the poll re-POSTs
+     * rather than needing a separate status endpoint.
+     */
+    const deadline = Date.now() + DOWNLOAD_READY_TIMEOUT_MS;
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.fetchStream(path, { method: 'POST' }, [409]);
+      const body = (await response.json().catch(() => null)) as {
+        result?: { default?: { status?: string; url?: string; percentComplete?: number } };
+      } | null;
 
-    const download = body?.result?.default;
-    if (!download?.url) return null;
-    return download.status === 'ready' ? download.url : null;
+      const download = body?.result?.default;
+      if (download?.url && download.status === 'ready') return this.signDownloadUrl(download.url, streamUid);
+      if (download?.status === 'error') {
+        this.logger.warn({ event: 'stream_download_render_failed', streamUid });
+        return null;
+      }
+      if (Date.now() >= deadline) {
+        this.logger.warn({
+          event: 'stream_download_timeout',
+          streamUid,
+          percentComplete: download?.percentComplete ?? null,
+        });
+        return null;
+      }
+      // Backs off to 5s. A short walkthrough renders in seconds; a long one
+      // should not be polled thirty times a second while it does.
+      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000 * 2 ** attempt, 5_000)));
+    }
+  }
+
+  /**
+   * Swap the uid in a download URL for a signed token.
+   *
+   * Videos are created with `requireSignedURLs`, so every URL under
+   * `customer-<code>.cloudflarestream.com` needs a token in the path where the
+   * uid would otherwise be — the download URL Cloudflare's API hands back is
+   * the unsigned form, and fetching it verbatim returns 401. That was the last
+   * thing standing between a recording and its transcript.
+   *
+   * Left untouched when signing is not configured: an account without signed
+   * URLs serves the plain form, and rewriting it would break it.
+   */
+  private signDownloadUrl(url: string, streamUid: string) {
+    if (!this.signingConfigured) return url;
+    const { token } = this.signPlaybackToken(streamUid, DOWNLOAD_TOKEN_TTL_SECONDS, {
+      downloadable: true,
+    });
+    return url.replace(`/${streamUid}/`, `/${token}/`);
   }
 
   /**
@@ -232,7 +292,11 @@ export class CloudflareStreamService {
    * client and never stored — a persisted one would outlive its own expiry and
    * become a permanent grant sitting in the database.
    */
-  signPlaybackToken(streamUid: string, ttlSeconds: number): { token: string; expiresAt: string } {
+  signPlaybackToken(
+    streamUid: string,
+    ttlSeconds: number,
+    options: { downloadable?: boolean } = {},
+  ): { token: string; expiresAt: string } {
     if (!this.signingConfigured)
       throw new ApplicationError(
         503,
@@ -241,7 +305,22 @@ export class CloudflareStreamService {
       );
     const expiry = Math.floor(Date.now() / 1000) + ttlSeconds;
     const header = { alg: 'RS256', kid: process.env.CLOUDFLARE_STREAM_SIGNING_KEY_ID };
-    const payload = { sub: streamUid, kid: header.kid, exp: expiry, accessRules: [] };
+    const payload = {
+      sub: streamUid,
+      kid: header.kid,
+      exp: expiry,
+      accessRules: [],
+      /**
+       * Only a token that says so may fetch `/downloads/default.mp4`.
+       *
+       * Cloudflare accepts a plain playback token on that path and then answers
+       * 403 — valid signature, insufficient grant — which reads like a broken
+       * key rather than a missing claim. Off by default so the tokens handed to
+       * players stay playback-only: a viewer should not be able to pull the
+       * original file out of a URL meant for streaming.
+       */
+      ...(options.downloadable ? { downloadable: true } : {}),
+    };
 
     const signingInput = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
     const signature = createSign('RSA-SHA256')

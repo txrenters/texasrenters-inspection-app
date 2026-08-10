@@ -37,6 +37,8 @@ function build(overrides: {
   area?: unknown;
   existing?: unknown;
   stream?: Partial<{ createDirectUpload: jest.Mock; getVideo: jest.Mock }>;
+  /** The pipeline the webhook starts; absent in tests that do not assert on it. */
+  mediaProcessing?: { queue: jest.Mock };
 } = {}) {
   const prisma = {
     inspectionArea: {
@@ -61,7 +63,11 @@ function build(overrides: {
   return {
     prisma,
     stream,
-    service: new InspectionVideoService(prisma as never, stream as never),
+    service: new InspectionVideoService(
+      prisma as never,
+      stream as never,
+      overrides.mediaProcessing as never,
+    ),
   };
 }
 
@@ -182,8 +188,16 @@ describe('upload session creation', () => {
 });
 
 describe('stream webhook', () => {
-  function mediaRow(processingStatus = 'PROCESSING') {
-    return { id: 'media-1', processingStatus, organizationId: 'org-1', inspectionId: 'insp-1' };
+  function mediaRow(processingStatus = 'PROCESSING', readyAt: Date | null = null) {
+    return {
+      id: 'media-1',
+      processingStatus,
+      // Cloudflare's encode stamp. Null means it has never reported the video
+      // finished, which is what decides whether the pipeline still owes work.
+      readyAt,
+      organizationId: 'org-1',
+      inspectionId: 'insp-1',
+    };
   }
 
   it('marks a video ready and records what Cloudflare measured', async () => {
@@ -198,9 +212,14 @@ describe('stream webhook', () => {
       thumbnail: 'https://cloudflarestream.com/uid-1/thumbnails/thumbnail.jpg',
     });
 
-    expect(result).toMatchObject({ accepted: true, processingStatus: 'READY' });
+    // PROCESSING, not READY. READY is the *pipeline's* terminal state, and
+    // MediaProcessingService.process returns immediately when it sees it — so
+    // claiming it here meant every Stream recording was declared finished a
+    // moment before transcription and analysis were asked to run, and neither
+    // ever did.
+    expect(result).toMatchObject({ accepted: true, processingStatus: 'PROCESSING' });
     const data = prisma.inspectionMedia.update.mock.calls[0][0].data;
-    expect(data.processingStatus).toBe('READY');
+    expect(data.processingStatus).toBe('PROCESSING');
     expect(data.durationSeconds).toBe(92);
     expect(data.widthPx).toBe(1920);
     expect(data.readyAt).toBeInstanceOf(Date);
@@ -213,10 +232,36 @@ describe('stream webhook', () => {
     // Cloudflare re-delivers. "When did this become available" has to stay
     // answerable, so the stamp is written once.
     const { service, prisma } = build();
-    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('READY'));
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('PROCESSING', new Date('2026-01-01')));
 
     await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
     expect(prisma.inspectionMedia.update.mock.calls[0][0].data.readyAt).toBeUndefined();
+  });
+
+  it('starts transcription and analysis the first time Cloudflare reports ready', async () => {
+    // The whole reason a Stream recording produced no transcript, no summary
+    // and no findings: nothing queued the pipeline. The device uploads straight
+    // to Cloudflare, so this webhook is the only moment the backend learns the
+    // video exists and is playable.
+    const mediaProcessing = { queue: jest.fn() };
+    const { service, prisma } = build({ mediaProcessing });
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow());
+
+    await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
+
+    expect(mediaProcessing.queue).toHaveBeenCalledWith('media-1', 'org-1');
+  });
+
+  it('does not re-queue processing when Cloudflare re-delivers the same event', async () => {
+    // Cloudflare retries. Transcription costs money per run, so the queue is
+    // keyed on the transition rather than on the event arriving.
+    const mediaProcessing = { queue: jest.fn() };
+    const { service, prisma } = build({ mediaProcessing });
+    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('PROCESSING', new Date('2026-01-01')));
+
+    await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
+
+    expect(mediaProcessing.queue).not.toHaveBeenCalled();
   });
 
   it('records an encoding failure with the provider reason', async () => {
@@ -292,7 +337,13 @@ describe('playback', () => {
     provider: 'cloudflare_stream',
     streamUid: 'uid-1',
     storageKey: null,
-    processingStatus: 'READY',
+    // Playability is decided by readyAt — Cloudflare's encode — not by
+    // processingStatus, which tracks our own transcription and analysis and
+    // finishes later. PROCESSING here on purpose: a reviewer must be able to
+    // watch a recording while the AI is still working on it, and must still be
+    // able to watch it if the AI fails.
+    processingStatus: 'PROCESSING',
+    readyAt: new Date('2026-08-10T00:00:00.000Z'),
     uploadStatus: 'UPLOADED',
     durationSeconds: 92,
     thumbnailUrl: null,
@@ -367,8 +418,9 @@ describe('playback', () => {
   });
 
   it('reports a video that is not yet encoded as processing, not as an error', async () => {
-    // A technician who just stopped recording should be told to wait.
-    const { service, stream } = playbackHarness({ ...readyMedia, processingStatus: 'PROCESSING' });
+    // A technician who just stopped recording should be told to wait. No
+    // readyAt is what "Cloudflare has not finished encoding" looks like.
+    const { service, stream } = playbackHarness({ ...readyMedia, readyAt: null });
     await expect(service.getPlayback(admin, 'media-1')).resolves.toMatchObject({
       status: 'processing',
     });

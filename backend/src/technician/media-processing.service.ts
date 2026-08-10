@@ -363,6 +363,59 @@ export class MediaProcessingService implements OnModuleInit {
     return result.text;
   }
 
+  /**
+   * Transcribe a Cloudflare Stream recording with OpenAI.
+   *
+   * OpenAI's transcription endpoint takes bytes rather than a URL, so the
+   * recording is fetched once from a signed Cloudflare download URL and its
+   * audio extracted locally — the same ffmpeg step the R2 path uses. Only the
+   * audio is sent onward, which is a fraction of the video's size.
+   */
+  private async transcribeStreamRecordingWithOpenAi(
+    media: { id: string; streamUid: string | null; durationSeconds: number; mimeType: string },
+    job: { id: string },
+    apiKey: string,
+  ) {
+    if (!this.stream || !media.streamUid)
+      throw new ApplicationError(
+        503,
+        'TRANSCRIPTION_SOURCE_UNAVAILABLE',
+        'This recording has no Cloudflare video to transcribe.',
+      );
+    const mediaUrl = await this.stream.ensureDownloadUrl(media.streamUid);
+    if (!mediaUrl)
+      throw new ApplicationError(
+        503,
+        'TRANSCRIPTION_SOURCE_PREPARING',
+        'Cloudflare is still preparing this recording for transcription.',
+      );
+
+    const response = await fetch(mediaUrl);
+    if (!response.ok)
+      throw new ApplicationError(
+        502,
+        'TRANSCRIPTION_SOURCE_UNREACHABLE',
+        `Could not download the recording from Cloudflare (${response.status}).`,
+      );
+    const video = Buffer.from(await response.arrayBuffer());
+    const audio = await this.extractAudio(video, media.mimeType);
+    const transcript = await this.requestTranscription(apiKey, audio);
+
+    await this.prisma.$transaction([
+      this.prisma.transcriptSegment.deleteMany({ where: { transcriptionJobId: job.id } }),
+      this.prisma.transcriptSegment.createMany({
+        // OpenAI's JSON response carries no timings, so one whole-recording
+        // segment is the only honest shape — the same fallback the R2 path uses.
+        data: [{ transcriptionJobId: job.id, startSeconds: 0, endSeconds: media.durationSeconds, text: transcript }],
+      }),
+    ]);
+    await this.prisma.transcriptionJob.update({
+      where: { inspectionMediaId: media.id },
+      data: { status: TranscriptionStatus.COMPLETED, language: null },
+    });
+    return transcript;
+  }
+
   private async transcribe(
     media: {
       id: string;
@@ -418,13 +471,25 @@ export class MediaProcessingService implements OnModuleInit {
     // endpoint takes bytes, not a URL, so using it would mean proxying the
     // video after all.
     if (!media.storageKey) {
-      if (!deepgramKey)
-        throw new ApplicationError(
-          503,
-          'TRANSCRIPTION_NOT_CONFIGURED',
-          'Transcribing a Cloudflare Stream recording requires DEEPGRAM_API_KEY: only Deepgram can fetch the media itself, and proxying video through this backend is what Stream replaced.',
-        );
-      return this.transcribeStreamRecording(media, job, deepgramKey);
+      if (deepgramKey) return this.transcribeStreamRecording(media, job, deepgramKey);
+      /**
+       * No Deepgram key: fetch the recording once and transcribe it with OpenAI.
+       *
+       * This used to throw, on the grounds that pulling the video back through
+       * the backend is what Stream removed. That reasoning does not survive
+       * contact with the rest of this method — the R2 branch below downloads
+       * the whole video and extracts audio locally, and has always done so. The
+       * transfer Stream eliminated is the per-viewer one: a reviewer streaming
+       * segments through this process. A single server-side read at analysis
+       * time is a different thing, happens once per recording, and never
+       * touches a client.
+       *
+       * The practical effect of refusing was that a deployment with a perfectly
+       * good OpenAI key produced no transcript, no summary and no findings for
+       * every recording, and reported it as though the AI had simply found
+       * nothing.
+       */
+      return this.transcribeStreamRecordingWithOpenAi(media, job, configuration!.apiKey);
     }
 
     try {

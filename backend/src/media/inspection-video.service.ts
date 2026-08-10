@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
   InspectionStatus,
@@ -12,6 +12,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
+import { MediaProcessingService } from '../technician/media-processing.service';
 
 /**
  * Limits enforced before Cloudflare is ever contacted.
@@ -47,7 +48,22 @@ const STREAM_STATE_TO_PROCESSING: Record<string, MediaProcessingStatus> = {
   downloading: MediaProcessingStatus.PROCESSING,
   queued: MediaProcessingStatus.PROCESSING,
   inprogress: MediaProcessingStatus.PROCESSING,
-  ready: MediaProcessingStatus.READY,
+  /**
+   * Cloudflare's `ready` means the encode finished, not that we are done.
+   *
+   * This used to map to READY, which is the *pipeline's* terminal state — set
+   * only after transcription, analysis and inspection advancement. Claiming it
+   * here had a precise consequence: `MediaProcessingService.process` opens with
+   * `if (media.processingStatus === READY) return`, so every Stream recording
+   * was declared finished a moment before the pipeline looked at it, and
+   * returned immediately. No transcript, no summary, no findings — which reads
+   * as "the AI found nothing" rather than "the AI never ran".
+   *
+   * PROCESSING is the honest answer: Cloudflare's part is done and ours has not
+   * started. Playability is not affected, because that is decided by `readyAt`
+   * rather than this column — see `getPlayback`.
+   */
+  ready: MediaProcessingStatus.PROCESSING,
   error: MediaProcessingStatus.FAILED,
 };
 
@@ -72,6 +88,12 @@ export class InspectionVideoService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(CloudflareStreamService) private readonly stream: CloudflareStreamService,
+    // Optional so the many tests that construct this service with two mocks
+    // keep working, and so a deployment missing the pipeline still accepts
+    // webhooks rather than rejecting the delivery Cloudflare will stop retrying.
+    @Optional()
+    @Inject(MediaProcessingService)
+    private readonly mediaProcessing?: MediaProcessingService,
   ) {}
 
   /**
@@ -229,6 +251,9 @@ export class InspectionVideoService {
         streamUid: true,
         storageKey: true,
         processingStatus: true,
+        // Whether Cloudflare finished encoding, which is what decides
+        // playability here — not our pipeline's processingStatus.
+        readyAt: true,
         uploadStatus: true,
         durationSeconds: true,
         thumbnailUrl: true,
@@ -245,21 +270,42 @@ export class InspectionVideoService {
       return {
         videoId: media.id,
         provider: 'legacy' as const,
-        status: media.processingStatus === MediaProcessingStatus.READY ? 'ready' : 'processing',
+        // Playable once the object exists in the bucket, for the same reason
+        // the Stream branch keys off readyAt: this endpoint answers "can this be
+        // watched", and analysis finishing later must not gate that.
+        status: media.storageKey ? ('ready' as const) : ('processing' as const),
         contentPath: media.storageKey ? `/api/v1/admin/media/${media.id}/content` : null,
         durationSeconds: media.durationSeconds,
       };
 
-    // Not an error: a technician who just finished recording, or a reviewer who
-    // opened the area early, should be told to wait rather than shown a failure.
-    if (media.processingStatus !== MediaProcessingStatus.READY)
+    /**
+     * Playable once Cloudflare has encoded it, which is what `readyAt` records.
+     *
+     * Deliberately not `processingStatus === READY`. That column tracks our own
+     * transcription and analysis, which run *after* the encode and take longer —
+     * gating playback on them would hide a perfectly watchable recording from a
+     * reviewer for as long as the AI took, and hide it forever if analysis
+     * failed. The video and the findings about it become available
+     * independently, and this endpoint reports the video.
+     */
+    // Failure is checked before playability, not after. An encode that failed
+    // can still carry a readyAt from an earlier delivery, and reporting that as
+    // playable would hand the reviewer a signed URL for a video Cloudflare
+    // cannot serve.
+    if (media.processingStatus === MediaProcessingStatus.FAILED)
       return {
         videoId: media.id,
         provider: 'cloudflare_stream' as const,
-        status:
-          media.processingStatus === MediaProcessingStatus.FAILED
-            ? ('failed' as const)
-            : ('processing' as const),
+        status: 'failed' as const,
+        streamUid: media.streamUid,
+        failureMessage: media.failureMessage,
+      };
+
+    if (!media.readyAt)
+      return {
+        videoId: media.id,
+        provider: 'cloudflare_stream' as const,
+        status: 'processing' as const,
         streamUid: media.streamUid,
         failureMessage: media.failureMessage,
       };
@@ -310,7 +356,15 @@ export class InspectionVideoService {
     const media = await withSystemTenant(() =>
       this.prisma.inspectionMedia.findUnique({
         where: { streamUid },
-        select: { id: true, processingStatus: true, organizationId: true, inspectionId: true },
+        // readyAt is what "Cloudflare has finished encoding this" is recorded
+        // as, and therefore what decides whether the pipeline still owes work.
+        select: {
+          id: true,
+          processingStatus: true,
+          readyAt: true,
+          organizationId: true,
+          inspectionId: true,
+        },
       }),
     );
     // An unknown uid is not an error worth failing on: Cloudflare retries 5xx,
@@ -332,7 +386,10 @@ export class InspectionVideoService {
       return { accepted: false as const, reason: 'UNMAPPED_STATE' };
     }
 
-    const ready = processingStatus === MediaProcessingStatus.READY;
+    // Cloudflare's own word for "the encode is finished and this is playable",
+    // read from the payload rather than from our column — that column now
+    // tracks our pipeline, which has not run yet at this point.
+    const encoded = state === 'ready';
     const failed = processingStatus === MediaProcessingStatus.FAILED;
     const duration = typeof payload.duration === 'number' && payload.duration > 0
       ? Math.round(payload.duration)
@@ -353,9 +410,7 @@ export class InspectionVideoService {
         ...(payload.thumbnail ? { thumbnailUrl: payload.thumbnail } : {}),
         // Stamped once. A repeat delivery must not keep moving readyAt forward,
         // or "when did this become available" stops being answerable.
-        ...(ready && media.processingStatus !== MediaProcessingStatus.READY
-          ? { readyAt: new Date() }
-          : {}),
+        ...(encoded && !media.readyAt ? { readyAt: new Date() } : {}),
         ...(failed
           ? {
               failedAt: new Date(),
@@ -366,12 +421,31 @@ export class InspectionVideoService {
       },
     });
 
+    /**
+     * Start transcription and analysis, which nothing else does for a Stream
+     * recording.
+     *
+     * The legacy multipart path queues this from the technician controller,
+     * because the bytes arrive there. A Stream upload goes device → Cloudflare
+     * and never touches this backend, so the webhook is the only moment we
+     * learn the video exists and is playable — and it was not queueing. Every
+     * recording since the Stream migration reached READY with no transcript, no
+     * summary and no findings, which reads as "the AI found nothing" rather
+     * than "the AI never ran".
+     *
+     * Only on the transition into READY. Cloudflare retries deliveries, and
+     * re-queueing on each one would transcribe the same video repeatedly at
+     * cost.
+     */
+    if (encoded && !media.readyAt) this.mediaProcessing?.queue(media.id, media.organizationId);
+
     this.logger.log({
       event: 'stream_webhook_applied',
       mediaId: media.id,
       streamUid,
       state,
       processingStatus,
+      queuedProcessing: encoded && !media.readyAt,
     });
     return { accepted: true as const, mediaId: media.id, processingStatus };
   }

@@ -29,5 +29,9 @@ import { TechnicianService } from './technician.service';
     ApiAuthGuard,
     RolesGuard,
   ],
+  // Exported so the Cloudflare Stream webhook can start the pipeline. A video
+  // uploaded straight to Stream never passes through this module's controller,
+  // so without this nothing queued transcription or analysis for it.
+  exports: [MediaProcessingService],
 })
 export class TechnicianModule {}

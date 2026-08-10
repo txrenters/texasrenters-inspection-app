@@ -6,7 +6,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { FieldError } from '@/components/ui/field';
 import { Alert } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { api, apiBlob } from '@/lib/api';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 import { usePermissions } from '@/lib/auth';
 import { buttonVariants } from '@/components/ui/button';
@@ -16,6 +15,7 @@ import { Badge, ErrorState, formatDate } from '../shared';
 
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
+import { RecordingSurface } from './RecordingSurface';
 
 /**
  * A section heading with an optional count.
@@ -78,34 +78,23 @@ function RecordingCard({
   onActivate: (id: string | null) => void;
   onExpand: () => void;
 }) {
-  const [source, setSource] = useState<string | null>(null);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const active = activeId === recording.id;
 
-  async function play() {
-    // Only one player is live at a time, so opening another disposes this one.
-    onActivate(recording.id);
-    if (source || objectUrl) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const playback = await api<{ url: string | null }>(
-        `/api/v1/admin/media/${recording.id}/playback`,
-      ).catch(() => ({ url: null }));
-      if (playback.url) {
-        setSource(playback.url);
-        return;
-      }
-      const blob = await apiBlob(recording.contentPath);
-      setObjectUrl(URL.createObjectURL(blob));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'This recording could not be loaded.');
-    } finally {
-      setLoading(false);
-    }
-  }
+  /**
+   * Playback is delegated to RecordingSurface rather than fetched here.
+   *
+   * This card used to mint its own URL from `/admin/media/:id/playback` and
+   * fall back to downloading `contentPath` as a blob. Both are R2-only: a
+   * Stream-backed recording has no bucket object, so the backend answers 409
+   * `MEDIA_NOT_PROXYABLE` — "Request a playback URL instead" — to each in turn,
+   * and the reviewer got that sentence instead of a video. Every recording made
+   * since the Stream migration failed this way.
+   *
+   * RecordingSurface already asks the right endpoint
+   * (`/inspection-videos/:id/playback`), embeds Cloudflare's player, keeps the
+   * blob path for pre-Stream recordings, and distinguishes "still encoding"
+   * from "failed". Two implementations of one job is what let this drift.
+   */
 
   return (
     <article className="area-recording">
@@ -117,14 +106,12 @@ function RecordingCard({
         </strong>
         <Badge value={recording.processingStatus} />
       </header>
-      {active && (source || objectUrl) ? (
+      {active ? (
         <div className="relative">
-          <video
-            controls
-            autoPlay
-            className="area-recording-player"
-            poster={recording.thumbnailUrl ?? undefined}
-            src={source ?? objectUrl ?? undefined}
+          <RecordingSurface
+            mediaId={recording.id}
+            posterUrl={recording.thumbnailUrl}
+            title={recording.label ?? 'Room recording'}
           />
           <button
             aria-label="View recording full screen"
@@ -137,21 +124,18 @@ function RecordingCard({
           </button>
         </div>
       ) : (
-        <button type="button" className="area-recording-poster" onClick={() => void play()}>
+        // Nothing is requested until Play. Mounting a player per recording is
+        // what made this page expensive, and that is still true of an iframe.
+        <button type="button" className="area-recording-poster" onClick={() => onActivate(recording.id)}>
           {recording.thumbnailUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={recording.thumbnailUrl} alt={`Poster frame for ${recording.label ?? 'recording'}`} />
           ) : (
             <span className="area-photo-placeholder" aria-hidden />
           )}
-          <span className="area-recording-play">{loading ? 'Loading…' : 'Play recording'}</span>
+          <span className="area-recording-play">Play recording</span>
         </button>
       )}
-      {error ? (
-        <Alert variant="destructive" role="alert">
-          {error} <button type="button" onClick={() => void play()}>Retry</button>
-        </Alert>
-      ) : null}
       <footer className="text-[13px] text-muted-foreground">
         {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
         {formatDate(recording.createdAt)}
