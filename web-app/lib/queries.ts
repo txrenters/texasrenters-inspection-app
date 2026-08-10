@@ -2,13 +2,21 @@
 
 import type { VideoPlayback } from './playback';
 import type {
+  AccountDeletionPreflight,
+  AccountDeletionResult,
   AdminAssignment,
   AdminAssignmentListItem,
   AdminAuditEvent,
-  AdminDashboard,
+  AdminBulkDeleteResult,
   AdminCharge,
   AdminChargeReport,
   AdminChargeRule,
+  AdminDashboard,
+  AdminDeleteResult,
+  AdminEvidenceRequest,
+  AdminFloorPlan,
+  AdminFloorPlanExtractionJob,
+  AdminFloorPlanExtractionStarted,
   AdminInspection,
   AdminInspectionArea,
   AdminInspectionComparison,
@@ -16,36 +24,29 @@ import type {
   AdminInspectionMedia,
   AdminInspectionPets,
   AdminInspectionPhoto,
-  AdminReportShare,
-  MergeInspectionAreasResult,
-  AdminRole,
-  AdminRoleSummary,
-  AdminUser,
-  AdminUserDetail,
-  AdminFloorPlan,
-  AreaEvidenceBundle,
-  AreaEvidenceSummary,
-  AdminFloorPlanExtractionJob,
-  AdminFloorPlanExtractionStarted,
-  AdminPropertyArea,
+  AdminLease,
   AdminPortfolio,
   AdminProperty,
+  AdminPropertyArea,
+  AdminReportShare,
+  AdminRole,
+  AdminRoleSummary,
   AdminTechnician,
+  AdminUnit,
+  AdminUser,
+  AdminUserDetail,
+  AiProviderName,
+  AiSettings,
+  AreaEvidenceBundle,
+  AreaEvidenceSummary,
   CreatedTechnicianAccount,
   CreatedUserAccount,
-  AdminUnit,
-  AdminLease,
-  PermissionGroup,
-  PropertywareSyncRun,
-  PropertywareSyncError,
-  ProviderReadiness,
-  AiSettings,
-  AiProviderName,
   MailDeliveryResult,
-  AccountDeletionPreflight,
-  AccountDeletionResult,
-  AdminDeleteResult,
-  AdminBulkDeleteResult,
+  MergeInspectionAreasResult,
+  PermissionGroup,
+  PropertywareSyncError,
+  PropertywareSyncRun,
+  ProviderReadiness,
 } from '@texasrenters/shared';
 import { allPropertywareEntities } from '@texasrenters/shared';
 import {
@@ -104,6 +105,7 @@ export const keys = {
   areaEvidence: (id: string, areaId: string) =>
     ['admin', 'inspection', id, 'area-evidence', areaId] as const,
   inspectionAreas: (id: string) => ['admin', 'inspection', id, 'areas'] as const,
+  evidenceRequests: (id: string) => ['admin', 'inspection', id, 'evidence-requests'] as const,
   inspectionComparison: (id: string) => ['admin', 'inspection', id, 'comparison'] as const,
   inspectionPets: (id: string) => ['admin', 'inspection', id, 'pets'] as const,
   inspectionCharges: (id: string) => ['admin', 'inspection', id, 'charges'] as const,
@@ -285,6 +287,15 @@ export const useInspectionFindings = (
     placeholderData: keepPreviousData,
   });
 /** Compact area index: counts and status only, no media. */
+/** Evidence the office has asked the technician to go back and capture. */
+export const useEvidenceRequests = (id: string) =>
+  useQuery({
+    queryKey: keys.evidenceRequests(id),
+    queryFn: ({ signal }) =>
+      api<AdminEvidenceRequest[]>(`/api/v1/admin/inspections/${id}/evidence-requests`, { signal }),
+    enabled: Boolean(id),
+  });
+
 export const useAreaEvidenceSummary = (id: string, enabled = true) =>
   useQuery({
     queryKey: keys.areaEvidenceSummary(id),
@@ -1279,6 +1290,43 @@ export function useAdminMutations() {
         mergeAuthoritativeEntity(client, keys.all, data);
         client.setQueryData(keys.inspection(variables.id), data);
         refreshWorkflow(variables.id);
+      },
+    }),
+    /**
+     * Ask the technician for more evidence in one area.
+     *
+     * Refreshes the workflow as well as the request list, because the server
+     * hands the inspection back to the technician in the same transaction —
+     * the status on screen is stale the moment this succeeds.
+     */
+    createEvidenceRequest: useMutation({
+      mutationFn: ({
+        id,
+        ...input
+      }: {
+        id: string;
+        inspectionAreaId: string;
+        checklistItemIds?: string[];
+        note: string;
+      }) =>
+        api<AdminEvidenceRequest>(`/api/v1/admin/inspections/${id}/evidence-requests`, {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (_data, variables) => {
+        refreshWorkflow(variables.id);
+        void client.invalidateQueries({ queryKey: keys.evidenceRequests(variables.id) });
+      },
+    }),
+    cancelEvidenceRequest: useMutation({
+      mutationFn: ({ requestId }: { requestId: string; inspectionId: string }) =>
+        api<AdminEvidenceRequest>(`/api/v1/admin/evidence-requests/${requestId}`, {
+          method: 'DELETE',
+        }),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({
+          queryKey: keys.evidenceRequests(variables.inspectionId),
+        });
       },
     }),
     mergeInspectionAreas: useMutation({

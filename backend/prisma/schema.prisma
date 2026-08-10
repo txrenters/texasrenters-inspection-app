@@ -299,21 +299,22 @@ enum ChargeSource {
 }
 
 model Organization {
-  id                 String                            @id @default(uuid()) @db.Uuid
-  name               String
-  createdAt          DateTime                          @default(now())
-  updatedAt          DateTime                          @updatedAt
-  members            OrganizationMember[]
-  properties         Property[]
-  inspections        Inspection[]
-  auditLogs          AuditLog[]
-  aiSettings         OrganizationAiSettings?
-  aiProviders        AiProviderConfiguration[]
-  aiUsageEvents      AiUsageEvent[]
-  roles              Role[]
-  roleAssignments    UserRoleAssignment[]
-  checklistItems     AreaChecklistItem[]
-  checklistResponses InspectionAreaChecklistResponse[]
+  id                   String                            @id @default(uuid()) @db.Uuid
+  name                 String
+  createdAt            DateTime                          @default(now())
+  updatedAt            DateTime                          @updatedAt
+  members              OrganizationMember[]
+  properties           Property[]
+  inspections          Inspection[]
+  auditLogs            AuditLog[]
+  aiSettings           OrganizationAiSettings?
+  aiProviders          AiProviderConfiguration[]
+  aiUsageEvents        AiUsageEvent[]
+  roles                Role[]
+  roleAssignments      UserRoleAssignment[]
+  checklistItems       AreaChecklistItem[]
+  checklistResponses   InspectionAreaChecklistResponse[]
+  areaEvidenceRequests AreaEvidenceRequest[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -698,6 +699,47 @@ model PropertyArea {
 /// record of coverage — it never gates completing an area, because the
 /// walkthrough video remains the evidence and an untouched checkbox is not
 /// proof that something was missed.
+enum EvidenceRequestStatus {
+  OPEN
+  RESOLVED
+  CANCELLED
+}
+
+/// A reviewer asking the technician for more evidence in one specific area.
+///
+/// Targeted on purpose. The office could already send an inspection back, but
+/// only as a whole — the technician saw a job reappear in their queue with no
+/// statement of what was missing, so the round trip depended on someone
+/// phoning them. This names the area, optionally the exact checklist items,
+/// and what is needed.
+///
+/// `checklistItemIds` empty means the whole area. It is a plain uuid array
+/// rather than a join table because the list is small, always read with its
+/// parent, and never queried from the other side; the ids are validated
+/// against the area's own checklist when the request is created.
+model AreaEvidenceRequest {
+  id               String                @id @default(uuid()) @db.Uuid
+  organizationId   String                @db.Uuid
+  inspectionId     String                @db.Uuid
+  inspectionAreaId String                @db.Uuid
+  checklistItemIds String[]              @default([]) @db.Uuid
+  note             String
+  status           EvidenceRequestStatus @default(OPEN)
+  requestedById    String                @db.Uuid
+  requestedAt      DateTime              @default(now())
+  resolvedById     String?               @db.Uuid
+  resolvedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  organization     Organization          @relation(fields: [organizationId], references: [id])
+  inspection       Inspection            @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  inspectionArea   InspectionArea        @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId, status])
+  @@index([inspectionAreaId])
+  @@index([organizationId])
+}
+
 /// One item's condition, as assessed during a specific inspection.
 ///
 /// The three axes mirror the printed report the office already issues: every
@@ -864,6 +906,7 @@ model Inspection {
   areas                      InspectionArea[]
   findings                   InspectionFinding[]
   reportShares               InspectionReportShare[]
+  areaEvidenceRequests       AreaEvidenceRequest[]
 
   @@index([organizationId, status, scheduledAt])
   @@index([organizationId, scheduledAt(sort: Desc)])
@@ -1202,29 +1245,30 @@ model InspectionAssignment {
 }
 
 model InspectionArea {
-  id                               String                            @id @default(uuid()) @db.Uuid
-  inspectionId                     String                            @db.Uuid
-  propertyAreaId                   String                            @db.Uuid
-  completionStatus                 InspectionAreaCompletionStatus    @default(PENDING)
-  skipReason                       String?
-  technicianNote                   String?
-  completedAt                      DateTime?
+  id                   String                            @id @default(uuid()) @db.Uuid
+  inspectionId         String                            @db.Uuid
+  propertyAreaId       String                            @db.Uuid
+  completionStatus     InspectionAreaCompletionStatus    @default(PENDING)
+  skipReason           String?
+  technicianNote       String?
+  completedAt          DateTime?
   // The technician's attestation that the AI's narrative summary matches the
   // walkthrough they performed. Deliberately NOT InspectionFinding.reviewedBy:
   // that pair records an admin approving or rejecting a finding, and a
   // technician must never write to it. This says only "I read this and it
   // reflects what I saw" — it changes no finding's review status.
-  summaryConfirmedAt               DateTime?
-  summaryConfirmedById             String?                           @db.Uuid
-  createdAt                        DateTime                          @default(now())
-  updatedAt                        DateTime                          @updatedAt
-  inspection                       Inspection                        @relation(fields: [inspectionId], references: [id])
-  propertyArea                     PropertyArea                      @relation(fields: [propertyAreaId], references: [id])
-  media                            InspectionMedia[]
-  photos                           InspectionPhoto[]
-  statusHistory                    InspectionAreaStatusHistory[]
-  uploadSessions                   MediaUploadSession[]
-  checklistResponses               InspectionAreaChecklistResponse[]
+  summaryConfirmedAt   DateTime?
+  summaryConfirmedById String?                           @db.Uuid
+  createdAt            DateTime                          @default(now())
+  updatedAt            DateTime                          @updatedAt
+  inspection           Inspection                        @relation(fields: [inspectionId], references: [id])
+  propertyArea         PropertyArea                      @relation(fields: [propertyAreaId], references: [id])
+  media                InspectionMedia[]
+  photos               InspectionPhoto[]
+  statusHistory        InspectionAreaStatusHistory[]
+  uploadSessions       MediaUploadSession[]
+  checklistResponses   InspectionAreaChecklistResponse[]
+  areaEvidenceRequests AreaEvidenceRequest[]
 
   @@unique([inspectionId, propertyAreaId])
   @@index([inspectionId])

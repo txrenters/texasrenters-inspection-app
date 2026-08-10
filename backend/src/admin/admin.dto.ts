@@ -114,6 +114,27 @@ export class InspectionFollowUpDto {
   @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
+/**
+ * Ask the technician for more evidence in one specific area.
+ *
+ * The note is required: a request that does not say what is wrong sends the
+ * technician back to a finished room with nothing to act on, which is the
+ * failure this whole route exists to fix.
+ *
+ * `checklistItemIds` is optional — omitted or empty means the whole area. When
+ * given, the ids are checked against that area's own checklist, so a request
+ * can never point at an item the technician's app will not show.
+ */
+export class CreateEvidenceRequestDto {
+  @IsUUID() inspectionAreaId!: string;
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsUUID('4', { each: true })
+  checklistItemIds?: string[];
+  @IsString() @MinLength(3) @MaxLength(1000) note!: string;
+}
+
 /** Move an inspection into administrator review / request more evidence. */
 export class InspectionUnderReviewDto {
   @IsOptional() @IsString() @MaxLength(500) reason?: string;

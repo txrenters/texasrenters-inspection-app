@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  EvidenceRequestStatus,
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
   InspectionStatus,
@@ -959,6 +960,93 @@ export class TechnicianService {
     });
     this.notifyInspectionChanged(user, room.inspectionId);
     return { ...response, recordedAt: response.recordedAt.toISOString() };
+  }
+
+  /**
+   * What the office has asked this technician to go back and capture.
+   *
+   * Open requests only. A resolved or withdrawn request is history the field
+   * does not need, and showing it would leave a technician unsure whether it is
+   * still outstanding.
+   *
+   * The checklist item labels are resolved here rather than sent as ids: the
+   * request says "Walls and ceilings", not a uuid the app would have to join
+   * against a list it may not have loaded.
+   */
+  async evidenceRequests(user: AuthenticatedUser, inspectionId: string) {
+    await this.assignedInspection(user, inspectionId);
+    const requests = await this.prisma.areaEvidenceRequest.findMany({
+      where: { inspectionId, status: EvidenceRequestStatus.OPEN },
+      orderBy: { requestedAt: 'asc' },
+      select: {
+        id: true,
+        inspectionAreaId: true,
+        checklistItemIds: true,
+        note: true,
+        requestedAt: true,
+        inspectionArea: { select: { propertyArea: { select: { name: true } } } },
+      },
+    });
+    const itemIds = [...new Set(requests.flatMap((request) => request.checklistItemIds))];
+    const labels = itemIds.length
+      ? new Map(
+          (
+            await this.prisma.areaChecklistItem.findMany({
+              where: { id: { in: itemIds } },
+              select: { id: true, label: true },
+            })
+          ).map((item) => [item.id, item.label]),
+        )
+      : new Map<string, string>();
+    return requests.map((request) => ({
+      id: request.id,
+      roomId: request.inspectionAreaId,
+      roomName: request.inspectionArea.propertyArea.name,
+      note: request.note,
+      requestedAt: request.requestedAt.toISOString(),
+      // An empty list means the whole area, which the app words differently.
+      items: request.checklistItemIds
+        .map((id) => labels.get(id))
+        .filter((label): label is string => Boolean(label)),
+    }));
+  }
+
+  /**
+   * Marks a request satisfied.
+   *
+   * The technician's own call, not inferred from a new upload arriving: only
+   * they know whether what they just captured is what was actually asked for,
+   * and auto-resolving on any new evidence would quietly close requests that
+   * were never addressed.
+   */
+  async resolveEvidenceRequest(user: AuthenticatedUser, requestId: string) {
+    const request = await this.prisma.areaEvidenceRequest.findFirst({
+      where: {
+        id: requestId,
+        status: EvidenceRequestStatus.OPEN,
+        inspection: {
+          organizationId: user.organizationId,
+          assignments: { some: { technicianId: user.id, isCurrent: true } },
+        },
+      },
+      select: { id: true, inspectionId: true },
+    });
+    if (!request)
+      throw new ApplicationError(
+        404,
+        'EVIDENCE_REQUEST_NOT_FOUND',
+        'That request was not found, or is no longer open.',
+      );
+    await this.prisma.areaEvidenceRequest.update({
+      where: { id: requestId },
+      data: {
+        status: EvidenceRequestStatus.RESOLVED,
+        resolvedById: user.id,
+        resolvedAt: new Date(),
+      },
+    });
+    this.notifyInspectionChanged(user, request.inspectionId);
+    return { id: requestId, status: 'RESOLVED' as const };
   }
 
   async room(user: AuthenticatedUser, id: string) {

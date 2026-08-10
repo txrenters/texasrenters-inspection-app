@@ -1,4 +1,7 @@
-import { checklistSchema } from '../src/repositories/api/repositories';
+import {
+  checklistSchema,
+  evidenceRequestSchema,
+} from '../src/repositories/api/repositories';
 
 /**
  * The wire contract for a scored checklist item.
@@ -65,5 +68,44 @@ describe('checklist assessment contract', () => {
   it('keeps an empty keyword list rather than dropping the item', () => {
     const parsed = checklistSchema.parse([{ id: 'a', label: 'Smoke alarms' }]);
     expect(parsed[0]).toMatchObject({ label: 'Smoke alarms', keywords: [] });
+  });
+});
+
+describe('evidence request contract', () => {
+  it('reads a targeted request', () => {
+    const [request] = evidenceRequestSchema.parse([
+      {
+        id: 'req-1',
+        roomId: 'area-1',
+        roomName: 'Library',
+        note: 'Need a close-up of the water stain.',
+        requestedAt: '2026-08-11T09:00:00.000Z',
+        items: ['Walls and ceilings'],
+      },
+    ]);
+    expect(request!).toMatchObject({ roomName: 'Library', items: ['Walls and ceilings'] });
+  });
+
+  it('treats an absent item list as a whole-area request', () => {
+    // Empty means "re-walk the area" rather than "nothing was asked for", and
+    // the card words those two cases differently.
+    const [request] = evidenceRequestSchema.parse([
+      {
+        id: 'req-1',
+        roomId: 'area-1',
+        roomName: 'Library',
+        note: 'The walkthrough skipped the far wall.',
+        requestedAt: '2026-08-11T09:00:00.000Z',
+      },
+    ]);
+    expect(request!.items).toEqual([]);
+  });
+
+  it('rejects a request with no note rather than showing a blank instruction', () => {
+    expect(() =>
+      evidenceRequestSchema.parse([
+        { id: 'req-1', roomId: 'a', roomName: 'Library', requestedAt: '2026-08-11T09:00:00.000Z' },
+      ]),
+    ).toThrow();
   });
 });

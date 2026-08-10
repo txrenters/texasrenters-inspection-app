@@ -1,5 +1,6 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  EvidenceRequestStatus,
   FindingReviewStatus,
   InspectionStatus,
   InspectionType,
@@ -36,21 +37,22 @@ import type {
   AssignmentListQueryDto,
   AuditListQueryDto,
   CreateAdminInspectionDto,
+  CreateEvidenceRequestDto,
   FinalizeInspectionDto,
   InspectionFollowUpDto,
   InspectionListQueryDto,
   InspectionTbdDto,
   InspectionUnderReviewDto,
-  ReopenInspectionDto,
   LeaseListQueryDto,
   MergeInspectionAreasDto,
-  PortfolioListQueryDto,
   PaginationDto,
+  PortfolioListQueryDto,
   PropertyListQueryDto,
+  ReopenInspectionDto,
   TechnicianListQueryDto,
   TechnicianStatusDto,
-  UnitListQueryDto,
   UnassignDto,
+  UnitListQueryDto,
   UpdateAdminInspectionDto,
 } from './admin.dto';
 
@@ -82,6 +84,25 @@ const FROZEN_INSPECTION_STATUSES: InspectionStatus[] = [
  * CANCELLED because a cancelled inspection is closed rather than finished —
  * reviving one should be a new inspection, not a status flip.
  */
+/**
+ * What a request looks like to both sides.
+ *
+ * The area's name travels with it so the technician's list can say "Kitchen"
+ * without a second query, and the reviewer's list does not have to re-join
+ * areas it already has.
+ */
+const EVIDENCE_REQUEST_SELECT = {
+  id: true,
+  inspectionId: true,
+  inspectionAreaId: true,
+  checklistItemIds: true,
+  note: true,
+  status: true,
+  requestedAt: true,
+  resolvedAt: true,
+  inspectionArea: { select: { propertyArea: { select: { name: true } } } },
+} satisfies Prisma.AreaEvidenceRequestSelect;
+
 const REOPENABLE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.TECHNICIAN_SUBMITTED,
   InspectionStatus.PROCESSING,
@@ -1447,6 +1468,144 @@ export class AdminService {
       organizationId: user.organizationId,
     });
     return this.inspection(user, id);
+  }
+
+  /**
+   * Asks the technician for more evidence in one specific area.
+   *
+   * This is the piece the workflow was missing. The office could already send
+   * an inspection back — `reopenInspection` returns it to IN_PROGRESS, which is
+   * what puts it in the technician's queue — but only as a whole, with no
+   * statement of what was wrong. The technician saw a finished job reappear and
+   * had to phone someone to find out why. A request names the area, optionally
+   * the exact checklist items, and what is needed.
+   *
+   * Reopening is *part of* creating the request, in the same transaction: a
+   * request the technician cannot reach is not a request, and the two must not
+   * be able to drift apart. When the inspection is already IN_PROGRESS there is
+   * nothing to reopen and the status is left alone.
+   */
+  async createEvidenceRequest(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    input: CreateEvidenceRequestDto,
+  ) {
+    const existing = await this.requireInspection(user.organizationId, inspectionId);
+    if (existing.status === InspectionStatus.CANCELLED)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_CANCELLED',
+        'A cancelled inspection cannot be sent back for more evidence.',
+      );
+
+    const area = await this.prisma.inspectionArea.findFirst({
+      where: { id: input.inspectionAreaId, inspectionId },
+      select: { id: true, propertyAreaId: true },
+    });
+    if (!area)
+      throw new ApplicationError(
+        404,
+        'INSPECTION_AREA_NOT_FOUND',
+        'That area does not belong to this inspection.',
+      );
+
+    // Validated against the area's own checklist, so a request can never point
+    // at an item the technician's app will not show them.
+    const itemIds: string[] = [...new Set(input.checklistItemIds ?? [])];
+    if (itemIds.length) {
+      const found = await this.prisma.areaChecklistItem.count({
+        where: { id: { in: itemIds }, propertyAreaId: area.propertyAreaId, archivedAt: null },
+      });
+      if (found !== itemIds.length)
+        throw new ApplicationError(
+          400,
+          'CHECKLIST_ITEM_NOT_IN_AREA',
+          'One or more checklist items do not belong to that area.',
+        );
+    }
+
+    const reopenable = REOPENABLE_INSPECTION_STATUSES.includes(existing.status);
+    const request = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.areaEvidenceRequest.create({
+        data: {
+          organizationId: user.organizationId,
+          inspectionId,
+          inspectionAreaId: area.id,
+          checklistItemIds: itemIds,
+          note: input.note.trim(),
+          requestedById: user.id,
+        },
+        select: EVIDENCE_REQUEST_SELECT,
+      });
+      if (reopenable) {
+        // Same re-assertion as reopenInspection: the status was read outside
+        // this transaction, so a concurrent finalize could otherwise be
+        // silently reversed here.
+        const { count } = await tx.inspection.updateMany({
+          where: { id: inspectionId, status: { in: REOPENABLE_INSPECTION_STATUSES } },
+          data: { status: InspectionStatus.IN_PROGRESS, completionBlockedReason: null },
+        });
+        if (count === 0)
+          throw new ApplicationError(
+            409,
+            'INSPECTION_NOT_REOPENABLE',
+            'The inspection changed while evidence was being requested. Reload and try again.',
+          );
+      }
+      await this.audit(tx, user, 'INSPECTION_EVIDENCE_REQUESTED', inspectionId, {
+        inspectionAreaId: area.id,
+        checklistItemIds: itemIds,
+        reopenedFrom: reopenable ? existing.status : null,
+      });
+      return created;
+    }, ADMIN_TRANSACTION_OPTIONS);
+
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return request;
+  }
+
+  async evidenceRequests(user: AuthenticatedUser, inspectionId: string) {
+    await this.requireInspection(user.organizationId, inspectionId);
+    return this.prisma.areaEvidenceRequest.findMany({
+      where: { inspectionId },
+      orderBy: [{ status: 'asc' }, { requestedAt: 'desc' }],
+      select: EVIDENCE_REQUEST_SELECT,
+    });
+  }
+
+  /**
+   * Withdraws a request the office no longer needs.
+   *
+   * Cancelled rather than deleted: the technician may already have seen it and
+   * started work, and a request that silently disappears leaves them unable to
+   * find out what happened to it.
+   */
+  async cancelEvidenceRequest(user: AuthenticatedUser, requestId: string) {
+    const { count } = await this.prisma.areaEvidenceRequest.updateMany({
+      where: {
+        id: requestId,
+        organizationId: user.organizationId,
+        status: EvidenceRequestStatus.OPEN,
+      },
+      data: {
+        status: EvidenceRequestStatus.CANCELLED,
+        resolvedById: user.id,
+        resolvedAt: new Date(),
+      },
+    });
+    if (count === 0)
+      throw new ApplicationError(
+        404,
+        'EVIDENCE_REQUEST_NOT_FOUND',
+        'That request was not found, or is no longer open.',
+      );
+    return this.prisma.areaEvidenceRequest.findFirstOrThrow({
+      where: { id: requestId },
+      select: EVIDENCE_REQUEST_SELECT,
+    });
   }
 
   /** Inspection areas for the workflow merge UI. */

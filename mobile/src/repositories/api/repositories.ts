@@ -245,6 +245,24 @@ export const checklistSchema = z.array(
   }),
 );
 
+/**
+ * What the office has asked this technician to go back and capture.
+ *
+ * `items` empty means the whole area — the server resolves checklist item ids
+ * to labels before sending, so the app never has to join against a list it may
+ * not have loaded.
+ */
+export const evidenceRequestSchema = z.array(
+  z.object({
+    id: z.string(),
+    roomId: z.string(),
+    roomName: z.string(),
+    note: z.string(),
+    requestedAt: z.string(),
+    items: z.array(z.string()).default([]),
+  }),
+);
+
 const uploadSchema = z.object({
   id: z.string(),
   mediaId: z.string(),
@@ -644,6 +662,19 @@ export class ApiInspectionRepository implements InspectionRepository {
       await cachedApiRecord(`room:${roomId}`, roomSchema, () =>
         getJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}`),
       ),
+    );
+  }
+  async evidenceRequests(inspectionId: string) {
+    return cachedApiRecord(`evidenceRequests:${inspectionId}`, evidenceRequestSchema, () =>
+      getJson(
+        `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/evidence-requests`,
+      ),
+    );
+  }
+  async resolveEvidenceRequest(requestId: string) {
+    await writeJson(
+      `/api/v1/technician/evidence-requests/${encodeURIComponent(requestId)}/resolve`,
+      'POST',
     );
   }
   async roomChecklist(roomId: string) {

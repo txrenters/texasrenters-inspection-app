@@ -21,11 +21,14 @@ import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AiSummaryCard } from '@/src/components/AiSummaryCard';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
 import { AreaConditionChecklist } from '@/src/components/AreaConditionChecklist';
+import { EvidenceRequestCard } from '@/src/components/EvidenceRequestCard';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { FindingRow } from '@/src/components/FindingRow';
 import {
+  useEvidenceRequests,
   useFindings,
   useInspection,
+  useResolveEvidenceRequest,
   useRoom,
   useRoomMedia,
   useRoomPhotos,
@@ -96,6 +99,11 @@ export default function AreaDetailScreen() {
    * correct a score.
    */
   const inspection = useInspection(inspectionId);
+  // Scoped to this area: a request about the kitchen is not this room's problem,
+  // and showing it here would send the technician to the wrong place.
+  const evidenceRequests = useEvidenceRequests(inspectionId);
+  const resolveRequest = useResolveEvidenceRequest(inspectionId);
+  const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
   const checklistClosed =
     inspection.data?.status === 'COMPLETED' || inspection.data?.status === 'CANCELLED';
   const { colorScheme } = useColorScheme();
@@ -188,6 +196,14 @@ export default function AreaDetailScreen() {
             </Text>
           </View>
         </View>
+
+        {/* First thing in the area, above the baseline: an outstanding request
+            is the reason the technician is standing here again. */}
+        <EvidenceRequestCard
+          onResolve={(requestId) => resolveRequest.mutate(requestId)}
+          requests={areaRequests}
+          resolving={resolveRequest.isPending}
+        />
 
         <View className="mx-5 mt-2 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-center justify-between gap-3">

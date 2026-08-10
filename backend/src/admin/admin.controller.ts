@@ -35,22 +35,22 @@ import { CacheService } from '../cache/cache.service';
 import { MailService } from '../mail/mail.service';
 import {
   AdminFindingsQueryDto,
-  AssignmentDto,
   ApprovePropertyAreasDto,
-  DeletePropertyAreasDto,
   AreaComparisonOverrideDto,
+  AssignmentDto,
   AssignmentListQueryDto,
   AuditListQueryDto,
   ChargeReviewDto,
   ChargeRuleDto,
   ComparisonReviewDto,
   CreateAdminInspectionDto,
-  CreateChargeDto,
-  PetCandidateReviewDto,
   CreateAreaChecklistItemDto,
+  CreateChargeDto,
+  CreateEvidenceRequestDto,
   CreatePropertyAreaDto,
   CreateReportShareDto,
   CreateTechnicianDto,
+  DeletePropertyAreasDto,
   FinalizeInspectionDto,
   FindingRejectDto,
   FindingReviewDto,
@@ -58,23 +58,24 @@ import {
   InspectionListQueryDto,
   InspectionTbdDto,
   InspectionUnderReviewDto,
-  ReopenInspectionDto,
   LeaseListQueryDto,
   MergeInspectionAreasDto,
+  PetCandidateReviewDto,
   PortfolioListQueryDto,
   PropertyListQueryDto,
   RejectPropertyAreaDto,
+  ReopenInspectionDto,
   TechnicianListQueryDto,
   TechnicianStatusDto,
   TestMailDto,
-  UnitListQueryDto,
   UnassignDto,
-  UpdateAreaChecklistItemDto,
-  UpdateAreaMarkerDto,
-  UpdatePropertyAreaDto,
+  UnitListQueryDto,
   UpdateAdminInspectionDto,
   UpdateAiProviderDto,
   UpdateAiRoutingDto,
+  UpdateAreaChecklistItemDto,
+  UpdateAreaMarkerDto,
+  UpdatePropertyAreaDto,
   UploadFloorPlanDto,
 } from './admin.dto';
 import { AdminService } from './admin.service';
@@ -484,6 +485,35 @@ export class AdminController {
    * reverse a finalization. The permission that closes an inspection is the one
    * that may reopen it.
    */
+  /**
+   * Ask the technician for more evidence in one area.
+   *
+   * `inspections:manage`, not `inspections:finalize`: this sends work back to
+   * the field, which is ordinary review traffic — it does not reverse a
+   * finalization the way reopen can.
+   */
+  @Post('inspections/:inspectionId/evidence-requests')
+  @RequirePermissions('inspections:manage')
+  createEvidenceRequest(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: CreateEvidenceRequestDto,
+  ) {
+    return this.service.createEvidenceRequest(request.user, id, body);
+  }
+  @Get('inspections/:inspectionId/evidence-requests')
+  @RequirePermissions('inspections:read')
+  evidenceRequests(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.service.evidenceRequests(request.user, id);
+  }
+  @Delete('evidence-requests/:requestId')
+  @RequirePermissions('inspections:manage')
+  cancelEvidenceRequest(
+    @Req() request: AuthenticatedRequest,
+    @Param('requestId') id: string,
+  ) {
+    return this.service.cancelEvidenceRequest(request.user, id);
+  }
   @Post('inspections/:inspectionId/reopen')
   @RequirePermissions('inspections:finalize')
   reopenInspection(

@@ -410,3 +410,18 @@ export interface ChecklistItemWithAssessment extends ChecklistAssessment {
   /** When it was scored; null while unassessed. */
   recordedAt: string | null;
 }
+
+/**
+ * The office asking for more evidence in one area.
+ *
+ * `items` empty means the whole area rather than nothing — that is how a
+ * reviewer asks for a re-walk instead of one detail.
+ */
+export interface EvidenceRequest {
+  id: string;
+  roomId: string;
+  roomName: string;
+  note: string;
+  requestedAt: string;
+  items: string[];
+}

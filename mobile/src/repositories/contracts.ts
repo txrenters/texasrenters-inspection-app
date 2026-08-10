@@ -3,6 +3,7 @@ import type {
   AreaEnvironment,
   ChecklistAssessment,
   ChecklistItemWithAssessment,
+  EvidenceRequest,
   DashboardSummary,
   DemoRole,
   DemoUser,
@@ -118,6 +119,10 @@ export interface InspectionRepository {
     itemId: string,
     assessment: ChecklistAssessment,
   ): Promise<ChecklistItemWithAssessment[]>;
+  /** Open requests from the office for more evidence on this inspection. */
+  evidenceRequests(inspectionId: string): Promise<EvidenceRequest[]>;
+  /** The technician's own call that a request is satisfied. */
+  resolveEvidenceRequest(requestId: string): Promise<void>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;

@@ -32,7 +32,8 @@ import {
 
 import { Badge, formatDate } from '@/components/shared';
 import { usePermissions } from '@/lib/auth';
-import { useAdminMutations } from '@/lib/queries';
+import { RequestEvidenceDialog } from '@/components/evidence-request/RequestEvidenceDialog';
+import { useAdminMutations, useEvidenceRequests } from '@/lib/queries';
 // Type-only: the merge dialog is handed areas already fetched by its caller.
 import type { useInspectionAreas } from '@/lib/queries';
 
@@ -65,6 +66,7 @@ export function InspectionWorkflowPanel({
 }) {
   const permissions = usePermissions();
   const [action, setAction] = useState<WorkflowAction | null>(null);
+  const [requestingEvidence, setRequestingEvidence] = useState(false);
   const canManage = permissions.has('inspections:manage');
   const canFinalize = permissions.has('inspections:finalize');
   const reviewable = REVIEWABLE.includes(inspection.status);
@@ -165,10 +167,14 @@ export function InspectionWorkflowPanel({
           ) : null}
           {canManage ? (
             <>
+              {/* Opens a targeted request rather than calling `under-review`.
+                  That action only relabels the inspection — UNDER_REVIEW is not
+                  in the technician's queue, so the office could record that
+                  evidence was missing while nothing ever reached the field. */}
               <button
                 type="button"
                 className={buttonVariants({ variant: 'secondary' })}
-                onClick={() => setAction('under-review')}>
+                onClick={() => setRequestingEvidence(true)}>
                 Request more evidence
               </button>
               <button
@@ -196,11 +202,18 @@ export function InspectionWorkflowPanel({
         </div>
       )}
 
+      <OpenEvidenceRequests inspectionId={inspection.id} />
       {action ? (
         <WorkflowActionDialog
           inspectionId={inspection.id}
           action={action}
           onClose={() => setAction(null)}
+        />
+      ) : null}
+      {requestingEvidence ? (
+        <RequestEvidenceDialog
+          inspectionId={inspection.id}
+          onClose={() => setRequestingEvidence(false)}
         />
       ) : null}
       </section>
@@ -239,6 +252,64 @@ const ACTION_COPY: Record<
 // reverse a finalization. Enforced here too so the block is a disabled button
 // with a visible rule rather than a 400 after the fact.
 const REASON_REQUIRED: ReadonlyArray<WorkflowAction> = ['reopen'];
+
+/**
+ * What the office is still waiting on from the field.
+ *
+ * Shown on the workflow panel because an outstanding request is the reason an
+ * inspection is back with the technician — without it the status simply reads
+ * IN_PROGRESS again and the reviewer has no record of what they asked for.
+ *
+ * Open requests only: a resolved or withdrawn one is history, and listing it
+ * here would make the panel read as though work were still outstanding.
+ */
+function OpenEvidenceRequests({ inspectionId }: { inspectionId: string }) {
+  const requests = useEvidenceRequests(inspectionId);
+  const mutations = useAdminMutations();
+  const open = (requests.data ?? []).filter((request) => request.status === 'OPEN');
+  if (!open.length) return null;
+  return (
+    <section className="workflow-evidence-requests">
+      <h3 className="text-sm font-semibold">
+        Awaiting the technician · {open.length} request{open.length === 1 ? '' : 's'}
+      </h3>
+      <ul className="mt-2 grid gap-2">
+        {open.map((request) => (
+          <li
+            className="rounded-md border border-border p-3 text-sm"
+            key={request.id}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <strong>{request.inspectionArea.propertyArea.name}</strong>
+                {/* Empty means the whole area, and saying so is clearer than an
+                    absent list the reviewer has to interpret. */}
+                <p className="text-xs text-muted-foreground">
+                  {request.checklistItemIds.length
+                    ? `${request.checklistItemIds.length} checklist item${request.checklistItemIds.length === 1 ? '' : 's'}`
+                    : 'Whole area'}
+                  {' · '}
+                  {formatDate(request.requestedAt)}
+                </p>
+                <p className="mt-1">{request.note}</p>
+              </div>
+              <button
+                className={buttonVariants({ variant: 'ghost' })}
+                disabled={mutations.cancelEvidenceRequest.isPending}
+                onClick={() =>
+                  mutations.cancelEvidenceRequest.mutate({ requestId: request.id, inspectionId })
+                }
+                type="button"
+              >
+                Withdraw
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 function WorkflowActionDialog({
   inspectionId,

@@ -63,6 +63,7 @@ export const queryKeys = {
   media: (roomId: string) => ['media', roomId] as const,
   roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
   roomChecklist: (roomId: string) => ['roomChecklist', roomId] as const,
+  evidenceRequests: (inspectionId: string) => ['evidenceRequests', inspectionId] as const,
   property: (id: string) => ['property', id] as const,
   floorPlan: (id: string) => ['floorPlan', id] as const,
   uploads: ['uploads'] as const,
@@ -389,6 +390,32 @@ export function useFinding(id: string, inspectionId?: string) {
     queryKey: queryKeys.findingForInspection(id, inspectionId),
     queryFn: () => repositories.findings.get(id, inspectionId),
     enabled: Boolean(id),
+  });
+}
+
+/**
+ * Open requests from the office for more evidence.
+ *
+ * Polled on the same cadence as assignments: a request is the reason an
+ * inspection came back to the technician, so it has to appear without them
+ * knowing to pull-to-refresh.
+ */
+export function useEvidenceRequests(inspectionId: string) {
+  return useQuery({
+    queryKey: queryKeys.evidenceRequests(inspectionId),
+    queryFn: () => repositories.inspections.evidenceRequests(inspectionId),
+    enabled: Boolean(inspectionId),
+    refetchInterval: assignmentRefreshInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useResolveEvidenceRequest(inspectionId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (requestId: string) => repositories.inspections.resolveEvidenceRequest(requestId),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: queryKeys.evidenceRequests(inspectionId) }),
   });
 }
 

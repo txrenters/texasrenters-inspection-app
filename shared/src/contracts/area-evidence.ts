@@ -197,3 +197,21 @@ export interface AreaFinding {
     createdAt: string;
   } | null;
 }
+
+/**
+ * A reviewer's request for more evidence in one area.
+ *
+ * `checklistItemIds` empty means the whole area rather than nothing — that is
+ * how a reviewer asks for a re-walk instead of one detail.
+ */
+export interface AdminEvidenceRequest {
+  id: string;
+  inspectionId: string;
+  inspectionAreaId: string;
+  checklistItemIds: string[];
+  note: string;
+  status: 'OPEN' | 'RESOLVED' | 'CANCELLED';
+  requestedAt: string;
+  resolvedAt?: string | null;
+  inspectionArea: { propertyArea: { name: string } };
+}

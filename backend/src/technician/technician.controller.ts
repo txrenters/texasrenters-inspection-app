@@ -139,6 +139,23 @@ export class TechnicianController {
   ) {
     return this.service.findings(request.user, id, query);
   }
+  @Get('inspections/:inspectionId/evidence-requests') evidenceRequests(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.service.evidenceRequests(request.user, id);
+  }
+  /**
+   * The technician's own call that a request is satisfied. Deliberately not
+   * inferred from a new upload arriving: only they know whether what they just
+   * captured is what was asked for.
+   */
+  @Post('evidence-requests/:requestId/resolve') resolveEvidenceRequest(
+    @Req() request: AuthenticatedRequest,
+    @Param('requestId') id: string,
+  ) {
+    return this.service.resolveEvidenceRequest(request.user, id);
+  }
   @Get('inspections/:inspectionId/report') report(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
