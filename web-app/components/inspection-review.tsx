@@ -21,7 +21,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 
-import { api, apiBlob } from '@/lib/api';
+import { apiBlob } from '@/lib/api';
 import { usePermissions } from '@/lib/auth';
 import {
   useAdminMutations,
@@ -32,6 +32,12 @@ import {
 import type { AdminInspectionFinding, AdminInspectionPhoto } from '@texasrenters/shared';
 
 import { Badge, ErrorState, LoadingState, Pagination, formatDate } from './shared';
+// The same player the area-evidence panel uses. This card used to mint its own
+// URL from /admin/media/:id/playback, which is the legacy object-storage path:
+// it requires a storageKey, and a Cloudflare Stream recording has none. Both
+// that call and its byte-proxy fallback returned 409 MEDIA_NOT_PROXYABLE, so
+// every Stream-backed recording was unplayable from this screen.
+import { RecordingSurface } from './area-evidence/RecordingSurface';
 
 // Radix Select rejects an empty string as an item value; the "nothing
 // selected" row uses a sentinel translated back to '' at the boundary.
@@ -49,85 +55,6 @@ function formatCategory(value: string) {
     .split('_')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
-}
-
-function RoomVideoPlayer({
-  mediaId,
-  contentPath,
-  label,
-  thumbnailUrl,
-}: {
-  mediaId: string;
-  contentPath: string;
-  label: string;
-  thumbnailUrl?: string | null;
-}) {
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(
-    () => () => {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    },
-    [objectUrl],
-  );
-
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      // Prefer a signed URL straight from the storage CDN: it supports range
-      // requests, so reviewers can seek without downloading the whole file.
-      // Local-disk storage returns no URL, so fall back to proxied bytes.
-      const playback = await api<{ url: string | null }>(
-        `/api/v1/admin/media/${mediaId}/playback`,
-      ).catch(() => ({ url: null }));
-      if (playback.url) {
-        setStreamUrl(playback.url);
-        return;
-      }
-      const blob = await apiBlob(contentPath);
-      setObjectUrl(URL.createObjectURL(blob));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The video could not be loaded.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const source = streamUrl ?? objectUrl;
-  if (source)
-    return (
-      <video
-        className="room-video-player"
-        controls
-        preload="metadata"
-        poster={thumbnailUrl ?? undefined}
-        src={source}
-      >
-        Your browser cannot play this recording.
-      </video>
-    );
-  return (
-    <div className="room-video-placeholder">
-      {thumbnailUrl ? (
-        // Poster frame so the room is recognisable before loading the video.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img className="room-video-poster" src={thumbnailUrl} alt={`${label} preview`} />
-      ) : null}
-      <button
-        type="button"
-        className={buttonVariants({ variant: 'secondary' })}
-        onClick={() => void load()}
-        disabled={loading}
-      >
-        {loading ? 'Loading video…' : `Load ${label} video`}
-      </button>
-      {error ? <FieldError>{error}</FieldError> : null}
-    </div>
-  );
 }
 
 export function InspectionMediaSection({ inspectionId }: { inspectionId: string }) {
@@ -177,11 +104,10 @@ export function InspectionMediaSection({ inspectionId }: { inspectionId: string 
                   ) : null}
                 </p>
               ) : null}
-              <RoomVideoPlayer
+              <RecordingSurface
                 mediaId={item.id}
-                contentPath={item.contentPath}
-                label={item.roomName}
-                thumbnailUrl={item.thumbnailUrl}
+                title={item.roomName}
+                posterUrl={item.thumbnailUrl}
               />
               <footer className="media-card-footer">
                 <span className="text-[13px] text-muted-foreground">
