@@ -7,7 +7,7 @@ import { reportError } from '../lib/error-log';
 import { repositories } from '../repositories';
 import { InspectionReminderSync } from '../realtime/InspectionReminderSync';
 import { TechnicianRealtimeProvider } from '../realtime/TechnicianRealtimeProvider';
-import { SessionExpiredError } from '../storage/offline-record-cache';
+import { ApiConnectionError, SessionExpiredError } from '../storage/offline-record-cache';
 
 /**
  * One place to react to a dead session.
@@ -49,10 +49,28 @@ const queryClient: QueryClient = new QueryClient({
   }),
   defaultOptions: {
     queries: {
-      // A dead session will not recover on retry, and retrying delays the
-      // redirect the technician needs.
-      retry: (failureCount, error) => !(error instanceof SessionExpiredError) && failureCount < 1,
-      retryDelay: 500,
+      /**
+       * A dead session will not recover on retry, and retrying delays the
+       * redirect the technician needs — so it is never retried.
+       *
+       * A connection failure is the opposite: almost always transient. The
+       * previous policy allowed one retry 500 ms later, which is shorter than
+       * anything that actually causes one. A backend redeploy takes ten to
+       * fifteen seconds, and both attempts landed inside the same outage, so a
+       * routine restart showed a technician in the field a red error about the
+       * API being unreachable. Cellular hand-offs behave the same way.
+       *
+       * Three attempts with backoff spans roughly ten seconds, which rides out
+       * a container restart without the screen ever admitting it happened. Two
+       * things make that safe rather than merely hopeful: these are GETs, and
+       * mutations stay at `retry: false` below, because a write that may have
+       * been applied must never be replayed on a guess.
+       */
+      retry: (failureCount, error) => {
+        if (error instanceof SessionExpiredError) return false;
+        return error instanceof ApiConnectionError ? failureCount < 3 : failureCount < 1;
+      },
+      retryDelay: (failureCount) => Math.min(500 * 2 ** failureCount, 8_000),
       staleTime: 30_000,
       gcTime: 10 * 60_000,
       refetchOnReconnect: true,
