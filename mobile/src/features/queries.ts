@@ -455,6 +455,14 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
         void refresh();
       },
     }),
+    confirmSummary: useMutation({
+      mutationFn: () => repositories.inspections.confirmRoomSummary(roomId),
+      onSuccess: (room) => {
+        mergeEntity(client, queryKeys.all, room);
+        client.setQueryData(queryKeys.room(roomId), room);
+        void refresh();
+      },
+    }),
   };
 }
 

@@ -1165,21 +1165,28 @@ model InspectionAssignment {
 }
 
 model InspectionArea {
-  id               String                         @id @default(uuid()) @db.Uuid
-  inspectionId     String                         @db.Uuid
-  propertyAreaId   String                         @db.Uuid
-  completionStatus InspectionAreaCompletionStatus @default(PENDING)
-  skipReason       String?
-  technicianNote   String?
-  completedAt      DateTime?
-  createdAt        DateTime                       @default(now())
-  updatedAt        DateTime                       @updatedAt
-  inspection       Inspection                     @relation(fields: [inspectionId], references: [id])
-  propertyArea     PropertyArea                   @relation(fields: [propertyAreaId], references: [id])
-  media            InspectionMedia[]
-  photos           InspectionPhoto[]
-  statusHistory    InspectionAreaStatusHistory[]
-  uploadSessions   MediaUploadSession[]
+  id                   String                         @id @default(uuid()) @db.Uuid
+  inspectionId         String                         @db.Uuid
+  propertyAreaId       String                         @db.Uuid
+  completionStatus     InspectionAreaCompletionStatus @default(PENDING)
+  skipReason           String?
+  technicianNote       String?
+  completedAt          DateTime?
+  // The technician's attestation that the AI's narrative summary matches the
+  // walkthrough they performed. Deliberately NOT InspectionFinding.reviewedBy:
+  // that pair records an admin approving or rejecting a finding, and a
+  // technician must never write to it. This says only "I read this and it
+  // reflects what I saw" — it changes no finding's review status.
+  summaryConfirmedAt   DateTime?
+  summaryConfirmedById String?                        @db.Uuid
+  createdAt            DateTime                       @default(now())
+  updatedAt            DateTime                       @updatedAt
+  inspection           Inspection                     @relation(fields: [inspectionId], references: [id])
+  propertyArea         PropertyArea                   @relation(fields: [propertyAreaId], references: [id])
+  media                InspectionMedia[]
+  photos               InspectionPhoto[]
+  statusHistory        InspectionAreaStatusHistory[]
+  uploadSessions       MediaUploadSession[]
 
   @@unique([inspectionId, propertyAreaId])
   @@index([inspectionId])
@@ -1197,15 +1204,15 @@ model InspectionAreaStatusHistory {
 }
 
 model InspectionMedia {
-  id                      String                 @id @default(uuid()) @db.Uuid
-  organizationId          String                 @db.Uuid
-  propertyId              String?                @db.Uuid
-  inspectionId            String                 @db.Uuid
-  inspectionAreaId        String                 @db.Uuid
-  technicianId            String                 @db.Uuid
+  id                      String                @id @default(uuid()) @db.Uuid
+  organizationId          String                @db.Uuid
+  propertyId              String?               @db.Uuid
+  inspectionId            String                @db.Uuid
+  inspectionAreaId        String                @db.Uuid
+  technicianId            String                @db.Uuid
   provider                String
   // Provider-side identity, and the client idempotency key for retried uploads.
-  providerMediaId         String                 @unique
+  providerMediaId         String                @unique
   // Where the bytes live in the storage bucket. Kept separate from
   // providerMediaId so the storage backend can change without rewriting
   // identity, and so keys can be tenant-scoped like photos and floor plans.
@@ -1219,61 +1226,61 @@ model InspectionMedia {
   durationSeconds         Int
   // PRIMARY_AREA is the one required room walkthrough (one per area, enforced by
   // a partial unique index); ADDITIONAL_ISSUE videos are extra labeled clips.
-  recordingType           VideoRecordingType     @default(PRIMARY_AREA)
+  recordingType           VideoRecordingType    @default(PRIMARY_AREA)
   label                   String?
   category                String?
   // Optional link to a finding (validated in app code; no Prisma relation to
   // avoid a second media↔finding relation). Plain FK enforced in the migration.
-  relatedFindingId        String?                @db.Uuid
+  relatedFindingId        String?               @db.Uuid
   captureGuidelineVersion String?
-  captureSessionId        String?                @unique
+  captureSessionId        String?               @unique
   capturePolicyVersion    String?
   // Summarized capture metrics only. Raw motion samples stay on the device.
   captureSummary          Json?
-  uploadStatus            MediaUploadStatus      @default(PENDING)
+  uploadStatus            MediaUploadStatus     @default(PENDING)
   // Encoding state at the provider, kept distinct from uploadStatus: bytes
   // arriving and the video being playable are different events, and Stream can
   // fail the second after succeeding at the first. No third "playbackStatus" —
   // for Stream, READY here *is* playable, and a duplicate field would only
   // create two answers to one question and eventually disagree.
-  processingStatus        MediaProcessingStatus  @default(PENDING)
+  processingStatus        MediaProcessingStatus @default(PENDING)
 
   // --- Cloudflare Stream ---
   // Null for every recording made before the Stream migration; those keep
   // playing from `storageKey` in R2. Presence of this is what marks a record as
   // Stream-backed, so no backfill is needed and no legacy evidence is stranded.
-  streamUid               String?                @unique
+  streamUid            String?   @unique
   // What the client says it will send, and what the provider has confirmed.
   // Percentage is derived rather than stored — a stored copy is one more thing
   // that can disagree with the bytes it summarises.
-  uploadBytesTotal        Int?
-  uploadBytesCompleted    Int?
-  originalFilename        String?
+  uploadBytesTotal     Int?
+  uploadBytesCompleted Int?
+  originalFilename     String?
   // Distinct from createdAt: when the technician recorded it, which can be
   // hours before a queued upload reaches the API from a property with no signal.
-  recordedAt              DateTime?
-  uploadedAt              DateTime?
-  readyAt                 DateTime?
-  failedAt                DateTime?
-  failureCode             String?
-  failureMessage          String?
-  retryCount              Int                    @default(0)
+  recordedAt           DateTime?
+  uploadedAt           DateTime?
+  readyAt              DateTime?
+  failedAt             DateTime?
+  failureCode          String?
+  failureMessage       String?
+  retryCount           Int       @default(0)
   // The device-side queue id, so a technician's stuck upload can be traced from
   // a support call to a row without guessing.
-  localQueueId            String?
+  localQueueId         String?
   // Filled from the ready webhook; the provider is authoritative for these.
-  thumbnailUrl            String?
-  widthPx                 Int?
-  heightPx                Int?
+  thumbnailUrl         String?
+  widthPx              Int?
+  heightPx             Int?
 
-  createdAt               DateTime               @default(now())
-  updatedAt               DateTime               @updatedAt
-  inspectionArea          InspectionArea         @relation(fields: [inspectionAreaId], references: [id])
-  technician              UserProfile            @relation(fields: [technicianId], references: [id])
-  processingEvents        MediaProcessingEvent[]
-  transcriptionJob        TranscriptionJob?
-  aiJobs                  AiAnalysisJob[]
-  findings                InspectionFinding[]
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  inspectionArea   InspectionArea         @relation(fields: [inspectionAreaId], references: [id])
+  technician       UserProfile            @relation(fields: [technicianId], references: [id])
+  processingEvents MediaProcessingEvent[]
+  transcriptionJob TranscriptionJob?
+  aiJobs           AiAnalysisJob[]
+  findings         InspectionFinding[]
 
   // One PRIMARY_AREA video per area is enforced by a partial unique index in the
   // migration; the plain index here supports lookups by area.

@@ -109,6 +109,12 @@ export interface InspectionRepository {
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
+  /**
+   * Records that the technician read the AI summary for an area and it matches
+   * what they saw. Not finding review — approving or rejecting a finding is an
+   * administrator action with no technician-side counterpart.
+   */
+  confirmRoomSummary(roomId: string): Promise<InspectionRoom>;
 }
 
 export interface FloorPlanRepository {

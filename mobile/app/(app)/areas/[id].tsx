@@ -359,7 +359,18 @@ export default function AreaDetailScreen() {
         <AiSummaryCard
           summary={summaries.byRoomId.get(item.id)}
           processingStatus={item.processingStatus}
+          confirmedAt={item.summaryConfirmedAt}
+          confirming={updates.confirmSummary.isPending}
+          onConfirm={() => updates.confirmSummary.mutate()}
         />
+        {/* Offline is the expected case here, and its message already says the
+            confirmation is safe on the device — so this reads as reassurance
+            rather than a failure the technician has to act on. */}
+        {updates.confirmSummary.error ? (
+          <Text className="mx-5 mt-2 text-xs leading-5 text-muted-foreground">
+            {updates.confirmSummary.error.message}
+          </Text>
+        ) : null}
 
         {/* Only shown once analysis has produced something. An empty "Findings"
             card during processing reads as "nothing wrong", which is a

@@ -179,6 +179,20 @@ export class TechnicianController {
   ) {
     return this.service.skipRoom(request.user, id, body.reason);
   }
+  /**
+   * Confirms the AI summary for an area reflects the walkthrough.
+   *
+   * Note what this route deliberately does not offer: no body, no verdict, no
+   * finding id. A technician confirms that the narrative matches the room they
+   * stood in — approving or rejecting the findings themselves stays an
+   * administrator decision, and there is no technician route that can reach it.
+   */
+  @Post('rooms/:roomId/confirm-summary') confirmRoomSummary(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+  ) {
+    return this.service.confirmRoomSummary(request.user, id);
+  }
   @Post('rooms/:roomId/complete') completeRoom(
     @Req() request: AuthenticatedRequest,
     @Param('roomId') id: string,

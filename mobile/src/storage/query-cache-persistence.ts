@@ -45,7 +45,13 @@ type StoredCache = {
 // page a `{ items, total, … }` envelope), and the row `status` widened to
 // accept the four server statuses the old schema rejected. A restored v2 cache
 // would hand the list screen an array where it now reads `.pages`.
-const CACHE_SCHEMA_VERSION = 3;
+// 4: rooms carry `summaryConfirmedAt`. The field is optional, so a restored v3
+// room still parses — but it parses as *unconfirmed*, which now gates
+// submission. A technician who had already confirmed would come back from a
+// warm start to a blocked submit button and a prompt to re-read summaries they
+// had read. One tap resolves it (the server keeps the original timestamp), but
+// a gate that looks stuck is the exact failure this cache buster exists for.
+const CACHE_SCHEMA_VERSION = 4;
 
 /**
  * Invalidates the whole stored cache when either the shipped version or the

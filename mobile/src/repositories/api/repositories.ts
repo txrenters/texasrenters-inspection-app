@@ -109,7 +109,9 @@ export const inspectionPageSchema = z.object({
   totalPages: z.number(),
 });
 
-const roomSchema = z.object({
+// Exported for the offline round-trip test: rooms are cached and re-parsed
+// from their own stored output, so this shape has to survive the trip.
+export const roomSchema = z.object({
   id: z.string(),
   inspectionId: z.string(),
   propertyAreaId: z.string(),
@@ -144,6 +146,10 @@ const roomSchema = z.object({
   ]),
   note: z.string().optional(),
   skipReason: z.string().optional(),
+  // Optional, not defaulted: a room cached before this field existed was never
+  // confirmed, and absent is exactly that. Round-trips cleanly because the
+  // mapper drops it rather than writing null.
+  summaryConfirmedAt: z.string().optional(),
   // Defaults keep older cached rooms (pre-Phase-2) parseable.
   environment: z.enum(['INDOOR', 'OUTDOOR', 'SEMI_OUTDOOR']).default('INDOOR'),
   category: z.string().nullable().optional(),
@@ -681,6 +687,26 @@ export class ApiInspectionRepository implements InspectionRepository {
   async completeRoom(roomId: string) {
     const room = roomSchema.parse(
       await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST'),
+    );
+    await this.persistRoom(room);
+    return room;
+  }
+  /**
+   * Records that the technician read the AI summary and it matches the area.
+   *
+   * Queued like a skip, because losing signal between reading the summary and
+   * tapping confirm should not cost the technician the attestation.
+   */
+  async confirmRoomSummary(roomId: string) {
+    const room = roomSchema.parse(
+      await queueOnConnectionFailure(
+        { id: `confirm-summary:${roomId}`, kind: 'room-confirm-summary', payload: { roomId } },
+        () =>
+          writeJson(
+            `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/confirm-summary`,
+            'POST',
+          ),
+      ),
     );
     await this.persistRoom(room);
     return room;

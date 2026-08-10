@@ -273,6 +273,17 @@ export class MockInspectionRepository implements InspectionRepository {
     useDemoStore.getState().updateRoom(roomId, { completionStatus: 'COMPLETED' });
     return this.room(roomId);
   }
+  async confirmRoomSummary(roomId: string) {
+    // Mirrors the server's idempotency: the first confirmation's timestamp is
+    // the record of when the technician actually read it, so re-confirming
+    // must not move it.
+    const room = await this.room(roomId);
+    if (room.summaryConfirmedAt) return room;
+    useDemoStore
+      .getState()
+      .updateRoom(roomId, { summaryConfirmedAt: new Date().toISOString() });
+    return this.room(roomId);
+  }
 }
 
 export class MockFloorPlanRepository implements FloorPlanRepository {

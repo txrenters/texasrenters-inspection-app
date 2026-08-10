@@ -11,6 +11,7 @@ import {
   MapPinIcon,
   SendIcon,
   ShieldCheckIcon,
+  SparklesIcon,
 } from 'lucide-react-native';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,6 +20,7 @@ import type { InspectionReportRoom } from '@/src/domain/models';
 import { useInspectionActions, useInspectionReport } from '@/src/features/queries';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { AI_REVIEW_DISCLAIMER } from '@/src/utils/ai-review';
+import { FINISHED_STATUSES, evaluateSubmissionGate } from '@/src/utils/submission-gate';
 import { HomeButton } from '@/src/components/HomeButton';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -34,22 +36,8 @@ registerIcons(
   MapPinIcon,
   SendIcon,
   ShieldCheckIcon,
+  SparklesIcon,
 );
-
-/**
- * What counts as finished for the purpose of submitting.
- *
- * `RECORDING_SAVED` is deliberately absent, and `UPLOADED` deliberately
- * present. A recording still on the phone is not evidence the office can
- * review — submitting on it hands over an inspection whose video may never
- * arrive. Once Cloudflare has the bytes, it is.
- *
- * The set previously read COMPLETED | SKIPPED | RECORDING_SAVED and could not
- * be satisfied at all: nothing wrote any of them for a Stream upload, so every
- * area reported NOT_STARTED and the button stayed disabled no matter how much
- * work had been done.
- */
-const finishedStatuses = new Set(['COMPLETED', 'SKIPPED', 'UPLOADED']);
 
 function readable(value: string) {
   return value
@@ -65,7 +53,7 @@ function RoomReviewRow({
   inspectionId: string;
   room: InspectionReportRoom;
 }) {
-  const finished = finishedStatuses.has(room.completionStatus);
+  const finished = FINISHED_STATUSES.has(room.completionStatus);
   const findingCount = room.findings?.length ?? 0;
   return (
     <Pressable
@@ -171,11 +159,8 @@ export default function InspectionReviewScreen() {
   }
 
   const { inspection, property, rooms, totals, generatedAt } = report.data;
-  const requiredRooms = rooms.filter((room) => room.isRequired);
-  const incompleteRequiredRooms = requiredRooms.filter(
-    (room) => !finishedStatuses.has(room.completionStatus),
-  );
-  const canSubmit = inspection.status === 'IN_PROGRESS' && incompleteRequiredRooms.length === 0;
+  const { canSubmit, blockedReason, incompleteRequiredRooms, unconfirmedSummaryRooms } =
+    evaluateSubmissionGate(rooms, inspection.status);
   // `findings` is required by the report schema, so a live response always has
   // it. A warm-start restore does not go through that schema — the persisted
   // react-query cache is written back as-is — so a payload stored by an older
@@ -250,6 +235,47 @@ export default function InspectionReviewScreen() {
                 {incompleteRequiredRooms.length} required room
                 {incompleteRequiredRooms.length === 1 ? '' : 's'} still need documentation.
               </Text>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Tappable, unlike the incomplete-rooms notice above: this one names a
+            specific area the technician has to open and read, so the panel is
+            the route there rather than a message about somewhere else. */}
+        {unconfirmedSummaryRooms.length > 0 && inspection.status === 'IN_PROGRESS' ? (
+          <View className="mx-5 mt-2 rounded-2xl border border-primary/20 bg-primary/5 p-4">
+            <View className="flex-row items-center gap-3">
+              <SparklesIcon size={20} className="text-primary" />
+              <View className="min-w-0 flex-1">
+                <Text className="text-sm font-semibold text-primary">
+                  {unconfirmedSummaryRooms.length} AI summar
+                  {unconfirmedSummaryRooms.length === 1 ? 'y' : 'ies'} to review
+                </Text>
+                <Text className="mt-0.5 text-xs leading-5 text-primary">
+                  Open each area and confirm the summary matches what you saw.
+                </Text>
+              </View>
+            </View>
+            <View className="mt-3 gap-2">
+              {unconfirmedSummaryRooms.map((room) => (
+                <Pressable
+                  accessibilityLabel={`Review the AI summary for ${room.name}`}
+                  accessibilityRole="button"
+                  className="min-h-12 flex-row items-center gap-2 rounded-xl bg-card px-3 py-3 active:opacity-70"
+                  key={room.id}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(app)/areas/[id]',
+                      params: { id: room.id, inspectionId: inspection.id },
+                    })
+                  }
+                >
+                  <Text className="min-w-0 flex-1 text-sm font-semibold text-foreground">
+                    {room.name}
+                  </Text>
+                  <ChevronRightIcon size={15} className="text-muted-foreground" />
+                </Pressable>
+              ))}
             </View>
           </View>
         ) : null}
@@ -415,15 +441,13 @@ export default function InspectionReviewScreen() {
           <Pressable
             // Disabled with no stated reason reads as a bug, and this is the
             // last control before an inspection leaves the technician's hands.
-            accessibilityHint={
-              canSubmit ? undefined : 'Complete every required room before submitting'
-            }
+            accessibilityHint={blockedReason}
             accessibilityLabel={
               actions.complete.isPending
                 ? 'Submitting inspection'
                 : canSubmit
                   ? 'Submit inspection'
-                  : 'Submit inspection, unavailable until required rooms are complete'
+                  : `Submit inspection, unavailable. ${blockedReason}`
             }
             accessibilityRole="button"
             accessibilityState={{
@@ -440,9 +464,7 @@ export default function InspectionReviewScreen() {
             <Text className="font-bold text-primary-foreground">
               {actions.complete.isPending
                 ? 'Submitting inspection…'
-                : canSubmit
-                  ? 'Submit inspection'
-                  : 'Complete required rooms first'}
+                : (blockedReason ?? 'Submit inspection')}
             </Text>
           </Pressable>
           {actions.complete.isError ? (

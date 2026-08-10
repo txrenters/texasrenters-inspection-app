@@ -59,6 +59,14 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
       send(`/api/v1/technician/rooms/${encodeURIComponent(String(payload.roomId))}/skip`, 'POST', {
         reason: payload.reason,
       }),
+    // Safe to replay: the server keeps the first confirmation's timestamp, so a
+    // duplicate cannot rewrite when the technician actually read the summary.
+    'room-confirm-summary': (payload, send) =>
+      send(
+        `/api/v1/technician/rooms/${encodeURIComponent(String(payload.roomId))}/confirm-summary`,
+        'POST',
+        {},
+      ),
   };
 
 type Sender = (path: string, method: string, body: unknown) => Promise<unknown>;

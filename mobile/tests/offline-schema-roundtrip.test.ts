@@ -2,6 +2,7 @@ import {
   findingSchema,
   inspectionPageSchema,
   roomPhotoSchema,
+  roomSchema,
 } from '../src/repositories/api/repositories';
 
 /**
@@ -163,5 +164,53 @@ describe('inspectionPageSchema round trip', () => {
   it('rejects a page whose envelope has no total rather than caching a broken count', () => {
     const { total: _total, ...withoutTotal } = serverPage;
     expect(() => inspectionPageSchema.parse(withoutTotal)).toThrow();
+  });
+});
+
+const serverRoom = {
+  id: 'room-1',
+  inspectionId: 'inspection-1',
+  propertyAreaId: 'area-1',
+  name: 'Library',
+  floorName: 'Ground',
+  order: 1,
+  isRequired: true,
+  inspectionType: 'OCCUPIED',
+  baseline: {
+    summary: 'No move-in baseline is available.',
+    condition: 'NOT_AVAILABLE',
+    existingDefects: [],
+    evidenceCount: 0,
+  },
+  completionStatus: 'COMPLETED',
+  uploadStatus: 'COMPLETED',
+  processingStatus: 'READY_FOR_REVIEW',
+  environment: 'INDOOR',
+  category: 'INDOOR_ROOM',
+  source: 'AI_FLOOR_PLAN',
+  areaStatus: 'APPROVED',
+  summaryConfirmedAt: '2026-08-11T09:00:00.000Z',
+};
+
+describe('roomSchema round trip', () => {
+  it('produces an identical value on the second parse', () => {
+    const { first, second } = roundTrip(roomSchema, serverRoom);
+    expect(second).toEqual(first);
+  });
+
+  it('keeps the summary confirmation across the trip', () => {
+    // The cached copy is what a warm start reads. Losing this field would show
+    // a technician a confirmation prompt for a summary they already signed off.
+    const { second } = roundTrip(roomSchema, serverRoom);
+    expect(second).toMatchObject({ summaryConfirmedAt: '2026-08-11T09:00:00.000Z' });
+  });
+
+  it('treats an absent confirmation as unconfirmed rather than failing', () => {
+    // Rooms cached before the field existed, and rooms nobody has confirmed,
+    // arrive the same way: with the key missing. Both mean "not confirmed".
+    const { summaryConfirmedAt: _omitted, ...unconfirmed } = serverRoom;
+    const { first, second } = roundTrip(roomSchema, unconfirmed);
+    expect((first as { summaryConfirmedAt?: string }).summaryConfirmedAt).toBeUndefined();
+    expect(second).toEqual(first);
   });
 });

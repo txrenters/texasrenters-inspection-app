@@ -1,11 +1,11 @@
-import { InfoIcon, Loader2Icon, SparklesIcon } from 'lucide-react-native';
-import { Text, View } from 'react-native';
+import { CheckCircle2Icon, InfoIcon, Loader2Icon, SparklesIcon } from 'lucide-react-native';
+import { Pressable, Text, View } from 'react-native';
 
 import type { Finding, InspectionRoom } from '../domain/models';
 import { AI_REVIEW_DISCLAIMER, describeConfidence } from '../utils/ai-review';
 import { registerIcons } from '../lib/icons';
 
-registerIcons(InfoIcon, Loader2Icon, SparklesIcon);
+registerIcons(CheckCircle2Icon, InfoIcon, Loader2Icon, SparklesIcon);
 
 /**
  * The AI's narrative summary of one room.
@@ -18,10 +18,18 @@ registerIcons(InfoIcon, Loader2Icon, SparklesIcon);
 export function AiSummaryCard({
   summary,
   processingStatus,
+  confirmedAt,
+  onConfirm,
+  confirming = false,
 }: {
   /** The summary finding for this room, or undefined if none exists yet. */
   summary?: Finding;
   processingStatus: InspectionRoom['processingStatus'];
+  /** When the technician attested this matches the area; undefined if not yet. */
+  confirmedAt?: string;
+  /** Omitted on read-only surfaces, which then show state without an action. */
+  onConfirm?: () => void;
+  confirming?: boolean;
 }) {
   const analyzing =
     !summary && processingStatus !== 'READY_FOR_REVIEW' && processingStatus !== 'FAILED';
@@ -65,6 +73,48 @@ export function AiSummaryCard({
           No summary was produced for this area.
         </Text>
       )}
+
+      {/* Confirmation is only offered once there is something to confirm.
+          Showing the control while analysis runs would invite a technician to
+          vouch for text they have not read.
+
+          What this attests is deliberately narrow: that the description matches
+          the room they walked. Approving, rejecting or editing the findings
+          themselves is an administrator decision, and no control here — or on
+          any technician screen — can reach it. */}
+      {summary ? (
+        confirmedAt ? (
+          <View className="mt-4 flex-row items-center gap-2 border-t border-border pt-3">
+            <CheckCircle2Icon size={15} className="text-chart-3" />
+            <Text className="min-w-0 flex-1 text-xs font-semibold leading-5 text-chart-3">
+              You confirmed this summary matches the area
+            </Text>
+          </View>
+        ) : onConfirm ? (
+          <>
+            <Pressable
+              accessibilityLabel="Confirm this summary matches the area"
+              accessibilityRole="button"
+              accessibilityState={{ busy: confirming, disabled: confirming }}
+              className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3 active:opacity-80"
+              disabled={confirming}
+              onPress={onConfirm}
+            >
+              {confirming ? (
+                <Loader2Icon size={16} className="text-primary-foreground" />
+              ) : (
+                <CheckCircle2Icon size={16} className="text-primary-foreground" />
+              )}
+              <Text className="font-semibold text-primary-foreground">
+                {confirming ? 'Confirming…' : 'Confirm summary'}
+              </Text>
+            </Pressable>
+            <Text className="mt-2 text-center text-xs leading-5 text-muted-foreground">
+              Confirm that this describes what you saw. The office reviews the findings.
+            </Text>
+          </>
+        ) : null
+      ) : null}
 
       {summary ? (
         <View className="mt-4 flex-row items-start gap-2.5 border-t border-border pt-3">

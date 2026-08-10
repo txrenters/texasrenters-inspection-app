@@ -125,6 +125,12 @@ export interface InspectionRoom {
   reviewStatus?: FindingStatus;
   note?: string;
   skipReason?: string;
+  /**
+   * When the technician attested that the AI summary matches what they saw.
+   * Undefined means unconfirmed — including on areas that have no summary yet,
+   * which are not awaiting anything.
+   */
+  summaryConfirmedAt?: string;
   // Area classification and provenance (Phase 2). Optional so pre-Phase-2 mock
   // data stays valid; the API always populates them (schema defaults).
   environment?: AreaEnvironment;

@@ -151,6 +151,7 @@ const technicianRoomSelect = {
   completionStatus: true,
   skipReason: true,
   technicianNote: true,
+  summaryConfirmedAt: true,
   inspection: { select: { inspectionType: true, baselineInspectionId: true } },
   propertyArea: {
     select: {
@@ -839,6 +840,63 @@ export class TechnicianService {
       data: { technicianNote: note.trim() || null },
       select: technicianRoomSelect,
     });
+    return this.mapRoom(room);
+  }
+
+  /**
+   * The technician's attestation that the AI's narrative summary for this area
+   * matches the walkthrough they performed.
+   *
+   * This is **not** finding review. A technician cannot approve, reject or edit
+   * an AI finding — that is an administrator decision, enforced here by writing
+   * only to the area's own confirmation columns and never touching
+   * `InspectionFinding.reviewStatus`/`reviewedById`. The claim recorded is the
+   * weaker one the technician is actually positioned to make: they were in the
+   * room, and this describes it.
+   *
+   * Refuses when no summary exists yet: confirming nothing is not a statement
+   * about anything, and a stored confirmation that predates the summary would
+   * later read as though a human had vouched for text they never saw.
+   *
+   * Idempotent — re-confirming keeps the original timestamp, so the record
+   * continues to say when the technician actually read it.
+   */
+  async confirmRoomSummary(user: AuthenticatedUser, id: string) {
+    const existing = await this.assignedRoom(user, id);
+
+    const summary = await this.prisma.inspectionFinding.findFirst({
+      where: {
+        inspectionId: existing.inspectionId,
+        propertyAreaId: existing.propertyAreaId,
+        ...ROOM_SUMMARY_WHERE,
+      },
+      select: { id: true },
+    });
+    if (!summary)
+      throw new ApplicationError(
+        409,
+        'ROOM_SUMMARY_NOT_READY',
+        'This area has no AI summary to confirm yet.',
+      );
+
+    if (existing.summaryConfirmedAt) return this.mapRoom(existing);
+
+    const room = await this.prisma.inspectionArea.update({
+      where: { id },
+      data: { summaryConfirmedAt: new Date(), summaryConfirmedById: user.id },
+      select: technicianRoomSelect,
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action: 'TECHNICIAN_SUMMARY_CONFIRMED',
+        entityType: 'InspectionArea',
+        entityId: id,
+        metadata: { inspectionId: existing.inspectionId, findingId: summary.id },
+      },
+    });
+    this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
   }
 
@@ -1593,8 +1651,12 @@ export class TechnicianService {
         })),
       };
     });
+    // Must stay in step with the mobile submit gate. RECORDING_SAVED is not
+    // finished — the bytes are still on the phone — and UPLOADED is, because
+    // Cloudflare has them. Counting a saved recording as done reported progress
+    // the office could not actually review.
     const finished = rooms.filter((room) =>
-      ['COMPLETED', 'SKIPPED', 'RECORDING_SAVED'].includes(room.completionStatus),
+      ['COMPLETED', 'SKIPPED', 'UPLOADED'].includes(room.completionStatus),
     );
     return {
       inspection: this.mapInspection(record, user.id),
@@ -1605,6 +1667,11 @@ export class TechnicianService {
         rooms: rooms.length,
         finishedRooms: finished.length,
         summaries: rooms.filter((room) => room.summary).length,
+        // Only areas that actually have a summary can be awaiting confirmation.
+        // Counting summary-less areas would produce an outstanding item the
+        // technician has no way to clear — the gate must stay satisfiable.
+        unconfirmedSummaries: rooms.filter((room) => room.summary && !room.summaryConfirmedAt)
+          .length,
         defectFindings: rooms.reduce((sum, room) => sum + room.findings.length, 0),
         photos: rooms.reduce((sum, room) => sum + room.photoCount, 0),
         pendingReviewCount: record._count.findings,
@@ -1753,6 +1820,7 @@ export class TechnicianService {
         : 'NOT_STARTED',
       note: record.technicianNote ?? undefined,
       skipReason: record.skipReason ?? undefined,
+      summaryConfirmedAt: record.summaryConfirmedAt?.toISOString() ?? undefined,
     };
   }
 
