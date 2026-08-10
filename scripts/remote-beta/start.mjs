@@ -2,12 +2,19 @@
 /**
  * Cold-starts the temporary remote beta and launches mobile.
  *
- * One Docker-managed ngrok URL terminates at the remote-beta gateway:
- *   /api/* and /socket.io/* -> backend container
- *   every other path        -> V2 Metro on host port 8082
+ * A Cloudflare Tunnel replaces the ngrok agent that used to sit here. The
+ * reason is availability: the free ngrok session drops and takes the beta with
+ * it, while cloudflared holds four redundant edge connections and rebuilds them
+ * itself.
  *
- * Expo receives the public URL through EXPO_PACKAGER_PROXY_URL and therefore
- * does not create a competing ngrok agent session.
+ * Routing moved with it. A token-based tunnel takes its hostnames from the
+ * Cloudflare dashboard, so this script can no longer discover the public URL —
+ * it reads CLOUDFLARE_TUNNEL_HOSTNAME, and treats an absent one as "the routes
+ * have not been added yet" rather than a failure.
+ *
+ * The gateway still path-routes one hostname when that is what is published:
+ *   /api/* and /socket.io/* -> backend container
+ *   every other path        -> Metro on host port 8082
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -26,7 +33,7 @@ const ENV_FILE = join(ROOT, 'backend', '.env.local');
 // reads --env-file and the root .env — never a service's env_file.
 const WEB_ENV_FILE = join(ROOT, 'web-app', '.env.local');
 const MOBILE_ENV = join(ROOT, 'mobile', '.env.local');
-const NGROK_AGENT_API = 'http://127.0.0.1:4041/api/tunnels';
+const TUNNEL_READY_URL = 'http://127.0.0.1:2000/ready';
 const PNPM_CLI = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'pnpm.js');
 
 const log = (message) => console.log(message);
@@ -67,10 +74,14 @@ async function preflight() {
   if (!(await waitForDocker()))
     fail('Docker Desktop did not become ready within 60 seconds. Start it and retry.');
 
-  if (!readEnvValue('NGROK_AUTHTOKEN')) fail('NGROK_AUTHTOKEN is missing from backend/.env.local.');
-  if (!readEnvValue('NGROK_DOMAIN')) fail('NGROK_DOMAIN is missing from backend/.env.local.');
+  if (!readEnvValue('CLOUDFLARE_TUNNEL_TOKEN'))
+    fail(
+      'CLOUDFLARE_TUNNEL_TOKEN is missing from backend/.env.local.\n' +
+        '  Zero Trust → Networks → Tunnels → your tunnel → Install connector,\n' +
+        '  and copy the token out of the shown command.',
+    );
 
-  log('✓ Docker, Compose, and required ngrok configuration are available');
+  log('✓ Docker, Compose, and the Cloudflare tunnel token are available');
 }
 
 const compose = (...args) =>
@@ -121,24 +132,25 @@ async function waitForBackendHealthy(timeoutMs = 180_000) {
   return false;
 }
 
-async function resolvePublicGateway(timeoutMs = 120_000) {
+/**
+ * Waits for cloudflared to register at least one edge connection.
+ *
+ * There is no equivalent of ngrok's tunnel-listing API: a token-based tunnel
+ * gets its hostnames from the Cloudflare dashboard, so the agent does not know
+ * what it is published as and cannot be asked. `/ready` on the metrics port is
+ * what it can answer — whether it is actually carrying traffic.
+ */
+async function waitForTunnelReady(timeoutMs = 120_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
-      const response = await fetch(NGROK_AGENT_API, { signal: AbortSignal.timeout(5_000) });
+      const response = await fetch(TUNNEL_READY_URL, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) {
-        const payload = await response.json();
-        const tunnels = Array.isArray(payload?.tunnels) ? payload.tunnels : [];
-        const gateway = tunnels.find(
-          (candidate) =>
-            candidate?.proto === 'https' &&
-            typeof candidate?.public_url === 'string' &&
-            String(candidate?.config?.addr ?? '').includes('gateway'),
-        );
-        if (gateway) return new URL(gateway.public_url).origin;
+        const payload = await response.json().catch(() => null);
+        return { connections: payload?.readyConnections ?? null };
       }
     } catch {
-      // The agent can take a few seconds to register after Compose starts it.
+      // cloudflared takes a few seconds to register after Compose starts it.
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
@@ -149,7 +161,6 @@ async function verifyPublicBackend(publicUrl) {
   const healthUrl = new URL('/api/v1/health', publicUrl);
   try {
     const response = await fetch(healthUrl, {
-      headers: { 'ngrok-skip-browser-warning': 'true' },
       signal: AbortSignal.timeout(15_000),
     });
     if (response.ok) return;
@@ -189,26 +200,52 @@ function updateMobileEnv(publicUrl) {
 
 await preflight();
 
-log('\n▸ Building and starting backend, gateway, and ngrok…');
+log('\n▸ Building and starting backend, gateway, and the Cloudflare tunnel…');
 if (compose('up', '-d', '--build').status !== 0) fail('docker compose up failed.');
 
 log('▸ Waiting for backend health…');
 if (!(await waitForBackendHealthy())) fail('Backend did not become healthy in time.');
 log('✓ Backend healthy');
 
-log('▸ Resolving the live Docker-managed ngrok gateway…');
-const publicUrl = await resolvePublicGateway();
-if (!publicUrl)
+log('▸ Waiting for the tunnel to register with Cloudflare…');
+const tunnel = await waitForTunnelReady();
+if (!tunnel)
   fail(
-    'No HTTPS ngrok gateway was registered. Inspect it with:\n' +
+    'cloudflared did not register an edge connection. Inspect it with:\n' +
       '  docker compose --env-file backend/.env.local -f compose.yaml -f compose.remote-beta.yaml logs tunnel',
   );
+log(`✓ Tunnel connected (${tunnel.connections ?? 'unknown'} edge connections)`);
 
-log('▸ Verifying the public REST health endpoint…');
-await verifyPublicBackend(publicUrl);
-log('✓ Public REST health endpoint responding');
+/**
+ * The hostname is the dashboard's to decide, not this script's.
+ *
+ * cloudflared cannot report what it is published as, so an absent hostname is
+ * an ordinary state — the tunnel is up and the routes have not been added yet —
+ * rather than a failure. Failing here would block the very step that fixes it.
+ */
+const publicUrl = readEnvValue('CLOUDFLARE_TUNNEL_HOSTNAME')
+  ? `https://${readEnvValue('CLOUDFLARE_TUNNEL_HOSTNAME').replace(/^https?:\/\//, '').replace(/\/$/, '')}`
+  : null;
 
-updateMobileEnv(publicUrl);
+if (publicUrl) {
+  log('▸ Verifying the public REST health endpoint…');
+  await verifyPublicBackend(publicUrl);
+  log('✓ Public REST health endpoint responding');
+  updateMobileEnv(publicUrl);
+} else {
+  log(
+    '\n  No CLOUDFLARE_TUNNEL_HOSTNAME set, so mobile/.env.local was left alone.\n' +
+      '  Add a public hostname in Zero Trust → Networks → Tunnels → Public Hostnames,\n' +
+      '  pointing at one of these Compose service URLs:\n' +
+      '\n' +
+      '    http://gateway:80                 API + websockets + Metro on one host\n' +
+      '    http://backend:3000               REST API and websockets only\n' +
+      '    http://web:5454                   administrator app only\n' +
+      '    http://host.docker.internal:8082  Metro only\n' +
+      '\n' +
+      '  Then set CLOUDFLARE_TUNNEL_HOSTNAME in backend/.env.local and re-run.',
+  );
+}
 
 log(`
 ────────────────────────────────────────────────
@@ -216,10 +253,11 @@ log(`
 
  Backend container : healthy
  Local backend     : http://127.0.0.1:3000
- Public gateway    : ${publicUrl}
- REST API          : ${publicUrl}/api/v1
+ Tunnel            : connected, ${tunnel.connections ?? '?'} edge connections
+ Public gateway    : ${publicUrl ?? '(no CLOUDFLARE_TUNNEL_HOSTNAME set yet)'}
+ REST API          : ${publicUrl ? `${publicUrl}/api/v1` : '(pending a public hostname)'}
  Mobile client     : mobile
- Tunnel inspector  : http://127.0.0.1:4041 (local only)
+ Tunnel metrics    : http://127.0.0.1:2000/ready (local only)
 
  Metro             : starting V2 on port 8082
  Next              : open Expo Go and scan the QR code below

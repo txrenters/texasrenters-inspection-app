@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Safe status snapshot of the V2 remote-beta session. Prints no secrets. */
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -42,32 +43,47 @@ console.log(
       : '  (none running)'),
 );
 
-let publicUrl = null;
-let upstream = null;
+/**
+ * cloudflared cannot be asked what it is published as — a token-based tunnel
+ * receives its hostnames from the dashboard and never learns them. So this
+ * reports the two things it can know: whether the tunnel is carrying traffic,
+ * and which hostname we were told to expect.
+ */
+let readyConnections = null;
 try {
-  const response = await fetch('http://127.0.0.1:4041/api/tunnels');
-  if (response.ok) {
-    const body = await response.json();
-    const tunnel = (body.tunnels ?? []).find(
-      (candidate) =>
-        candidate.public_url?.startsWith('https://') &&
-        String(candidate?.config?.addr ?? '').includes('gateway'),
-    );
-    publicUrl = tunnel?.public_url ?? null;
-    upstream = tunnel?.config?.addr ?? null;
-  }
+  const response = await fetch('http://127.0.0.1:2000/ready', {
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (response.ok) readyConnections = (await response.json().catch(() => null))?.readyConnections ?? 0;
 } catch {
-  // Agent is not running.
+  // Not running, or still registering.
 }
 
-console.log(`\nPublic gateway: ${publicUrl ?? '(ngrok gateway unavailable)'}`);
-console.log(`Tunnel upstream: ${upstream ?? '(unavailable)'}`);
+const configuredHostname = (() => {
+  try {
+    const raw = readFileSync(ENV_FILE, 'utf8').replace(/^﻿/, '');
+    return raw.match(/^CLOUDFLARE_TUNNEL_HOSTNAME=(.+)$/m)?.[1]?.trim() || null;
+  } catch {
+    return null;
+  }
+})();
+const publicUrl = configuredHostname
+  ? `https://${configuredHostname.replace(/^https?:\/\//, '').replace(/\/$/, '')}`
+  : null;
+
+console.log(
+  `\nTunnel edge   : ${
+    readyConnections === null
+      ? '(cloudflared metrics unreachable — is the tunnel running?)'
+      : `${readyConnections} ready connection${readyConnections === 1 ? '' : 's'}`
+  }`,
+);
+console.log(`Public gateway: ${publicUrl ?? '(no CLOUDFLARE_TUNNEL_HOSTNAME configured)'}`);
 
 if (publicUrl) {
   try {
     const started = Date.now();
     const response = await fetch(`${publicUrl}/api/v1/health`, {
-      headers: { 'ngrok-skip-browser-warning': 'true' },
     });
     console.log(`REST health    : ${response.status} in ${Date.now() - started}ms`);
   } catch (error) {

@@ -25,7 +25,9 @@ services:
       # Expo web for mobile runs on 8082 during remote-beta development.
       MOBILE_APP_ORIGIN: http://localhost:8082
     ports:
-      # ngrok is the only public entry point. The host binding stays loopback.
+      # The tunnel is the only public entry point. The host binding stays
+      # loopback — Cloudflare reaches this over the Compose network by service
+      # name, so nothing needs publishing to reach the internet.
       - '127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}'
 
   web:
@@ -33,8 +35,12 @@ services:
       # The admin app is not part of the tester-facing tunnel.
       - '127.0.0.1:${WEB_PORT:-5454}:${WEB_PORT:-5454}'
 
-  # One internal gateway keeps the account to a single ngrok agent session while
-  # exposing both the REST API and Metro to remote testers.
+  # Path-routes one hostname across the REST API, websockets, and Metro.
+  #
+  # Originally here because a free ngrok account gets one agent session, so
+  # everything had to share a URL. Cloudflare removes that constraint — a
+  # hostname per service is fine now — but one origin serving both Metro and the
+  # API is still the simplest thing to point a test device at.
   gateway:
     image: nginx:1.29-alpine
     volumes:
@@ -48,22 +54,50 @@ services:
       - 'host.docker.internal:host-gateway'
     restart: unless-stopped
 
+  # Cloudflare Tunnel, replacing ngrok.
+  #
+  # The reason is availability, not preference. The free ngrok agent holds a
+  # single session that drops and takes the beta down with it; cloudflared opens
+  # four redundant edge connections and re-establishes them itself, so a dropped
+  # link is invisible rather than an outage.
+  #
+  # Routing lives in the Cloudflare dashboard, not here. A token-based tunnel
+  # pulls its ingress rules from Zero Trust → Networks → Tunnels → Public
+  # Hostnames, which is why this command names no upstream. Because this
+  # container sits on the Compose network, a public hostname can point at any of
+  # these service URLs:
+  #
+  #   http://gateway:80                 one hostname, path-routed:
+  #                                       /api/ and /socket.io/ → backend
+  #                                       everything else       → Metro
+  #   http://backend:3000               the REST API and websockets on their own
+  #   http://web:5454                   the administrator app on its own
+  #   http://host.docker.internal:8082  Metro directly
+  #
+  # Per-hostname routing is the better shape now that Cloudflare can do it:
+  # the gateway existed to multiplex a single ngrok URL, and nothing forces that
+  # compromise any more. It stays because Metro and the API sharing one origin is
+  # still convenient for a device on a phone network.
   tunnel:
-    image: ngrok/ngrok:latest
-    # The free ngrok dev domain is stable across restarts. It terminates at the
-    # gateway instead of competing with a second Expo-managed ngrok agent.
-    command:
-      - http
-      - http://gateway:80
-      - --url=https://${NGROK_DOMAIN}
-      - --log
-      - stdout
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --metrics 0.0.0.0:2000 run
     environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?NGROK_AUTHTOKEN is missing from backend/.env.local}
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN is missing from backend/.env.local}
     depends_on:
       gateway:
         condition: service_started
     ports:
-      # The inspection API contains captured payloads, so it remains loopback.
-      - '127.0.0.1:4041:4040'
+      # cloudflared's own metrics, which is where /ready lives — the readiness
+      # signal that replaces ngrok's tunnel-listing API. Loopback only: it
+      # reports connection state, not a public surface.
+      - '127.0.0.1:2000:2000'
+    healthcheck:
+      # /ready is 200 once at least one edge connection is registered, so the
+      # container is unhealthy while the tunnel is genuinely down rather than
+      # merely running.
+      test: ['CMD-SHELL', 'cloudflared --version >/dev/null 2>&1 || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
