@@ -1,7 +1,11 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { InspectionType, type AdminProperty } from '@texasrenters/shared';
+import {
+  InspectionType,
+  inspectionRequiresEveryArea,
+  type AdminProperty,
+} from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -15,7 +19,14 @@ import { PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
@@ -218,6 +229,24 @@ function CreateInspectionForm() {
   const [technicianWillCapture, setTechnicianWillCapture] = useState(false);
   useEffect(() => setTechnicianWillCapture(false), [propertyId]);
 
+  /**
+   * Which areas this inspection covers, when the type allows a choice.
+   *
+   * Move-in and move-out always take the whole layout — they are compared to
+   * each other area by area, and a subset on either end leaves the other with
+   * counterparts that never resolve. The picker is therefore hidden for those
+   * rather than shown disabled: there is no decision to make.
+   *
+   * Held as the *excluded* set, so an area added to the property after this
+   * form was opened is included by default. Tracking the included set instead
+   * would silently drop it, which is the wrong way round for a scope decision.
+   */
+  const [excludedAreaIds, setExcludedAreaIds] = useState<ReadonlySet<string>>(new Set());
+  // A scope decision about one property, and about one kind of visit.
+  useEffect(() => setExcludedAreaIds(new Set()), [propertyId, unitId, inspectionType]);
+  const scopeIsChoosable = !inspectionRequiresEveryArea(inspectionType) && hasApprovedAreas;
+  const selectedAreas = approvedAreas.filter((area) => !excludedAreaIds.has(area.id));
+
   useEffect(() => {
     if (prefill.data) {
       // Empty rather than absent: the portfolio field is a filter, and a property
@@ -257,6 +286,12 @@ function CreateInspectionForm() {
         // is only offered there — but sent as chosen rather than re-derived, so
         // the record says what was decided.
         allowTechnicianAreaCapture: technicianWillCapture || undefined,
+        // Only when it is genuinely a subset. Sending every id would be
+        // refused for a move-in or move-out, and says nothing extra otherwise.
+        areaIds:
+          scopeIsChoosable && selectedAreas.length < approvedAreas.length
+            ? selectedAreas.map((area) => area.id)
+            : undefined,
         idempotencyKey: crypto.randomUUID(),
       });
       router.push(`/inspections/${created.id}`);
@@ -621,6 +656,56 @@ function CreateInspectionForm() {
           </CardContent>
         </Card>
 
+        {/* Scope, for the types that inspect part of a property. Hidden rather
+            than disabled for move-in and move-out: they always cover the whole
+            layout, so there is no decision to present. */}
+        {scopeIsChoosable ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Which areas</CardTitle>
+              <CardDescription>
+                {inspectionTypeLabel(inspectionType)} inspections cover the areas you choose.
+                Everything is included unless you clear it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-2 sm:grid-cols-2">
+              {approvedAreas.map((area) => (
+                <label
+                  className="hover:bg-accent flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm"
+                  key={area.id}
+                >
+                  <Checkbox
+                    checked={!excludedAreaIds.has(area.id)}
+                    onCheckedChange={(checked) =>
+                      setExcludedAreaIds((current) => {
+                        const next = new Set(current);
+                        if (checked === true) next.delete(area.id);
+                        else next.add(area.id);
+                        return next;
+                      })
+                    }
+                  />
+                  <span className="min-w-0 flex-1 truncate">{area.name}</span>
+                  {area.floor?.name ? (
+                    <span className="text-muted-foreground shrink-0 text-xs">{area.floor.name}</span>
+                  ) : null}
+                </label>
+              ))}
+            </CardContent>
+            <CardFooter className="justify-between border-t">
+              <p className="text-muted-foreground text-sm">
+                {selectedAreas.length} of {approvedAreas.length} areas
+              </p>
+              {/* Clearing every area would schedule a visit with nothing to
+                  inspect, so the submit gate below refuses it and this says so
+                  where the decision is made. */}
+              {selectedAreas.length === 0 ? (
+                <p className="text-destructive text-sm">Select at least one area.</p>
+              ) : null}
+            </CardFooter>
+          </Card>
+        ) : null}
+
         {!needsAreaSetup && approvedAreas.length ? (
           <Alert variant={areasWithChecklist === approvedAreas.length ? 'success' : 'default'}>
             <AlertDescription>
@@ -727,6 +812,7 @@ function CreateInspectionForm() {
               isSubmitting ||
               mutation.isPending ||
               propertyAreas.isLoading ||
+              (scopeIsChoosable && selectedAreas.length === 0) ||
               (needsAreaSetup && !technicianWillCapture) ||
               units.isLoading ||
               (requiresUnit && !unitId)
