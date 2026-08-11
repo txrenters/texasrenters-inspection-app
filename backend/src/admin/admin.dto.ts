@@ -429,3 +429,12 @@ export class ApprovePropertyAreasDto {
 export class DeletePropertyAreasDto {
   @ArrayMinSize(1) @IsUUID('4', { each: true }) areaIds!: string[];
 }
+
+/**
+ * Bulk inspection deletion. POST-with-body rather than DELETE, matching
+ * `DeletePropertyAreasDto` above — a DELETE carrying a body is poorly supported
+ * by proxies and by `fetch`.
+ */
+export class DeleteInspectionsDto {
+  @ArrayMinSize(1) @IsUUID('4', { each: true }) inspectionIds!: string[];
+}
