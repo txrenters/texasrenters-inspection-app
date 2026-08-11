@@ -2,9 +2,20 @@ import type { ExpoConfig } from 'expo/config';
 
 const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
 
-/** `--background` from global.css, so splash and first paint agree. */
-const LIGHT_BACKGROUND = '#FCFBF8';
-const DARK_BACKGROUND = '#0A0F18';
+/**
+ * The splash artwork's own background, sampled from the images themselves.
+ *
+ * Deliberately *not* the app tokens above. `resizeMode: 'contain'` letterboxes
+ * the image, and the surrounding area is painted with `backgroundColor` — so a
+ * value that does not match the artwork draws a visible band around it for the
+ * whole of the launch. The dark pair was the worse of the two: navy artwork on
+ * a near-black surround.
+ *
+ * The cost is a slight step at hand-off to the first screen instead of a hard
+ * edge for the entire splash. Update these if the artwork is ever re-exported.
+ */
+const SPLASH_LIGHT_BACKGROUND = '#FFFFFF';
+const SPLASH_DARK_BACKGROUND = '#0C1E42';
 
 // The store identity, and the one part of this file that is effectively
 // permanent: `bundleIdentifier` and `package` cannot be changed after the first
@@ -47,13 +58,13 @@ const config: ExpoConfig = {
         // colour. `dark` is honoured because userInterfaceStyle is 'automatic'.
         image: './assets/splash-light.png',
         resizeMode: 'contain',
-        backgroundColor: LIGHT_BACKGROUND,
+        backgroundColor: SPLASH_LIGHT_BACKGROUND,
         dark: {
           // A separate asset, not a tint: the logo's "TEXAS" and ".com" are
           // dark navy and vanish on a dark background, while the green
           // "RENTERS" reads fine. See scripts/build-splash.mjs.
           image: './assets/splash-dark.png',
-          backgroundColor: DARK_BACKGROUND,
+          backgroundColor: SPLASH_DARK_BACKGROUND,
         },
       },
     ],
@@ -80,7 +91,10 @@ const config: ExpoConfig = {
   android: {
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
-      backgroundColor: '#145347',
+      // The artwork's own navy, so nothing shows through where the launcher's
+      // mask exposes background. Was the brand green, which framed the navy
+      // foreground in a ring of a colour the icon does not otherwise use.
+      backgroundColor: SPLASH_DARK_BACKGROUND,
     },
     package: 'com.texasrenters.inspection',
   },
