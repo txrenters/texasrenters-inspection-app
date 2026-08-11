@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { BottomSheet } from '../components/BottomSheet';
 import { registerIcons } from '../lib/icons';
+import type { ChecklistAssessment } from '../domain/models';
 import { checklistProgress, type ChecklistItem } from './area-checklist';
 
 registerIcons(CheckIcon, CircleIcon, MicIcon);
@@ -19,10 +20,87 @@ registerIcons(CheckIcon, CircleIcon, MicIcon);
  * only evidence that something was talked about, so the technician stays able
  * to correct it either way.
  */
+/** The three axes the printed report scores, in the order it prints them. */
+const AXES = [
+  { key: 'isClean', label: 'Clean' },
+  { key: 'isUndamaged', label: 'Undamaged' },
+  { key: 'isWorking', label: 'Working' },
+] as const;
+
+export type ChecklistAxisKey = (typeof AXES)[number]['key'];
+
+/**
+ * Clean / Undamaged / Working for one item, answered in place.
+ *
+ * Yes / No / unanswered rather than a checkbox: a checkbox cannot say "I did
+ * not assess this", so a skipped item would be indistinguishable from a faulty
+ * one, and the report prints those cells blank precisely because the
+ * distinction matters. Tapping the active answer clears it.
+ */
+function AxisRow({
+  assessment,
+  label,
+  onAnswer,
+}: {
+  assessment: ChecklistAssessment | undefined;
+  label: string;
+  onAnswer: (axis: ChecklistAxisKey, next: boolean | null) => void;
+}) {
+  return (
+    <View className="mt-2 flex-row gap-2">
+      {AXES.map((axis) => {
+        const value = assessment?.[axis.key] ?? null;
+        return (
+          <View className="flex-1" key={axis.key}>
+            <Text className="mb-1 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {axis.label}
+            </Text>
+            <View className="flex-row gap-1">
+              {[true, false].map((option) => {
+                const active = value === option;
+                return (
+                  <Pressable
+                    accessibilityLabel={`${label}, ${axis.label}: ${option ? 'yes' : 'no'}`}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: active }}
+                    className={`min-h-11 flex-1 items-center justify-center rounded-lg border ${
+                      active
+                        ? option
+                          ? 'border-chart-3 bg-chart-3/20'
+                          : 'border-destructive bg-destructive/15'
+                        : 'border-border bg-card'
+                    }`}
+                    key={String(option)}
+                    onPress={() => onAnswer(axis.key, active ? null : option)}
+                  >
+                    <Text
+                      className={`text-xs font-bold ${
+                        active
+                          ? option
+                            ? 'text-chart-3'
+                            : 'text-destructive'
+                          : 'text-muted-foreground'
+                      }`}
+                    >
+                      {option ? 'Y' : 'N'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 export function AreaChecklistSheet({
   areaName,
+  assessments,
   items,
   checkedIds,
+  onAssess,
   onToggle,
   visible,
   onClose,
@@ -30,6 +108,10 @@ export function AreaChecklistSheet({
 }: {
   areaName: string;
   items: ChecklistItem[];
+  /** Current condition answers, keyed by checklist item id. */
+  assessments?: Map<string, ChecklistAssessment>;
+  /** Records one axis. Omitted when there is nothing to record against. */
+  onAssess?: (itemId: string, axis: ChecklistAxisKey, next: boolean | null) => void;
   checkedIds: readonly string[];
   onToggle: (id: string) => void;
   visible: boolean;
@@ -75,17 +157,20 @@ export function AreaChecklistSheet({
         {items.map((item) => {
           const isChecked = checked.has(item.id);
           return (
-            <Pressable
-              accessibilityHint={isChecked ? 'Marks this as not covered' : 'Marks this covered'}
-              accessibilityLabel={item.label}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: isChecked }}
-              className={`mb-2 min-h-14 flex-row items-center gap-3 rounded-xl border px-4 py-3 ${
+            <View
+              className={`mb-2 rounded-xl border px-4 py-3 ${
                 isChecked ? 'border-chart-3/40 bg-chart-3/10' : 'border-border bg-card'
               }`}
               key={item.id}
-              onPress={() => onToggle(item.id)}
             >
+              <Pressable
+                accessibilityHint={isChecked ? 'Marks this as not covered' : 'Marks this covered'}
+                accessibilityLabel={item.label}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: isChecked }}
+                className="min-h-11 flex-row items-center gap-3"
+                onPress={() => onToggle(item.id)}
+              >
               {isChecked ? (
                 <CheckIcon size={18} className="text-chart-3" />
               ) : (
@@ -98,7 +183,19 @@ export function AreaChecklistSheet({
               >
                 {item.label}
               </Text>
-            </Pressable>
+              </Pressable>
+              {/* The condition answers sit in the same card as the item they
+                  are about. This is the checklist the technician already opens
+                  from the camera; asking them to score somewhere else is the
+                  extra step this workflow exists to remove. */}
+              {onAssess ? (
+                <AxisRow
+                  assessment={assessments?.get(item.id)}
+                  label={item.label}
+                  onAnswer={(axis, next) => onAssess(item.id, axis, next)}
+                />
+              ) : null}
+            </View>
           );
         })}
         <Text className="mb-2 mt-1 px-1 text-xs leading-4 text-muted-foreground">

@@ -98,7 +98,20 @@ export function ConditionPromptSheet({
   saving: boolean;
   visible: boolean;
 }) {
-  const [index, setIndex] = useState(0);
+  /**
+   * The item being asked, chosen when the sheet opens.
+   *
+   * The first *unanswered* one rather than the first in the list, so reopening
+   * continues where the technician left off instead of re-asking what they have
+   * already scored.
+   */
+  const firstUnanswered = Math.max(
+    0,
+    items.findIndex(
+      (row) => row.isClean === null && row.isUndamaged === null && row.isWorking === null,
+    ),
+  );
+  const [index, setIndex] = useState(firstUnanswered);
   const [axis, setAxis] = useState(0);
   /**
    * Answers for the item being asked, held locally until all three axes are in.
@@ -144,7 +157,17 @@ export function ConditionPromptSheet({
       setAxis(axis + 1);
       return;
     }
-    // Last axis: persist the item and move on.
+    // Last axis: persist and move straight to the next item.
+    //
+    // Deliberately *not* closing and reopening between items. That was the
+    // first attempt, and it does not work: React Native's Modal silently
+    // refuses to show again while the previous dismissal is still animating,
+    // so the next question never appeared. Any fixed delay is a race against
+    // an animation whose length is not ours to know.
+    //
+    // Advancing in place is also what the technician wants — the sequence runs
+    // without them reaching for anything. The sheet closes when the checklist
+    // is finished, or when they choose Later.
     onRecord(item!.id, next);
     setDraft(EMPTY);
     setAxis(0);
