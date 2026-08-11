@@ -12,6 +12,7 @@ import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
+import { AreaChecklistAiService } from './area-checklist-ai.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
 import { AreaEvidenceService } from './area-evidence.service';
@@ -19,6 +20,7 @@ import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { ReportsController } from './reports.controller';
 import { AuthModule } from '../auth/auth.module';
+import { MediaModule } from '../media/media.module';
 import { LocalIdentityProvider } from '../auth/local-identity.provider';
 import { IDENTITY_PROVIDER } from './identity-provider';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
@@ -26,7 +28,10 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
 @Module({
   // AuthModule for LocalIdentityProvider, so provisioning and the password
   // flows share one instance rather than each registering their own.
-  imports: [RealtimeModule, MailModule, AuthModule],
+  // MediaModule for CloudflareStreamService: deleting an inspection has to
+  // remove its Stream videos, or the footage stays billed for and unreachable.
+  // No cycle — MediaModule imports TechnicianModule, never this one.
+  imports: [RealtimeModule, MailModule, AuthModule, MediaModule],
   controllers: [AdminController, AccessController, ReportsController],
   providers: [
     AdminService,
@@ -36,6 +41,7 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
     ChargeService,
     ComparisonService,
     FloorPlanAdminService,
+    AreaChecklistAiService,
     FloorPlanExtractionService,
     FloorPlanStorageService,
     InspectionMediaStorageService,

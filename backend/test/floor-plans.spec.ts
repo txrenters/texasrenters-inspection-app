@@ -47,6 +47,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       storage as never,
       {} as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       {} as never,
     );
 
@@ -78,6 +81,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       storage as never,
       {} as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       {} as never,
     );
     const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
@@ -110,6 +116,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       storage as never,
       {} as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       {} as never,
     );
 
@@ -168,6 +177,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       storage as never,
       extraction as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       {
         resolve: jest.fn().mockResolvedValue({
           provider: 'ANTHROPIC',
@@ -232,6 +244,9 @@ describe('administrator floor plans', () => {
       },
       floorPlanExtractionJob: { update: jest.fn().mockResolvedValue({ id: 'job-1' }) },
       propertyFloorPlan: { update: jest.fn().mockResolvedValue(plan) },
+      // Extraction now writes each area's default checklist alongside the area
+      // itself, rather than leaving it until approval.
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const prisma = {
       propertyFloorPlan: {
@@ -298,6 +313,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       { get: jest.fn().mockResolvedValue(Buffer.from('plan')) } as never,
       extraction as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       aiSettings as never,
     );
 
@@ -359,6 +377,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       {} as never,
       {} as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       {} as never,
     );
     jest.spyOn(service, 'areas').mockResolvedValue([]);
@@ -417,6 +438,9 @@ describe('administrator floor plans', () => {
       prisma as never,
       {} as never,
       {} as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
       {} as never,
     );
 

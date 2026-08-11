@@ -188,6 +188,26 @@ export class CloudflareStreamService {
   }
 
   /**
+   * Permanently remove a video from Stream.
+   *
+   * Only reached by inspection deletion. Cloudflare bills for stored minutes,
+   * so dropping the database row without this leaves the footage paid for and
+   * unreachable — an orphan nothing in the product can ever surface again.
+   *
+   * A 404 counts as success: the caller's goal is "this video is gone", and a
+   * video Cloudflare has already lost satisfies that. Treating it as a failure
+   * would make a retried delete fail forever.
+   */
+  async deleteVideo(streamUid: string): Promise<void> {
+    this.assertConfigured();
+    await this.fetchStream(
+      `/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/stream/${encodeURIComponent(streamUid)}`,
+      { method: 'DELETE' },
+      [404],
+    );
+  }
+
+  /**
    * The provider's current view of a video.
    *
    * Used by the reconciliation path when a webhook never arrives, so a video is

@@ -136,6 +136,25 @@ export interface ReportFindingView {
   roomName: string;
 }
 
+/**
+ * One checklist row, pre-formatted for printing.
+ *
+ * The axes arrive as tri-states and leave as the strings the page prints:
+ * "Y", "N" or an **empty string** for unassessed. Doing the mapping here rather
+ * than in each renderer is what guarantees the HTML page and the PDF cannot
+ * disagree about what a blank cell means — and a blank is the whole point, as
+ * the office's existing reports leave unassessed rows empty rather than
+ * claiming a defect nobody observed.
+ */
+export interface ReportChecklistRowView {
+  id: string;
+  label: string;
+  clean: string;
+  undamaged: string;
+  working: string;
+  comment: string;
+}
+
 export interface ReportRoomView {
   id: string;
   name: string;
@@ -144,10 +163,19 @@ export interface ReportRoomView {
   /** True only for COMPLETED, so renderers can accent inspected rooms. */
   inspected: boolean;
   skipReason: string | null;
+  /** Condition rows, in the order an administrator authored the checklist. */
+  checklist: ReportChecklistRowView[];
   photos: ReportPhotoView[];
   findings: ReportFindingView[];
-  /** False when the room has neither photos nor findings — render it compactly. */
+  /** False when the room has no checklist, photos or findings — render compactly. */
   hasEvidence: boolean;
+}
+
+/** Tri-state to printed cell. Null and undefined both mean "not assessed". */
+function axisCell(value: boolean | null | undefined) {
+  if (value === true) return 'Y';
+  if (value === false) return 'N';
+  return '';
 }
 
 export interface ReportSeverityCount {
@@ -246,6 +274,17 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
   const rooms: ReportRoomView[] = report.rooms.map((room) => {
     const photos = photosByRoom.get(room.id) ?? [];
     const roomFindings = (findingsByRoom.get(room.id) ?? []).sort(bySeverity);
+    // Defaulted: a report generated against a backend that predates
+    // assessments has no checklist at all, which prints as no table rather
+    // than an empty one.
+    const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => ({
+      id: item.id,
+      label: item.label,
+      clean: axisCell(item.isClean),
+      undamaged: axisCell(item.isUndamaged),
+      working: axisCell(item.isWorking),
+      comment: item.comment?.trim() || '',
+    }));
     return {
       id: room.id,
       name: room.name,
@@ -253,9 +292,10 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       statusLabel: ROOM_STATUS_LABEL[room.completionStatus] ?? formatEnumLabel(room.completionStatus),
       inspected: room.completionStatus === 'COMPLETED',
       skipReason: room.skipReason?.trim() || null,
+      checklist,
       photos,
       findings: roomFindings,
-      hasEvidence: photos.length > 0 || roomFindings.length > 0,
+      hasEvidence: checklist.length > 0 || photos.length > 0 || roomFindings.length > 0,
     };
   });
 

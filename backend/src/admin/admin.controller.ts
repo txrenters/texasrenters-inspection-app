@@ -12,6 +12,7 @@ import {
   Patch,
   ParseEnumPipe,
   Post,
+  Put,
   Query,
   Req,
   StreamableFile,
@@ -44,12 +45,14 @@ import {
   ChargeRuleDto,
   ComparisonReviewDto,
   CreateAdminInspectionDto,
+  AdminChecklistAssessmentDto,
   CreateAreaChecklistItemDto,
   CreateChargeDto,
   CreateEvidenceRequestDto,
   CreatePropertyAreaDto,
   CreateReportShareDto,
   CreateTechnicianDto,
+  DeleteInspectionsDto,
   DeletePropertyAreasDto,
   FinalizeInspectionDto,
   FindingRejectDto,
@@ -546,6 +549,24 @@ export class AdminController {
   inspectionAreas(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.service.inspectionAreas(request.user, id);
   }
+  /**
+   * Records how one checklist item was found, during review.
+   *
+   * `inspections:manage` rather than `:read`, because this writes to the record
+   * the report prints from. PUT, not PATCH: the body is the item's complete
+   * assessment, so clearing a control clears it on the server.
+   */
+  @Put('inspections/:inspectionId/areas/:areaId/checklist/:itemId')
+  @RequirePermissions('inspections:manage')
+  recordAreaChecklistItem(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+    @Param('itemId') itemId: string,
+    @Body() body: AdminChecklistAssessmentDto,
+  ) {
+    return this.areaEvidence.recordChecklistItem(request.user, inspectionId, areaId, itemId, body);
+  }
   @Post('inspections/:inspectionId/merge-areas')
   @RequirePermissions('inspections:manage')
   mergeInspectionAreas(
@@ -732,6 +753,39 @@ export class AdminController {
   @RequirePermissions('technicians:manage')
   deleteTechnician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
     return this.profileDeletion.remove(request.user, id, 'TECHNICIAN');
+  }
+
+  /**
+   * Permanently erase an inspection and all of its evidence.
+   *
+   * `inspections:delete` rather than `inspections:manage`: managing means
+   * editing and cancelling, and cancelling is the reversible way to close an
+   * inspection. This one cannot be undone, so it is grantable separately.
+   */
+  @Delete('inspections/:inspectionId')
+  @RequirePermissions('inspections:delete')
+  deleteInspection(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
+    return this.service.deleteInspection(request.user, id);
+  }
+
+  /**
+   * Bulk erase.
+   *
+   * POST with the ids in the body rather than DELETE, matching
+   * `properties/:propertyId/areas/delete` above: a DELETE carrying a body is
+   * poorly supported by proxies and by `fetch`.
+   *
+   * `inspections/delete` cannot be shadowed by a route parameter — every other
+   * POST under `inspections` carries a second segment (`/finalize`, `/assign`,
+   * `/reopen`), so none of them matches a single-segment path.
+   */
+  @Post('inspections/delete')
+  @RequirePermissions('inspections:delete')
+  deleteInspections(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: DeleteInspectionsDto,
+  ) {
+    return this.service.deleteInspections(request.user, body.inspectionIds);
   }
 
   @Get('integrations/providers/status')

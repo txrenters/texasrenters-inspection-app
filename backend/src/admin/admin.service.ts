@@ -27,7 +27,10 @@ import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
 // A pure function, not the service: the panel needs Stream's definition of
 // "ready" without AdminModule depending on MediaModule.
-import { cloudflareStreamReadiness } from '../media/cloudflare-stream.service';
+import {
+  CloudflareStreamService,
+  cloudflareStreamReadiness,
+} from '../media/cloudflare-stream.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
@@ -131,6 +134,17 @@ const ADMIN_TRANSACTION_OPTIONS = {
 } as const;
 
 /**
+ * Ceiling on one bulk-delete request.
+ *
+ * Each inspection is its own transaction, so this is not a transaction-size
+ * limit — it bounds how long a single HTTP request can hold a worker while it
+ * walks Cloudflare Stream and object storage for every recording and photo.
+ * Fifty is comfortably more than a test-data sweep needs and well short of a
+ * request that would look hung.
+ */
+const MAX_BULK_DELETE = 50;
+
+/**
  * Restricts properties to those whose portfolio is active, without hiding the
  * ones that have no portfolio at all.
  *
@@ -198,6 +212,9 @@ export class AdminService {
     @Inject(InspectionMediaStorageService)
     private readonly mediaStorage?: InspectionMediaStorageService,
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
+    @Optional()
+    @Inject(CloudflareStreamService)
+    private readonly stream?: CloudflareStreamService,
   ) {}
 
   async profile(user: AuthenticatedUser) {
@@ -2830,6 +2847,247 @@ export class AdminService {
       organizationId: user.organizationId,
     });
     return outcome.finding;
+  }
+
+  /**
+   * Permanently erase an inspection and everything hanging off it.
+   *
+   * Gated on `inspections:delete`, which is deliberately its own permission
+   * rather than part of `inspections:manage`: managing an inspection means
+   * editing and cancelling it, and cancelling is the reversible, auditable way
+   * to close one. This is the irreversible one, so it can be withheld from the
+   * same people who are trusted to run the rest of the workflow.
+   *
+   * Unlike every other mutation here it does **not** refuse a finalized
+   * inspection. `finalizedAt` freezes evidence against edits — a technician
+   * cannot delete a photo out of a closed report — but that guard exists to stop
+   * a report being quietly altered, not to make a whole inspection immortal.
+   * Deleting one removes the report entirely, which is a different act, and the
+   * permission is the gate on it.
+   *
+   * Ordering is dictated by the schema, not by preference. Most children of
+   * `Inspection` have no `onDelete: Cascade`, so a bare `inspection.delete()`
+   * fails on the first foreign key. Each step below removes a table that points
+   * at something deleted later; the ones that *do* cascade
+   * (`AreaEvidenceRequest`, `InspectionAreaChecklistResponse`) are left to the
+   * database.
+   */
+  async deleteInspection(user: AuthenticatedUser, id: string) {
+    const result = await this.eraseInspection(user, id);
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return { deleted: true, ...result };
+  }
+
+  /**
+   * Delete several inspections in one request.
+   *
+   * Each one runs in **its own transaction**, sequentially, rather than all of
+   * them in a single outer transaction. Two reasons, both learned the hard way
+   * on this codebase:
+   *
+   * - A batch that wraps everything scales its statement count with the data,
+   *   and the remote pooler drops it at five seconds with "Transaction not
+   *   found". Deleting twenty inspections' worth of media in one transaction is
+   *   exactly that shape.
+   * - For clearing test data, partial success beats all-or-nothing. One
+   *   inspection that refuses — because a dependant could not be unlinked, say —
+   *   should not strip the other nineteen of a successful delete they already
+   *   earned.
+   *
+   * So the response reports per-id outcomes and the caller decides what to
+   * retry. Nothing is silently skipped.
+   */
+  async deleteInspections(user: AuthenticatedUser, ids: string[]) {
+    const unique = [...new Set(ids)];
+    if (unique.length > MAX_BULK_DELETE)
+      throw new ApplicationError(
+        422,
+        'TOO_MANY_INSPECTIONS',
+        `Delete at most ${MAX_BULK_DELETE} inspections at a time.`,
+      );
+
+    const deleted: string[] = [];
+    const failed: { id: string; message: string }[] = [];
+    let orphanedStorageObjects = 0;
+
+    for (const id of unique) {
+      try {
+        const result = await this.eraseInspection(user, id);
+        orphanedStorageObjects += result.orphanedStorageObjects;
+        deleted.push(id);
+      } catch (error) {
+        failed.push({
+          id,
+          message:
+            error instanceof ApplicationError
+              ? error.message
+              : 'This inspection could not be deleted.',
+        });
+      }
+    }
+
+    // Published once, not per inspection: twenty deletes are one change to the
+    // list every client is looking at.
+    if (deleted.length)
+      await this.cacheInvalidation?.publish({
+        type: 'inspection.changed',
+        organizationId: user.organizationId,
+      });
+
+    return { requested: unique.length, deleted, failed, orphanedStorageObjects };
+  }
+
+  /**
+   * The deletion itself, shared by the single and bulk endpoints so there is
+   * one implementation of an irreversible operation rather than two that drift.
+   * Cache invalidation is the caller's job — the bulk path publishes once.
+   */
+  private async eraseInspection(user: AuthenticatedUser, id: string) {
+    await this.requireInspection(user.organizationId, id);
+
+    // Read the storage identities before the rows go: once the transaction
+    // commits there is nothing left to tell us which objects to remove.
+    const [media, photos] = await Promise.all([
+      this.prisma.inspectionMedia.findMany({
+        where: { inspectionId: id },
+        select: { id: true, streamUid: true, storageKey: true },
+      }),
+      this.prisma.inspectionPhoto.findMany({
+        where: { inspectionId: id },
+        select: { id: true, storageKey: true },
+      }),
+    ]);
+
+    const counts = await this.prisma.$transaction(async (tx) => {
+      /**
+       * Dependants are unlinked rather than deleted.
+       *
+       * `baselineInspectionId` and `parentInspectionId` are both
+       * `onDelete: Restrict`, so a move-in that some move-out compares against
+       * cannot simply be removed. Clearing the pointer keeps the other
+       * inspection — and all of its evidence — intact; it loses its baseline
+       * comparison, which is recorded in the audit metadata below so the
+       * absence is explainable later.
+       */
+      const [baselineOf, parentOf] = await Promise.all([
+        tx.inspection.updateMany({
+          where: { baselineInspectionId: id },
+          data: { baselineInspectionId: null },
+        }),
+        tx.inspection.updateMany({
+          where: { parentInspectionId: id },
+          data: { parentInspectionId: null },
+        }),
+      ]);
+
+      // No Prisma relation on either column, so these are matched by hand.
+      // Area comparisons cascade from the comparison row.
+      await tx.inspectionComparison.deleteMany({
+        where: { OR: [{ moveOutInspectionId: id }, { moveInInspectionId: id }] },
+      });
+
+      // Charges reference findings and pet candidates, so they go first.
+      await tx.charge.deleteMany({ where: { inspectionId: id } });
+      await tx.petObservation.deleteMany({ where: { inspectionId: id } });
+      await tx.petCandidate.deleteMany({ where: { inspectionId: id } });
+
+      await tx.findingReview.deleteMany({ where: { finding: { inspectionId: id } } });
+      // Photos carry a findingId as well as an area, so they precede findings.
+      const deletedPhotos = await tx.inspectionPhoto.deleteMany({ where: { inspectionId: id } });
+
+      /**
+       * The three job tables that hang off a recording.
+       *
+       * None of them cascades, and none carries an `inspectionId` — they are
+       * reachable only through `inspectionMediaId`, which is why an enumeration
+       * that greps for `inspectionId` misses all three and the delete dies on
+       * `AiAnalysisJob_inspectionMediaId_fkey` at the first recording.
+       */
+      const mediaOfInspection = { inspectionMedia: { inspectionId: id } };
+      // Segments hang off the transcription job, not the media, and the
+      // constraint is RESTRICT — so the job cannot go until its transcript does.
+      await tx.transcriptSegment.deleteMany({
+        where: { transcriptionJob: mediaOfInspection },
+      });
+      await tx.aiAnalysisJob.deleteMany({ where: mediaOfInspection });
+      await tx.transcriptionJob.deleteMany({ where: mediaOfInspection });
+      await tx.mediaProcessingEvent.deleteMany({ where: mediaOfInspection });
+
+      /**
+       * Findings before media, not after.
+       *
+       * `InspectionFinding.inspectionMediaId` points at the recording a finding
+       * was raised from, so deleting the media first violates that constraint.
+       * The reverse order is not symmetric — nothing in `InspectionMedia` points
+       * back at a finding.
+       */
+      const deletedFindings = await tx.inspectionFinding.deleteMany({ where: { inspectionId: id } });
+      const deletedMedia = await tx.inspectionMedia.deleteMany({ where: { inspectionId: id } });
+
+      await tx.mediaUploadSession.deleteMany({
+        where: { inspectionArea: { inspectionId: id } },
+      });
+      await tx.inspectionAreaStatusHistory.deleteMany({
+        where: { inspectionArea: { inspectionId: id } },
+      });
+      const deletedAreas = await tx.inspectionArea.deleteMany({ where: { inspectionId: id } });
+      await tx.inspectionAssignment.deleteMany({ where: { inspectionId: id } });
+      await tx.inspectionReportShare.deleteMany({ where: { inspectionId: id } });
+      await tx.areaEvidenceRequest.deleteMany({ where: { inspectionId: id } });
+
+      await tx.inspection.delete({ where: { id } });
+
+      /**
+       * Written last, inside the same transaction.
+       *
+       * `AuditLog.entityId` is a plain string with no foreign key to
+       * `Inspection`, which is what lets the record outlive the row it
+       * describes — the deletion is the one event whose evidence must survive
+       * the thing it happened to.
+       */
+      await this.audit(tx, user, 'INSPECTION_DELETED', id, {
+        areas: deletedAreas.count,
+        recordings: deletedMedia.count,
+        photos: deletedPhotos.count,
+        findings: deletedFindings.count,
+        unlinkedBaselineOf: baselineOf.count,
+        unlinkedParentOf: parentOf.count,
+      });
+
+      return {
+        areas: deletedAreas.count,
+        recordings: deletedMedia.count,
+        photos: deletedPhotos.count,
+        findings: deletedFindings.count,
+        unlinkedInspections: baselineOf.count + parentOf.count,
+      };
+    });
+
+    /**
+     * Storage is cleared after the commit, never before.
+     *
+     * Deleting the objects first would destroy footage for an inspection that
+     * still exists if the transaction then rolled back — the failure mode with
+     * no recovery. This way a storage error leaves an orphan, which costs money
+     * but loses nothing, and is reported rather than swallowed so somebody can
+     * clean it up.
+     */
+    const failures: string[] = [];
+    for (const item of media) {
+      if (item.streamUid && this.stream)
+        await this.stream.deleteVideo(item.streamUid).catch(() => failures.push(item.id));
+      if (item.storageKey && this.mediaStorage)
+        await this.mediaStorage.delete(item.storageKey).catch(() => failures.push(item.id));
+    }
+    for (const photo of photos) {
+      if (this.mediaStorage)
+        await this.mediaStorage.delete(photo.storageKey).catch(() => failures.push(photo.id));
+    }
+
+    return { ...counts, orphanedStorageObjects: failures.length };
   }
 
   private async requireInspection(

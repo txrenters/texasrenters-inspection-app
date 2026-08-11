@@ -698,6 +698,10 @@ export class ApiInspectionRepository implements InspectionRepository {
       isUndamaged: assessment.isUndamaged ?? null,
       isWorking: assessment.isWorking ?? null,
       comment: assessment.comment ?? null,
+      // Where in the recording it was answered. Built explicitly here, so a
+      // field added to ChecklistAssessment and not to this object is silently
+      // dropped before it ever leaves the phone.
+      videoTimestampSeconds: assessment.videoTimestampSeconds ?? null,
     };
     try {
       await queueOnConnectionFailure(

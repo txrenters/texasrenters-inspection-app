@@ -18,6 +18,7 @@ export const PERMISSION_KEYS = [
   'inspections:manage',
   'inspections:assign',
   'inspections:finalize',
+  'inspections:delete',
   'technicians:read',
   'technicians:manage',
   'technicians:provision',
@@ -136,6 +137,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         label: 'Finalize inspections',
         description:
           'Complete (finalize) an inspection, and reopen a submitted or finalized one to send it back to the technician. Human-only decision that closes the review workflow.',
+      },
+      {
+        key: 'inspections:delete',
+        label: 'Delete inspections',
+        description:
+          'Permanently erase an inspection and every recording, photo, finding and charge attached to it, including the video files themselves. Irreversible, and works even on finalized inspections — grant it only to accounts that are meant to clear test data.',
       },
     ],
   },

@@ -893,6 +893,7 @@ export class TechnicianService {
       isUndamaged?: boolean | null;
       isWorking?: boolean | null;
       comment?: string | null;
+      videoTimestampSeconds?: number | null;
     },
   ) {
     const room = await this.assignedRoom(user, roomId);
@@ -936,6 +937,7 @@ export class TechnicianService {
       isUndamaged: input.isUndamaged ?? null,
       isWorking: input.isWorking ?? null,
       comment,
+      videoTimestampSeconds: input.videoTimestampSeconds ?? null,
     };
     const response = await this.prisma.inspectionAreaChecklistResponse.upsert({
       where: {
@@ -956,6 +958,7 @@ export class TechnicianService {
         isWorking: true,
         comment: true,
         recordedAt: true,
+        videoTimestampSeconds: true,
       },
     });
     this.notifyInspectionChanged(user, room.inspectionId);

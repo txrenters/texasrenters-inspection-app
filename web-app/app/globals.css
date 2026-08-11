@@ -3618,6 +3618,48 @@ button:disabled {
   margin: 14px;
 }
 
+/* The condition table: the record the office's printed report is built from.
+   Photographs below it are its evidence. */
+.report-checklist {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.report-checklist th,
+.report-checklist td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.report-checklist thead th {
+  background: var(--surface-subtle);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+/* The three verdict columns are narrow and centred; the label and comment
+   columns take the remaining width. */
+.report-checklist thead th:nth-child(2),
+.report-checklist thead th:nth-child(3),
+.report-checklist thead th:nth-child(4),
+.report-checklist tbody td:nth-child(2),
+.report-checklist tbody td:nth-child(3),
+.report-checklist tbody td:nth-child(4) {
+  width: 72px;
+  text-align: center;
+  font-weight: 600;
+}
+.report-checklist tbody th {
+  font-weight: 500;
+  width: 30%;
+}
+.report-checklist-comment {
+  color: var(--text-2);
+}
+
 .report-photo-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -4859,6 +4901,22 @@ button:disabled {
     display: none !important;
   }
   .charge-report-section {
+    break-inside: avoid;
+  }
+  /* A room's table and its photographs belong together: a page break between
+     the verdicts and the evidence for them is what makes a printed report hard
+     to read. Rooms are allowed to break internally when one genuinely does not
+     fit, but never mid-row. */
+  .report-room {
+    break-inside: avoid;
+  }
+  .report-checklist tr {
+    break-inside: avoid;
+  }
+  .report-checklist thead {
+    display: table-header-group;
+  }
+  .report-photo {
     break-inside: avoid;
   }
 }

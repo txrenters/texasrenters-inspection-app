@@ -165,7 +165,38 @@ export interface AreaEvidenceBundle {
   photoGroups: AreaPhotoGroup[];
   /** Itemized findings for this area, most severe first. */
   findings: AreaFinding[];
+  /**
+   * The area's checklist with however it has been assessed, in walk order.
+   *
+   * Scored during review rather than on site: the reviewer is the one reading
+   * the recording and the photographs, and each axis is a judgement about
+   * evidence they are already looking at.
+   */
+  checklist: AreaChecklistEntry[];
   counts: AreaEvidenceCounts;
+}
+
+/**
+ * One checklist item and its assessment.
+ *
+ * Each axis is `true`, `false`, or `null` for not assessed. Null is not the same
+ * as "no": the report prints those cells blank precisely so a skipped item
+ * cannot be read as a fault.
+ */
+export interface AreaChecklistEntry {
+  itemId: string;
+  label: string;
+  isClean: boolean | null;
+  isUndamaged: boolean | null;
+  isWorking: boolean | null;
+  comment: string | null;
+  recordedAt: string | null;
+  /**
+   * Seconds into the area's recording when this was answered, so a reviewer can
+   * jump to the moment instead of scrubbing. Null when the assessment was made
+   * outside a recording — on the web, or after the fact.
+   */
+  videoTimestampSeconds: number | null;
 }
 
 /**

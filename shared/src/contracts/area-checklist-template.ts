@@ -128,7 +128,13 @@ const NAME_RULES: { test: RegExp; kind: string }[] = [
   { test: /laundry|utility|mud\s?room/i, kind: 'LAUNDRY' },
   { test: /garage|carport|workshop/i, kind: 'GARAGE' },
   { test: /closet|wardrobe|storage/i, kind: 'CLOSET' },
-  { test: /entrance|entry|foyer|hall|corridor|landing|stair/i, kind: 'HALLWAY' },
+  // Before the hallway rule, and separate from it. Both were one rule ending in
+  // `kind: 'HALLWAY'`, which made the ENTRANCE table below unreachable: nothing
+  // resolved to it from a name, and `AreaCategory` has no ENTRANCE member for
+  // CATEGORY_ALIASES to map either. Every entrance and foyer silently took the
+  // bare base list and lost its entry closet — the one item the report gives it.
+  { test: /entrance|entry|foyer|vestibule/i, kind: 'ENTRANCE' },
+  { test: /hall|corridor|landing|stair|passage/i, kind: 'HALLWAY' },
   { test: /bed|nursery/i, kind: 'BEDROOM' },
   { test: /living|lounge|family|dining|den|study|office|media/i, kind: 'LIVING' },
 ];
@@ -143,6 +149,19 @@ const CATEGORY_ALIASES: Record<string, string> = {
   ATTIC: 'CLOSET',
   BASEMENT: 'GARAGE',
 };
+
+/**
+ * Every label the tables use, deduplicated.
+ *
+ * Handed to the model as preferred wording. Not a closed set — an area the
+ * report never covered may genuinely need an item nobody has written down — but
+ * a model left to phrase things freely produces "Light fixtures" in one property
+ * and "Lights and power points" in the next, and the two never line up in a
+ * report or match the same spoken words.
+ */
+export const CHECKLIST_VOCABULARY: readonly string[] = [
+  ...new Set([...BASE_INDOOR, ...BASE_OUTDOOR, ...Object.values(CATEGORY_ADDITIONS).flat()]),
+];
 
 export interface ChecklistTemplateArea {
   name?: string | null;
@@ -159,12 +178,21 @@ export interface ChecklistTemplateArea {
  * the technician with nothing to cover and no sign that anything was missing.
  */
 export function checklistTemplateFor(area: ChecklistTemplateArea): string[] {
+  const fromCategory = area.category ? CATEGORY_ALIASES[area.category.toUpperCase()] : undefined;
+
   // Semi-outdoor — a porch, a balcony — is walked like the outside.
-  if (area.environment === 'OUTDOOR' || area.environment === 'SEMI_OUTDOOR') {
+  //
+  // Except an enclosed space that merely attaches to the outside. The mobile
+  // Add Area form offers Garage as SEMI_OUTDOOR, and this returned early on the
+  // environment alone, so a garage was asked about its lawn and never about its
+  // doors, walls or lights. A garage has all three; the source report gives
+  // GARAGE/CARPORT the indoor base. An explicit category is the more specific
+  // statement of the two, so it decides.
+  const enclosed = fromCategory === 'GARAGE' || fromCategory === 'CLOSET';
+  if (!enclosed && (area.environment === 'OUTDOOR' || area.environment === 'SEMI_OUTDOOR')) {
     return [...BASE_OUTDOOR];
   }
 
-  const fromCategory = area.category ? CATEGORY_ALIASES[area.category.toUpperCase()] : undefined;
   const fromName = area.name
     ? NAME_RULES.find((rule) => rule.test.test(area.name as string))?.kind
     : undefined;

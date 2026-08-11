@@ -24,6 +24,11 @@ services:
       USE_MOCK_AUTH: 'false'
       # Expo web for mobile runs on 8082 during remote-beta development.
       MOBILE_APP_ORIGIN: http://localhost:8082
+      # The console's public origin. This is not only a CORS entry — report-share
+      # links, invitations and password resets are all built from it, so leaving
+      # it on localhost hands a remote tester URLs that only work on this machine.
+      # allowedCorsOrigins() merges it into the CORS list too.
+      WEB_APP_ORIGIN: https://inspection-tx.erniecodev.win
     ports:
       # The tunnel is the only public entry point. The host binding stays
       # loopback — Cloudflare reaches this over the Compose network by service

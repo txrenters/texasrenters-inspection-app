@@ -1,0 +1,100 @@
+import { describe, expect, it } from 'vitest';
+
+import { InspectionType } from '@texasrenters/shared';
+
+import {
+  activeNavigationChild,
+  adminNavigation,
+  getAdminBreadcrumbs,
+  getVisibleAdminNavigation,
+  isAdminNavigationItemActive,
+  navigationChildHref,
+} from './admin-navigation';
+
+const inspections = adminNavigation
+  .flatMap((group) => group.items)
+  .find((item) => item.href === '/inspections')!;
+
+describe('admin navigation', () => {
+  it('matches exact routes and their descendants without substring collisions', () => {
+    expect(isAdminNavigationItemActive('/inspections', '/inspections')).toBe(true);
+    expect(isAdminNavigationItemActive('/inspections/inspection-1', '/inspections')).toBe(true);
+    expect(isAdminNavigationItemActive('/inspections?status=ACTIVE', '/inspections')).toBe(true);
+    expect(isAdminNavigationItemActive('/inspection-templates', '/inspections')).toBe(false);
+    expect(isAdminNavigationItemActive('/properties-archive', '/properties')).toBe(false);
+  });
+
+  it('removes unauthorized items and empty groups without changing route ownership', () => {
+    const visible = getVisibleAdminNavigation((permission) =>
+      ['dashboard:read', 'properties:read'].includes(permission),
+    );
+    const titles = visible.flatMap((group) => group.items.map((item) => item.title));
+
+    // Settings and Profile live in the account dropdown, not the nav tree.
+    expect(titles).toEqual(['Dashboard', 'Properties']);
+    expect(visible.map((group) => group.title)).toEqual(['Overview', 'Property management']);
+  });
+
+  it('builds useful breadcrumbs for create, detail, and deeper workflow routes', () => {
+    expect(getAdminBreadcrumbs('/inspections/new')).toEqual([
+      { title: 'Inspections', href: '/inspections' },
+      { title: 'Create' },
+    ]);
+    expect(getAdminBreadcrumbs('/properties/property-1')).toEqual([
+      { title: 'Properties', href: '/properties' },
+      { title: 'Property detail' },
+    ]);
+    expect(getAdminBreadcrumbs('/inspections/inspection-1/charge-report')).toEqual([
+      { title: 'Inspections', href: '/inspections' },
+      { title: 'Inspection detail', href: '/inspections/inspection-1' },
+      { title: 'Charge report' },
+    ]);
+  });
+
+  describe('inspection type sub-items', () => {
+    it('covers every inspection type, so none is unreachable from the nav', () => {
+      // The sub-items are the primary way into a type's history. A type added to
+      // the enum and not here would exist only behind the toolbar dropdown.
+      expect([...(inspections.children ?? [])].map((child) => child.type).sort()).toEqual(
+        [...Object.values(InspectionType)].sort(),
+      );
+    });
+
+    it('links to the list carrying the type, not to a nested route', () => {
+      // `/inspections/move-out` would be captured by `[inspectionId]` and
+      // fetched as an inspection id.
+      expect(navigationChildHref(inspections, { title: 'Move-out', type: 'MOVE_OUT' })).toBe(
+        '/inspections?type=MOVE_OUT',
+      );
+    });
+
+    it('marks a sub-item active only on the list itself', () => {
+      expect(activeNavigationChild(inspections, '/inspections', 'MOVE_OUT')?.title).toBe('Move-out');
+
+      // No type selected: the parent is active, no child is.
+      expect(activeNavigationChild(inspections, '/inspections', null)).toBeUndefined();
+      // A detail page belongs to no single type filter, even though the parent
+      // stays highlighted for it.
+      expect(activeNavigationChild(inspections, '/inspections/inspection-1', 'MOVE_OUT')).toBe(
+        undefined,
+      );
+      // A type the nav does not offer must not highlight anything.
+      expect(activeNavigationChild(inspections, '/inspections', 'NOT_A_TYPE')).toBeUndefined();
+    });
+
+    it('shows the open type as a breadcrumb under Inspections', () => {
+      expect(getAdminBreadcrumbs('/inspections', 'MOVE_OUT')).toEqual([
+        { title: 'Inspections', href: '/inspections' },
+        { title: 'Move-out' },
+      ]);
+
+      // An unknown type is not a section, so the trail stays as it was.
+      expect(getAdminBreadcrumbs('/inspections', 'NOT_A_TYPE')).toEqual([{ title: 'Inspections' }]);
+      // The type does not leak onto a detail page's trail.
+      expect(getAdminBreadcrumbs('/inspections/inspection-1', 'MOVE_OUT')).toEqual([
+        { title: 'Inspections', href: '/inspections' },
+        { title: 'Inspection detail' },
+      ]);
+    });
+  });
+});

@@ -33,6 +33,106 @@ export class AreaEvidenceService {
   ) {}
 
   /**
+   * Records how one checklist item was found, during review.
+   *
+   * The administrator counterpart of the technician's route. Same table, same
+   * one-assessment-per-item rule, and the same refusal once the inspection is
+   * finalized — `finalizedAt`, not status alone, because an inspection can be
+   * reopened and a status-only check would reopen the assessments behind a
+   * report that has already been shared.
+   *
+   * PUT semantics: the body is the item's complete assessment, so clearing a
+   * control clears it on the server rather than leaving a value the report
+   * would still print.
+   */
+  async recordChecklistItem(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    areaId: string,
+    itemId: string,
+    input: {
+      isClean?: boolean | null;
+      isUndamaged?: boolean | null;
+      isWorking?: boolean | null;
+      comment?: string | null;
+      videoTimestampSeconds?: number | null;
+    },
+  ) {
+    await this.requireInspection(user.organizationId, inspectionId);
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: inspectionId },
+      select: { finalizedAt: true },
+    });
+    if (inspection?.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'The checklist cannot be changed after the inspection is finalized.',
+      );
+
+    // Scoped by inspection as well as id, so an area id from another inspection
+    // cannot be written through this route.
+    const area = await this.prisma.inspectionArea.findFirst({
+      where: { id: areaId, inspectionId },
+      select: { id: true, propertyAreaId: true },
+    });
+    if (!area)
+      throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'Inspection area was not found.');
+
+    // The item has to belong to *this* area, or the report would show an
+    // assessment against a room nobody inspected.
+    const item = await this.prisma.areaChecklistItem.findFirst({
+      where: { id: itemId, propertyAreaId: area.propertyAreaId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!item)
+      throw new ApplicationError(
+        404,
+        'CHECKLIST_ITEM_NOT_FOUND',
+        'That checklist item does not belong to this area.',
+      );
+
+    const values = {
+      isClean: input.isClean ?? null,
+      isUndamaged: input.isUndamaged ?? null,
+      isWorking: input.isWorking ?? null,
+      comment: input.comment?.trim() || null,
+      videoTimestampSeconds: input.videoTimestampSeconds ?? null,
+    };
+    const response = await this.prisma.inspectionAreaChecklistResponse.upsert({
+      where: {
+        inspectionAreaId_checklistItemId: { inspectionAreaId: areaId, checklistItemId: itemId },
+      },
+      create: {
+        organizationId: user.organizationId,
+        inspectionAreaId: areaId,
+        checklistItemId: itemId,
+        recordedById: user.id,
+        ...values,
+      },
+      update: { recordedById: user.id, recordedAt: new Date(), ...values },
+      select: {
+        checklistItemId: true,
+        isClean: true,
+        isUndamaged: true,
+        isWorking: true,
+        comment: true,
+        recordedAt: true,
+        videoTimestampSeconds: true,
+      },
+    });
+    return {
+      itemId: response.checklistItemId,
+      isClean: response.isClean,
+      isUndamaged: response.isUndamaged,
+      isWorking: response.isWorking,
+      comment: response.comment,
+      recordedAt: response.recordedAt.toISOString(),
+      videoTimestampSeconds: response.videoTimestampSeconds,
+    };
+  }
+
+  /**
    * Where an area stands, derived rather than stored.
    *
    * Order matters and encodes what a reviewer most needs to act on. A failed
@@ -302,7 +402,7 @@ export class AreaEvidenceService {
     if (!area)
       throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'Inspection area was not found.');
 
-    const [recordings, photos, findings, summaryFinding] = await Promise.all([
+    const [recordings, photos, findings, summaryFinding, checklistItems] = await Promise.all([
       this.prisma.inspectionMedia.findMany({
         where: { inspectionAreaId: area.id },
         orderBy: [{ recordingType: 'asc' }, { createdAt: 'asc' }],
@@ -374,6 +474,28 @@ export class AreaEvidenceService {
         where: { inspectionId, propertyAreaId: area.propertyArea.id, ...ROOM_SUMMARY_WHERE },
         orderBy: { createdAt: 'desc' },
         select: { id: true, description: true, createdAt: true, reviewStatus: true },
+      }),
+      // Driven from the item list, not from the responses: an unassessed item
+      // has no response row, and listing only what has been scored would hide
+      // exactly the items still needing attention.
+      this.prisma.areaChecklistItem.findMany({
+        where: { propertyAreaId: area.propertyArea.id, archivedAt: null },
+        orderBy: { sortOrder: 'asc' },
+        select: {
+          id: true,
+          label: true,
+          responses: {
+            where: { inspectionAreaId: area.id },
+            select: {
+              isClean: true,
+              isUndamaged: true,
+              isWorking: true,
+              comment: true,
+              recordedAt: true,
+              videoTimestampSeconds: true,
+            },
+          },
+        },
       }),
     ]);
 
@@ -483,6 +605,21 @@ export class AreaEvidenceService {
         contentPath: `/api/v1/admin/media/${recording.id}/content`,
       })),
       photoGroups: groups,
+      // Every item, assessed or not. `responses` is filtered to this inspection
+      // area, so at most one row exists per item.
+      checklist: checklistItems.map((item) => {
+        const response = item.responses[0];
+        return {
+          itemId: item.id,
+          label: item.label,
+          isClean: response?.isClean ?? null,
+          isUndamaged: response?.isUndamaged ?? null,
+          isWorking: response?.isWorking ?? null,
+          comment: response?.comment ?? null,
+          recordedAt: response?.recordedAt.toISOString() ?? null,
+          videoTimestampSeconds: response?.videoTimestampSeconds ?? null,
+        };
+      }),
       findings: findings.map((finding) => ({
         id: finding.id,
         title: finding.title,

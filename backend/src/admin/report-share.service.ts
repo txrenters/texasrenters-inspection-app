@@ -5,7 +5,7 @@ import { FindingReviewStatus, PhotoCaptureType, type Prisma } from '@prisma/clie
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
-import { enterTenant, withSystemTenant } from '../database/tenant-context';
+import { withSystemTenant, withTenant } from '../database/tenant-context';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
@@ -136,7 +136,20 @@ export class ReportShareService {
    * output, and identifiers stay private.
    */
   async publicReport(token: string) {
-    const inspectionId = await this.resolveShare(token);
+    const share = await this.resolveShare(token);
+    // `withTenant`, not `enterTenant`. The share lookup runs as the system
+    // tenant, and `enterWith` inside that helper did not survive back into this
+    // continuation — so no `set_config` ran, and every query below was made
+    // under an unset tenant. That used to be harmless because the first
+    // policies allowed a null tenant; once they were tightened to fail closed,
+    // it silently turned every shared report into "This report is not
+    // available." Wrapping the reads keeps the scope open across them.
+    return withTenant(share.organizationId, () =>
+      this.buildPublicReport(share.inspectionId, token),
+    );
+  }
+
+  private async buildPublicReport(inspectionId: string, token: string) {
     const inspection = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
       select: {
@@ -158,6 +171,31 @@ export class ReportShareService {
             skipReason: true,
             completedAt: true,
             propertyArea: { select: { name: true, floor: { select: { name: true } } } },
+            /**
+             * The condition checklist as the technician scored it.
+             *
+             * Ordered by the item's own sortOrder so the report prints rows in
+             * the sequence an administrator authored, which is the order the
+             * office's existing reports use.
+             *
+             * Archived items are deliberately still included: the report is a
+             * record of what was assessed at the time, and dropping a row
+             * because someone later tidied the checklist would silently edit
+             * history a tenant may already have been shown.
+             */
+            checklistResponses: {
+              orderBy: [
+                { checklistItem: { sortOrder: 'asc' as const } },
+                { checklistItem: { label: 'asc' as const } },
+              ],
+              select: {
+                isClean: true,
+                isUndamaged: true,
+                isWorking: true,
+                comment: true,
+                checklistItem: { select: { id: true, label: true } },
+              },
+            },
             photos: {
               where: HOMEOWNER_VISIBLE_PHOTO,
               orderBy: [{ captureType: 'asc' }, { sequenceNumber: 'asc' }, { capturedAt: 'asc' }],
@@ -222,6 +260,17 @@ export class ReportShareService {
         completionStatus: area.completionStatus,
         skipReason: area.skipReason,
         completedAt: area.completedAt,
+        // Nulls are carried through rather than coerced: the report prints an
+        // empty cell for an unassessed axis, and a false would claim a defect
+        // the technician never recorded.
+        checklist: area.checklistResponses.map((response) => ({
+          id: response.checklistItem.id,
+          label: response.checklistItem.label,
+          isClean: response.isClean,
+          isUndamaged: response.isUndamaged,
+          isWorking: response.isWorking,
+          comment: response.comment,
+        })),
       })),
       findings: inspection.findings.map((finding) => ({
         id: finding.id,
@@ -257,7 +306,13 @@ export class ReportShareService {
    * another's evidence, and must never reach an unapproved finding's photo.
    */
   async publicPhoto(token: string, photoId: string, width?: number) {
-    const inspectionId = await this.resolveShare(token);
+    const share = await this.resolveShare(token);
+    return withTenant(share.organizationId, () =>
+      this.loadPublicPhoto(share.inspectionId, photoId, width),
+    );
+  }
+
+  private async loadPublicPhoto(inspectionId: string, photoId: string, width?: number) {
     if (!this.mediaStorage)
       throw new ApplicationError(
         503,
@@ -323,8 +378,7 @@ export class ReportShareService {
         'REPORT_NOT_AVAILABLE',
         'This report link is invalid, expired, or has been revoked.',
       );
-    enterTenant(share.organizationId);
-    return share.inspectionId;
+    return share;
   }
 
   /** Letterhead. Deployment-level branding; every field is env-overridable. */

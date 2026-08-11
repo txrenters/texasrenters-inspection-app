@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CameraView,
   type CameraType,
@@ -43,9 +43,17 @@ import {
   rotationProgress,
   type GuidedCaptureSummary,
 } from '@/src/capture/guided-capture';
+import { ConditionPromptSheet } from '@/src/capture/ConditionPromptSheet';
+import { SweepPromptSheet } from '@/src/capture/SweepPromptSheet';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
-import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
+import {
+  useInspection,
+  useInspectionActions,
+  useRecordChecklistItem,
+  useRoom,
+  useRoomChecklist,
+} from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
@@ -155,6 +163,22 @@ export default function RoomCameraScreen() {
   const [photoCount, setPhotoCount] = useState(0);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
+  const [conditionOpen, setConditionOpen] = useState(false);
+  const [sweepPromptOpen, setSweepPromptOpen] = useState(false);
+
+  /**
+   * Authored items only, straight from `useRoomChecklist`.
+   *
+   * `useAreaChecklist` falls back to a *generated* list for areas nobody has
+   * configured, and those synthetic ids do not exist on the server — scoring
+   * one would 404. Only authored items can be assessed, so only those are asked.
+   */
+  const conditionItems = useRoomChecklist(areaId);
+  const recordCondition = useRecordChecklistItem(areaId);
+  const conditionAssessments = useMemo(
+    () => new Map((conditionItems.data ?? []).map((item) => [item.id, item])),
+    [conditionItems.data],
+  );
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
@@ -217,10 +241,23 @@ export default function RoomCameraScreen() {
       announce('Slow down for a clear room walkthrough.');
     } else if (guidanceState === 'RETURN_TO_START') {
       announce('Return to Wall 1 to complete the walkthrough.');
-    } else if (guidanceState === 'COMPLETE') {
-      announce('Clockwise walkthrough complete.');
+    } else if (guidanceState === 'COMPLETE' || guidanceState === 'LIKELY_COMPLETE') {
+      // Both states, not COMPLETE alone. A sweep that reaches 92% and returns
+      // to the start settles on LIKELY_COMPLETE and never advances, so gating
+      // on COMPLETE left the prompt unopened for a large share of real
+      // walkthroughs — the room had been filmed and nothing happened.
+      //
+      // The sensor confirming the sweep is the cue to move on: the next thing
+      // is assessing what was just filmed, while the technician is still
+      // standing in it. Only prompted when there is something to ask — an
+      // unconfigured area would open an empty sheet.
+      announce('Walkthrough complete. Start the detailed checklist.');
+      if (conditionItems.data?.length) setConditionOpen(true);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+        () => undefined,
+      );
     }
-  }, [guidanceState, isAdditional, recording]);
+  }, [conditionItems.data, guidanceState, isAdditional, recording]);
 
   useEffect(() => {
     if (!recording || stopping) return;
@@ -304,6 +341,10 @@ export default function RoomCameraScreen() {
     }
 
     setRecording(true);
+    // The first instruction of the area: film the room before assessing it.
+    // Only for the primary walkthrough — an additional clip is a follow-up on
+    // something already found and has no sweep to perform.
+    if (!isAdditional) setSweepPromptOpen(true);
     setStopping(false);
     announce(
       isAdditional
@@ -778,12 +819,24 @@ export default function RoomCameraScreen() {
             </View>
 
             <View className="flex-1 items-center">
+              {/* Long press opens the condition prompts by hand.
+                  The sensor cue must never be the only route: a device with no
+                  gyroscope reports SENSOR_UNAVAILABLE and reaches no complete
+                  state at all, and a technician who dismissed the prompt with
+                  "Later" would otherwise have no way back to it. */}
               <Pressable
-                accessibilityHint="Opens the coverage checklist for this area"
+                accessibilityHint="Asks the next condition question. Long press to see the whole checklist."
                 accessibilityLabel={`Area checklist, ${checklistCoverage.covered} of ${checklistCoverage.total} covered`}
                 accessibilityRole="button"
                 className="h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-black/30"
-                onPress={() => setChecklistOpen(true)}
+                // Tap asks the next question; long press opens the full list to
+                // review or correct. The prompt is the fast path, so it gets the
+                // tap — an area with no authored items falls back to the list,
+                // which explains itself rather than opening an empty prompt.
+                onLongPress={() => setChecklistOpen(true)}
+                onPress={() =>
+                  conditionItems.data?.length ? setConditionOpen(true) : setChecklistOpen(true)
+                }
               >
                 <ListChecksIcon size={22} className="text-white" />
               </Pressable>
@@ -803,12 +856,55 @@ export default function RoomCameraScreen() {
 
       <AreaChecklistSheet
         areaName={room.data?.name ?? 'Area'}
+        // Keyed by item id so a row can read its own answers without scanning
+        // the list once per render.
+        assessments={conditionAssessments}
         checkedIds={checkedItems}
         items={checklist}
+        onAssess={(itemId, axis, next) => {
+          const current = conditionAssessments.get(itemId);
+          recordCondition.mutate({
+            itemId,
+            assessment: {
+              isClean: current?.isClean ?? null,
+              isUndamaged: current?.isUndamaged ?? null,
+              isWorking: current?.isWorking ?? null,
+              comment: current?.comment ?? null,
+              // The whole assessment every time: the API takes a complete
+              // record, so sending one axis would clear the other two.
+              [axis]: next,
+              // Where in the recording it was answered, so the reviewer can
+              // jump to the moment instead of scrubbing.
+              videoTimestampSeconds: recording ? secondsRef.current : null,
+            },
+          });
+        }}
         onClose={() => setChecklistOpen(false)}
         onToggle={(id) => toggleChecklistItem(areaId, id)}
         recording={recording}
         visible={checklistOpen}
+      />
+
+      <ConditionPromptSheet
+        items={conditionItems.data ?? []}
+        onClose={() => setConditionOpen(false)}
+        onRecord={(itemId, assessment) => {
+          recordCondition.mutate({
+            // Read from the ref, not the `seconds` state: the state lags by up
+            // to a second behind the timer, and the whole point is the moment
+            // the technician actually answered.
+            itemId,
+            assessment: { ...assessment, videoTimestampSeconds: secondsRef.current },
+          });
+        }}
+        saving={recordCondition.isPending}
+        visible={conditionOpen}
+      />
+
+      <SweepPromptSheet
+        areaName={room.data?.name ?? 'this area'}
+        onClose={() => setSweepPromptOpen(false)}
+        visible={sweepPromptOpen}
       />
     </View>
   );

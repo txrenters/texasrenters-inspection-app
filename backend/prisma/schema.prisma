@@ -760,6 +760,11 @@ model InspectionAreaChecklistResponse {
   isUndamaged      Boolean?
   isWorking        Boolean?
   comment          String?
+  /// Seconds into the area's recording when this was answered, so a reviewer can
+  /// jump straight to the moment rather than scrubbing an hour of video. Null for
+  /// an assessment made outside a recording — the web review screen, or a
+  /// technician scoring after the fact.
+  videoTimestampSeconds Int?
   recordedById     String?           @db.Uuid
   recordedAt       DateTime          @default(now())
   createdAt        DateTime          @default(now())

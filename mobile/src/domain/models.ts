@@ -400,6 +400,13 @@ export interface ChecklistAssessment {
   isUndamaged: boolean | null;
   isWorking: boolean | null;
   comment: string | null;
+  /**
+   * Seconds into the area's recording when this was answered.
+   *
+   * Set when the prompt is answered during capture, so a reviewer can jump to
+   * the moment rather than scrubbing. Null when scored outside a recording.
+   */
+  videoTimestampSeconds?: number | null;
 }
 
 /** A checklist item together with this inspection's assessment of it. */

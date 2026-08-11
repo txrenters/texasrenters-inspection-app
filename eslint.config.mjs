@@ -18,18 +18,70 @@ export default tseslint.config(
     },
   },
   {
-    files: ['web-app/scripts/**/*.mjs'],
+    files: ['web-app/scripts/**/*.mjs', 'web-shadcn/scripts/**/*.mjs'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },
   },
   {
-    files: ['web-app/**/*.{ts,tsx}'],
+    files: ['web-app/**/*.{ts,tsx}', 'web-shadcn/**/*.{ts,tsx}'],
     plugins: { '@next/next': nextPlugin },
     rules: {
       ...nextPlugin.configs.recommended.rules,
       ...nextPlugin.configs['core-web-vitals'].rules,
     },
+  },
+  {
+    /**
+     * web-shadcn ships no bespoke CSS — `app/globals.css` is tokens only, and
+     * every legacy class name it could refer to was deliberately not carried
+     * over. A `className` holding a raw colour is the way that erodes: it works,
+     * it looks local, and it silently opts that element out of theming, so it is
+     * the one thing worth failing the build over.
+     */
+    files: ['web-shadcn/app/**/*.tsx', 'web-shadcn/components/**/*.tsx'],
+    ignores: ['web-shadcn/components/ui/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            'JSXAttribute[name.name="className"] > Literal[value=/(^|[\\s:[])(#[0-9a-fA-F]{3,8}\\b|rgba?\\(|hsla?\\()/]',
+          message:
+            'Raw colour in a className. Use a theme token (bg-card, text-muted-foreground, border-border…) so the element follows light and dark mode.',
+        },
+        {
+          selector: 'JSXOpeningElement[name.name=/^(table|thead|tbody|tfoot)$/]',
+          message: 'Use the Table primitives from @/components/ui/table, or the DataTable component.',
+        },
+        {
+          selector: 'JSXOpeningElement[name.name="dialog"]',
+          message: 'Use Dialog, AlertDialog or Sheet from @/components/ui.',
+        },
+        {
+          // Native modals ignore the design system and block the event loop, so
+          // deferred AlertDialog flows cannot be built on them.
+          selector:
+            'CallExpression[callee.object.name="window"][callee.property.name=/^(confirm|alert)$/]',
+          message: 'Use AlertDialog from @/components/ui/alert-dialog.',
+        },
+        {
+          selector: 'JSXOpeningElement[name.name="select"]',
+          message:
+            'Use Select from @/components/ui/select (or SearchableSelect when the list needs search).',
+        },
+        {
+          selector:
+            'JSXOpeningElement[name.name="input"]:has(JSXAttribute[name.name="type"][value.value="checkbox"])',
+          message: 'Use Checkbox from @/components/ui/checkbox.',
+        },
+      ],
+    },
+  },
+  {
+    // The primitives themselves are the one place these tags are legitimate.
+    files: ['web-shadcn/components/ui/**/*.tsx'],
+    rules: { 'no-restricted-syntax': 'off' },
   },
   {
     // Keeps the shadcn migration from regressing: the legacy CSS blocks these

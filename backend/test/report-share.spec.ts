@@ -121,6 +121,17 @@ describe('inspection report shares', () => {
               skipReason: null,
               completedAt: new Date(),
               propertyArea: { name: 'Kitchen', floor: { name: 'Ground Floor' } },
+              // A partial assessment: Working was never scored, and the report
+              // has to carry that through as null rather than false.
+              checklistResponses: [
+                {
+                  isClean: false,
+                  isUndamaged: true,
+                  isWorking: null,
+                  comment: 'scratches on door',
+                  checklistItem: { id: 'item-1', label: 'Doors and locks' },
+                },
+              ],
               photos: [
                 {
                   id: 'photo-1',
@@ -164,6 +175,19 @@ describe('inspection report shares', () => {
     expect(report.findings[0].roomId).toBe('area-1');
     expect(report.photos).toHaveLength(1);
     expect(report.photos[0].contentPath).toBe('/api/v1/reports/valid-token/photos/photo-1');
+    // The rule the printed report depends on: an unassessed axis stays null.
+    // Coercing it to false would publish a defect the technician never
+    // observed, on a document a tenant may be shown.
+    expect(report.rooms[0].checklist).toEqual([
+      {
+        id: 'item-1',
+        label: 'Doors and locks',
+        isClean: false,
+        isUndamaged: true,
+        isWorking: null,
+        comment: 'scratches on door',
+      },
+    ]);
     expect(JSON.stringify(report)).not.toMatch(/internalNotes|technician|organizationId/);
   });
 

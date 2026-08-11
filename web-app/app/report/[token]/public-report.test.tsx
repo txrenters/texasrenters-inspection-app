@@ -44,6 +44,27 @@ const REPORT: PublicInspectionReport = {
       completionStatus: 'COMPLETED',
       skipReason: null,
       completedAt: '2026-07-23T17:00:00.000Z',
+      // Deliberately mixed: a fully scored row, a partial one, and a comment.
+      // The partial row is what proves an unassessed axis prints blank rather
+      // than as "N", which would claim a defect nobody observed.
+      checklist: [
+        {
+          id: 'item-1',
+          label: 'Doors and locks',
+          isClean: false,
+          isUndamaged: false,
+          isWorking: true,
+          comment: 'scratches on door need to be painted',
+        },
+        {
+          id: 'item-2',
+          label: 'Smoke alarms',
+          isClean: true,
+          isUndamaged: null,
+          isWorking: null,
+          comment: null,
+        },
+      ],
     },
     {
       id: 'area-2',
@@ -52,6 +73,8 @@ const REPORT: PublicInspectionReport = {
       completionStatus: 'SKIPPED',
       skipReason: 'Vehicle blocking access',
       completedAt: null,
+      // A skipped room was never assessed.
+      checklist: [],
     },
   ],
   findings: [
@@ -115,6 +138,38 @@ describe('public inspection report', () => {
     render(<PublicReportPage />);
 
     expect(await screen.findByText(/Vehicle blocking access/)).toBeInTheDocument();
+  });
+
+  it('prints the condition checklist as Y, N and blank', async () => {
+    render(<PublicReportPage />);
+
+    const row = (await screen.findByText('Doors and locks')).closest('tr')!;
+    const cells = [...row.querySelectorAll('td')].map((cell) => cell.textContent);
+    // Clean=N, Undamaged=N, Working=Y, then the comment.
+    expect(cells).toEqual(['N', 'N', 'Y', 'scratches on door need to be painted']);
+  });
+
+  /**
+   * The rule the whole checklist rests on. The office's printed reports leave
+   * unassessed rows blank, and "not assessed" is a different claim from "No" —
+   * printing N here would publish a defect nobody observed.
+   */
+  it('leaves an unassessed axis blank rather than printing N', async () => {
+    render(<PublicReportPage />);
+
+    const row = (await screen.findByText('Smoke alarms')).closest('tr')!;
+    const cells = [...row.querySelectorAll('td')].map((cell) => cell.textContent);
+    expect(cells).toEqual(['Y', '', '', '']);
+  });
+
+  it('shows no checklist table for a room that was never assessed', async () => {
+    const { container } = render(<PublicReportPage />);
+    await screen.findByText('Doors and locks');
+
+    // Two rooms in the fixture, one of them skipped with an empty checklist.
+    // An empty table would read as "assessed and found nothing" rather than
+    // "not assessed", so the skipped room must render none at all.
+    expect(container.querySelectorAll('.report-checklist')).toHaveLength(1);
   });
 
   it('shows a recoverable message when the link is expired or revoked', async () => {
