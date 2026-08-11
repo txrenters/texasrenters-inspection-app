@@ -21,6 +21,9 @@ function service(prisma: unknown, storage: unknown = {}, extraction: unknown = {
     prisma as never,
     storage as never,
     extraction as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
     ai as never,
   );
 }

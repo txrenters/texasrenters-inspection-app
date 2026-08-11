@@ -150,6 +150,19 @@ const CATEGORY_ALIASES: Record<string, string> = {
   BASEMENT: 'GARAGE',
 };
 
+/**
+ * Every label the tables use, deduplicated.
+ *
+ * Handed to the model as preferred wording. Not a closed set — an area the
+ * report never covered may genuinely need an item nobody has written down — but
+ * a model left to phrase things freely produces "Light fixtures" in one property
+ * and "Lights and power points" in the next, and the two never line up in a
+ * report or match the same spoken words.
+ */
+export const CHECKLIST_VOCABULARY: readonly string[] = [
+  ...new Set([...BASE_INDOOR, ...BASE_OUTDOOR, ...Object.values(CATEGORY_ADDITIONS).flat()]),
+];
+
 export interface ChecklistTemplateArea {
   name?: string | null;
   /** The app's AreaCategory, when an administrator has set one. */

@@ -17,6 +17,7 @@ import type {
   UpdatePropertyAreaDto,
 } from './admin.dto';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
+import { AreaChecklistAiService } from './area-checklist-ai.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
 
@@ -187,6 +188,7 @@ export class FloorPlanAdminService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(FloorPlanStorageService) private readonly storage: FloorPlanStorageService,
     @Inject(FloorPlanExtractionService) private readonly extraction: FloorPlanExtractionService,
+    @Inject(AreaChecklistAiService) private readonly checklistAi: AreaChecklistAiService,
     @Inject(AiProviderSettingsService) private readonly aiSettings: AiProviderSettingsService,
   ) {}
 
@@ -356,6 +358,32 @@ export class FloorPlanAdminService {
         configuration,
       );
       const extracted = extractionResult.areas;
+      /**
+       * Checklists are generated here, **before** the transaction opens.
+       *
+       * A provider call can take the better part of a minute; inside the
+       * transaction it would hold it open far past the pooler's limit and
+       * surface as "Transaction not found" — losing the extraction, not just
+       * the checklists.
+       *
+       * Generated for every extracted area, including ones the transaction
+       * later discards as duplicates. That wastes a few tokens and keeps this
+       * independent of a decision that needs the database to make.
+       */
+      const generatedChecklists = await this.checklistAi.generate(
+        extracted.map((area) => {
+          const classified = classifyAreaByName(area.name);
+          return {
+            name: area.name,
+            category: classified.category,
+            environment: classified.environment,
+          };
+        }),
+        configuration,
+      );
+      const checklistByArea = new Map(
+        extracted.map((area, index) => [area, generatedChecklists.items[index] ?? []]),
+      );
       // The database can be several hundred milliseconds away (hosted
       // Supabase), so the transaction batches its work into a constant number
       // of round trips regardless of how many rooms were extracted, and runs
@@ -477,20 +505,29 @@ export class FloorPlanAdminService {
           // Approval still generates for anything that has none — areas
           // extracted before this, and drafts added by hand — and its
           // "already has a checklist" guard means these are not duplicated.
-          const checklistRows = areaRows.flatMap((row) =>
-            checklistTemplateFor({
-              name: row.name,
-              category: row.category,
-              environment: row.environment,
-            }).map((label, index) => ({
+          const checklistRows = areaRows.flatMap((row, rowIndex) => {
+            // areaRows is fresh.map(...), so index i is fresh[i]. Matching on
+            // the object rather than the name matters: three areas called
+            // "Living area" is normal here, and a name lookup would give all
+            // three whichever list came back first.
+            const labels = checklistByArea.get(fresh[rowIndex]!);
+            return (
+              labels?.length
+                ? labels
+                : checklistTemplateFor({
+                    name: row.name,
+                    category: row.category,
+                    environment: row.environment,
+                  })
+            ).map((label, index) => ({
               organizationId: user.organizationId,
               propertyAreaId: row.id,
               label,
               keywords: keywordsFromLabel(label),
               sortOrder: index,
               createdById: user.id,
-            })),
-          );
+            }));
+          });
           if (checklistRows.length) await tx.areaChecklistItem.createMany({ data: checklistRows });
           const created = areaRows.length
             ? await tx.propertyArea.findMany({

@@ -12,6 +12,7 @@ import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService } from './floor-plan-admin.service';
+import { AreaChecklistAiService } from './area-checklist-ai.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
 import { AreaEvidenceService } from './area-evidence.service';
@@ -40,6 +41,7 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
     ChargeService,
     ComparisonService,
     FloorPlanAdminService,
+    AreaChecklistAiService,
     FloorPlanExtractionService,
     FloorPlanStorageService,
     InspectionMediaStorageService,

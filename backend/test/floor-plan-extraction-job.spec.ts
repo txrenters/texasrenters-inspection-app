@@ -33,6 +33,9 @@ function service(prisma: Record<string, unknown>, extraction: Record<string, unk
       extract: jest.fn(),
       ...extraction,
     } as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
     { resolve: jest.fn().mockResolvedValue({ provider: 'OPENAI', modelId: 'm' }) } as never,
   );
 }

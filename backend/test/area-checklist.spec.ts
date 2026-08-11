@@ -34,6 +34,9 @@ function makeService() {
     prisma as never,
     {} as never,
     {} as never,
+      // Returns nothing per area, so the service falls back to the shared
+      // templates and these assertions stay deterministic and offline.
+      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
     {} as never,
   );
   return { service, created };
