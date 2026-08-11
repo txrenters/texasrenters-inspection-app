@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { ApiAuthGuard, RolesGuard } from '../common/auth';
+import { AreaChecklistAiService } from '../admin/area-checklist-ai.service';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { ChargeService } from '../admin/charge.service';
 import { ComparisonService } from '../admin/comparison.service';
@@ -24,6 +25,10 @@ import { TechnicianService } from './technician.service';
     // there rather than in the bucket.
     CloudflareStreamService,
     AiProviderSettingsService,
+    // Stateless and dependency-free, so it is provided here rather than
+    // imported from AdminModule — which imports MediaModule, which imports this
+    // one. A second instance costs nothing and avoids the cycle.
+    AreaChecklistAiService,
     ComparisonService,
     ChargeService,
     ApiAuthGuard,

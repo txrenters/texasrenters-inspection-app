@@ -282,6 +282,15 @@ export default function RecordingReviewScreen() {
         </View>
       </ScrollView>
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
+        {/* The reason the button below is dead, said out loud.
+            It was an accessibilityHint alone, which only a screen reader ever
+            announced — everyone else saw a greyed-out control and no way to
+            find out what it wanted. */}
+        {confirmed ? null : (
+          <Text className="mb-2 text-center text-xs leading-4 text-muted-foreground">
+            Tick the confirmation above to save this recording.
+          </Text>
+        )}
         <Pressable
           // Disabled with no stated reason is indistinguishable from broken.
           accessibilityHint={confirmed ? undefined : 'Confirm the recording above before saving'}

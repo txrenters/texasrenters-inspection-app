@@ -1,4 +1,8 @@
-import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
+import {
+  checklistTemplateFor,
+  inspectionRequiresEveryArea,
+  keywordsFromLabel,
+} from '@texasrenters/shared';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
@@ -19,6 +23,8 @@ import type { FindingReviewStatus, Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
+import { AreaChecklistAiService } from '../admin/area-checklist-ai.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
@@ -224,6 +230,7 @@ const technicianInspectionSummarySelect = {
       id: true,
       completionStatus: true,
       propertyArea: { select: { isRequired: true } },
+      // Needed to decide whether the type overrides that flag.
       media: {
         orderBy: { createdAt: 'desc' as const },
         take: 1,
@@ -286,6 +293,15 @@ export class TechnicianService {
     @Optional()
     @Inject(TechnicianEventsGateway)
     private readonly technicianEvents?: TechnicianEventsGateway,
+    // Optional, and appended rather than inserted, for the same reason as the
+    // gateway above: the unit tests construct this service directly with a
+    // handful of doubles. Absent, area creation falls back to the tables.
+    @Optional()
+    @Inject(AreaChecklistAiService)
+    private readonly checklistAi?: AreaChecklistAiService,
+    @Optional()
+    @Inject(AiProviderSettingsService)
+    private readonly aiSettings?: AiProviderSettingsService,
   ) {}
 
   /**
@@ -508,7 +524,10 @@ export class TechnicianService {
     const incomplete = await this.prisma.inspectionArea.count({
       where: {
         inspectionId: id,
-        propertyArea: { isRequired: true },
+        // Same rule as the summary: the type can override the per-area flag.
+        ...(inspectionRequiresEveryArea(inspection.inspectionType)
+          ? {}
+          : { propertyArea: { isRequired: true } }),
         completionStatus: {
           notIn: [InspectionAreaCompletionStatus.COMPLETED, InspectionAreaCompletionStatus.SKIPPED],
         },
@@ -719,13 +738,29 @@ export class TechnicianService {
         select: { id: true },
       }));
 
-    // Deterministic and free of I/O, so it is resolved before the transaction
-    // opens rather than while it is held.
-    const templateItems = checklistTemplateFor({
-      name,
-      category: input.category ?? null,
-      environment: input.environment,
-    });
+    /**
+     * The checklist for the area the technician just described.
+     *
+     * Resolved before the transaction opens, not while it is held — this now
+     * makes a provider call, and a transaction left open across one would be
+     * dropped by the pooler long before it returned.
+     *
+     * The same generator the floor-plan path uses, so an area surveyed on site
+     * gets the same quality of list as one extracted from a plan. Without this
+     * it fell back to the tables applied by room *kind*, and a staircase added
+     * in the field was still asked about its doors and locks.
+     *
+     * Never fatal: every failure inside `generate` yields the table list for
+     * that area, so a technician with no signal still gets a checklist.
+     */
+    const newArea = { name, category: input.category ?? null, environment: input.environment };
+    const configuration = await this.aiSettings
+      ?.resolve(user.organizationId)
+      .catch(() => undefined);
+    const generated = await this.checklistAi?.generate([newArea], configuration ?? undefined);
+    const templateItems: string[] = generated?.items[0]?.length
+      ? generated.items[0]
+      : checklistTemplateFor(newArea);
 
     const room = await this.prisma.$transaction(async (tx) => {
       const area = await tx.propertyArea.create({
@@ -1973,7 +2008,13 @@ export class TechnicianService {
   }
 
   private mapInspection(record: TechnicianInspectionSummaryRecord, technicianId: string) {
-    const requiredAreas = record.areas.filter((area) => area.propertyArea.isRequired);
+    // On a move-in or move-out every attached area counts, whatever the
+    // property flagged optional — the two are compared area by area, and one
+    // missing from either end drops out of the comparison without a trace.
+    const everyAreaCounts = inspectionRequiresEveryArea(record.inspectionType);
+    const requiredAreas = record.areas.filter(
+      (area) => everyAreaCounts || area.propertyArea.isRequired,
+    );
     const completedAreas = requiredAreas.filter(
       (area) =>
         area.completionStatus === InspectionAreaCompletionStatus.COMPLETED ||
