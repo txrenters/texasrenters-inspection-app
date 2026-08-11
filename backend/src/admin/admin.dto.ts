@@ -78,6 +78,17 @@ export class CreateAdminInspectionDto {
   @IsOptional() @IsString() @MaxLength(2000) internalNotes?: string;
   @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
   /**
+   * The areas to inspect, when the type does not demand all of them.
+   *
+   * Occupied, back-to-market and HVAC inspect a chosen part of the property, so
+   * the scope is stated here and only these areas are attached. Omitted means
+   * every approved area, which is what a move-in and move-out always get —
+   * sending a subset for those is refused rather than silently widened, because
+   * a move-out missing an area has no counterpart in its move-in and the
+   * comparison drops it without a trace.
+   */
+  @IsOptional() @IsUUID('4', { each: true }) areaIds?: string[];
+  /**
    * Schedule without an approved floor plan and let the technician survey the
    * areas on site. Their areas are written to the property as DRAFT, so an
    * administrator still approves the permanent layout.

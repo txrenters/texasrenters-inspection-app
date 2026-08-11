@@ -14,6 +14,7 @@ import {
 import {
   LEASE_EXPIRING_SOON_DAYS,
   daysUntilLeaseEnd,
+  inspectionRequiresEveryArea,
   leaseExpiryStatus,
 } from '@texasrenters/shared';
 
@@ -1114,6 +1115,42 @@ export class AdminService {
       // site. What they add is still DRAFT on the property, so an administrator
       // approves the permanent layout — this delegates the survey, not the
       // approval.
+      /**
+       * The areas this inspection actually covers.
+       *
+       * Move-in and move-out always take the whole approved layout — they are
+       * compared to each other area by area, and a subset on either end leaves
+       * the other with counterparts that never resolve. A caller who sends
+       * `areaIds` for one of those is refused rather than quietly widened: they
+       * asked for something the type cannot honour, and silently doing
+       * otherwise is how a move-out ends up scoped differently from the
+       * move-in it will be judged against.
+       *
+       * Every id is checked against the approved set, so a stale or foreign id
+       * fails here rather than producing an inspection missing an area nobody
+       * notices until a technician is standing in the property.
+       */
+      const requestedAreaIds = input.areaIds?.length ? [...new Set(input.areaIds)] : null;
+      if (requestedAreaIds && inspectionRequiresEveryArea(input.inspectionType))
+        throw new ApplicationError(
+          422,
+          'AREA_SELECTION_NOT_ALLOWED',
+          'A move-in or move-out covers every area, so it cannot be limited to a selection.',
+        );
+      if (requestedAreaIds) {
+        const approvedIds = new Set(approvedAreas.map((area) => area.id));
+        const unknown = requestedAreaIds.filter((id) => !approvedIds.has(id));
+        if (unknown.length)
+          throw new ApplicationError(
+            422,
+            'INVALID_AREA_SELECTION',
+            'Select only approved areas belonging to this property.',
+          );
+      }
+      const scopedAreas = requestedAreaIds
+        ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
+        : approvedAreas;
+
       const technicianWillCapture = input.allowTechnicianAreaCapture === true;
       if (!approvedAreas.length && !technicianWillCapture)
         throw new ApplicationError(
@@ -1160,7 +1197,7 @@ export class AdminService {
             propertySnapshot: this.propertySnapshot(property, unit),
             leaseSnapshot: lease ? this.leaseSnapshot(lease) : Prisma.JsonNull,
             areas: {
-              create: approvedAreas.map((area) => ({ propertyAreaId: area.id })),
+              create: scopedAreas.map((area) => ({ propertyAreaId: area.id })),
             },
           },
         });
@@ -1184,6 +1221,8 @@ export class AdminService {
         // with no areas at all.
         allowTechnicianAreaCapture: technicianWillCapture,
         areasFromApprovedPlan: approvedAreas.length,
+        // What the inspection actually covers, which differs when scoped.
+        areasInspected: scopedAreas.length,
       });
       if (input.technicianId)
         await this.createAssignment(

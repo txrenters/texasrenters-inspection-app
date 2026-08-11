@@ -172,6 +172,13 @@ export function ConditionPromptSheet({
     setDraft(EMPTY);
     setAxis(0);
     setIndex(index + 1);
+    // Finishing the list closes the sheet. Advancing past the last item renders
+    // the "complete" panel, and with nothing to close it that panel sat over
+    // the camera telling the technician to stop recording, every time, for the
+    // rest of the area. The panel is worth keeping for someone who *opens* the
+    // checklist with nothing left to answer; it is not worth showing to someone
+    // who just finished it.
+    if (index + 1 >= items.length) onClose();
   }
 
   function back() {

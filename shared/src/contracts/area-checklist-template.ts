@@ -202,3 +202,19 @@ export function checklistTemplateFor(area: ChecklistTemplateArea): string[] {
 
   return [...BASE_INDOOR, ...(kind ? (CATEGORY_ADDITIONS[kind] ?? []) : [])];
 }
+
+/**
+ * Whether every area attached to an inspection must be walked.
+ *
+ * Move-in and move-out are the two the tenancy is judged against: a move-out is
+ * compared area by area to its move-in, so an area missing from either end has
+ * no counterpart and the comparison silently omits it. For those, the type
+ * overrides `PropertyArea.isRequired` — a garage or patio flagged optional on
+ * the property is still mandatory here.
+ *
+ * Every other type inspects a chosen subset, so what is attached is already the
+ * decision about scope and the per-area flag continues to apply.
+ */
+export function inspectionRequiresEveryArea(inspectionType: string | null | undefined) {
+  return inspectionType === 'MOVE_IN' || inspectionType === 'MOVE_OUT';
+}
