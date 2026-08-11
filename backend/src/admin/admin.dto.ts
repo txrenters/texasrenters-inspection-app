@@ -438,3 +438,19 @@ export class DeletePropertyAreasDto {
 export class DeleteInspectionsDto {
   @ArrayMinSize(1) @IsUUID('4', { each: true }) inspectionIds!: string[];
 }
+
+/**
+ * How one checklist item was found, recorded by a reviewer.
+ *
+ * Each axis is tri-state: true, false, or omitted for not assessed. Omitted is
+ * not the same as false — the report prints an unassessed cell blank precisely
+ * so a skipped item cannot be read as a fault.
+ */
+export class AdminChecklistAssessmentDto {
+  /** Seconds into the area's recording, when the answer refers to a moment. */
+  @IsOptional() @IsInt() @Min(0) @Max(86_400) videoTimestampSeconds?: number | null;
+  @IsOptional() @IsBoolean() isClean?: boolean | null;
+  @IsOptional() @IsBoolean() isUndamaged?: boolean | null;
+  @IsOptional() @IsBoolean() isWorking?: boolean | null;
+  @IsOptional() @IsString() @MaxLength(2000) comment?: string | null;
+}

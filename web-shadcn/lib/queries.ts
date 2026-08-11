@@ -37,6 +37,7 @@ import type {
   AdminUserDetail,
   AiProviderName,
   AiSettings,
+  AreaChecklistEntry,
   AreaEvidenceBundle,
   AreaEvidenceSummary,
   CreatedTechnicianAccount,
@@ -318,6 +319,40 @@ export const useAreaEvidence = (id: string, areaId: string | null) =>
       }),
     enabled: Boolean(id) && Boolean(areaId),
   });
+
+/**
+ * Records how one checklist item was found, during review.
+ *
+ * PUT with the item's complete assessment, so clearing a control clears it on
+ * the server rather than leaving a value the report would still print.
+ *
+ * The area's evidence is refetched rather than patched in place: the assessment
+ * is one of the inputs to the area's derived review status, and reconstructing
+ * that here would duplicate a rule the server owns.
+ */
+export const useRecordChecklistItem = (inspectionId: string, areaId: string | null) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      itemId,
+      ...assessment
+    }: {
+      itemId: string;
+      isClean: boolean | null;
+      isUndamaged: boolean | null;
+      isWorking: boolean | null;
+      comment?: string | null;
+    }) =>
+      api<AreaChecklistEntry>(
+        `/api/v1/admin/inspections/${inspectionId}/areas/${areaId}/checklist/${itemId}`,
+        { method: 'PUT', body: JSON.stringify(assessment) },
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.areaEvidence(inspectionId, areaId ?? '') });
+      void client.invalidateQueries({ queryKey: keys.areaEvidenceSummary(inspectionId) });
+    },
+  });
+};
 
 export const useReportShares = (id: string) =>
   useQuery({

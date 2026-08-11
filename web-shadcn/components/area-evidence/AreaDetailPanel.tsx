@@ -17,6 +17,7 @@ import { usePermissions } from '@/lib/auth';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 
+import { AreaConditionChecklist } from './AreaConditionChecklist';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { RecordingSurface } from './RecordingSurface';
@@ -73,11 +74,14 @@ function RecordingCard({
   activeId,
   onActivate,
   onExpand,
+  startSeconds,
 }: {
   recording: AreaRecording;
   activeId: string | null;
   onActivate: (id: string | null) => void;
   onExpand: () => void;
+  /** Opens the player at a moment, when arriving from a checklist answer. */
+  startSeconds?: number | null;
 }) {
   const active = activeId === recording.id;
 
@@ -97,6 +101,7 @@ function RecordingCard({
           <RecordingSurface
             mediaId={recording.id}
             posterUrl={recording.thumbnailUrl}
+            startSeconds={startSeconds}
             title={recording.label ?? 'Room recording'}
           />
           <Button
@@ -332,12 +337,29 @@ export function AreaDetailPanel({
 }) {
   const evidence = useAreaEvidence(inspectionId, areaId);
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
+  /**
+   * Where the walkthrough should open, when the reviewer arrives from a
+   * checklist answer rather than pressing Play.
+   *
+   * Held as an object rather than a bare number so that asking for the same
+   * second twice still re-seeks: the value is part of the iframe's src, and an
+   * unchanged src would leave the player exactly where the reviewer had
+   * scrubbed to.
+   */
+  const [seek, setSeek] = useState<{ seconds: number; nonce: number } | null>(null);
   // Belongs to one area, so it resets when the area does. The panel used to be
   // remounted for this, which threw away the open tab and every other piece of
   // state along with it.
-  useEffect(() => setActiveRecording(null), [areaId]);
+  useEffect(() => {
+    setActiveRecording(null);
+    setSeek(null);
+  }, [areaId]);
   // Reviewing is a privileged decision; reading evidence is not.
-  const canReview = usePermissions().has('findings:review');
+  const permissions = usePermissions();
+  const canReview = permissions.has('findings:review');
+  // Scoring the checklist writes to what the report prints, so it follows the
+  // same permission as editing the inspection rather than reviewing findings.
+  const canManage = permissions.has('inspections:manage');
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   // One flat list across recordings and photos, so the arrow keys walk the whole
@@ -384,8 +406,14 @@ export function AreaDetailPanel({
     return <ErrorState error={evidence.error} retry={() => void evidence.refetch()} />;
 
   const bundle = evidence.data!;
-  const { area, recordings, photoGroups, findings, conditionSummary } = bundle;
+  const { area, recordings, photoGroups, findings, conditionSummary, checklist } = bundle;
   const photoCount = photoGroups.reduce((sum, group) => sum + group.photos.length, 0);
+  // An item counts as assessed once any one axis is answered. Requiring all
+  // three would report real work as missing — the printed reports the office
+  // issues contain exactly such partial rows.
+  const checklistAssessed = checklist.filter(
+    (item) => item.isClean !== null || item.isUndamaged !== null || item.isWorking !== null,
+  ).length;
   // The required walkthrough, separated so it can be shown at full width. An
   // area should only ever have one; `find` takes the first if data says
   // otherwise rather than rendering two full-width players.
@@ -429,6 +457,11 @@ export function AreaDetailPanel({
           <TabsTrigger value="photos">Photos{photoCount ? ` (${photoCount})` : ''}</TabsTrigger>
           <TabsTrigger value="findings">
             Findings{findings.length ? ` (${findings.length})` : ''}
+          </TabsTrigger>
+          {/* Its own tab rather than a section under Overview: scoring is a task
+              the reviewer works through item by item, and it needs the width. */}
+          <TabsTrigger value="condition">
+            Condition{checklist.length ? ` (${checklistAssessed}/${checklist.length})` : ''}
           </TabsTrigger>
         </TabsList>
 
@@ -475,6 +508,7 @@ export function AreaDetailPanel({
               {primaryRecording ? (
                 <RecordingCard
                   activeId={activeRecording}
+                  key={`${primaryRecording.id}-${seek?.nonce ?? 0}`}
                   onActivate={setActiveRecording}
                   onExpand={() =>
                     setViewerIndex(
@@ -482,6 +516,7 @@ export function AreaDetailPanel({
                     )
                   }
                   recording={primaryRecording}
+                  startSeconds={seek?.seconds ?? null}
                 />
               ) : null}
               {additionalRecordings.length ? (
@@ -573,6 +608,29 @@ export function AreaDetailPanel({
               }
             />
           )}
+        </TabsContent>
+
+        <TabsContent value="condition">
+          <AreaConditionChecklist
+            areaId={areaId}
+            canReview={canManage}
+            checklist={checklist}
+            inspectionId={inspectionId}
+            onSeek={
+              // Only offered when there is a walkthrough to seek: without one
+              // the link would switch tabs to a player that never appears.
+              primaryRecording
+                ? (seconds) => {
+                    setActiveRecording(primaryRecording.id);
+                    setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
+                    onTabChange('recording');
+                  }
+                : undefined
+            }
+            readOnlyReason={
+              !canManage ? 'Read-only — you cannot change this inspection' : undefined
+            }
+          />
         </TabsContent>
       </Tabs>
 

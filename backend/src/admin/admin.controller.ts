@@ -12,6 +12,7 @@ import {
   Patch,
   ParseEnumPipe,
   Post,
+  Put,
   Query,
   Req,
   StreamableFile,
@@ -44,6 +45,7 @@ import {
   ChargeRuleDto,
   ComparisonReviewDto,
   CreateAdminInspectionDto,
+  AdminChecklistAssessmentDto,
   CreateAreaChecklistItemDto,
   CreateChargeDto,
   CreateEvidenceRequestDto,
@@ -546,6 +548,24 @@ export class AdminController {
   @RequirePermissions('inspections:read')
   inspectionAreas(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.service.inspectionAreas(request.user, id);
+  }
+  /**
+   * Records how one checklist item was found, during review.
+   *
+   * `inspections:manage` rather than `:read`, because this writes to the record
+   * the report prints from. PUT, not PATCH: the body is the item's complete
+   * assessment, so clearing a control clears it on the server.
+   */
+  @Put('inspections/:inspectionId/areas/:areaId/checklist/:itemId')
+  @RequirePermissions('inspections:manage')
+  recordAreaChecklistItem(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') inspectionId: string,
+    @Param('areaId') areaId: string,
+    @Param('itemId') itemId: string,
+    @Body() body: AdminChecklistAssessmentDto,
+  ) {
+    return this.areaEvidence.recordChecklistItem(request.user, inspectionId, areaId, itemId, body);
   }
   @Post('inspections/:inspectionId/merge-areas')
   @RequirePermissions('inspections:manage')

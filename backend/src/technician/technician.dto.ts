@@ -241,6 +241,14 @@ function parseMultipartBoolean(value: unknown) {
  * from "No"; coercing the two would invent a defect nobody observed.
  */
 export class ChecklistAssessmentDto {
+  /**
+   * Seconds into the area's recording when this was answered.
+   *
+   * Bounded rather than merely non-negative: a client sending a millisecond
+   * value by mistake would otherwise store a timestamp days into a recording
+   * that is minutes long, and the reviewer's seek would land nowhere.
+   */
+  @IsOptional() @IsInt() @Min(0) @Max(86_400) videoTimestampSeconds?: number | null;
   @IsOptional() @IsBoolean() isClean?: boolean | null;
   @IsOptional() @IsBoolean() isUndamaged?: boolean | null;
   @IsOptional() @IsBoolean() isWorking?: boolean | null;

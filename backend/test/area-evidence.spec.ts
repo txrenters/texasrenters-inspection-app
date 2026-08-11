@@ -283,6 +283,9 @@ describe('single area evidence bundle', () => {
           },
         ]),
       },
+      // The bundle now carries the area's checklist, driven from the item list
+      // so an unassessed item still appears.
+      areaChecklistItem: { findMany: jest.fn().mockResolvedValue([]) },
       inspectionFinding: {
         findMany: jest.fn().mockResolvedValue([
           {

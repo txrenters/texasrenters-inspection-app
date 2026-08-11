@@ -43,9 +43,16 @@ import {
   rotationProgress,
   type GuidedCaptureSummary,
 } from '@/src/capture/guided-capture';
+import { ConditionPromptSheet } from '@/src/capture/ConditionPromptSheet';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
-import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
+import {
+  useInspection,
+  useInspectionActions,
+  useRecordChecklistItem,
+  useRoom,
+  useRoomChecklist,
+} from '@/src/features/queries';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
@@ -155,6 +162,16 @@ export default function RoomCameraScreen() {
   const [photoCount, setPhotoCount] = useState(0);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
+  const [conditionOpen, setConditionOpen] = useState(false);
+  /**
+   * Authored items only, straight from `useRoomChecklist`.
+   *
+   * `useAreaChecklist` falls back to a *generated* list for areas nobody has
+   * configured, and those synthetic ids do not exist on the server — scoring
+   * one would 404. Only authored items can be assessed, so only those are asked.
+   */
+  const conditionItems = useRoomChecklist(areaId);
+  const recordCondition = useRecordChecklistItem(areaId);
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
@@ -218,9 +235,17 @@ export default function RoomCameraScreen() {
     } else if (guidanceState === 'RETURN_TO_START') {
       announce('Return to Wall 1 to complete the walkthrough.');
     } else if (guidanceState === 'COMPLETE') {
-      announce('Clockwise walkthrough complete.');
+      // The sensor confirming the sweep is the cue to move on: the room has
+      // been recorded, so the next thing is assessing what was just filmed,
+      // while the technician is still standing in it. Only prompted when there
+      // is something to ask — an unconfigured area would open an empty sheet.
+      announce('Walkthrough complete. Start the detailed checklist.');
+      if (conditionItems.data?.length) setConditionOpen(true);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+        () => undefined,
+      );
     }
-  }, [guidanceState, isAdditional, recording]);
+  }, [conditionItems.data, guidanceState, isAdditional, recording]);
 
   useEffect(() => {
     if (!recording || stopping) return;
@@ -809,6 +834,22 @@ export default function RoomCameraScreen() {
         onToggle={(id) => toggleChecklistItem(areaId, id)}
         recording={recording}
         visible={checklistOpen}
+      />
+
+      <ConditionPromptSheet
+        items={conditionItems.data ?? []}
+        onClose={() => setConditionOpen(false)}
+        onRecord={(itemId, assessment) =>
+          recordCondition.mutate({
+            // Read from the ref, not the `seconds` state: the state lags by up
+            // to a second behind the timer, and the whole point is the moment
+            // the technician actually answered.
+            itemId,
+            assessment: { ...assessment, videoTimestampSeconds: secondsRef.current },
+          })
+        }
+        saving={recordCondition.isPending}
+        visible={conditionOpen}
       />
     </View>
   );
