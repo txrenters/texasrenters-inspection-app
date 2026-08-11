@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
-import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
+import { checklistTemplateFor, classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
+import { AreaCategory, AreaEnvironment, FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
@@ -437,7 +437,13 @@ export class FloorPlanAdminService {
           }
           // Insert every area in one statement with pre-assigned ids, then
           // load them back with the full response shape in one more read.
-          const areaRows = fresh.map((suggestion) => ({
+          const areaRows = fresh.map((suggestion) => {
+            // The model returns a name and no classification, so without this
+            // every area took the schema default of INDOOR with no category —
+            // a patio stored as an indoor room, and later handed the indoor
+            // checklist, down to "walls and ceilings".
+            const classified = classifyAreaByName(suggestion.name);
+            return {
             id: randomUUID(),
             propertyId: plan.propertyId,
             unitId: plan.unitId,
@@ -447,6 +453,8 @@ export class FloorPlanAdminService {
             isRequired: suggestion.isRequired,
             source: 'AI_FLOOR_PLAN',
             status: PropertyAreaStatus.DRAFT,
+            environment: classified.environment as AreaEnvironment,
+            category: classified.category as AreaCategory,
             // Spatial marker (if the model returned a valid one), tied to THIS plan
             // version so a replaced plan never silently reuses old coordinates.
             markerX: suggestion.marker?.x ?? null,
@@ -457,9 +465,33 @@ export class FloorPlanAdminService {
             boundingBoxY: suggestion.boundingBox?.y ?? null,
             boundingBoxWidth: suggestion.boundingBox?.width ?? null,
             boundingBoxHeight: suggestion.boundingBox?.height ?? null,
-            sourceFloorPlanId: floorPlanId,
-          }));
+              sourceFloorPlanId: floorPlanId,
+            };
+          });
           if (areaRows.length) await tx.propertyArea.createMany({ data: areaRows });
+          // The checklist is part of what extraction produces, not a surprise
+          // that appears on approval. Generating it here puts the proposed
+          // items in front of the reviewer while the areas are still drafts,
+          // which is the only point at which changing them is cheap.
+          //
+          // Approval still generates for anything that has none — areas
+          // extracted before this, and drafts added by hand — and its
+          // "already has a checklist" guard means these are not duplicated.
+          const checklistRows = areaRows.flatMap((row) =>
+            checklistTemplateFor({
+              name: row.name,
+              category: row.category,
+              environment: row.environment,
+            }).map((label, index) => ({
+              organizationId: user.organizationId,
+              propertyAreaId: row.id,
+              label,
+              keywords: keywordsFromLabel(label),
+              sortOrder: index,
+              createdById: user.id,
+            })),
+          );
+          if (checklistRows.length) await tx.areaChecklistItem.createMany({ data: checklistRows });
           const created = areaRows.length
             ? await tx.propertyArea.findMany({
                 where: { id: { in: areaRows.map((row) => row.id) } },

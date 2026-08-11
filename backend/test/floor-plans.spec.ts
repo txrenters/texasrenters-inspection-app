@@ -232,6 +232,9 @@ describe('administrator floor plans', () => {
       },
       floorPlanExtractionJob: { update: jest.fn().mockResolvedValue({ id: 'job-1' }) },
       propertyFloorPlan: { update: jest.fn().mockResolvedValue(plan) },
+      // Extraction now writes each area's default checklist alongside the area
+      // itself, rather than leaving it until approval.
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     const prisma = {
       propertyFloorPlan: {
