@@ -12,7 +12,6 @@ import {
   MapPinIcon,
   SendIcon,
   ShieldCheckIcon,
-  SparklesIcon,
 } from 'lucide-react-native';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -38,7 +37,6 @@ registerIcons(
   MapPinIcon,
   SendIcon,
   ShieldCheckIcon,
-  SparklesIcon,
 );
 
 function readable(value: string) {
@@ -264,7 +262,6 @@ export default function InspectionReviewScreen() {
             </View>
           </View>
         ) : null}
-
 
         <View className="mx-5 mt-4 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-start gap-3">

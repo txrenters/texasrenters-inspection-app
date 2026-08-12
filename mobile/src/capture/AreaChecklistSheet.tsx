@@ -119,7 +119,25 @@ export function AreaChecklistSheet({
   /** Drives the "listening" hint; the sheet itself never touches the microphone. */
   recording: boolean;
 }) {
-  const { covered, total } = checklistProgress(items, checkedIds);
+  /**
+   * Coverage counts an assessed item as covered.
+   *
+   * There are two records over the same list: a coverage tick, set by tapping a
+   * row or by the transcript mentioning it, and a condition assessment written
+   * to the server. The header only ever counted the first, so a technician who
+   * answered Clean / Undamaged / Working on every item was still told 0 of 7 —
+   * the work was done and the screen said none of it was.
+   *
+   * Answering three axes about an item is not something you can do without
+   * having looked at it, so it counts. The union, not a replacement: spoken
+   * coverage still ticks items nobody answered by hand.
+   */
+  const assessedIds = [...(assessments?.entries() ?? [])]
+    .filter(([, value]) => value.isClean !== null || value.isUndamaged !== null || value.isWorking !== null)
+    .map(([id]) => id);
+  const { covered, total } = checklistProgress(items, [
+    ...new Set([...checkedIds, ...assessedIds]),
+  ]);
   const checked = new Set(checkedIds);
 
   return (

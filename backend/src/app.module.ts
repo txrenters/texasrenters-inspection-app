@@ -17,36 +17,16 @@ import { PropertywareModule } from './integrations/propertyware/propertyware.mod
 import { MediaModule } from './media/media.module';
 import { TechnicianModule } from './technician/technician.module';
 import { RealtimeModule } from './realtime/realtime.module';
-import {
-  InMemoryJobQueueProvider,
-  LocalDevelopmentFloorPlanStorageProvider,
-  MockAiAnalysisProvider,
-  MockFloorPlanExtractionProvider,
-  MockTranscriptionProvider,
-  MockVideoPlatformProvider,
-} from './providers/mock.providers';
-import { VerticalSliceController } from './vertical-slice/vertical-slice.controller';
-import { VerticalSliceService } from './vertical-slice/vertical-slice.service';
-import { WebhookSignatureGuard } from './webhooks/webhook-signature.guard';
-import { WebhooksController } from './webhooks/webhooks.controller';
 
-// The in-memory vertical-slice stack (seeded demo data, mock providers, and
-// their webhook endpoints) exists for development and demos only. Production
-// serves exclusively the database-backed admin/technician modules.
-const isProduction = process.env.NODE_ENV === 'production';
-const mockStackControllers = isProduction ? [] : [VerticalSliceController, WebhooksController];
-const mockStackProviders = isProduction
-  ? []
-  : [
-      VerticalSliceService,
-      WebhookSignatureGuard,
-      MockFloorPlanExtractionProvider,
-      MockVideoPlatformProvider,
-      MockTranscriptionProvider,
-      MockAiAnalysisProvider,
-      InMemoryJobQueueProvider,
-      LocalDevelopmentFloorPlanStorageProvider,
-    ];
+// The in-memory vertical-slice stack — seeded demo data, mock transcription and
+// analysis providers, and their own webhook endpoints — used to be registered
+// here whenever NODE_ENV was not 'production'. It is gone.
+//
+// It was scaffolding that outlived the scaffold. Every real path now runs on
+// the database-backed admin/technician modules and on providers resolved from
+// AiProviderSettings, so the mock stack was reachable only by NODE_ENV, which
+// is exactly the kind of switch that produces convincing fabricated findings on
+// a laptop and silence in production. A missing provider must fail loudly.
 
 @Module({
   imports: [
@@ -64,7 +44,7 @@ const mockStackProviders = isProduction
     MediaModule,
     RealtimeModule,
   ],
-  controllers: [HealthController, ...mockStackControllers],
+  controllers: [HealthController],
   providers: [
     { provide: APP_INTERCEPTOR, useClass: RequestPerformanceInterceptor },
     // Global, so a new controller is scoped without anyone remembering to opt
@@ -72,7 +52,6 @@ const mockStackProviders = isProduction
     { provide: APP_INTERCEPTOR, useClass: TenantScopeInterceptor },
     ApiAuthGuard,
     RolesGuard,
-    ...mockStackProviders,
   ],
 })
 export class AppModule implements NestModule {

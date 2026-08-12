@@ -11,7 +11,8 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 
-import { type PermissionKey, resolveEffectivePermissions, UserRole } from '@texasrenters/shared';
+import type { UserRole } from '@texasrenters/shared';
+import { type PermissionKey, resolveEffectivePermissions } from '@texasrenters/shared';
 
 import { PrismaService } from './prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
@@ -90,53 +91,6 @@ export async function authenticateApplicationUser(
   };
 }
 
-function mockUser(user: Omit<AuthenticatedUser, 'permissions'>): AuthenticatedUser {
-  return { ...user, permissions: resolveEffectivePermissions(user.roles, []) };
-}
-
-export const MOCK_USERS: Record<string, AuthenticatedUser> = {
-  '10000000-0000-4000-8000-000000000002': mockUser({
-    id: '10000000-0000-4000-8000-000000000002',
-    authUserId: '10000000-0000-4000-8000-000000000002',
-    organizationId: '10000000-0000-4000-8000-000000000001',
-    displayName: 'System Admin',
-    roles: [UserRole.SYSTEM_ADMIN],
-    mustChangePassword: false,
-  }),
-  '10000000-0000-4000-8000-000000000003': mockUser({
-    id: '10000000-0000-4000-8000-000000000003',
-    authUserId: '10000000-0000-4000-8000-000000000003',
-    organizationId: '10000000-0000-4000-8000-000000000001',
-    displayName: 'Property Admin',
-    roles: [UserRole.PROPERTY_ADMIN],
-    mustChangePassword: false,
-  }),
-  '10000000-0000-4000-8000-000000000004': mockUser({
-    id: '10000000-0000-4000-8000-000000000004',
-    authUserId: '10000000-0000-4000-8000-000000000004',
-    organizationId: '10000000-0000-4000-8000-000000000001',
-    displayName: 'Taylor Technician',
-    roles: [UserRole.INSPECTION_TECHNICIAN],
-    mustChangePassword: false,
-  }),
-  '10000000-0000-4000-8000-000000000005': mockUser({
-    id: '10000000-0000-4000-8000-000000000005',
-    authUserId: '10000000-0000-4000-8000-000000000005',
-    organizationId: '10000000-0000-4000-8000-000000000001',
-    displayName: 'Riley Reviewer',
-    roles: [UserRole.CONDITION_REVIEWER],
-    mustChangePassword: false,
-  }),
-  '10000000-0000-4000-8000-000000000006': mockUser({
-    id: '10000000-0000-4000-8000-000000000006',
-    authUserId: '10000000-0000-4000-8000-000000000006',
-    organizationId: '10000000-0000-4000-8000-000000000001',
-    displayName: 'Casey Approver',
-    roles: [UserRole.CHARGE_APPROVER],
-    mustChangePassword: false,
-  }),
-};
-
 export const Roles = (...roles: UserRole[]) => SetMetadata('roles', roles);
 
 export const PERMISSIONS_METADATA_KEY = 'permissions';
@@ -155,24 +109,17 @@ export class ApiAuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    if (process.env.USE_MOCK_AUTH === 'true') return this.authenticateMock(request);
+    // No bypass. USE_MOCK_AUTH used to short-circuit this guard and attach a
+    // hard-coded SYSTEM_ADMIN from an `x-mock-user-id` header, refused only when
+    // NODE_ENV happened to read 'production'. That is one mis-set variable away
+    // from unauthenticated admin access to tenant evidence, and it bought
+    // nothing a seeded login does not. Every request authenticates for real.
     const token = bearerToken(request.header('authorization'));
     const requestedOrganization = request.header('x-organization-id');
     request.user = await authenticateApplicationUser(this.prisma, token, requestedOrganization);
     return true;
   }
 
-  private authenticateMock(request: AuthenticatedRequest) {
-    if (process.env.NODE_ENV === 'production')
-      throw new UnauthorizedException('Mock authentication is disabled in production.');
-    const header = request.header('x-mock-user-id');
-    const id =
-      header ?? process.env.MOCK_AUTH_DEFAULT_USER_ID ?? '10000000-0000-4000-8000-000000000004';
-    const user = MOCK_USERS[id];
-    if (!user) throw new UnauthorizedException('Unknown mock user.');
-    request.user = user;
-    return true;
-  }
 }
 
 interface AccessTokenClaims {

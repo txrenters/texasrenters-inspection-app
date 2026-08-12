@@ -7,7 +7,20 @@ const integer = (value: string | undefined, fallback: number) => {
 };
 
 export function getPropertywareConfig(env: NodeJS.ProcessEnv = process.env): PropertywareConfig {
+  // The last mock left in the codebase, kept because propertyware.spec.ts is
+  // real coverage of the sync and pagination logic and needs a source of pages
+  // that does not call Propertyware.
+  //
+  // What is not kept is its reach. This selection means anything that is not
+  // exactly 'live' resolves to mock, so an unset variable or a capitalised
+  // 'Live' silently syncs fixture buildings into the real database looking
+  // exactly like a successful sync. The fixtures stay available to tests; they
+  // are now refused where they could be mistaken for tenant data.
   const provider = env.PROPERTYWARE_PROVIDER === 'live' ? 'live' : 'mock';
+  if (provider === 'mock' && env.NODE_ENV === 'production')
+    throw new Error(
+      'Propertyware mock fixtures cannot be used in production. Set PROPERTYWARE_PROVIDER=live.',
+    );
   const config: PropertywareConfig = {
     provider,
     store: env.PROPERTYWARE_STORE === 'prisma' ? 'prisma' : 'memory',

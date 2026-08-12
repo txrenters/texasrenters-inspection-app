@@ -20,8 +20,9 @@ services:
     environment:
       NODE_ENV: production
       APP_ENV: remote-beta
-      # The public beta boundary must always use real authentication.
-      USE_MOCK_AUTH: 'false'
+      # USE_MOCK_AUTH was pinned 'false' here to hold the public beta boundary.
+      # The variable no longer exists — there is only real authentication now —
+      # so the boundary is a property of the code rather than of this file.
       # Expo web for mobile runs on 8082 during remote-beta development.
       MOBILE_APP_ORIGIN: http://localhost:8082
       # The console's public origin. This is not only a CORS entry — report-share
