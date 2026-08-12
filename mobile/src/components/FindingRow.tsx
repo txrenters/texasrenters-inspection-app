@@ -8,6 +8,7 @@ import {
   describeConfidence,
   findingTone,
   reviewStatusLabel,
+  reviewStatusTone,
   SEVERITY_LABELS,
   type FindingTone,
 } from '../utils/ai-review';
@@ -38,6 +39,8 @@ export function FindingRow({
   last?: boolean;
 }) {
   const tone = findingTone(finding);
+  // Distinct from `tone` above, which is severity. This is the office's verdict.
+  const reviewTone = reviewStatusTone(finding.reviewStatus);
   const confidence = describeConfidence(finding.confidence);
 
   return (
@@ -71,8 +74,38 @@ export function FindingRow({
           }`}
           numberOfLines={1}
         >
-          {confidence.label} · {reviewStatusLabel(finding.reviewStatus)}
+          {confidence.label}
         </Text>
+        {/* The office's decision, as a chip rather than more grey text. This is
+            what tells a technician whether an area still wants their attention,
+            and it was previously indistinguishable from the confidence band it
+            sat beside. */}
+        <View
+          className={`mt-1.5 self-start rounded-full px-2 py-0.5 ${
+            reviewTone === 'approved'
+              ? 'bg-chart-3/15'
+              : reviewTone === 'rejected'
+                ? 'bg-destructive/10'
+                : reviewTone === 'attention'
+                  ? 'bg-chart-4/15'
+                  : 'bg-muted'
+          }`}
+        >
+          <Text
+            className={`text-[11px] font-semibold ${
+              reviewTone === 'approved'
+                ? 'text-chart-3'
+                : reviewTone === 'rejected'
+                  ? 'text-destructive'
+                  : reviewTone === 'attention'
+                    ? 'text-chart-4'
+                    : 'text-muted-foreground'
+            }`}
+            numberOfLines={1}
+          >
+            {reviewStatusLabel(finding.reviewStatus)}
+          </Text>
+        </View>
       </View>
       <ChevronRightIcon size={15} className="mt-1 text-muted-foreground" />
     </Pressable>

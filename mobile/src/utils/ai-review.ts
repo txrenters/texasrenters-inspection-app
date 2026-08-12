@@ -130,3 +130,25 @@ export function findingTone(finding: Pick<Finding, 'severity' | 'comparisonResul
  */
 export const AI_REVIEW_DISCLAIMER =
   'AI findings are suggestions for an authorized reviewer. They do not determine tenant responsibility or charges. Report what you observed — the office decides.';
+
+/**
+ * How a review outcome should read at a glance.
+ *
+ * The status was already on the row, but as grey text in a meta line beside the
+ * confidence band — so "Accepted by the office" and "Awaiting office review"
+ * looked identical until read. A decision the office has made is the single
+ * most useful thing on that row to a technician deciding whether an area still
+ * needs their attention, so it gets colour and its own chip.
+ *
+ * `PENDING_REVIEW` is deliberately neutral rather than a warning: nothing is
+ * wrong with a finding nobody has looked at yet, and colouring it would make
+ * every fresh inspection read as a page of problems.
+ */
+export type ReviewStatusTone = 'approved' | 'rejected' | 'attention' | 'neutral';
+
+export function reviewStatusTone(status: string): ReviewStatusTone {
+  if (status === 'APPROVED' || status === 'EDITED') return 'approved';
+  if (status === 'REJECTED') return 'rejected';
+  if (status === 'REINSPECTION_REQUESTED') return 'attention';
+  return 'neutral';
+}
