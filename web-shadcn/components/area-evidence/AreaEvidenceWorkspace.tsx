@@ -41,6 +41,10 @@ const STATUS_META: Record<
   { label: string; variant: 'secondary' | 'warning' | 'success' | 'info' | 'destructive' }
 > = {
   NOT_STARTED: { label: 'Not started', variant: 'secondary' },
+  // Not 'warning'. A skipped area is a decision the technician recorded with a
+  // reason, not a fault to chase — colouring it like incomplete evidence sends
+  // reviewers looking for a recording that was never going to exist.
+  SKIPPED: { label: 'Skipped', variant: 'secondary' },
   EVIDENCE_INCOMPLETE: { label: 'Evidence incomplete', variant: 'warning' },
   EVIDENCE_READY: { label: 'Evidence ready', variant: 'success' },
   ANALYSIS_PROCESSING: { label: 'Analysing', variant: 'info' },
@@ -61,6 +65,7 @@ const STATUS_FILTERS = [
   { value: ALL_STATUSES, label: 'All areas' },
   { value: 'FINDINGS_NEED_REVIEW', label: 'Needs review' },
   { value: 'EVIDENCE_INCOMPLETE', label: 'Incomplete' },
+  { value: 'SKIPPED', label: 'Skipped' },
   { value: 'NOT_STARTED', label: 'Not started' },
   { value: 'REVIEWED', label: 'Reviewed' },
 ] as const;
@@ -81,7 +86,9 @@ function areaAriaLabel(area: AreaEvidenceSummaryItem) {
   const review = area.counts.unreviewedFindings
     ? `${countLabel(area.counts.unreviewedFindings, 'finding')} require review.`
     : `${STATUS_META[area.reviewStatus].label}.`;
-  return `${parts.join('. ')}. ${review}`;
+  // Announced as part of the status, so the reason is not sighted-only.
+  const reason = area.skipReason ? ` Reason: ${area.skipReason}.` : '';
+  return `${parts.join('. ')}. ${review}${reason}`;
 }
 
 export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }) {
@@ -283,6 +290,15 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
                             </Badge>
                           ) : null}
                         </span>
+                        {/* The reason belongs next to the status, not a click
+                            away. "Skipped" alone tells a reviewer nothing they
+                            can act on; "Skipped — tenant refused access" closes
+                            the question without opening the area. */}
+                        {area.skipReason ? (
+                          <span className="text-muted-foreground text-xs italic">
+                            {area.skipReason}
+                          </span>
+                        ) : null}
                       </button>
 
                       {/* Sibling of the row button, never nested inside it — a

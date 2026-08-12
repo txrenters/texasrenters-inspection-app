@@ -63,6 +63,7 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
 
   // Area evidence review
   NOT_STARTED: { label: 'Not started', tone: 'muted', glyph: 'idle' },
+  SKIPPED: { label: 'Skipped', tone: 'muted', glyph: 'pending' },
   EVIDENCE_INCOMPLETE: { label: 'Evidence incomplete', tone: 'warning', glyph: 'warning' },
   EVIDENCE_READY: { label: 'Evidence ready', tone: 'success', glyph: 'success' },
   ANALYSIS_PROCESSING: { label: 'Analysing', tone: 'default', glyph: 'processing' },
