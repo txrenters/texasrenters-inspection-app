@@ -47,6 +47,15 @@ export default function RecordingReviewScreen() {
   const save = useSaveRecording();
   const [note, setNote] = useState(draft?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  /**
+   * The height of the fixed footer, measured rather than assumed.
+   *
+   * The scroll used to clear it with a hard-coded 130, which was right for the
+   * footer as it stood and wrong the moment a line was added to it — the video
+   * ended up partly underneath. Measuring means the two cannot drift again, and
+   * it also absorbs the safe-area inset, which differs per device.
+   */
+  const [footerHeight, setFooterHeight] = useState(130);
   const [label, setLabel] = useState(draft?.label ?? '');
   const [category, setCategory] = useState<AdditionalVideoCategory>(draft?.category ?? 'OTHER');
   const player = useVideoPlayer(draft?.uri ?? null, (instance) => {
@@ -122,7 +131,10 @@ export default function RecordingReviewScreen() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 130 }}>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ padding: 20, paddingBottom: footerHeight + 24 }}
+      >
         <View className="flex-row items-start gap-3">
           <View className="min-w-0 flex-1">
             <Text className="text-2xl font-bold text-foreground">Review recording</Text>
@@ -281,7 +293,10 @@ export default function RecordingReviewScreen() {
           </Pressable>
         </View>
       </ScrollView>
-      <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
+      <View
+        className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3"
+        onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
+      >
         {/* The reason the button below is dead, said out loud.
             It was an accessibilityHint alone, which only a screen reader ever
             announced — everyone else saw a greyed-out control and no way to
