@@ -2,6 +2,10 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import '@/global.css';
+// Side-effect import, before any screen renders: registers third-party
+// components that are styled with `className`. See the file for why an
+// unregistered SafeAreaView surfaced as a navigation-context error.
+import '@/src/lib/css-interop';
 import { createErrorBoundary } from '@/src/components/AppErrorBoundary';
 import { installGlobalErrorHandlers } from '@/src/lib/error-log';
 import { ThemeProvider } from '@/src/providers/ThemeProvider';

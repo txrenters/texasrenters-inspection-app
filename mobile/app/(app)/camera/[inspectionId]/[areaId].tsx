@@ -30,6 +30,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
 import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
 import { checklistProgress } from '@/src/capture/area-checklist';
@@ -624,7 +625,7 @@ export default function RoomCameraScreen() {
             // 40pt visual, 44pt target: hitSlop keeps the design and still
             // clears the minimum for a gloved or unsteady hand.
             hitSlop={8}
-            onPress={() => (recording ? stopRecording() : router.back())}
+            onPress={() => (recording ? stopRecording() : goBack())}
           >
             <ArrowLeftIcon size={21} className="text-white" />
           </Pressable>

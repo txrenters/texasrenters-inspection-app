@@ -16,6 +16,7 @@ import {
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import type { InspectionReportRoom } from '@/src/domain/models';
 import { useInspectionActions, useInspectionReport } from '@/src/features/queries';
 import { useDemoStore } from '@/src/stores/demo.store';
@@ -217,7 +218,7 @@ export default function InspectionReviewScreen() {
             accessibilityRole="button"
             accessibilityLabel="Back"
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
-            onPress={() => router.back()}
+            onPress={() => goBack()}
           >
             <ArrowLeftIcon size={18} className="text-foreground" />
           </Pressable>

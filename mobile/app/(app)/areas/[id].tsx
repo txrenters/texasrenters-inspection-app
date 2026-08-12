@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
@@ -170,7 +171,7 @@ export default function AreaDetailScreen() {
             accessibilityRole="button"
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
             hitSlop={8}
-            onPress={() => router.back()}
+            onPress={() => goBack()}
           >
             <ArrowLeftIcon size={18} className="text-foreground" />
           </Pressable>
@@ -595,7 +596,7 @@ export default function AreaDetailScreen() {
                 onSuccess: () => {
                   setSkipOpen(false);
                   setSkipReason('');
-                  router.back();
+                  goBack();
                 },
               })
             }
