@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useColorScheme } from 'nativewind';
 import { router, useLocalSearchParams } from 'expo-router';
 
@@ -56,11 +56,34 @@ export default function RecordingReviewScreen() {
    * it also absorbs the safe-area inset, which differs per device.
    */
   const [footerHeight, setFooterHeight] = useState(130);
+  /**
+   * The video's own shape, so the box matches the footage instead of the
+   * footage sitting letterboxed inside a fixed 300px band.
+   *
+   * A walkthrough is shot with the phone upright, so the default is portrait —
+   * being briefly too tall while the track loads is better than being far too
+   * short, which is what a landscape default would do to every recording this
+   * app produces.
+   */
+  const [aspectRatio, setAspectRatio] = useState(9 / 16);
   const [label, setLabel] = useState(draft?.label ?? '');
   const [category, setCategory] = useState<AdditionalVideoCategory>(draft?.category ?? 'OTHER');
   const player = useVideoPlayer(draft?.uri ?? null, (instance) => {
     instance.loop = false;
   });
+
+  useEffect(() => {
+    // The track is not there the moment the player is created; it arrives with
+    // the first loaded frame, so this reads it on every status change and stops
+    // once a usable size appears.
+    const applySize = () => {
+      const size = player.videoTrack?.size;
+      if (size?.width && size.height) setAspectRatio(size.width / size.height);
+    };
+    applySize();
+    const subscription = player.addListener('statusChange', applySize);
+    return () => subscription.remove();
+  }, [player]);
   const isAdditional =
     draft?.recordingType === 'ADDITIONAL_ISSUE' || recordingType === 'ADDITIONAL_ISSUE';
 
@@ -158,7 +181,17 @@ export default function RecordingReviewScreen() {
           player={player}
           nativeControls
           contentFit="contain"
-          style={{ height: 300, marginTop: 20, borderRadius: 18, backgroundColor: '#000' }}
+          style={{
+            aspectRatio,
+            // Capped so a portrait clip cannot push the note and the
+            // confirmation off the screen — the point of this screen is to
+            // review *and* confirm, and a video tall enough to fill it would
+            // hide the control that lets them move on.
+            maxHeight: 420,
+            marginTop: 20,
+            borderRadius: 18,
+            backgroundColor: '#000',
+          }}
         />
         <View className="mt-5 rounded-2xl bg-card p-5">
           <Text nativeID="recording-note-label" className="font-semibold text-foreground">
