@@ -825,7 +825,7 @@ export default function RoomCameraScreen() {
                   state at all, and a technician who dismissed the prompt with
                   "Later" would otherwise have no way back to it. */}
               <Pressable
-                accessibilityHint="Asks the next condition question. Long press to see the whole checklist."
+                accessibilityHint="Opens the condition questions, which can be browsed in either direction without answering. Long press to see the whole checklist."
                 accessibilityLabel={`Area checklist, ${checklistCoverage.covered} of ${checklistCoverage.total} covered`}
                 accessibilityRole="button"
                 className="h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-black/30"
