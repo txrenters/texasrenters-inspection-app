@@ -151,6 +151,18 @@ export default function RoomCameraScreen() {
   const frameMarkersRef = useRef<number[]>([]);
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
+  /**
+   * Whether the condition prompt has already been offered for this sweep.
+   *
+   * The change-guard above dedupes on the raw guidance state, but the branch
+   * that opens the prompt accepts COMPLETE *or* LIKELY_COMPLETE. A sweep
+   * hovering around the finish oscillates between the two, and each oscillation
+   * is a genuine state change landing in the same branch — so the sheet reopened
+   * itself moments after the technician dismissed it with "Later", and the
+   * completion announcement replayed with it. Latched per sweep instead, and
+   * reset when the next recording starts.
+   */
+  const conditionPromptedRef = useRef(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
@@ -251,6 +263,11 @@ export default function RoomCameraScreen() {
       // is assessing what was just filmed, while the technician is still
       // standing in it. Only prompted when there is something to ask — an
       // unconfigured area would open an empty sheet.
+      // Once per sweep. Dismissing the prompt is a decision the technician is
+      // allowed to make and have stick — they may want to film a detail before
+      // answering — and the checklist button reopens it whenever they choose.
+      if (conditionPromptedRef.current) return;
+      conditionPromptedRef.current = true;
       announce('Walkthrough complete. Start the detailed checklist.');
       if (conditionItems.data?.length) setConditionOpen(true);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
@@ -258,6 +275,11 @@ export default function RoomCameraScreen() {
       );
     }
   }, [conditionItems.data, guidanceState, isAdditional, recording]);
+
+  // A new recording is a new sweep, so the prompt is owed again.
+  useEffect(() => {
+    if (recording) conditionPromptedRef.current = false;
+  }, [recording]);
 
   useEffect(() => {
     if (!recording || stopping) return;

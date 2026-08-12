@@ -250,13 +250,23 @@ export function ConditionPromptSheet({
             Item {index + 1} of {items.length}
             {remaining ? ` · ${remaining} unassessed` : ''}
           </Text>
+          {/* Reads as a close control and behaves like one. It was the word
+              "Later" in muted grey, which looked like a hint rather than a
+              button — and the only other exit, "Back", moves to the previous
+              question rather than dismissing.
+              
+              This is the only way out on iOS. Android's hardware back reaches
+              Modal's onRequestClose, but iOS has no such button, so a technician
+              who could not find this control had no exit at all. */}
           <Pressable
             accessibilityLabel="Close checklist"
             accessibilityRole="button"
+            className="min-h-11 flex-row items-center gap-1.5 rounded-full bg-muted px-3 active:scale-[0.97]"
             hitSlop={8}
             onPress={onClose}
           >
-            <Text className="text-sm font-semibold text-muted-foreground">Later</Text>
+            <XIcon size={16} className="text-foreground" />
+            <Text className="text-sm font-semibold text-foreground">Close</Text>
           </Pressable>
         </View>
 
@@ -349,7 +359,7 @@ export function ConditionPromptSheet({
             <Text
               className={`text-sm ${atFirst && axis === 0 ? 'text-muted-foreground' : 'text-foreground'}`}
             >
-              Back
+              Previous
             </Text>
           </Pressable>
           <Text className="text-[11px] text-muted-foreground">Swipe to browse</Text>
