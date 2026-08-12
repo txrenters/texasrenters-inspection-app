@@ -165,7 +165,6 @@ export default function InspectionReviewScreen() {
     canSubmit,
     blockedReason,
     incompleteRequiredRooms,
-    unconfirmedSummaryRooms,
     analysisPendingRooms,
   } = evaluateSubmissionGate(rooms, inspection.status);
   // `findings` is required by the report schema, so a live response always has
@@ -266,46 +265,6 @@ export default function InspectionReviewScreen() {
           </View>
         ) : null}
 
-        {/* Tappable, unlike the incomplete-rooms notice above: this one names a
-            specific area the technician has to open and read, so the panel is
-            the route there rather than a message about somewhere else. */}
-        {unconfirmedSummaryRooms.length > 0 && inspection.status === 'IN_PROGRESS' ? (
-          <View className="mx-5 mt-2 rounded-2xl border border-primary/20 bg-primary/5 p-4">
-            <View className="flex-row items-center gap-3">
-              <SparklesIcon size={20} className="text-primary" />
-              <View className="min-w-0 flex-1">
-                <Text className="text-sm font-semibold text-primary">
-                  {unconfirmedSummaryRooms.length} AI summar
-                  {unconfirmedSummaryRooms.length === 1 ? 'y' : 'ies'} to review
-                </Text>
-                <Text className="mt-0.5 text-xs leading-5 text-primary">
-                  Open each area and confirm the summary matches what you saw.
-                </Text>
-              </View>
-            </View>
-            <View className="mt-3 gap-2">
-              {unconfirmedSummaryRooms.map((room) => (
-                <Pressable
-                  accessibilityLabel={`Review the AI summary for ${room.name}`}
-                  accessibilityRole="button"
-                  className="min-h-12 flex-row items-center gap-2 rounded-xl bg-card px-3 py-3 active:opacity-70"
-                  key={room.id}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/(app)/areas/[id]',
-                      params: { id: room.id, inspectionId: inspection.id },
-                    })
-                  }
-                >
-                  <Text className="min-w-0 flex-1 text-sm font-semibold text-foreground">
-                    {room.name}
-                  </Text>
-                  <ChevronRightIcon size={15} className="text-muted-foreground" />
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        ) : null}
 
         <View className="mx-5 mt-4 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-start gap-3">

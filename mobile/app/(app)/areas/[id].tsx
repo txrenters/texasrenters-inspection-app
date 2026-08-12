@@ -12,7 +12,16 @@ import {
   PlayCircleIcon,
   RotateCwIcon,
 } from 'lucide-react-native';
-import { Image, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import {
+  Image,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
@@ -99,6 +108,14 @@ export default function AreaDetailScreen() {
     () => (snapshots ?? []).filter((snapshot) => snapshot.roomId === id),
     [snapshots, id],
   );
+  /**
+   * The photo open full screen, by uri.
+   *
+   * A thumbnail strip with nothing behind the tap is worse than no strip: the
+   * technician is checking whether a shot came out, and 80px tells them very
+   * little.
+   */
+  const [viewedPhoto, setViewedPhoto] = useState<string | null>(null);
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
 
@@ -343,14 +360,20 @@ export default function AreaDetailScreen() {
               showsHorizontalScrollIndicator={false}
             >
               {areaSnapshots.map((snapshot) => (
-                <Image
-                  accessibilityIgnoresInvertColors
+                <Pressable
+                  accessibilityHint="Opens this photo full screen"
                   accessibilityLabel={`Photo taken ${new Date(snapshot.capturedAt).toLocaleTimeString()}`}
-                  className="mx-1 h-20 w-20 rounded-xl bg-muted"
+                  accessibilityRole="imagebutton"
                   key={snapshot.id}
-                  resizeMode="cover"
-                  source={{ uri: snapshot.uri }}
-                />
+                  onPress={() => setViewedPhoto(snapshot.uri)}
+                >
+                  <Image
+                    accessibilityIgnoresInvertColors
+                    className="mx-1 h-20 w-20 rounded-xl bg-muted"
+                    resizeMode="cover"
+                    source={{ uri: snapshot.uri }}
+                  />
+                </Pressable>
               ))}
             </ScrollView>
           ) : null}
@@ -496,6 +519,35 @@ export default function AreaDetailScreen() {
 
       {/* 'alert' so a screen reader reports the context switch instead of
           silently moving focus into a new layer. */}
+      {/* Fills the screen rather than sitting in a card: the point is to see
+          the photograph, and `contain` keeps the whole frame visible whatever
+          shape it was shot in. Tapping anywhere closes it — there is nothing
+          else to do here, so a dedicated close button would be one more thing
+          to aim at one-handed. */}
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setViewedPhoto(null)}
+        transparent
+        visible={viewedPhoto !== null}
+      >
+        <Pressable
+          accessibilityHint="Closes the photo"
+          accessibilityLabel="Close photo"
+          accessibilityRole="button"
+          className="flex-1 items-center justify-center bg-black/95"
+          onPress={() => setViewedPhoto(null)}
+        >
+          {viewedPhoto ? (
+            <Image
+              accessibilityIgnoresInvertColors
+              className="h-full w-full"
+              resizeMode="contain"
+              source={{ uri: viewedPhoto }}
+            />
+          ) : null}
+        </Pressable>
+      </Modal>
+
       <BottomSheet
         accessibilityRole="alert"
         animationType="fade"
