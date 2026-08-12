@@ -9,7 +9,19 @@ import { PrismaService } from '../common/prisma.service';
 import { MobilePushService } from './mobile-push.service';
 
 export type TechnicianInspectionEventKind =
-  'ASSIGNED' | 'REASSIGNED' | 'UNASSIGNED' | 'CANCELLED' | 'UPDATED';
+  | 'ASSIGNED'
+  | 'REASSIGNED'
+  | 'UNASSIGNED'
+  | 'CANCELLED'
+  | 'UPDATED'
+  /**
+   * The office asked for more evidence in one of this technician's areas.
+   *
+   * A kind on the existing event rather than a new one: the client already
+   * subscribes to `inspection:changed`, and a second channel would be a second
+   * thing to keep connected, authorise and remember to handle.
+   */
+  | 'EVIDENCE_REQUESTED';
 
 export interface TechnicianInspectionEvent {
   inspectionId: string;

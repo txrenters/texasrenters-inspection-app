@@ -139,6 +139,15 @@ export class TechnicianController {
   ) {
     return this.service.findings(request.user, id, query);
   }
+  /**
+   * Everything waiting on this technician, across their assignments.
+   *
+   * Read outside any one inspection — it is what the app polls and the realtime
+   * gateway invalidates to tell a technician the office needs something.
+   */
+  @Get('evidence-requests') openEvidenceRequests(@Req() request: AuthenticatedRequest) {
+    return this.service.openEvidenceRequests(request.user);
+  }
   @Get('inspections/:inspectionId/evidence-requests') evidenceRequests(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,

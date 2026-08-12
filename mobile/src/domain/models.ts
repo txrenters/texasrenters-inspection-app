@@ -432,3 +432,20 @@ export interface EvidenceRequest {
   requestedAt: string;
   items: string[];
 }
+
+/**
+ * An open request seen from outside any one inspection.
+ *
+ * Carries the property, because this is read from a tab: an area name alone
+ * does not tell a technician which building to drive to.
+ */
+export interface OpenEvidenceRequest {
+  id: string;
+  inspectionId: string;
+  roomId: string;
+  roomName: string;
+  propertyName: string;
+  unitName: string | null;
+  note: string;
+  requestedAt: string;
+}

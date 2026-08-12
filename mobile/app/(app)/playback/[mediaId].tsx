@@ -48,8 +48,11 @@ export default function PlaybackScreen() {
     instance.loop = false;
   });
 
+  // Both edges. With only 'top', the player filled to the physical bottom of the
+  // screen and ran under the home indicator, so the last of the frame and the
+  // native controls sat in the unreachable strip.
   return (
-    <SafeAreaView edges={['top']} className="flex-1 bg-background">
+    <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
       <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
         <Pressable
           accessibilityLabel="Back"
@@ -86,10 +89,12 @@ export default function PlaybackScreen() {
           {state.retryable ? <Retry label="Try again" onPress={() => void playback.refetch()} /> : null}
         </Centred>
       ) : (
-        <View className="flex-1 px-5">
+        // pb-4 on top of the safe-area inset: a video flush against the bottom
+        // edge reads as clipped even when it is not.
+        <View className="flex-1 px-5 pb-4">
           <VideoView
-            allowsFullscreen
             contentFit="contain"
+            fullscreenOptions={{ enable: true }}
             nativeControls
             player={player}
             style={{ flex: 1, borderRadius: 18, backgroundColor: '#000' }}

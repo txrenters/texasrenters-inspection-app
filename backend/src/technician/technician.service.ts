@@ -1011,6 +1011,60 @@ export class TechnicianService {
    * request says "Walls and ceilings", not a uuid the app would have to join
    * against a list it may not have loaded.
    */
+  /**
+   * Every open evidence request across the technician's current assignments.
+   *
+   * The per-inspection route below answers "what does this inspection still
+   * want"; this answers "is anyone waiting on me", which is the question a
+   * technician has when they are not already inside an inspection. Without it
+   * an outstanding request is invisible until they happen to open the right
+   * area, and the request exists precisely because the office needs them to go
+   * somewhere they were not otherwise going.
+   *
+   * Scoped by the assignment, not by the inspection id: `isCurrent` matters, so
+   * a reassigned inspection stops appearing for the previous technician the
+   * moment it moves.
+   */
+  async openEvidenceRequests(user: AuthenticatedUser) {
+    const requests = await this.prisma.areaEvidenceRequest.findMany({
+      where: {
+        status: EvidenceRequestStatus.OPEN,
+        inspection: {
+          assignments: { some: { technicianId: user.id, isCurrent: true } },
+          status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
+        },
+      },
+      // Oldest first: the one that has been waiting longest is the one to do.
+      orderBy: { requestedAt: 'asc' },
+      select: {
+        id: true,
+        inspectionId: true,
+        inspectionAreaId: true,
+        note: true,
+        requestedAt: true,
+        inspectionArea: { select: { propertyArea: { select: { name: true } } } },
+        inspection: {
+          select: {
+            propertywareBuilding: { select: { name: true } },
+            propertywareUnit: { select: { name: true } },
+          },
+        },
+      },
+    });
+    return requests.map((request) => ({
+      id: request.id,
+      inspectionId: request.inspectionId,
+      roomId: request.inspectionAreaId,
+      roomName: request.inspectionArea.propertyArea.name,
+      // The property, because this list is read outside any one inspection and
+      // an area name alone does not say which building to drive to.
+      propertyName: request.inspection.propertywareBuilding?.name ?? 'Property',
+      unitName: request.inspection.propertywareUnit?.name ?? null,
+      note: request.note,
+      requestedAt: request.requestedAt.toISOString(),
+    }));
+  }
+
   async evidenceRequests(user: AuthenticatedUser, inspectionId: string) {
     await this.assignedInspection(user, inspectionId);
     const requests = await this.prisma.areaEvidenceRequest.findMany({

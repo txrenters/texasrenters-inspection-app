@@ -46,8 +46,10 @@ export type SubmissionGate = {
   /** Undefined when submission is available. */
   blockedReason?: string;
   incompleteRequiredRooms: SubmittableRoom[];
-  unconfirmedSummaryRooms: SubmittableRoom[];
-  /** Areas whose summary has not arrived yet. Clears without the technician. */
+  /**
+   * Areas still being analysed. Reported so the screen can say so, but never
+   * blocking: analysis runs after the handover now.
+   */
   analysisPendingRooms: SubmittableRoom[];
 };
 
@@ -68,8 +70,6 @@ export function evaluateSubmissionGate(
    * condition no amount of field work clears. An area with no summary has
    * nothing to confirm and never blocks.
    */
-  const unconfirmedSummaryRooms = rooms.filter((room) => room.summary && !room.summaryConfirmedAt);
-
   /**
    * Areas whose summary has not arrived yet.
    *
@@ -86,30 +86,27 @@ export function evaluateSubmissionGate(
    */
   const analysisPendingRooms = rooms.filter((room) => room.analysisPending);
 
-  const canSubmit =
-    inspectionStatus === 'IN_PROGRESS' &&
-    incompleteRequiredRooms.length === 0 &&
-    analysisPendingRooms.length === 0 &&
-    unconfirmedSummaryRooms.length === 0;
+  /**
+   * Every area finished is the whole rule.
+   *
+   * Confirming each AI summary used to be required too. That is gone: the
+   * summaries are written after the fact and read by the office, so holding a
+   * technician in the property until a language model has finished writing —
+   * and until they have read it back — bought nothing the reviewer does not do
+   * better with the video in front of them.
+   *
+   * It had also become unsatisfiable. The card that confirmed a summary was
+   * removed from the area screen, so the condition survived with nothing left
+   * that could clear it: a finished inspection, a greyed-out button, and no way
+   * forward. Exactly the failure this module was extracted to prevent.
+   */
+  const canSubmit = inspectionStatus === 'IN_PROGRESS' && incompleteRequiredRooms.length === 0;
 
-  // Ordered the way the technician has to resolve it: record, then wait for the
-  // summary, then read it. An area with no evidence has no summary coming, and
-  // a summary still being written cannot be confirmed yet.
   const blockedReason = canSubmit
     ? undefined
     : incompleteRequiredRooms.length
       ? 'Complete required rooms first'
-      : analysisPendingRooms.length
-        ? 'Waiting for AI analysis'
-        : unconfirmedSummaryRooms.length
-          ? 'Confirm AI summaries first'
-          : 'Submission unavailable';
+      : 'Submission unavailable';
 
-  return {
-    canSubmit,
-    blockedReason,
-    incompleteRequiredRooms,
-    unconfirmedSummaryRooms,
-    analysisPendingRooms,
-  };
+  return { canSubmit, blockedReason, incompleteRequiredRooms, analysisPendingRooms };
 }

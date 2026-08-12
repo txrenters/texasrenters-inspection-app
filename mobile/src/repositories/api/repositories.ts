@@ -42,7 +42,24 @@ import {
 } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import { resolveApiUrl } from '@texasrenters/shared';
+
+
 import { z } from 'zod';
+
+/**
+ * A string the API may send as `null`, `undefined`, or omit entirely.
+ *
+ * These are all nullable columns, and Prisma serialises them as `null` — which
+ * `nullableString` rejects, because optional means *absent*, not null.
+ * A rejection fails the whole response, so one null reviewer note blanked the
+ * entire findings list rather than that one field.
+ *
+ * Normalised to `undefined` so every consumer keeps the type it already had.
+ */
+const nullableString = z
+  .string()
+  .nullish()
+  .transform((value) => value ?? undefined);
 
 const propertySchema = z.object({
   id: z.string(),
@@ -68,7 +85,7 @@ const inspectionSchema = z.object({
   unitName: z.string().nullable().optional(),
   type: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT', 'HVAC']),
   baselineInspectionId: z.string().nullable().optional(),
-  baselineScheduledAt: z.string().optional(),
+  baselineScheduledAt: nullableString,
   scheduledAt: z.string(),
   assignedUserId: z.string(),
   // Permissive for the same reason as captureType, and it had already broken:
@@ -93,7 +110,7 @@ const inspectionSchema = z.object({
     total: z.number(),
     hasFailedUpload: z.boolean(),
   }),
-  updatedAt: z.string().optional(),
+  updatedAt: nullableString,
 });
 /**
  * A page of inspections, `total` included.
@@ -145,12 +162,12 @@ export const roomSchema = z.object({
     'READY_FOR_REVIEW',
     'FAILED',
   ]),
-  note: z.string().optional(),
-  skipReason: z.string().optional(),
+  note: nullableString,
+  skipReason: nullableString,
   // Optional, not defaulted: a room cached before this field existed was never
   // confirmed, and absent is exactly that. Round-trips cleanly because the
   // mapper drops it rather than writing null.
-  summaryConfirmedAt: z.string().optional(),
+  summaryConfirmedAt: nullableString,
   // Defaulted false rather than optional: this one gates submission, and a room
   // from an older backend that cannot report it is not "maybe still analyzing",
   // it is a room nothing is waiting on. Absent must not block.
@@ -160,7 +177,7 @@ export const roomSchema = z.object({
   category: z.string().nullable().optional(),
   source: z.string().default('AI_FLOOR_PLAN'),
   areaStatus: z.enum(['DRAFT', 'APPROVED', 'REJECTED']).default('APPROVED'),
-  updatedAt: z.string().optional(),
+  updatedAt: nullableString,
 });
 // Exported for the offline round-trip tests: these schemas are re-parsed
 // against their own cached output, so their shape has to be verifiable.
@@ -195,8 +212,8 @@ export const findingSchema = z.object({
     'REJECTED',
     'REINSPECTION_REQUESTED',
   ]),
-  reviewerNotes: z.string().optional(),
-  updatedAt: z.string().optional(),
+  reviewerNotes: nullableString,
+  updatedAt: nullableString,
 });
 export const roomPhotoSchema = z
   .object({
@@ -252,6 +269,19 @@ export const checklistSchema = z.array(
  * to labels before sending, so the app never has to join against a list it may
  * not have loaded.
  */
+export const openEvidenceRequestSchema = z.array(
+  z.object({
+    id: z.string(),
+    inspectionId: z.string(),
+    roomId: z.string(),
+    roomName: z.string(),
+    propertyName: z.string(),
+    unitName: z.string().nullable(),
+    note: z.string(),
+    requestedAt: z.string(),
+  }),
+);
+
 export const evidenceRequestSchema = z.array(
   z.object({
     id: z.string(),
@@ -669,6 +699,13 @@ export class ApiInspectionRepository implements InspectionRepository {
       getJson(
         `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/evidence-requests`,
       ),
+    );
+  }
+  async openEvidenceRequests() {
+    // Cached under a key with no inspection id: this is the whole outstanding
+    // list, and it is what the requests tab reads offline.
+    return cachedApiRecord('openEvidenceRequests', openEvidenceRequestSchema, () =>
+      getJson('/api/v1/technician/evidence-requests'),
     );
   }
   async resolveEvidenceRequest(requestId: string) {

@@ -4,6 +4,7 @@ import type {
   ChecklistAssessment,
   ChecklistItemWithAssessment,
   EvidenceRequest,
+  OpenEvidenceRequest,
   DashboardSummary,
   DemoRole,
   DemoUser,
@@ -121,6 +122,7 @@ export interface InspectionRepository {
   ): Promise<ChecklistItemWithAssessment[]>;
   /** Open requests from the office for more evidence on this inspection. */
   evidenceRequests(inspectionId: string): Promise<EvidenceRequest[]>;
+  openEvidenceRequests(): Promise<OpenEvidenceRequest[]>;
   /** The technician's own call that a request is satisfied. */
   resolveEvidenceRequest(requestId: string): Promise<void>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;

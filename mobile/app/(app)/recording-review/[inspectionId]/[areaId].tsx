@@ -48,15 +48,6 @@ export default function RecordingReviewScreen() {
   const [note, setNote] = useState(draft?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
   /**
-   * The height of the fixed footer, measured rather than assumed.
-   *
-   * The scroll used to clear it with a hard-coded 130, which was right for the
-   * footer as it stood and wrong the moment a line was added to it — the video
-   * ended up partly underneath. Measuring means the two cannot drift again, and
-   * it also absorbs the safe-area inset, which differs per device.
-   */
-  const [footerHeight, setFooterHeight] = useState(130);
-  /**
    * The video's own shape, so the box matches the footage instead of the
    * footage sitting letterboxed inside a fixed 300px band.
    *
@@ -156,7 +147,7 @@ export default function RecordingReviewScreen() {
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ padding: 20, paddingBottom: footerHeight + 24 }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 24 }}
       >
         <View className="flex-row items-start gap-3">
           <View className="min-w-0 flex-1">
@@ -326,10 +317,13 @@ export default function RecordingReviewScreen() {
           </Pressable>
         </View>
       </ScrollView>
-      <View
-        className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3"
-        onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
-      >
+      {/* A sibling below the scroll, not an overlay across it.
+          It was positioned absolutely, so the scroll had to reserve exactly its
+          height — first a hard-coded 130, then a measurement. Both are a number
+          that has to stay in step with a layout nobody remembers to check, and
+          both let the video end up underneath it. Laid out in the column,
+          overlap is impossible by construction. */}
+      <View className="border-t border-border bg-background px-5 pb-8 pt-3">
         {/* The reason the button below is dead, said out loud.
             It was an accessibilityHint alone, which only a screen reader ever
             announced — everyone else saw a greyed-out control and no way to
