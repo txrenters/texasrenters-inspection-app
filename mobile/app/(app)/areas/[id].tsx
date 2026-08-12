@@ -11,14 +11,13 @@ import {
   FileTextIcon,
   PlayCircleIcon,
   RotateCwIcon,
-  SaveIcon,
 } from 'lucide-react-native';
-import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
+import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
-import { AiSummaryCard } from '@/src/components/AiSummaryCard';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
 import { EvidenceRequestCard } from '@/src/components/EvidenceRequestCard';
 import { BottomSheet } from '@/src/components/BottomSheet';
@@ -50,7 +49,6 @@ registerIcons(
   FileTextIcon,
   PlayCircleIcon,
   RotateCwIcon,
-  SaveIcon,
 );
 
 export default function AreaDetailScreen() {
@@ -81,7 +79,19 @@ export default function AreaDetailScreen() {
   const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
-  const [note, setNote] = useState<string | null>(null);
+  /**
+   * The photos taken on this device for this area, newest first.
+   *
+   * Read from the local store rather than the API: these are `file://` URIs
+   * written by `persistRoomSnapshot`, so they render with no network and no
+   * bearer token. The server's own photo rows carry an authenticated
+   * `contentPath` that a bare <Image> cannot load, and nothing in the app
+   * resolves one yet — so this shows what the technician captured, which is
+   * what they come back to this screen to check.
+   */
+  const areaSnapshots = useDemoStore((state) =>
+    (state.snapshots ?? []).filter((snapshot) => snapshot.roomId === id),
+  );
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
 
@@ -94,9 +104,9 @@ export default function AreaDetailScreen() {
   }
 
   const item = room.data;
-  const displayedNote = note ?? item.note ?? '';
   const roomFindings = (findings.data ?? []).filter((finding) => finding.roomId === item.id);
   const hasRecording = Boolean(media.data?.length);
+  const recordingCount = media.data?.length ?? 0;
   const requirements = deriveAreaRequirements(item, {
     hasPrimaryRecording: hasRecording,
     photoCount: photos.data?.length ?? 0,
@@ -253,7 +263,13 @@ export default function AreaDetailScreen() {
         <View className="mx-5 mt-4 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-center justify-between">
             <Text className="text-base font-semibold text-foreground">Room Evidence</Text>
-            <Text className="text-xs text-muted-foreground">{media.data?.length ?? 0} saved</Text>
+            {/* Counts both kinds. It read "N saved" off recordings alone, so a
+                technician who had taken ten photos and no video was told
+                nothing was saved. */}
+            <Text className="text-xs text-muted-foreground">
+              {recordingCount} video{recordingCount === 1 ? '' : 's'} · {areaSnapshots.length} photo
+              {areaSnapshots.length === 1 ? '' : 's'}
+            </Text>
           </View>
           <Text className="text-xs leading-relaxed text-muted-foreground">
             Capture one narrated room walkthrough. Snapshots can be taken before or during the
@@ -305,7 +321,34 @@ export default function AreaDetailScreen() {
                 </View>
               );
             })
-          ) : (
+          ) : null}
+
+          {/* Photos, below the recordings in the same card. They were captured
+              here and counted toward completion but never shown, so a technician
+              had no way to check what they had actually shot without leaving the
+              app. Horizontal because a room can hold twenty and a grid would
+              push everything below it off the screen. */}
+          {areaSnapshots.length ? (
+            <ScrollView
+              accessibilityLabel={`${areaSnapshots.length} photos in this area`}
+              className="-mx-1"
+              horizontal
+              showsHorizontalScrollIndicator={false}
+            >
+              {areaSnapshots.map((snapshot) => (
+                <Image
+                  accessibilityIgnoresInvertColors
+                  accessibilityLabel={`Photo taken ${new Date(snapshot.capturedAt).toLocaleTimeString()}`}
+                  className="mx-1 h-20 w-20 rounded-xl bg-muted"
+                  key={snapshot.id}
+                  resizeMode="cover"
+                  source={{ uri: snapshot.uri }}
+                />
+              ))}
+            </ScrollView>
+          ) : null}
+
+          {!recordingCount ? (
             <Pressable
               accessibilityHint="Opens the camera for the primary room walkthrough"
               accessibilityLabel="No recording saved yet. Start the primary room walkthrough."
@@ -326,41 +369,9 @@ export default function AreaDetailScreen() {
               </View>
               <ChevronRightIcon size={16} className="text-muted-foreground" />
             </Pressable>
-          )}
+          ) : null}
         </View>
 
-        <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
-          <Text nativeID="area-note-label" className="text-base font-semibold text-foreground">
-            Technician Note
-          </Text>
-          <TextInput
-            accessibilityLabel="Technician note"
-            accessibilityLabelledBy="area-note-label"
-            className="mt-3 min-h-24 rounded-xl border border-border bg-muted px-4 py-3 text-base text-foreground"
-            multiline
-            textAlignVertical="top"
-            placeholder="Add an observation or reminder"
-            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
-            value={displayedNote}
-            onChangeText={setNote}
-          />
-          <Pressable
-            accessibilityLabel={updates.note.isPending ? 'Saving note' : 'Save note'}
-            accessibilityRole="button"
-            accessibilityState={{
-              busy: updates.note.isPending,
-              disabled: updates.note.isPending || displayedNote === (item.note ?? ''),
-            }}
-            className="mt-3 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-muted py-3"
-            disabled={updates.note.isPending || displayedNote === (item.note ?? '')}
-            onPress={() => updates.note.mutate(displayedNote)}
-          >
-            <SaveIcon size={16} className="text-primary" />
-            <Text className="font-semibold text-primary">
-              {updates.note.isPending ? 'Saving…' : 'Save Note'}
-            </Text>
-          </Pressable>
-        </View>
 
         {/* Replaces a hard-coded four-item list whose first row ("Baseline
             reviewed") was literally `true` and whose contents had no bearing on
@@ -378,21 +389,6 @@ export default function AreaDetailScreen() {
             each axis is a judgement about that evidence. The technician's job on
             site is to capture it. */}
 
-        <AiSummaryCard
-          summary={summaries.byRoomId.get(item.id)}
-          processingStatus={item.processingStatus}
-          confirmedAt={item.summaryConfirmedAt}
-          confirming={updates.confirmSummary.isPending}
-          onConfirm={() => updates.confirmSummary.mutate()}
-        />
-        {/* Offline is the expected case here, and its message already says the
-            confirmation is safe on the device — so this reads as reassurance
-            rather than a failure the technician has to act on. */}
-        {updates.confirmSummary.error ? (
-          <Text className="mx-5 mt-2 text-xs leading-5 text-muted-foreground">
-            {updates.confirmSummary.error.message}
-          </Text>
-        ) : null}
 
         {/* Only shown once analysis has produced something. An empty "Findings"
             card during processing reads as "nothing wrong", which is a
@@ -449,15 +445,22 @@ export default function AreaDetailScreen() {
             </Pressable>
           </View>
         ) : null}
-        <Pressable
-          accessibilityHint="Asks for a reason, then records this area as not inspected"
-          accessibilityLabel="Mark area as skipped"
-          accessibilityRole="button"
-          className="mx-5 mt-4 min-h-12 items-center justify-center py-3"
-          onPress={() => setSkipOpen(true)}
-        >
-          <Text className="font-semibold text-muted-foreground">Mark as Skipped</Text>
-        </Pressable>
+        {/* Only while there is nothing to skip.
+            Skipping means "this area was not inspected", which is a claim the
+            evidence contradicts once a walkthrough has been recorded — and
+            offering it there invites a technician to file a recorded area as
+            uninspected. Finished areas lose it for the same reason. */}
+        {hasRecording || alreadyFinished ? null : (
+          <Pressable
+            accessibilityHint="Asks for a reason, then records this area as not inspected"
+            accessibilityLabel="Mark area as skipped"
+            accessibilityRole="button"
+            className="mx-5 mt-4 min-h-12 items-center justify-center py-3"
+            onPress={() => setSkipOpen(true)}
+          >
+            <Text className="font-semibold text-muted-foreground">Mark as Skipped</Text>
+          </Pressable>
+        )}
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
