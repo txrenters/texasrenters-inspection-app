@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import { useMemo } from 'react';
 import { useColorScheme } from 'nativewind';
 import {
   AlertTriangleIcon,
@@ -22,6 +23,7 @@ import { useUploadActions, useUploads } from '@/src/features/queries';
 import { useLiveUploadProgress } from '@/src/features/useLiveUploadProgress';
 import { UploadListSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
+import { useDemoStore } from '@/src/stores/demo.store';
 import { evaluateUploadGate } from '@/src/lib/connectivity';
 import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
@@ -83,9 +85,19 @@ const STATUS_CONFIG: Record<
 function UploadRow({
   item,
   actions,
+  removable,
 }: {
   item: UploadItem;
   actions: ReturnType<typeof useUploadActions>;
+  /**
+   * Whether this row is still a file on the phone.
+   *
+   * Only those can be removed: a server-backed upload has already been
+   * delivered and is a media row the office owns, so "remove from the device"
+   * has nothing to act on. The repository refuses it — offering the control
+   * anyway meant a bin icon that always threw.
+   */
+  removable: boolean;
 }) {
   // Wording comes from `describeUpload`, which is the only place that knows a
   // finished transfer is not the same as a playable video. The badge colours
@@ -197,18 +209,20 @@ function UploadRow({
               <Text className="text-xs font-semibold text-muted-foreground">Pause</Text>
             </Pressable>
           )}
-          <Pressable
-            // Destructive and icon-only: the hint spells out the consequence,
-            // because "Remove" next to a trash can is ambiguous about whether
-            // the recording itself is being discarded.
-            accessibilityHint="Removes this item from the upload queue"
-            accessibilityLabel={`Remove ${item.roomName} from the upload queue`}
-            accessibilityRole="button"
-            className="min-h-11 min-w-11 items-center justify-center rounded-lg bg-destructive/10 p-2 active:scale-[0.98]"
-            onPress={() => actions.remove.mutate(item.id)}
-          >
-            <Trash2Icon size={14} className="text-destructive" />
-          </Pressable>
+          {removable ? (
+            <Pressable
+              // Destructive and icon-only: the hint spells out the consequence,
+              // because "Remove" next to a trash can is ambiguous about whether
+              // the recording itself is being discarded.
+              accessibilityHint="Removes this item from the upload queue"
+              accessibilityLabel={`Remove ${item.roomName} from the upload queue`}
+              accessibilityRole="button"
+              className="min-h-11 min-w-11 items-center justify-center rounded-lg bg-destructive/10 p-2 active:scale-[0.98]"
+              onPress={() => actions.remove.mutate(item.id)}
+            >
+              <Trash2Icon size={14} className="text-destructive" />
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -219,6 +233,18 @@ export default function UploadsScreen() {
   const uploads = useUploads();
   const pull = usePullToRefresh([uploads.refetch]);
   const actions = useUploadActions();
+  /**
+   * The ids still held on this device, read from the same store the repository
+   * checks. Membership here is the only honest test of whether "remove" can do
+   * anything — a server-backed row shares the shape but not the file.
+   */
+  const localUploadIds = useDemoStore(
+    (state) => state.uploads,
+  );
+  const removableIds = useMemo(
+    () => new Set((localUploadIds ?? []).map((upload) => upload.id)),
+    [localUploadIds],
+  );
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const isOnline = useNetworkStore((state) => state.isOnline);
@@ -371,7 +397,9 @@ export default function UploadsScreen() {
             </View>
           </View>
         }
-        renderItem={({ item }) => <UploadRow item={item} actions={actions} />}
+        renderItem={({ item }) => (
+          <UploadRow actions={actions} item={item} removable={removableIds.has(item.id)} />
+        )}
         ListEmptyComponent={
           uploads.isLoading ? (
             <UploadListSkeleton rows={3} />
