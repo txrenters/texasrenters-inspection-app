@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import {
@@ -82,6 +82,11 @@ export default function AreaDetailScreen() {
   /**
    * The photos taken on this device for this area, newest first.
    *
+   * The selector returns the store's own array and the filtering happens in a
+   * memo. Filtering *inside* the selector allocates a new array on every call,
+   * which `useSyncExternalStore` reads as the store having changed — it then
+   * re-renders, re-selects, and loops until React gives up.
+   *
    * Read from the local store rather than the API: these are `file://` URIs
    * written by `persistRoomSnapshot`, so they render with no network and no
    * bearer token. The server's own photo rows carry an authenticated
@@ -89,8 +94,10 @@ export default function AreaDetailScreen() {
    * resolves one yet — so this shows what the technician captured, which is
    * what they come back to this screen to check.
    */
-  const areaSnapshots = useDemoStore((state) =>
-    (state.snapshots ?? []).filter((snapshot) => snapshot.roomId === id),
+  const snapshots = useDemoStore((state) => state.snapshots);
+  const areaSnapshots = useMemo(
+    () => (snapshots ?? []).filter((snapshot) => snapshot.roomId === id),
+    [snapshots, id],
   );
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
