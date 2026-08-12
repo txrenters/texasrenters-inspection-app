@@ -1620,6 +1620,21 @@ export class AdminService {
       type: 'inspection.changed',
       organizationId: user.organizationId,
     });
+    /**
+     * Told to the technician the moment it is written, not on their next poll.
+     * A request exists because the office needs someone to go back to a
+     * property; a notification that waits for a refresh interval is a
+     * notification that arrives after they have driven away.
+     *
+     * After the commit, never inside it: announcing a request that then rolled
+     * back sends a technician to an area with nothing waiting.
+     */
+    const assignee = await this.prisma.inspectionAssignment.findFirst({
+      where: { inspectionId, isCurrent: true },
+      select: { technicianId: true },
+    });
+    if (assignee)
+      this.technicianEvents?.publish(assignee.technicianId, inspectionId, 'EVIDENCE_REQUESTED');
     return request;
   }
 

@@ -1,7 +1,13 @@
 import { Tabs } from 'expo-router';
-import { HomeIcon, ClipboardListIcon, UploadCloudIcon, CogIcon } from 'lucide-react-native';
+import {
+  HomeIcon,
+  ClipboardListIcon,
+  InboxIcon,
+  UploadCloudIcon,
+  CogIcon,
+} from 'lucide-react-native';
 import { useColorScheme } from 'nativewind';
-import { useAssignedInspectionCount } from '@/src/features/queries';
+import { useAssignedInspectionCount, useOpenEvidenceRequests } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(HomeIcon);
@@ -17,6 +23,10 @@ export default function TabsLayout() {
   // technician reopening anything.
   const assigned = useAssignedInspectionCount();
   const assignedCount = assigned.data ?? 0;
+  // Kept live by the realtime gateway: the badge changes the moment the office
+  // asks for something, not on the next poll.
+  const openRequests = useOpenEvidenceRequests();
+  const requestCount = openRequests.data?.length ?? 0;
 
   return (
     <Tabs
@@ -65,6 +75,31 @@ export default function TabsLayout() {
               : 'Inspections',
           tabBarIcon: ({ focused }) => (
             <ClipboardListIcon
+              className={focused ? 'text-primary' : 'text-muted-foreground'}
+              size={22}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="requests"
+        options={{
+          title: 'Requests',
+          // Same rule as Inspections: undefined, never 0, or an empty dot sits
+          // on the tab for ever.
+          tabBarBadge: requestCount > 0 ? requestCount : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: isDark ? '#f59e0b' : '#b45309',
+            color: '#ffffff',
+            fontSize: 11,
+            fontWeight: '700',
+          },
+          tabBarAccessibilityLabel:
+            requestCount > 0
+              ? `Requests, ${requestCount} area${requestCount === 1 ? '' : 's'} the office is waiting on`
+              : 'Requests',
+          tabBarIcon: ({ focused }) => (
+            <InboxIcon
               className={focused ? 'text-primary' : 'text-muted-foreground'}
               size={22}
             />

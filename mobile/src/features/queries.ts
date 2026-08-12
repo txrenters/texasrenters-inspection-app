@@ -64,6 +64,7 @@ export const queryKeys = {
   roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
   roomChecklist: (roomId: string) => ['roomChecklist', roomId] as const,
   evidenceRequests: (inspectionId: string) => ['evidenceRequests', inspectionId] as const,
+  openEvidenceRequests: ['openEvidenceRequests'] as const,
   property: (id: string) => ['property', id] as const,
   floorPlan: (id: string) => ['floorPlan', id] as const,
   uploads: ['uploads'] as const,
@@ -400,6 +401,21 @@ export function useFinding(id: string, inspectionId?: string) {
  * inspection came back to the technician, so it has to appear without them
  * knowing to pull-to-refresh.
  */
+/**
+ * Everything the office is waiting on, across assignments.
+ *
+ * Kept fresh by the realtime gateway rather than a tight poll — the interval is
+ * the fallback for a dropped socket, not the delivery mechanism.
+ */
+export function useOpenEvidenceRequests() {
+  return useQuery({
+    queryKey: queryKeys.openEvidenceRequests,
+    queryFn: () => repositories.inspections.openEvidenceRequests(),
+    refetchInterval: assignmentRefreshInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
 export function useEvidenceRequests(inspectionId: string) {
   return useQuery({
     queryKey: queryKeys.evidenceRequests(inspectionId),

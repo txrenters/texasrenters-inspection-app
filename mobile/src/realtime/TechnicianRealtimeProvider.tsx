@@ -57,7 +57,14 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       socket.on('technician:ready', refreshAssignments);
       socket.on('inspection:changed', (event: InspectionChangedEvent) => {
         refreshAssignments();
-        void verifyQueries(queryClient, [queryKeys.inspection(event.inspectionId)]);
+        void verifyQueries(queryClient, [
+          queryKeys.inspection(event.inspectionId),
+          // The outstanding list, on every kind rather than only
+          // EVIDENCE_REQUESTED: resolving a request, finishing an inspection or
+          // losing an assignment all change what is still waiting, and a badge
+          // that only ever counts up is worse than none.
+          queryKeys.openEvidenceRequests,
+        ]);
         if (event.kind === 'ASSIGNED' && !registeredPushToken)
           void notifyNewAssignment(event.inspectionId).catch(() => undefined);
       });

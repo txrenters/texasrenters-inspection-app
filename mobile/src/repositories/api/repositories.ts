@@ -269,6 +269,19 @@ export const checklistSchema = z.array(
  * to labels before sending, so the app never has to join against a list it may
  * not have loaded.
  */
+export const openEvidenceRequestSchema = z.array(
+  z.object({
+    id: z.string(),
+    inspectionId: z.string(),
+    roomId: z.string(),
+    roomName: z.string(),
+    propertyName: z.string(),
+    unitName: z.string().nullable(),
+    note: z.string(),
+    requestedAt: z.string(),
+  }),
+);
+
 export const evidenceRequestSchema = z.array(
   z.object({
     id: z.string(),
@@ -686,6 +699,13 @@ export class ApiInspectionRepository implements InspectionRepository {
       getJson(
         `/api/v1/technician/inspections/${encodeURIComponent(inspectionId)}/evidence-requests`,
       ),
+    );
+  }
+  async openEvidenceRequests() {
+    // Cached under a key with no inspection id: this is the whole outstanding
+    // list, and it is what the requests tab reads offline.
+    return cachedApiRecord('openEvidenceRequests', openEvidenceRequestSchema, () =>
+      getJson('/api/v1/technician/evidence-requests'),
     );
   }
   async resolveEvidenceRequest(requestId: string) {

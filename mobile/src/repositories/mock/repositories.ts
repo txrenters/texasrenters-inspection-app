@@ -227,6 +227,11 @@ export class MockInspectionRepository implements InspectionRepository {
     // Demo mode has no reviewer to raise one.
     return [];
   }
+  async openEvidenceRequests() {
+    await mockDelay();
+    // Same reason: nobody in demo mode can ask for more evidence.
+    return [];
+  }
   async resolveEvidenceRequest() {
     await mockDelay();
   }
