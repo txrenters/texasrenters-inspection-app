@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useColorScheme } from 'nativewind';
 import { router, useLocalSearchParams } from 'expo-router';
 
@@ -47,11 +47,43 @@ export default function RecordingReviewScreen() {
   const save = useSaveRecording();
   const [note, setNote] = useState(draft?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  /**
+   * The height of the fixed footer, measured rather than assumed.
+   *
+   * The scroll used to clear it with a hard-coded 130, which was right for the
+   * footer as it stood and wrong the moment a line was added to it — the video
+   * ended up partly underneath. Measuring means the two cannot drift again, and
+   * it also absorbs the safe-area inset, which differs per device.
+   */
+  const [footerHeight, setFooterHeight] = useState(130);
+  /**
+   * The video's own shape, so the box matches the footage instead of the
+   * footage sitting letterboxed inside a fixed 300px band.
+   *
+   * A walkthrough is shot with the phone upright, so the default is portrait —
+   * being briefly too tall while the track loads is better than being far too
+   * short, which is what a landscape default would do to every recording this
+   * app produces.
+   */
+  const [aspectRatio, setAspectRatio] = useState(9 / 16);
   const [label, setLabel] = useState(draft?.label ?? '');
   const [category, setCategory] = useState<AdditionalVideoCategory>(draft?.category ?? 'OTHER');
   const player = useVideoPlayer(draft?.uri ?? null, (instance) => {
     instance.loop = false;
   });
+
+  useEffect(() => {
+    // The track is not there the moment the player is created; it arrives with
+    // the first loaded frame, so this reads it on every status change and stops
+    // once a usable size appears.
+    const applySize = () => {
+      const size = player.videoTrack?.size;
+      if (size?.width && size.height) setAspectRatio(size.width / size.height);
+    };
+    applySize();
+    const subscription = player.addListener('statusChange', applySize);
+    return () => subscription.remove();
+  }, [player]);
   const isAdditional =
     draft?.recordingType === 'ADDITIONAL_ISSUE' || recordingType === 'ADDITIONAL_ISSUE';
 
@@ -122,7 +154,10 @@ export default function RecordingReviewScreen() {
 
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 130 }}>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ padding: 20, paddingBottom: footerHeight + 24 }}
+      >
         <View className="flex-row items-start gap-3">
           <View className="min-w-0 flex-1">
             <Text className="text-2xl font-bold text-foreground">Review recording</Text>
@@ -146,7 +181,17 @@ export default function RecordingReviewScreen() {
           player={player}
           nativeControls
           contentFit="contain"
-          style={{ height: 300, marginTop: 20, borderRadius: 18, backgroundColor: '#000' }}
+          style={{
+            aspectRatio,
+            // Capped so a portrait clip cannot push the note and the
+            // confirmation off the screen — the point of this screen is to
+            // review *and* confirm, and a video tall enough to fill it would
+            // hide the control that lets them move on.
+            maxHeight: 420,
+            marginTop: 20,
+            borderRadius: 18,
+            backgroundColor: '#000',
+          }}
         />
         <View className="mt-5 rounded-2xl bg-card p-5">
           <Text nativeID="recording-note-label" className="font-semibold text-foreground">
@@ -281,7 +326,10 @@ export default function RecordingReviewScreen() {
           </Pressable>
         </View>
       </ScrollView>
-      <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
+      <View
+        className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3"
+        onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
+      >
         {/* The reason the button below is dead, said out loud.
             It was an accessibilityHint alone, which only a screen reader ever
             announced — everyone else saw a greyed-out control and no way to
