@@ -438,8 +438,21 @@ export default function InspectionReviewScreen() {
               busy: actions.complete.isPending,
               disabled: !canSubmit || actions.complete.isPending,
             }}
-            className={`min-h-12 flex-row items-center justify-center gap-2 rounded-xl py-4 ${
-              canSubmit ? 'bg-primary active:scale-[0.98]' : 'bg-primary/40'
+            // `active:` stays put; only the colour is conditional.
+            //
+            // It used to live inside the canSubmit branch, so the class appeared
+            // only once the report had loaded and the gate passed. css-interop
+            // treats a pseudo-class arriving after the first render as a
+            // component upgrade and warns about it — and to build that warning it
+            // JSON-stringifies the props, which walks the child tree into React
+            // Navigation's context getter and throws "Couldn't find a navigation
+            // context". An error about a missing NavigationContainer, on a screen
+            // whose container was fine, caused by a conditional CSS class.
+            //
+            // Harmless to keep while disabled: a disabled Pressable never enters
+            // the active state, so the style cannot apply.
+            className={`min-h-12 flex-row items-center justify-center gap-2 rounded-xl py-4 active:scale-[0.98] ${
+              canSubmit ? 'bg-primary' : 'bg-primary/40'
             }`}
             disabled={!canSubmit || actions.complete.isPending}
             onPress={submitInspection}
