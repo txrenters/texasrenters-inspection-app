@@ -69,9 +69,19 @@ function AxisControl({
             aria-label={`${label}: ${option ? 'yes' : 'no'}`}
             className={cn(
               'size-8',
+              // `text-brand`, not `text-brand-foreground`. The -foreground token
+              // is the colour meant to sit *on* a solid brand fill, and it is a
+              // very dark green (oklch L=0.236) for exactly that reason. Painted
+              // as text over a 15% tint on a dark card it was invisible, so a
+              // "yes" rendered as an empty box while "no" — which correctly used
+              // `text-destructive`, the colour itself — showed up red.
+              //
+              // Every all-yes row therefore looked unanswered, and the header
+              // still counted it as assessed. The stored data was right the whole
+              // time; only this one token was wrong.
               active &&
                 (option
-                  ? 'border-brand bg-brand/15 text-brand-foreground hover:bg-brand/20'
+                  ? 'border-brand bg-brand/15 text-brand hover:bg-brand/20'
                   : 'border-destructive bg-destructive/10 text-destructive hover:bg-destructive/15'),
             )}
             disabled={disabled}
