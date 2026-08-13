@@ -83,7 +83,9 @@ function Finding({ finding, showRoom }: { finding: ReportFindingView; showRoom?:
 
 function Room({ room }: { room: ReportRoomView }) {
   return (
-    <section className="bg-card space-y-4 rounded-xl border p-5">
+    // `print:break-inside-avoid`: a page break between a room's verdicts and
+    // the photographs proving them is what makes a printed report hard to read.
+    <section className="bg-card space-y-4 rounded-xl border p-5 print:break-inside-avoid">
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h3 className="font-semibold">{room.name}</h3>
@@ -104,7 +106,7 @@ function Room({ room }: { room: ReportRoomView }) {
       {room.checklist.length ? (
         <div className="overflow-hidden rounded-lg border">
           <Table>
-            <TableHeader className="bg-muted/40">
+            <TableHeader className="bg-muted/40 print:table-header-group">
               <TableRow className="hover:bg-transparent">
                 <TableHead scope="col">Room / item</TableHead>
                 <TableHead scope="col">Clean</TableHead>
@@ -115,7 +117,7 @@ function Room({ room }: { room: ReportRoomView }) {
             </TableHeader>
             <TableBody>
               {room.checklist.map((row) => (
-                <TableRow key={row.id}>
+                <TableRow className="print:break-inside-avoid" key={row.id}>
                   <TableHead className="text-foreground h-auto py-3 font-normal" scope="row">
                     {row.label}
                   </TableHead>
@@ -136,7 +138,7 @@ function Room({ room }: { room: ReportRoomView }) {
       {room.photos.length ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {room.photos.map((photo) => (
-            <figure className="space-y-1.5" key={photo.id}>
+            <figure className="space-y-1.5 print:break-inside-avoid" key={photo.id}>
               <a
                 className="focus-visible:ring-ring/50 block overflow-hidden rounded-lg border focus-visible:ring-[3px] focus-visible:outline-none"
                 href={photoUrl(photo.contentPath, FULL_WIDTH)}
@@ -268,7 +270,9 @@ export default function PublicReportPage() {
                 <p className="text-muted-foreground text-sm">{view.subtitle}</p>
               ) : null}
             </div>
-            <Button asChild variant="outline">
+            {/* Hidden on paper: a download button printed onto a report that
+                has already been handed over is noise. */}
+            <Button asChild className="print:hidden" variant="outline">
               <a href={`/report/${encodeURIComponent(token)}/pdf`}>
                 <DownloadIcon />
                 Download PDF
