@@ -39,6 +39,10 @@ import { AreaDetailPanel } from './AreaDetailPanel';
 /** Wording and tone per status. Never colour alone — each carries a label. */
 const STATUS_META: Record<AreaReviewStatus, { label: string; tone: string }> = {
   NOT_STARTED: { label: 'Not started', tone: 'neutral' },
+  // Not 'warning'. A skipped area is a decision the technician recorded with a
+  // reason, not a fault to chase — colouring it like incomplete evidence sends
+  // reviewers looking for a recording that was never going to exist.
+  SKIPPED: { label: 'Skipped', tone: 'neutral' },
   EVIDENCE_INCOMPLETE: { label: 'Evidence incomplete', tone: 'warning' },
   EVIDENCE_READY: { label: 'Evidence ready', tone: 'ok' },
   ANALYSIS_PROCESSING: { label: 'Analysing', tone: 'info' },
@@ -59,6 +63,7 @@ const STATUS_FILTERS = [
   { value: ALL_STATUSES, label: 'All areas' },
   { value: 'FINDINGS_NEED_REVIEW', label: 'Needs review' },
   { value: 'EVIDENCE_INCOMPLETE', label: 'Incomplete' },
+  { value: 'SKIPPED', label: 'Skipped' },
   { value: 'NOT_STARTED', label: 'Not started' },
   { value: 'REVIEWED', label: 'Reviewed' },
 ] as const;

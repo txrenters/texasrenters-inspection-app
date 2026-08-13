@@ -126,3 +126,7 @@ Desktop.ini
 # Database dumps. These contain password hashes and full tenant data.
 backups/
 *.dump
+
+# Editor/tool workspace state — per-machine, regenerated locally.
+.v3code/
+.context-bridge/
