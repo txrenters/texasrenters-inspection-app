@@ -161,12 +161,20 @@ describe('technician realtime authorization', () => {
     expect(payload.occurredAt).toEqual(expect.any(String));
   });
 
-  it('fans an assignment event out to background push delivery', () => {
-    const mobilePush = { sendAssignment: jest.fn().mockResolvedValue(undefined) };
+  it('hands every event to push delivery, which decides what is worth sending', () => {
+    /**
+     * The gateway used to gate on ASSIGNED itself, so a reopened inspection and
+     * an evidence request reached nobody whose app was closed. Which kinds
+     * deserve a push is a question about wording and noise, so it belongs with
+     * the copy in MobilePushService rather than here.
+     */
+    const mobilePush = { send: jest.fn().mockResolvedValue(undefined) };
     const gateway = new TechnicianEventsGateway({} as never, mobilePush as never);
 
     gateway.publish('technician-1', 'inspection-1', 'ASSIGNED');
+    gateway.publish('technician-1', 'inspection-2', 'REOPENED');
 
-    expect(mobilePush.sendAssignment).toHaveBeenCalledWith('technician-1', 'inspection-1');
+    expect(mobilePush.send).toHaveBeenCalledWith('ASSIGNED', 'technician-1', 'inspection-1');
+    expect(mobilePush.send).toHaveBeenCalledWith('REOPENED', 'technician-1', 'inspection-2');
   });
 });

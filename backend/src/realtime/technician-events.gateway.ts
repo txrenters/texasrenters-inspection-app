@@ -130,7 +130,10 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
       occurredAt: new Date().toISOString(),
     };
     this.server?.to(this.technicianRoom(technicianId)).emit('inspection:changed', event);
-    if (kind === 'ASSIGNED') void this.mobilePush?.sendAssignment(technicianId, inspectionId);
+    // The service decides which kinds are worth a push; the gateway just tells
+    // it what happened. Pushing only ASSIGNED was why a reopened inspection or
+    // an evidence request reached nobody whose app was closed.
+    void this.mobilePush?.send(kind, technicianId, inspectionId);
   }
 
   /** Broadcast to the organization's administrators, not to any technician. */
