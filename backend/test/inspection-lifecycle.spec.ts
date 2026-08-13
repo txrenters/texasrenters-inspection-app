@@ -88,8 +88,13 @@ describe('inspection status lifecycle (spec §11)', () => {
   it('blocks finalization while findings await review unless an override is documented', async () => {
     const prisma = {
       inspection: { findFirst: jest.fn().mockResolvedValue(reviewableInspection()) },
-      inspectionFinding: { count: jest.fn().mockResolvedValue(2) },
-      inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([
+          { title: 'Cracked tile', propertyArea: { name: 'Kitchen' } },
+          { title: 'Scuffed baseboard', propertyArea: { name: 'Hall' } },
+        ]),
+      },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
     const service = new AdminService(prisma as never);
@@ -97,8 +102,21 @@ describe('inspection status lifecycle (spec §11)', () => {
     await expect(service.finalizeInspection(admin, 'insp-1', {})).rejects.toMatchObject({
       status: 409,
       code: 'INSPECTION_HAS_UNRESOLVED_ITEMS',
+      // Names what is blocking, and says nothing about the zero recordings —
+      // the old wording printed both counts and left the reviewer to work out
+      // which half mattered.
+      message: expect.stringContaining('Kitchen — Cracked tile'),
+    });
+    await expect(service.finalizeInspection(admin, 'insp-1', {})).rejects.not.toMatchObject({
+      message: expect.stringContaining('recording'),
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
+
+    // The room condition summary must never be one of the counted rows: it is
+    // narrative, the review screen hides it, and an administrator has no
+    // control that clears it.
+    const [[query]] = prisma.inspectionFinding.findMany.mock.calls;
+    expect(query.where.NOT).toEqual({ findingType: 'NO_CHANGE', title: 'Room condition summary' });
   });
 
   it('finalizes with a documented override, recording the finalizer and audit trail', async () => {
@@ -111,8 +129,12 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspection: {
         findFirst: jest.fn().mockResolvedValueOnce(reviewableInspection()).mockResolvedValueOnce(detail),
       },
-      inspectionFinding: { count: jest.fn().mockResolvedValue(1) },
-      inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+      inspectionFinding: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ title: 'Cracked tile', propertyArea: { name: 'Kitchen' } }]),
+      },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     const service = new AdminService(prisma as never);

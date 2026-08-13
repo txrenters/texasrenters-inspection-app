@@ -107,6 +107,54 @@ const EVIDENCE_REQUEST_SELECT = {
   inspectionArea: { select: { propertyArea: { select: { name: true } } } },
 } satisfies Prisma.AreaEvidenceRequestSelect;
 
+/**
+ * What is stopping this inspection being finalized, in words a reviewer can act
+ * on.
+ *
+ * Exported for its own test. The rule it encodes: say only what is actually
+ * blocking, and name it. The message this replaced always printed both counts,
+ * so an administrator with nothing but an unreviewable row behind the gate read
+ * "1 finding(s) awaiting review and 0 recording(s) still processing" and had no
+ * way to find the one or dismiss the zero.
+ */
+export function describeFinalizeBlockers(
+  findings: readonly { title: string; propertyArea: { name: string } | null }[],
+  media: readonly { inspectionArea: { propertyArea: { name: string } } | null }[],
+): string {
+  const parts: string[] = [];
+  if (findings.length) {
+    // Named rather than counted: "Kitchen — Cracked tile" is something a
+    // reviewer can go and open.
+    const named = findings
+      .slice(0, 3)
+      .map((finding) =>
+        finding.propertyArea?.name
+          ? `${finding.propertyArea.name} — ${finding.title}`
+          : finding.title,
+      )
+      .join('; ');
+    const rest = findings.length > 3 ? ` and ${findings.length - 3} more` : '';
+    parts.push(
+      `${findings.length} finding${findings.length === 1 ? '' : 's'} still awaiting review (${named}${rest})`,
+    );
+  }
+  if (media.length) {
+    const areas = [
+      ...new Set(
+        media
+          .map((item) => item.inspectionArea?.propertyArea.name)
+          .filter((name): name is string => Boolean(name)),
+      ),
+    ];
+    parts.push(
+      `${media.length} recording${media.length === 1 ? '' : 's'} still processing${
+        areas.length ? ` (${areas.slice(0, 3).join(', ')})` : ''
+      }`,
+    );
+  }
+  return `${parts.join(' and ')}. Resolve ${parts.length > 1 ? 'them' : 'it'} or document an override to finalize.`;
+}
+
 const REOPENABLE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.TECHNICIAN_SUBMITTED,
   InspectionStatus.PROCESSING,
@@ -1344,24 +1392,52 @@ export class AdminService {
     const existing = await this.requireInspection(user.organizationId, id);
     this.assertReviewable(existing.status);
     const [pendingFindings, unfinishedMedia] = await Promise.all([
-      this.prisma.inspectionFinding.count({
-        where: { inspectionId: id, reviewStatus: FindingReviewStatus.PENDING_REVIEW },
+      /**
+       * Defects only — the room condition summary is deliberately excluded.
+       *
+       * It is stored as a finding row (findingType NO_CHANGE, title "Room
+       * condition summary") but it is narrative, not a defect, and the review
+       * screen filters it out of the findings list on purpose. Counting it here
+       * produced the worst kind of blocker: the dialog said "1 finding awaiting
+       * review" while the Findings tab showed one finding, approved, and the
+       * area read "1 of 1 reviewed". There was nothing the administrator could
+       * click to clear it.
+       *
+       * A gate that can only be passed by typing an override reason every time
+       * is not a safety gate — it teaches people to override reflexively, which
+       * is precisely how a genuinely unreviewed defect gets finalized. This now
+       * counts what the reviewer can actually see and act on, matching the
+       * exclusion `area-evidence.service` already applies to the same rows.
+       */
+      this.prisma.inspectionFinding.findMany({
+        where: {
+          inspectionId: id,
+          reviewStatus: FindingReviewStatus.PENDING_REVIEW,
+          NOT: { ...ROOM_SUMMARY_WHERE },
+        },
+        select: { title: true, propertyArea: { select: { name: true } } },
+        take: 20,
       }),
-      this.prisma.inspectionMedia.count({
+      this.prisma.inspectionMedia.findMany({
         where: {
           inspectionId: id,
           processingStatus: {
             in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING],
           },
         },
+        select: { inspectionArea: { select: { propertyArea: { select: { name: true } } } } },
+        take: 20,
       }),
     ]);
-    const blockers = pendingFindings + unfinishedMedia;
-    if (blockers > 0 && !input.overrideReason)
+    if ((pendingFindings.length || unfinishedMedia.length) && !input.overrideReason)
       throw new ApplicationError(
         409,
         'INSPECTION_HAS_UNRESOLVED_ITEMS',
-        `${pendingFindings} finding(s) awaiting review and ${unfinishedMedia} recording(s) still processing. Resolve them or document an override to finalize.`,
+        // Names what is blocking, and mentions only the categories that
+        // actually are. The old wording always printed both counts, so a
+        // reviewer read "and 0 recording(s) still processing" and had to work
+        // out for themselves that the zero was not the problem.
+        describeFinalizeBlockers(pendingFindings, unfinishedMedia),
       );
     await this.prisma.$transaction(async (tx) => {
       await tx.inspection.update({
@@ -1378,9 +1454,12 @@ export class AdminService {
         },
       });
       await this.audit(tx, user, 'INSPECTION_FINALIZED', id, {
-        pendingFindings,
-        unfinishedMedia,
-        override: blockers > 0,
+        // Counts, not the rows: the audit records that an override happened and
+        // how much was outstanding, which is what a later reader needs. The
+        // titles are already in the findings themselves.
+        pendingFindings: pendingFindings.length,
+        unfinishedMedia: unfinishedMedia.length,
+        override: pendingFindings.length + unfinishedMedia.length > 0,
         overrideReason: input.overrideReason ?? null,
       });
     }, ADMIN_TRANSACTION_OPTIONS);
