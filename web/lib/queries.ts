@@ -1419,6 +1419,34 @@ export function useAdminMutations() {
         });
       },
     }),
+    /**
+     * Cut a still from a recording and file it as report evidence.
+     *
+     * Invalidates the area bundle rather than patching it: the new photograph
+     * lands in a group the client does not compute, and re-reading is cheaper
+     * than reproducing that grouping here.
+     */
+    captureSnapshot: useMutation({
+      mutationFn: ({
+        mediaId,
+        ...body
+      }: {
+        mediaId: string;
+        inspectionId: string;
+        areaId: string;
+        atMs: number;
+        checklistItemId?: string;
+      }) =>
+        api<{ id: string; atMs: number; reused: boolean }>(
+          `/api/v1/inspection-videos/${mediaId}/snapshot`,
+          { method: 'POST', body: JSON.stringify({ atMs: body.atMs, checklistItemId: body.checklistItemId }) },
+        ),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({
+          queryKey: keys.areaEvidence(variables.inspectionId, variables.areaId),
+        });
+      },
+    }),
     mergeInspectionAreas: useMutation({
       mutationFn: ({
         id,

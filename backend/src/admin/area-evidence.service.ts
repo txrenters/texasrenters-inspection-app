@@ -12,7 +12,7 @@ import { ApplicationError } from '../common/errors';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
-import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
+import { ROOM_SUMMARY_WHERE, readFrameMarkers } from '../technician/media-processing.service';
 
 /** Findings awaiting a human decision. */
 const UNREVIEWED: FindingReviewStatus[] = [FindingReviewStatus.PENDING_REVIEW];
@@ -422,6 +422,11 @@ export class AreaEvidenceService {
           uploadStatus: true,
           processingStatus: true,
           createdAt: true,
+          // Where the technician tapped the shutter during the walkthrough.
+          // Android cannot photograph while recording, so the shutter stores a
+          // moment instead — until now those moments never reached the
+          // reviewer, which made them useless.
+          captureSummary: true,
           technician: { select: { displayName: true } },
         },
       }),
@@ -608,6 +613,9 @@ export class AreaEvidenceService {
         technicianName: recording.technician.displayName,
         createdAt: recording.createdAt.toISOString(),
         thumbnailUrl: thumbnails[index],
+        // Bounded by the recording length by the same helper the pipeline uses,
+        // so a marker past the end never reaches the player as a dead chip.
+        frameMarkersMs: readFrameMarkers(recording.captureSummary, recording.durationSeconds),
         contentPath: `/api/v1/admin/media/${recording.id}/content`,
       })),
       photoGroups: groups,

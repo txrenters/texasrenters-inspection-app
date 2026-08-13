@@ -122,6 +122,16 @@ export interface AreaRecording {
   createdAt: string;
   /** Poster frame. Playback itself is requested only when opened. */
   thumbnailUrl?: string | null;
+  /**
+   * Offsets, in milliseconds, where the technician tapped the shutter during
+   * the walkthrough.
+   *
+   * Android cannot photograph while recording — expo-camera binds either the
+   * image or the video use case, never both — so the shutter stores a moment
+   * instead of a picture. Surfacing them lets a reviewer jump straight to what
+   * the technician wanted looked at, and capture the frame themselves.
+   */
+  frameMarkersMs: number[];
   /** Proxy fallback for storage backends that cannot sign URLs. */
   contentPath: string;
 }

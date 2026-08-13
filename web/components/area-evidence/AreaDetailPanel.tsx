@@ -1,6 +1,6 @@
 'use client';
 
-import type { AreaFinding, AreaRecording } from '@texasrenters/shared';
+import type { AreaChecklistEntry, AreaFinding, AreaRecording } from '@texasrenters/shared';
 import { Maximize2Icon, PlayIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -20,6 +20,7 @@ import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 import { AreaConditionChecklist } from './AreaConditionChecklist';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
+import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface } from './RecordingSurface';
 
 /** A section heading with an optional count. */
@@ -75,6 +76,10 @@ function RecordingCard({
   onActivate,
   onExpand,
   startSeconds,
+  inspectionId,
+  areaId,
+  checklist,
+  onSeek,
 }: {
   recording: AreaRecording;
   activeId: string | null;
@@ -82,6 +87,11 @@ function RecordingCard({
   onExpand: () => void;
   /** Opens the player at a moment, when arriving from a checklist answer. */
   startSeconds?: number | null;
+  inspectionId: string;
+  areaId: string;
+  /** Items a captured still can be filed against. */
+  checklist: AreaChecklistEntry[];
+  onSeek: (seconds: number) => void;
 }) {
   const active = activeId === recording.id;
 
@@ -140,6 +150,19 @@ function RecordingCard({
           </span>
         </button>
       )}
+
+      {/* Only while the player is open: the markers are for looking at the
+          moment before capturing it, which needs a player to look in. */}
+      {active ? (
+        <RecordingMarkers
+          areaId={areaId}
+          checklist={checklist}
+          inspectionId={inspectionId}
+          markers={recording.frameMarkersMs}
+          mediaId={recording.id}
+          onSeek={onSeek}
+        />
+      ) : null}
 
       <footer className="text-muted-foreground text-xs">
         {formatSeconds(recording.durationSeconds)} · {recording.technicianName} ·{' '}
@@ -515,6 +538,13 @@ export function AreaDetailPanel({
                       viewerItems.findIndex((entry) => entry.id === primaryRecording.id),
                     )
                   }
+                  areaId={bundle.area.id}
+                  checklist={bundle.checklist}
+                  inspectionId={inspectionId}
+                  onSeek={(seconds) => {
+                    setActiveRecording(primaryRecording.id);
+                    setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
+                  }}
                   recording={primaryRecording}
                   startSeconds={seek?.seconds ?? null}
                 />
@@ -537,6 +567,13 @@ export function AreaDetailPanel({
                             viewerItems.findIndex((entry) => entry.id === recording.id),
                           )
                         }
+                        areaId={bundle.area.id}
+                        checklist={bundle.checklist}
+                        inspectionId={inspectionId}
+                        onSeek={(seconds) => {
+                          setActiveRecording(recording.id);
+                          setSeek((current) => ({ seconds, nonce: (current?.nonce ?? 0) + 1 }));
+                        }}
                         recording={recording}
                       />
                     ))}
