@@ -190,6 +190,14 @@ export interface ReportView {
   title: string;
   subtitle: string;
   inspectionLabel: string;
+  /**
+   * The office's own name for the form, when the deployment supplies one —
+   * "Exit Inspection" rather than "Move out inspection". Falls back to the
+   * enum-derived label so a report is never headed by a blank.
+   */
+  templateLabel: string;
+  /** Who carried it out; empty when nobody is assigned. */
+  inspectorLabel: string;
   dateLabel: string;
   summary: {
     headline: string;
@@ -323,6 +331,10 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     title: `${property.addressLine1 || property.name}${unit}`,
     subtitle: [property.city, property.state, property.postalCode].filter(Boolean).join(', '),
     inspectionLabel: `${formatEnumLabel(report.inspection.type)} inspection`,
+    templateLabel:
+      report.inspection.templateLabel?.trim() ||
+      `${formatEnumLabel(report.inspection.type)} inspection`,
+    inspectorLabel: report.inspection.inspector?.trim() ?? '',
     dateLabel: completed
       ? `Completed ${completed}`
       : scheduled

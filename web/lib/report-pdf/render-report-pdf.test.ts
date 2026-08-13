@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderReportPdf, reportFileName } from './render-report-pdf';
+import { buildReportView } from '@texasrenters/shared';
 import type { PublicInspectionReport } from '@texasrenters/shared';
 
 const REPORT: PublicInspectionReport = {
@@ -33,6 +34,8 @@ const REPORT: PublicInspectionReport = {
     status: 'COMPLETED',
     scheduledAt: '2026-07-23T16:00:00.000Z',
     completedAt: '2026-07-23T18:00:00.000Z',
+    inspector: 'Lovely Mae / Beatriz',
+    templateLabel: 'Routine Inspection',
   },
   rooms: [
     {
@@ -185,6 +188,29 @@ describe('inspection report PDF', () => {
     expect(pdf.subarray(0, 5).toString('latin1')).toBe('%PDF-');
     expect(fetchMock).not.toHaveBeenCalled();
   }, 30_000);
+
+  it("heads the report with the office's template name and inspector", () => {
+    // "Routine Inspection", not "Occupied inspection": the line names the form
+    // the inspector worked from, which is the organisation's vocabulary and is
+    // deployment-overridable.
+    const view = buildReportView(REPORT);
+
+    expect(view.templateLabel).toBe('Routine Inspection');
+    expect(view.inspectorLabel).toBe('Lovely Mae / Beatriz');
+  });
+
+  it('falls back to the enum label when the deployment names no template', () => {
+    // A report must never be headed by a blank.
+    const view = buildReportView({
+      ...REPORT,
+      inspection: { ...REPORT.inspection, templateLabel: null, inspector: null },
+    });
+
+    expect(view.templateLabel).toBe('Occupied inspection');
+    // Empty, so the renderer omits the line rather than printing "Inspector:"
+    // over nothing.
+    expect(view.inspectorLabel).toBe('');
+  });
 
   it('names the download after the property', () => {
     expect(reportFileName(REPORT)).toBe('302-watercrest-harbor-ln-inspection-report.pdf');

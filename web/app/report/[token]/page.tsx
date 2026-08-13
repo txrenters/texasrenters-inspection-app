@@ -280,11 +280,21 @@ export default function PublicReportPage() {
             </Button>
           </div>
 
+          {/* Four facts, matching the office's letterhead: what form was
+              used, who carried it out, and when. The inspector is omitted
+              rather than shown blank when nobody is assigned — a report should
+              not claim an inspector it does not have. */}
           <dl className="grid gap-4 border-t pt-4 sm:grid-cols-2">
             <div className="space-y-0.5">
-              <dt className="text-muted-foreground text-xs font-medium">Inspection</dt>
-              <dd className="text-sm font-medium">{view.inspectionLabel}</dd>
+              <dt className="text-muted-foreground text-xs font-medium">Inspection template</dt>
+              <dd className="text-sm font-medium">{view.templateLabel}</dd>
             </div>
+            {view.inspectorLabel ? (
+              <div className="space-y-0.5">
+                <dt className="text-muted-foreground text-xs font-medium">Inspector</dt>
+                <dd className="text-sm font-medium">{view.inspectorLabel}</dd>
+              </div>
+            ) : null}
             <div className="space-y-0.5">
               <dt className="text-muted-foreground text-xs font-medium">Date</dt>
               <dd className="text-sm font-medium">{view.dateLabel}</dd>

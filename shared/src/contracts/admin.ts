@@ -725,6 +725,20 @@ export interface PublicInspectionReport {
     status: string;
     scheduledAt: string;
     completedAt?: string | null;
+    /**
+     * Who carried out the inspection, for the report's "Inspector" line.
+     *
+     * Every current assignee, joined — the office's reports name more than one
+     * person on a job. Null when nobody is assigned; the report should not
+     * claim an inspector it does not have.
+     */
+    inspector?: string | null;
+    /**
+     * The name of the form the inspector worked from — "Exit Inspection" — as
+     * distinct from the enum. Deployment-overridable, because this is the
+     * organisation's vocabulary.
+     */
+    templateLabel?: string | null;
   };
   rooms: Array<{
     id: string;

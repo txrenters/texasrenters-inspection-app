@@ -32,6 +32,23 @@ const HOMEOWNER_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
   ],
 };
 
+/**
+ * How each inspection type is named on the printed report.
+ *
+ * The office's reports carry an "Inspection Template" line — the name of the
+ * form the inspector worked from, not the enum. These are the equivalents;
+ * `REPORT_TEMPLATE_LABEL_<TYPE>` overrides any of them for a deployment whose
+ * wording differs, because this is the organisation's vocabulary rather than
+ * ours to fix.
+ */
+const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
+  MOVE_IN: process.env.REPORT_TEMPLATE_LABEL_MOVE_IN ?? 'Entry Inspection',
+  MOVE_OUT: process.env.REPORT_TEMPLATE_LABEL_MOVE_OUT ?? 'Exit Inspection',
+  OCCUPIED: process.env.REPORT_TEMPLATE_LABEL_OCCUPIED ?? 'Routine Inspection',
+  BACK_TO_MARKET: process.env.REPORT_TEMPLATE_LABEL_BACK_TO_MARKET ?? 'Back to Market Inspection',
+  HVAC: process.env.REPORT_TEMPLATE_LABEL_HVAC ?? 'HVAC Maintenance Inspection',
+};
+
 @Injectable()
 export class ReportShareService {
   constructor(
@@ -157,6 +174,19 @@ export class ReportShareService {
         status: true,
         scheduledAt: true,
         completedAt: true,
+        /**
+         * Who carried out the inspection, for the report's "Inspector" line.
+         *
+         * Current assignments only, and all of them: the office's reports name
+         * more than one person on a job, and a superseded assignment names
+         * whoever *used* to hold it — printing that would credit the wrong
+         * technician on a document a tenant may be shown.
+         */
+        assignments: {
+          where: { isCurrent: true },
+          orderBy: { assignedAt: 'asc' as const },
+          select: { technician: { select: { displayName: true } } },
+        },
         propertywareUnit: { select: { name: true } },
         propertywareBuilding: {
           select: { name: true, addressLine1: true, city: true, state: true, postalCode: true },
@@ -257,6 +287,11 @@ export class ReportShareService {
         status: inspection.status,
         scheduledAt: inspection.scheduledAt,
         completedAt: inspection.completedAt,
+        // Null rather than a placeholder when nobody is assigned: the report
+        // should not claim an inspector it does not have.
+        inspector:
+          inspection.assignments.map((entry) => entry.technician.displayName).join(' / ') || null,
+        templateLabel: INSPECTION_TEMPLATE_LABEL[inspection.inspectionType] ?? null,
       },
       rooms: inspection.areas.map((area) => ({
         id: area.id,

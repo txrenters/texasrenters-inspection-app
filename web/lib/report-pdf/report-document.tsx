@@ -318,11 +318,20 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
           <Text style={styles.coverKicker}>{view.brand.name.toUpperCase()}</Text>
           <Text style={styles.coverTitle}>{view.title}</Text>
           {view.subtitle ? <Text style={styles.coverSubtitle}>{view.subtitle}</Text> : null}
+          {/* Matches the office's letterhead: the form used, who carried it
+              out, and when. The inspector is omitted rather than shown blank
+              when nobody is assigned. */}
           <View style={styles.coverMetaRow}>
             <View>
-              <Text style={styles.coverMetaLabel}>INSPECTION</Text>
-              <Text style={styles.coverMetaValue}>{view.inspectionLabel}</Text>
+              <Text style={styles.coverMetaLabel}>INSPECTION TEMPLATE</Text>
+              <Text style={styles.coverMetaValue}>{view.templateLabel}</Text>
             </View>
+            {view.inspectorLabel ? (
+              <View>
+                <Text style={styles.coverMetaLabel}>INSPECTOR</Text>
+                <Text style={styles.coverMetaValue}>{view.inspectorLabel}</Text>
+              </View>
+            ) : null}
             <View>
               <Text style={styles.coverMetaLabel}>DATE</Text>
               <Text style={styles.coverMetaValue}>{view.dateLabel}</Text>

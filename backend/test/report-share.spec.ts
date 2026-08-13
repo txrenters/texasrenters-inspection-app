@@ -103,6 +103,7 @@ describe('inspection report shares', () => {
       inspection: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionType: 'MOVE_OUT',
+          assignments: [{ technician: { displayName: 'Lovely Mae' } }],
           status: 'COMPLETED',
           scheduledAt: new Date('2026-07-20T15:00:00Z'),
           completedAt: new Date('2026-07-22T15:00:00Z'),
@@ -203,6 +204,8 @@ describe('inspection report shares', () => {
       inspection: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionType: 'MOVE_OUT',
+          // Unassigned: the report must not claim an inspector it lacks.
+          assignments: [],
           status: 'COMPLETED',
           scheduledAt: new Date(),
           completedAt: new Date(),
