@@ -68,11 +68,20 @@ export default function AreaDetailScreen() {
   const media = useRoomMedia(id);
   const photos = useRoomPhotos(id);
   const findings = useFindings(inspectionId);
-  // Poll while this area is still processing so the summary lands on its own.
-  const summaries = useRoomSummaries(
-    inspectionId,
-    room.data?.processingStatus !== 'READY_FOR_REVIEW',
-  );
+  /**
+   * Poll only while a summary is genuinely on its way.
+   *
+   * This asked `processingStatus !== 'READY_FOR_REVIEW'`, which is true forever
+   * for an area whose analysis failed and for one that was never recorded — so
+   * an open area screen issued a request every five seconds, indefinitely. On a
+   * mobile connection any one of those can time out, which is where the
+   * "did not respond in time" errors came from.
+   *
+   * `analysisPending` is the server's own answer to the same question and is
+   * bounded there: a pipeline that dies mid-run stops reporting pending, so
+   * this cannot spin forever the way the status comparison did.
+   */
+  const summaries = useRoomSummaries(inspectionId, room.data?.analysisPending ?? false);
   const updates = useUpdateRoom(inspectionId, id);
   const pull = usePullToRefresh([room.refetch, media.refetch, photos.refetch, findings.refetch]);
   // The AI summary is transcript-derived, so what it mentions is what the
