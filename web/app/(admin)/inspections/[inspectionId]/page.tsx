@@ -8,7 +8,6 @@ import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWo
 import { AssignmentDialog } from '@/components/assignment-dialog';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InspectionChargesPanel } from '@/components/inspection-charges';
-import { InspectionComparisonPanel } from '@/components/inspection-comparison';
 import { InspectionCompleteDialog } from '@/components/inspection-complete-dialog';
 import { InspectionDeleteDialog } from '@/components/inspection-delete-dialog';
 import {
@@ -16,6 +15,7 @@ import {
   InspectionEditDialog,
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
+import { InspectionTabs } from '@/components/inspection-tabs';
 import { InspectionWorkflowPanel } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
@@ -239,6 +239,8 @@ function InspectionDetail() {
         title={item.propertywareBuilding?.name ?? 'Inspection'}
       />
 
+      <InspectionTabs active="overview" inspectionId={id} inspectionType={item.inspectionType} />
+
       <Card aria-labelledby="inspection-overview-title">
         <CardHeader className="flex-row items-start justify-between">
           <CardTitle id="inspection-overview-title">Inspection overview</CardTitle>
@@ -349,7 +351,10 @@ function InspectionDetail() {
       <div className="mt-4 space-y-4">
         <AreaEvidenceWorkspace inspectionId={id} />
 
-        {item.inspectionType === 'MOVE_OUT' ? <InspectionComparisonPanel inspectionId={id} /> : null}
+        {/* The comparison moved to its own page. It was rendered here, below
+            the evidence workspace and above the charges, where nothing linked
+            to it and a reviewer had to scroll past everything else to find a
+            distinct piece of work. See the "Move-in comparison" tab. */}
 
         {item.inspectionType === 'OCCUPIED' || item.inspectionType === 'MOVE_OUT' ? (
           <InspectionChargesPanel inspectionId={id} inspectionType={item.inspectionType} />

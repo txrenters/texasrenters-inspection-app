@@ -4,6 +4,8 @@ import type { AdminCharge } from '@texasrenters/shared';
 import { ArrowLeftIcon, PrinterIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+
+import { InspectionTabs } from '@/components/inspection-tabs';
 import type { ReactNode } from 'react';
 
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -119,6 +121,16 @@ export default function ChargeReportPage() {
           <PrinterIcon />
           Print
         </Button>
+      </div>
+
+      {/* `print:hidden` for the same reason as the toolbar above: this page is
+          printed and handed over, and navigation on paper is noise. */}
+      <div className="print:hidden">
+        <InspectionTabs
+          active="charges"
+          inspectionId={id}
+          inspectionType={data.inspection.type}
+        />
       </div>
 
       <header className="space-y-2">
