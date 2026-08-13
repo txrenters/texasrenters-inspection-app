@@ -89,7 +89,7 @@ export function InspectionCompleteDialog({
               onChange={(event) => setOverrideReason(event.target.value)}
               placeholder={
                 needsOverride
-                  ? 'Required — explain why the inspection is being finalized with items outstanding'
+                  ? 'Required - explain why the inspection is being finalized with items outstanding'
                   : 'Only needed to finalize while items are still outstanding'
               }
               rows={2}

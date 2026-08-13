@@ -322,7 +322,7 @@ function AiProviderPanel({
               <SelectContent>
                 {provider.models.map((model) => (
                   <SelectItem key={model.id} value={model.id}>
-                    {model.name} — {model.tier}
+                    {model.name} - {model.tier}
                     {model.recommended ? ' · Recommended' : ''}
                   </SelectItem>
                 ))}
@@ -366,7 +366,7 @@ function AiProviderPanel({
               id={`${provider.provider}-key`}
               onChange={(event) => setApiKey(event.target.value)}
               placeholder={
-                provider.hasApiKey ? 'Configured — enter a new key to replace' : 'Enter provider API key'
+                provider.hasApiKey ? 'Configured - enter a new key to replace' : 'Enter provider API key'
               }
               value={apiKey}
             />

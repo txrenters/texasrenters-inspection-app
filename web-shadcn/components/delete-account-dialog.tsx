@@ -94,7 +94,7 @@ export function DeleteAccountDialog({
                 ))}
               </ul>
               <p>
-                These have to stay attributed to this {noun}. Deactivate the account instead — that
+                These have to stay attributed to this {noun}. Deactivate the account instead - that
                 revokes access immediately and keeps the record intact.
               </p>
             </AlertDescription>

@@ -63,7 +63,7 @@ export function CredentialResult({
         <AlertDescription>
           {delivered
             ? `Sign-in instructions and a temporary password were emailed to ${email}. They must change it on first sign-in. Nothing needs sending by hand.`
-            : 'Email delivery was unavailable, so this password was not sent. Share it through an approved private channel — it is shown only here, only once.'}
+            : 'Email delivery was unavailable, so this password was not sent. Share it through an approved private channel - it is shown only here, only once.'}
         </AlertDescription>
       </Alert>
 

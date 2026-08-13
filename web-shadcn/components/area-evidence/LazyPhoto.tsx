@@ -90,7 +90,7 @@ export function LazyPhoto({
   }, [visible, photo.contentPath]);
 
   const alt = `${captureLabel(photo.captureType)} of ${areaName}${
-    photo.label ? ` — ${photo.label}` : ''
+    photo.label ? ` - ${photo.label}` : ''
   }`;
 
   return (

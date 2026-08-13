@@ -329,7 +329,7 @@ export function FloorPlanManager({
         if (job.status === 'FAILED') {
           setExtractionError(
             job.errorCode === 'FLOOR_PLAN_EXTRACTION_TIMED_OUT'
-              ? 'Extraction did not finish. The plan may be too complex for the current model — try again, or split the plan by floor.'
+              ? 'Extraction did not finish. The plan may be too complex for the current model - try again, or split the plan by floor.'
               : `Extraction failed (${job.errorCode ?? 'unknown error'}). Check the AI provider settings and try again.`,
           );
           await Promise.all([plans.refetch(), areas.refetch()]);

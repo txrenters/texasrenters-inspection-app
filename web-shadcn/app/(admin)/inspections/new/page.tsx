@@ -389,7 +389,7 @@ function CreateInspectionForm() {
           <CardHeader>
             <CardTitle>Which property</CardTitle>
             <CardDescription>
-              The portfolio is only a filter for the property list — it is not part of the
+              The portfolio is only a filter for the property list - it is not part of the
               inspection record, and it fills itself in once a property is chosen.
             </CardDescription>
           </CardHeader>
@@ -543,7 +543,7 @@ function CreateInspectionForm() {
               />
               {requiresUnit ? (
                 <FieldDescription>
-                  This property has units — choose which unit this inspection covers.
+                  This property has units - choose which unit this inspection covers.
                 </FieldDescription>
               ) : propertyId && !units.isLoading ? (
                 <FieldDescription>

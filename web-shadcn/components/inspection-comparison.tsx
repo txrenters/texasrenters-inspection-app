@@ -175,7 +175,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                     area.originalClassification !== area.classification ? (
                       <p className="text-muted-foreground text-xs">
                         Overridden from {classLabel(area.originalClassification)}
-                        {area.overrideReason ? ` — ${area.overrideReason}` : ''}
+                        {area.overrideReason ? ` - ${area.overrideReason}` : ''}
                       </p>
                     ) : null}
                     <p className="text-muted-foreground text-xs">
@@ -301,7 +301,7 @@ function OverrideAreaDialog({
           <DialogHeader>
             <DialogTitle>Override classification</DialogTitle>
             <DialogDescription>
-              {area.areaName} — currently {classLabel(area.classification)}.
+              {area.areaName} - currently {classLabel(area.classification)}.
             </DialogDescription>
           </DialogHeader>
 

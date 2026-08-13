@@ -328,7 +328,7 @@ export default function ProvidersPage() {
             <ShieldCheckIcon />
             <AlertDescription>
               All providers are checked on a regular schedule. Status reflects availability and
-              configuration only — no credentials are stored or displayed.
+              configuration only - no credentials are stored or displayed.
             </AlertDescription>
           </Alert>
         </div>

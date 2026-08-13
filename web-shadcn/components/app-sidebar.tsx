@@ -244,7 +244,7 @@ export function AppSidebar() {
     <Sidebar aria-label="Application navigation" collapsible="icon">
       <SidebarHeader className="h-14 justify-center border-b px-3">
         <Link
-          aria-label="TexasRenters Inspection Admin — go to dashboard"
+          aria-label="TexasRenters Inspection Admin - go to dashboard"
           className="focus-visible:ring-sidebar-ring flex items-center gap-2.5 rounded-md outline-none focus-visible:ring-2"
           href="/dashboard"
           onClick={closeMobileNavigation}

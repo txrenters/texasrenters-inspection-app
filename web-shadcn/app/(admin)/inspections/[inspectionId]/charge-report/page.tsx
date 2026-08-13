@@ -185,7 +185,7 @@ export default function ChargeReportPage() {
             {data.newOrWorsenedFindings.map((finding) => (
               <li className="flex flex-wrap items-center justify-between gap-2 p-2.5 text-sm" key={finding.id}>
                 <span>
-                  <span className="font-medium">{finding.area}</span> — {finding.title}
+                  <span className="font-medium">{finding.area}</span> - {finding.title}
                 </span>
                 <span className="text-muted-foreground text-xs">
                   {humanize(finding.severity).toLowerCase()} ·{' '}
@@ -204,7 +204,7 @@ export default function ChargeReportPage() {
           <ul className="divide-y rounded-lg border">
             {data.existingConditionExclusions.map((finding) => (
               <li className="p-2.5 text-sm" key={finding.id}>
-                <span className="font-medium">{finding.area}</span> — {finding.title}
+                <span className="font-medium">{finding.area}</span> - {finding.title}
               </li>
             ))}
           </ul>

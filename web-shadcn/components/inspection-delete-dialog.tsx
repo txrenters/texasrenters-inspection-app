@@ -104,7 +104,7 @@ export function InspectionDeleteDialog({
               <li>Any shared report link stops working immediately</li>
             </ul>
             <p>
-              An audit entry naming you survives the deletion. Nothing else does — to close an
+              An audit entry naming you survives the deletion. Nothing else does - to close an
               inspection reversibly, cancel it instead.
             </p>
           </AlertDescription>

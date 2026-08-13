@@ -80,7 +80,7 @@ export function RoleEditorDialog({
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit role' : 'Create role'}</DialogTitle>
             <DialogDescription>
-              Compose a role from any permissions below. Roles are fully custom — nothing is granted
+              Compose a role from any permissions below. Roles are fully custom - nothing is granted
               until you assign this role to a user.
             </DialogDescription>
           </DialogHeader>
@@ -177,7 +177,7 @@ export function RoleEditorDialog({
               need while working down a long list, so it stays put. */}
           <FieldDescription aria-live="polite">
             {permissions.size} permission{permissions.size === 1 ? '' : 's'} selected
-            {permissions.size === 0 ? ' — this role will grant no access.' : null}
+            {permissions.size === 0 ? ' - this role will grant no access.' : null}
           </FieldDescription>
 
           {mutation.error ? (

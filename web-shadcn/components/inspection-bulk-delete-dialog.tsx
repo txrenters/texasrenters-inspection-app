@@ -90,7 +90,7 @@ export function InspectionBulkDeleteDialog({
               <ul className="grid gap-1">
                 {result.failed.map((failure) => (
                   <li key={failure.id}>
-                    <span className="font-medium">{nameOf(failure.id)}</span> — {failure.message}
+                    <span className="font-medium">{nameOf(failure.id)}</span> - {failure.message}
                   </li>
                 ))}
               </ul>

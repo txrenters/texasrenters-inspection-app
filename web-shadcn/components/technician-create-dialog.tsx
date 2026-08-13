@@ -105,7 +105,7 @@ export function TechnicianCreateDialog({ onClose }: { onClose: () => void }) {
                   theirs to pass on, which cannot both be true. */}
               <FieldDescription>
                 They must replace the temporary password when they first sign in. If the email
-                cannot be sent, it is shown here instead — the only time you will see it.
+                cannot be sent, it is shown here instead - the only time you will see it.
               </FieldDescription>
             </Field>
 

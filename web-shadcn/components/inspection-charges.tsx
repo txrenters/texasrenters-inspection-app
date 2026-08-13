@@ -97,7 +97,7 @@ export function InspectionChargesPanel({
         <div className="space-y-1">
           <CardTitle id="inspection-charges-title">Charges &amp; pet review</CardTitle>
           <CardDescription>
-            A reviewer confirms unique unauthorized pets and finalizes charges — nothing is
+            A reviewer confirms unique unauthorized pets and finalizes charges - nothing is
             auto-approved.
           </CardDescription>
         </div>
@@ -481,7 +481,7 @@ function AddChargeDialog({
           <DialogHeader>
             <DialogTitle>Add a charge</DialogTitle>
             <DialogDescription>
-              Manually proposed charges start as pending review — they are not approved until
+              Manually proposed charges start as pending review - they are not approved until
               reviewed.
             </DialogDescription>
           </DialogHeader>

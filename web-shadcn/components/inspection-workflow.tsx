@@ -90,7 +90,7 @@ export function InspectionWorkflowPanel({
             Finalization &amp; follow-up
           </CardTitle>
           <CardDescription>
-            Submitting is not completing — an administrator finalizes, defers, or requests a
+            Submitting is not completing - an administrator finalizes, defers, or requests a
             follow-up.
           </CardDescription>
         </div>
@@ -131,7 +131,7 @@ export function InspectionWorkflowPanel({
                 {inspection.followUpDueAt
                   ? `Due ${formatDate(inspection.followUpDueAt)}`
                   : 'No date set'}
-                {inspection.followUpTasks ? ` — ${inspection.followUpTasks}` : ''}
+                {inspection.followUpTasks ? ` - ${inspection.followUpTasks}` : ''}
               </dd>
             </div>
           ) : null}
@@ -183,7 +183,7 @@ export function InspectionWorkflowPanel({
             {canManage ? (
               <>
                 {/* Opens a targeted request rather than calling `under-review`.
-                    That action only relabels the inspection — UNDER_REVIEW is
+                    That action only relabels the inspection - UNDER_REVIEW is
                     not in the technician's queue, so the office could record
                     that evidence was missing while nothing ever reached the
                     field. */}

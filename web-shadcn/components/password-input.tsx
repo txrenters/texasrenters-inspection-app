@@ -65,7 +65,7 @@ export function PasswordRules({
               <XIcon aria-hidden className="size-3.5 shrink-0 opacity-40" />
             )}
             <span>{rule.message}</span>
-            <span className="sr-only">{met ? ' — met' : ' — not met'}</span>
+            <span className="sr-only">{met ? ' - met' : ' - not met'}</span>
           </li>
         );
       })}

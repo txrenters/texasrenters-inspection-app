@@ -194,7 +194,7 @@ export function AreaChecklistDialog({
               value={label}
             />
             <FieldDescription>
-              Word it the way a technician would say it aloud — the item ticks itself when those
+              Word it the way a technician would say it aloud - the item ticks itself when those
               words appear in the recording.
             </FieldDescription>
           </Field>

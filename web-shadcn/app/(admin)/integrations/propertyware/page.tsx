@@ -498,7 +498,7 @@ export default function PropertywarePage() {
               <div className="space-y-1">
                 <CardTitle>Automatic schedule</CardTitle>
                 <CardDescription>
-                  When enabled, these syncs run on their own — no manual trigger needed.
+                  When enabled, these syncs run on their own - no manual trigger needed.
                 </CardDescription>
               </div>
               {schedule.data ? (

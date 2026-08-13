@@ -126,7 +126,7 @@ export function RequestEvidenceDialog({
               <FieldDescription>
                 {itemIds.length
                   ? `${itemIds.length} item${itemIds.length === 1 ? '' : 's'} selected`
-                  : 'Nothing selected — the request covers the whole area.'}
+                  : 'Nothing selected - the request covers the whole area.'}
               </FieldDescription>
               {checklist.data?.length ? (
                 <ul className="max-h-48 overflow-y-auto rounded-md border p-1">

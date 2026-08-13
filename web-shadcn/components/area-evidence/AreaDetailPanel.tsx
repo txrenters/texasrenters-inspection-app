@@ -374,8 +374,8 @@ export function AreaDetailPanel({
         contentPath: recording.contentPath,
         title:
           recording.recordingType === 'PRIMARY_AREA'
-            ? `Primary recording — ${bundle.area.name}`
-            : recording.label || `Additional recording — ${bundle.area.name}`,
+            ? `Primary recording - ${bundle.area.name}`
+            : recording.label || `Additional recording - ${bundle.area.name}`,
         caption: `${formatSeconds(recording.durationSeconds)} · ${recording.technicianName} · ${formatDateTime(recording.createdAt)}`,
         posterUrl: recording.thumbnailUrl,
       })),
@@ -436,7 +436,7 @@ export function AreaDetailPanel({
 
       {area.skipReason ? (
         <Alert variant="warning">
-          <AlertDescription>Skipped — {area.skipReason}</AlertDescription>
+          <AlertDescription>Skipped - {area.skipReason}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -471,7 +471,7 @@ export function AreaDetailPanel({
               <SectionHeading>Condition summary</SectionHeading>
               <p className="text-sm">{conditionSummary.description}</p>
               <p className="text-muted-foreground mt-1 text-xs">
-                Overall context — the Findings tab lists the specific work.
+                Overall context - the Findings tab lists the specific work.
               </p>
             </section>
           ) : (
@@ -628,7 +628,7 @@ export function AreaDetailPanel({
                 : undefined
             }
             readOnlyReason={
-              !canManage ? 'Read-only — you cannot change this inspection' : undefined
+              !canManage ? 'Read-only - you cannot change this inspection' : undefined
             }
           />
         </TabsContent>

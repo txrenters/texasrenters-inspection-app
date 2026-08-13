@@ -140,7 +140,7 @@ export function UserCreateDialog({ onClose }: { onClose: () => void }) {
                 ) : (
                   <Alert variant="warning">
                     <AlertDescription>
-                      No roles exist yet. Create a role before provisioning a user — an account with
+                      No roles exist yet. Create a role before provisioning a user - an account with
                       no role can sign in and reach nothing.
                     </AlertDescription>
                   </Alert>
