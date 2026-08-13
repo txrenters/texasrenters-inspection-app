@@ -81,6 +81,30 @@ function Finding({ finding, showRoom }: { finding: ReportFindingView; showRoom?:
   );
 }
 
+/**
+ * One verdict cell.
+ *
+ * Colour is an accent, never the message: the letter carries the meaning in
+ * print, in monochrome, and to a screen reader, which is told "Not assessed"
+ * for the blank rather than reading silence.
+ */
+function AxisCell({ value }: { value: string }) {
+  return (
+    <TableCell
+      aria-label={value || 'Not assessed'}
+      className={
+        value === 'Y'
+          ? 'font-semibold text-emerald-600 dark:text-emerald-400'
+          : value === 'N'
+            ? 'text-destructive font-semibold'
+            : ''
+      }
+    >
+      {value}
+    </TableCell>
+  );
+}
+
 function Room({ room }: { room: ReportRoomView }) {
   return (
     // `print:break-inside-avoid`: a page break between a room's verdicts and
@@ -124,9 +148,9 @@ function Room({ room }: { room: ReportRoomView }) {
                   {/* Spoken as "Not assessed" so a blank cell is not silence to a
                       screen reader — the distinction from "No" matters as much
                       aloud as it does in print. */}
-                  <TableCell aria-label={row.clean || 'Not assessed'}>{row.clean}</TableCell>
-                  <TableCell aria-label={row.undamaged || 'Not assessed'}>{row.undamaged}</TableCell>
-                  <TableCell aria-label={row.working || 'Not assessed'}>{row.working}</TableCell>
+                  <AxisCell value={row.clean} />
+                  <AxisCell value={row.undamaged} />
+                  <AxisCell value={row.working} />
                   <TableCell className="text-muted-foreground">{row.comment}</TableCell>
                 </TableRow>
               ))}

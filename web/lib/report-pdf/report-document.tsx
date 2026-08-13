@@ -135,6 +135,8 @@ const styles = StyleSheet.create({
   checklistCell: { fontSize: 8, paddingVertical: 3, paddingHorizontal: 4 },
   checklistLabel: { width: '32%' },
   checklistAxis: { width: '11%', textAlign: 'center' },
+  checklistPass: { color: C.pass, fontWeight: 700 },
+  checklistFail: { color: C.fail, fontWeight: 700 },
   checklistComment: { width: '35%', color: C.muted },
   quietRow: {
     flexDirection: 'row',
@@ -226,6 +228,16 @@ function Finding({ finding }: { finding: ReportFindingView }) {
  * already made that decision, so this renderer and the HTML page cannot
  * disagree about what a blank means.
  */
+/**
+ * Returns an empty style rather than undefined: @react-pdf's array form rejects
+ * an undefined entry, so an unassessed cell would crash the render.
+ */
+function axisTone(value: string) {
+  if (value === 'Y') return styles.checklistPass;
+  if (value === 'N') return styles.checklistFail;
+  return {};
+}
+
 function ChecklistTable({ room }: { room: ReportRoomView }) {
   if (!room.checklist.length) return null;
   return (
@@ -240,9 +252,17 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
       {room.checklist.map((row) => (
         <View key={row.id} style={styles.checklistRow} wrap={false}>
           <Text style={[styles.checklistCell, styles.checklistLabel]}>{row.label}</Text>
-          <Text style={[styles.checklistCell, styles.checklistAxis]}>{row.clean}</Text>
-          <Text style={[styles.checklistCell, styles.checklistAxis]}>{row.undamaged}</Text>
-          <Text style={[styles.checklistCell, styles.checklistAxis]}>{row.working}</Text>
+          {/* Colour is an accent on the letter, never a substitute for it —
+              the table has to survive a monochrome print. */}
+          <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.clean)]}>
+            {row.clean}
+          </Text>
+          <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.undamaged)]}>
+            {row.undamaged}
+          </Text>
+          <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.working)]}>
+            {row.working}
+          </Text>
           <Text style={[styles.checklistCell, styles.checklistComment]}>{row.comment}</Text>
         </View>
       ))}

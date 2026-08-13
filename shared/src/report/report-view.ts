@@ -43,6 +43,17 @@ export const REPORT_PALETTE = {
   border: '#d9e0ea',
   surface: '#ffffff',
   surfaceSubtle: '#f5f7fb',
+  /**
+   * Checklist verdicts. Named for what they mean rather than reused from the
+   * severity scale: a failed axis is not a severity, and tying them together
+   * would make a palette change to one silently restyle the other.
+   *
+   * The letter still carries the meaning — these are an accent on top of a Y
+   * or an N, never a substitute for it, so the table survives monochrome
+   * printing and colour blindness.
+   */
+  pass: '#527a24',
+  fail: '#b64040',
 } as const;
 
 const SEVERITY_TONE: Record<ReportSeverity, ReportTone> = {
@@ -292,14 +303,38 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     // Defaulted: a report generated against a backend that predates
     // assessments has no checklist at all, which prints as no table rather
     // than an empty one.
-    const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => ({
-      id: item.id,
-      label: item.label,
-      clean: axisCell(item.isClean),
-      undamaged: axisCell(item.isUndamaged),
-      working: axisCell(item.isWorking),
-      comment: item.comment?.trim() || '',
-    }));
+    const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => {
+      /**
+       * A failed axis with no comment borrows the finding that explains it.
+       *
+       * The office's report never prints a bare "N" — the comment column is
+       * where a reader learns what was wrong. The AI already wrote that
+       * sentence from the technician's narration and filed it as a finding
+       * under the same name as the checklist item, so this surfaces existing
+       * words rather than inventing new ones. Nothing is generated here.
+       *
+       * Only when an axis actually failed: a row scored all-Y needs no
+       * explanation, and attaching one would read as a defect.
+       */
+      const failed =
+        item.isClean === false || item.isUndamaged === false || item.isWorking === false;
+      const written = item.comment?.trim() || '';
+      const borrowed =
+        !written && failed
+          ? (roomFindings.find(
+              (finding) =>
+                finding.categoryLabel.trim().toLowerCase() === item.label.trim().toLowerCase(),
+            )?.description ?? '')
+          : '';
+      return {
+        id: item.id,
+        label: item.label,
+        clean: axisCell(item.isClean),
+        undamaged: axisCell(item.isUndamaged),
+        working: axisCell(item.isWorking),
+        comment: written || borrowed,
+      };
+    });
     return {
       id: room.id,
       name: room.name,

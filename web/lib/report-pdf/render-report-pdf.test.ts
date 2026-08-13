@@ -235,6 +235,101 @@ describe('inspection report PDF', () => {
     expect(view.closingNotes).toEqual([]);
   });
 
+  describe('a failed axis borrows the finding that explains it', () => {
+    // The office's report never prints a bare "N" — the comment column is where
+    // a reader learns what was wrong. The AI already wrote that sentence from
+    // the narration and filed it under the same name as the checklist item, so
+    // this surfaces existing words rather than inventing any.
+    const withFinding = (checklist: unknown) => ({
+      ...REPORT,
+      rooms: [{ ...REPORT.rooms[0]!, checklist }],
+      findings: [
+        {
+          id: 'f-1',
+          roomId: 'area-1',
+          roomName: 'Kitchen',
+          title: 'Doors and locks not clean',
+          description: 'Grease around the handle, noted in the narration.',
+          category: 'Doors and locks',
+          severity: 'LOW',
+          comparisonResult: 'EXISTING_CONDITION',
+          baselineCondition: 'Clean at move-in.',
+        },
+      ],
+    });
+
+    it('fills an empty comment from the matching finding', () => {
+      const view = buildReportView(
+        withFinding([
+          {
+            id: 'i-1',
+            label: 'Doors and locks',
+            isClean: false,
+            isUndamaged: true,
+            isWorking: true,
+            comment: null,
+          },
+        ]) as never,
+      );
+
+      expect(view.rooms[0]!.checklist[0]!.comment).toBe(
+        'Grease around the handle, noted in the narration.',
+      );
+    });
+
+    it('leaves a passing row alone', () => {
+      // Attaching an explanation to an all-Y row would read as a defect.
+      const view = buildReportView(
+        withFinding([
+          {
+            id: 'i-1',
+            label: 'Doors and locks',
+            isClean: true,
+            isUndamaged: true,
+            isWorking: true,
+            comment: null,
+          },
+        ]) as never,
+      );
+
+      expect(view.rooms[0]!.checklist[0]!.comment).toBe('');
+    });
+
+    it("never overwrites what a person wrote", () => {
+      const view = buildReportView(
+        withFinding([
+          {
+            id: 'i-1',
+            label: 'Doors and locks',
+            isClean: false,
+            isUndamaged: true,
+            isWorking: true,
+            comment: 'Handle sticks.',
+          },
+        ]) as never,
+      );
+
+      expect(view.rooms[0]!.checklist[0]!.comment).toBe('Handle sticks.');
+    });
+
+    it('leaves the comment empty when no finding matches the item', () => {
+      const view = buildReportView(
+        withFinding([
+          {
+            id: 'i-2',
+            label: 'Smoke alarms',
+            isClean: false,
+            isUndamaged: true,
+            isWorking: true,
+            comment: null,
+          },
+        ]) as never,
+      );
+
+      expect(view.rooms[0]!.checklist[0]!.comment).toBe('');
+    });
+  });
+
   it('names the download after the property', () => {
     expect(reportFileName(REPORT)).toBe('302-watercrest-harbor-ln-inspection-report.pdf');
   });
