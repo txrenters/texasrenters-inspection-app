@@ -558,7 +558,9 @@ export class TechnicianService {
     this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
       kind: 'INSPECTION_SUBMITTED',
       title: 'Inspection submitted',
-      body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' — '),
+      // Middot, not an em-dash: this string is rendered verbatim in the console
+      // toast, the notification bell and the operating system's own alert.
+      body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' · '),
       inspectionId: id,
     });
     return this.mapInspection(updated, user.id);

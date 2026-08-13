@@ -90,7 +90,10 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
 
     socket.on('area:added', (event: AreaAddedEvent) => {
       const where = [event.propertyName, event.floorName].filter(Boolean).join(' · ');
-      const description = [where, `Added by ${event.technicianName}`].filter(Boolean).join(' — ');
+      // Separated with a middot rather than an em-dash. The em-dash is banned in
+      // shipped copy (skill Section 9.G); it also reads as a sentence break here
+      // when the two halves are really just adjacent facts.
+      const description = [where, `Added by ${event.technicianName}`].filter(Boolean).join(' · ');
       toast.info(`New area: ${event.areaName}`, { description });
       pushRef.current?.({
         // The gateway does not id this event, so it is keyed by what makes it

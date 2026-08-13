@@ -48,7 +48,18 @@
      is the neutral *hover surface* for menus, rows and command items, so
      putting the brand there turns every hover green. This is for brand
      surfaces only — the sign-in mark, the sidebar rail, the active nav item. */
+  /* Set from next/font in app/layout.tsx. The fallbacks matter: they are what
+     renders during the swap window and on any build where the font fails to
+     fetch, so they are a real UI state rather than dead defensive text. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+
   --color-brand: var(--brand);
+  /* Only ever on a SOLID --brand fill. It is a very dark green (L=0.236) chosen
+     to sit on bright lime, so used as text over a tint it is dark-on-dark and
+     disappears. That is not hypothetical: the condition checklist rendered every
+     "yes" as an empty box until it was moved to `text-brand`. For tinted
+     surfaces the colour itself is the correct pairing, exactly as the
+     destructive controls already do with `text-destructive`. */
   --color-brand-foreground: var(--brand-foreground);
 
   /* Categorical scale. Used for the provider tiles, where the point is that
