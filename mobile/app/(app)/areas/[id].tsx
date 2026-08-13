@@ -41,6 +41,7 @@ import {
   useRoomPhotos,
   useRoomSummaries,
   useUpdateRoom,
+  useUploadActions,
 } from '@/src/features/queries';
 import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
@@ -93,6 +94,7 @@ export default function AreaDetailScreen() {
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
   // Scoped to this area: a request about the kitchen is not this room's problem,
   // and showing it here would send the technician to the wrong place.
+  const uploadActions = useUploadActions();
   const evidenceRequests = useEvidenceRequests(inspectionId);
   const resolveRequest = useResolveEvidenceRequest(inspectionId);
   const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
@@ -140,6 +142,9 @@ export default function AreaDetailScreen() {
   const item = room.data;
   const roomFindings = (findings.data ?? []).filter((finding) => finding.roomId === item.id);
   const hasRecording = Boolean(media.data?.length);
+  // The primary walkthrough is what the pipeline analyses, so it is the one to
+  // re-run. Additional clips ride along with it.
+  const primaryMediaId = media.data?.[0]?.id ?? null;
   const recordingCount = media.data?.length ?? 0;
   const requirements = deriveAreaRequirements(item, {
     hasPrimaryRecording: hasRecording,
@@ -429,6 +434,51 @@ export default function AreaDetailScreen() {
             each axis is a judgement about that evidence. The technician's job on
             site is to capture it. */}
 
+
+        {/* Where analysis stands, and a way to run it again.
+            Shown only when there is a recording but nothing came back from it:
+            with findings on screen the state is self-evident, and with no
+            recording there is nothing to analyse. Until now this screen said
+            nothing at all in that case — a technician whose analysis had failed
+            saw an area that simply looked empty, with no way to retry. */}
+        {hasRecording && !roomFindings.length ? (
+          <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
+            <Text className="text-base font-semibold text-foreground">AI analysis</Text>
+            <Text className="mt-1 text-sm leading-6 text-muted-foreground">
+              {item.analysisPending
+                ? 'Running now. Findings appear here on their own, usually within a minute.'
+                : item.processingStatus === 'FAILED'
+                  ? 'Analysis could not be completed for this recording. Your video and photos are still saved.'
+                  : 'No findings were produced from this recording.'}
+            </Text>
+            {/* Offered only once analysis has stopped: asking to re-run
+                something already running would queue a second pass over the
+                same recording. */}
+            {!item.analysisPending && primaryMediaId ? (
+              <Pressable
+                accessibilityLabel="Run the analysis again"
+                accessibilityRole="button"
+                accessibilityState={{
+                  busy: uploadActions.retryProcessing.isPending,
+                  disabled: uploadActions.retryProcessing.isPending,
+                }}
+                className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-muted py-3 active:opacity-70"
+                disabled={uploadActions.retryProcessing.isPending}
+                onPress={() => uploadActions.retryProcessing.mutate(primaryMediaId)}
+              >
+                <RotateCwIcon size={16} className="text-primary" />
+                <Text className="font-semibold text-primary">
+                  {uploadActions.retryProcessing.isPending ? 'Starting…' : 'Run analysis again'}
+                </Text>
+              </Pressable>
+            ) : null}
+            {uploadActions.retryProcessing.error ? (
+              <Text className="mt-2 text-xs leading-5 text-muted-foreground">
+                {uploadActions.retryProcessing.error.message}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* Only shown once analysis has produced something. An empty "Findings"
             card during processing reads as "nothing wrong", which is a
