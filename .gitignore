@@ -130,3 +130,5 @@ backups/
 # Editor/tool workspace state — per-machine, regenerated locally.
 .v3code/
 .context-bridge/
+.agents/
+skills-lock.json
