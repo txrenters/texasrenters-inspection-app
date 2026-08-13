@@ -6,6 +6,7 @@ import { Fragment, Suspense } from 'react';
 
 import { CommandPalette } from '@/components/command-palette';
 import { HeaderClocks } from '@/components/header-clocks';
+import { NotificationBell } from '@/components/notification-bell';
 import { ThemeToggle } from '@/components/theme-toggle';
 import {
   Breadcrumb,
@@ -79,6 +80,9 @@ export function AppHeader() {
           <CommandPalette />
         </div>
         <HeaderClocks />
+        {/* Before the theme toggle: this is the control that changes, and the
+            one somebody scans for on returning to their desk. */}
+        <NotificationBell />
         <ThemeToggle />
       </div>
     </header>

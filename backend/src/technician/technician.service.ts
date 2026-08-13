@@ -551,6 +551,16 @@ export class TechnicianService {
     // inspection is immediately ready for human review.
     await this.mediaProcessing.advanceInspection(id);
     this.notifyInspectionChanged(user, id);
+    // Tell the office. notifyInspectionChanged above addresses the technician's
+    // own devices; nothing reached the administrators, so a submitted
+    // inspection sat in the queue until somebody happened to reload.
+    const property = updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name ?? null;
+    this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
+      kind: 'INSPECTION_SUBMITTED',
+      title: 'Inspection submitted',
+      body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' — '),
+      inspectionId: id,
+    });
     return this.mapInspection(updated, user.id);
   }
 

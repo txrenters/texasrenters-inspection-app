@@ -6,7 +6,21 @@ import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 
 import { useAuth } from './auth';
+import { useNotifications } from './notifications';
 import { keys } from './queries';
+
+/**
+ * Anything the office should be told about. Mirrors `OrganizationNotification`
+ * in the gateway.
+ */
+interface OrganizationNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  inspectionId: string;
+  occurredAt: string;
+}
 
 /**
  * What the backend broadcasts to an organization when a technician adds an area
@@ -38,6 +52,12 @@ interface AreaAddedEvent {
 export function AdminRealtimeProvider({ children }: { children: React.ReactNode }) {
   const { session } = useAuth();
   const queryClient = useQueryClient();
+  const notifications = useNotifications();
+  // Read through a ref so the socket effect does not depend on the store's
+  // identity — a re-render on every arriving notification would otherwise tear
+  // the connection down and rebuild it, dropping the next one.
+  const pushRef = useRef(notifications?.push);
+  pushRef.current = notifications?.push;
   const accessToken = session?.accessToken ?? null;
   // Held in a ref so a re-render caused by the invalidations below cannot tear
   // down and rebuild the socket, which would drop events in a loop.
@@ -56,10 +76,31 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
     });
     socketRef.current = socket;
 
+    // The general channel: things the office should notice, kept in the bell so
+    // they survive being missed. A toast alone is gone in four seconds, which is
+    // no use to anyone who stepped away.
+    socket.on('notification', (event: OrganizationNotification) => {
+      pushRef.current?.(event);
+      toast.info(event.title, { description: event.body });
+      // The submitted inspection has to appear in the queue the notification
+      // points at, or clicking through lands on a stale page.
+      void queryClient.invalidateQueries({ queryKey: keys.inspection(event.inspectionId) });
+      void queryClient.invalidateQueries({ queryKey: keys.inspectionsRoot });
+    });
+
     socket.on('area:added', (event: AreaAddedEvent) => {
       const where = [event.propertyName, event.floorName].filter(Boolean).join(' · ');
-      toast.info(`New area: ${event.areaName}`, {
-        description: [where, `Added by ${event.technicianName}`].filter(Boolean).join(' — '),
+      const description = [where, `Added by ${event.technicianName}`].filter(Boolean).join(' — ');
+      toast.info(`New area: ${event.areaName}`, { description });
+      pushRef.current?.({
+        // The gateway does not id this event, so it is keyed by what makes it
+        // unique: one area is added once.
+        id: `area:${event.areaId}`,
+        kind: 'AREA_ADDED',
+        title: `New area: ${event.areaName}`,
+        body: description,
+        inspectionId: event.inspectionId,
+        occurredAt: event.occurredAt,
       });
       // The area lists, the evidence summary, and any list showing area counts.
       // Broad on purpose: an area appearing is rare, and a missed refresh is a

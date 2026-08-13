@@ -5,6 +5,7 @@ import { ThemeProvider } from 'next-themes';
 import { useState, type ReactNode } from 'react';
 
 import { AuthProvider } from '@/lib/auth';
+import { NotificationsProvider } from '@/lib/notifications';
 import { AdminRealtimeProvider } from '@/lib/realtime';
 import { reconcileServerState } from '@/lib/state-consistency';
 
@@ -38,7 +39,10 @@ export function Providers({ children }: { children: ReactNode }) {
             authenticates with, and inside QueryClientProvider, whose cache it
             invalidates when an event lands. */}
         <AuthProvider>
-          <AdminRealtimeProvider>{children}</AdminRealtimeProvider>
+          <NotificationsProvider>
+            {/* Outside AdminRealtimeProvider, which is what feeds it. */}
+            <AdminRealtimeProvider>{children}</AdminRealtimeProvider>
+          </NotificationsProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>

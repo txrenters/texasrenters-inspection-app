@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import type { OnGatewayConnection } from '@nestjs/websockets';
@@ -38,6 +39,29 @@ export interface TechnicianInspectionEvent {
  * no toast: the whole point is that a property with no floor plan is gaining
  * its layout from the field, and the office wants to see it happening.
  */
+/**
+ * A thing that happened in the organization, addressed to its administrators.
+ *
+ * Distinct from the technician events above, which are addressed to one person.
+ * `area:added` was the only broadcast of this kind and carried its own shape;
+ * anything else the office needed to hear about — a technician submitting an
+ * inspection, most obviously — had no channel at all, so the console stayed
+ * silent and the office found out by reloading.
+ *
+ * `id` is generated at the source so the console can deduplicate. A socket that
+ * reconnects mid-flight can deliver the same event twice, and a notification
+ * list that shows it twice reads as two inspections submitted.
+ */
+export interface OrganizationNotification {
+  id: string;
+  kind: 'INSPECTION_SUBMITTED' | 'AREA_ADDED';
+  title: string;
+  body: string;
+  /** Where the console should navigate when the notification is opened. */
+  inspectionId: string;
+  occurredAt: string;
+}
+
 export interface AreaAddedEvent {
   inspectionId: string;
   areaId: string;
@@ -109,6 +133,24 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
     this.server
       ?.to(this.organizationRoom(organizationId))
       .emit('area:added', { ...event, occurredAt: new Date().toISOString() } satisfies AreaAddedEvent);
+  }
+
+  /**
+   * Broadcasts a notification to the organization's administrators.
+   *
+   * Separate from publishAreaAdded, which stays as it is: that event also drives
+   * cache invalidation keyed to its own payload, and folding the two would make
+   * every notification carry fields only one of them uses.
+   */
+  publishOrganizationNotification(
+    organizationId: string,
+    event: Omit<OrganizationNotification, 'id' | 'occurredAt'>,
+  ) {
+    this.server?.to(this.organizationRoom(organizationId)).emit('notification', {
+      ...event,
+      id: randomUUID(),
+      occurredAt: new Date().toISOString(),
+    } satisfies OrganizationNotification);
   }
 
   private accessToken(client: Socket) {
