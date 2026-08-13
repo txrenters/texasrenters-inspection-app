@@ -34,7 +34,7 @@ x-backend-env: &backend-env
   # a missing Access-Control-Allow-Origin that reads like a backend fault.
   #
   # inspection-tx is the console's public hostname, published by the tunnel at
-  # inspection-tx.erniecodev.win -> http://web:5454. 5456 is the web-shadcn dev
+  # inspection-tx.erniecodev.win -> http://web:5454. 5456 is the console dev
   # server, which talks to this same backend.
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://inspection-tx.erniecodev.win,http://localhost:5454,http://localhost:5456,http://localhost:8081,http://localhost:8082,http://localhost:19006}
 
@@ -125,10 +125,10 @@ services:
   web:
     build:
       context: .
-      # The admin console. Switch this single line back to docker/web/Dockerfile
-      # to serve the older web-app again — nothing else about this service, the
-      # port, or the tunnel differs between them.
-      dockerfile: docker/web-shadcn/Dockerfile
+      # The admin console. There is only one now: web-app was deleted and
+      # web-shadcn took its name, so this line no longer selects between two
+      # consoles the way it used to.
+      dockerfile: docker/web/Dockerfile
       target: runtime
       args:
         # Next inlines NEXT_PUBLIC_* at build time, so these must be build args
@@ -137,7 +137,7 @@ services:
         #
         # Compose fills these by interpolation, which reads the CLI --env-file
         # and the root .env, never a service's env_file. The values live in
-        # web-shadcn/.env.local, so the pnpm docker:* scripts pass that file
+        # web/.env.local, so the pnpm docker:* scripts pass that file
         # explicitly. Build without it and the bundle inlines the default API
         # URL, and the console talks to the wrong backend.
         #

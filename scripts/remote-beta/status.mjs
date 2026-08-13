@@ -9,7 +9,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENV_FILE = join(ROOT, 'backend', '.env.local');
 // The web image inlines NEXT_PUBLIC_* at build time, and interpolation only
 // reads --env-file and the root .env — never a service's env_file.
-const WEB_ENV_FILE = join(ROOT, 'web-shadcn', '.env.local');
+const WEB_ENV_FILE = join(ROOT, 'web', '.env.local');
 const COMPOSE_FILES = [
   '-f',
   join(ROOT, 'compose.yaml'),
