@@ -393,6 +393,20 @@ export default function PublicReportPage() {
           </section>
         ) : null}
 
+        {/* The closing block, last and before the disclaimer, exactly where the
+            office's own report puts it. Rendered only when something was
+            written — three headings over three blanks says less than nothing. */}
+        {view.closingNotes.length ? (
+          <section className="grid gap-4 border-t pt-6 sm:grid-cols-3 print:break-inside-avoid">
+            {view.closingNotes.map((note) => (
+              <div key={note.label}>
+                <h3 className="text-muted-foreground text-xs font-medium">{note.label}</h3>
+                <p className="mt-1 text-sm whitespace-pre-line">{note.body}</p>
+              </div>
+            ))}
+          </section>
+        ) : null}
+
         <footer className="text-muted-foreground space-y-2 border-t pt-6 text-xs">
           <p className="text-pretty">{view.disclaimer}</p>
           <p>

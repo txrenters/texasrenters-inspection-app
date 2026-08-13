@@ -448,6 +448,14 @@ export interface AdminInspection {
   createdAt: string;
   updatedAt: string;
   internalNotes?: string | null;
+  /**
+   * The report's closing block, written at sign-off. Distinct from
+   * `internalNotes`, which is never published — these three are printed on the
+   * document a tenant and an owner read.
+   */
+  nextInspectionAlert?: string | null;
+  maintenanceComments?: string | null;
+  generalComments?: string | null;
   propertySnapshot?: unknown;
   leaseSnapshot?: unknown;
   propertywareBuilding?: Pick<
@@ -771,6 +779,18 @@ export interface PublicInspectionReport {
     baselineCondition: string;
   }>;
   photos: PublicReportPhoto[];
+  /**
+   * The report's closing block, written by the reviewer at sign-off.
+   *
+   * Three fields rather than one note because they are read by different
+   * people: the alert schedules the next visit, the maintenance comments become
+   * work orders, and the general comments are what the tenant reads.
+   */
+  closing?: {
+    nextInspectionAlert?: string | null;
+    maintenanceComments?: string | null;
+    generalComments?: string | null;
+  };
   generatedAt: string;
 }
 

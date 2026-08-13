@@ -198,6 +198,13 @@ export interface ReportView {
   templateLabel: string;
   /** Who carried it out; empty when nobody is assigned. */
   inspectorLabel: string;
+  /**
+   * The closing block, already filtered to what was actually written.
+   *
+   * Empty when the reviewer wrote nothing, so a renderer can skip the whole
+   * section rather than printing three headings over three blanks.
+   */
+  closingNotes: { label: string; body: string }[];
   dateLabel: string;
   summary: {
     headline: string;
@@ -335,6 +342,17 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
       report.inspection.templateLabel?.trim() ||
       `${formatEnumLabel(report.inspection.type)} inspection`,
     inspectorLabel: report.inspection.inspector?.trim() ?? '',
+    // Built here so the HTML page and the PDF print the same headings in the
+    // same order as the office's own report.
+    closingNotes: (
+      [
+        ['Next inspection alert', report.closing?.nextInspectionAlert],
+        ['Maintenance comments', report.closing?.maintenanceComments],
+        ['General comments', report.closing?.generalComments],
+      ] as const
+    )
+      .filter(([, body]) => Boolean(body?.trim()))
+      .map(([label, body]) => ({ label, body: body!.trim() })),
     dateLabel: completed
       ? `Completed ${completed}`
       : scheduled

@@ -104,6 +104,16 @@ export class UpdateAdminInspectionDto {
   // update only allows cancellation.
   @IsOptional() @IsIn(['CANCELLED']) status?: string;
   @IsOptional() @IsString() @MaxLength(500) cancellationReason?: string;
+  /**
+   * The report's closing block, written at sign-off.
+   *
+   * Kept apart from `internalNotes`, which is deliberately never published —
+   * these three are printed on the document a tenant and an owner read. Folding
+   * them into the internal note would either leak it or bury them.
+   */
+  @IsOptional() @IsString() @MaxLength(1000) nextInspectionAlert?: string;
+  @IsOptional() @IsString() @MaxLength(4000) maintenanceComments?: string;
+  @IsOptional() @IsString() @MaxLength(4000) generalComments?: string;
 }
 
 /** Finalize (complete) an inspection — a human-only decision (spec §11). */

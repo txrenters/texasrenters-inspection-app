@@ -865,6 +865,16 @@ model Inspection {
   baselineInspectionId       String?                 @db.Uuid
   priority                   String                  @default("STANDARD")
   internalNotes              String?
+  /// The report's closing block, written by the reviewer at sign-off.
+  ///
+  /// Three separate fields rather than one note because the office's printed
+  /// report prints them as three headed columns, and they are read by
+  /// different people: the alert schedules the next visit, the maintenance
+  /// comments become work orders, and the general comments are what the tenant
+  /// reads. Merging them would force whoever reads one to sift the other two.
+  nextInspectionAlert        String?
+  maintenanceComments        String?
+  generalComments            String?
   createdById                String?                 @db.Uuid
   status                     InspectionStatus        @default(SCHEDULED)
   /// Date only. Inspections are scheduled to a day, never a time — the column

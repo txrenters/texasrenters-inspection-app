@@ -16,6 +16,7 @@ import {
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
 import { InspectionTabs } from '@/components/inspection-tabs';
+import { ReportClosingNotes } from '@/components/report-closing-notes';
 import { InspectionWorkflowPanel } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
@@ -359,6 +360,10 @@ function InspectionDetail() {
         {item.inspectionType === 'OCCUPIED' || item.inspectionType === 'MOVE_OUT' ? (
           <InspectionChargesPanel inspectionId={id} inspectionType={item.inspectionType} />
         ) : null}
+
+        {/* Before finalization, in the order the work happens: a reviewer
+            writes what the report should say, then decides it is ready. */}
+        <ReportClosingNotes inspection={item} readOnly={finalized} />
 
         {/* Finalization sits after the evidence, in the order the work happens:
             read the areas, then decide. */}

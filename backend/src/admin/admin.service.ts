@@ -155,6 +155,18 @@ export function describeFinalizeBlockers(
   return `${parts.join(' and ')}. Resolve ${parts.length > 1 ? 'them' : 'it'} or document an override to finalize.`;
 }
 
+/**
+ * Distinguishes "not sent" from "cleared" for an optional text field.
+ *
+ * Returns undefined so Prisma skips the column when the caller omitted it, and
+ * null when they sent it blank — which is the difference between leaving a
+ * comment alone and deleting it.
+ */
+function emptyToNull(value: string | undefined) {
+  if (value === undefined) return undefined;
+  return value.trim() || null;
+}
+
 const REOPENABLE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.TECHNICIAN_SUBMITTED,
   InspectionStatus.PROCESSING,
@@ -928,6 +940,9 @@ export class AdminService {
       createdAt: true,
       updatedAt: true,
       internalNotes: true,
+      nextInspectionAlert: true,
+      maintenanceComments: true,
+      generalComments: true,
       propertywareBuilding: {
         select: { id: true, name: true, addressLine1: true, city: true, state: true },
       },
@@ -994,6 +1009,9 @@ export class AdminService {
         createdAt: true,
         updatedAt: true,
         internalNotes: true,
+      nextInspectionAlert: true,
+      maintenanceComments: true,
+      generalComments: true,
         propertywareBuilding: {
           select: { id: true, name: true, addressLine1: true, city: true, state: true },
         },
@@ -1343,6 +1361,17 @@ export class AdminService {
           scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : undefined,
           priority: input.priority,
           internalNotes: input.internalNotes,
+          /**
+           * Absent means "leave it alone"; empty means "clear it".
+           *
+           * `?.trim() || undefined` would collapse those two, so a reviewer who
+           * deleted a comment would watch it reappear — the field would stay on
+           * a report they had just removed it from. Null is what clears it, and
+           * the report prints no heading over a null.
+           */
+          nextInspectionAlert: emptyToNull(input.nextInspectionAlert),
+          maintenanceComments: emptyToNull(input.maintenanceComments),
+          generalComments: emptyToNull(input.generalComments),
           status: input.status as InspectionStatus | undefined,
           cancelledAt: input.status === 'CANCELLED' ? new Date() : undefined,
           cancellationReason: input.cancellationReason,
@@ -2151,6 +2180,9 @@ export class AdminService {
       createdAt: true,
       updatedAt: true,
       internalNotes: true,
+      nextInspectionAlert: true,
+      maintenanceComments: true,
+      generalComments: true,
       propertywareBuilding: {
         select: { id: true, name: true, addressLine1: true, city: true, state: true },
       },

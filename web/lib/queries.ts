@@ -1246,6 +1246,9 @@ export function useAdminMutations() {
         internalNotes?: string;
         status?: string;
         cancellationReason?: string;
+        nextInspectionAlert?: string;
+        maintenanceComments?: string;
+        generalComments?: string;
       }) =>
         api<AdminInspection>(`/api/v1/admin/inspections/${id}`, {
           method: 'PATCH',

@@ -174,6 +174,9 @@ export class ReportShareService {
         status: true,
         scheduledAt: true,
         completedAt: true,
+        nextInspectionAlert: true,
+        maintenanceComments: true,
+        generalComments: true,
         /**
          * Who carried out the inspection, for the report's "Inspector" line.
          *
@@ -292,6 +295,13 @@ export class ReportShareService {
         inspector:
           inspection.assignments.map((entry) => entry.technician.displayName).join(' / ') || null,
         templateLabel: INSPECTION_TEMPLATE_LABEL[inspection.inspectionType] ?? null,
+      },
+      // The report's closing block. Nulls travel through as nulls so the
+      // renderers can omit a heading rather than print one over nothing.
+      closing: {
+        nextInspectionAlert: inspection.nextInspectionAlert,
+        maintenanceComments: inspection.maintenanceComments,
+        generalComments: inspection.generalComments,
       },
       rooms: inspection.areas.map((area) => ({
         id: area.id,

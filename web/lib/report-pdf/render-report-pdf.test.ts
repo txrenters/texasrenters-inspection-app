@@ -212,6 +212,29 @@ describe('inspection report PDF', () => {
     expect(view.inspectorLabel).toBe('');
   });
 
+  it('carries only the closing notes that were actually written', () => {
+    // Three headings over three blanks says less than nothing, so the view
+    // model filters rather than leaving the renderers to guess.
+    const view = buildReportView({
+      ...REPORT,
+      closing: {
+        nextInspectionAlert: null,
+        maintenanceComments: '  carpet needs replacing  ',
+        generalComments: '   ',
+      },
+    });
+
+    expect(view.closingNotes).toEqual([
+      { label: 'Maintenance comments', body: 'carpet needs replacing' },
+    ]);
+  });
+
+  it('has no closing block when the reviewer wrote nothing', () => {
+    const view = buildReportView({ ...REPORT, closing: undefined });
+
+    expect(view.closingNotes).toEqual([]);
+  });
+
   it('names the download after the property', () => {
     expect(reportFileName(REPORT)).toBe('302-watercrest-harbor-ln-inspection-report.pdf');
   });

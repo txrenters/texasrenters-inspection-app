@@ -145,6 +145,9 @@ const styles = StyleSheet.create({
   },
 
   // ---- closing -----------------------------------------------------------
+  closingRow: { flexDirection: 'row', gap: 12, marginTop: 10, marginBottom: 4 },
+  closingCell: { flex: 1 },
+  closingBody: { fontSize: 8.5, lineHeight: 1.4, marginTop: 2 },
   disclaimer: {
     marginTop: 16,
     padding: 12,
@@ -422,6 +425,20 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
             </Text>
             {view.otherFindings.map((finding) => (
               <Finding key={finding.id} finding={finding} />
+            ))}
+          </View>
+        ) : null}
+
+        {/* Closing block, last and before the disclaimer, where the office's
+            own report puts it. Kept whole on one page: splitting a maintenance
+            list across a page break is how items get missed. */}
+        {view.closingNotes.length ? (
+          <View style={styles.closingRow} wrap={false}>
+            {view.closingNotes.map((note) => (
+              <View key={note.label} style={styles.closingCell}>
+                <Text style={styles.coverMetaLabel}>{note.label.toUpperCase()}</Text>
+                <Text style={styles.closingBody}>{note.body}</Text>
+              </View>
             ))}
           </View>
         ) : null}
