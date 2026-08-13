@@ -19,6 +19,14 @@ export interface UploadRoomPhotoInput {
   captureSource?: SnapshotCaptureSource;
   sequenceNumber?: number;
   findingId?: string;
+  /**
+   * The checklist item this photograph evidences.
+   *
+   * Optional: plenty of shots document the room generally. When set, the
+   * report captions the photograph with the item's name and groups it under
+   * that row, which is how the office's printed report is laid out.
+   */
+  checklistItemId?: string;
 }
 
 /**
@@ -55,6 +63,7 @@ export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id
           ? { sequenceNumber: String(Math.max(1, Math.round(input.sequenceNumber))) }
           : {}),
         ...(input.findingId ? { findingId: input.findingId } : {}),
+        ...(input.checklistItemId ? { checklistItemId: input.checklistItemId } : {}),
       },
       headers: { authorization: `Bearer ${session.accessToken}` },
     },

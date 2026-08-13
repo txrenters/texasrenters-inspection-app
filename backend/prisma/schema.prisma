@@ -752,26 +752,26 @@ model AreaEvidenceRequest {
 /// again at every inspection, and last quarter's answers must not appear as
 /// this quarter's.
 model InspectionAreaChecklistResponse {
-  id               String            @id @default(uuid()) @db.Uuid
-  organizationId   String            @db.Uuid
-  inspectionAreaId String            @db.Uuid
-  checklistItemId  String            @db.Uuid
-  isClean          Boolean?
-  isUndamaged      Boolean?
-  isWorking        Boolean?
-  comment          String?
+  id                    String            @id @default(uuid()) @db.Uuid
+  organizationId        String            @db.Uuid
+  inspectionAreaId      String            @db.Uuid
+  checklistItemId       String            @db.Uuid
+  isClean               Boolean?
+  isUndamaged           Boolean?
+  isWorking             Boolean?
+  comment               String?
   /// Seconds into the area's recording when this was answered, so a reviewer can
   /// jump straight to the moment rather than scrubbing an hour of video. Null for
   /// an assessment made outside a recording — the web review screen, or a
   /// technician scoring after the fact.
   videoTimestampSeconds Int?
-  recordedById     String?           @db.Uuid
-  recordedAt       DateTime          @default(now())
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  organization     Organization      @relation(fields: [organizationId], references: [id])
-  inspectionArea   InspectionArea    @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
-  checklistItem    AreaChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
+  recordedById          String?           @db.Uuid
+  recordedAt            DateTime          @default(now())
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  organization          Organization      @relation(fields: [organizationId], references: [id])
+  inspectionArea        InspectionArea    @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
+  checklistItem         AreaChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Cascade)
 
   /// One assessment per item per area. Re-scoring updates it rather than
   /// stacking a second opinion the report would have to choose between.
@@ -781,22 +781,23 @@ model InspectionAreaChecklistResponse {
 }
 
 model AreaChecklistItem {
-  id             String                            @id @default(uuid()) @db.Uuid
-  organizationId String                            @db.Uuid
-  propertyAreaId String                            @db.Uuid
-  label          String
+  id               String                            @id @default(uuid()) @db.Uuid
+  organizationId   String                            @db.Uuid
+  propertyAreaId   String                            @db.Uuid
+  label            String
   /// Spoken words that count as covering this item, matched against the
   /// recording's transcript. Empty means the item can only be ticked by hand.
-  keywords       String[]                          @default([])
-  sortOrder      Int                               @default(0)
-  archivedAt     DateTime?
-  createdById    String?                           @db.Uuid
-  createdAt      DateTime                          @default(now())
-  updatedAt      DateTime                          @updatedAt
-  organization   Organization                      @relation(fields: [organizationId], references: [id])
-  propertyArea   PropertyArea                      @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
-  createdBy      UserProfile?                      @relation("ChecklistItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  responses      InspectionAreaChecklistResponse[]
+  keywords         String[]                          @default([])
+  sortOrder        Int                               @default(0)
+  archivedAt       DateTime?
+  createdById      String?                           @db.Uuid
+  createdAt        DateTime                          @default(now())
+  updatedAt        DateTime                          @updatedAt
+  organization     Organization                      @relation(fields: [organizationId], references: [id])
+  propertyArea     PropertyArea                      @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
+  createdBy        UserProfile?                      @relation("ChecklistItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  responses        InspectionAreaChecklistResponse[]
+  inspectionPhotos InspectionPhoto[]
 
   /// The same wording twice in one area is a mistake, not a second item.
   @@unique([propertyAreaId, label])
@@ -1383,6 +1384,18 @@ model InspectionPhoto {
   inspectionId     String             @db.Uuid
   inspectionAreaId String             @db.Uuid
   findingId        String?            @db.Uuid
+  /// The checklist item this photograph evidences.
+  ///
+  /// The office's printed report captions every photograph with the item it
+  /// documents — "WALLS & CEILINGS", "DOORS & LOCKS" — so the table states the
+  /// verdict and the photographs beneath it prove that verdict, item by item.
+  /// Without this link a photo can only carry free text, and the report cannot
+  /// group evidence under the row it belongs to.
+  ///
+  /// Nullable and SetNull on delete: plenty of photographs document the room
+  /// generally rather than one item, and an administrator archiving a
+  /// checklist item must not delete the evidence captured against it.
+  checklistItemId  String?            @db.Uuid
   capturedById     String             @db.Uuid
   provider         String             @default("local")
   storageKey       String             @unique
@@ -1405,7 +1418,9 @@ model InspectionPhoto {
   inspectionArea   InspectionArea     @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
   finding          InspectionFinding? @relation(fields: [findingId], references: [id], onDelete: SetNull)
   capturedBy       UserProfile        @relation(fields: [capturedById], references: [id])
+  checklistItem    AreaChecklistItem? @relation(fields: [checklistItemId], references: [id], onDelete: SetNull)
 
+  @@index([inspectionAreaId, checklistItemId])
   @@index([inspectionAreaId, captureType, sequenceNumber])
   @@index([inspectionId])
   @@index([findingId])

@@ -207,6 +207,11 @@ export class ReportShareService {
                 capturedAt: true,
                 width: true,
                 height: true,
+                // The caption the printed report uses. Every photograph in the
+                // office's report is titled with the checklist item it
+                // evidences, so the table states the verdict and the
+                // photographs beneath prove it item by item.
+                checklistItem: { select: { label: true } },
               },
             },
           },
@@ -287,7 +292,11 @@ export class ReportShareService {
         area.photos.map((photo) => ({
           id: photo.id,
           roomId: area.id,
-          label: photo.label,
+          // The item name wins over free text: it is what the printed report
+          // captions with, and a technician's ad-hoc label is the fallback for
+          // a photograph that documents the room rather than one item.
+          label: photo.checklistItem?.label ?? photo.label,
+          checklistItem: photo.checklistItem?.label ?? null,
           notes: photo.notes,
           capturedAt: photo.capturedAt,
           width: photo.width,

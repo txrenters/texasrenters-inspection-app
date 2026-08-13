@@ -683,7 +683,16 @@ export interface PublicReportBrand {
 export interface PublicReportPhoto {
   id: string;
   roomId: string;
+  /** Caption. The checklist item's name when the photo evidences one. */
   label?: string | null;
+  /**
+   * The checklist item this photograph evidences, if any.
+   *
+   * Carried separately from `label` so a renderer can group photographs under
+   * their table row rather than only captioning them — which is how the
+   * office's printed report is laid out.
+   */
+  checklistItem?: string | null;
   notes?: string | null;
   capturedAt: string;
   width?: number | null;

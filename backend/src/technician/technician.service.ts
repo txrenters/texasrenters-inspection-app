@@ -1564,6 +1564,30 @@ export class TechnicianService {
       if (!area)
         throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
 
+      /**
+       * The item has to belong to *this* area.
+       *
+       * Same rule as scoring a checklist item: without it a photograph could be
+       * filed under an item from another property, and the report would print
+       * that evidence under a row nobody inspected.
+       *
+       * Archived items are still accepted. The checklist can change mid-
+       * inspection, and refusing evidence because an administrator tidied the
+       * list would lose a photograph the technician had already taken.
+       */
+      if (dto.checklistItemId) {
+        const item = await this.prisma.areaChecklistItem.findFirst({
+          where: { id: dto.checklistItemId, propertyAreaId: area.propertyAreaId },
+          select: { id: true },
+        });
+        if (!item)
+          throw new ApplicationError(
+            404,
+            'CHECKLIST_ITEM_NOT_FOUND',
+            'That checklist item does not belong to this area.',
+          );
+      }
+
       // Retried uploads reuse the client key and return the stored photo.
       const existing = await this.prisma.inspectionPhoto.findUnique({
         where: { idempotencyKey: dto.idempotencyKey },
@@ -1613,6 +1637,7 @@ export class TechnicianService {
             inspectionId: area.inspectionId,
             inspectionAreaId: area.id,
             findingId: dto.findingId ?? null,
+            checklistItemId: dto.checklistItemId ?? null,
             capturedById: user.id,
             provider: 'local',
             storageKey,
