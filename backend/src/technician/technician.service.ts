@@ -212,6 +212,8 @@ const technicianInspectionSummarySelect = {
   // Tells the app to ask the technician to survey the areas rather than treat
   // an empty list as an error.
   allowTechnicianAreaCapture: true,
+  // Why the office sent this back. The technician has to be able to read it.
+  reopenReason: true,
   propertywareUnit: {
     select: { id: true, name: true, bedrooms: true, bathrooms: true },
   },
@@ -544,7 +546,14 @@ export class TechnicianService {
     // advance it to REVIEW_REQUIRED once processing finishes.
     const updated = await this.prisma.inspection.update({
       where: { id },
-      data: { status: InspectionStatus.TECHNICIAN_SUBMITTED, submittedAt: new Date() },
+      data: {
+        status: InspectionStatus.TECHNICIAN_SUBMITTED,
+        submittedAt: new Date(),
+        // Cleared on submission: by now the technician has acted on it, and a
+        // reason left standing would reappear as an instruction on work they
+        // have already redone.
+        reopenReason: null,
+      },
       select: technicianInspectionSummarySelect,
     });
     // If every recording finished processing before submission, the
@@ -2126,6 +2135,9 @@ export class TechnicianService {
       unitName: record.propertywareUnit?.name ?? null,
       roomIds: record.areas.map((area) => area.id),
       allowTechnicianAreaCapture: record.allowTechnicianAreaCapture,
+      // Undefined rather than empty string: the app shows the banner only when
+      // there is something to read.
+      reopenReason: record.reopenReason ?? undefined,
       propertyNotes: record.internalNotes ?? '',
       property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {

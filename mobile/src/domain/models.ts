@@ -167,6 +167,13 @@ export interface Inspection {
    * starting point, not a fault.
    */
   allowTechnicianAreaCapture: boolean;
+  /**
+   * Why the office sent this inspection back.
+   *
+   * Set when an administrator reopens it, cleared when the technician submits
+   * again. Undefined on an inspection that was never reopened.
+   */
+  reopenReason?: string;
   propertyNotes: string;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };

@@ -872,6 +872,13 @@ model Inspection {
   /// different people: the alert schedules the next visit, the maintenance
   /// comments become work orders, and the general comments are what the tenant
   /// reads. Merging them would force whoever reads one to sift the other two.
+  /// Why the office sent this back, shown to the technician who receives it.
+  ///
+  /// Stored rather than left in the audit log: an audit row is for people
+  /// reconstructing what happened later, and the technician standing in the
+  /// property needs to read it now. Cleared on their next submission, because
+  /// by then they have acted on it.
+  reopenReason               String?
   nextInspectionAlert        String?
   maintenanceComments        String?
   generalComments            String?

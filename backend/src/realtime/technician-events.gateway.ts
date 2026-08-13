@@ -16,6 +16,11 @@ export type TechnicianInspectionEventKind =
   | 'CANCELLED'
   | 'UPDATED'
   /**
+   * The office sent a submitted or finalized inspection back to this
+   * technician, with a reason they need to read.
+   */
+  | 'REOPENED'
+  /**
    * The office asked for more evidence in one of this technician's areas.
    *
    * A kind on the existing event rather than a new one: the client already

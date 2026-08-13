@@ -1595,9 +1595,13 @@ export class AdminService {
     // not an error — the admin may be about to assign it — so this is recorded
     // rather than refused, and the inspections list already flags unassigned
     // work on its own.
-    const currentAssignments = await this.prisma.inspectionAssignment.count({
+    // Ids, not just a count: each of these technicians has to be told, and the
+    // count alone cannot address them.
+    const currentAssignees = await this.prisma.inspectionAssignment.findMany({
       where: { inspectionId: id, isCurrent: true },
+      select: { technicianId: true },
     });
+    const currentAssignments = currentAssignees.length;
     await this.prisma.$transaction(async (tx) => {
       // The status is re-asserted in the WHERE clause. The check above ran on
       // `this.prisma`, outside this transaction, so Serializable cannot detect
@@ -1612,6 +1616,16 @@ export class AdminService {
           // overwrites it, and until then it records when the work last left
           // the field.
           completionBlockedReason: null,
+          /**
+           * Stored where the technician can read it.
+           *
+           * The reason was previously written only into the audit metadata,
+           * which no technician endpoint reads — so a reopened inspection
+           * reappeared in their queue with no explanation and the office had to
+           * phone them. An audit row is for reconstructing what happened later;
+           * this is for the person standing in the property now.
+           */
+          reopenReason: input.reason.trim() || null,
         },
       });
       if (count === 0)
@@ -1631,6 +1645,18 @@ export class AdminService {
       type: 'inspection.changed',
       organizationId: user.organizationId,
     });
+    /**
+     * Tell the technician, in real time.
+     *
+     * This published only a cache invalidation before, which refreshes the web
+     * console and reaches nobody in the field: the inspection reappeared in the
+     * technician's queue on their next sixty-second poll, with no explanation
+     * and no signal that anything had changed. Every other admin action that
+     * moves work — assign, reassign, unassign, request evidence — already
+     * publishes here.
+     */
+    for (const assignee of currentAssignees)
+      this.technicianEvents?.publish(assignee.technicianId, id, 'REOPENED');
     return this.inspection(user, id);
   }
 

@@ -65,8 +65,10 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
           // that only ever counts up is worse than none.
           queryKeys.openEvidenceRequests,
         ]);
-        if (event.kind === 'ASSIGNED' && !registeredPushToken)
-          void notifyNewAssignment(event.inspectionId).catch(() => undefined);
+        // Local notification only when no push token is registered — otherwise
+        // the server's push and this would both fire for the same event.
+        if (!registeredPushToken)
+          void notifyTechnician(event.kind, event.inspectionId).catch(() => undefined);
       });
     };
 
@@ -153,19 +155,38 @@ async function registerRemotePushDevice() {
   }
 }
 
-async function notifyNewAssignment(inspectionId: string) {
+/**
+ * Copy for the events a technician has to be told about immediately.
+ *
+ * Only kinds that put work back in their hands. UPDATED and the assignment
+ * churn kinds refresh the queue silently — a notification for every edit the
+ * office makes is how people learn to ignore them.
+ */
+const NOTIFIABLE: Partial<Record<string, { title: string; body: string }>> = {
+  ASSIGNED: {
+    title: 'New inspection assigned',
+    body: 'A new inspection is ready in your TexasRenters workspace.',
+  },
+  REOPENED: {
+    title: 'Inspection sent back',
+    body: 'The office returned an inspection to you. Open it to read why.',
+  },
+  EVIDENCE_REQUESTED: {
+    title: 'More evidence requested',
+    body: 'The office asked for more evidence on one of your areas.',
+  },
+};
+
+async function notifyTechnician(kind: string, inspectionId: string) {
+  const copy = NOTIFIABLE[kind];
+  if (!copy) return;
   if (!areNotificationsEnabled()) return;
   const Notifications = await loadNotifications();
   if (!Notifications) return;
   const permission = await Notifications.getPermissionsAsync();
   if (!permission.granted) return;
   await Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'New inspection assigned',
-      body: 'A new inspection is ready in your TexasRenters workspace.',
-      data: { inspectionId },
-      sound: true,
-    },
+    content: { ...copy, data: { inspectionId }, sound: true },
     trigger: null,
   });
 }

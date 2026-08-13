@@ -103,6 +103,9 @@ const inspectionSchema = z.object({
   // Defaulted rather than required: a cached inspection written before this
   // field existed must still parse, or the whole record is discarded.
   allowTechnicianAreaCapture: z.boolean().default(false),
+  // Why the office sent this back. Optional: most inspections were never
+  // reopened, and an absent reason is not an error.
+  reopenReason: z.string().optional(),
   propertyNotes: z.string(),
   property: propertySchema.pick({ id: true, address: true, cityStateZip: true, imageTone: true }),
   progress: z.object({
