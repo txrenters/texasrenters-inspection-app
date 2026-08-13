@@ -40,6 +40,7 @@ import {
   useRoomMedia,
   useRoomPhotos,
   useRoomSummaries,
+  useUpdateArea,
   useUpdateRoom,
   useUploadActions,
 } from '@/src/features/queries';
@@ -95,6 +96,7 @@ export default function AreaDetailScreen() {
   // Scoped to this area: a request about the kitchen is not this room's problem,
   // and showing it here would send the technician to the wrong place.
   const uploadActions = useUploadActions();
+  const updateArea = useUpdateArea(inspectionId, id);
   const evidenceRequests = useEvidenceRequests(inspectionId);
   const resolveRequest = useResolveEvidenceRequest(inspectionId);
   const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
@@ -128,6 +130,8 @@ export default function AreaDetailScreen() {
    * little.
    */
   const [viewedPhoto, setViewedPhoto] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editedName, setEditedName] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
 
@@ -190,7 +194,28 @@ export default function AreaDetailScreen() {
             <ArrowLeftIcon size={18} className="text-foreground" />
           </Pressable>
           <View className="min-w-0 flex-1">
-            <Text className="text-lg font-bold text-foreground">{item.name}</Text>
+            <View className="flex-row items-center gap-2">
+              <Text className="min-w-0 shrink text-lg font-bold text-foreground">{item.name}</Text>
+              {/* Offered only for an area this technician added. One from a
+                  floor plan is the office's catalog record, reused by every
+                  future inspection of the property, so renaming it from the
+                  field would change work nobody here is responsible for — the
+                  server refuses it, and a button that always errors is worse
+                  than none. */}
+              {item.source === 'TECHNICIAN' ? (
+                <Pressable
+                  accessibilityLabel={`Rename ${item.name}`}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => {
+                    setEditedName(item.name);
+                    setEditOpen(true);
+                  }}
+                >
+                  <Edit3Icon size={15} className="text-muted-foreground" />
+                </Pressable>
+              ) : null}
+            </View>
             <Text className="text-xs text-muted-foreground">
               {item.floorName} · {item.isRequired ? 'Required' : 'Optional'} room
             </Text>
@@ -607,6 +632,67 @@ export default function AreaDetailScreen() {
           ) : null}
         </Pressable>
       </Modal>
+
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
+        onClose={() => setEditOpen(false)}
+        visible={editOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">Rename this area</Text>
+        <Text nativeID="area-name-label" className="mt-2 text-sm leading-5 text-muted-foreground">
+          Correct the name you gave this area. The office sees the change straight away.
+        </Text>
+        <TextInput
+          accessibilityLabel="Area name"
+          accessibilityLabelledBy="area-name-label"
+          autoFocus
+          className="mt-4 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+          onChangeText={setEditedName}
+          placeholder="Area name"
+          placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+          value={editedName}
+        />
+        {updateArea.error ? (
+          <Text className="mt-2 text-xs leading-5 text-destructive">
+            {updateArea.error.message}
+          </Text>
+        ) : null}
+        <View className="mt-4 flex-row gap-3">
+          <Pressable
+            accessibilityLabel="Cancel"
+            accessibilityRole="button"
+            className="min-h-12 flex-1 items-center justify-center rounded-xl bg-muted"
+            onPress={() => setEditOpen(false)}
+          >
+            <Text className="font-semibold text-foreground">Cancel</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Save the area name"
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: updateArea.isPending,
+              disabled: updateArea.isPending || !editedName.trim() || editedName.trim() === item.name,
+            }}
+            className={`min-h-12 flex-1 items-center justify-center rounded-xl ${
+              updateArea.isPending || !editedName.trim() || editedName.trim() === item.name
+                ? 'bg-primary/40'
+                : 'bg-primary'
+            }`}
+            disabled={updateArea.isPending || !editedName.trim() || editedName.trim() === item.name}
+            onPress={() =>
+              updateArea.mutate(
+                { name: editedName.trim() },
+                { onSuccess: () => setEditOpen(false) },
+              )
+            }
+          >
+            <Text className="font-semibold text-primary-foreground">
+              {updateArea.isPending ? 'Saving…' : 'Save'}
+            </Text>
+          </Pressable>
+        </View>
+      </BottomSheet>
 
       <BottomSheet
         accessibilityRole="alert"

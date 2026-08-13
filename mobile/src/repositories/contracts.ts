@@ -32,6 +32,17 @@ export interface AddAreaInput {
   notes?: string;
 }
 
+/**
+ * Corrections to an area the technician added. Every field optional: this is a
+ * correction, so sending only the name must not blank the rest.
+ */
+export interface UpdateAreaInput {
+  name?: string;
+  environment?: AreaEnvironment;
+  category?: string | null;
+  notes?: string;
+}
+
 export interface AuthRepository {
   listDemoUsers(): Promise<DemoUser[]>;
   signIn(role: DemoRole): Promise<DemoUser>;
@@ -108,6 +119,8 @@ export interface InspectionRepository {
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
   addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;
+  /** Corrects an area this technician added; the server refuses the rest. */
+  updateArea(roomId: string, input: UpdateAreaInput): Promise<InspectionRoom>;
   /** Administrator-authored coverage checklist; empty when none is configured. */
   roomChecklist(roomId: string): Promise<ChecklistItemWithAssessment[]>;
   /**

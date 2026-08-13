@@ -240,6 +240,10 @@ export class MockInspectionRepository implements InspectionRepository {
     // Nothing to score against without authored items — see roomChecklist.
     return [];
   }
+  async updateArea(roomId: string) {
+    await mockDelay();
+    return this.room(roomId);
+  }
   async addArea(inspectionId: string, input: AddAreaInput) {
     await mockDelay();
     ensureMockAvailable();

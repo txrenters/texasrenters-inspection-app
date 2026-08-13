@@ -69,6 +69,27 @@ export class TechnicianCreateAreaDto {
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
 }
 
+/**
+ * Corrections to an area the technician added.
+ *
+ * Every field optional: this is a correction, and sending only the name should
+ * not blank the rest. `isRequired` and `inspectionOrder` are deliberately
+ * absent — those are scheduling decisions the office makes, not observations
+ * from the field.
+ */
+export class TechnicianUpdateAreaDto {
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name?: string;
+  @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
+  // Nullable so a category can be cleared, not only changed.
+  @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory | null;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string;
+}
+
 export class TechnicianInspectionListQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 25;
