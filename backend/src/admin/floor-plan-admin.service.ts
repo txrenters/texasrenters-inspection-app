@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { checklistTemplateFor, classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
-import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
+import {
+  airConditioningChecklistTemplate,
+  checklistTemplateFor,
+  classifyAreaByName,
+  keywordsFromLabel,
+} from '@texasrenters/shared';
+import { AreaChecklistItemKind, FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
 import type { AreaCategory, AreaEnvironment, Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
@@ -73,6 +78,7 @@ const propertyAreaResponseSelect = {
   name: true,
   inspectionOrder: true,
   isRequired: true,
+  hasAirConditioning: true,
   status: true,
   source: true,
   environment: true,
@@ -141,6 +147,7 @@ function mapArea(row: PropertyAreaRow) {
     name: row.name,
     inspectionOrder: row.inspectionOrder,
     isRequired: row.isRequired,
+    hasAirConditioning: row.hasAirConditioning,
     status: row.status,
     source: row.source,
     environment: row.environment,
@@ -711,6 +718,7 @@ export class FloorPlanAdminService {
         name: input.name.trim(),
         inspectionOrder: input.inspectionOrder,
         isRequired: input.isRequired,
+        hasAirConditioning: input.hasAirConditioning ?? false,
         source: 'MANUAL',
         status: PropertyAreaStatus.DRAFT,
         createdById: user.id,
@@ -812,7 +820,28 @@ export class FloorPlanAdminService {
     // That exception ends once an inspection referencing it has been completed.
     // Renaming an area then would relabel evidence in a finished report, which
     // is the audit trail rather than the layout.
-    if (area.status !== PropertyAreaStatus.DRAFT) {
+    /**
+     * `hasAirConditioning` is exempt from the freeze.
+     *
+     * Everything else here describes the layout, and a layout that shifts under
+     * a running inspection relabels evidence in a report. This flag describes
+     * the *equipment*, changes nothing about any existing inspection, and only
+     * decides which future HVAC visits include the area.
+     *
+     * Without the exemption the flag would be unsettable on every area that
+     * matters: inspections scope from APPROVED areas, so the office could tick
+     * the box on drafts and nowhere else, and no property with a finished
+     * layout could ever have its units recorded.
+     */
+    const changesLayout =
+      input.name !== undefined ||
+      input.floorName !== undefined ||
+      input.inspectionOrder !== undefined ||
+      input.isRequired !== undefined ||
+      input.environment !== undefined ||
+      input.category !== undefined ||
+      input.notes !== undefined;
+    if (area.status !== PropertyAreaStatus.DRAFT && changesLayout) {
       const correctable = area.source === 'TECHNICIAN' && !(await this.areaIsFinalized(area.id));
       if (!correctable)
         throw new ApplicationError(
@@ -845,6 +874,12 @@ export class FloorPlanAdminService {
           ...(input.floorName ? { floorId: floor?.id } : {}),
           ...(input.inspectionOrder ? { inspectionOrder: input.inspectionOrder } : {}),
           ...(input.isRequired === undefined ? {} : { isRequired: input.isRequired }),
+          // `=== undefined` rather than truthiness, like isRequired above and
+          // unlike the fields below it: false is a meaningful value here, and a
+          // truthy check would make unticking an area impossible.
+          ...(input.hasAirConditioning === undefined
+            ? {}
+            : { hasAirConditioning: input.hasAirConditioning }),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.category ? { category: input.category } : {}),
           ...(input.notes === undefined ? {} : { notes: input.notes.trim() || null }),
@@ -866,6 +901,34 @@ export class FloorPlanAdminService {
             },
           ],
         );
+      }
+      /**
+       * Ticking the box has to produce the items, or it does nothing visible.
+       *
+       * An HVAC visit asks the AIR_CONDITIONING set, and those rows only exist
+       * once somebody says the area has a unit — there is no earlier moment to
+       * generate them, because at floor-plan time the flag is still false.
+       *
+       * `skipDuplicates` rather than a count-then-insert: the unique index is
+       * (area, kind, label), so an area unticked and ticked again re-uses the
+       * rows it already has instead of failing or duplicating them. Answers
+       * already recorded against those items survive, which is the point —
+       * unticking a box is not a reason to lose a technician's work.
+       */
+      if (input.hasAirConditioning === true) {
+        const labels = airConditioningChecklistTemplate();
+        await tx.areaChecklistItem.createMany({
+          data: labels.map((label, index) => ({
+            organizationId: user.organizationId,
+            propertyAreaId: areaId,
+            kind: AreaChecklistItemKind.AIR_CONDITIONING,
+            label,
+            keywords: keywordsFromLabel(label),
+            sortOrder: index,
+            createdById: user.id,
+          })),
+          skipDuplicates: true,
+        });
       }
       return tx.propertyArea.findUniqueOrThrow({
         where: { id: areaId },

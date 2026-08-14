@@ -169,6 +169,88 @@ describe('multi-unit inspection creation', () => {
   });
 
   /**
+   * HVAC is scoped by equipment, not by an operator ticking areas.
+   *
+   * The office's rule: an HVAC visit covers every area that has an air
+   * conditioner. It was previously lumped in with occupied and back-to-market
+   * as a chosen subset, which meant somebody had to remember which rooms have
+   * units in them and tick them by hand.
+   */
+  it('attaches only the areas that have air conditioning', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'hall', hasAirConditioning: true },
+          { id: 'bathroom', hasAirConditioning: false },
+          { id: 'bedroom', hasAirConditioning: true },
+        ]),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    const createData = tx.inspection.create.mock.calls[0][0].data;
+    expect(createData.areas.create).toEqual([
+      { propertyAreaId: 'hall' },
+      { propertyAreaId: 'bedroom' },
+    ]);
+  });
+
+  it('refuses an HVAC visit when the property has a layout but no unit is marked', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'hall', hasAirConditioning: false },
+          { id: 'bathroom', hasAirConditioning: false },
+        ]),
+      },
+    });
+    const service = buildService(tx);
+
+    await expect(
+      service.createInspection(admin, {
+        propertyId: 'building-1',
+        scheduledAt: '2026-08-01T15:00:00.000Z',
+        inspectionType: 'HVAC',
+        priority: 'STANDARD',
+      } as never),
+    ).rejects.toMatchObject({ status: 409, code: 'NO_AIR_CONDITIONED_AREAS' });
+    // Creating it anyway would look like a scheduling success and reach the
+    // technician as an empty job.
+    expect(tx.inspection.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a hand-picked area list on an HVAC visit', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'hall', hasAirConditioning: true }]),
+      },
+    });
+    const service = buildService(tx);
+
+    await expect(
+      service.createInspection(admin, {
+        propertyId: 'building-1',
+        scheduledAt: '2026-08-01T15:00:00.000Z',
+        inspectionType: 'HVAC',
+        priority: 'STANDARD',
+        areaIds: ['hall'],
+      } as never),
+    ).rejects.toMatchObject({ status: 422, code: 'AREA_SELECTION_NOT_ALLOWED' });
+  });
+
+  // The CHOSEN path (occupied, back-to-market) is unchanged code and is covered
+  // by the taxonomy tests in shared/. Asserting it here would mean standing up a
+  // completed move-in baseline first, since those types refuse to be scheduled
+  // without one — scaffolding for behaviour this change never touched.
+
+  /**
    * The clash rule, which had two faults that only showed together.
    *
    * An office tried to book an HVAC visit on a unit whose move-in had already
@@ -179,7 +261,9 @@ describe('multi-unit inspection creation', () => {
    */
   it('books an HVAC visit on a day a completed move-in already used', async () => {
     const tx = buildTx({
-      propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'area-1', hasAirConditioning: true }]),
+      },
     });
     const service = buildService(tx);
 
@@ -200,7 +284,9 @@ describe('multi-unit inspection creation', () => {
 
   it('still refuses a second live inspection of the same type at the same time', async () => {
     const tx = buildTx({
-      propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'area-1', hasAirConditioning: true }]),
+      },
       inspection: {
         findFirst: jest.fn().mockResolvedValue({ id: 'already-booked' }),
         create: jest.fn(),

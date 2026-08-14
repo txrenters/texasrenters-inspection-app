@@ -243,6 +243,15 @@ export interface AdminPropertyArea {
   name: string;
   inspectionOrder: number;
   isRequired: boolean;
+  /**
+   * Whether this area holds an air conditioner.
+   *
+   * Scheduling scope, not a condition observation: an HVAC inspection covers
+   * every area where this is true. Optional on the contract because a client
+   * built against an older server will not receive it, and `false` is the right
+   * reading of its absence.
+   */
+  hasAirConditioning?: boolean;
   status: 'DRAFT' | 'APPROVED' | 'REJECTED';
   source: string;
   environment?: AreaEnvironment;

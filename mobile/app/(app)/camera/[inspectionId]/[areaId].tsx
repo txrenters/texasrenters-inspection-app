@@ -203,11 +203,25 @@ export default function RoomCameraScreen() {
   const checkedItems = useDemoStore((state) => state.areaChecklist[areaId]) ?? EMPTY_CHECKED;
   const toggleChecklistItem = useDemoStore((state) => state.toggleChecklistItem);
   const isAdditional = recordingType === 'ADDITIONAL_ISSUE';
+  /**
+   * No rotation target on this capture.
+   *
+   * Two different reasons land here. An additional-issue clip is a close-up of
+   * one defect, and an HVAC visit is filmed standing at a unit — neither is a
+   * lap of the room, and asking for 360° of rotation to finish either one is a
+   * gate the technician cannot honestly satisfy.
+   */
+  const skipsRoomSweep = isAdditional || room.data?.inspectionType === 'HVAC';
   const hasPermissions = Boolean(cameraPermission?.granted && microphonePermission?.granted);
-  const guidedSensor = useGuidedCaptureSensor(recording && !isAdditional);
+  const guidedSensor = useGuidedCaptureSensor(recording && !skipsRoomSweep);
   const checklist = useAreaChecklist(areaId, {
     name: room.data?.name,
     environment: room.data?.environment,
+    // Was dropped on the way in, so the device-side fallback ignored the
+    // category an administrator had set and could disagree with the
+    // server-generated list for the same area.
+    category: room.data?.category,
+    inspectionType: room.data?.inspectionType,
   });
   const checklistCoverage = checklistProgress(checklist, checkedItems);
   const guidanceState = guidedCaptureState({
@@ -228,7 +242,7 @@ export default function RoomCameraScreen() {
   // Haptic tick at each quarter of the clockwise loop, heavy at completion —
   // progress a technician can feel without looking away from the room.
   useEffect(() => {
-    if (!recording || isAdditional || !guidedSensor.supported) return;
+    if (!recording || skipsRoomSweep || !guidedSensor.supported) return;
     const milestone =
       [100, 75, 50, 25].find(
         (value) => Math.round(rotationProgress(guidedSensor.tracker) * 100) >= value,
@@ -238,12 +252,12 @@ export default function RoomCameraScreen() {
     void Haptics.impactAsync(
       milestone >= 100 ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light,
     ).catch(() => undefined);
-  }, [guidedSensor.supported, guidedSensor.tracker, isAdditional, recording]);
+  }, [guidedSensor.supported, guidedSensor.tracker, recording, skipsRoomSweep]);
 
   // Spoken guidance on state *changes* only, so a screen reader hears the
   // correction once rather than on every sensor sample.
   useEffect(() => {
-    if (!recording || isAdditional || previousGuidanceRef.current === guidanceState) return;
+    if (!recording || skipsRoomSweep || previousGuidanceRef.current === guidanceState) return;
     previousGuidanceRef.current = guidanceState;
     if (guidanceState === 'WRONG_DIRECTION') {
       announce('Turn the other way and continue clockwise.');
@@ -275,7 +289,7 @@ export default function RoomCameraScreen() {
         () => undefined,
       );
     }
-  }, [conditionItems.data, guidanceState, isAdditional, recording]);
+  }, [conditionItems.data, guidanceState, recording, skipsRoomSweep]);
 
   // A new recording is a new sweep, so the prompt is owed again.
   useEffect(() => {
@@ -306,7 +320,7 @@ export default function RoomCameraScreen() {
   };
 
   const createCaptureSummary = (durationSeconds: number): GuidedCaptureSummary | undefined => {
-    if (isAdditional) return undefined;
+    if (skipsRoomSweep) return undefined;
     const evaluation = evaluateCapture({
       tracker: guidedSensor.trackerRef.current,
       durationSeconds,
@@ -355,7 +369,7 @@ export default function RoomCameraScreen() {
     frameMarkersRef.current = [];
     previousGuidanceRef.current = null;
 
-    if (!isAdditional) {
+    if (!skipsRoomSweep) {
       guidedSensor.reset();
       // Prompts, but nothing here waits on the answer or on a capability
       // check — the hook reports guidance as unavailable only if the sensor
@@ -367,12 +381,14 @@ export default function RoomCameraScreen() {
     // The first instruction of the area: film the room before assessing it.
     // Only for the primary walkthrough — an additional clip is a follow-up on
     // something already found and has no sweep to perform.
-    if (!isAdditional) setSweepPromptOpen(true);
+    if (!skipsRoomSweep) setSweepPromptOpen(true);
     setStopping(false);
     announce(
       isAdditional
         ? 'Additional evidence recording started.'
-        : 'Wall 1 registered. Begin one slow clockwise walkthrough.',
+        : skipsRoomSweep
+          ? 'Recording started.'
+          : 'Wall 1 registered. Begin one slow clockwise walkthrough.',
     );
     try {
       const result = await camera.recordAsync({
@@ -675,7 +691,7 @@ export default function RoomCameraScreen() {
               `pt-7` drops it clear of the header: flush against the room name
               the banner read as part of the title bar, and sat high enough to
               crowd the status bar. */}
-          {recording && !isAdditional ? (
+          {recording && !skipsRoomSweep ? (
             <View className="px-5 pt-7" pointerEvents="none">
               <GuidedCaptureOverlay state={guidanceState} tracker={guidedSensor.tracker} />
             </View>

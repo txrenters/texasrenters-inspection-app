@@ -68,6 +68,37 @@ const BASE_INDOOR = [
 ];
 
 /**
+ * What an HVAC visit covers in an area that has a unit.
+ *
+ * ── PROVENANCE, WHICH DIFFERS FROM EVERYTHING ELSE IN THIS FILE ──────────────
+ * The room tables above are transcribed from the TexasRenters report for 17307
+ * Nordway Dr. That report *is* the house standard, so those lists are a record
+ * rather than a judgement.
+ *
+ * There is no equivalent source document for air conditioning. This list is
+ * ordinary split-system service practice: the things a technician would walk in
+ * the order they would walk them, indoor unit first, then the drain that causes
+ * most of the callouts, then outside. It is a **starting draft awaiting the
+ * office's sign-off**, not a transcription, and it should be replaced wholesale
+ * the moment somebody produces the real standard.
+ *
+ * Condition still belongs to the finding, not the checklist — one tick per item,
+ * the same rule as the rooms. "Air filter" records that the filter was covered,
+ * not that it was clean.
+ */
+const BASE_AIR_CONDITIONING = [
+  'Thermostat and controls',
+  'Air filter',
+  'Indoor unit and coil',
+  'Condensate drain and tray',
+  'Supply air and vents',
+  'Return air grille',
+  'Outdoor condenser unit',
+  'Refrigerant lines and insulation',
+  'Noise and vibration in operation',
+];
+
+/**
  * Outdoor areas replace the base rather than adding to it — a lawn has no
  * ceiling, and asking a technician to tick one teaches them to tick anything.
  */
@@ -160,7 +191,12 @@ const CATEGORY_ALIASES: Record<string, string> = {
  * report or match the same spoken words.
  */
 export const CHECKLIST_VOCABULARY: readonly string[] = [
-  ...new Set([...BASE_INDOOR, ...BASE_OUTDOOR, ...Object.values(CATEGORY_ADDITIONS).flat()]),
+  ...new Set([
+    ...BASE_INDOOR,
+    ...BASE_OUTDOOR,
+    ...BASE_AIR_CONDITIONING,
+    ...Object.values(CATEGORY_ADDITIONS).flat(),
+  ]),
 ];
 
 export interface ChecklistTemplateArea {
@@ -204,17 +240,38 @@ export function checklistTemplateFor(area: ChecklistTemplateArea): string[] {
 }
 
 /**
- * Whether every area attached to an inspection must be walked.
+ * What an HVAC visit asks about an area, whatever kind of room it is.
  *
- * Move-in and move-out are the two the tenancy is judged against: a move-out is
- * compared area by area to its move-in, so an area missing from either end has
- * no counterpart and the comparison silently omits it. For those, the type
- * overrides `PropertyArea.isRequired` — a garage or patio flagged optional on
- * the property is still mandatory here.
- *
- * Every other type inspects a chosen subset, so what is attached is already the
- * decision about scope and the per-area flag continues to apply.
+ * Unlike the room template this does not vary: a split system in a bedroom is
+ * serviced the same way as one in a hall, and the room's category says nothing
+ * about the equipment hanging in it. The area only qualifies for this list at
+ * all because somebody marked it as having a unit.
  */
-export function inspectionRequiresEveryArea(inspectionType: string | null | undefined) {
-  return inspectionType === 'MOVE_IN' || inspectionType === 'MOVE_OUT';
+export function airConditioningChecklistTemplate(): string[] {
+  return [...BASE_AIR_CONDITIONING];
 }
+
+/**
+ * The default items for an area, for a given kind of visit.
+ *
+ * The one entry point callers should reach for. Both sets are persisted against
+ * the same area and only one is asked at a time, so getting the kind wrong is
+ * how a technician servicing an air conditioner is asked about the floor
+ * coverings — which is the bug this whole change exists to fix.
+ */
+export function checklistTemplateForKind(
+  area: ChecklistTemplateArea,
+  kind: 'ROOM' | 'AIR_CONDITIONING',
+): string[] {
+  return kind === 'AIR_CONDITIONING' ? airConditioningChecklistTemplate() : checklistTemplateFor(area);
+}
+
+/**
+ * `inspectionRequiresEveryArea` used to live here, next to the checklist it
+ * interacts with. It is in `inspection-scope.ts` now: HVAC made the answer
+ * three-way rather than two-way, and the scope of a visit is a property of the
+ * inspection type rather than of the checklist template. Keeping the whole
+ * taxonomy in one file is what stops the five rules drifting apart.
+ *
+ * Both files are re-exported from the package root, so no call site changed.
+ */

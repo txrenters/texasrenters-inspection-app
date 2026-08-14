@@ -46,6 +46,16 @@ enum AreaEnvironment {
   SEMI_OUTDOOR
 }
 
+/// Which visit a checklist item is written for.
+///
+/// ROOM is the condition walkthrough every tenancy inspection does: doors,
+/// walls, floor, lights. AIR_CONDITIONING is the equipment service an HVAC visit
+/// does. Both hang off the same area and only one set is asked at a time.
+enum AreaChecklistItemKind {
+  ROOM
+  AIR_CONDITIONING
+}
+
 enum AreaCategory {
   INDOOR_ROOM
   HALLWAY
@@ -643,6 +653,15 @@ model PropertyArea {
   name               String
   inspectionOrder    Int
   isRequired         Boolean                 @default(true)
+  /// Whether this area contains air-conditioning equipment.
+  ///
+  /// An HVAC inspection is scoped by equipment rather than by the operator
+  /// picking areas: it covers every approved area of the property where this is
+  /// true. Defaults false so an existing property inspects nothing until
+  /// somebody says where the units actually are, which is the safe direction —
+  /// the alternative sends a technician to look for an air conditioner in a
+  /// bathroom.
+  hasAirConditioning Boolean                 @default(false)
   status             PropertyAreaStatus      @default(DRAFT)
   // Provenance: AI_FLOOR_PLAN | MANUAL | MANUAL_FALLBACK (admin) | TECHNICIAN.
   source             String                  @default("MANUAL")
@@ -785,6 +804,14 @@ model AreaChecklistItem {
   organizationId   String                            @db.Uuid
   propertyAreaId   String                            @db.Uuid
   label            String
+  /// What kind of inspection this item belongs to.
+  ///
+  /// Items are stored per *area*, but a given area is walked differently
+  /// depending on the visit: a move-in asks about its floor and its walls, an
+  /// HVAC visit asks about the air conditioner hanging in it. A response points
+  /// at a persisted item row, so the two sets have to coexist on the area rather
+  /// than one being generated on the fly. This is what separates them.
+  kind             AreaChecklistItemKind             @default(ROOM)
   /// Spoken words that count as covering this item, matched against the
   /// recording's transcript. Empty means the item can only be ticked by hand.
   keywords         String[]                          @default([])
@@ -799,8 +826,14 @@ model AreaChecklistItem {
   responses        InspectionAreaChecklistResponse[]
   inspectionPhotos InspectionPhoto[]
 
-  /// The same wording twice in one area is a mistake, not a second item.
-  @@unique([propertyAreaId, label])
+  /// The same wording twice in one area *of the same kind* is a mistake, not a
+  /// second item. Across kinds it is legitimate and expected: an area can
+  /// reasonably be asked about its vents as part of the room and again as part
+  /// of the air conditioner.
+  ///
+  /// Widening this cannot fail on existing data — every row is ROOM, so
+  /// (area, ROOM, label) is unique exactly when (area, label) was.
+  @@unique([propertyAreaId, kind, label])
   @@index([propertyAreaId, sortOrder])
   @@index([organizationId])
 }

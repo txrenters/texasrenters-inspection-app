@@ -118,7 +118,15 @@ export interface InspectionRoom {
   order: number;
   isRequired: boolean;
   inspectionType: InspectionType;
-  baseline: BaselineCondition;
+  /**
+   * The move-in condition this area is judged against.
+   *
+   * Absent on a visit that does not deal in baselines. That is a different
+   * statement from a baseline whose condition is NOT_AVAILABLE: an HVAC visit
+   * sits outside the move-in chain entirely, so the question does not apply and
+   * the screen shows nothing rather than warning about a missing record.
+   */
+  baseline?: BaselineCondition;
   completionStatus: RoomCompletionStatus;
   uploadStatus: UploadStatus;
   processingStatus: ProcessingStatus;

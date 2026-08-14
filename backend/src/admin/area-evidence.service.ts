@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { FindingReviewStatus, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
+import { checklistKindFor } from '@texasrenters/shared';
 import type {
   AreaEvidenceBundle,
   AreaEvidenceSummary,
@@ -384,7 +385,7 @@ export class AreaEvidenceService {
     inspectionId: string,
     areaId: string,
   ): Promise<AreaEvidenceBundle> {
-    await this.requireInspection(user.organizationId, inspectionId);
+    const inspection = await this.requireInspection(user.organizationId, inspectionId);
     const area = await this.prisma.inspectionArea.findFirst({
       // Scoped by inspection as well as id, so an area id from another
       // inspection cannot be read through this route.
@@ -490,7 +491,11 @@ export class AreaEvidenceService {
       // has no response row, and listing only what has been scored would hide
       // exactly the items still needing attention.
       this.prisma.areaChecklistItem.findMany({
-        where: { propertyAreaId: area.propertyArea.id, archivedAt: null },
+        where: {
+          propertyAreaId: area.propertyArea.id,
+          archivedAt: null,
+          kind: checklistKindFor(inspection.inspectionType),
+        },
         orderBy: { sortOrder: 'asc' },
         select: {
           id: true,
@@ -671,7 +676,10 @@ export class AreaEvidenceService {
   private async requireInspection(organizationId: string, inspectionId: string) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId },
-      select: { id: true },
+      // `inspectionType` for the checklist read in `areaEvidence`: an area
+      // carries both item sets once it is marked as having a unit, and the
+      // reviewer must be shown the one the technician was actually asked.
+      select: { id: true, inspectionType: true },
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');

@@ -6,7 +6,10 @@ on:
       - 'mobile/**'
       - 'backend/**'
       - 'shared/**'
-      - 'supabase/**'
+      # `web/**` was missing, so a change touching only the admin console ran no
+      # CI at all - no lint, no typecheck, no tests. `supabase/**` is gone with
+      # the directory it watched.
+      - 'web/**'
       - 'infrastructure/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -18,7 +21,10 @@ on:
       - 'mobile/**'
       - 'backend/**'
       - 'shared/**'
-      - 'supabase/**'
+      # `web/**` was missing, so a change touching only the admin console ran no
+      # CI at all - no lint, no typecheck, no tests. `supabase/**` is gone with
+      # the directory it watched.
+      - 'web/**'
       - 'infrastructure/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -49,13 +55,25 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/texasrenters_test?schema=public
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/texasrenters_test?schema=public
       REDIS_URL: redis://localhost:6379
-      USE_MOCK_AUTH: 'true'
-      FLOOR_PLAN_EXTRACTION_PROVIDER: mock
-      VIDEO_PLATFORM_PROVIDER: mock
-      TRANSCRIPTION_PROVIDER: mock
-      AI_ANALYSIS_PROVIDER: mock
+      # These were written for a mock stack that no longer exists (cfdbcdc).
+      # `USE_MOCK_AUTH` is gone, `VIDEO_PLATFORM_PROVIDER`,
+      # `TRANSCRIPTION_PROVIDER` and `AI_ANALYSIS_PROVIDER` are gone with it, and
+      # `mock` was removed from the extraction provider's enum because it
+      # returned a fixed eleven-room house for whatever plan was uploaded.
+      # `disabled` is the honest way to not extract.
+      #
+      # The environment schema rejects the old values outright, so every backend
+      # suite that boots the Nest module died at ConfigModule validation. Nobody
+      # saw it because the lint step failed first and the run never got here.
+      FLOOR_PLAN_EXTRACTION_PROVIDER: disabled
       JOB_QUEUE_PROVIDER: memory
       FLOOR_PLAN_STORAGE_PROVIDER: local
+      # Required unconditionally now that USE_MOCK_AUTH is gone - it is the one
+      # value without which nothing can sign in, so the module refuses to boot
+      # without it. A throwaway string, not a secret: it signs tokens for a
+      # database that is created and destroyed with the job, and putting a real
+      # key in a workflow file would be the actual mistake.
+      AUTH_JWT_SECRET: ci-not-a-real-secret-tokens-die-with-the-runner
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -66,6 +84,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
+      # `shared` must be built before anything lints or typechecks against it.
+      #
+      # Its package exports point at ./dist, so on a clean checkout that path
+      # does not exist yet and every dependent fails to resolve the package.
+      # Mobile's `import/no-unresolved` was reporting exactly that - "Unable to
+      # resolve path to module '@texasrenters/shared'" - on every run since the
+      # workflow was written, while passing on developer machines where a stale
+      # dist happened to be lying around. Same reason `db:generate` is above.
+      - run: pnpm --filter @texasrenters/shared build
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

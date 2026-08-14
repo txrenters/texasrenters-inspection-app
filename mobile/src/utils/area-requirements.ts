@@ -47,7 +47,9 @@ export function deriveAreaRequirements(
   ];
 
   // A baseline only has to be acknowledged when one exists to review against.
-  if (room.baseline.condition !== 'NOT_AVAILABLE')
+  // Absent entirely on a visit outside the move-in chain, such as an HVAC job,
+  // where there is nothing to compare and so nothing to acknowledge.
+  if (room.baseline && room.baseline.condition !== 'NOT_AVAILABLE')
     requirements.push({
       key: 'baseline',
       label: 'Baseline reviewed',
@@ -57,13 +59,13 @@ export function deriveAreaRequirements(
 
   // Advisory: an area with documented prior defects is worth photographing, but
   // the technician — not the app — decides whether an issue exists here.
-  if (room.baseline.existingDefects.length)
+  if (room.baseline?.existingDefects.length)
     requirements.push({
       key: 'defect-photos',
       label: 'Prior defects re-checked',
       met: evidence.photoCount > 0,
       blocking: false,
-      hint: `${room.baseline.existingDefects.length} defect(s) documented at move-in.`,
+      hint: `${room.baseline?.existingDefects.length ?? 0} defect(s) documented at move-in.`,
     });
 
   return requirements;

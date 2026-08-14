@@ -16,13 +16,20 @@ import { resolveAreaChecklist, type ChecklistItem } from './area-checklist';
  */
 export function useAreaChecklist(
   roomId: string,
-  area: { name?: string | null; environment?: AreaEnvironment },
+  area: {
+    name?: string | null;
+    environment?: AreaEnvironment;
+    category?: string | null;
+    inspectionType?: string | null;
+  },
 ): ChecklistItem[] {
   const authored = useRoomChecklist(roomId);
   const name = area.name ?? '';
   const environment = area.environment;
+  const category = area.category ?? null;
+  const inspectionType = area.inspectionType ?? null;
   return useMemo(
-    () => resolveAreaChecklist(authored.data, { name, environment }),
-    [authored.data, name, environment],
+    () => resolveAreaChecklist(authored.data, { name, environment, category, inspectionType }),
+    [authored.data, name, environment, category, inspectionType],
   );
 }
