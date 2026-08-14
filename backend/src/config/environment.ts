@@ -50,9 +50,9 @@ const environmentSchema = z
       z.string().email().optional(),
     ),
     MAIL_CONNECTION_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(10000),
-    USE_MOCK_AUTH: z.enum(['true', 'false']).default('false'),
-    // Token identity. AUTH_JWT_SECRET signs and verifies every access token, so
-    // it is required outside mock auth — see the refinement below.
+    // Token identity. AUTH_JWT_SECRET signs and verifies every access token and
+    // is now required unconditionally: USE_MOCK_AUTH is gone, so there is no
+    // configuration in which the application authenticates without it.
     // AUTH_IDENTITY_PROVIDER is gone: there is one credential store now.
     AUTH_JWT_ISSUER: z.string().optional(),
     AUTH_JWT_AUDIENCE: z.string().optional(),
@@ -63,15 +63,19 @@ const environmentSchema = z
     // Turns off per-query tenant scoping AND relaxes the RLS policies with it,
     // so it degrades rather than locking the application out.
     RLS_TENANT_SCOPE_ENABLED: z.enum(['true', 'false']).default('true'),
-    FLOOR_PLAN_EXTRACTION_PROVIDER: z
-      .enum(['disabled', 'mock', 'anthropic', 'openai'])
-      .default('disabled'),
+    // 'mock' is gone from this list. It returned a fixed eleven-room house —
+    // entryway, kitchen, two-storey, garage — for whatever plan was uploaded,
+    // which reads as a successful extraction and is wrong for every property.
+    // 'disabled' is the honest way to not extract.
+    FLOOR_PLAN_EXTRACTION_PROVIDER: z.enum(['disabled', 'anthropic', 'openai']).default('disabled'),
     ANTHROPIC_FLOOR_PLAN_MODEL: z.string().optional(),
     OPENAI_FLOOR_PLAN_MODEL: z.string().optional(),
     AI_CREDENTIALS_ENCRYPTION_KEY: z.string().optional(),
-    VIDEO_PLATFORM_PROVIDER: z.literal('mock').default('mock'),
-    TRANSCRIPTION_PROVIDER: z.literal('mock').default('mock'),
-    AI_ANALYSIS_PROVIDER: z.literal('mock').default('mock'),
+    // VIDEO_PLATFORM_PROVIDER, TRANSCRIPTION_PROVIDER and AI_ANALYSIS_PROVIDER
+    // are gone. Each was z.literal('mock') — a setting that accepted exactly one
+    // value, read by nothing, while the real routing came from AiProviderSettings
+    // in the database. Their presence in .env.local made the stack look
+    // mock-backed when it was not, and cost an evening of misdiagnosis.
     JOB_QUEUE_PROVIDER: z.literal('memory').default('memory'),
     // Validated so a typo cannot silently fall back to `local`, which is the
     // container's ephemeral disk and loses every upload on redeploy.
@@ -132,12 +136,6 @@ const environmentSchema = z
         message: 'DATABASE_URL is required for the persistent backend process.',
         path: ['DATABASE_URL'],
       });
-    if (config.NODE_ENV === 'production' && config.USE_MOCK_AUTH === 'true')
-      context.addIssue({
-        code: 'custom',
-        message: 'Mock authentication cannot be enabled in production.',
-        path: ['USE_MOCK_AUTH'],
-      });
     if (config.CACHE_ENABLED === 'true' && !config.REDIS_URL && !config.REDIS_HOST)
       context.addIssue({
         code: 'custom',
@@ -156,10 +154,10 @@ const environmentSchema = z
     // Was "Supabase URL and JWT secret are required". The signing key is ours
     // now, and it is the one value without which nothing can sign in: no token
     // can be minted and none can be verified.
-    if (config.USE_MOCK_AUTH === 'false' && !config.AUTH_JWT_SECRET)
+    if (!config.AUTH_JWT_SECRET)
       context.addIssue({
         code: 'custom',
-        message: 'AUTH_JWT_SECRET is required when mock authentication is disabled.',
+        message: 'AUTH_JWT_SECRET is required.',
         path: ['AUTH_JWT_SECRET'],
       });
     if (

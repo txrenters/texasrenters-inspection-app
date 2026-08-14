@@ -5,7 +5,7 @@ import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 
 import { ApiAuthGuard, type AuthenticatedRequest } from '../common/auth';
 import { CloudflareStreamWebhookGuard } from './cloudflare-stream-webhook.guard';
-import { CreateUploadSessionDto } from './inspection-video.dto';
+import { CaptureSnapshotDto, CreateUploadSessionDto } from './inspection-video.dto';
 import { InspectionVideoService } from './inspection-video.service';
 
 @ApiTags('Inspection video')
@@ -44,6 +44,25 @@ export class InspectionVideoController {
   @UseGuards(ApiAuthGuard)
   playback(@Req() request: AuthenticatedRequest, @Param('videoId') videoId: string) {
     return this.service.getPlayback(request.user, videoId);
+  }
+
+  /**
+   * Cut a still from a recording and file it as report evidence.
+   *
+   * Reviewer-side by design, and authorized inside the service against the
+   * organization rather than an assignment: a technician may watch their own
+   * recording, but deciding which frame becomes evidence in a report handed to
+   * a tenant is the office's call.
+   */
+  @Post(':videoId/snapshot')
+  @ApiBearerAuth()
+  @UseGuards(ApiAuthGuard)
+  captureSnapshot(
+    @Req() request: AuthenticatedRequest,
+    @Param('videoId') videoId: string,
+    @Body() body: CaptureSnapshotDto,
+  ) {
+    return this.service.captureSnapshot(request.user, videoId, body);
   }
 }
 

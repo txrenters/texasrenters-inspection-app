@@ -18,6 +18,7 @@ import {
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
@@ -205,7 +206,7 @@ export default function InspectionOverviewScreen() {
             accessibilityRole="button"
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
             hitSlop={8}
-            onPress={() => router.back()}
+            onPress={() => goBack()}
           >
             <ArrowLeftIcon size={18} className="text-foreground" />
           </Pressable>
@@ -260,6 +261,20 @@ export default function InspectionOverviewScreen() {
               · {item.type.replaceAll('_', ' ').toLowerCase()}
             </Text>
           </View>
+          {/* Why the office sent this back, above the property notes and styled
+              as something to act on rather than background. Before this the
+              reason lived only in the audit log, so a reopened inspection
+              reappeared in the queue with no explanation at all. */}
+          {item.reopenReason ? (
+            <View className="rounded-xl border border-chart-4/30 bg-chart-4/10 p-3">
+              <Text className="text-xs font-semibold uppercase tracking-wide text-chart-4">
+                Sent back by the office
+              </Text>
+              <Text className="mt-1 text-sm leading-relaxed text-foreground">
+                {item.reopenReason}
+              </Text>
+            </View>
+          ) : null}
           {item.propertyNotes ? (
             <View className="rounded-xl bg-muted p-3">
               <Text className="text-xs leading-relaxed text-muted-foreground">

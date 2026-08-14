@@ -12,7 +12,7 @@ import { ApplicationError } from '../common/errors';
 import { thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
-import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
+import { ROOM_SUMMARY_WHERE, readFrameMarkers } from '../technician/media-processing.service';
 
 /** Findings awaiting a human decision. */
 const UNREVIEWED: FindingReviewStatus[] = [FindingReviewStatus.PENDING_REVIEW];
@@ -155,15 +155,17 @@ export class AreaEvidenceService {
   }): AreaReviewStatus {
     if (input.processingFailed) return 'FAILED';
     if (input.completionStatus === 'FAILED') return 'FAILED';
-    if (!input.recordings && !input.photos)
-      return input.completionStatus === 'SKIPPED' ? 'EVIDENCE_INCOMPLETE' : 'NOT_STARTED';
+    // Ahead of the evidence checks on purpose. A skipped area has no recording
+    // by definition, so every downstream rule would report it as incomplete and
+    // bury the fact that skipping was a decision with a reason attached.
+    if (input.completionStatus === 'SKIPPED') return 'SKIPPED';
+    if (!input.recordings && !input.photos) return 'NOT_STARTED';
     if (input.followUpFindings) return 'FOLLOW_UP_REQUIRED';
     if (input.processingPending) return 'ANALYSIS_PROCESSING';
     if (input.unreviewedFindings) return 'FINDINGS_NEED_REVIEW';
     // A required area without its walkthrough is incomplete even if photos and
     // decided findings exist — the primary recording is the mandated evidence.
     if (input.isRequired && !input.hasPrimaryRecording) return 'EVIDENCE_INCOMPLETE';
-    if (input.completionStatus === 'SKIPPED') return 'EVIDENCE_INCOMPLETE';
     return input.findings ? 'REVIEWED' : 'EVIDENCE_READY';
   }
 
@@ -182,6 +184,7 @@ export class AreaEvidenceService {
       select: {
         id: true,
         completionStatus: true,
+        skipReason: true,
         propertyArea: {
           select: {
             id: true,
@@ -315,6 +318,9 @@ export class AreaEvidenceService {
         // — the report still shows them, so the reviewer must see them too.
         checklistAssessedCount: checklistAssessedByArea.get(area.id) ?? 0,
         completionStatus: area.completionStatus,
+        // Only meaningful alongside a SKIPPED status, and null otherwise so the
+        // console never prints a stale reason against an area that was resumed.
+        skipReason: area.completionStatus === 'SKIPPED' ? area.skipReason : null,
         reviewStatus: this.reviewStatusFor({
           completionStatus: area.completionStatus,
           isRequired: area.propertyArea.isRequired,
@@ -416,6 +422,11 @@ export class AreaEvidenceService {
           uploadStatus: true,
           processingStatus: true,
           createdAt: true,
+          // Where the technician tapped the shutter during the walkthrough.
+          // Android cannot photograph while recording, so the shutter stores a
+          // moment instead — until now those moments never reached the
+          // reviewer, which made them useless.
+          captureSummary: true,
           technician: { select: { displayName: true } },
         },
       }),
@@ -602,6 +613,9 @@ export class AreaEvidenceService {
         technicianName: recording.technician.displayName,
         createdAt: recording.createdAt.toISOString(),
         thumbnailUrl: thumbnails[index],
+        // Bounded by the recording length by the same helper the pipeline uses,
+        // so a marker past the end never reaches the player as a dead chip.
+        frameMarkersMs: readFrameMarkers(recording.captureSummary, recording.durationSeconds),
         contentPath: `/api/v1/admin/media/${recording.id}/content`,
       })),
       photoGroups: groups,

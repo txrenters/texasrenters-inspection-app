@@ -448,6 +448,14 @@ export interface AdminInspection {
   createdAt: string;
   updatedAt: string;
   internalNotes?: string | null;
+  /**
+   * The report's closing block, written at sign-off. Distinct from
+   * `internalNotes`, which is never published — these three are printed on the
+   * document a tenant and an owner read.
+   */
+  nextInspectionAlert?: string | null;
+  maintenanceComments?: string | null;
+  generalComments?: string | null;
   propertySnapshot?: unknown;
   leaseSnapshot?: unknown;
   propertywareBuilding?: Pick<
@@ -683,7 +691,16 @@ export interface PublicReportBrand {
 export interface PublicReportPhoto {
   id: string;
   roomId: string;
+  /** Caption. The checklist item's name when the photo evidences one. */
   label?: string | null;
+  /**
+   * The checklist item this photograph evidences, if any.
+   *
+   * Carried separately from `label` so a renderer can group photographs under
+   * their table row rather than only captioning them — which is how the
+   * office's printed report is laid out.
+   */
+  checklistItem?: string | null;
   notes?: string | null;
   capturedAt: string;
   width?: number | null;
@@ -716,6 +733,20 @@ export interface PublicInspectionReport {
     status: string;
     scheduledAt: string;
     completedAt?: string | null;
+    /**
+     * Who carried out the inspection, for the report's "Inspector" line.
+     *
+     * Every current assignee, joined — the office's reports name more than one
+     * person on a job. Null when nobody is assigned; the report should not
+     * claim an inspector it does not have.
+     */
+    inspector?: string | null;
+    /**
+     * The name of the form the inspector worked from — "Exit Inspection" — as
+     * distinct from the enum. Deployment-overridable, because this is the
+     * organisation's vocabulary.
+     */
+    templateLabel?: string | null;
   };
   rooms: Array<{
     id: string;
@@ -748,6 +779,18 @@ export interface PublicInspectionReport {
     baselineCondition: string;
   }>;
   photos: PublicReportPhoto[];
+  /**
+   * The report's closing block, written by the reviewer at sign-off.
+   *
+   * Three fields rather than one note because they are read by different
+   * people: the alert schedules the next visit, the maintenance comments become
+   * work orders, and the general comments are what the tenant reads.
+   */
+  closing?: {
+    nextInspectionAlert?: string | null;
+    maintenanceComments?: string | null;
+    generalComments?: string | null;
+  };
   generatedAt: string;
 }
 

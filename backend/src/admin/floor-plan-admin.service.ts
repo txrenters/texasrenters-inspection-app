@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { checklistTemplateFor, classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
-import { AreaCategory, AreaEnvironment, FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
-import type { Prisma } from '@prisma/client';
+import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
+import type { AreaCategory, AreaEnvironment, Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';

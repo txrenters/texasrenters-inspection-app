@@ -1,7 +1,6 @@
 packages:
   - mobile
-  - web-app
-  - web-shadcn
+  - web
   - backend
   - shared
 

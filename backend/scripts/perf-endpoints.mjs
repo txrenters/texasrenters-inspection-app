@@ -1,3 +1,11 @@
+// BROKEN: this harness authenticates with `x-mock-user-id`, and the mock-auth
+// bypass it depends on has been removed from ApiAuthGuard. Every request below
+// now returns 401.
+//
+// Left in place rather than deleted because the endpoint list and the sampling
+// logic are still worth having. Making it run again means signing in for real
+// and sending a bearer token — a small job, but one that needs a seeded set of
+// credentials this file cannot carry.
 import { measure, percentile, round } from './perf-utils.mjs';
 
 const baseUrl = (process.env.PERF_API_BASE_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');

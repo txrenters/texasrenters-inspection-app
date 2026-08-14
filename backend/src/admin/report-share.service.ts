@@ -32,6 +32,23 @@ const HOMEOWNER_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
   ],
 };
 
+/**
+ * How each inspection type is named on the printed report.
+ *
+ * The office's reports carry an "Inspection Template" line — the name of the
+ * form the inspector worked from, not the enum. These are the equivalents;
+ * `REPORT_TEMPLATE_LABEL_<TYPE>` overrides any of them for a deployment whose
+ * wording differs, because this is the organisation's vocabulary rather than
+ * ours to fix.
+ */
+const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
+  MOVE_IN: process.env.REPORT_TEMPLATE_LABEL_MOVE_IN ?? 'Entry Inspection',
+  MOVE_OUT: process.env.REPORT_TEMPLATE_LABEL_MOVE_OUT ?? 'Exit Inspection',
+  OCCUPIED: process.env.REPORT_TEMPLATE_LABEL_OCCUPIED ?? 'Routine Inspection',
+  BACK_TO_MARKET: process.env.REPORT_TEMPLATE_LABEL_BACK_TO_MARKET ?? 'Back to Market Inspection',
+  HVAC: process.env.REPORT_TEMPLATE_LABEL_HVAC ?? 'HVAC Maintenance Inspection',
+};
+
 @Injectable()
 export class ReportShareService {
   constructor(
@@ -145,11 +162,11 @@ export class ReportShareService {
     // it silently turned every shared report into "This report is not
     // available." Wrapping the reads keeps the scope open across them.
     return withTenant(share.organizationId, () =>
-      this.buildPublicReport(share.inspectionId, token),
+      this.buildPublicReport(share.inspectionId, token, share.createdBy.displayName),
     );
   }
 
-  private async buildPublicReport(inspectionId: string, token: string) {
+  private async buildPublicReport(inspectionId: string, token: string, issuedBy: string) {
     const inspection = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
       select: {
@@ -157,6 +174,26 @@ export class ReportShareService {
         status: true,
         scheduledAt: true,
         completedAt: true,
+        nextInspectionAlert: true,
+        maintenanceComments: true,
+        generalComments: true,
+        /**
+         * Who carried out the inspection, for the report's "Inspector" line.
+         *
+         * Current assignments only, and all of them: the office's reports name
+         * more than one person on a job, and a superseded assignment names
+         * whoever *used* to hold it — printing that would credit the wrong
+         * technician on a document a tenant may be shown.
+         */
+        assignments: {
+          where: { isCurrent: true },
+          orderBy: { assignedAt: 'asc' as const },
+          select: { technician: { select: { displayName: true } } },
+        },
+        // Who signed the report off. Preferred over the link's creator: a
+        // report can be shared more than once, by different people, and the
+        // name on it should be whoever took responsibility for the content.
+        finalizedBy: { select: { displayName: true } },
         propertywareUnit: { select: { name: true } },
         propertywareBuilding: {
           select: { name: true, addressLine1: true, city: true, state: true, postalCode: true },
@@ -207,6 +244,11 @@ export class ReportShareService {
                 capturedAt: true,
                 width: true,
                 height: true,
+                // The caption the printed report uses. Every photograph in the
+                // office's report is titled with the checklist item it
+                // evidences, so the table states the verdict and the
+                // photographs beneath prove it item by item.
+                checklistItem: { select: { label: true } },
               },
             },
           },
@@ -252,6 +294,36 @@ export class ReportShareService {
         status: inspection.status,
         scheduledAt: inspection.scheduledAt,
         completedAt: inspection.completedAt,
+        // Null rather than a placeholder when nobody is assigned: the report
+        // should not claim an inspector it does not have.
+        /**
+         * The office, then the field — the order the printed report uses.
+         *
+         * "Office" is whoever signed the report off, falling back to whoever
+         * issued this link when it has not been finalized. A public report has
+         * no viewer to ask, so the acting account has to be captured at issue
+         * time rather than read at view time.
+         *
+         * Deduplicated: an administrator who is also the assigned technician
+         * would otherwise be printed twice.
+         */
+        inspector:
+          [
+            ...new Set(
+              [
+                inspection.finalizedBy?.displayName ?? issuedBy,
+                ...inspection.assignments.map((entry) => entry.technician.displayName),
+              ].filter((name): name is string => Boolean(name?.trim())),
+            ),
+          ].join(' / ') || null,
+        templateLabel: INSPECTION_TEMPLATE_LABEL[inspection.inspectionType] ?? null,
+      },
+      // The report's closing block. Nulls travel through as nulls so the
+      // renderers can omit a heading rather than print one over nothing.
+      closing: {
+        nextInspectionAlert: inspection.nextInspectionAlert,
+        maintenanceComments: inspection.maintenanceComments,
+        generalComments: inspection.generalComments,
       },
       rooms: inspection.areas.map((area) => ({
         id: area.id,
@@ -287,7 +359,11 @@ export class ReportShareService {
         area.photos.map((photo) => ({
           id: photo.id,
           roomId: area.id,
-          label: photo.label,
+          // The item name wins over free text: it is what the printed report
+          // captions with, and a technician's ad-hoc label is the fallback for
+          // a photograph that documents the room rather than one item.
+          label: photo.checklistItem?.label ?? photo.label,
+          checklistItem: photo.checklistItem?.label ?? null,
           notes: photo.notes,
           capturedAt: photo.capturedAt,
           width: photo.width,
@@ -369,6 +445,9 @@ export class ReportShareService {
           organizationId: true,
           expiresAt: true,
           revokedAt: true,
+          // Whoever issued this link — the logged-in account at the moment the
+          // report went out. A public report has no viewer to ask.
+          createdBy: { select: { displayName: true } },
         },
       }),
     );

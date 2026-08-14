@@ -18,6 +18,7 @@ import {
   PropertyAreaStatus,
   VideoRecordingType,
 } from '@prisma/client';
+import type { AreaCategory, AreaEnvironment } from '@prisma/client';
 import type { FindingReviewStatus, Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -212,6 +213,8 @@ const technicianInspectionSummarySelect = {
   // Tells the app to ask the technician to survey the areas rather than treat
   // an empty list as an error.
   allowTechnicianAreaCapture: true,
+  // Why the office sent this back. The technician has to be able to read it.
+  reopenReason: true,
   propertywareUnit: {
     select: { id: true, name: true, bedrooms: true, bathrooms: true },
   },
@@ -544,13 +547,32 @@ export class TechnicianService {
     // advance it to REVIEW_REQUIRED once processing finishes.
     const updated = await this.prisma.inspection.update({
       where: { id },
-      data: { status: InspectionStatus.TECHNICIAN_SUBMITTED, submittedAt: new Date() },
+      data: {
+        status: InspectionStatus.TECHNICIAN_SUBMITTED,
+        submittedAt: new Date(),
+        // Cleared on submission: by now the technician has acted on it, and a
+        // reason left standing would reappear as an instruction on work they
+        // have already redone.
+        reopenReason: null,
+      },
       select: technicianInspectionSummarySelect,
     });
     // If every recording finished processing before submission, the
     // inspection is immediately ready for human review.
     await this.mediaProcessing.advanceInspection(id);
     this.notifyInspectionChanged(user, id);
+    // Tell the office. notifyInspectionChanged above addresses the technician's
+    // own devices; nothing reached the administrators, so a submitted
+    // inspection sat in the queue until somebody happened to reload.
+    const property = updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name ?? null;
+    this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
+      kind: 'INSPECTION_SUBMITTED',
+      title: 'Inspection submitted',
+      // Middot, not an em-dash: this string is rendered verbatim in the console
+      // toast, the notification bell and the operating system's own alert.
+      body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' · '),
+      inspectionId: id,
+    });
     return this.mapInspection(updated, user.id);
   }
 
@@ -1141,6 +1163,81 @@ export class TechnicianService {
     return { id: requestId, status: 'RESOLVED' as const };
   }
 
+  /**
+   * Corrects an area the technician added themselves.
+   *
+   * Scoped to `source: TECHNICIAN` and their own `createdById`, which is the
+   * whole point of the rule: a technician fixing a name they just mistyped is a
+   * different act from rewriting the property's layout. Areas that came from a
+   * floor plan are the office's catalog record and are reused by every future
+   * inspection of that property, so renaming one here would silently change
+   * work nobody in this inspection is responsible for.
+   *
+   * Name, environment, category and notes only. `isRequired` and
+   * `inspectionOrder` are scheduling decisions the office makes, not
+   * observations from the field.
+   */
+  async updateArea(
+    user: AuthenticatedUser,
+    roomId: string,
+    input: { name?: string; environment?: AreaEnvironment; category?: AreaCategory | null; notes?: string },
+  ) {
+    const room = await this.assignedRoom(user, roomId);
+
+    // `finalizedAt`, not status alone — the same rule that governs photo
+    // deletion and checklist scoring. A reopen must not reopen the naming of
+    // areas behind a report that has already been closed and possibly shared.
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: room.inspectionId },
+      select: { status: true, finalizedAt: true },
+    });
+    if (
+      inspection?.finalizedAt ||
+      inspection?.status === InspectionStatus.COMPLETED ||
+      inspection?.status === InspectionStatus.CANCELLED
+    )
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Areas cannot be changed after the inspection is finalized.',
+      );
+
+    const area = await this.prisma.propertyArea.findFirst({
+      where: { id: room.propertyAreaId, source: 'TECHNICIAN', createdById: user.id },
+      select: { id: true },
+    });
+    if (!area)
+      throw new ApplicationError(
+        403,
+        'AREA_NOT_EDITABLE',
+        'Only an area you added can be changed here. Ask the office to change the others.',
+      );
+
+    const name = input.name?.trim();
+    await this.prisma.propertyArea.update({
+      where: { id: area.id },
+      data: {
+        ...(name ? { name } : {}),
+        ...(input.environment ? { environment: input.environment } : {}),
+        // Explicit null clears the category; absent leaves it alone.
+        ...(input.category !== undefined ? { category: input.category } : {}),
+        ...(input.notes !== undefined ? { notes: input.notes.trim() || null } : {}),
+      },
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action: 'TECHNICIAN_AREA_UPDATED',
+        entityType: 'PropertyArea',
+        entityId: area.id,
+        metadata: { inspectionId: room.inspectionId, name: name ?? null },
+      },
+    });
+    this.notifyInspectionChanged(user, room.inspectionId);
+    return this.mapRoom(await this.assignedRoom(user, roomId));
+  }
+
   async room(user: AuthenticatedUser, id: string) {
     const room = await this.assignedRoom(user, id);
     return this.mapRoom(room);
@@ -1552,6 +1649,30 @@ export class TechnicianService {
       if (!area)
         throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
 
+      /**
+       * The item has to belong to *this* area.
+       *
+       * Same rule as scoring a checklist item: without it a photograph could be
+       * filed under an item from another property, and the report would print
+       * that evidence under a row nobody inspected.
+       *
+       * Archived items are still accepted. The checklist can change mid-
+       * inspection, and refusing evidence because an administrator tidied the
+       * list would lose a photograph the technician had already taken.
+       */
+      if (dto.checklistItemId) {
+        const item = await this.prisma.areaChecklistItem.findFirst({
+          where: { id: dto.checklistItemId, propertyAreaId: area.propertyAreaId },
+          select: { id: true },
+        });
+        if (!item)
+          throw new ApplicationError(
+            404,
+            'CHECKLIST_ITEM_NOT_FOUND',
+            'That checklist item does not belong to this area.',
+          );
+      }
+
       // Retried uploads reuse the client key and return the stored photo.
       const existing = await this.prisma.inspectionPhoto.findUnique({
         where: { idempotencyKey: dto.idempotencyKey },
@@ -1601,6 +1722,7 @@ export class TechnicianService {
             inspectionId: area.inspectionId,
             inspectionAreaId: area.id,
             findingId: dto.findingId ?? null,
+            checklistItemId: dto.checklistItemId ?? null,
             capturedById: user.id,
             provider: 'local',
             storageKey,
@@ -2089,6 +2211,9 @@ export class TechnicianService {
       unitName: record.propertywareUnit?.name ?? null,
       roomIds: record.areas.map((area) => area.id),
       allowTechnicianAreaCapture: record.allowTechnicianAreaCapture,
+      // Undefined rather than empty string: the app shows the banner only when
+      // there is something to read.
+      reopenReason: record.reopenReason ?? undefined,
       propertyNotes: record.internalNotes ?? '',
       property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {

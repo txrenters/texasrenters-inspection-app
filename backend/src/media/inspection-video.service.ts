@@ -5,6 +5,7 @@ import {
   InspectionStatus,
   MediaProcessingStatus,
   MediaUploadStatus,
+  PhotoCaptureType,
   VideoRecordingType,
 } from '@prisma/client';
 
@@ -13,6 +14,7 @@ import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
+import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MediaProcessingService } from '../technician/media-processing.service';
 
 /**
@@ -95,7 +97,170 @@ export class InspectionVideoService {
     @Optional()
     @Inject(MediaProcessingService)
     private readonly mediaProcessing?: MediaProcessingService,
+    // Optional for the same reason: the existing tests build this service with
+    // two mocks, and a deployment without photo storage should still serve
+    // playback rather than fail to start.
+    @Optional()
+    @Inject(InspectionMediaStorageService)
+    private readonly mediaStorage?: InspectionMediaStorageService,
   ) {}
+
+  /**
+   * Captures a still from a recording at a given moment, as report evidence.
+   *
+   * This is the reviewer's half of a mechanism that already existed and was
+   * silently dead. A technician tapping the shutter mid-walkthrough records a
+   * timestamp rather than a photograph — Android cannot photograph while
+   * recording at all — and the pipeline was meant to cut those frames out
+   * afterwards. For a Cloudflare Stream recording it never ran: extraction sits
+   * below an early return taken by every Stream video, so every marker a
+   * technician has ever set went nowhere.
+   *
+   * Reconnected here rather than there, and better: Cloudflare serves a frame
+   * at any offset from the signed thumbnail endpoint, so this needs no ffmpeg
+   * and never downloads the video. It also frees the reviewer from the
+   * technician's marks — any moment can be captured, chosen on a large screen
+   * with the recording in front of them.
+   *
+   * Idempotent per (recording, offset): clicking twice on the same frame
+   * returns the stored photograph instead of filing a duplicate into the
+   * report.
+   */
+  async captureSnapshot(
+    user: AuthenticatedUser,
+    videoId: string,
+    input: { atMs: number; checklistItemId?: string; label?: string },
+  ) {
+    if (!this.mediaStorage)
+      throw new ApplicationError(
+        503,
+        'INSPECTION_MEDIA_STORAGE_NOT_CONFIGURED',
+        'Photo storage is not configured.',
+      );
+
+    /**
+     * Reviewer-only, unlike playback.
+     *
+     * A technician may watch their own recording — `getPlayback` allows that
+     * deliberately — but deciding which frame becomes evidence in a report
+     * handed to a tenant is the office's call. Checked explicitly here because
+     * this controller carries no permissions guard, so scoping by organization
+     * alone would have let any authenticated technician file report evidence.
+     */
+    if (!user.permissions.includes('inspections:manage'))
+      throw new ApplicationError(
+        403,
+        'FORBIDDEN',
+        'You do not have permission to capture report evidence.',
+      );
+
+    const media = await this.prisma.inspectionMedia.findFirst({
+      where: { id: videoId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        streamUid: true,
+        readyAt: true,
+        durationSeconds: true,
+        inspectionId: true,
+        inspectionAreaId: true,
+        inspectionArea: { select: { propertyAreaId: true } },
+      },
+    });
+    if (!media || !media.inspectionAreaId)
+      throw new ApplicationError(404, 'INSPECTION_MEDIA_NOT_FOUND', 'Recording was not found.');
+    if (!media.streamUid || !media.readyAt)
+      throw new ApplicationError(
+        409,
+        'RECORDING_NOT_READY',
+        'This recording is not ready for playback yet.',
+      );
+
+    // A frame past the end yields nothing, and an unchecked offset would let a
+    // caller drive arbitrary requests at Cloudflare on our account.
+    const limitMs = Math.max(0, media.durationSeconds) * 1000;
+    const atMs = Math.round(input.atMs);
+    if (!Number.isFinite(atMs) || atMs < 0 || atMs > limitMs)
+      throw new ApplicationError(
+        400,
+        'SNAPSHOT_OFFSET_OUT_OF_RANGE',
+        'That moment is outside the recording.',
+      );
+
+    // Same rule as scoring an item or filing a photograph against one: the
+    // item has to belong to this area, or the report would show evidence under
+    // a row nobody inspected.
+    if (input.checklistItemId) {
+      const item = await this.prisma.areaChecklistItem.findFirst({
+        where: { id: input.checklistItemId, propertyAreaId: media.inspectionArea!.propertyAreaId },
+        select: { id: true },
+      });
+      if (!item)
+        throw new ApplicationError(
+          404,
+          'CHECKLIST_ITEM_NOT_FOUND',
+          'That checklist item does not belong to this area.',
+        );
+    }
+
+    const idempotencyKey = `${media.id}-snapshot-${atMs}`;
+    const existing = await this.prisma.inspectionPhoto.findUnique({
+      where: { idempotencyKey },
+      select: { id: true },
+    });
+    if (existing) return { id: existing.id, atMs, reused: true };
+
+    const customer = this.stream.customerCode;
+    if (!customer)
+      throw new ApplicationError(
+        503,
+        'STREAM_CUSTOMER_CODE_MISSING',
+        'Stream playback is not configured for this environment.',
+      );
+    const { token } = this.stream.signPlaybackToken(media.streamUid, PLAYBACK_TTL_SECONDS);
+    // `?time=` is what makes this cheap — Cloudflare renders the frame, so the
+    // video never has to reach this process.
+    const url =
+      `https://customer-${customer}.cloudflarestream.com/${token}/thumbnails/thumbnail.jpg` +
+      `?time=${(atMs / 1000).toFixed(3)}s&height=1080`;
+    const response = await fetch(url).catch(() => null);
+    if (!response?.ok)
+      throw new ApplicationError(
+        502,
+        'SNAPSHOT_UNAVAILABLE',
+        'The frame could not be captured from the recording.',
+      );
+    const bytes = Buffer.from(await response.arrayBuffer());
+
+    const storageKey = `organizations/${user.organizationId}/inspections/${media.inspectionId}/photos/${idempotencyKey}.jpg`;
+    await this.mediaStorage.putBytes(storageKey, bytes, 'image/jpeg');
+    try {
+      const photo = await this.prisma.inspectionPhoto.create({
+        data: {
+          organizationId: user.organizationId,
+          inspectionId: media.inspectionId,
+          inspectionAreaId: media.inspectionAreaId,
+          checklistItemId: input.checklistItemId ?? null,
+          capturedById: user.id,
+          provider: 'local',
+          storageKey,
+          captureType: PhotoCaptureType.VIDEO_FRAME_SNAPSHOT,
+          label: input.label?.trim() || null,
+          mimeType: 'image/jpeg',
+          sizeBytes: bytes.byteLength,
+          idempotencyKey,
+          // The moment is kept so the report can cite it, and so a reviewer can
+          // jump back to it in the recording.
+          metadata: { videoTimestampMs: atMs, captureSource: 'VIDEO_FRAME_EXTRACTION' },
+        },
+        select: { id: true },
+      });
+      return { id: photo.id, atMs, reused: false };
+    } catch (error) {
+      // Orphaned bytes would otherwise accumulate in storage on every failure.
+      await this.mediaStorage.delete(storageKey).catch(() => undefined);
+      throw error;
+    }
+  }
 
   /**
    * Reserve a direct-to-Cloudflare upload for one area recording.

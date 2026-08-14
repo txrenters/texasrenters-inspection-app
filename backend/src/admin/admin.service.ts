@@ -107,6 +107,66 @@ const EVIDENCE_REQUEST_SELECT = {
   inspectionArea: { select: { propertyArea: { select: { name: true } } } },
 } satisfies Prisma.AreaEvidenceRequestSelect;
 
+/**
+ * What is stopping this inspection being finalized, in words a reviewer can act
+ * on.
+ *
+ * Exported for its own test. The rule it encodes: say only what is actually
+ * blocking, and name it. The message this replaced always printed both counts,
+ * so an administrator with nothing but an unreviewable row behind the gate read
+ * "1 finding(s) awaiting review and 0 recording(s) still processing" and had no
+ * way to find the one or dismiss the zero.
+ */
+export function describeFinalizeBlockers(
+  findings: readonly { title: string; propertyArea: { name: string } | null }[],
+  media: readonly { inspectionArea: { propertyArea: { name: string } } | null }[],
+): string {
+  const parts: string[] = [];
+  if (findings.length) {
+    // Named rather than counted: "Kitchen — Cracked tile" is something a
+    // reviewer can go and open.
+    const named = findings
+      .slice(0, 3)
+      .map((finding) =>
+        finding.propertyArea?.name
+          ? `${finding.propertyArea.name} — ${finding.title}`
+          : finding.title,
+      )
+      .join('; ');
+    const rest = findings.length > 3 ? ` and ${findings.length - 3} more` : '';
+    parts.push(
+      `${findings.length} finding${findings.length === 1 ? '' : 's'} still awaiting review (${named}${rest})`,
+    );
+  }
+  if (media.length) {
+    const areas = [
+      ...new Set(
+        media
+          .map((item) => item.inspectionArea?.propertyArea.name)
+          .filter((name): name is string => Boolean(name)),
+      ),
+    ];
+    parts.push(
+      `${media.length} recording${media.length === 1 ? '' : 's'} still processing${
+        areas.length ? ` (${areas.slice(0, 3).join(', ')})` : ''
+      }`,
+    );
+  }
+  return `${parts.join(' and ')}. Resolve ${parts.length > 1 ? 'them' : 'it'} or document an override to finalize.`;
+}
+
+/**
+ * Distinguishes "not sent" from "cleared" for an optional text field.
+ *
+ * Returns undefined so Prisma skips the column when the caller omitted it, and
+ * null when they sent it blank — which is the difference between leaving a
+ * comment alone and deleting it.
+ */
+function emptyToNull(value: string | undefined) {
+  if (value === undefined) return undefined;
+  return value.trim() || null;
+}
+
 const REOPENABLE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.TECHNICIAN_SUBMITTED,
   InspectionStatus.PROCESSING,
@@ -880,6 +940,9 @@ export class AdminService {
       createdAt: true,
       updatedAt: true,
       internalNotes: true,
+      nextInspectionAlert: true,
+      maintenanceComments: true,
+      generalComments: true,
       propertywareBuilding: {
         select: { id: true, name: true, addressLine1: true, city: true, state: true },
       },
@@ -946,6 +1009,9 @@ export class AdminService {
         createdAt: true,
         updatedAt: true,
         internalNotes: true,
+      nextInspectionAlert: true,
+      maintenanceComments: true,
+      generalComments: true,
         propertywareBuilding: {
           select: { id: true, name: true, addressLine1: true, city: true, state: true },
         },
@@ -1295,6 +1361,17 @@ export class AdminService {
           scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : undefined,
           priority: input.priority,
           internalNotes: input.internalNotes,
+          /**
+           * Absent means "leave it alone"; empty means "clear it".
+           *
+           * `?.trim() || undefined` would collapse those two, so a reviewer who
+           * deleted a comment would watch it reappear — the field would stay on
+           * a report they had just removed it from. Null is what clears it, and
+           * the report prints no heading over a null.
+           */
+          nextInspectionAlert: emptyToNull(input.nextInspectionAlert),
+          maintenanceComments: emptyToNull(input.maintenanceComments),
+          generalComments: emptyToNull(input.generalComments),
           status: input.status as InspectionStatus | undefined,
           cancelledAt: input.status === 'CANCELLED' ? new Date() : undefined,
           cancellationReason: input.cancellationReason,
@@ -1344,24 +1421,52 @@ export class AdminService {
     const existing = await this.requireInspection(user.organizationId, id);
     this.assertReviewable(existing.status);
     const [pendingFindings, unfinishedMedia] = await Promise.all([
-      this.prisma.inspectionFinding.count({
-        where: { inspectionId: id, reviewStatus: FindingReviewStatus.PENDING_REVIEW },
+      /**
+       * Defects only — the room condition summary is deliberately excluded.
+       *
+       * It is stored as a finding row (findingType NO_CHANGE, title "Room
+       * condition summary") but it is narrative, not a defect, and the review
+       * screen filters it out of the findings list on purpose. Counting it here
+       * produced the worst kind of blocker: the dialog said "1 finding awaiting
+       * review" while the Findings tab showed one finding, approved, and the
+       * area read "1 of 1 reviewed". There was nothing the administrator could
+       * click to clear it.
+       *
+       * A gate that can only be passed by typing an override reason every time
+       * is not a safety gate — it teaches people to override reflexively, which
+       * is precisely how a genuinely unreviewed defect gets finalized. This now
+       * counts what the reviewer can actually see and act on, matching the
+       * exclusion `area-evidence.service` already applies to the same rows.
+       */
+      this.prisma.inspectionFinding.findMany({
+        where: {
+          inspectionId: id,
+          reviewStatus: FindingReviewStatus.PENDING_REVIEW,
+          NOT: { ...ROOM_SUMMARY_WHERE },
+        },
+        select: { title: true, propertyArea: { select: { name: true } } },
+        take: 20,
       }),
-      this.prisma.inspectionMedia.count({
+      this.prisma.inspectionMedia.findMany({
         where: {
           inspectionId: id,
           processingStatus: {
             in: [MediaProcessingStatus.PENDING, MediaProcessingStatus.PROCESSING],
           },
         },
+        select: { inspectionArea: { select: { propertyArea: { select: { name: true } } } } },
+        take: 20,
       }),
     ]);
-    const blockers = pendingFindings + unfinishedMedia;
-    if (blockers > 0 && !input.overrideReason)
+    if ((pendingFindings.length || unfinishedMedia.length) && !input.overrideReason)
       throw new ApplicationError(
         409,
         'INSPECTION_HAS_UNRESOLVED_ITEMS',
-        `${pendingFindings} finding(s) awaiting review and ${unfinishedMedia} recording(s) still processing. Resolve them or document an override to finalize.`,
+        // Names what is blocking, and mentions only the categories that
+        // actually are. The old wording always printed both counts, so a
+        // reviewer read "and 0 recording(s) still processing" and had to work
+        // out for themselves that the zero was not the problem.
+        describeFinalizeBlockers(pendingFindings, unfinishedMedia),
       );
     await this.prisma.$transaction(async (tx) => {
       await tx.inspection.update({
@@ -1378,9 +1483,12 @@ export class AdminService {
         },
       });
       await this.audit(tx, user, 'INSPECTION_FINALIZED', id, {
-        pendingFindings,
-        unfinishedMedia,
-        override: blockers > 0,
+        // Counts, not the rows: the audit records that an override happened and
+        // how much was outstanding, which is what a later reader needs. The
+        // titles are already in the findings themselves.
+        pendingFindings: pendingFindings.length,
+        unfinishedMedia: unfinishedMedia.length,
+        override: pendingFindings.length + unfinishedMedia.length > 0,
         overrideReason: input.overrideReason ?? null,
       });
     }, ADMIN_TRANSACTION_OPTIONS);
@@ -1487,9 +1595,13 @@ export class AdminService {
     // not an error — the admin may be about to assign it — so this is recorded
     // rather than refused, and the inspections list already flags unassigned
     // work on its own.
-    const currentAssignments = await this.prisma.inspectionAssignment.count({
+    // Ids, not just a count: each of these technicians has to be told, and the
+    // count alone cannot address them.
+    const currentAssignees = await this.prisma.inspectionAssignment.findMany({
       where: { inspectionId: id, isCurrent: true },
+      select: { technicianId: true },
     });
+    const currentAssignments = currentAssignees.length;
     await this.prisma.$transaction(async (tx) => {
       // The status is re-asserted in the WHERE clause. The check above ran on
       // `this.prisma`, outside this transaction, so Serializable cannot detect
@@ -1504,6 +1616,16 @@ export class AdminService {
           // overwrites it, and until then it records when the work last left
           // the field.
           completionBlockedReason: null,
+          /**
+           * Stored where the technician can read it.
+           *
+           * The reason was previously written only into the audit metadata,
+           * which no technician endpoint reads — so a reopened inspection
+           * reappeared in their queue with no explanation and the office had to
+           * phone them. An audit row is for reconstructing what happened later;
+           * this is for the person standing in the property now.
+           */
+          reopenReason: input.reason.trim() || null,
         },
       });
       if (count === 0)
@@ -1523,6 +1645,18 @@ export class AdminService {
       type: 'inspection.changed',
       organizationId: user.organizationId,
     });
+    /**
+     * Tell the technician, in real time.
+     *
+     * This published only a cache invalidation before, which refreshes the web
+     * console and reaches nobody in the field: the inspection reappeared in the
+     * technician's queue on their next sixty-second poll, with no explanation
+     * and no signal that anything had changed. Every other admin action that
+     * moves work — assign, reassign, unassign, request evidence — already
+     * publishes here.
+     */
+    for (const assignee of currentAssignees)
+      this.technicianEvents?.publish(assignee.technicianId, id, 'REOPENED');
     return this.inspection(user, id);
   }
 
@@ -2072,6 +2206,9 @@ export class AdminService {
       createdAt: true,
       updatedAt: true,
       internalNotes: true,
+      nextInspectionAlert: true,
+      maintenanceComments: true,
+      generalComments: true,
       propertywareBuilding: {
         select: { id: true, name: true, addressLine1: true, city: true, state: true },
       },

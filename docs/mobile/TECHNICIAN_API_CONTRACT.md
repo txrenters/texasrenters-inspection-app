@@ -131,8 +131,8 @@ then open <http://localhost:3000/api/docs>. To expose it through the tunnel temp
 
 ## Gotchas
 
-- **`USE_MOCK_AUTH=false`** is forced by Compose during remote beta. Mock auth cannot be used to
-  bypass login while the API is publicly reachable.
+- **Mock auth is gone.** It was previously pinned off by Compose during remote beta; the bypass
+  has since been removed from the guard entirely, so there is no configuration that skips login.
 - **`EXPO_PUBLIC_ENABLE_DEMO_DATA`** must stay unset. When `true`, the app resolves
   `dataSource = 'mock'` and never calls the backend at all.
 - **`VIDEO_PLATFORM_PROVIDER=mock`** currently, so video upload exercises the mock provider.

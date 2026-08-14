@@ -22,6 +22,7 @@ import {
 } from '../../storage/offline-record-cache';
 import type {
   AddAreaInput,
+  UpdateAreaInput,
   AuthRepository,
   CatalogRepository,
   FindingKind,
@@ -103,6 +104,9 @@ const inspectionSchema = z.object({
   // Defaulted rather than required: a cached inspection written before this
   // field existed must still parse, or the whole record is discarded.
   allowTechnicianAreaCapture: z.boolean().default(false),
+  // Why the office sent this back. Optional: most inspections were never
+  // reopened, and an absent reason is not an error.
+  reopenReason: z.string().optional(),
   propertyNotes: z.string(),
   property: propertySchema.pick({ id: true, address: true, cityStateZip: true, imageTone: true }),
   progress: z.object({
@@ -773,6 +777,26 @@ export class ApiInspectionRepository implements InspectionRepository {
     // Re-read rather than patching the cached list by hand: the server is the
     // authority on what was stored, including the trimmed comment.
     return this.roomChecklist(roomId);
+  }
+  /**
+   * Corrects an area this technician added.
+   *
+   * Not queued offline like a note or a skip: the server decides whether the
+   * area is theirs to change, and a rename held on the device would look
+   * accepted for hours before being refused.
+   */
+  async updateArea(roomId: string, input: UpdateAreaInput) {
+    const room = withLocalRoomState(
+      roomSchema.parse(
+        await writeJson(
+          `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/area`,
+          'PATCH',
+          input,
+        ),
+      ),
+    );
+    await this.persistRoom(room);
+    return room;
   }
   async addArea(inspectionId: string, input: AddAreaInput) {
     const room = withLocalRoomState(

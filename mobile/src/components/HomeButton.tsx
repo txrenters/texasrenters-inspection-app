@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { HouseIcon } from 'lucide-react-native';
 import { Modal, Pressable, Text, View } from 'react-native';
-import { router } from 'expo-router';
 
 import { registerIcons } from '../lib/icons';
+import { goHome } from '../lib/navigation';
 
 registerIcons(HouseIcon);
 
@@ -33,12 +33,13 @@ export function HomeButton({
   const [asking, setAsking] = useState(false);
   const overlay = tone === 'overlay';
 
-  const goHome = () => {
+  const leave = () => {
     setAsking(false);
-    // dismissAll, not push: pushing home would leave the abandoned inspection
-    // screens underneath it, so the next back press would walk right back into
-    // the walkthrough the technician just left.
-    router.dismissAll();
+    // goHome dismisses the whole stack rather than pushing: pushing home would
+    // leave the abandoned inspection screens underneath it, so the next back
+    // press would walk right back into the walkthrough just left. It also guards
+    // POP_TO_TOP, which is unhandled on a screen opened cold.
+    goHome();
   };
 
   return (
@@ -51,7 +52,7 @@ export function HomeButton({
           overlay ? 'h-10 w-10 bg-black/40' : 'h-9 w-9 bg-card'
         }`}
         hitSlop={8}
-        onPress={() => (confirm ? setAsking(true) : goHome())}
+        onPress={() => (confirm ? setAsking(true) : leave())}
       >
         <HouseIcon size={overlay ? 21 : 18} className={overlay ? 'text-white' : 'text-foreground'} />
       </Pressable>
@@ -84,7 +85,7 @@ export function HomeButton({
                   accessibilityLabel={confirm.leaveLabel}
                   accessibilityRole="button"
                   className="min-h-12 flex-1 items-center justify-center rounded-xl bg-destructive py-3"
-                  onPress={goHome}
+                  onPress={leave}
                 >
                   <Text className="font-bold text-white">{confirm.leaveLabel}</Text>
                 </Pressable>

@@ -69,6 +69,27 @@ export class TechnicianCreateAreaDto {
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
 }
 
+/**
+ * Corrections to an area the technician added.
+ *
+ * Every field optional: this is a correction, and sending only the name should
+ * not blank the rest. `isRequired` and `inspectionOrder` are deliberately
+ * absent — those are scheduling decisions the office makes, not observations
+ * from the field.
+ */
+export class TechnicianUpdateAreaDto {
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name?: string;
+  @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
+  // Nullable so a category can be cleared, not only changed.
+  @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory | null;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string;
+}
+
 export class TechnicianInspectionListQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page = 1;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize = 25;
@@ -189,6 +210,16 @@ export class TechnicianPhotoUploadDto {
   @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/) idempotencyKey!: string;
   @IsEnum(PhotoCaptureType) captureType!: PhotoCaptureType;
   @IsOptional() @IsUUID() findingId?: string;
+  /**
+   * The checklist item this photograph evidences.
+   *
+   * Optional because plenty of shots document the room generally rather than
+   * one item — forcing a choice would push technicians into filing overview
+   * photographs under an arbitrary row. Validated server-side against the
+   * area's own checklist, so a photo can never be filed under an item that
+   * belongs to a different room.
+   */
+  @IsOptional() @IsUUID() checklistItemId?: string;
   @IsOptional() @IsString() @MaxLength(120) label?: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(1000) sequenceNumber?: number;

@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { ArrowLeftIcon, RotateCwIcon } from 'lucide-react-native';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import { environment } from '@/src/config/environment';
 import { registerIcons } from '@/src/lib/icons';
 import { resolveMobilePlayback } from '@/src/media/playback-source';
@@ -59,7 +60,7 @@ export default function PlaybackScreen() {
           accessibilityRole="button"
           className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
           hitSlop={8}
-          onPress={() => router.back()}
+          onPress={() => goBack()}
         >
           <ArrowLeftIcon size={18} className="text-foreground" />
         </Pressable>

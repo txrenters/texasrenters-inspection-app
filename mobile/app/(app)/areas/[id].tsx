@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
@@ -39,7 +40,9 @@ import {
   useRoomMedia,
   useRoomPhotos,
   useRoomSummaries,
+  useUpdateArea,
   useUpdateRoom,
+  useUploadActions,
 } from '@/src/features/queries';
 import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
@@ -67,11 +70,20 @@ export default function AreaDetailScreen() {
   const media = useRoomMedia(id);
   const photos = useRoomPhotos(id);
   const findings = useFindings(inspectionId);
-  // Poll while this area is still processing so the summary lands on its own.
-  const summaries = useRoomSummaries(
-    inspectionId,
-    room.data?.processingStatus !== 'READY_FOR_REVIEW',
-  );
+  /**
+   * Poll only while a summary is genuinely on its way.
+   *
+   * This asked `processingStatus !== 'READY_FOR_REVIEW'`, which is true forever
+   * for an area whose analysis failed and for one that was never recorded — so
+   * an open area screen issued a request every five seconds, indefinitely. On a
+   * mobile connection any one of those can time out, which is where the
+   * "did not respond in time" errors came from.
+   *
+   * `analysisPending` is the server's own answer to the same question and is
+   * bounded there: a pipeline that dies mid-run stops reporting pending, so
+   * this cannot spin forever the way the status comparison did.
+   */
+  const summaries = useRoomSummaries(inspectionId, room.data?.analysisPending ?? false);
   const updates = useUpdateRoom(inspectionId, id);
   const pull = usePullToRefresh([room.refetch, media.refetch, photos.refetch, findings.refetch]);
   // The AI summary is transcript-derived, so what it mentions is what the
@@ -83,6 +95,8 @@ export default function AreaDetailScreen() {
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
   // Scoped to this area: a request about the kitchen is not this room's problem,
   // and showing it here would send the technician to the wrong place.
+  const uploadActions = useUploadActions();
+  const updateArea = useUpdateArea(inspectionId, id);
   const evidenceRequests = useEvidenceRequests(inspectionId);
   const resolveRequest = useResolveEvidenceRequest(inspectionId);
   const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
@@ -116,6 +130,8 @@ export default function AreaDetailScreen() {
    * little.
    */
   const [viewedPhoto, setViewedPhoto] = useState<string | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editedName, setEditedName] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState('');
 
@@ -130,6 +146,9 @@ export default function AreaDetailScreen() {
   const item = room.data;
   const roomFindings = (findings.data ?? []).filter((finding) => finding.roomId === item.id);
   const hasRecording = Boolean(media.data?.length);
+  // The primary walkthrough is what the pipeline analyses, so it is the one to
+  // re-run. Additional clips ride along with it.
+  const primaryMediaId = media.data?.[0]?.id ?? null;
   const recordingCount = media.data?.length ?? 0;
   const requirements = deriveAreaRequirements(item, {
     hasPrimaryRecording: hasRecording,
@@ -170,12 +189,33 @@ export default function AreaDetailScreen() {
             accessibilityRole="button"
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
             hitSlop={8}
-            onPress={() => router.back()}
+            onPress={() => goBack()}
           >
             <ArrowLeftIcon size={18} className="text-foreground" />
           </Pressable>
           <View className="min-w-0 flex-1">
-            <Text className="text-lg font-bold text-foreground">{item.name}</Text>
+            <View className="flex-row items-center gap-2">
+              <Text className="min-w-0 shrink text-lg font-bold text-foreground">{item.name}</Text>
+              {/* Offered only for an area this technician added. One from a
+                  floor plan is the office's catalog record, reused by every
+                  future inspection of the property, so renaming it from the
+                  field would change work nobody here is responsible for — the
+                  server refuses it, and a button that always errors is worse
+                  than none. */}
+              {item.source === 'TECHNICIAN' ? (
+                <Pressable
+                  accessibilityLabel={`Rename ${item.name}`}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                  onPress={() => {
+                    setEditedName(item.name);
+                    setEditOpen(true);
+                  }}
+                >
+                  <Edit3Icon size={15} className="text-muted-foreground" />
+                </Pressable>
+              ) : null}
+            </View>
             <Text className="text-xs text-muted-foreground">
               {item.floorName} · {item.isRequired ? 'Required' : 'Optional'} room
             </Text>
@@ -420,6 +460,51 @@ export default function AreaDetailScreen() {
             site is to capture it. */}
 
 
+        {/* Where analysis stands, and a way to run it again.
+            Shown only when there is a recording but nothing came back from it:
+            with findings on screen the state is self-evident, and with no
+            recording there is nothing to analyse. Until now this screen said
+            nothing at all in that case — a technician whose analysis had failed
+            saw an area that simply looked empty, with no way to retry. */}
+        {hasRecording && !roomFindings.length ? (
+          <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
+            <Text className="text-base font-semibold text-foreground">AI analysis</Text>
+            <Text className="mt-1 text-sm leading-6 text-muted-foreground">
+              {item.analysisPending
+                ? 'Running now. Findings appear here on their own, usually within a minute.'
+                : item.processingStatus === 'FAILED'
+                  ? 'Analysis could not be completed for this recording. Your video and photos are still saved.'
+                  : 'No findings were produced from this recording.'}
+            </Text>
+            {/* Offered only once analysis has stopped: asking to re-run
+                something already running would queue a second pass over the
+                same recording. */}
+            {!item.analysisPending && primaryMediaId ? (
+              <Pressable
+                accessibilityLabel="Run the analysis again"
+                accessibilityRole="button"
+                accessibilityState={{
+                  busy: uploadActions.retryProcessing.isPending,
+                  disabled: uploadActions.retryProcessing.isPending,
+                }}
+                className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-muted py-3 active:opacity-70"
+                disabled={uploadActions.retryProcessing.isPending}
+                onPress={() => uploadActions.retryProcessing.mutate(primaryMediaId)}
+              >
+                <RotateCwIcon size={16} className="text-primary" />
+                <Text className="font-semibold text-primary">
+                  {uploadActions.retryProcessing.isPending ? 'Starting…' : 'Run analysis again'}
+                </Text>
+              </Pressable>
+            ) : null}
+            {uploadActions.retryProcessing.error ? (
+              <Text className="mt-2 text-xs leading-5 text-muted-foreground">
+                {uploadActions.retryProcessing.error.message}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* Only shown once analysis has produced something. An empty "Findings"
             card during processing reads as "nothing wrong", which is a
             different and much more dangerous claim than "not analyzed yet". */}
@@ -551,6 +636,67 @@ export default function AreaDetailScreen() {
       <BottomSheet
         accessibilityRole="alert"
         animationType="fade"
+        onClose={() => setEditOpen(false)}
+        visible={editOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">Rename this area</Text>
+        <Text nativeID="area-name-label" className="mt-2 text-sm leading-5 text-muted-foreground">
+          Correct the name you gave this area. The office sees the change straight away.
+        </Text>
+        <TextInput
+          accessibilityLabel="Area name"
+          accessibilityLabelledBy="area-name-label"
+          autoFocus
+          className="mt-4 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
+          onChangeText={setEditedName}
+          placeholder="Area name"
+          placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+          value={editedName}
+        />
+        {updateArea.error ? (
+          <Text className="mt-2 text-xs leading-5 text-destructive">
+            {updateArea.error.message}
+          </Text>
+        ) : null}
+        <View className="mt-4 flex-row gap-3">
+          <Pressable
+            accessibilityLabel="Cancel"
+            accessibilityRole="button"
+            className="min-h-12 flex-1 items-center justify-center rounded-xl bg-muted"
+            onPress={() => setEditOpen(false)}
+          >
+            <Text className="font-semibold text-foreground">Cancel</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Save the area name"
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: updateArea.isPending,
+              disabled: updateArea.isPending || !editedName.trim() || editedName.trim() === item.name,
+            }}
+            className={`min-h-12 flex-1 items-center justify-center rounded-xl ${
+              updateArea.isPending || !editedName.trim() || editedName.trim() === item.name
+                ? 'bg-primary/40'
+                : 'bg-primary'
+            }`}
+            disabled={updateArea.isPending || !editedName.trim() || editedName.trim() === item.name}
+            onPress={() =>
+              updateArea.mutate(
+                { name: editedName.trim() },
+                { onSuccess: () => setEditOpen(false) },
+              )
+            }
+          >
+            <Text className="font-semibold text-primary-foreground">
+              {updateArea.isPending ? 'Saving…' : 'Save'}
+            </Text>
+          </Pressable>
+        </View>
+      </BottomSheet>
+
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
         onClose={() => setSkipOpen(false)}
         visible={skipOpen}
       >
@@ -595,7 +741,7 @@ export default function AreaDetailScreen() {
                 onSuccess: () => {
                   setSkipOpen(false);
                   setSkipReason('');
-                  router.back();
+                  goBack();
                 },
               })
             }

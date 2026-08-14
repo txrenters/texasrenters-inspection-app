@@ -22,7 +22,18 @@
 export type AreaReviewStatus =
   /** Nothing captured yet. */
   | 'NOT_STARTED'
-  /** Capture began or was skipped, but the required evidence is not all there. */
+  /**
+   * The technician deliberately skipped this area and gave a reason.
+   *
+   * Distinct from EVIDENCE_INCOMPLETE, which it used to be folded into. The two
+   * look identical on a dashboard and mean opposite things: incomplete is work
+   * that stopped halfway, skipped is a decision someone made and can justify —
+   * a locked room, a tenant who refused access. Showing "Evidence incomplete"
+   * over a reason the technician typed reads as if the app ignored them, and it
+   * sends a reviewer chasing evidence that was never going to exist.
+   */
+  | 'SKIPPED'
+  /** Capture began, but the required evidence is not all there. */
   | 'EVIDENCE_INCOMPLETE'
   /** Evidence is present and nothing needs a decision. */
   | 'EVIDENCE_READY'
@@ -79,6 +90,8 @@ export interface AreaEvidenceSummaryItem {
   checklistAssessedCount: number;
   completionStatus: string;
   reviewStatus: AreaReviewStatus;
+  /** Why the technician skipped it; null unless reviewStatus is SKIPPED. */
+  skipReason?: string | null;
   counts: AreaEvidenceCounts;
   evidence: AreaEvidenceFlags;
   /** Most recent capture in this area, or null when nothing was captured. */
@@ -109,6 +122,16 @@ export interface AreaRecording {
   createdAt: string;
   /** Poster frame. Playback itself is requested only when opened. */
   thumbnailUrl?: string | null;
+  /**
+   * Offsets, in milliseconds, where the technician tapped the shutter during
+   * the walkthrough.
+   *
+   * Android cannot photograph while recording — expo-camera binds either the
+   * image or the video use case, never both — so the shutter stores a moment
+   * instead of a picture. Surfacing them lets a reviewer jump straight to what
+   * the technician wanted looked at, and capture the frame themselves.
+   */
+  frameMarkersMs: number[];
   /** Proxy fallback for storage backends that cannot sign URLs. */
   contentPath: string;
 }

@@ -100,8 +100,24 @@ describe('media processing pipeline', () => {
     const prisma = {
       inspectionMedia: {
         findFirst: jest.fn().mockResolvedValue(media),
+        // Read by the analysis to reach the area's recorded checklist answers.
+        findUnique: jest.fn().mockResolvedValue({ inspectionAreaId: 'inspection-area-1' }),
         update: jest.fn().mockResolvedValue({}),
         count: jest.fn().mockResolvedValue(0),
+      },
+      // The technician's own assessment of each item — booleans, not speech.
+      // The analysis treats these as authoritative over the transcript.
+      inspectionAreaChecklistResponse: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            isClean: true,
+            isUndamaged: true,
+            isWorking: true,
+            comment: null,
+            videoTimestampSeconds: 39,
+            checklistItem: { label: 'Doors and locks' },
+          },
+        ]),
       },
       transcriptionJob: {
         upsert: jest.fn().mockResolvedValue({ id: 'transcription-1' }),
@@ -172,6 +188,27 @@ describe('media processing pipeline', () => {
     await service.process('media-1', ORGANIZATION_ID);
 
     expect(prisma.inspectionFinding.createMany).toHaveBeenCalledTimes(1);
+
+    // The analysis prompt must carry the technician's recorded answers, and must
+    // say they outrank the transcript.
+    //
+    // This is the guard for a real incident: OpenAI transcribed "clean and
+    // undamaged" as "clean and damaged" — the "un-" is unstressed and the two
+    // words are opposites — and three findings asserted damage on items the
+    // technician had recorded as undamaged. The booleans cannot be misheard, so
+    // they are what the model is told to trust.
+    const analysisBody = JSON.parse(
+      (global.fetch as jest.Mock).mock.calls[1][1].body as string,
+    ) as { input: string };
+    const prompt = JSON.stringify(analysisBody);
+    expect(prompt).toContain('<assessment>');
+    expect(prompt).toContain('Doors and locks');
+    expect(prompt).toContain('undamaged');
+    expect(prompt).toContain('AUTHORITATIVE');
+    expect(prompt).toContain('Never report damage for an item recorded as undamaged');
+    // The moment the answer was given, so a finding about this item can cite it
+    // instead of defaulting to 0:00.
+    expect(prompt).toContain('[at 39s]');
     // No DEEPGRAM_API_KEY in this test, so the OpenAI path runs and reports no
     // timings — the whole narration is stored as one whole-recording segment.
     expect(prisma.transcriptSegment.createMany).toHaveBeenCalledWith({

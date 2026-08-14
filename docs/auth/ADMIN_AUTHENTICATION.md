@@ -29,7 +29,7 @@ Technician identities use the same server-controlled flag. The mobile applicatio
 ## Security notes
 
 - Production must set `SUPABASE_URL` and the server-side JWT verification secret/key configuration.
-- `USE_MOCK_AUTH` is forbidden in production by the guard.
+- `USE_MOCK_AUTH` no longer exists. The guard has no bypass branch: every request authenticates against a real token, in every environment.
 - The Supabase service-role key is backend-only and must never use a `NEXT_PUBLIC_` prefix.
 - Organization scope comes from the verified membership, not a query/body field.
 - Disabled profiles and accounts with no effective web permission cannot use the admin console even if they possess a valid Supabase session.

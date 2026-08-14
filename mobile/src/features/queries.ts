@@ -17,7 +17,12 @@ import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // evaluation time — the app crashed on launch with
 // `Property 'useDemoStore' doesn't exist`. Screens that need live device state
 // import it themselves; see `useLiveUploadProgress`.
-import type { AddAreaInput, FindingKind, InspectionListFilters } from '../repositories/contracts';
+import type {
+  AddAreaInput,
+  FindingKind,
+  InspectionListFilters,
+  UpdateAreaInput,
+} from '../repositories/contracts';
 // Safe where the store was not: this pulls in only `auth/session` and
 // `demo-storage`, both of which `offline-record-cache` already loads on the way
 // into `repositories`, so nothing new joins the cycle.
@@ -475,6 +480,25 @@ export function useRecordChecklistItem(roomId: string) {
       // would contradict what is actually stored.
       if (error instanceof QueuedOfflineError) return;
       if (context?.previous) client.setQueryData(key, context.previous);
+    },
+  });
+}
+
+/**
+ * Corrects an area this technician added.
+ *
+ * Not optimistic, unlike a note: the server decides whether the area is theirs
+ * to change, so showing a rename that may be refused would be a lie the screen
+ * has to take back.
+ */
+export function useUpdateArea(inspectionId: string, roomId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: UpdateAreaInput) => repositories.inspections.updateArea(roomId, input),
+    onSuccess: (room) => {
+      mergeEntity(client, queryKeys.all, room);
+      client.setQueryData(queryKeys.room(roomId), room);
+      void client.invalidateQueries({ queryKey: queryKeys.rooms(inspectionId) });
     },
   });
 }

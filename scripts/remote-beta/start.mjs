@@ -30,10 +30,10 @@ const ENV_FILE = join(ROOT, 'backend', '.env.local');
 // The web image inlines NEXT_PUBLIC_* at build time, and interpolation only
 // reads --env-file and the root .env — never a service's env_file.
 //
-// Follows the `web` service, which now builds web-shadcn. Leaving it on
+// Follows the `web` service, which now builds web. Leaving it on
 // web-app/.env.local would still start a stack, and the console would silently
 // talk to whichever backend that file happened to name.
-const WEB_ENV_FILE = join(ROOT, 'web-shadcn', '.env.local');
+const WEB_ENV_FILE = join(ROOT, 'web', '.env.local');
 const MOBILE_ENV = join(ROOT, 'mobile', '.env.local');
 const TUNNEL_READY_URL = 'http://127.0.0.1:2000/ready';
 const PNPM_CLI = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'pnpm.js');

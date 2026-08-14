@@ -1,13 +1,14 @@
 import { VideoRecordingType } from '@prisma/client';
 import {
   IsEnum,
-  IsInt,
   IsISO8601,
+  IsInt,
   IsOptional,
   IsPositive,
   IsString,
   IsUUID,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 /**
@@ -59,4 +60,22 @@ export class CreateUploadSessionDto {
   @IsOptional()
   @IsISO8601()
   recordedAt?: string;
+}
+
+/**
+ * A still the reviewer wants cut from a recording.
+ *
+ * `atMs` rather than seconds because the technician's own markers are recorded
+ * in milliseconds, so a reviewer clicking one lands on exactly the frame that
+ * was marked rather than a rounded second nearby.
+ */
+export class CaptureSnapshotDto {
+  @IsInt() @Min(0) atMs!: number;
+  /**
+   * The checklist item this still evidences. Optional: a reviewer may capture a
+   * frame that documents the room generally, and the report captions it with
+   * the free-text label in that case.
+   */
+  @IsOptional() @IsUUID() checklistItemId?: string;
+  @IsOptional() @IsString() @MaxLength(120) label?: string;
 }

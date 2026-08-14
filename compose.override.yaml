@@ -66,24 +66,18 @@ services:
     environment:
       NODE_ENV: development
       APP_ENV: local
-      # Real authentication, because the admin app in this workspace signs in
-      # against a real Supabase project and talks to a real database.
+      # The mock provider block that stood here is gone, along with USE_MOCK_AUTH.
       #
-      # Mock auth does not verify the bearer token at all — it ignores whoever
-      # signed in and resolves a hardcoded id, defaulting to the technician
-      # seed. So a real administrator signing in was answered as a deactivated
-      # @local.test technician, which surfaced as "Account is disabled" on a
-      # perfectly good account. Two halves of one login disagreeing about who
-      # the user is.
+      # It set floor-plan extraction, video, transcription and analysis to
+      # 'mock', so the dev stack answered every AI call with fabricated findings
+      # about a bedroom nobody recorded. That is worse than an outage: an outage
+      # is visible. Extraction now follows AiProviderSettings like everything
+      # else, and an unconfigured provider fails where you can see it.
       #
-      # Set USE_MOCK_AUTH=true to work against the seeded mock users instead,
-      # and pair it with MOCK_AUTH_DEFAULT_USER_ID — the default resolves to a
-      # technician, which the administrator app cannot use.
-      USE_MOCK_AUTH: ${USE_MOCK_AUTH:-false}
-      FLOOR_PLAN_EXTRACTION_PROVIDER: mock
-      VIDEO_PLATFORM_PROVIDER: mock
-      TRANSCRIPTION_PROVIDER: mock
-      AI_ANALYSIS_PROVIDER: mock
+      # Mock auth is gone for a second reason: it ignored the bearer token and
+      # resolved a hardcoded id, so a real administrator signing in was answered
+      # as the seeded technician and told "Account is disabled" on a perfectly
+      # good account. Two halves of one login disagreeing about who the user is.
       JOB_QUEUE_PROVIDER: memory
       FLOOR_PLAN_STORAGE_PROVIDER: local
     # DATABASE_URL and DIRECT_URL are deliberately absent here. Compose

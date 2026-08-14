@@ -88,8 +88,13 @@ describe('inspection status lifecycle (spec §11)', () => {
   it('blocks finalization while findings await review unless an override is documented', async () => {
     const prisma = {
       inspection: { findFirst: jest.fn().mockResolvedValue(reviewableInspection()) },
-      inspectionFinding: { count: jest.fn().mockResolvedValue(2) },
-      inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+      inspectionFinding: {
+        findMany: jest.fn().mockResolvedValue([
+          { title: 'Cracked tile', propertyArea: { name: 'Kitchen' } },
+          { title: 'Scuffed baseboard', propertyArea: { name: 'Hall' } },
+        ]),
+      },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
     const service = new AdminService(prisma as never);
@@ -97,8 +102,21 @@ describe('inspection status lifecycle (spec §11)', () => {
     await expect(service.finalizeInspection(admin, 'insp-1', {})).rejects.toMatchObject({
       status: 409,
       code: 'INSPECTION_HAS_UNRESOLVED_ITEMS',
+      // Names what is blocking, and says nothing about the zero recordings —
+      // the old wording printed both counts and left the reviewer to work out
+      // which half mattered.
+      message: expect.stringContaining('Kitchen — Cracked tile'),
+    });
+    await expect(service.finalizeInspection(admin, 'insp-1', {})).rejects.not.toMatchObject({
+      message: expect.stringContaining('recording'),
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
+
+    // The room condition summary must never be one of the counted rows: it is
+    // narrative, the review screen hides it, and an administrator has no
+    // control that clears it.
+    const [[query]] = prisma.inspectionFinding.findMany.mock.calls;
+    expect(query.where.NOT).toEqual({ findingType: 'NO_CHANGE', title: 'Room condition summary' });
   });
 
   it('finalizes with a documented override, recording the finalizer and audit trail', async () => {
@@ -111,8 +129,12 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspection: {
         findFirst: jest.fn().mockResolvedValueOnce(reviewableInspection()).mockResolvedValueOnce(detail),
       },
-      inspectionFinding: { count: jest.fn().mockResolvedValue(1) },
-      inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+      inspectionFinding: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ title: 'Cracked tile', propertyArea: { name: 'Kitchen' } }]),
+      },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     const service = new AdminService(prisma as never);
@@ -235,11 +257,52 @@ describe('inspection status lifecycle (spec §11)', () => {
           .mockResolvedValueOnce(reviewableInspection(from))
           .mockResolvedValueOnce({ id: 'insp-1', status: InspectionStatus.IN_PROGRESS }),
       },
-      inspectionAssignment: { count: jest.fn().mockResolvedValue(currentAssignments) },
+      // findMany, not count: reopen needs the technician ids so it can tell
+      // each of them, which a count cannot address.
+      inspectionAssignment: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue(
+            Array.from({ length: currentAssignments }, (_, index) => ({
+              technicianId: `tech-${index + 1}`,
+            })),
+          ),
+      },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     return { tx, prisma };
   }
+
+  it('tells every assigned technician, in real time', async () => {
+    /**
+     * The gap this closes. Reopen published only a cache invalidation, which
+     * refreshes the web console and reaches nobody in the field: the inspection
+     * reappeared in the technician's queue on their next sixty-second poll,
+     * with no signal and no explanation. Every other admin action that moves
+     * work already publishes here.
+     */
+    const { prisma } = reopenPrisma(InspectionStatus.TECHNICIAN_SUBMITTED, 2);
+    const technicianEvents = { publish: jest.fn() };
+    const service = new AdminService(prisma as never, technicianEvents as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
+
+    expect(technicianEvents.publish).toHaveBeenCalledTimes(2);
+    expect(technicianEvents.publish).toHaveBeenCalledWith('tech-1', 'insp-1', 'REOPENED');
+    expect(technicianEvents.publish).toHaveBeenCalledWith('tech-2', 'insp-1', 'REOPENED');
+  });
+
+  it('stores the reason where the technician can read it', async () => {
+    // It used to live only in the audit metadata, which no technician endpoint
+    // reads — so the office had to phone them.
+    const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
+    const service = new AdminService(prisma as never);
+
+    await service.reopenInspection(admin, 'insp-1', { reason: '  Garage was never captured  ' });
+
+    const [{ data }] = tx.inspection.updateMany.mock.calls[0];
+    expect(data.reopenReason).toBe('Garage was never captured');
+  });
 
   it('reopens a finalized inspection back to IN_PROGRESS', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);

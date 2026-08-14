@@ -19,6 +19,7 @@ import {
 import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { goBack } from '@/src/lib/navigation';
 import { environment } from '@/src/config/environment';
 import { useUploads } from '@/src/features/queries';
 import { evaluateUploadGate } from '@/src/lib/connectivity';
@@ -173,7 +174,7 @@ export default function DiagnosticsScreen() {
             accessibilityRole="button"
             accessibilityLabel="Back to settings"
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
-            onPress={() => router.back()}
+            onPress={() => goBack()}
           >
             <ArrowLeftIcon size={18} className="text-foreground" />
           </Pressable>

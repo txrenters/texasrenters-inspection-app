@@ -41,6 +41,7 @@ import {
   TechnicianNoteDto,
   TechnicianPhotoUploadDto,
   TechnicianReasonDto,
+  TechnicianUpdateAreaDto,
 } from './technician.dto';
 import { TechnicianService, type UploadedRoomVideo } from './technician.service';
 
@@ -192,6 +193,21 @@ export class TechnicianController {
   }
   @Get('rooms/:roomId') room(@Req() request: AuthenticatedRequest, @Param('roomId') id: string) {
     return this.service.room(request.user, id);
+  }
+  /**
+   * Corrects an area the technician added themselves.
+   *
+   * Authorized in the service against `source: TECHNICIAN` and their own
+   * `createdById`: fixing a name they just mistyped is a different act from
+   * renaming the office's catalog record, which every future inspection of the
+   * property reuses.
+   */
+  @Patch('rooms/:roomId/area') updateArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+    @Body() body: TechnicianUpdateAreaDto,
+  ) {
+    return this.service.updateArea(request.user, id, body);
   }
   @Patch('rooms/:roomId/note') note(
     @Req() request: AuthenticatedRequest,

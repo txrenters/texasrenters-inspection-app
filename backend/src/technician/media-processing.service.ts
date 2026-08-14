@@ -31,7 +31,7 @@ import {
 } from './deepgram-transcription';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 
-const PROMPT_VERSION = '2';
+const PROMPT_VERSION = '3';
 const SCHEMA_VERSION = '1';
 const MAX_DIRECT_TRANSCRIPTION_BYTES = 24_000_000; // OpenAI hard limit is 25 MB.
 
@@ -74,7 +74,15 @@ export const ROOM_SUMMARY_WHERE = { findingType: 'NO_CHANGE', title: ROOM_SUMMAR
 const TRANSCRIPTION_DOMAIN_HINT =
   'Property inspection walkthrough narrated by a field technician, possibly with a strong accent ' +
   'or in a language other than English. Typical terms: room names, walls, flooring, ceiling, ' +
-  'plumbing, appliances, fixtures, damage, scratches, stains, leaks, mold, working condition.';
+  'plumbing, appliances, fixtures, damage, scratches, stains, leaks, mold, working condition. ' +
+  // "undamaged" and "damaged" are near-homophones in running speech and exact
+  // opposites in the report. A real walkthrough came back with "clean and
+  // damaged" where the technician had said "clean and undamaged", inverting
+  // three findings. Listing both forms biases the recogniser toward hearing the
+  // prefix; it does not guarantee it, which is why the checklist answers — not
+  // this transcript — are what the analysis treats as authoritative.
+  'Technicians grade each item as clean or dirty, undamaged or damaged, working or not working. ' +
+  'The words "undamaged" and "not damaged" are common; do not transcribe them as "damaged".';
 
 const findingItemSchema = z.object({
   findingType: z.enum(['POSSIBLE_NEW_DAMAGE', 'EXISTING_CONDITION', 'MAINTENANCE', 'NO_CHANGE']),
@@ -399,15 +407,28 @@ export class MediaProcessingService implements OnModuleInit {
       );
     const video = Buffer.from(await response.arrayBuffer());
     const audio = await this.extractAudio(video, media.mimeType);
-    const transcript = await this.requestTranscription(apiKey, audio);
+    const { text: transcript, segments } = await this.requestTranscription(apiKey, audio);
 
+    // Real timings when the model gave them; one whole-recording segment only as
+    // the honest fallback, which is what this path always used to store.
+    const rows = segments.length
+      ? segments.map((segment) => ({
+          transcriptionJobId: job.id,
+          startSeconds: Math.max(0, Math.round(segment.start)),
+          endSeconds: Math.min(media.durationSeconds, Math.round(segment.end)),
+          text: segment.text.trim(),
+        }))
+      : [
+          {
+            transcriptionJobId: job.id,
+            startSeconds: 0,
+            endSeconds: media.durationSeconds,
+            text: transcript,
+          },
+        ];
     await this.prisma.$transaction([
       this.prisma.transcriptSegment.deleteMany({ where: { transcriptionJobId: job.id } }),
-      this.prisma.transcriptSegment.createMany({
-        // OpenAI's JSON response carries no timings, so one whole-recording
-        // segment is the only honest shape — the same fallback the R2 path uses.
-        data: [{ transcriptionJobId: job.id, startSeconds: 0, endSeconds: media.durationSeconds, text: transcript }],
-      }),
+      this.prisma.transcriptSegment.createMany({ data: rows }),
     ]);
     await this.prisma.transcriptionJob.update({
       where: { inspectionMediaId: media.id },
@@ -503,13 +524,24 @@ export class MediaProcessingService implements OnModuleInit {
       const audio = await this.extractAudio(video, media.mimeType);
       const result = deepgramKey
         ? await requestDeepgramTranscription(deepgramKey, audio, media.durationSeconds)
-        : {
-            text: await this.requestTranscription(configuration!.apiKey, audio),
-            // OpenAI's JSON response carries no timings, so there is nothing
-            // honest to segment by.
-            segments: null,
-            language: null,
-          };
+        : await (async () => {
+            // OpenAI returns timings now too, via whisper-1 and verbose_json, so
+            // this path is no longer the untimed one. `segments: null` here used
+            // to force the whole-recording fallback below even when timings
+            // existed, which is half of why findings were all stamped 0:00.
+            const openAi = await this.requestTranscription(configuration!.apiKey, audio);
+            return {
+              text: openAi.text,
+              segments: openAi.segments.length
+                ? openAi.segments.map((segment) => ({
+                    startSeconds: Math.max(0, Math.round(segment.start)),
+                    endSeconds: Math.min(media.durationSeconds, Math.round(segment.end)),
+                    text: segment.text.trim(),
+                  }))
+                : null,
+              language: null,
+            };
+          })();
       const transcript = result.text;
       // Real per-utterance timings when the provider supplies them. The single
       // whole-recording segment below is the fallback, and it is why an AI
@@ -776,7 +808,16 @@ export class MediaProcessingService implements OnModuleInit {
     apiKey: string,
     audio: { bytes: Buffer; name: string; type: string },
   ) {
-    const models = ['gpt-4o-mini-transcribe', 'whisper-1'];
+    // whisper-1 first, and deliberately so. It is the only OpenAI transcription
+    // model that accepts response_format=verbose_json, which is the only way to
+    // get per-utterance timings; gpt-4o-mini-transcribe returns text alone. That
+    // left every finding stamped 0:00, because one 150-second segment is all the
+    // analysis had to cite. Segment timings are worth more here than any margin
+    // in raw text quality, now that correctness rests on the checklist answers.
+    const models = [
+      { id: 'whisper-1', format: 'verbose_json' },
+      { id: 'gpt-4o-mini-transcribe', format: 'json' },
+    ];
     let lastError: ApplicationError | null = null;
     for (const model of models) {
       const form = new FormData();
@@ -785,8 +826,9 @@ export class MediaProcessingService implements OnModuleInit {
         new Blob([new Uint8Array(audio.bytes)], { type: audio.type }),
         audio.name,
       );
-      form.append('model', model);
-      form.append('response_format', 'json');
+      form.append('model', model.id);
+      form.append('response_format', model.format);
+      if (model.format === 'verbose_json') form.append('timestamp_granularities[]', 'segment');
       // No language parameter: let the model auto-detect (multilingual crews).
       form.append('prompt', TRANSCRIPTION_DOMAIN_HINT);
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
@@ -796,18 +838,27 @@ export class MediaProcessingService implements OnModuleInit {
       });
       const payload: unknown = await response.json().catch(() => null);
       if (response.ok) {
-        const parsed = z.object({ text: z.string() }).safeParse(payload);
+        // `segments` is optional: only the verbose_json model returns it, and the
+        // caller falls back to a single whole-recording segment without it.
+        const parsed = z
+          .object({
+            text: z.string(),
+            segments: z
+              .array(z.object({ start: z.number(), end: z.number(), text: z.string() }))
+              .optional(),
+          })
+          .safeParse(payload);
         if (!parsed.success)
           throw new ApplicationError(
             502,
             'TRANSCRIPTION_FAILED',
             'The transcription provider returned an unreadable response.',
           );
-        return parsed.data.text;
+        return { text: parsed.data.text, segments: parsed.data.segments ?? [] };
       }
       const message =
         (payload as { error?: { message?: string } } | null)?.error?.message ?? 'unknown error';
-      this.logger.warn(`Transcription with ${model} failed (HTTP ${response.status}): ${message}`);
+      this.logger.warn(`Transcription with ${model.id} failed (HTTP ${response.status}): ${message}`);
       lastError = new ApplicationError(
         response.status === 401 || response.status === 403 ? 503 : 502,
         'TRANSCRIPTION_FAILED',
@@ -858,7 +909,8 @@ export class MediaProcessingService implements OnModuleInit {
         items = [this.noNotableConditionSummary(media.inspectionArea.propertyArea.name)];
       } else {
         const baselineContext = await this.baselineContext(media);
-        const prompt = this.analysisPrompt(media, transcript, baselineContext);
+        const assessments = await this.checklistAssessments(media.id);
+        const prompt = this.analysisPrompt(media, transcript, baselineContext, assessments);
         const result =
           configuration.provider === AiProvider.ANTHROPIC
             ? await this.anthropicText(configuration.apiKey, configuration.modelId, prompt)
@@ -964,6 +1016,57 @@ export class MediaProcessingService implements OnModuleInit {
       : null;
   }
 
+  /**
+   * What the technician actually recorded, item by item.
+   *
+   * This is ground truth in a way the transcript is not. The answers are taps on
+   * three explicit axes, stored as booleans; the transcript is speech run through
+   * a recogniser that can drop a syllable and invert the meaning. A real
+   * walkthrough produced "doors and locks, they are clean and damaged" from a
+   * technician who had tapped undamaged, and three findings asserted damage that
+   * nobody reported.
+   *
+   * Each answer also carries the second of the recording it was given at, which
+   * is a far better anchor for a finding's timestamp than anything inferable
+   * from narration.
+   */
+  private async checklistAssessments(mediaId: string) {
+    const media = await this.prisma.inspectionMedia.findUnique({
+      where: { id: mediaId },
+      select: { inspectionAreaId: true },
+    });
+    if (!media) return [];
+    const responses = await this.prisma.inspectionAreaChecklistResponse.findMany({
+      where: {
+        inspectionAreaId: media.inspectionAreaId,
+        // An item nobody answered says nothing, and presenting it as a blank row
+        // invites the model to treat "unanswered" as "nothing wrong".
+        OR: [
+          { isClean: { not: null } },
+          { isUndamaged: { not: null } },
+          { isWorking: { not: null } },
+        ],
+      },
+      select: {
+        isClean: true,
+        isUndamaged: true,
+        isWorking: true,
+        comment: true,
+        videoTimestampSeconds: true,
+        checklistItem: { select: { label: true } },
+      },
+      orderBy: { videoTimestampSeconds: 'asc' },
+    });
+    return responses.map((response) => ({
+      label: response.checklistItem.label,
+      isClean: response.isClean,
+      isUndamaged: response.isUndamaged,
+      isWorking: response.isWorking,
+      comment: response.comment,
+      videoTimestampSeconds: response.videoTimestampSeconds,
+    }));
+  }
+
   private analysisPrompt(
     media: {
       durationSeconds: number;
@@ -978,8 +1081,28 @@ export class MediaProcessingService implements OnModuleInit {
     },
     transcript: string,
     baselineContext: string | null,
+    assessments: Array<{
+      label: string;
+      isClean: boolean | null;
+      isUndamaged: boolean | null;
+      isWorking: boolean | null;
+      comment: string | null;
+      videoTimestampSeconds: number | null;
+    }> = [],
   ) {
     const area = media.inspectionArea.propertyArea;
+    const axis = (value: boolean | null, yes: string, no: string) =>
+      value === null ? 'not assessed' : value ? yes : no;
+    const assessmentLines = assessments.map((item) => {
+      const at =
+        item.videoTimestampSeconds === null ? '' : ` [at ${item.videoTimestampSeconds}s]`;
+      const note = item.comment ? ` — technician note: ${item.comment}` : '';
+      return `- ${item.label}: ${axis(item.isClean, 'clean', 'NOT clean')}, ${axis(
+        item.isUndamaged,
+        'undamaged',
+        'DAMAGED',
+      )}, ${axis(item.isWorking, 'working', 'NOT working')}${at}${note}`;
+    });
     const isMoveIn = media.inspectionArea.inspection.inspectionType === 'MOVE_IN';
     return [
       'You review property-inspection narrations for TexasRenters.',
@@ -991,6 +1114,28 @@ export class MediaProcessingService implements OnModuleInit {
         : baselineContext
           ? `Move-in baseline for this room:\n${baselineContext}`
           : 'No move-in baseline is documented for this room.',
+      // Placed before the transcript on purpose: the model reads the facts it
+      // must not contradict before it reads the prose it may misread.
+      ...(assessmentLines.length
+        ? [
+            'The technician recorded the following assessment for each checklist item.',
+            'These are explicit recorded answers, not speech, and they are AUTHORITATIVE.',
+            '<assessment>',
+            ...assessmentLines,
+            '</assessment>',
+            'Rules for using the assessment:',
+            '- Never report damage for an item recorded as undamaged, however the transcript reads.',
+            '  Speech recognition drops the "un-" in "undamaged" often enough that the transcript',
+            '  can assert the exact opposite of what the technician recorded. The assessment wins.',
+            '- The same applies to clean and working.',
+            '- Raise a finding for an item only when the assessment marks it NOT clean, DAMAGED or',
+            '  NOT working, or when the narration describes a problem the checklist has no item for.',
+            '- When an item is "not assessed", the narration is the only evidence; say so in',
+            '  recommendedReview rather than assuming a condition.',
+            '- If the transcript and the assessment disagree, follow the assessment and note the',
+            '  discrepancy in recommendedReview so a human can check the recording.',
+          ]
+        : []),
       'Technician narration transcript follows between <transcript> tags.',
       'The narration may be in any language, mixed languages, or heavily accented English —',
       'interpret it faithfully and write every output field in clear English.',
@@ -1004,7 +1149,14 @@ export class MediaProcessingService implements OnModuleInit {
       'category (short noun, e.g. Walls, Plumbing), title, description,',
       'baselineCondition (what the baseline says about this item, or empty string),',
       'comparisonResult (EXISTING_CONDITION|POSSIBLE_NEW_DAMAGE|NO_MATERIAL_CHANGE|NORMAL_WEAR|OWNER_MAINTENANCE|MISSING_EVIDENCE|INSUFFICIENT_DATA),',
-      'videoTimestampStart and videoTimestampEnd (integer seconds within the duration; use 0 when unknown),',
+      // Findings used to come back stamped 0:00 across the board: the transcript
+      // was one untimed block, so there was nothing to cite. The assessment
+      // timestamps are exact — they are recorded by the phone at the moment the
+      // technician answers — so they are the best anchor available.
+      'videoTimestampStart and videoTimestampEnd (integer seconds within the duration):',
+      '  for a finding about a checklist item, use the [at Ns] timestamp of that item as the start',
+      '  and a few seconds later as the end; otherwise use the timing of the narration that',
+      '  supports it; use 0 only when neither is available,',
       'severity (LOW|MEDIUM|HIGH), possibleResponsibility (TENANT_REVIEW_REQUIRED|OWNER_REVIEW_REQUIRED|UNDETERMINED),',
       'confidence (0-1), recommendedReview (one actionable sentence for the human reviewer).',
       'Findings are suggestions for human review; never state conclusions about charges or fault.',

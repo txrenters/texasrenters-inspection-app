@@ -21,7 +21,6 @@ Run after starting a local or managed test Redis and a mock-auth backend:
 ```powershell
 $env:CACHE_ENABLED='true'
 $env:REDIS_URL='redis://127.0.0.1:6379'
-$env:USE_MOCK_AUTH='true'
 $env:PERF_API_BASE_URL='http://127.0.0.1:3002'
 $env:PERF_SAMPLES='20'
 node backend/scripts/perf-endpoints.mjs

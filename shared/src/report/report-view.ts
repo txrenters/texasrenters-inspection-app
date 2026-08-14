@@ -43,6 +43,17 @@ export const REPORT_PALETTE = {
   border: '#d9e0ea',
   surface: '#ffffff',
   surfaceSubtle: '#f5f7fb',
+  /**
+   * Checklist verdicts. Named for what they mean rather than reused from the
+   * severity scale: a failed axis is not a severity, and tying them together
+   * would make a palette change to one silently restyle the other.
+   *
+   * The letter still carries the meaning — these are an accent on top of a Y
+   * or an N, never a substitute for it, so the table survives monochrome
+   * printing and colour blindness.
+   */
+  pass: '#527a24',
+  fail: '#b64040',
 } as const;
 
 const SEVERITY_TONE: Record<ReportSeverity, ReportTone> = {
@@ -190,6 +201,21 @@ export interface ReportView {
   title: string;
   subtitle: string;
   inspectionLabel: string;
+  /**
+   * The office's own name for the form, when the deployment supplies one —
+   * "Exit Inspection" rather than "Move out inspection". Falls back to the
+   * enum-derived label so a report is never headed by a blank.
+   */
+  templateLabel: string;
+  /** Who carried it out; empty when nobody is assigned. */
+  inspectorLabel: string;
+  /**
+   * The closing block, already filtered to what was actually written.
+   *
+   * Empty when the reviewer wrote nothing, so a renderer can skip the whole
+   * section rather than printing three headings over three blanks.
+   */
+  closingNotes: { label: string; body: string }[];
   dateLabel: string;
   summary: {
     headline: string;
@@ -277,14 +303,38 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     // Defaulted: a report generated against a backend that predates
     // assessments has no checklist at all, which prints as no table rather
     // than an empty one.
-    const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => ({
-      id: item.id,
-      label: item.label,
-      clean: axisCell(item.isClean),
-      undamaged: axisCell(item.isUndamaged),
-      working: axisCell(item.isWorking),
-      comment: item.comment?.trim() || '',
-    }));
+    const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => {
+      /**
+       * A failed axis with no comment borrows the finding that explains it.
+       *
+       * The office's report never prints a bare "N" — the comment column is
+       * where a reader learns what was wrong. The AI already wrote that
+       * sentence from the technician's narration and filed it as a finding
+       * under the same name as the checklist item, so this surfaces existing
+       * words rather than inventing new ones. Nothing is generated here.
+       *
+       * Only when an axis actually failed: a row scored all-Y needs no
+       * explanation, and attaching one would read as a defect.
+       */
+      const failed =
+        item.isClean === false || item.isUndamaged === false || item.isWorking === false;
+      const written = item.comment?.trim() || '';
+      const borrowed =
+        !written && failed
+          ? (roomFindings.find(
+              (finding) =>
+                finding.categoryLabel.trim().toLowerCase() === item.label.trim().toLowerCase(),
+            )?.description ?? '')
+          : '';
+      return {
+        id: item.id,
+        label: item.label,
+        clean: axisCell(item.isClean),
+        undamaged: axisCell(item.isUndamaged),
+        working: axisCell(item.isWorking),
+        comment: written || borrowed,
+      };
+    });
     return {
       id: room.id,
       name: room.name,
@@ -323,6 +373,21 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     title: `${property.addressLine1 || property.name}${unit}`,
     subtitle: [property.city, property.state, property.postalCode].filter(Boolean).join(', '),
     inspectionLabel: `${formatEnumLabel(report.inspection.type)} inspection`,
+    templateLabel:
+      report.inspection.templateLabel?.trim() ||
+      `${formatEnumLabel(report.inspection.type)} inspection`,
+    inspectorLabel: report.inspection.inspector?.trim() ?? '',
+    // Built here so the HTML page and the PDF print the same headings in the
+    // same order as the office's own report.
+    closingNotes: (
+      [
+        ['Next inspection alert', report.closing?.nextInspectionAlert],
+        ['Maintenance comments', report.closing?.maintenanceComments],
+        ['General comments', report.closing?.generalComments],
+      ] as const
+    )
+      .filter(([, body]) => Boolean(body?.trim()))
+      .map(([label, body]) => ({ label, body: body!.trim() })),
     dateLabel: completed
       ? `Completed ${completed}`
       : scheduled

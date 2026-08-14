@@ -98,11 +98,14 @@ describe('inspection report shares', () => {
           inspectionId: 'inspection-1',
           expiresAt: new Date(Date.now() + 86_400_000),
           revokedAt: null,
+          // Whoever issued the link; the report names the office before the field.
+          createdBy: { displayName: 'Operations Team' },
         }),
       },
       inspection: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionType: 'MOVE_OUT',
+          assignments: [{ technician: { displayName: 'Lovely Mae' } }],
           status: 'COMPLETED',
           scheduledAt: new Date('2026-07-20T15:00:00Z'),
           completedAt: new Date('2026-07-22T15:00:00Z'),
@@ -178,6 +181,10 @@ describe('inspection report shares', () => {
     // The rule the printed report depends on: an unassessed axis stays null.
     // Coercing it to false would publish a defect the technician never
     // observed, on a document a tenant may be shown.
+    // The office first, then the field — the order the printed report uses.
+    // Deduplicated, so an administrator who is also the assignee is not printed
+    // twice.
+    expect(report.inspection.inspector).toBe('Operations Team / Lovely Mae');
     expect(report.rooms[0].checklist).toEqual([
       {
         id: 'item-1',
@@ -198,11 +205,15 @@ describe('inspection report shares', () => {
           inspectionId: 'inspection-1',
           expiresAt: new Date(Date.now() + 86_400_000),
           revokedAt: null,
+          // Whoever issued the link; the report names the office before the field.
+          createdBy: { displayName: 'Operations Team' },
         }),
       },
       inspection: {
         findUnique: jest.fn().mockResolvedValue({
           inspectionType: 'MOVE_OUT',
+          // Unassigned: the report must not claim an inspector it lacks.
+          assignments: [],
           status: 'COMPLETED',
           scheduledAt: new Date(),
           completedAt: new Date(),
@@ -237,6 +248,8 @@ describe('inspection report shares', () => {
           inspectionId: 'inspection-1',
           expiresAt: new Date(Date.now() + 86_400_000),
           revokedAt: null,
+          // Whoever issued the link; the report names the office before the field.
+          createdBy: { displayName: 'Operations Team' },
         }),
       },
       inspectionPhoto: {
@@ -274,6 +287,8 @@ describe('inspection report shares', () => {
           inspectionId: 'inspection-1',
           expiresAt: new Date(Date.now() + 86_400_000),
           revokedAt: null,
+          // Whoever issued the link; the report names the office before the field.
+          createdBy: { displayName: 'Operations Team' },
         }),
       },
       // The scoped query matches nothing for a foreign photo id.

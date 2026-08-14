@@ -1,0 +1,232 @@
+/**
+ * The entire stylesheet for this application.
+ *
+ * `web-app` carries ~5,000 lines here across 400 bespoke class selectors, and
+ * omits Tailwind's Preflight so those selectors keep working — which is why a
+ * utility can silently lose to an unlayered legacy rule over there. Nothing is
+ * inherited from that file. Everything below is tokens; all layout, spacing and
+ * colour is expressed as utilities or shadcn variants at the call site.
+ *
+ * Preflight is **on**, via the single `tailwindcss` import.
+ */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* shadcn's canonical dark signal. `next-themes` stamps `.dark` on <html>. The
+   old app used a `data-theme` attribute and a hand-rolled bootstrap script. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Status colours, as solid foregrounds. Components tint their own surface
+     with `/10`–`/15` rather than each status owning a second hard-coded token,
+     which is what let "approved" and "completed" drift apart in the old app. */
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+
+  /* The TexasRenters green. Deliberately NOT `--accent`: in shadcn `--accent`
+     is the neutral *hover surface* for menus, rows and command items, so
+     putting the brand there turns every hover green. This is for brand
+     surfaces only — the sign-in mark, the sidebar rail, the active nav item. */
+  /* Set from next/font in app/layout.tsx. The fallbacks matter: they are what
+     renders during the swap window and on any build where the font fails to
+     fetch, so they are a real UI state rather than dead defensive text. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --color-brand: var(--brand);
+  /* Only ever on a SOLID --brand fill. It is a very dark green (L=0.236) chosen
+     to sit on bright lime, so used as text over a tint it is dark-on-dark and
+     disappears. That is not hypothetical: the condition checklist rendered every
+     "yes" as an empty box until it was moved to `text-brand`. For tinted
+     surfaces the colour itself is the correct pairing, exactly as the
+     destructive controls already do with `text-destructive`. */
+  --color-brand-foreground: var(--brand-foreground);
+
+  /* Categorical scale. Used for the provider tiles, where the point is that
+     four cards in a row are told apart at a glance rather than read. */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+
+  /* shadcn slate, unmodified. */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.129 0.042 264.695);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.129 0.042 264.695);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.129 0.042 264.695);
+  --secondary: oklch(0.968 0.007 247.896);
+  --secondary-foreground: oklch(0.208 0.042 265.755);
+  --muted: oklch(0.968 0.007 247.896);
+  --muted-foreground: oklch(0.554 0.046 257.417);
+  --accent: oklch(0.968 0.007 247.896);
+  --accent-foreground: oklch(0.208 0.042 265.755);
+  --border: oklch(0.929 0.013 255.508);
+  --input: oklch(0.929 0.013 255.508);
+
+  /* Brand. #1d4492 and #85c43f, converted rather than re-picked, so the new app
+     is recognisably the same product. */
+  --primary: oklch(0.407 0.136 262.1);
+  --primary-foreground: oklch(0.984 0.003 247.858);
+  --ring: oklch(0.407 0.136 262.1);
+  --brand: oklch(0.751 0.175 131.4);
+  /* Near-black on the green, never white: white on #85c43f measures 2.0:1 and
+     fails WCAG outright, while #10240a is 8.1:1. */
+  --brand-foreground: oklch(0.236 0.053 139);
+
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --success: oklch(0.52 0.13 149);
+  --warning: oklch(0.55 0.12 75);
+  --info: oklch(0.407 0.136 262.1);
+
+  --chart-1: oklch(0.55 0.15 262);
+  --chart-2: oklch(0.55 0.13 190);
+  --chart-3: oklch(0.55 0.15 300);
+  --chart-4: oklch(0.58 0.14 45);
+  --chart-5: oklch(0.55 0.14 145);
+
+  --sidebar: oklch(0.984 0.003 247.858);
+  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-primary: oklch(0.407 0.136 262.1);
+  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-ring: oklch(0.407 0.136 262.1);
+}
+
+.dark {
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --card: oklch(0.208 0.042 265.755);
+  --card-foreground: oklch(0.984 0.003 247.858);
+  --popover: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.984 0.003 247.858);
+  --secondary: oklch(0.279 0.041 260.031);
+  --secondary-foreground: oklch(0.984 0.003 247.858);
+  --muted: oklch(0.279 0.041 260.031);
+  --muted-foreground: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.279 0.041 260.031);
+  --accent-foreground: oklch(0.984 0.003 247.858);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+
+  /* The blue lightens; the green does not. #85c43f already carries enough
+     contrast against both surfaces, and the brand colour is the brand colour. */
+  --primary: oklch(0.716 0.115 264.4);
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --ring: oklch(0.716 0.115 264.4);
+  --brand: oklch(0.751 0.175 131.4);
+  --brand-foreground: oklch(0.236 0.053 139);
+
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.208 0.042 265.755);
+  --success: oklch(0.75 0.16 145);
+  --warning: oklch(0.79 0.13 78);
+  --info: oklch(0.716 0.115 264.4);
+
+  --chart-1: oklch(0.72 0.13 262);
+  --chart-2: oklch(0.72 0.11 190);
+  --chart-3: oklch(0.72 0.13 300);
+  --chart-4: oklch(0.75 0.12 45);
+  --chart-5: oklch(0.74 0.13 145);
+
+  --sidebar: oklch(0.208 0.042 265.755);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.716 0.115 264.4);
+  --sidebar-primary-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-accent: oklch(0.279 0.041 260.031);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.716 0.115 264.4);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Tabular figures wherever a number is compared down a column — counts,
+     money, durations. Proportional digits make a table of totals jitter. */
+  th[data-numeric],
+  td[data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/**
+ * The one animation this app defines. Everything else comes from tw-animate-css.
+ *
+ * The locate pulse on a floor-plan marker: a ring that expands and fades once,
+ * re-triggered by remounting the element with a new key. It cannot be a Tailwind
+ * utility because the ring has to grow from the marker's own centre while the
+ * marker itself is counter-scaled against the canvas zoom.
+ */
+@keyframes fp-marker-pulse {
+  from {
+    opacity: 0.65;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(2.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
