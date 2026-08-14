@@ -31,8 +31,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -1493,38 +1495,28 @@ function AreaReviewRow({
   onArchive: () => Promise<unknown>;
 }) {
   const environmentLabel = area.environment ? humanize(area.environment) : null;
-  const [floorName, setFloorName] = useState(area.floor?.name ?? '');
-  const [name, setName] = useState(area.name);
-  const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
-  const [isRequired, setIsRequired] = useState(area.isRequired);
-  const [hasAirConditioning, setHasAirConditioning] = useState(area.hasAirConditioning ?? false);
-  const [isDirty, setIsDirty] = useState(false);
-  const loadedRevision = useRef(area.updatedAt);
+  const [editing, setEditing] = useState(false);
   const sync = entitySyncMetadata(area);
-  const hasExternalConflict = isDirty && loadedRevision.current !== area.updatedAt;
-
-  useEffect(() => {
-    if (isDirty) return;
-    setFloorName(area.floor?.name ?? '');
-    setName(area.name);
-    setInspectionOrder(area.inspectionOrder);
-    setIsRequired(area.isRequired);
-    setHasAirConditioning(area.hasAirConditioning ?? false);
-    loadedRevision.current = area.updatedAt;
-  }, [area, isDirty]);
-
-  const floorOptionsId = `floor-options-${area.id}`;
 
   return (
+    /**
+     * A summary, with the editing behind a dialog.
+     *
+     * Every area used to render its five inputs and four buttons inline, so a
+     * property with a dozen areas was a wall of identical form controls with no
+     * way to leave one alone once opened — no cancel, no close, and a half-typed
+     * name sitting in a field indefinitely. Reading the list and editing one
+     * area are different jobs, and only one of them needs a form.
+     */
     <article
       aria-busy={Boolean(sync && sync.state !== 'SYNCED')}
       className={cn(
-        'flex flex-wrap items-end gap-3 rounded-lg border p-3 transition-colors',
+        'flex flex-wrap items-center gap-3 rounded-lg border p-3 transition-colors',
         selected && 'border-primary bg-primary/5',
       )}
     >
       {onToggleSelected ? (
-        <label className="flex h-9 items-center">
+        <label className="flex items-center">
           <Checkbox
             aria-label={`Select ${area.name}`}
             checked={Boolean(selected)}
@@ -1533,111 +1525,59 @@ function AreaReviewRow({
         </label>
       ) : null}
 
-      <Field className="w-[160px]">
-        <FieldLabel htmlFor={`floor-${area.id}`}>Floor</FieldLabel>
-        <Input
-          disabled={readOnly}
-          id={`floor-${area.id}`}
-          list={floorOptionsId}
-          onChange={(event) => {
-            setFloorName(event.target.value);
-            setIsDirty(true);
-          }}
-          value={floorName}
-        />
-        <FloorOptions floorNames={floorNames} id={floorOptionsId} />
-      </Field>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{area.name}</p>
+        <p className="text-muted-foreground truncate text-xs">
+          {[
+            area.floor?.name,
+            `Order ${area.inspectionOrder}`,
+            environmentLabel,
+            area.source === 'TECHNICIAN' ? 'Technician-added' : humanize(area.source),
+            area.createdBy ? `by ${area.createdBy.displayName}` : null,
+            sync ? syncLabel(sync.state) : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      </div>
 
-      <Field className="min-w-[180px] flex-1">
-        <FieldLabel htmlFor={`area-${area.id}`}>Area</FieldLabel>
-        <Input
-          disabled={readOnly}
-          id={`area-${area.id}`}
-          onChange={(event) => {
-            setName(event.target.value);
-            setIsDirty(true);
-          }}
-          value={name}
-        />
-        <FieldDescription>
-          {environmentLabel ? `${environmentLabel} · ` : ''}
-          {area.source === 'TECHNICIAN' ? 'Technician-added' : humanize(area.source)}
-          {area.createdBy ? ` · by ${area.createdBy.displayName}` : ''}
-          {sync ? ` · ${syncLabel(sync.state)}` : ''}
-        </FieldDescription>
-        <FieldError>
-          {hasExternalConflict
-            ? 'This area changed elsewhere. Review the latest values before saving.'
-            : null}
-        </FieldError>
-      </Field>
-
-      <Field className="w-[84px]">
-        <FieldLabel htmlFor={`order-${area.id}`}>Order</FieldLabel>
-        <Input
-          disabled={readOnly}
-          id={`order-${area.id}`}
-          min={1}
-          onChange={(event) => {
-            setInspectionOrder(Number(event.target.value));
-            setIsDirty(true);
-          }}
-          type="number"
-          value={inspectionOrder}
-        />
-      </Field>
-
-      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm font-medium">
-        <Checkbox
-          checked={isRequired}
-          disabled={readOnly}
-          onCheckedChange={(checked) => {
-            setIsRequired(checked === true);
-            setIsDirty(true);
-          }}
-        />
-        Required
-      </label>
-
-      {/* Not a condition observation. This is the office saying where the units
-          are, and it is what an HVAC inspection is scoped by: the visit covers
-          every area ticked here, and none of the ones that are not. */}
-      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm font-medium">
-        <Checkbox
-          checked={hasAirConditioning}
-          disabled={readOnly}
-          onCheckedChange={(checked) => {
-            setHasAirConditioning(checked === true);
-            setIsDirty(true);
-          }}
-        />
-        Has air conditioning
-      </label>
+      {/* The two facts that change what an inspection does, stated where the
+          list is read rather than only inside the form. "Has air conditioning"
+          is not a condition observation — it is the office saying where the
+          units are, and it is what an HVAC visit is scoped by. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+        {area.isRequired ? <Badge variant="secondary">Required</Badge> : null}
+        {area.hasAirConditioning ? <Badge variant="secondary">Air conditioning</Badge> : null}
+      </div>
 
       {!readOnly ? (
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button
-            disabled={
-              saving ||
-              hasExternalConflict ||
-              !isDirty ||
-              !floorName.trim() ||
-              !name.trim() ||
-              inspectionOrder < 1
-            }
-            onClick={() => {
-              void onSave({ floorName, name, inspectionOrder, isRequired, hasAirConditioning })
-                .then(() => {
-                  setIsDirty(false);
-                  loadedRevision.current = area.updatedAt;
-                })
-                .catch(() => undefined);
-            }}
-            size="sm"
-          >
-            {saving ? <Spinner /> : null}
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
+          <Dialog onOpenChange={setEditing} open={editing}>
+            <Button onClick={() => setEditing(true)} size="sm" variant="outline">
+              Edit
+            </Button>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Edit {area.name}</DialogTitle>
+                <DialogDescription>
+                  Changes apply to future inspections. Evidence already recorded against this area
+                  is unaffected.
+                </DialogDescription>
+              </DialogHeader>
+              {/* Mounted with the dialog, so the fields start from what is
+                  stored every time it opens and closing discards the draft.
+                  That is what makes Close mean something. */}
+              {editing ? (
+                <AreaEditForm
+                  area={area}
+                  floorNames={floorNames}
+                  onSave={onSave}
+                  onSaved={() => setEditing(false)}
+                  saving={saving}
+                />
+              ) : null}
+            </DialogContent>
+          </Dialog>
           {area.status === 'DRAFT' ? (
             <Button
               disabled={saving}
@@ -1656,18 +1596,156 @@ function AreaReviewRow({
           >
             Archive
           </Button>
-          <Button
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            disabled={deleting}
-            onClick={() => void onDelete().catch(() => undefined)}
-            size="sm"
-            variant="ghost"
-          >
-            {deleting ? 'Removing…' : 'Remove'}
-          </Button>
+          {/* Confirmed, like every other destructive control here. Removing an
+              area takes its evidence with it and there is no undo. */}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={deleting}
+                size="sm"
+                variant="ghost"
+              >
+                {deleting ? 'Removing…' : 'Remove'}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove {area.name}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This deletes the area from the floor plan along with anything recorded against
+                  it. It cannot be undone. Archive it instead to keep the record and stop
+                  scheduling it.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className={buttonVariants({ variant: 'destructive' })}
+                  onClick={() => void onDelete().catch(() => undefined)}
+                >
+                  Remove area
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       ) : null}
     </article>
+  );
+}
+
+function AreaEditForm({
+  area,
+  floorNames,
+  saving,
+  onSave,
+  onSaved,
+}: {
+  area: AdminPropertyArea;
+  floorNames: string[];
+  saving: boolean;
+  onSave: (input: AreaInput) => Promise<unknown>;
+  onSaved: () => void;
+}) {
+  const [floorName, setFloorName] = useState(area.floor?.name ?? '');
+  const [name, setName] = useState(area.name);
+  const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
+  const [isRequired, setIsRequired] = useState(area.isRequired);
+  const [hasAirConditioning, setHasAirConditioning] = useState(area.hasAirConditioning ?? false);
+  // Captured at open. If the row updates underneath while this is on screen,
+  // saving would overwrite whatever the other edit did.
+  const loadedRevision = useRef(area.updatedAt);
+  const hasExternalConflict = loadedRevision.current !== area.updatedAt;
+  const floorOptionsId = `floor-options-${area.id}`;
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+        <Field>
+          <FieldLabel htmlFor={`area-${area.id}`}>Area</FieldLabel>
+          <Input
+            id={`area-${area.id}`}
+            onChange={(event) => setName(event.target.value)}
+            value={name}
+          />
+          <FieldError>
+            {hasExternalConflict
+              ? 'This area changed elsewhere. Close and reopen to see the latest values.'
+              : null}
+          </FieldError>
+        </Field>
+
+        <Field className="sm:w-[96px]">
+          <FieldLabel htmlFor={`order-${area.id}`}>Order</FieldLabel>
+          <Input
+            id={`order-${area.id}`}
+            min={1}
+            onChange={(event) => setInspectionOrder(Number(event.target.value))}
+            type="number"
+            value={inspectionOrder}
+          />
+        </Field>
+      </div>
+
+      <Field>
+        <FieldLabel htmlFor={`floor-${area.id}`}>Floor</FieldLabel>
+        <Input
+          id={`floor-${area.id}`}
+          list={floorOptionsId}
+          onChange={(event) => setFloorName(event.target.value)}
+          value={floorName}
+        />
+        <FloorOptions floorNames={floorNames} id={floorOptionsId} />
+      </Field>
+
+      <div className="grid gap-3">
+        <label className="hover:bg-accent flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md border px-3 text-sm font-medium">
+          <Checkbox
+            checked={isRequired}
+            onCheckedChange={(checked) => setIsRequired(checked === true)}
+          />
+          Required
+        </label>
+
+        <label className="hover:bg-accent flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md border px-3 text-sm font-medium">
+          <Checkbox
+            checked={hasAirConditioning}
+            onCheckedChange={(checked) => setHasAirConditioning(checked === true)}
+          />
+          <span className="min-w-0">
+            Has air conditioning
+            <FieldDescription>Scopes HVAC inspections. Not a condition finding.</FieldDescription>
+          </span>
+        </label>
+      </div>
+
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            Close
+          </Button>
+        </DialogClose>
+        <Button
+          disabled={
+            saving ||
+            hasExternalConflict ||
+            !floorName.trim() ||
+            !name.trim() ||
+            inspectionOrder < 1
+          }
+          onClick={() => {
+            void onSave({ floorName, name, inspectionOrder, isRequired, hasAirConditioning })
+              .then(onSaved)
+              .catch(() => undefined);
+          }}
+          type="button"
+        >
+          {saving ? <Spinner /> : null}
+          {saving ? 'Saving…' : 'Save changes'}
+        </Button>
+      </DialogFooter>
+    </div>
   );
 }
 
