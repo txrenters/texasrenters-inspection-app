@@ -6,7 +6,10 @@ on:
       - 'mobile/**'
       - 'backend/**'
       - 'shared/**'
-      - 'supabase/**'
+      # `web/**` was missing, so a change touching only the admin console ran no
+      # CI at all - no lint, no typecheck, no tests. `supabase/**` is gone with
+      # the directory it watched.
+      - 'web/**'
       - 'infrastructure/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -18,7 +21,10 @@ on:
       - 'mobile/**'
       - 'backend/**'
       - 'shared/**'
-      - 'supabase/**'
+      # `web/**` was missing, so a change touching only the admin console ran no
+      # CI at all - no lint, no typecheck, no tests. `supabase/**` is gone with
+      # the directory it watched.
+      - 'web/**'
       - 'infrastructure/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -66,6 +72,15 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
+      # `shared` must be built before anything lints or typechecks against it.
+      #
+      # Its package exports point at ./dist, so on a clean checkout that path
+      # does not exist yet and every dependent fails to resolve the package.
+      # Mobile's `import/no-unresolved` was reporting exactly that - "Unable to
+      # resolve path to module '@texasrenters/shared'" - on every run since the
+      # workflow was written, while passing on developer machines where a stale
+      # dist happened to be lying around. Same reason `db:generate` is above.
+      - run: pnpm --filter @texasrenters/shared build
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
