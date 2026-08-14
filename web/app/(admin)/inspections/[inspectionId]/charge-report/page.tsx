@@ -79,7 +79,7 @@ function ChargeTable({ charges, currency }: { charges: AdminCharge[]; currency: 
     // No `bg-muted/40` on the header. TableHeader is opaque and sticky by
     // default now, and overriding it with a translucent fill lets the rows show
     // through it the moment a long charge list scrolls under.
-    <div className="overflow-hidden rounded-lg border">
+    <div className="overflow-clip rounded-lg border">
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -290,7 +290,7 @@ export default function ChargeReportPage() {
           asked for against what a human actually signed off. Approved carries
           the weight; proposed is stated for comparison and greyed. */}
       <ReportSection index={9} title="Totals">
-        <dl className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border">
+        <dl className="bg-border grid grid-cols-2 gap-px overflow-clip rounded-lg border">
           <div className="bg-card p-4">
             <dt className="text-muted-foreground text-xs">Proposed</dt>
             <dd className="text-muted-foreground mt-1 font-mono text-2xl font-semibold tabular-nums">

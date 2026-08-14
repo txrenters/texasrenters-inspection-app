@@ -49,21 +49,34 @@ const HIDE_BELOW: Record<NonNullable<Column<unknown>['hideBelow']>, string> = {
 };
 
 /**
- * `font-mono` on numeric columns, not just `tabular-nums`.
- *
- * Lining figures hold the digits to one width, which stops a column of totals
- * jittering as it re-renders. They do nothing for the *left* edge of a mixed
- * value — an inspection reference, a duration, a unit number — and scanning a
- * list of forty for the row that is wrong is exactly an exercise in reading
- * down a column's left edge. Geist Mono is metrically related to Geist, so a
- * mono cell and a sans cell in the same row keep the same baseline rhythm.
+ * Alignment and responsive visibility, shared by the header and the body so a
+ * numeric column cannot end up right-aligned in one and left in the other.
  */
-function cellClass<Row>(column: Column<Row>) {
+function columnClass<Row>(column: Column<Row>) {
   return cn(
-    column.numeric && 'text-right font-mono tabular-nums',
+    column.numeric && 'text-right',
     column.hideBelow && HIDE_BELOW[column.hideBelow],
     column.className,
   );
+}
+
+/**
+ * The body cell adds the figures treatment; the header deliberately does not.
+ *
+ * `font-mono` on numeric columns, not just `tabular-nums`: lining figures hold
+ * the digits to one width, which stops a column of totals jittering as it
+ * re-renders, but they do nothing for the *left* edge of a mixed value — an
+ * inspection reference, a duration, a unit number — and scanning a list of forty
+ * for the row that is wrong is exactly an exercise in reading down a column's
+ * left edge. Geist Mono is metrically related to Geist, so a mono cell and a
+ * sans cell in the same row keep the same baseline rhythm.
+ *
+ * A *header* is a label, not a figure. Applying this to both put "Fetched" and
+ * "Updated" in monospace next to sans-serif neighbours in the same header row,
+ * which reads as a rendering fault rather than as emphasis.
+ */
+function cellClass<Row>(column: Column<Row>) {
+  return cn(columnClass(column), column.numeric && 'font-mono tabular-nums');
 }
 
 /**
@@ -122,7 +135,7 @@ export function DataTable<Row>({
   const allSelected = pageIds.length > 0 && selectedOnPage === pageIds.length;
 
   return (
-    <div className={cn('bg-card overflow-hidden rounded-xl border', className)}>
+    <div className={cn('bg-card overflow-clip rounded-xl border', className)}>
       <Table aria-label={label}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
@@ -138,7 +151,7 @@ export function DataTable<Row>({
               </TableHead>
             ) : null}
             {columns.map((column) => (
-              <TableHead key={column.key} scope="col" className={cellClass(column)}>
+              <TableHead key={column.key} scope="col" className={columnClass(column)}>
                 {column.header}
               </TableHead>
             ))}
@@ -225,12 +238,12 @@ export function DataTableSkeleton<Row>({
   hasActions?: boolean;
 }) {
   return (
-    <div className="bg-card overflow-hidden rounded-xl border" aria-busy="true" aria-live="polite">
+    <div className="bg-card overflow-clip rounded-xl border" aria-busy="true" aria-live="polite">
       <Table aria-label={label}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             {columns.map((column) => (
-              <TableHead key={column.key} scope="col" className={cellClass(column)}>
+              <TableHead key={column.key} scope="col" className={columnClass(column)}>
                 {column.header}
               </TableHead>
             ))}
