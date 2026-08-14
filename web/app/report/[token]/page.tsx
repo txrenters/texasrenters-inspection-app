@@ -112,7 +112,13 @@ function Room({ room }: { room: ReportRoomView }) {
     <section className="bg-card space-y-4 rounded-xl border p-5 print:break-inside-avoid">
       <header className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="font-semibold">{room.name}</h3>
+          {/* Uppercased in CSS rather than in the string, here and on the
+              checklist labels below. The office's report sets area and item
+              names in caps, but transforming the text keeps the real casing in
+              the data and in the accessibility tree — a screen reader says
+              "Bathroom" rather than spelling it out letter by letter, which is
+              what it does with a hard-uppercased word. */}
+          <h3 className="font-semibold tracking-wide uppercase">{room.name}</h3>
           {room.floorName ? (
             <p className="text-muted-foreground text-xs">{room.floorName}</p>
           ) : null}
@@ -164,7 +170,7 @@ function Room({ room }: { room: ReportRoomView }) {
                       a vertically centred Y three lines down from its own row
                       label belongs to no row a reader can identify. */}
                   <TableHead
-                    className="text-foreground h-auto py-3 align-top font-normal whitespace-normal"
+                    className="text-foreground h-auto py-3 align-top text-xs font-medium tracking-wide whitespace-normal uppercase"
                     scope="row"
                   >
                     {row.label}
@@ -418,7 +424,7 @@ export default function PublicReportPage() {
               {quietRooms.map((room) => (
                 <li className="flex items-center justify-between gap-3 p-4" key={room.id}>
                   <span className="min-w-0 text-sm">
-                    {room.name}
+                    <span className="font-medium tracking-wide uppercase">{room.name}</span>
                     {room.floorName ? ` · ${room.floorName}` : ''}
                     {room.skipReason ? ` — ${room.skipReason}` : ''}
                   </span>
