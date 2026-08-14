@@ -833,14 +833,32 @@ export class FloorPlanAdminService {
      * the box on drafts and nowhere else, and no property with a finished
      * layout could ever have its units recorded.
      */
+    /**
+     * A field counts as a layout change only when it actually differs.
+     *
+     * This used to test `!== undefined`, which asks whether the caller
+     * *mentioned* a field rather than whether they changed it — and every form
+     * that edits an area submits all of its fields, changed or not. The effect
+     * was that the exemption above could not be reached from any UI: ticking
+     * "has air conditioning" also resubmitted the area's own name, so the
+     * freeze rejected it with "This area appears in a completed inspection and
+     * can no longer be renamed" for a request that renamed nothing.
+     *
+     * Comparing against what is stored is also the honest reading of the rule
+     * the freeze exists to enforce. Resubmitting a name identical to the one on
+     * record relabels no evidence.
+     */
+    const floorNameChanged =
+      input.floorName !== undefined &&
+      input.floorName.trim().toLowerCase() !== (area.floor?.name ?? '').trim().toLowerCase();
     const changesLayout =
-      input.name !== undefined ||
-      input.floorName !== undefined ||
-      input.inspectionOrder !== undefined ||
-      input.isRequired !== undefined ||
-      input.environment !== undefined ||
-      input.category !== undefined ||
-      input.notes !== undefined;
+      (input.name !== undefined && input.name.trim() !== area.name) ||
+      floorNameChanged ||
+      (input.inspectionOrder !== undefined && input.inspectionOrder !== area.inspectionOrder) ||
+      (input.isRequired !== undefined && input.isRequired !== area.isRequired) ||
+      (input.environment !== undefined && input.environment !== area.environment) ||
+      (input.category !== undefined && input.category !== area.category) ||
+      (input.notes !== undefined && (input.notes.trim() || null) !== area.notes);
     if (area.status !== PropertyAreaStatus.DRAFT && changesLayout) {
       const correctable = area.source === 'TECHNICIAN' && !(await this.areaIsFinalized(area.id));
       if (!correctable)
