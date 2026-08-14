@@ -9,6 +9,7 @@ import {
   UploadIcon,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { toast } from 'sonner';
 
 import { SectionHeader } from '@/components/page-header';
 import { ErrorState, PageSkeleton } from '@/components/states';
@@ -42,7 +43,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
-import { apiBlob } from '@/lib/api';
+import { ApiError, apiBlob } from '@/lib/api';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAdminMutations, useFloorPlans, usePropertyAreas, useUnits } from '@/lib/queries';
 import { entitySyncMetadata } from '@/lib/state-consistency';
@@ -200,6 +201,49 @@ export function FloorPlanManager({
       })
       .catch(() => undefined);
   }, [actions.deletePropertyAreas, propertyId, selectedIds]);
+
+  /**
+   * Saving an area, with the result actually said out loud.
+   *
+   * Both call sites previously ended in `.catch(() => undefined)`, so a refused
+   * edit produced nothing at all — no message, no console entry, an unchanged
+   * form. The frozen-area rename is the case that matters: the server explains
+   * itself clearly and nobody was ever shown the sentence.
+   *
+   * The air-conditioning line is called out because it is the one field whose
+   * effect is invisible from this screen — it decides which areas an HVAC
+   * inspection covers, and that is decided on a different page entirely.
+   */
+  const saveArea = useCallback(
+    async (area: AdminPropertyArea, input: AreaInput) => {
+      const name = input.name.trim() || area.name;
+      try {
+        const saved = await actions.updatePropertyArea.mutateAsync({
+          propertyId,
+          areaId: area.id,
+          expectedUpdatedAt: area.updatedAt,
+          ...input,
+        });
+        const airConditioningChanged =
+          input.hasAirConditioning !== Boolean(area.hasAirConditioning);
+        toast.success(`${name} updated`, {
+          description: airConditioningChanged
+            ? input.hasAirConditioning
+              ? 'Now included in HVAC inspections.'
+              : 'No longer included in HVAC inspections.'
+            : undefined,
+        });
+        return saved;
+      } catch (error) {
+        toast.error(`Could not update ${area.name}`, {
+          description:
+            error instanceof ApiError ? error.message : 'The change was not saved. Try again.',
+        });
+        throw error;
+      }
+    },
+    [actions.updatePropertyArea, propertyId],
+  );
 
   useEffect(() => {
     if (scope !== BUILDING_SCOPE && !activeUnits.some((unit) => unit.id === scope)) {
@@ -770,14 +814,7 @@ export function FloorPlanManager({
                         onReject={() =>
                           actions.rejectPropertyArea.mutateAsync({ propertyId, areaId: area.id })
                         }
-                        onSave={(input) =>
-                          actions.updatePropertyArea.mutateAsync({
-                            propertyId,
-                            areaId: area.id,
-                            expectedUpdatedAt: area.updatedAt,
-                            ...input,
-                          })
-                        }
+                        onSave={(input) => saveArea(area, input)}
                         onToggleSelected={(selected) => toggleSelected(area.id, selected)}
                         readOnly={!canManage}
                         saving={
@@ -843,12 +880,7 @@ export function FloorPlanManager({
                             onDelete={() => Promise.resolve()}
                             onReject={() => Promise.resolve()}
                             onSave={async (input) => {
-                              const saved = await actions.updatePropertyArea.mutateAsync({
-                                propertyId,
-                                areaId: area.id,
-                                expectedUpdatedAt: area.updatedAt,
-                                ...input,
-                              });
+                              const saved = await saveArea(area, input);
                               setCorrectingAreaId(null);
                               return saved;
                             }}
@@ -874,7 +906,23 @@ export function FloorPlanManager({
                             #{area.inspectionOrder} · {area.isRequired ? 'Required' : 'Optional'}
                             {area.source === 'TECHNICIAN' ? ' · Technician-added' : ''}
                           </p>
-                          {canManage && area.source === 'TECHNICIAN' ? (
+                          {/* Stated here, not only inside the editor. It decides
+                              which areas an HVAC visit covers, and after ticking
+                              the box this is the only place that confirms it
+                              took. */}
+                          {area.hasAirConditioning ? (
+                            <Badge variant="secondary">Air conditioning</Badge>
+                          ) : null}
+                          {/* Offered for every approved area, not just
+                              technician-added ones. `hasAirConditioning` is
+                              exempt from the layout freeze precisely so it can
+                              be recorded on approved areas — gating the only
+                              button that reaches it by source made it
+                              unsettable on every AI-extracted property, which
+                              is most of them. A genuine rename of a frozen area
+                              is still refused by the server, with a message
+                              that says so. */}
+                          {canManage ? (
                             <Button
                               onClick={() => setCorrectingAreaId(area.id)}
                               size="sm"
