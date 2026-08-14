@@ -1226,13 +1226,32 @@ export class AdminService {
             ? 'Approve a floor plan for this unit (or a building-level plan) before creating an inspection.'
             : 'Upload or define the property floor plan and approve its areas before creating an inspection.',
         );
+      /**
+       * A duplicate is the same *work* booked twice, so the type is part of what
+       * makes two inspections the same thing.
+       *
+       * The type was missing from this check, which made every kind of visit
+       * mutually exclusive on a date. HVAC is the case that exposed it: the
+       * schema calls it "equipment maintenance, outside the tenancy lifecycle
+       * chain", and an air-conditioning service has nothing to do with a move-in
+       * that happens to fall on the same day. The office could not book one
+       * behind the other.
+       *
+       * Terminal work does not block either. A completed or cancelled
+       * inspection is a record, not a booking — a move-in finished this morning
+       * is the evidence the unit is ready for the next visit, so treating it as
+       * a clash left that unit unbookable for the rest of the day. Only a live
+       * booking of the same type at the same time is genuinely a second copy of
+       * the same job.
+       */
       const duplicate = await tx.inspection.findFirst({
         where: {
           organizationId: user.organizationId,
           propertywareBuildingId: property.id,
           propertywareUnitId: unit?.id ?? null,
+          inspectionType: input.inspectionType,
           scheduledAt,
-          status: { not: InspectionStatus.CANCELLED },
+          status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
         },
         select: { id: true },
       });
@@ -1240,7 +1259,7 @@ export class AdminService {
         throw new ApplicationError(
           409,
           'DUPLICATE_INSPECTION',
-          'An inspection already exists for this unit and schedule.',
+          'An inspection of this type is already scheduled for this unit at that time.',
         );
       let inspection;
       try {
@@ -1268,13 +1287,29 @@ export class AdminService {
           },
         });
       } catch (error) {
-        // The partial unique index on (org, building, unit, scheduledAt) is the
-        // race-proof backstop behind the friendly findFirst check above.
+        /**
+         * There is NO unique index behind the check above. This comment used to
+         * claim a "partial unique index on (org, building, unit, scheduledAt)"
+         * was the race-proof backstop; `pg_indexes` on this table lists only the
+         * primary key, and no migration has ever created one. So the findFirst
+         * is the only gate, and two concurrent creates can both pass it.
+         *
+         * That race is left open deliberately rather than papered over: the
+         * matching index would have to be partial (`WHERE status NOT IN
+         * ('COMPLETED','CANCELLED')`) to agree with the rule above, existing
+         * rows would need checking against it first, and adding it silently
+         * here would be a schema change nobody asked for. Booking the same
+         * visit twice in the same second is also not a thing the office does by
+         * hand.
+         *
+         * The mapping is kept because P2002 can still arrive from the nested
+         * area creates, and a 409 is the honest answer to either.
+         */
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
           throw new ApplicationError(
             409,
             'DUPLICATE_INSPECTION',
-            'An inspection already exists for this unit and schedule.',
+            'An inspection of this type is already scheduled for this unit at that time.',
           );
         throw error;
       }
@@ -1338,21 +1373,26 @@ export class AdminService {
       );
     const updated = await this.prisma.$transaction(async (tx) => {
       if (input.scheduledAt) {
+        // Same rule as creation, and it has to stay the same rule: rescheduling
+        // an HVAC visit onto a day that already holds a finished move-in is the
+        // identical situation, and this check carried the identical two faults —
+        // no type, and terminal work still counted as a clash.
         const duplicate = await tx.inspection.findFirst({
           where: {
             id: { not: id },
             organizationId: user.organizationId,
             propertywareBuildingId: existing.propertywareBuildingId,
             propertywareUnitId: existing.propertywareUnitId,
+            inspectionType: existing.inspectionType,
             scheduledAt: new Date(input.scheduledAt),
-            status: { not: InspectionStatus.CANCELLED },
+            status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
           },
         });
         if (duplicate)
           throw new ApplicationError(
             409,
             'DUPLICATE_INSPECTION',
-            'An inspection already exists for this property, unit, and schedule.',
+            'An inspection of this type is already scheduled for this unit at that time.',
           );
       }
       const updated = await tx.inspection.update({
@@ -3293,6 +3333,9 @@ export class AdminService {
         status: true,
         propertywareBuildingId: true,
         propertywareUnitId: true,
+        // Needed by the reschedule clash check: two inspections are only the
+        // same booking if they are the same kind of visit.
+        inspectionType: true,
       },
     });
     if (!inspection)

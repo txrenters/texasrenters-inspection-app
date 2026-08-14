@@ -168,7 +168,62 @@ describe('multi-unit inspection creation', () => {
     expect(createData.propertywareUnitId).toBe('unit-b');
   });
 
-  it('reports a friendly conflict when the database unique index catches a duplicate race', async () => {
+  /**
+   * The clash rule, which had two faults that only showed together.
+   *
+   * An office tried to book an HVAC visit on a unit whose move-in had already
+   * been completed that morning and was told an inspection already existed. The
+   * check keyed on property, unit and time but not on the *type*, and it counted
+   * finished work as a live booking, so one completed inspection made a unit
+   * unbookable for anything else for the rest of the day.
+   */
+  it('books an HVAC visit on a day a completed move-in already used', async () => {
+    const tx = buildTx({
+      propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    const { where } = tx.inspection.findFirst.mock.calls[0][0];
+    // The type is what makes two bookings the same job...
+    expect(where.inspectionType).toBe('HVAC');
+    // ...and finished work is a record, not a booking.
+    expect(where.status).toEqual({ notIn: ['COMPLETED', 'CANCELLED'] });
+    expect(tx.inspection.create).toHaveBeenCalled();
+  });
+
+  it('still refuses a second live inspection of the same type at the same time', async () => {
+    const tx = buildTx({
+      propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'already-booked' }),
+        create: jest.fn(),
+      },
+    });
+    const service = buildService(tx);
+
+    await expect(
+      service.createInspection(admin, {
+        propertyId: 'building-1',
+        scheduledAt: '2026-08-01T15:00:00.000Z',
+        inspectionType: 'HVAC',
+        priority: 'STANDARD',
+      } as never),
+    ).rejects.toMatchObject({ status: 409, code: 'DUPLICATE_INSPECTION' });
+    expect(tx.inspection.create).not.toHaveBeenCalled();
+  });
+
+  // Not "when the unique index catches a race", as this was named: there is no
+  // unique index on Inspection beyond the primary key. What is covered is that a
+  // P2002 from anywhere in the create (the nested area rows can raise one) still
+  // surfaces as a 409 rather than a 500.
+  it('reports a friendly conflict when the create raises a unique violation', async () => {
     const { Prisma } = jest.requireActual('@prisma/client');
     const raceError = new Prisma.PrismaClientKnownRequestError('duplicate', {
       code: 'P2002',
