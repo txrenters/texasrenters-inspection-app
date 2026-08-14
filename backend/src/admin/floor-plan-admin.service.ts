@@ -73,6 +73,7 @@ const propertyAreaResponseSelect = {
   name: true,
   inspectionOrder: true,
   isRequired: true,
+  hasAirConditioning: true,
   status: true,
   source: true,
   environment: true,
@@ -141,6 +142,7 @@ function mapArea(row: PropertyAreaRow) {
     name: row.name,
     inspectionOrder: row.inspectionOrder,
     isRequired: row.isRequired,
+    hasAirConditioning: row.hasAirConditioning,
     status: row.status,
     source: row.source,
     environment: row.environment,
@@ -711,6 +713,7 @@ export class FloorPlanAdminService {
         name: input.name.trim(),
         inspectionOrder: input.inspectionOrder,
         isRequired: input.isRequired,
+        hasAirConditioning: input.hasAirConditioning ?? false,
         source: 'MANUAL',
         status: PropertyAreaStatus.DRAFT,
         createdById: user.id,
@@ -845,6 +848,12 @@ export class FloorPlanAdminService {
           ...(input.floorName ? { floorId: floor?.id } : {}),
           ...(input.inspectionOrder ? { inspectionOrder: input.inspectionOrder } : {}),
           ...(input.isRequired === undefined ? {} : { isRequired: input.isRequired }),
+          // `=== undefined` rather than truthiness, like isRequired above and
+          // unlike the fields below it: false is a meaningful value here, and a
+          // truthy check would make unticking an area impossible.
+          ...(input.hasAirConditioning === undefined
+            ? {}
+            : { hasAirConditioning: input.hasAirConditioning }),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.category ? { category: input.category } : {}),
           ...(input.notes === undefined ? {} : { notes: input.notes.trim() || null }),

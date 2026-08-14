@@ -12,9 +12,10 @@ import {
 } from '@prisma/client';
 
 import {
+  AreaScope,
   LEASE_EXPIRING_SOON_DAYS,
+  areaScopeFor,
   daysUntilLeaseEnd,
-  inspectionRequiresEveryArea,
   leaseExpiryStatus,
 } from '@texasrenters/shared';
 
@@ -1160,7 +1161,9 @@ export class AdminService {
               status: PropertyAreaStatus.APPROVED,
             },
             orderBy: { inspectionOrder: 'asc' },
-            select: { id: true },
+            // `hasAirConditioning` for the HVAC scope below, which picks areas
+            // by equipment rather than by anything the caller sent.
+            select: { id: true, hasAirConditioning: true },
           })
         : [];
       const approvedAreas = unitAreas.length
@@ -1172,7 +1175,9 @@ export class AdminService {
               status: PropertyAreaStatus.APPROVED,
             },
             orderBy: { inspectionOrder: 'asc' },
-            select: { id: true },
+            // `hasAirConditioning` for the HVAC scope below, which picks areas
+            // by equipment rather than by anything the caller sent.
+            select: { id: true, hasAirConditioning: true },
           });
       // An inspection normally starts from an approved layout. The exception is
       // a property nobody has surveyed yet: rather than block it, or flatten it
@@ -1182,26 +1187,38 @@ export class AdminService {
       // approves the permanent layout — this delegates the survey, not the
       // approval.
       /**
-       * The areas this inspection actually covers.
+       * The areas this inspection actually covers, decided three different ways.
        *
-       * Move-in and move-out always take the whole approved layout — they are
+       * ALL — move-in and move-out take the whole approved layout. They are
        * compared to each other area by area, and a subset on either end leaves
-       * the other with counterparts that never resolve. A caller who sends
-       * `areaIds` for one of those is refused rather than quietly widened: they
-       * asked for something the type cannot honour, and silently doing
-       * otherwise is how a move-out ends up scoped differently from the
-       * move-in it will be judged against.
+       * the other with counterparts that never resolve.
+       *
+       * CHOSEN — occupied and back-to-market take what the office picked.
+       *
+       * AIR_CONDITIONED — an HVAC visit covers every area recorded as holding a
+       * unit. Not a selection: the equipment decides, so nobody can forget a
+       * room, and nobody can send a technician looking for an air conditioner
+       * that was never in the bathroom.
+       *
+       * A caller who sends `areaIds` for a type that does not offer a choice is
+       * refused rather than quietly widened or narrowed. They asked for
+       * something the type cannot honour, and silently doing otherwise is how a
+       * move-out ends up scoped differently from the move-in it will be judged
+       * against.
        *
        * Every id is checked against the approved set, so a stale or foreign id
        * fails here rather than producing an inspection missing an area nobody
        * notices until a technician is standing in the property.
        */
+      const areaScope = areaScopeFor(input.inspectionType);
       const requestedAreaIds = input.areaIds?.length ? [...new Set(input.areaIds)] : null;
-      if (requestedAreaIds && inspectionRequiresEveryArea(input.inspectionType))
+      if (requestedAreaIds && areaScope !== AreaScope.CHOSEN)
         throw new ApplicationError(
           422,
           'AREA_SELECTION_NOT_ALLOWED',
-          'A move-in or move-out covers every area, so it cannot be limited to a selection.',
+          areaScope === AreaScope.AIR_CONDITIONED
+            ? 'An HVAC inspection covers every area that has air conditioning, so it cannot be limited to a selection.'
+            : 'A move-in or move-out covers every area, so it cannot be limited to a selection.',
         );
       if (requestedAreaIds) {
         const approvedIds = new Set(approvedAreas.map((area) => area.id));
@@ -1213,9 +1230,28 @@ export class AdminService {
             'Select only approved areas belonging to this property.',
           );
       }
-      const scopedAreas = requestedAreaIds
-        ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
-        : approvedAreas;
+      const scopedAreas =
+        areaScope === AreaScope.AIR_CONDITIONED
+          ? approvedAreas.filter((area) => area.hasAirConditioning)
+          : requestedAreaIds
+            ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
+            : approvedAreas;
+
+      /**
+       * The property has a layout, but nothing in it is marked as having a unit.
+       *
+       * Distinct from NO_APPROVED_AREAS below, and deliberately so: that one
+       * means "survey this property", this one means "say which of these rooms
+       * has an air conditioner". Creating the inspection anyway would produce an
+       * HVAC visit covering nothing, which looks like a scheduling success and
+       * reaches the technician as an empty job.
+       */
+      if (areaScope === AreaScope.AIR_CONDITIONED && approvedAreas.length && !scopedAreas.length)
+        throw new ApplicationError(
+          409,
+          'NO_AIR_CONDITIONED_AREAS',
+          'No approved area of this property is marked as having air conditioning. Mark the areas that have a unit before scheduling an HVAC inspection.',
+        );
 
       const technicianWillCapture = input.allowTechnicianAreaCapture === true;
       if (!approvedAreas.length && !technicianWillCapture)

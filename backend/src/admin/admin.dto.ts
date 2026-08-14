@@ -379,6 +379,8 @@ export class CreatePropertyAreaDto {
   @IsString() @MinLength(1) @MaxLength(120) name!: string;
   @Type(() => Number) @IsInt() @Min(1) @Max(500) inspectionOrder!: number;
   @IsBoolean() isRequired!: boolean;
+  /** Optional here, unlike `isRequired`: absent means no, which is the default. */
+  @IsOptional() @IsBoolean() hasAirConditioning?: boolean;
   @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
   @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
@@ -425,6 +427,14 @@ export class UpdatePropertyAreaDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(120) name?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) inspectionOrder?: number;
   @IsOptional() @IsBoolean() isRequired?: boolean;
+  /**
+   * Whether this area holds air-conditioning equipment.
+   *
+   * Scheduling scope, not a condition observation: an HVAC inspection covers
+   * every area where this is true, so it is the office saying where the units
+   * are rather than a technician reporting what they found.
+   */
+  @IsOptional() @IsBoolean() hasAirConditioning?: boolean;
   @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
   @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;

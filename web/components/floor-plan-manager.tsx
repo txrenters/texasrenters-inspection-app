@@ -1394,13 +1394,20 @@ function ManualAreaForm({
   const [floorName, setFloorName] = useState('Ground Floor');
   const [name, setName] = useState('');
   const [isRequired, setIsRequired] = useState(true);
+  const [hasAirConditioning, setHasAirConditioning] = useState(false);
   return (
     <form
       className="bg-muted/40 flex flex-wrap items-end gap-3 rounded-lg border p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        void onCreate({ floorName, name, inspectionOrder: nextOrder, isRequired })
-          .then(() => setName(''))
+        void onCreate({ floorName, name, inspectionOrder: nextOrder, isRequired, hasAirConditioning })
+          .then(() => {
+            setName('');
+            // Cleared with the name: the next area is a different room, and
+            // carrying the tick over is how a whole floor silently ends up
+            // marked as having units.
+            setHasAirConditioning(false);
+          })
           .catch(() => undefined);
       }}
     >
@@ -1430,6 +1437,13 @@ function ManualAreaForm({
         />
         Required
       </label>
+      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm font-medium">
+        <Checkbox
+          checked={hasAirConditioning}
+          onCheckedChange={(checked) => setHasAirConditioning(checked === true)}
+        />
+        Has air conditioning
+      </label>
       <Button disabled={!floorName.trim() || !name.trim() || submitting} variant="outline">
         {submitting ? <Spinner /> : null}
         Add draft area
@@ -1443,6 +1457,14 @@ interface AreaInput {
   name: string;
   inspectionOrder: number;
   isRequired: boolean;
+  /**
+   * Whether this area holds an air conditioner.
+   *
+   * Scheduling scope rather than a condition observation: an HVAC inspection
+   * covers every area where this is true, so it is the office recording where
+   * the units are. Until somebody ticks these, an HVAC visit scopes to nothing.
+   */
+  hasAirConditioning: boolean;
 }
 
 function AreaReviewRow({
@@ -1475,6 +1497,7 @@ function AreaReviewRow({
   const [name, setName] = useState(area.name);
   const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
   const [isRequired, setIsRequired] = useState(area.isRequired);
+  const [hasAirConditioning, setHasAirConditioning] = useState(area.hasAirConditioning ?? false);
   const [isDirty, setIsDirty] = useState(false);
   const loadedRevision = useRef(area.updatedAt);
   const sync = entitySyncMetadata(area);
@@ -1486,6 +1509,7 @@ function AreaReviewRow({
     setName(area.name);
     setInspectionOrder(area.inspectionOrder);
     setIsRequired(area.isRequired);
+    setHasAirConditioning(area.hasAirConditioning ?? false);
     loadedRevision.current = area.updatedAt;
   }, [area, isDirty]);
 
@@ -1575,6 +1599,21 @@ function AreaReviewRow({
         Required
       </label>
 
+      {/* Not a condition observation. This is the office saying where the units
+          are, and it is what an HVAC inspection is scoped by: the visit covers
+          every area ticked here, and none of the ones that are not. */}
+      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm font-medium">
+        <Checkbox
+          checked={hasAirConditioning}
+          disabled={readOnly}
+          onCheckedChange={(checked) => {
+            setHasAirConditioning(checked === true);
+            setIsDirty(true);
+          }}
+        />
+        Has air conditioning
+      </label>
+
       {!readOnly ? (
         <div className="flex flex-wrap items-center gap-1.5">
           <Button
@@ -1587,7 +1626,7 @@ function AreaReviewRow({
               inspectionOrder < 1
             }
             onClick={() => {
-              void onSave({ floorName, name, inspectionOrder, isRequired })
+              void onSave({ floorName, name, inspectionOrder, isRequired, hasAirConditioning })
                 .then(() => {
                   setIsDirty(false);
                   loadedRevision.current = area.updatedAt;
