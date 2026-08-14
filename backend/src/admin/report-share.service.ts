@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { FindingReviewStatus, PhotoCaptureType, type Prisma } from '@prisma/client';
+import { FindingReviewStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -19,17 +19,20 @@ const MAX_REPORT_PHOTOS = 300;
 /**
  * Which photos a homeowner may see.
  *
- * An area overview with no finding attached is neutral evidence. Anything tied
- * to a finding is only safe once that finding is APPROVED — otherwise the
- * report would leak pending or rejected AI output. Both clauses are needed:
- * `findingId: null` alone would re-expose a detail photo if its rejected
- * finding were ever deleted (the relation is onDelete: SetNull).
+ * What must not leak is *unreviewed AI output*: a photograph attached to a
+ * finding is only safe once that finding is APPROVED, or the report publishes
+ * a defect nobody signed off on. A photograph with no finding attached is the
+ * technician's own record of the area and carries no such claim.
+ *
+ * This deliberately does **not** filter on `captureType`. It used to admit only
+ * AREA_OVERVIEW, which meant the guided capture flow — which files its shots as
+ * FINDING_CONTEXT — had every photograph silently dropped from the report: a
+ * two-room inspection with twelve photographs published two. The capture type
+ * describes how a photograph was framed, not whether it is fit to show, and
+ * using it as a permission check hid evidence the report exists to present.
  */
 const HOMEOWNER_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
-  OR: [
-    { captureType: PhotoCaptureType.AREA_OVERVIEW, findingId: null },
-    { finding: { reviewStatus: FindingReviewStatus.APPROVED } },
-  ],
+  OR: [{ findingId: null }, { finding: { reviewStatus: FindingReviewStatus.APPROVED } }],
 };
 
 /**
@@ -230,7 +233,12 @@ export class ReportShareService {
                 isUndamaged: true,
                 isWorking: true,
                 comment: true,
-                checklistItem: { select: { id: true, label: true } },
+                // `keywords` travels with the row so the report can attach the
+                // finding that explains a failed axis. They already exist to
+                // recognise the item in a transcript ("wall", "ceiling"), and
+                // that is precisely the vocabulary an AI-authored finding
+                // categorises itself with.
+                checklistItem: { select: { id: true, label: true, keywords: true } },
               },
             },
             photos: {
@@ -338,6 +346,7 @@ export class ReportShareService {
         checklist: area.checklistResponses.map((response) => ({
           id: response.checklistItem.id,
           label: response.checklistItem.label,
+          keywords: response.checklistItem.keywords,
           isClean: response.isClean,
           isUndamaged: response.isUndamaged,
           isWorking: response.isWorking,

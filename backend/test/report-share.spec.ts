@@ -198,7 +198,7 @@ describe('inspection report shares', () => {
     expect(JSON.stringify(report)).not.toMatch(/internalNotes|technician|organizationId/);
   });
 
-  it('only exposes area overviews and photos belonging to an approved finding', async () => {
+  it('withholds only the photos of a finding nobody approved', async () => {
     const prisma = {
       inspectionReportShare: {
         findUnique: jest.fn().mockResolvedValue({
@@ -231,13 +231,18 @@ describe('inspection report shares', () => {
     const query = prisma.inspection.findUnique.mock.calls[0][0] as {
       select: { areas: { select: { photos: { where: unknown } } } };
     };
-    // Both clauses matter: `findingId: null` alone would re-expose a detail
-    // photo whose rejected finding was deleted (relation is onDelete: SetNull).
+    /**
+     * What must not leak is unreviewed AI output — a photograph attached to a
+     * finding nobody has approved. A photograph with no finding on it is the
+     * technician's own record and carries no such claim.
+     *
+     * Deliberately no `captureType` clause. Restricting to AREA_OVERVIEW read
+     * as a tighter rule and was really a bug: guided capture files its shots as
+     * FINDING_CONTEXT, so a two-room inspection with twelve photographs
+     * published two of them and the report looked empty.
+     */
     expect(query.select.areas.select.photos.where).toEqual({
-      OR: [
-        { captureType: 'AREA_OVERVIEW', findingId: null },
-        { finding: { reviewStatus: 'APPROVED' } },
-      ],
+      OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }],
     });
   });
 
@@ -269,12 +274,7 @@ describe('inspection report shares', () => {
         where: {
           id: 'photo-1',
           inspectionId: 'inspection-1',
-          AND: {
-            OR: [
-              { captureType: 'AREA_OVERVIEW', findingId: null },
-              { finding: { reviewStatus: 'APPROVED' } },
-            ],
-          },
+          AND: { OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }] },
         },
       }),
     );

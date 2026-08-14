@@ -11,7 +11,11 @@
  * Pure and dependency-free: it runs in Node for PDF generation and in the
  * browser for the web page.
  */
-import type { PublicInspectionReport, PublicReportPhoto } from '../contracts/admin.js';
+import type {
+  PublicInspectionReport,
+  PublicReportChecklistItem,
+  PublicReportPhoto,
+} from '../contracts/admin.js';
 
 export type ReportSeverity = 'HIGH' | 'MEDIUM' | 'LOW';
 
@@ -189,6 +193,64 @@ function axisCell(value: boolean | null | undefined) {
   return '';
 }
 
+/**
+ * Words worth matching on, from a checklist label or a finding's category.
+ *
+ * Singularised and stripped of joining words, because the two vocabularies
+ * never agree on either: the checklist says "Doors and locks" and "Smoke
+ * alarms", the AI files findings under "Doors", "Smoke alarm" and "Flooring".
+ */
+const MATCH_STOPWORDS = new Set(['and', 'or', 'the', 'for', 'of', 'in', 'on', 'to', 'any', 'not']);
+
+function matchTokens(value: string): Set<string> {
+  const tokens = value
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((word) => word.length > 2 && !MATCH_STOPWORDS.has(word))
+    // "alarms" and "alarm" are the same item; "coverings" and "covering" too.
+    .map((word) => (word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word));
+  return new Set(tokens);
+}
+
+/**
+ * Two words name the same thing.
+ *
+ * A prefix rather than equality, because the checklist and the AI inflect the
+ * same noun differently — "Floor and coverings" against "Flooring", "Lights and
+ * power points" against "Lighting". Four characters minimum, so short words
+ * still have to match exactly: "fan" must not reach "fancy".
+ */
+function sameSubject(a: string, b: string) {
+  if (a === b) return true;
+  const [short, long] = a.length < b.length ? [a, b] : [b, a];
+  return short.length >= 4 && long.startsWith(short);
+}
+
+/**
+ * Does this finding explain this checklist row?
+ *
+ * Matching the two labels for equality — which is what this did — succeeds
+ * almost never. Of six failed rows on a real two-room report exactly one
+ * matched ("Doors and locks" against the category "Doors and locks"); "Floor
+ * and coverings" missed "Flooring", "Walls and ceilings" missed "Walls", and
+ * "Smoke alarms" missed "Smoke alarm", so five rows printed a bare N with an
+ * empty comment column.
+ *
+ * A shared word is the right test because the checklist item already carries
+ * the vocabulary for it. `keywords` exists to recognise the item in a
+ * transcript, which is the same job.
+ */
+function explains(item: PublicReportChecklistItem, finding: ReportFindingView): boolean {
+  const subject = matchTokens(finding.categoryLabel);
+  if (!subject.size) return false;
+  const itemWords = matchTokens(item.label);
+  for (const keyword of item.keywords ?? [])
+    for (const word of matchTokens(keyword)) itemWords.add(word);
+  for (const word of itemWords)
+    for (const other of subject) if (sameSubject(word, other)) return true;
+  return false;
+}
+
 export interface ReportSeverityCount {
   severity: ReportSeverity;
   label: string;
@@ -305,34 +367,41 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
     // than an empty one.
     const checklist: ReportChecklistRowView[] = (room.checklist ?? []).map((item) => {
       /**
-       * A failed axis with no comment borrows the finding that explains it.
+       * A failed axis borrows every finding that explains it.
        *
        * The office's report never prints a bare "N" — the comment column is
-       * where a reader learns what was wrong. The AI already wrote that
-       * sentence from the technician's narration and filed it as a finding
-       * under the same name as the checklist item, so this surfaces existing
-       * words rather than inventing new ones. Nothing is generated here.
+       * where a reader learns what was wrong. The AI already wrote those
+       * sentences from the technician's narration and filed them as findings,
+       * so this surfaces existing words rather than inventing new ones.
+       * Nothing is generated here.
        *
-       * Only when an axis actually failed: a row scored all-Y needs no
+       * *Every* matching finding, not the first: a room can have two things
+       * wrong with its walls, and printing one of them silently drops the
+       * other from the only column a reader checks.
+       *
+       * Only when an axis actually failed. A row scored all-Y needs no
        * explanation, and attaching one would read as a defect.
        */
       const failed =
         item.isClean === false || item.isUndamaged === false || item.isWorking === false;
       const written = item.comment?.trim() || '';
-      const borrowed =
-        !written && failed
-          ? (roomFindings.find(
-              (finding) =>
-                finding.categoryLabel.trim().toLowerCase() === item.label.trim().toLowerCase(),
-            )?.description ?? '')
-          : '';
+      const borrowed = failed
+        ? roomFindings
+            .filter((finding) => explains(item, finding))
+            .map((finding) => finding.description.trim())
+            .filter(Boolean)
+        : [];
+      // The reviewer's own words lead; the findings follow rather than being
+      // replaced by it, so writing one note never hides the rest.
       return {
         id: item.id,
         label: item.label,
         clean: axisCell(item.isClean),
         undamaged: axisCell(item.isUndamaged),
         working: axisCell(item.isWorking),
-        comment: written || borrowed,
+        comment: [written, ...borrowed.filter((text) => text !== written)]
+          .filter(Boolean)
+          .join(' '),
       };
     });
     return {

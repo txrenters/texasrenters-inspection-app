@@ -1,11 +1,27 @@
 import { SYSTEM_TENANT, tenantScopeEnabled } from './tenant-context';
 
 export interface DatabaseConnectionSummary {
-  category: 'supabase-session-pooler' | 'supabase-transaction-pooler' | 'direct' | 'test';
+  category: 'direct' | 'test';
   port: string;
-  source: 'DATABASE_URL' | 'DIRECT_URL' | 'test';
+  source: 'DATABASE_URL' | 'test';
 }
 
+/**
+ * Prepares the runtime database connection.
+ *
+ * This module used to be built around Supabase's shared poolers: it recognised
+ * `*.pooler.supabase.com`, refused any port other than 6543 or 5432, set
+ * `pgbouncer=true` for the transaction pooler, and reported which of the two
+ * was in use. That whole taxonomy is gone with Supabase — every deployment now
+ * runs its own Postgres.
+ *
+ * One behaviour is deliberately kept and widened. `connection_limit` and
+ * `pool_timeout` were applied *only* to Supabase URLs, so on a self-hosted
+ * database `DATABASE_CONNECTION_LIMIT` and `DATABASE_POOL_TIMEOUT_SECONDS`
+ * were documented, settable, and silently ignored — which is exactly the pair
+ * of knobs a VPS with a modest `max_connections` needs. They now apply to any
+ * Postgres URL.
+ */
 export function preparePersistentDatabaseEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): DatabaseConnectionSummary {
@@ -16,31 +32,9 @@ export function preparePersistentDatabaseEnvironment(
   }
 
   applyTenantScopeToConnection(runtime, environment);
+  environment.DATABASE_URL = withPoolLimits(runtime, environment).toString();
 
-  if (!isSupabaseSharedPooler(runtime)) {
-    return { category: 'direct', port: runtime.port || '5432', source: 'DATABASE_URL' };
-  }
-  if ((runtime.port || '5432') === '5432') {
-    environment.DATABASE_URL = withSupabasePoolLimits(runtime, environment).toString();
-    return {
-      category: 'supabase-session-pooler',
-      port: '5432',
-      source: 'DATABASE_URL',
-    };
-  }
-  if (runtime.port === '6543') {
-    runtime.searchParams.set('pgbouncer', 'true');
-    environment.DATABASE_URL = withSupabasePoolLimits(runtime, environment).toString();
-    return {
-      category: 'supabase-transaction-pooler',
-      port: '6543',
-      source: 'DATABASE_URL',
-    };
-  }
-
-  throw new Error(
-    'Supabase DATABASE_URL must use the transaction pooler on port 6543 or the session pooler on port 5432.',
-  );
+  return { category: 'direct', port: runtime.port || '5432', source: 'DATABASE_URL' };
 }
 
 function parseDatabaseUrl(value?: string) {
@@ -52,10 +46,6 @@ function parseDatabaseUrl(value?: string) {
   } catch {
     return null;
   }
-}
-
-function isSupabaseSharedPooler(value: URL) {
-  return value.hostname.endsWith('.pooler.supabase.com');
 }
 
 /**
@@ -84,12 +74,18 @@ function applyTenantScopeToConnection(runtime: URL, environment: NodeJS.ProcessE
   environment.DATABASE_URL = runtime.toString();
 }
 
-function withSupabasePoolLimits(value: URL, environment: NodeJS.ProcessEnv) {
+/**
+ * An explicit value in the URL always wins. A deployment that wrote the limit
+ * into its connection string said something more specific than the environment
+ * default, and silently rewriting it is how a tuned production connection ends
+ * up back on the fallback.
+ */
+function withPoolLimits(value: URL, environment: NodeJS.ProcessEnv) {
   const runtime = new URL(value);
   if (!runtime.searchParams.has('connection_limit'))
     runtime.searchParams.set(
       'connection_limit',
-      boundedInteger(environment.DATABASE_CONNECTION_LIMIT, 5, 1, 10).toString(),
+      boundedInteger(environment.DATABASE_CONNECTION_LIMIT, 5, 1, 50).toString(),
     );
   if (!runtime.searchParams.has('pool_timeout'))
     runtime.searchParams.set(

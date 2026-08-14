@@ -156,7 +156,14 @@ export function AreaConditionChecklist({
       <CardContent className="p-0">
         <div className="overflow-x-auto">
           <Table>
-            <TableHeader>
+            {/* `lg:static`, overriding the sticky default.
+                `TableHeader` pins itself below the app header, which is right
+                for a full-page list and wrong for a table sitting inside a card
+                partway down a page: the header detaches from its own table and
+                rides over the rows as the card scrolls past. This one is short
+                and always fully visible, so there is nothing for stickiness to
+                buy here either. */}
+            <TableHeader className="lg:static">
               <TableRow className="hover:bg-transparent">
                 <TableHead>Item</TableHead>
                 {AXES.map((axis) => (

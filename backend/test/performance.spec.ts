@@ -9,40 +9,52 @@ import { PrismaService } from '../src/database/prisma.service';
 import { QueryPerformanceContext } from '../src/database/query-performance.context';
 
 describe('database performance foundation', () => {
-  it('keeps persistent runtime traffic on the configured transaction pooler', () => {
+  it('bounds the pool on a self-hosted database', () => {
+    // These two knobs used to be applied only to Supabase's shared poolers, so
+    // on the database every deployment now runs they were documented,
+    // settable, and silently ignored.
     const environment = {
-      NODE_ENV: 'development',
-      DATABASE_URL:
-        'postgresql://user:password@aws-0-ca-central-1.pooler.supabase.com:6543/postgres?pgbouncer=true',
-      DIRECT_URL: 'postgresql://user:password@aws-0-ca-central-1.pooler.supabase.com:5432/postgres',
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://app:password@postgres:5432/texasrenters?schema=public',
     } as NodeJS.ProcessEnv;
 
     expect(preparePersistentDatabaseEnvironment(environment)).toEqual({
-      category: 'supabase-transaction-pooler',
-      port: '6543',
-      source: 'DATABASE_URL',
-    });
-    const runtime = new URL(environment.DATABASE_URL!);
-    expect(runtime.port).toBe('6543');
-    expect(runtime.searchParams.get('pgbouncer')).toBe('true');
-    expect(runtime.searchParams.get('connection_limit')).toBe('5');
-    expect(runtime.searchParams.get('pool_timeout')).toBe('10');
-  });
-
-  it('preserves explicit Supabase session-pooler limits', () => {
-    const environment = {
-      NODE_ENV: 'development',
-      DATABASE_URL:
-        'postgresql://user:password@aws-0-ca-central-1.pooler.supabase.com:5432/postgres?connection_limit=2&pool_timeout=4',
-      DATABASE_CONNECTION_LIMIT: '7',
-      DATABASE_POOL_TIMEOUT_SECONDS: '20',
-    } as NodeJS.ProcessEnv;
-
-    expect(preparePersistentDatabaseEnvironment(environment)).toEqual({
-      category: 'supabase-session-pooler',
+      category: 'direct',
       port: '5432',
       source: 'DATABASE_URL',
     });
+    const runtime = new URL(environment.DATABASE_URL!);
+    expect(runtime.searchParams.get('connection_limit')).toBe('5');
+    expect(runtime.searchParams.get('pool_timeout')).toBe('10');
+    expect(runtime.searchParams.get('schema')).toBe('public');
+  });
+
+  it('takes the configured limits over the defaults', () => {
+    const environment = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://app:password@postgres:5432/texasrenters',
+      DATABASE_CONNECTION_LIMIT: '20',
+      DATABASE_POOL_TIMEOUT_SECONDS: '30',
+    } as NodeJS.ProcessEnv;
+
+    preparePersistentDatabaseEnvironment(environment);
+    const runtime = new URL(environment.DATABASE_URL!);
+    expect(runtime.searchParams.get('connection_limit')).toBe('20');
+    expect(runtime.searchParams.get('pool_timeout')).toBe('30');
+  });
+
+  it('never overwrites a limit written into the connection string', () => {
+    // A deployment that tuned its own URL said something more specific than an
+    // environment default.
+    const environment = {
+      NODE_ENV: 'production',
+      DATABASE_URL:
+        'postgresql://app:password@postgres:5432/texasrenters?connection_limit=2&pool_timeout=4',
+      DATABASE_CONNECTION_LIMIT: '20',
+      DATABASE_POOL_TIMEOUT_SECONDS: '30',
+    } as NodeJS.ProcessEnv;
+
+    preparePersistentDatabaseEnvironment(environment);
     const runtime = new URL(environment.DATABASE_URL!);
     expect(runtime.searchParams.get('connection_limit')).toBe('2');
     expect(runtime.searchParams.get('pool_timeout')).toBe('4');

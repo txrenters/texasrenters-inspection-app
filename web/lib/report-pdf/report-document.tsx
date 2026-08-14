@@ -89,7 +89,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
-  roomName: { fontSize: 11.5, fontFamily: 'Helvetica-Bold' },
+  /**
+   * Caps, matching the office's report, which sets area and item names that
+   * way — "BATHROOM", "DOORS & LOCKS".
+   *
+   * `textTransform` rather than uppercasing the string: the shared view model
+   * owns the content and both renderers only style it, so the casing decision
+   * has to live in the stylesheet or the web page and the PDF would each need
+   * their own copy of it. Letter-spacing comes with it, because caps set at
+   * these sizes without tracking are noticeably harder to read.
+   */
+  roomName: {
+    fontSize: 11,
+    fontFamily: 'Helvetica-Bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   roomFloor: { color: C.muted, fontSize: 8.5, marginTop: 1 },
   roomBody: { padding: 12 },
 
@@ -133,7 +148,12 @@ const styles = StyleSheet.create({
   checklistHeadRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: C.border },
   checklistHeadCell: { fontSize: 7, color: C.muted, paddingVertical: 3, paddingHorizontal: 4 },
   checklistCell: { fontSize: 8, paddingVertical: 3, paddingHorizontal: 4 },
-  checklistLabel: { width: '32%' },
+  checklistLabel: {
+    width: '32%',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    fontSize: 7.5,
+  },
   checklistAxis: { width: '11%', textAlign: 'center' },
   checklistPass: { color: C.pass, fontWeight: 700 },
   checklistFail: { color: C.fail, fontWeight: 700 },
@@ -145,6 +165,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: C.border,
   },
+  quietName: { textTransform: 'uppercase', letterSpacing: 0.5, fontFamily: 'Helvetica-Bold' },
 
   // ---- closing -----------------------------------------------------------
   closingRow: { flexDirection: 'row', gap: 12, marginTop: 10, marginBottom: 4 },
@@ -250,7 +271,10 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
         <Text style={[styles.checklistHeadCell, styles.checklistComment]}>Comments</Text>
       </View>
       {room.checklist.map((row) => (
-        <View key={row.id} style={styles.checklistRow} wrap={false}>
+        // Wrappable. A row whose comment borrows two findings can run longer
+        // than the space left on the page, and `wrap={false}` there does not
+        // move it — it clips it, losing the explanation the column exists for.
+        <View key={row.id} style={styles.checklistRow}>
           <Text style={[styles.checklistCell, styles.checklistLabel]}>{row.label}</Text>
           {/* Colour is an accent on the letter, never a substitute for it —
               the table has to survive a monochrome print. */}
@@ -426,8 +450,11 @@ export function ReportDocument({ view, images }: { view: ReportView; images: Rep
             </Text>
             {quietRooms.map((room) => (
               <View key={room.id} style={styles.quietRow}>
+                {/* Nested rather than transforming the whole line: only the
+                    area name is set in caps, not its floor or the reason it
+                    was skipped. */}
                 <Text>
-                  {room.name}
+                  <Text style={styles.quietName}>{room.name}</Text>
                   {room.floorName ? ` · ${room.floorName}` : ''}
                   {room.skipReason ? ` — ${room.skipReason}` : ''}
                 </Text>

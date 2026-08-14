@@ -721,6 +721,14 @@ export interface PublicReportPhoto {
 export interface PublicReportChecklistItem {
   id: string;
   label: string;
+  /**
+   * The words that identify this item — "wall", "ceiling".
+   *
+   * Carried so the report can find the finding that explains a failed axis.
+   * Optional: a report generated against a backend that predates this still
+   * renders, it just falls back to matching on the label alone.
+   */
+  keywords?: string[];
   isClean: boolean | null;
   isUndamaged: boolean | null;
   isWorking: boolean | null;

@@ -19,7 +19,8 @@ const prisma = new PrismaClient();
 const report = {
   generatedAt: new Date().toISOString(),
   connection: {
-    category: databaseUrl.hostname.includes('.pooler.supabase.com') ? 'supabase-pooler' : 'direct',
+    category: 'direct',
+    host: databaseUrl.hostname,
     port: databaseUrl.port || '5432',
   },
   measurements: {},

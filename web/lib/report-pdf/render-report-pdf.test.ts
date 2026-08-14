@@ -295,7 +295,11 @@ describe('inspection report PDF', () => {
       expect(view.rooms[0]!.checklist[0]!.comment).toBe('');
     });
 
-    it("never overwrites what a person wrote", () => {
+    it('leads with what a person wrote and keeps the finding after it', () => {
+      // The person's words are never overwritten, but they no longer suppress
+      // the finding either: a reviewer adding a note to one row used to delete
+      // the AI's explanation of that same row from the printed report, which
+      // is the one column a reader checks to learn what the N meant.
       const view = buildReportView(
         withFinding([
           {
@@ -309,7 +313,9 @@ describe('inspection report PDF', () => {
         ]) as never,
       );
 
-      expect(view.rooms[0]!.checklist[0]!.comment).toBe('Handle sticks.');
+      expect(view.rooms[0]!.checklist[0]!.comment).toBe(
+        'Handle sticks. Grease around the handle, noted in the narration.',
+      );
     });
 
     it('leaves the comment empty when no finding matches the item', () => {

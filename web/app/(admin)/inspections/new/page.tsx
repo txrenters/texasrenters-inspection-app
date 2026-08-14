@@ -2,8 +2,9 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  AreaScope,
   InspectionType,
-  inspectionRequiresEveryArea,
+  areaScopeFor,
   type AdminProperty,
 } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
@@ -244,7 +245,20 @@ function CreateInspectionForm() {
   const [excludedAreaIds, setExcludedAreaIds] = useState<ReadonlySet<string>>(new Set());
   // A scope decision about one property, and about one kind of visit.
   useEffect(() => setExcludedAreaIds(new Set()), [propertyId, unitId, inspectionType]);
-  const scopeIsChoosable = !inspectionRequiresEveryArea(inspectionType) && hasApprovedAreas;
+  /**
+   * Only one of the three scopes offers a choice.
+   *
+   * This asked `!inspectionRequiresEveryArea(...)`, which is the wrong
+   * question: that returns true for ALL, so anything else — including HVAC —
+   * looked choosable. The picker was then rendered for an HVAC visit, and
+   * clearing a single area sent `areaIds` the backend refuses outright with
+   * "an HVAC inspection covers every area that has air conditioning". An HVAC
+   * visit is scoped by the equipment, not by an operator, so there is nothing
+   * here to decide.
+   */
+  const scopeIsChoosable = areaScopeFor(inspectionType) === AreaScope.CHOSEN && hasApprovedAreas;
+  const airConditionedScope = areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED;
+  const airConditionedAreas = approvedAreas.filter((area) => area.hasAirConditioning);
   const selectedAreas = approvedAreas.filter((area) => !excludedAreaIds.has(area.id));
 
   useEffect(() => {
@@ -703,6 +717,49 @@ function CreateInspectionForm() {
                 <p className="text-destructive text-sm">Select at least one area.</p>
               ) : null}
             </CardFooter>
+          </Card>
+        ) : null}
+
+        {/* An HVAC visit is scoped by the equipment, so there is no picker —
+            but "no picker" on its own says nothing, and the office cannot see
+            from here which rooms have a unit in them. This states the coverage
+            and, when it is empty, names the fix. Without it the first sign of a
+            problem is a 409 on submit for something recorded on another screen
+            entirely. */}
+        {airConditionedScope && hasApprovedAreas ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Which areas</CardTitle>
+              <CardDescription>
+                An HVAC inspection covers every area recorded as having an air conditioner, so it
+                is not chosen here — the floor plan decides it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {airConditionedAreas.length ? (
+                <p className="text-sm">
+                  {airConditionedAreas.length} of {approvedAreas.length} areas:{' '}
+                  <span className="font-medium">
+                    {airConditionedAreas.map((area) => area.name).join(', ')}
+                  </span>
+                </p>
+              ) : (
+                <Alert variant="destructive">
+                  <TriangleAlertIcon />
+                  <AlertDescription>
+                    No area of this property is marked as having an air conditioner, so this visit
+                    would cover nothing.{' '}
+                    <Link
+                      className="underline underline-offset-4"
+                      href={`/properties/${propertyId}#floor-plan`}
+                    >
+                      Mark the areas that have a unit
+                    </Link>{' '}
+                    first.
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
           </Card>
         ) : null}
 

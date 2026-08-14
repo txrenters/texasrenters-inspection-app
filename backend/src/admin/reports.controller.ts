@@ -27,9 +27,24 @@ export class ReportsController {
    * `w` requests a width-limited copy (see ALLOWED_PHOTO_WIDTHS); anything else
    * serves the original. Phone photos are several megabytes each, so the report
    * always asks for a bounded width.
+   *
+   * The CORP override is what makes these bytes displayable at all. Helmet's
+   * default is `same-origin`, and the report page is served from the web app's
+   * domain while the photographs come from the API's — so every `<img>` on a
+   * shared report was blocked by the browser and rendered as its alt text, even
+   * though the request itself returned 200 with the image. It is the only
+   * endpoint that needs this: the console never embeds a cross-origin URL, it
+   * fetches the bytes with credentials and renders a blob (see LazyPhoto), and
+   * CORP does not apply to that.
+   *
+   * Relaxing it is safe precisely here — the response is public by design. The
+   * unguessable share token is the credential, the photo is already restricted
+   * to reviewed, homeowner-visible material, and no cookie is involved, so
+   * embedding reveals nothing a holder of the link could not already open.
    */
   @Get(':token/photos/:photoId')
   @Header('Cache-Control', 'private, no-store')
+  @Header('Cross-Origin-Resource-Policy', 'cross-origin')
   async photo(
     @Param('token') token: string,
     @Param('photoId') photoId: string,

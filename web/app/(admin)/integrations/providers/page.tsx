@@ -7,7 +7,6 @@ import {
   BoxesIcon,
   BugIcon,
   Building2Icon,
-  DatabaseIcon,
   HardDriveIcon,
   MailIcon,
   RefreshCwIcon,
@@ -53,12 +52,6 @@ const PROVIDER_META: Record<string, { description: string; metric: string; icon:
       metric: 'Source sync',
       icon: Building2Icon,
       tint: 'bg-chart-1/10 text-chart-1',
-    },
-    Supabase: {
-      description: 'Administrator authentication and managed PostgreSQL services.',
-      metric: 'Database',
-      icon: DatabaseIcon,
-      tint: 'bg-chart-3/10 text-chart-3',
     },
     Deepgram: {
       description: 'Video transcription provider.',
@@ -118,7 +111,10 @@ const GROUPS: Array<{ key: string; label: string; icon: Icon; members: string[] 
     key: 'core',
     label: 'Core data',
     icon: BoxesIcon,
-    members: ['Propertyware', 'Supabase', 'Deepgram'],
+    // Supabase is gone from here with the migration off it. The database is
+    // now Postgres the deployment runs itself, and a self-hosted dependency is
+    // not a third-party integration to show an administrator.
+    members: ['Propertyware', 'Deepgram'],
   },
   { key: 'ai', label: 'AI providers', icon: SparklesIcon, members: ['Anthropic', 'OpenAI'] },
   {
