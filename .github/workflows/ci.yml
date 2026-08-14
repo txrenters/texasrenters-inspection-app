@@ -68,6 +68,12 @@ jobs:
       FLOOR_PLAN_EXTRACTION_PROVIDER: disabled
       JOB_QUEUE_PROVIDER: memory
       FLOOR_PLAN_STORAGE_PROVIDER: local
+      # Required unconditionally now that USE_MOCK_AUTH is gone - it is the one
+      # value without which nothing can sign in, so the module refuses to boot
+      # without it. A throwaway string, not a secret: it signs tokens for a
+      # database that is created and destroyed with the job, and putting a real
+      # key in a workflow file would be the actual mistake.
+      AUTH_JWT_SECRET: ci-not-a-real-secret-tokens-die-with-the-runner
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
