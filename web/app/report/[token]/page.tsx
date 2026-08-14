@@ -94,7 +94,7 @@ function AxisCell({ value }: { value: string }) {
       aria-label={value || 'Not assessed'}
       className={
         value === 'Y'
-          ? 'font-semibold text-emerald-600 dark:text-emerald-400'
+          ? 'text-success font-semibold'
           : value === 'N'
             ? 'text-destructive font-semibold'
             : ''

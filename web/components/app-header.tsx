@@ -66,7 +66,12 @@ function BreadcrumbsWithType() {
 
 export function AppHeader() {
   return (
-    <header className="bg-background/95 supports-[backdrop-filter]:bg-background/75 sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b px-4 backdrop-blur">
+    // Opaque, not `bg-background/75` with a blur. A translucent bar over a dense
+    // table shows the rows sliding underneath it, and the column headers now pin
+    // directly below this one — two stacked translucent layers over moving
+    // content is unreadable. Height comes from `--app-header-height` because the
+    // table headers offset themselves by it.
+    <header className="bg-background sticky top-0 z-30 flex h-[var(--app-header-height)] shrink-0 items-center gap-2 border-b px-4">
       <SidebarTrigger aria-label="Toggle application navigation" className="-ml-1 shrink-0" />
       <Separator className="mr-1 !h-4" orientation="vertical" />
       <Breadcrumb className="min-w-0 flex-1">

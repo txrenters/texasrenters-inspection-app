@@ -1,6 +1,13 @@
 'use client';
 
-import { CheckIcon, CircleIcon, InfoIcon, MoreHorizontalIcon, TriangleAlertIcon, XIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  CircleIcon,
+  InfoIcon,
+  MoreHorizontalIcon,
+  TriangleAlertIcon,
+  XIcon,
+} from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 
@@ -236,110 +243,120 @@ function InspectionDetail() {
             ) : null}
           </>
         }
+        badges={
+          <>
+            <StatusBadge value={item.status} />
+            <StatusBadge value={item.inspectionType} />
+            <StatusBadge value={item.priority} />
+          </>
+        }
         description={`${item.propertywareUnit?.name ?? 'Entire property'} · ${formatDate(item.scheduledAt)}`}
         title={item.propertywareBuilding?.name ?? 'Inspection'}
       />
 
       <InspectionTabs active="overview" inspectionId={id} inspectionType={item.inspectionType} />
 
-      <Card aria-labelledby="inspection-overview-title">
-        <CardHeader className="flex-row items-start justify-between">
-          <CardTitle id="inspection-overview-title">Inspection overview</CardTitle>
-          <div className="flex flex-wrap gap-1.5">
-            <StatusBadge value={item.status} />
-            <StatusBadge value={item.inspectionType} />
-            <StatusBadge value={item.priority} />
-          </div>
-        </CardHeader>
+      {/* No "Inspection overview" heading any more. The card carried a title
+          restating the page you are already on, and three status badges that
+          have moved up beside the inspection's name where someone scanning back
+          to the top actually looks for them. What is left is the two things the
+          card is for: where the work has got to, and the facts about it. */}
+      <section aria-label="Inspection status" className="mt-3 space-y-4">
+        {/* The stepper is the instrument on this page: it answers "where has
+              this got to" in four named stages, where the status badge alone
+              said "In progress" for capture running, review not started and
+              finalization unavailable alike. Each step carries its own label and
+              a written state, never colour alone.
 
-        <CardContent className="space-y-5">
-          {/* Where the inspection actually is, as four named stages. The status
-              badge above says one thing — "In progress" — that stood equally for
-              capture running, review not started and finalization unavailable,
-              so it appeared in several places meaning something different each
-              time. Each step carries its own label and a written state, never
-              colour alone. */}
-          <ol aria-label="Inspection workflow" className="grid gap-3 sm:grid-cols-4">
-            {inspectionProgress(item.status).map((step) => (
-              <li className="flex items-start gap-2" key={step.key}>
-                <span
-                  aria-hidden
-                  className={cn(
-                    'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border',
-                    step.state === 'complete' && 'bg-success border-success text-white',
-                    step.state === 'active' && 'border-primary text-primary',
-                    step.state === 'blocked' && 'bg-destructive border-destructive text-white',
-                    step.state === 'pending' && 'text-muted-foreground',
-                  )}
-                >
-                  {step.state === 'complete' ? (
-                    <CheckIcon className="size-3" />
-                  ) : step.state === 'blocked' ? (
-                    <XIcon className="size-3" />
-                  ) : (
-                    <CircleIcon className="size-2 fill-current" />
-                  )}
-                </span>
-                <span className="grid min-w-0 gap-0.5">
-                  <span className="text-sm font-medium">{step.label}</span>
-                  {/* The written state is what a screen reader announces, and
+              One hairline panel rather than four floating boxes, matching
+              StatGroup: four cells, whole rows at both breakpoints. */}
+        <ol
+          aria-label="Inspection workflow"
+          className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-xl border lg:grid-cols-4"
+        >
+          {inspectionProgress(item.status).map((step) => (
+            <li className="bg-card flex items-start gap-2 p-3" key={step.key}>
+              <span
+                aria-hidden
+                className={cn(
+                  'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border',
+                  // `text-background`, never `text-white`. These fills invert
+                  // between modes: in dark mode --success is a light green and
+                  // white on it measures 1.95:1, so the tick simply vanished.
+                  // The page background is by definition the most contrasting
+                  // neutral available in whichever mode is active.
+                  step.state === 'complete' && 'bg-success border-success text-background',
+                  step.state === 'active' && 'border-primary text-primary',
+                  step.state === 'blocked' && 'bg-destructive border-destructive text-background',
+                  step.state === 'pending' && 'text-muted-foreground',
+                )}
+              >
+                {step.state === 'complete' ? (
+                  <CheckIcon className="size-3" />
+                ) : step.state === 'blocked' ? (
+                  <XIcon className="size-3" />
+                ) : (
+                  <CircleIcon className="size-2 fill-current" />
+                )}
+              </span>
+              <span className="grid min-w-0 gap-0.5">
+                <span className="text-sm font-medium">{step.label}</span>
+                {/* The written state is what a screen reader announces, and
                       what makes the marker meaningful to everyone else. */}
-                  <span className="text-muted-foreground text-xs">
-                    {step.detail || STEP_STATE_LABEL[step.state]}
-                  </span>
+                <span className="text-muted-foreground text-xs">
+                  {step.detail || STEP_STATE_LABEL[step.state]}
                 </span>
-              </li>
-            ))}
-          </ol>
+              </span>
+            </li>
+          ))}
+        </ol>
 
-          {/* Four facts, scannable in a row. Each carried a grey sentence
-              underneath restating what the label already said, so the strip read
-              as eight lines of small text rather than four values. Only the two
-              that add a fact the value does not carry survive. */}
-          <dl className="grid gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-              <dt className="text-muted-foreground text-xs">Assigned technician</dt>
-              <dd className="mt-0.5 text-sm font-medium">
-                {current?.technician?.displayName ?? 'Not assigned'}
-              </dd>
-              {current ? null : (
-                <dd className="text-warning mt-0.5 text-xs">
-                  Required before field work can start
-                </dd>
-              )}
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Scheduled</dt>
-              <dd className="mt-0.5 text-sm font-medium">{formatDate(item.scheduledAt)}</dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Property scope</dt>
-              <dd className="mt-0.5 text-sm font-medium">
-                {item.propertywareUnit?.name ?? 'Entire property'}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground text-xs">Comparison baseline</dt>
-              <dd className="mt-0.5 text-sm font-medium">{baselineLabel}</dd>
-            </div>
-          </dl>
+        {/* Four facts, and deliberately not a second panel below the first.
+              These are reference, not instrument: giving them the same bordered
+              treatment as the stepper would make the page read as two equally
+              important rows of boxes. Plain text on the canvas, with the labels
+              carrying the only chrome they need. */}
+        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <dt className="text-muted-foreground text-xs">Assigned technician</dt>
+            <dd className="mt-0.5 text-sm font-medium">
+              {current?.technician?.displayName ?? 'Not assigned'}
+            </dd>
+            {current ? null : (
+              <dd className="text-warning mt-0.5 text-xs">Required before field work can start</dd>
+            )}
+          </div>
+          <div>
+            <dt className="text-muted-foreground text-xs">Scheduled</dt>
+            <dd className="mt-0.5 text-sm font-medium">{formatDate(item.scheduledAt)}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground text-xs">Property scope</dt>
+            <dd className="mt-0.5 text-sm font-medium">
+              {item.propertywareUnit?.name ?? 'Entire property'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground text-xs">Comparison baseline</dt>
+            <dd className="mt-0.5 text-sm font-medium">{baselineLabel}</dd>
+          </div>
+        </dl>
 
-          {banner ? (
-            <Alert variant={banner.tone === 'warning' ? 'warning' : 'default'}>
-              {banner.tone === 'warning' ? <TriangleAlertIcon /> : <InfoIcon />}
-              <AlertTitle>{banner.title}</AlertTitle>
-              <AlertDescription>{banner.body}</AlertDescription>
-            </Alert>
-          ) : null}
+        {banner ? (
+          <Alert variant={banner.tone === 'warning' ? 'warning' : 'default'}>
+            {banner.tone === 'warning' ? <TriangleAlertIcon /> : <InfoIcon />}
+            <AlertTitle>{banner.title}</AlertTitle>
+            <AlertDescription>{banner.body}</AlertDescription>
+          </Alert>
+        ) : null}
 
-          {item.internalNotes ? (
-            <div className="bg-muted/50 rounded-lg p-3">
-              <p className="text-muted-foreground text-xs">Internal notes</p>
-              <p className="mt-1 text-sm whitespace-pre-wrap">{item.internalNotes}</p>
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
+        {item.internalNotes ? (
+          <div className="bg-muted rounded-lg p-3">
+            <p className="text-muted-foreground text-xs">Internal notes</p>
+            <p className="mt-1 text-sm whitespace-pre-wrap">{item.internalNotes}</p>
+          </div>
+        ) : null}
+      </section>
 
       {/* Area-first: recordings, photos, condition summaries and findings are
           read through the area they belong to rather than through four
@@ -375,7 +392,7 @@ function InspectionDetail() {
             click away and keyboard-reachable without any custom disclosure
             logic. */}
         <details className="group">
-          <summary className="hover:bg-accent/50 flex cursor-pointer items-center gap-2 rounded-lg border p-3 text-sm font-medium select-none">
+          <summary className="bg-card hover:bg-accent flex cursor-pointer items-center gap-2 rounded-xl border p-3 text-sm font-medium select-none">
             Additional information
             <span className="text-muted-foreground font-normal">
               Assignment history and activity
@@ -460,7 +477,9 @@ function InspectionDetail() {
       {assigning ? (
         <AssignmentDialog current={current} inspectionId={id} onClose={() => setAssigning(false)} />
       ) : null}
-      {editing ? <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} /> : null}
+      {editing ? (
+        <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} />
+      ) : null}
       {cancelling ? (
         <InspectionCancelDialog inspectionId={id} onClose={() => setCancelling(false)} />
       ) : null}

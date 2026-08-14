@@ -6,7 +6,7 @@ import { DataTable, DataTableSkeleton, type Column } from '@/components/data-tab
 import { DeleteAccountDialog } from '@/components/delete-account-dialog';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
-import { StatCard } from '@/components/stat-card';
+import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import {
@@ -146,21 +146,16 @@ export default function TechnicianDetailPage() {
         </Alert>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="gap-0 p-5">
-          <p className="text-muted-foreground text-sm font-medium">Status</p>
-          <div className="mt-2">
-            <StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />
-          </div>
-        </Card>
-        <StatCard label="Current assignments" value={item.workload?.current ?? 0} />
-        <StatCard label="In progress" value={item.workload?.inProgress ?? 0} />
-        <StatCard
+      <StatGroup columns="grid-cols-2 lg:grid-cols-4">
+        <Stat label="Status" value={<StatusBadge value={item.isActive ? 'ACTIVE' : 'INACTIVE'} />} />
+        <Stat label="Current assignments" value={item.workload?.current ?? 0} />
+        <Stat label="In progress" value={item.workload?.inProgress ?? 0} />
+        <Stat
           detail={formatDateTime(item.createdAt)}
           label="Completed"
           value={item.workload?.completed ?? 0}
         />
-      </div>
+      </StatGroup>
 
       <Card className="mt-4">
         <CardHeader>

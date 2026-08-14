@@ -1,19 +1,31 @@
 /**
  * The entire stylesheet for this application.
  *
- * `web-app` carries ~5,000 lines here across 400 bespoke class selectors, and
- * omits Tailwind's Preflight so those selectors keep working — which is why a
- * utility can silently lose to an unlayered legacy rule over there. Nothing is
+ * `web-app` carried ~5,000 lines here across 400 bespoke class selectors, and
+ * omitted Tailwind's Preflight so those selectors kept working. Nothing is
  * inherited from that file. Everything below is tokens; all layout, spacing and
  * colour is expressed as utilities or shadcn variants at the call site.
  *
  * Preflight is **on**, via the single `tailwindcss` import.
+ *
+ * ── The palette is measured, not picked ──────────────────────────────────────
+ * Every foreground/surface pair this app actually builds is asserted in
+ * `lib/theme-contrast.test.ts`, which parses THIS file. A colour nudged below
+ * WCAG AA fails the suite rather than shipping. Two rules came out of that work
+ * and are why some values look oddly specific:
+ *
+ *   1. Status text sits on a tint of *itself*, so lightening the text also
+ *      lightens the surface under it. Past a point the ratio stops improving.
+ *      Dark mode therefore tints at 8% where light mode tints at 10%; see
+ *      `components/ui/badge.tsx`.
+ *   2. `--muted-foreground` carries most of the secondary text in the console
+ *      (timestamps, addresses, table headers) at 12px. It is held near 5.5:1,
+ *      not at the 4.5:1 floor, because it is read all day.
  */
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* shadcn's canonical dark signal. `next-themes` stamps `.dark` on <html>. The
-   old app used a `data-theme` attribute and a hand-rolled bootstrap script. */
+/* shadcn's canonical dark signal. `next-themes` stamps `.dark` on <html>. */
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -38,8 +50,8 @@
   --color-ring: var(--ring);
 
   /* Status colours, as solid foregrounds. Components tint their own surface
-     with `/10`–`/15` rather than each status owning a second hard-coded token,
-     which is what let "approved" and "completed" drift apart in the old app. */
+     rather than each status owning a second hard-coded token, which is what let
+     "approved" and "completed" drift apart in the old app. */
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
@@ -47,19 +59,12 @@
   /* The TexasRenters green. Deliberately NOT `--accent`: in shadcn `--accent`
      is the neutral *hover surface* for menus, rows and command items, so
      putting the brand there turns every hover green. This is for brand
-     surfaces only — the sign-in mark, the sidebar rail, the active nav item. */
-  /* Set from next/font in app/layout.tsx. The fallbacks matter: they are what
-     renders during the swap window and on any build where the font fails to
-     fetch, so they are a real UI state rather than dead defensive text. */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
-
+     surfaces only: the sign-in mark and the sidebar rail. */
   --color-brand: var(--brand);
-  /* Only ever on a SOLID --brand fill. It is a very dark green (L=0.236) chosen
-     to sit on bright lime, so used as text over a tint it is dark-on-dark and
-     disappears. That is not hypothetical: the condition checklist rendered every
-     "yes" as an empty box until it was moved to `text-brand`. For tinted
-     surfaces the colour itself is the correct pairing, exactly as the
-     destructive controls already do with `text-destructive`. */
+  /* Only ever on a SOLID --brand fill. It is a very dark green chosen to sit on
+     bright lime, so used as text over a tint it is dark-on-dark and disappears.
+     That is not hypothetical: the condition checklist rendered every "yes" as an
+     empty box until it was moved to `text-brand`. */
   --color-brand-foreground: var(--brand-foreground);
 
   /* Categorical scale. Used for the provider tiles, where the point is that
@@ -79,6 +84,29 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
+  /* Set from next/font in app/layout.tsx. The fallbacks matter: they are what
+     renders during the swap window and on any build where the font fails to
+     fetch, so they are a real UI state rather than dead defensive text. */
+  --font-sans: var(--font-geist), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* Geist Mono is not decoration here. Identifiers, timestamps, durations and
+     money are read *down a column* in this console, and a proportional font
+     makes "0:33 / 0:46 / 1:19" a ragged edge. See `font-mono` at those sites. */
+  --font-mono: var(--font-geist-mono), ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* SHAPE LOCK. Three radii, by nesting depth, and nothing else:
+       rounded-xl (12px)  top-level surfaces — cards, tables, panels, dialogs
+       rounded-lg (8px)   surfaces nested INSIDE one of those — wells, inner
+                          panels, image thumbnails, evidence tiles
+       rounded-md (6px)   controls — buttons, inputs, badges, chips
+
+     The middle tier is not slack, it is the nesting rule: a child corner must
+     be tighter than the parent it sits in, or the inner box looks like it is
+     bulging out of the outer one. `rounded-full` is permitted for avatars and
+     status pills only, where the shape is the meaning.
+
+     What this forbids is picking a radius by feel at the call site. If a new
+     surface does not obviously belong to one of the three tiers, it is probably
+     the wrong component. */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -86,85 +114,108 @@
 }
 
 :root {
-  --radius: 0.625rem;
+  --radius: 0.5rem;
 
-  /* shadcn slate, unmodified. */
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
+  /**
+   * The app header's height, shared because two sticky layers depend on it.
+   *
+   * The header pins at the top of the viewport; a table's column headers pin
+   * directly beneath it. There is no intermediate scroll container in the shell
+   * (`SidebarInset` is a flex column, the document scrolls), so a table header
+   * stuck at `top-0` pins *behind* the app header and disappears. Both read this
+   * value, so the offset cannot drift when the header is resized.
+   */
+  --app-header-height: 3rem;
 
-  /* Brand. #1d4492 and #85c43f, converted rather than re-picked, so the new app
+  /* Light mode is a grey canvas carrying lighter surfaces, not white-on-white.
+     That is what lets a card read as raised from its border alone, with no
+     drop shadow anywhere in the application. Pure #ffffff is deliberately not
+     used: it flattens the surface relationship and glares on a bright desk. */
+  --background: oklch(0.975 0.003 250);
+  --card: oklch(0.995 0.001 250);
+  --card-foreground: oklch(0.185 0.025 258);
+  --popover: oklch(0.995 0.001 250);
+  --popover-foreground: oklch(0.185 0.025 258);
+  --foreground: oklch(0.185 0.025 258);
+
+  /* Recessed surface: table headers, inactive tabs, well panels. */
+  --muted: oklch(0.949 0.006 250);
+  --muted-foreground: oklch(0.492 0.026 256);
+  --secondary: oklch(0.949 0.006 250);
+  --secondary-foreground: oklch(0.245 0.024 258);
+  --accent: oklch(0.941 0.007 250);
+  --accent-foreground: oklch(0.245 0.024 258);
+
+  --border: oklch(0.905 0.008 252);
+  --input: oklch(0.888 0.009 252);
+
+  /* Brand. #1d4492 and #85c43f, converted rather than re-picked, so the console
      is recognisably the same product. */
   --primary: oklch(0.407 0.136 262.1);
-  --primary-foreground: oklch(0.984 0.003 247.858);
+  --primary-foreground: oklch(0.985 0.002 250);
   --ring: oklch(0.407 0.136 262.1);
   --brand: oklch(0.751 0.175 131.4);
   /* Near-black on the green, never white: white on #85c43f measures 2.0:1 and
-     fails WCAG outright, while #10240a is 8.1:1. */
+     fails WCAG outright, while this measures 8.1:1. */
   --brand-foreground: oklch(0.236 0.053 139);
 
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.984 0.003 247.858);
-  --success: oklch(0.52 0.13 149);
-  --warning: oklch(0.55 0.12 75);
+  --destructive: oklch(0.522 0.208 27);
+  --destructive-foreground: oklch(0.985 0.002 250);
+  --success: oklch(0.478 0.132 150);
+  --warning: oklch(0.508 0.122 71);
   --info: oklch(0.407 0.136 262.1);
 
-  --chart-1: oklch(0.55 0.15 262);
-  --chart-2: oklch(0.55 0.13 190);
-  --chart-3: oklch(0.55 0.15 300);
-  --chart-4: oklch(0.58 0.14 45);
-  --chart-5: oklch(0.55 0.14 145);
+  --chart-1: oklch(0.52 0.15 262);
+  --chart-2: oklch(0.52 0.13 190);
+  --chart-3: oklch(0.52 0.15 300);
+  --chart-4: oklch(0.55 0.14 45);
+  --chart-5: oklch(0.52 0.14 145);
 
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  /* The sidebar is the one persistently-darker plane in light mode, so the
+     content area reads as the lit working surface. */
+  --sidebar: oklch(0.958 0.005 250);
+  --sidebar-foreground: oklch(0.185 0.025 258);
   --sidebar-primary: oklch(0.407 0.136 262.1);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-primary-foreground: oklch(0.985 0.002 250);
+  --sidebar-accent: oklch(0.918 0.008 252);
+  --sidebar-accent-foreground: oklch(0.245 0.024 258);
+  --sidebar-border: oklch(0.898 0.009 252);
   --sidebar-ring: oklch(0.407 0.136 262.1);
 }
 
 .dark {
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  /* Same relationship inverted: the canvas is the darkest plane, surfaces lift
+     off it. Pure #000000 is avoided for the same reason as pure white. */
+  --background: oklch(0.168 0.019 258);
+  --card: oklch(0.212 0.021 258);
+  --card-foreground: oklch(0.968 0.004 250);
+  --popover: oklch(0.212 0.021 258);
+  --popover-foreground: oklch(0.968 0.004 250);
+  --foreground: oklch(0.968 0.004 250);
+
+  --muted: oklch(0.258 0.022 258);
+  --muted-foreground: oklch(0.735 0.028 256);
+  --secondary: oklch(0.258 0.022 258);
+  --secondary-foreground: oklch(0.968 0.004 250);
+  --accent: oklch(0.275 0.023 258);
+  --accent-foreground: oklch(0.968 0.004 250);
+
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 16%);
 
   /* The blue lightens; the green does not. #85c43f already carries enough
      contrast against both surfaces, and the brand colour is the brand colour. */
-  --primary: oklch(0.716 0.115 264.4);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --ring: oklch(0.716 0.115 264.4);
+  --primary: oklch(0.735 0.117 264);
+  --primary-foreground: oklch(0.185 0.025 258);
+  --ring: oklch(0.735 0.117 264);
   --brand: oklch(0.751 0.175 131.4);
   --brand-foreground: oklch(0.236 0.053 139);
 
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.208 0.042 265.755);
-  --success: oklch(0.75 0.16 145);
-  --warning: oklch(0.79 0.13 78);
-  --info: oklch(0.716 0.115 264.4);
+  --destructive: oklch(0.752 0.163 24);
+  --destructive-foreground: oklch(0.185 0.025 258);
+  --success: oklch(0.771 0.155 148);
+  --warning: oklch(0.822 0.128 79);
+  --info: oklch(0.735 0.117 264);
 
   --chart-1: oklch(0.72 0.13 262);
   --chart-2: oklch(0.72 0.11 190);
@@ -172,14 +223,14 @@
   --chart-4: oklch(0.75 0.12 45);
   --chart-5: oklch(0.74 0.13 145);
 
-  --sidebar: oklch(0.208 0.042 265.755);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.716 0.115 264.4);
-  --sidebar-primary-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.716 0.115 264.4);
+  --sidebar: oklch(0.192 0.02 258);
+  --sidebar-foreground: oklch(0.968 0.004 250);
+  --sidebar-primary: oklch(0.735 0.117 264);
+  --sidebar-primary-foreground: oklch(0.185 0.025 258);
+  --sidebar-accent: oklch(0.258 0.022 258);
+  --sidebar-accent-foreground: oklch(0.968 0.004 250);
+  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-ring: oklch(0.735 0.117 264);
 }
 
 @layer base {
@@ -193,8 +244,8 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Tabular figures wherever a number is compared down a column — counts,
-     money, durations. Proportional digits make a table of totals jitter. */
+  /* Tabular figures wherever a number is compared down a column: counts, money,
+     durations. Proportional digits make a table of totals jitter. */
   th[data-numeric],
   td[data-numeric] {
     font-variant-numeric: tabular-nums;

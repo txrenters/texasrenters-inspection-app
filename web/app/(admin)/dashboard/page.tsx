@@ -2,19 +2,21 @@
 
 import {
   ArrowRightIcon,
-  Building2Icon,
   CheckCircle2Icon,
   ClipboardCheckIcon,
-  FileTextIcon,
-  LayersIcon,
   PlayCircleIcon,
   TriangleAlertIcon,
-  UsersRoundIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 
 import { PageHeader, SectionHeader } from '@/components/page-header';
-import { StatCard, StatCardSkeleton } from '@/components/stat-card';
+import {
+  Stat,
+  StatGroup,
+  StatGroupSkeleton,
+  StatStrip,
+  StatStripItem,
+} from '@/components/stat-card';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -42,11 +44,7 @@ export default function DashboardPage() {
           description="Live inspection, assignment, synchronization, and provider readiness."
           title="Operations dashboard"
         />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 4 }, (_, index) => (
-            <StatCardSkeleton key={index} />
-          ))}
-        </div>
+        <StatGroupSkeleton columns="grid-cols-2 lg:grid-cols-4" count={4} />
         <Skeleton className="mt-6 h-48 rounded-xl" />
       </>
     );
@@ -92,8 +90,8 @@ export default function DashboardPage() {
           }
           title="Current operations"
         />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
+        <StatGroup columns="grid-cols-2 lg:grid-cols-4">
+          <Stat
             action={
               data.metrics.unassigned ? (
                 <Button asChild size="sm" variant="outline">
@@ -107,26 +105,26 @@ export default function DashboardPage() {
             tone={data.metrics.unassigned ? 'warning' : 'default'}
             value={formatCount(data.metrics.unassigned)}
           />
-          <StatCard
+          <Stat
             detail="Ready to begin"
             icon={ClipboardCheckIcon}
             label="Assigned"
             value={formatCount(data.metrics.assigned)}
           />
-          <StatCard
+          <Stat
             detail="Active in the field"
             icon={PlayCircleIcon}
             label="In progress"
             value={formatCount(data.metrics.inProgress)}
           />
-          <StatCard
+          <Stat
             detail="Finished inspections"
             icon={CheckCircle2Icon}
             label="Completed"
             tone="success"
             value={formatCount(data.metrics.completed)}
           />
-        </div>
+        </StatGroup>
       </section>
 
       <section aria-labelledby="catalog-title" className="mt-6 space-y-3">
@@ -142,21 +140,17 @@ export default function DashboardPage() {
           description="Synchronized from Propertyware."
           title="Portfolio coverage"
         />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <StatCard icon={LayersIcon} label="Portfolios" value={formatCount(data.metrics.portfolios)} />
-          <StatCard
-            icon={Building2Icon}
-            label="Properties"
-            value={formatCount(data.metrics.properties)}
-          />
-          <StatCard icon={Building2Icon} label="Units" value={formatCount(data.metrics.units)} />
-          <StatCard icon={FileTextIcon} label="Leases" value={formatCount(data.metrics.leases)} />
-          <StatCard
-            icon={UsersRoundIcon}
-            label="Technicians"
-            value={formatCount(data.metrics.technicians)}
-          />
-        </div>
+        {/* A strip, not a second panel of five boxes. These are synchronized
+            overnight and nobody acts on them from here; giving them the same
+            treatment as the queue above is what made the old dashboard read as
+            nine equally-urgent figures. */}
+        <StatStrip>
+          <StatStripItem label="Portfolios" value={formatCount(data.metrics.portfolios)} />
+          <StatStripItem label="Properties" value={formatCount(data.metrics.properties)} />
+          <StatStripItem label="Units" value={formatCount(data.metrics.units)} />
+          <StatStripItem label="Leases" value={formatCount(data.metrics.leases)} />
+          <StatStripItem label="Technicians" value={formatCount(data.metrics.technicians)} />
+        </StatStrip>
       </section>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">

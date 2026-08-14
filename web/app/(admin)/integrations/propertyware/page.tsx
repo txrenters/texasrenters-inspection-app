@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
-import { StatCard } from '@/components/stat-card';
+import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import {
@@ -299,37 +299,35 @@ export default function PropertywarePage() {
       {/* Health first, above the tabs: it is the answer to "is this working",
           which is why anyone opens this page. The old layout put it third, below
           two cards of controls. */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="gap-0 p-5">
-          <p className="text-muted-foreground text-sm font-medium">Last run</p>
-          <div className="mt-2">
-            {latestRun?.status ? (
+      <StatGroup className="mb-6" columns="grid-cols-2 lg:grid-cols-4">
+        <Stat
+          detail={`${humanize(latestRun?.syncType)} · ${formatRelative(latestRun?.completedAt)}`}
+          label="Last run"
+          value={
+            latestRun?.status ? (
               <StatusBadge value={latestRun.status} />
             ) : (
               <span className="text-muted-foreground text-sm">Not started</span>
-            )}
-          </div>
-          <p className="text-muted-foreground mt-1 text-xs">
-            {humanize(latestRun?.syncType) } · {formatRelative(latestRun?.completedAt)}
-          </p>
-        </Card>
-        <StatCard
+            )
+          }
+        />
+        <Stat
           detail={formatDateTime(latestRun?.completedAt)}
           label="Records fetched"
           value={formatCount(latestRun?.recordsFetched)}
         />
-        <StatCard
+        <Stat
           detail={`${formatCount(latestRun?.recordsCreated)} newly created`}
           label="Records updated"
           value={formatCount(latestRun?.recordsUpdated)}
         />
-        <StatCard
+        <Stat
           detail={`${formatCount(latestRun?.recordsFailed)} failed in latest run`}
           label="Unresolved errors"
           tone={unresolvedErrors ? 'destructive' : 'default'}
           value={formatCount(unresolvedErrors)}
         />
-      </div>
+      </StatGroup>
 
       <Tabs onValueChange={(tab) => setState({ tab })} value={state.tab}>
         <TabsList>

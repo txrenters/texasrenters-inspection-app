@@ -48,9 +48,19 @@ const HIDE_BELOW: Record<NonNullable<Column<unknown>['hideBelow']>, string> = {
   xl: 'hidden xl:table-cell',
 };
 
+/**
+ * `font-mono` on numeric columns, not just `tabular-nums`.
+ *
+ * Lining figures hold the digits to one width, which stops a column of totals
+ * jittering as it re-renders. They do nothing for the *left* edge of a mixed
+ * value — an inspection reference, a duration, a unit number — and scanning a
+ * list of forty for the row that is wrong is exactly an exercise in reading
+ * down a column's left edge. Geist Mono is metrically related to Geist, so a
+ * mono cell and a sans cell in the same row keep the same baseline rhythm.
+ */
 function cellClass<Row>(column: Column<Row>) {
   return cn(
-    column.numeric && 'text-right tabular-nums',
+    column.numeric && 'text-right font-mono tabular-nums',
     column.hideBelow && HIDE_BELOW[column.hideBelow],
     column.className,
   );
@@ -114,7 +124,7 @@ export function DataTable<Row>({
   return (
     <div className={cn('bg-card overflow-hidden rounded-xl border', className)}>
       <Table aria-label={label}>
-        <TableHeader className="bg-muted/40">
+        <TableHeader>
           <TableRow className="hover:bg-transparent">
             {selection ? (
               <TableHead className="w-0 pr-0">
@@ -147,11 +157,10 @@ export function DataTable<Row>({
             return (
               <TableRow
                 key={id}
-                className={cn(
-                  'relative',
-                  href && 'focus-within:bg-muted/50',
-                  checked && 'bg-primary/5',
-                )}
+                // The selected tint comes from TableRow's `data-[state=selected]`
+                // rather than a second class here, so selection looks identical
+                // in every table in the console.
+                className={cn('relative', href && 'focus-within:bg-accent')}
                 data-state={checked ? 'selected' : undefined}
               >
                 {selection ? (
@@ -218,7 +227,7 @@ export function DataTableSkeleton<Row>({
   return (
     <div className="bg-card overflow-hidden rounded-xl border" aria-busy="true" aria-live="polite">
       <Table aria-label={label}>
-        <TableHeader className="bg-muted/40">
+        <TableHeader>
           <TableRow className="hover:bg-transparent">
             {columns.map((column) => (
               <TableHead key={column.key} scope="col" className={cellClass(column)}>

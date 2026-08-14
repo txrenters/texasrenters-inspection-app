@@ -29,6 +29,19 @@ function money(amount: number | null | undefined, currency = 'USD') {
 }
 
 /**
+ * Money, in mono.
+ *
+ * This document exists to be read down its amount columns and then totalled by
+ * hand against a deposit. `tabular-nums` holds the digits to one width but not
+ * the decimal point across rows of different magnitudes; the mono face lines up
+ * `$9.00` under `$1,240.00` so a column can be checked with a finger. It is also
+ * the one number on the page somebody may be disputing.
+ */
+function Money({ amount, currency }: { amount: number | null | undefined; currency: string }) {
+  return <span className="font-mono tabular-nums">{money(amount, currency)}</span>;
+}
+
+/**
  * A numbered section of the report.
  *
  * The number is part of the record: this document is printed and referred to by
@@ -63,9 +76,12 @@ function Nothing({ children = 'None.' }: { children?: string }) {
 function ChargeTable({ charges, currency }: { charges: AdminCharge[]; currency: string }) {
   if (!charges.length) return <Nothing />;
   return (
+    // No `bg-muted/40` on the header. TableHeader is opaque and sticky by
+    // default now, and overriding it with a translucent fill lets the rows show
+    // through it the moment a long charge list scrolls under.
     <div className="overflow-hidden rounded-lg border">
       <Table>
-        <TableHeader className="bg-muted/40">
+        <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>Description</TableHead>
             <TableHead>Source</TableHead>
@@ -79,11 +95,11 @@ function ChargeTable({ charges, currency }: { charges: AdminCharge[]; currency: 
             <TableRow key={charge.id}>
               <TableCell>{charge.description}</TableCell>
               <TableCell className="text-muted-foreground">{humanize(charge.source)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {money(charge.proposedAmount, currency)}
+              <TableCell className="text-right">
+                <Money amount={charge.proposedAmount} currency={currency} />
               </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {money(charge.approvedAmount, currency)}
+              <TableCell className="text-right">
+                <Money amount={charge.approvedAmount} currency={currency} />
               </TableCell>
               <TableCell>
                 <StatusBadge showIcon={false} value={charge.status} />
@@ -101,7 +117,8 @@ export default function ChargeReportPage() {
   const report = useChargeReport(id);
 
   // isError first: a failed fetch has no data either.
-  if (report.isError) return <ErrorState error={report.error} retry={() => void report.refetch()} />;
+  if (report.isError)
+    return <ErrorState error={report.error} retry={() => void report.refetch()} />;
   if (!report.data) return <PageSkeleton cards={4} />;
   const data = report.data;
   const currency = data.totals.currency;
@@ -126,19 +143,19 @@ export default function ChargeReportPage() {
       {/* `print:hidden` for the same reason as the toolbar above: this page is
           printed and handed over, and navigation on paper is noise. */}
       <div className="print:hidden">
-        <InspectionTabs
-          active="charges"
-          inspectionId={id}
-          inspectionType={data.inspection.type}
-        />
+        <InspectionTabs active="charges" inspectionId={id} inspectionType={data.inspection.type} />
       </div>
 
+      {/* Deliberately not `PageHeader`: that component is screen chrome, and
+          this header is part of the printed document. It only borrows its type
+          scale so the title does not sit at a different size from every other
+          h1 in the console. */}
       <header className="space-y-2">
-        <h1 className="text-xl font-semibold tracking-tight">Charge comparison report</h1>
+        <h1 className="text-lg font-semibold tracking-tight">Charge comparison report</h1>
         <p className="text-muted-foreground text-sm">
           {data.property.name}
-          {data.property.unit ? ` · ${data.property.unit}` : ''} · {humanize(data.inspection.type)} ·{' '}
-          {formatDate(data.inspection.scheduledAt)}
+          {data.property.unit ? ` · ${data.property.unit}` : ''} · {humanize(data.inspection.type)}{' '}
+          · {formatDate(data.inspection.scheduledAt)}
         </p>
         <p className="text-muted-foreground text-xs text-pretty">
           Sources are labelled: <em>system</em> / <em>ai suggested</em> are recommendations only;{' '}
@@ -179,7 +196,10 @@ export default function ChargeReportPage() {
           </p>
           <ul className="divide-y rounded-lg border">
             {data.comparison.areas.map((area) => (
-              <li className="flex items-center justify-between gap-3 p-2.5 text-sm" key={area.areaName}>
+              <li
+                className="flex items-center justify-between gap-3 p-2.5 text-sm"
+                key={area.areaName}
+              >
                 <span className="font-medium">{area.areaName}</span>
                 <span className="text-muted-foreground">
                   {humanize(area.classification).toLowerCase()}
@@ -195,7 +215,10 @@ export default function ChargeReportPage() {
         {data.newOrWorsenedFindings.length ? (
           <ul className="divide-y rounded-lg border">
             {data.newOrWorsenedFindings.map((finding) => (
-              <li className="flex flex-wrap items-center justify-between gap-2 p-2.5 text-sm" key={finding.id}>
+              <li
+                className="flex flex-wrap items-center justify-between gap-2 p-2.5 text-sm"
+                key={finding.id}
+              >
                 <span>
                   <span className="font-medium">{finding.area}</span> - {finding.title}
                 </span>
@@ -229,7 +252,10 @@ export default function ChargeReportPage() {
         {data.petReview.length ? (
           <ul className="divide-y rounded-lg border">
             {data.petReview.map((pet) => (
-              <li className="flex flex-wrap items-center justify-between gap-2 p-2.5 text-sm" key={pet.id}>
+              <li
+                className="flex flex-wrap items-center justify-between gap-2 p-2.5 text-sm"
+                key={pet.id}
+              >
                 <span>
                   <span className="font-medium">{pet.label}</span> ({pet.species})
                 </span>
@@ -258,17 +284,22 @@ export default function ChargeReportPage() {
         <ChargeTable charges={data.charges.rejected} currency={currency} />
       </ReportSection>
 
+      {/* The figure the document exists to produce, so it is allowed to be the
+          largest thing on the page. Proposed and approved are shown side by side
+          because the difference between them is the whole argument: what was
+          asked for against what a human actually signed off. Approved carries
+          the weight; proposed is stated for comparison and greyed. */}
       <ReportSection index={9} title="Totals">
-        <dl className="grid gap-3 sm:grid-cols-2">
-          <div className="bg-muted/50 rounded-lg p-3">
+        <dl className="bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border">
+          <div className="bg-card p-4">
             <dt className="text-muted-foreground text-xs">Proposed</dt>
-            <dd className="mt-0.5 text-lg font-semibold tabular-nums">
+            <dd className="text-muted-foreground mt-1 font-mono text-2xl font-semibold tabular-nums">
               {money(data.totals.proposedTotal, currency)}
             </dd>
           </div>
-          <div className="bg-muted/50 rounded-lg p-3">
+          <div className="bg-card p-4">
             <dt className="text-muted-foreground text-xs">Approved</dt>
-            <dd className="mt-0.5 text-lg font-semibold tabular-nums">
+            <dd className="mt-1 font-mono text-2xl font-semibold tabular-nums">
               {money(data.totals.approvedTotal, currency)}
             </dd>
           </div>

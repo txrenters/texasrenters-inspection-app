@@ -239,7 +239,7 @@ export default function ProvidersPage() {
                   const meta = PROVIDER_META[provider.provider];
                   const problem = isProblem(provider.status);
                   return (
-                    <Card className="gap-4 p-5" key={provider.provider}>
+                    <Card className="p-4" key={provider.provider}>
                       <div className="flex items-start gap-3">
                         <span
                           aria-hidden
