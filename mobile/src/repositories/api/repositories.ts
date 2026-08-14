@@ -142,12 +142,26 @@ export const roomSchema = z.object({
   order: z.number(),
   isRequired: z.boolean(),
   inspectionType: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT', 'HVAC']),
-  baseline: z.object({
-    summary: z.string(),
-    condition: z.enum(['DOCUMENTED', 'LIMITED', 'NOT_AVAILABLE']),
-    existingDefects: z.array(z.string()),
-    evidenceCount: z.number(),
-  }),
+  /**
+   * Optional, because a visit outside the tenancy chain has no baseline to
+   * send. The server omits the block entirely for an HVAC inspection — absent
+   * means "this visit does not deal in baselines", which is a different
+   * statement from a baseline whose condition is NOT_AVAILABLE.
+   *
+   * Required here was the last piece of the contract that had not been told.
+   * The domain model already declared it optional and every screen already
+   * guarded on it, so the only thing rejecting an HVAC inspection was this
+   * line — and it rejected the whole room list rather than one field, so a
+   * technician opening the app got a parse error instead of their work.
+   */
+  baseline: z
+    .object({
+      summary: z.string(),
+      condition: z.enum(['DOCUMENTED', 'LIMITED', 'NOT_AVAILABLE']),
+      existingDefects: z.array(z.string()),
+      evidenceCount: z.number(),
+    })
+    .optional(),
   // Permissive for the same reason as `status` above: this enum just grew two
   // members the server can send, and a strict list here would have rejected
   // the whole area rather than one field. The screens fall back to
