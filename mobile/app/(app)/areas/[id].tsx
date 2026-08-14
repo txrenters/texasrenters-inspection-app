@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useColorScheme } from 'nativewind';
 import {
   ArrowLeftIcon,
   CameraIcon,
@@ -50,6 +49,8 @@ import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { areaCompletionGate, deriveAreaRequirements } from '@/src/utils/area-requirements';
 import { describeRecordingLocation } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
+import { Button } from '@/src/components/ui';
 
 registerIcons(
   ArrowLeftIcon,
@@ -100,8 +101,7 @@ export default function AreaDetailScreen() {
   const evidenceRequests = useEvidenceRequests(inspectionId);
   const resolveRequest = useResolveEvidenceRequest(inspectionId);
   const areaRequests = (evidenceRequests.data ?? []).filter((request) => request.roomId === id);
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   /**
    * The photos taken on this device for this area, newest first.
    *
@@ -144,6 +144,14 @@ export default function AreaDetailScreen() {
   }
 
   const item = room.data;
+  /**
+   * An equipment visit, not a condition walkthrough.
+   *
+   * Drives the guidance copy and the capture steps below. The room script asks
+   * for a slow clockwise pass; servicing an air conditioner is the opposite
+   * shape of job, filmed standing at one unit.
+   */
+  const isEquipmentVisit = item.inspectionType === 'HVAC';
   const roomFindings = (findings.data ?? []).filter((finding) => finding.roomId === item.id);
   const hasRecording = Boolean(media.data?.length);
   // The primary walkthrough is what the pipeline analyses, so it is the one to
@@ -179,7 +187,7 @@ export default function AreaDetailScreen() {
           <RefreshControl
             refreshing={pull.refreshing}
             onRefresh={pull.onRefresh}
-            tintColor={isDark ? '#2dd4bf' : '#145347'}
+            tintColor={theme.primary}
           />
         }
       >
@@ -187,7 +195,7 @@ export default function AreaDetailScreen() {
           <Pressable
             accessibilityLabel="Back"
             accessibilityRole="button"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
+            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
             hitSlop={8}
             onPress={() => goBack()}
           >
@@ -252,39 +260,45 @@ export default function AreaDetailScreen() {
           resolving={resolveRequest.isPending}
         />
 
-        <View className="mx-5 mt-2 gap-3 rounded-2xl bg-card p-5">
-          <View className="flex-row items-center justify-between gap-3">
-            <View className="flex-row items-center gap-2">
-              <FileTextIcon size={18} className="text-primary" />
-              <Text className="text-base font-semibold text-foreground">Baseline Condition</Text>
+        {/* Absent on a visit that does not deal in baselines. An HVAC job is
+            outside the move-in chain, so the whole card goes rather than
+            showing "No move-in baseline is available" — which read as a gap in
+            the record instead of a question that does not apply. */}
+        {item.baseline ? (
+          <View className="mx-5 mt-2 gap-3 rounded-2xl bg-card p-5">
+            <View className="flex-row items-center justify-between gap-3">
+              <View className="flex-row items-center gap-2">
+                <FileTextIcon size={18} className="text-primary" />
+                <Text className="text-base font-semibold text-foreground">Baseline Condition</Text>
+              </View>
+              <View className="rounded-full bg-muted px-3 py-1">
+                <Text className="text-xs font-semibold capitalize text-muted-foreground">
+                  {item.baseline.condition.replaceAll('_', ' ').toLowerCase()}
+                </Text>
+              </View>
             </View>
-            <View className="rounded-full bg-muted px-3 py-1">
-              <Text className="text-xs font-semibold capitalize text-muted-foreground">
-                {item.baseline.condition.replaceAll('_', ' ').toLowerCase()}
+            <Text className="text-sm leading-6 text-muted-foreground">
+              {item.baseline.summary || 'No baseline condition is available for this room.'}
+            </Text>
+            <Text className="text-xs text-muted-foreground">
+              {item.baseline.evidenceCount} reference photos available
+            </Text>
+            <Text className="mt-2 text-xs font-bold uppercase tracking-wider text-primary">
+              Existing documented defects
+            </Text>
+            <Text className="text-sm text-muted-foreground">
+              {item.baseline.existingDefects.length
+                ? item.baseline.existingDefects.join(' · ')
+                : 'No existing defects documented.'}
+            </Text>
+            <View className="mt-1 flex-row items-center gap-2 self-start rounded-lg bg-muted px-3 py-1.5">
+              <Edit3Icon size={14} className="text-muted-foreground" />
+              <Text className="text-xs font-semibold text-muted-foreground">
+                Baseline is read-only
               </Text>
             </View>
           </View>
-          <Text className="text-sm leading-6 text-muted-foreground">
-            {item.baseline.summary || 'No baseline condition is available for this room.'}
-          </Text>
-          <Text className="text-xs text-muted-foreground">
-            {item.baseline.evidenceCount} reference photos available
-          </Text>
-          <Text className="mt-2 text-xs font-bold uppercase tracking-wider text-primary">
-            Existing documented defects
-          </Text>
-          <Text className="text-sm text-muted-foreground">
-            {item.baseline.existingDefects.length
-              ? item.baseline.existingDefects.join(' · ')
-              : 'No existing defects documented.'}
-          </Text>
-          <View className="mt-1 flex-row items-center gap-2 self-start rounded-lg bg-muted px-3 py-1.5">
-            <Edit3Icon size={14} className="text-muted-foreground" />
-            <Text className="text-xs font-semibold text-muted-foreground">
-              Baseline is read-only
-            </Text>
-          </View>
-        </View>
+        ) : null}
 
         <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
           <View className="flex-row items-start gap-3">
@@ -292,20 +306,31 @@ export default function AreaDetailScreen() {
               <RotateCwIcon size={19} className="text-primary" />
             </View>
             <View className="min-w-0 flex-1">
-              <Text className="text-base font-semibold text-foreground">Clockwise Walkthrough</Text>
+              <Text className="text-base font-semibold text-foreground">
+                {isEquipmentVisit ? 'Equipment Walkthrough' : 'Clockwise Walkthrough'}
+              </Text>
               <Text className="mt-1 text-xs leading-5 text-muted-foreground">
-                Narrate one slow pass around the room. Use snapshots to document the overview and
-                focused finding context without interrupting the video.
+                {isEquipmentVisit
+                  ? 'Cover the unit itself. There is no room sweep to complete: film what you are working on and narrate what you find.'
+                  : 'Narrate one slow pass around the room. Use snapshots to document the overview and focused finding context without interrupting the video.'}
               </Text>
             </View>
           </View>
           <View className="mt-4 overflow-hidden rounded-xl bg-muted">
-            {[
-              ['1', 'Room overview', 'Capture the full room and primary circulation path'],
-              ['2', 'Walls & surfaces', 'Move clockwise and narrate visible conditions'],
-              ['3', 'Fixtures & details', 'Pause briefly on appliances, doors, and windows'],
-              ['4', 'Exit pass', 'Confirm the room name before ending the recording'],
-            ].map(([number, title, description], index) => (
+            {(isEquipmentVisit
+              ? ([
+                  ['1', 'Indoor unit', 'Film the head unit, its filter and the coil behind it'],
+                  ['2', 'Drain and tray', 'Show the condensate path and any standing water'],
+                  ['3', 'Running check', 'Narrate airflow, noise and vibration with it running'],
+                  ['4', 'Outdoor unit', 'Capture the condenser and the refrigerant lines'],
+                ] as const)
+              : ([
+                  ['1', 'Room overview', 'Capture the full room and primary circulation path'],
+                  ['2', 'Walls & surfaces', 'Move clockwise and narrate visible conditions'],
+                  ['3', 'Fixtures & details', 'Pause briefly on appliances, doors, and windows'],
+                  ['4', 'Exit pass', 'Confirm the room name before ending the recording'],
+                ] as const)
+            ).map(([number, title, description], index) => (
               <View
                 key={number}
                 className={`flex-row items-center gap-3 px-3 py-3 ${
@@ -365,7 +390,7 @@ export default function AreaDetailScreen() {
                 <Pressable
                   accessibilityLabel={`Play ${label}`}
                   accessibilityRole="button"
-                  className="flex-row items-center justify-between rounded-xl bg-muted p-3 active:scale-[0.99]"
+                  className="flex-row items-center justify-between rounded-xl bg-muted p-3 active:scale-[0.98]"
                   key={recording.id}
                   onPress={() =>
                     router.push({
@@ -423,7 +448,7 @@ export default function AreaDetailScreen() {
               accessibilityHint="Opens the camera for the primary room walkthrough"
               accessibilityLabel="No recording saved yet. Start the primary room walkthrough."
               accessibilityRole="button"
-              className="min-h-14 flex-row items-center gap-3 rounded-xl bg-muted p-4 active:opacity-70"
+              className="min-h-14 flex-row items-center gap-3 rounded-xl bg-muted p-4 active:scale-[0.98]"
               onPress={() => router.push(`/camera/${inspectionId}/${id}`)}
             >
               <View className="h-9 w-9 items-center justify-center rounded-full bg-primary/10">
@@ -480,22 +505,15 @@ export default function AreaDetailScreen() {
                 something already running would queue a second pass over the
                 same recording. */}
             {!item.analysisPending && primaryMediaId ? (
-              <Pressable
-                accessibilityLabel="Run the analysis again"
-                accessibilityRole="button"
-                accessibilityState={{
-                  busy: uploadActions.retryProcessing.isPending,
-                  disabled: uploadActions.retryProcessing.isPending,
-                }}
-                className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-muted py-3 active:opacity-70"
-                disabled={uploadActions.retryProcessing.isPending}
+              <Button
+                busy={uploadActions.retryProcessing.isPending}
+                busyLabel="Starting…"
+                className="mt-4"
+                icon={<RotateCwIcon size={16} className="text-primary" />}
+                label="Run analysis again"
                 onPress={() => uploadActions.retryProcessing.mutate(primaryMediaId)}
-              >
-                <RotateCwIcon size={16} className="text-primary" />
-                <Text className="font-semibold text-primary">
-                  {uploadActions.retryProcessing.isPending ? 'Starting…' : 'Run analysis again'}
-                </Text>
-              </Pressable>
+                variant="ghost"
+              />
             ) : null}
             {uploadActions.retryProcessing.error ? (
               <Text className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -547,17 +565,14 @@ export default function AreaDetailScreen() {
             an extra clip does not undo the walkthrough. */}
         {hasRecording ? (
           <View className="mx-5 mt-4">
-            <Pressable
+            <Button
               accessibilityHint="Records an extra clip without replacing the main walkthrough"
-              accessibilityLabel="Add additional video"
-              accessibilityRole="button"
-              className="min-h-12 items-center justify-center rounded-xl border border-border bg-card py-3"
+              label="Add Additional Video"
               onPress={() =>
                 router.push(`/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`)
               }
-            >
-              <Text className="font-semibold text-foreground">Add Additional Video</Text>
-            </Pressable>
+              variant="secondary"
+            />
           </View>
         ) : null}
         {/* Only while there is nothing to skip.
@@ -566,21 +581,34 @@ export default function AreaDetailScreen() {
             offering it there invites a technician to file a recorded area as
             uninspected. Finished areas lose it for the same reason. */}
         {hasRecording || alreadyFinished ? null : (
-          <Pressable
+          // Deliberately the quietest control on the screen: skipping is a
+          // claim about the property, not a shortcut, and it should take a
+          // moment to find.
+          <Button
             accessibilityHint="Asks for a reason, then records this area as not inspected"
             accessibilityLabel="Mark area as skipped"
-            accessibilityRole="button"
-            className="mx-5 mt-4 min-h-12 items-center justify-center py-3"
+            className="mx-5 mt-4"
+            label="Mark as Skipped"
             onPress={() => setSkipOpen(true)}
-          >
-            <Text className="font-semibold text-muted-foreground">Mark as Skipped</Text>
-          </Pressable>
+            variant="quiet"
+          />
         )}
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
-        <Pressable
-          className="items-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
+        {/* This carried no accessible label of its own, so a screen reader read
+            the button's own text — which is right, but only by accident, and it
+            said nothing about where the button goes. */}
+        <Button
+          accessibilityHint="Opens the camera"
+          icon={
+            hasRecording ? (
+              <CameraIcon size={18} className="text-primary-foreground" />
+            ) : (
+              <PlayCircleIcon size={18} className="text-primary-foreground" />
+            )
+          }
+          label={hasRecording ? 'Record Additional Video' : 'Begin Walkthrough'}
           onPress={() =>
             router.push(
               hasRecording
@@ -588,18 +616,7 @@ export default function AreaDetailScreen() {
                 : `/camera/${inspectionId}/${id}`,
             )
           }
-        >
-          <View className="flex-row items-center gap-2">
-            {hasRecording ? (
-              <CameraIcon size={18} className="text-primary-foreground" />
-            ) : (
-              <PlayCircleIcon size={18} className="text-primary-foreground" />
-            )}
-            <Text className="font-bold text-primary-foreground">
-              {hasRecording ? 'Record Additional Video' : 'Begin Walkthrough'}
-            </Text>
-          </View>
-        </Pressable>
+        />
       </View>
 
       {/* 'alert' so a screen reader reports the context switch instead of
@@ -650,7 +667,7 @@ export default function AreaDetailScreen() {
           className="mt-4 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
           onChangeText={setEditedName}
           placeholder="Area name"
-          placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+          placeholderTextColor={theme.mutedForeground}
           value={editedName}
         />
         {updateArea.error ? (
@@ -659,38 +676,29 @@ export default function AreaDetailScreen() {
           </Text>
         ) : null}
         <View className="mt-4 flex-row gap-3">
-          <Pressable
-            accessibilityLabel="Cancel"
-            accessibilityRole="button"
-            className="min-h-12 flex-1 items-center justify-center rounded-xl bg-muted"
+          <Button
+            className="flex-1"
+            label="Cancel"
             onPress={() => setEditOpen(false)}
-          >
-            <Text className="font-semibold text-foreground">Cancel</Text>
-          </Pressable>
-          <Pressable
+            variant="secondary"
+          />
+          {/* Was `bg-primary/40` when unavailable, which faded the label along
+              with the fill. The disabled state is a `muted` surface now, so the
+              word "Save" stays readable while clearly reading as inert. */}
+          <Button
             accessibilityLabel="Save the area name"
-            accessibilityRole="button"
-            accessibilityState={{
-              busy: updateArea.isPending,
-              disabled: updateArea.isPending || !editedName.trim() || editedName.trim() === item.name,
-            }}
-            className={`min-h-12 flex-1 items-center justify-center rounded-xl ${
-              updateArea.isPending || !editedName.trim() || editedName.trim() === item.name
-                ? 'bg-primary/40'
-                : 'bg-primary'
-            }`}
-            disabled={updateArea.isPending || !editedName.trim() || editedName.trim() === item.name}
+            busy={updateArea.isPending}
+            busyLabel="Saving…"
+            className="flex-1"
+            disabled={!editedName.trim() || editedName.trim() === item.name}
+            label="Save"
             onPress={() =>
               updateArea.mutate(
                 { name: editedName.trim() },
                 { onSuccess: () => setEditOpen(false) },
               )
             }
-          >
-            <Text className="font-semibold text-primary-foreground">
-              {updateArea.isPending ? 'Saving…' : 'Save'}
-            </Text>
-          </Pressable>
+          />
         </View>
       </BottomSheet>
 
@@ -711,31 +719,24 @@ export default function AreaDetailScreen() {
           multiline
           textAlignVertical="top"
           placeholder="Why can this room not be inspected?"
-          placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+          placeholderTextColor={theme.mutedForeground}
           value={skipReason}
           onChangeText={setSkipReason}
         />
         <View className="mt-4 flex-row gap-3">
-          <Pressable
-            accessibilityLabel="Cancel"
-            accessibilityRole="button"
-            className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border py-3"
+          <Button
+            className="flex-1"
+            label="Cancel"
             onPress={() => setSkipOpen(false)}
-          >
-            <Text className="font-semibold text-foreground">Cancel</Text>
-          </Pressable>
-          <Pressable
+            variant="secondary"
+          />
+          <Button
             accessibilityHint={skipReason.trim() ? undefined : 'Enter a reason before skipping'}
-            accessibilityLabel={updates.skip.isPending ? 'Saving' : 'Skip room'}
-            accessibilityRole="button"
-            accessibilityState={{
-              busy: updates.skip.isPending,
-              disabled: !skipReason.trim() || updates.skip.isPending,
-            }}
-            className={`min-h-12 flex-1 items-center justify-center rounded-xl py-3 ${
-              skipReason.trim() ? 'bg-primary' : 'bg-muted'
-            }`}
-            disabled={!skipReason.trim() || updates.skip.isPending}
+            busy={updates.skip.isPending}
+            busyLabel="Saving…"
+            className="flex-1"
+            disabled={!skipReason.trim()}
+            label="Skip Room"
             onPress={() =>
               updates.skip.mutate(skipReason.trim(), {
                 onSuccess: () => {
@@ -745,15 +746,7 @@ export default function AreaDetailScreen() {
                 },
               })
             }
-          >
-            <Text
-              className={`font-bold ${
-                skipReason.trim() ? 'text-primary-foreground' : 'text-muted-foreground'
-              }`}
-            >
-              {updates.skip.isPending ? 'Saving…' : 'Skip Room'}
-            </Text>
-          </Pressable>
+          />
         </View>
       </BottomSheet>
     </SafeAreaView>

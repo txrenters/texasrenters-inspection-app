@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useColorScheme } from 'nativewind';
 import {
   AlertTriangleIcon,
   ArrowLeftIcon,
@@ -27,6 +26,7 @@ import { HomeButton } from '@/src/components/HomeButton';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
+import { useThemeColors } from '@/src/lib/theme-colors';
 import { buildPriorityChecklist, summaryCoverage } from '@/src/utils/inspection-audit';
 import {
   INSPECTION_STATUS_TONE_CLASS,
@@ -57,6 +57,21 @@ function isRoomDone(room: InspectionRoom) {
   const { status } = deriveAreaStatus(room);
   return status === 'COMPLETED' || status === 'SKIPPED';
 }
+
+/**
+ * What each kind of visit is called on the handset.
+ *
+ * Spelled out rather than de-underscored from the enum: "HVAC" should not
+ * render as "Hvac", and "Back to market" reads better than "BACK TO MARKET"
+ * shouted at a technician standing in someone's hallway.
+ */
+const INSPECTION_TYPE_LABEL: Record<string, string> = {
+  MOVE_IN: 'Move-in inspection',
+  MOVE_OUT: 'Move-out inspection',
+  OCCUPIED: 'Occupied inspection',
+  BACK_TO_MARKET: 'Back-to-market inspection',
+  HVAC: 'HVAC service visit',
+};
 
 const TONE_TEXT: Record<AreaStatusDescriptor['tone'], string> = {
   neutral: 'text-muted-foreground',
@@ -130,7 +145,7 @@ function RoomRow({ room, findings }: { room: InspectionRoom; findings: Finding[]
             <Text className={`mt-0.5 text-xs font-medium ${TONE_TEXT[derived.tone]}`}>
               {derived.label}
             </Text>
-            {room.baseline.summary ? (
+            {room.baseline?.summary ? (
               <Text
                 numberOfLines={2}
                 className="mt-1 text-xs leading-relaxed text-muted-foreground"
@@ -152,8 +167,7 @@ export default function InspectionOverviewScreen() {
   const rooms = useRooms(id);
   const findings = useFindings(id);
   const actions = useInspectionActions(id);
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
 
@@ -196,7 +210,7 @@ export default function InspectionOverviewScreen() {
           <RefreshControl
             refreshing={pull.refreshing}
             onRefresh={pull.onRefresh}
-            tintColor={isDark ? '#2dd4bf' : '#145347'}
+            tintColor={theme.primary}
           />
         }
       >
@@ -204,7 +218,7 @@ export default function InspectionOverviewScreen() {
           <Pressable
             accessibilityLabel="Back"
             accessibilityRole="button"
-            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
+            className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
             hitSlop={8}
             onPress={() => goBack()}
           >
@@ -225,6 +239,13 @@ export default function InspectionOverviewScreen() {
             </View>
             <View className="min-w-0 flex-1">
               <Text className="text-lg font-bold text-foreground">{item.property.address}</Text>
+              {/* The kind of visit, first. It decides what the technician is
+                  being asked to do — an HVAC job and a move-out share an
+                  address and nothing else — and the screen previously named
+                  only the unit, so the two were indistinguishable. */}
+              <Text className="text-sm font-semibold text-primary">
+                {INSPECTION_TYPE_LABEL[item.type] ?? item.type.replaceAll('_', ' ')}
+              </Text>
               <Text className="text-sm text-muted-foreground">
                 {item.unitName ?? 'Entire property'} · {item.property.cityStateZip}
               </Text>

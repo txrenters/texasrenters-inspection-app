@@ -1,4 +1,8 @@
-import { checklistTemplateFor, keywordsFromLabel } from '@texasrenters/shared';
+import {
+  checklistKindFor,
+  checklistTemplateForKind,
+  keywordsFromLabel,
+} from '@texasrenters/shared';
 
 import type { AreaEnvironment, InspectionRoom } from '../domain/models';
 
@@ -29,7 +33,12 @@ export interface ChecklistItem {
  */
 export function resolveAreaChecklist(
   authored: readonly { id: string; label: string; keywords: string[] }[] | undefined,
-  area: { name?: string | null; environment?: AreaEnvironment },
+  area: {
+    name?: string | null;
+    environment?: AreaEnvironment;
+    category?: string | null;
+    inspectionType?: string | null;
+  },
 ): ChecklistItem[] {
   if (authored?.length)
     return authored.map((item) => ({
@@ -37,7 +46,12 @@ export function resolveAreaChecklist(
       label: item.label,
       keywords: item.keywords,
     }));
-  return checklistForArea({ name: area.name ?? '', environment: area.environment });
+  return checklistForArea({
+    name: area.name ?? '',
+    environment: area.environment,
+    category: area.category,
+    inspectionType: area.inspectionType,
+  });
 }
 
 /**
@@ -54,9 +68,19 @@ export function resolveAreaChecklist(
  * still on the list, so anything that no longer matches is simply dropped.
  */
 export function checklistForArea(
-  area: Pick<InspectionRoom, 'name'> & { environment?: AreaEnvironment },
+  area: Pick<InspectionRoom, 'name'> & {
+    environment?: AreaEnvironment;
+    /** Dropped on the way in until now, so this fallback ignored the category
+        an administrator had set and could disagree with the server's list. */
+    category?: string | null;
+    /** An HVAC visit falls back to the equipment items, not the room ones. */
+    inspectionType?: string | null;
+  },
 ): ChecklistItem[] {
-  return checklistTemplateFor({ name: area.name, environment: area.environment }).map((label) => ({
+  return checklistTemplateForKind(
+    { name: area.name, environment: area.environment, category: area.category },
+    checklistKindFor(area.inspectionType),
+  ).map((label) => ({
     id: label,
     label,
     keywords: keywordsFromLabel(label),

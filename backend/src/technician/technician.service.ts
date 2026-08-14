@@ -1,6 +1,8 @@
 import {
   checklistKindFor,
   checklistTemplateFor,
+  inspectionComparesToBaseline,
+  inspectionEstablishesBaseline,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
@@ -2237,7 +2239,19 @@ export class TechnicianService {
   }
 
   private mapRoom(record: TechnicianRoomRecord) {
-    const establishesBaseline = record.inspection.inspectionType === InspectionType.MOVE_IN;
+    /**
+     * A move-in baseline is a tenancy-chain idea, so a visit outside the chain
+     * gets no baseline block at all.
+     *
+     * This used to be `type !== MOVE_IN`, which made HVAC a comparison visit by
+     * omission: it went looking for a baseline, found none, and told the
+     * technician "No move-in baseline is available" on every area. That reads as
+     * a gap in the record rather than what it is — a question that does not
+     * apply to servicing an air conditioner.
+     */
+    const establishesBaseline = inspectionEstablishesBaseline(record.inspection.inspectionType);
+    const usesBaseline =
+      establishesBaseline || inspectionComparesToBaseline(record.inspection.inspectionType);
     const baseline = establishesBaseline ? undefined : record.propertyArea.baselineConditions[0];
     const latestMedia = record.media[0];
     return {
@@ -2253,23 +2267,29 @@ export class TechnicianService {
       source: record.propertyArea.source,
       areaStatus: record.propertyArea.status,
       inspectionType: record.inspection.inspectionType,
-      baseline: {
-        summary: establishesBaseline
-          ? 'This move-in inspection establishes the initial condition for future comparisons.'
-          : (baseline?.conditionSummary ??
-            (record.inspection.baselineInspectionId
-              ? 'The completed move-in inspection is linked as the comparison baseline.'
-              : 'No move-in baseline is available.')),
-        condition: baseline
-          ? 'DOCUMENTED'
-          : record.inspection.baselineInspectionId
-            ? 'LIMITED'
-            : 'NOT_AVAILABLE',
-        existingDefects: Array.isArray(baseline?.knownDefects)
-          ? baseline.knownDefects.filter((item): item is string => typeof item === 'string')
-          : [],
-        evidenceCount: 0,
-      },
+      // Omitted entirely rather than sent empty: absent means "this visit does
+      // not deal in baselines", which is a different statement from
+      // NOT_AVAILABLE, and the app hides the block instead of rendering a
+      // warning about a record nobody expected to exist.
+      baseline: usesBaseline
+        ? {
+            summary: establishesBaseline
+              ? 'This move-in inspection establishes the initial condition for future comparisons.'
+              : (baseline?.conditionSummary ??
+                (record.inspection.baselineInspectionId
+                  ? 'The completed move-in inspection is linked as the comparison baseline.'
+                  : 'No move-in baseline is available.')),
+            condition: baseline
+              ? 'DOCUMENTED'
+              : record.inspection.baselineInspectionId
+                ? 'LIMITED'
+                : 'NOT_AVAILABLE',
+            existingDefects: Array.isArray(baseline?.knownDefects)
+              ? baseline.knownDefects.filter((item): item is string => typeof item === 'string')
+              : [],
+            evidenceCount: 0,
+          }
+        : undefined,
       completionStatus: this.mapRoomStatus(record.completionStatus),
       uploadStatus: latestMedia ? this.mapUploadStatus(latestMedia.uploadStatus) : 'PENDING',
       processingStatus: latestMedia
