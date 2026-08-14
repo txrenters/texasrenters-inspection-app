@@ -1,4 +1,5 @@
 import {
+  checklistKindFor,
   checklistTemplateFor,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
@@ -897,7 +898,16 @@ export class TechnicianService {
     const room = await this.assignedRoom(user, roomId);
     const [items, responses] = await Promise.all([
       this.prisma.areaChecklistItem.findMany({
-        where: { propertyAreaId: room.propertyAreaId, archivedAt: null },
+        // Filtered by kind, not just by area. An area carries both sets once it
+        // is marked as having a unit, and asking the wrong one is the original
+        // fault: a technician servicing an air conditioner was handed the room
+        // checklist written for the move-in, so the job read "Floor and
+        // coverings" while they were standing at a condenser.
+        where: {
+          propertyAreaId: room.propertyAreaId,
+          archivedAt: null,
+          kind: checklistKindFor(room.inspection.inspectionType),
+        },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         select: { id: true, label: true, keywords: true },
       }),

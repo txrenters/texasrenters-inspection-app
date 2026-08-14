@@ -72,6 +72,20 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 }
 
 /**
+ * Which set of checklist items this visit asks about an area.
+ *
+ * Both sets are persisted against the same area and only one is asked at a
+ * time. Getting this wrong is the original bug: a technician servicing an air
+ * conditioner was asked about the floor coverings, because the area's only
+ * checklist was the room one written for the move-in.
+ */
+export function checklistKindFor(
+  inspectionType: string | null | undefined,
+): 'ROOM' | 'AIR_CONDITIONING' {
+  return areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED ? 'AIR_CONDITIONING' : 'ROOM';
+}
+
+/**
  * Whether this inspection is the one that records the condition others are
  * later compared against.
  *
