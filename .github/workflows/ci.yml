@@ -55,11 +55,17 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/texasrenters_test?schema=public
       DIRECT_URL: postgresql://postgres:postgres@localhost:5432/texasrenters_test?schema=public
       REDIS_URL: redis://localhost:6379
-      USE_MOCK_AUTH: 'true'
-      FLOOR_PLAN_EXTRACTION_PROVIDER: mock
-      VIDEO_PLATFORM_PROVIDER: mock
-      TRANSCRIPTION_PROVIDER: mock
-      AI_ANALYSIS_PROVIDER: mock
+      # These were written for a mock stack that no longer exists (cfdbcdc).
+      # `USE_MOCK_AUTH` is gone, `VIDEO_PLATFORM_PROVIDER`,
+      # `TRANSCRIPTION_PROVIDER` and `AI_ANALYSIS_PROVIDER` are gone with it, and
+      # `mock` was removed from the extraction provider's enum because it
+      # returned a fixed eleven-room house for whatever plan was uploaded.
+      # `disabled` is the honest way to not extract.
+      #
+      # The environment schema rejects the old values outright, so every backend
+      # suite that boots the Nest module died at ConfigModule validation. Nobody
+      # saw it because the lint step failed first and the run never got here.
+      FLOOR_PLAN_EXTRACTION_PROVIDER: disabled
       JOB_QUEUE_PROVIDER: memory
       FLOOR_PLAN_STORAGE_PROVIDER: local
     steps:
