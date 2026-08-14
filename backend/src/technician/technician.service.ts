@@ -15,7 +15,6 @@ import {
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
   InspectionStatus,
-  InspectionType,
   MediaProcessingStatus,
   MediaUploadStatus,
   PropertyAreaStatus,
