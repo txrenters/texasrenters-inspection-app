@@ -44,13 +44,29 @@ export class RequestPerformanceInterceptor implements NestInterceptor {
             const serializationStartedAt = performance.now();
             const payloadBytes = serializedSize(value);
             const serializationDurationMs = round(performance.now() - serializationStartedAt);
-            response.setHeader(
-              'Server-Timing',
-              `app;dur=${durationMs}, db;dur=${round(query.durationMs)};desc="${query.count} queries", serialize;dur=${serializationDurationMs}`,
-            );
-            response.setHeader('X-Database-Query-Count', String(query.count));
-            response.setHeader('X-Response-Bytes', String(payloadBytes));
-            response.setHeader('Cache-Control', 'private, no-store');
+            /**
+             * A handler that took `@Res()` writes and ends the response itself,
+             * so by the time this runs the headers are already on the wire.
+             * Setting one then throws ERR_HTTP_HEADERS_SENT from inside this
+             * rxjs `next` callback, where nothing catches it: the exception
+             * filter tries to answer with a 500 body, hits the same error, and
+             * the process exits. Every request for a photo on a shared report
+             * took the whole API down that way — an unauthenticated link was a
+             * denial of service on the entire backend.
+             *
+             * The measurements are still taken and still logged; only the
+             * headers are skipped, because a response that has already left is
+             * the one case where there is nowhere to put them.
+             */
+            if (!response.headersSent) {
+              response.setHeader(
+                'Server-Timing',
+                `app;dur=${durationMs}, db;dur=${round(query.durationMs)};desc="${query.count} queries", serialize;dur=${serializationDurationMs}`,
+              );
+              response.setHeader('X-Database-Query-Count', String(query.count));
+              response.setHeader('X-Response-Bytes', String(payloadBytes));
+              response.setHeader('Cache-Control', 'private, no-store');
+            }
             const threshold = Number(process.env.SLOW_REQUEST_WARNING_MS ?? 750);
             if (Number.isFinite(threshold) && durationMs >= threshold)
               this.logger.warn({

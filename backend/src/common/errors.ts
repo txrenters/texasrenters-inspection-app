@@ -69,6 +69,20 @@ export class ApplicationExceptionFilter implements ExceptionFilter {
     // the rule and never the submitted value, which is why they were already
     // judged safe to log.
     const validationDetail = status === 400 ? describeValidationFailure(exception) : null;
+    /**
+     * Nothing can be written once the response has left.
+     *
+     * A handler that took `@Res()` has already sent its own status and body, so
+     * a failure raised *after* that point has nowhere to be reported. Writing
+     * anyway throws ERR_HTTP_HEADERS_SENT out of this filter, which is the last
+     * thing that could have handled it — the process then exits, turning one
+     * bad request into an outage. The exception is already logged above; ending
+     * the response is all that is left to do.
+     */
+    if (response.headersSent) {
+      response.end();
+      return;
+    }
     response.status(status).json({
       statusCode: status,
       code: isApplication ? exception.code : status === 400 ? 'VALIDATION_ERROR' : 'REQUEST_FAILED',
