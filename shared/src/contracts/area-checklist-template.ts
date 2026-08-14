@@ -204,17 +204,11 @@ export function checklistTemplateFor(area: ChecklistTemplateArea): string[] {
 }
 
 /**
- * Whether every area attached to an inspection must be walked.
+ * `inspectionRequiresEveryArea` used to live here, next to the checklist it
+ * interacts with. It is in `inspection-scope.ts` now: HVAC made the answer
+ * three-way rather than two-way, and the scope of a visit is a property of the
+ * inspection type rather than of the checklist template. Keeping the whole
+ * taxonomy in one file is what stops the five rules drifting apart.
  *
- * Move-in and move-out are the two the tenancy is judged against: a move-out is
- * compared area by area to its move-in, so an area missing from either end has
- * no counterpart and the comparison silently omits it. For those, the type
- * overrides `PropertyArea.isRequired` — a garage or patio flagged optional on
- * the property is still mandatory here.
- *
- * Every other type inspects a chosen subset, so what is attached is already the
- * decision about scope and the per-area flag continues to apply.
+ * Both files are re-exported from the package root, so no call site changed.
  */
-export function inspectionRequiresEveryArea(inspectionType: string | null | undefined) {
-  return inspectionType === 'MOVE_IN' || inspectionType === 'MOVE_OUT';
-}
