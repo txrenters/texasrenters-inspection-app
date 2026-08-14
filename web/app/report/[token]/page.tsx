@@ -94,10 +94,10 @@ function AxisCell({ value }: { value: string }) {
       aria-label={value || 'Not assessed'}
       className={
         value === 'Y'
-          ? 'text-success font-semibold'
+          ? 'text-success py-3 align-top font-semibold'
           : value === 'N'
-            ? 'text-destructive font-semibold'
-            : ''
+            ? 'text-destructive py-3 align-top font-semibold'
+            : 'py-3 align-top'
       }
     >
       {value}
@@ -129,8 +129,26 @@ function Room({ room }: { room: ReportRoomView }) {
           printing "N" would publish a defect nobody observed. */}
       {room.checklist.length ? (
         <div className="overflow-hidden rounded-lg border">
-          <Table>
-            <TableHeader className="bg-muted/40 print:table-header-group">
+          <Table className="table-fixed">
+            {/* `colgroup` rather than per-cell widths: `table-fixed` reads the
+                first row to size the columns, so without it each room's table
+                sizes itself from its own longest comment and no two line up
+                down the page. The office's report prints one grid, not six. */}
+            <colgroup>
+              <col className="w-[30%]" />
+              <col className="w-[9%]" />
+              <col className="w-[12%]" />
+              <col className="w-[10%]" />
+              <col className="w-[39%]" />
+            </colgroup>
+            {/* `static`, and an opaque background.
+                `TableHeader` is sticky by default for the console's long list
+                pages, which is wrong here twice over: this page has no app
+                header to offset against and no scroll container, so the header
+                detached and floated across the rows and the room heading above
+                them. The translucent `bg-muted/40` it used to carry is what
+                made that read as overlapping text rather than as a bar. */}
+            <TableHeader className="bg-muted lg:static print:table-header-group">
               <TableRow className="hover:bg-transparent">
                 <TableHead scope="col">Room / item</TableHead>
                 <TableHead scope="col">Clean</TableHead>
@@ -142,7 +160,13 @@ function Room({ room }: { room: ReportRoomView }) {
             <TableBody>
               {room.checklist.map((row) => (
                 <TableRow className="print:break-inside-avoid" key={row.id}>
-                  <TableHead className="text-foreground h-auto py-3 font-normal" scope="row">
+                  {/* `align-top`: a borrowed finding runs to several lines, and
+                      a vertically centred Y three lines down from its own row
+                      label belongs to no row a reader can identify. */}
+                  <TableHead
+                    className="text-foreground h-auto py-3 align-top font-normal whitespace-normal"
+                    scope="row"
+                  >
                     {row.label}
                   </TableHead>
                   {/* Spoken as "Not assessed" so a blank cell is not silence to a
@@ -151,7 +175,9 @@ function Room({ room }: { room: ReportRoomView }) {
                   <AxisCell value={row.clean} />
                   <AxisCell value={row.undamaged} />
                   <AxisCell value={row.working} />
-                  <TableCell className="text-muted-foreground">{row.comment}</TableCell>
+                  <TableCell className="text-muted-foreground py-3 align-top text-xs leading-relaxed">
+                    {row.comment}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

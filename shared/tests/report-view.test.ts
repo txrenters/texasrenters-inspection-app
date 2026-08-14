@@ -123,3 +123,122 @@ describe('inspection report view model', () => {
     expect(view.allFindings[0].severityLabel).toBe('Moderate');
   });
 });
+
+/**
+ * The comment column of the condition table.
+ *
+ * The vocabularies on the two sides never match: an administrator writes the
+ * checklist ("Floor and coverings", "Smoke alarms") and the AI categorises its
+ * findings from the technician's narration ("Flooring", "Smoke alarm"). These
+ * cover the pairings a real two-room report produced, where matching the two
+ * labels for equality left five of six failed rows printing a bare N.
+ */
+describe('explaining a failed checklist row', () => {
+  function rowFor(
+    item: { label: string; keywords?: string[]; isClean?: boolean | null },
+    findings: { category: string; description: string }[],
+  ) {
+    const view = buildReportView(
+      report({
+        rooms: [
+          {
+            ...ROOM,
+            checklist: [
+              {
+                id: 'item-1',
+                label: item.label,
+                keywords: item.keywords,
+                isClean: item.isClean ?? false,
+                isUndamaged: true,
+                isWorking: true,
+              },
+            ],
+          },
+        ],
+        findings: findings.map((finding, index) => ({
+          ...FINDING,
+          id: `finding-${index}`,
+          ...finding,
+        })),
+      }),
+    );
+    return view.rooms[0].checklist[0];
+  }
+
+  it.each([
+    ['Floor and coverings', ['floor', 'covering'], 'Flooring'],
+    ['Walls and ceilings', ['wall', 'ceiling'], 'Walls'],
+    ['Smoke alarms', ['smoke', 'alarm'], 'Smoke alarm'],
+    ['Doors and locks', ['door', 'lock'], 'Doors'],
+    ['Lights and power points', ['light', 'power', 'point'], 'Lighting'],
+  ])('explains %s from a finding filed under %s', (label, keywords, category) => {
+    expect(rowFor({ label, keywords }, [{ category, description: 'The recorded defect.' }]).comment)
+      .toBe('The recorded defect.');
+  });
+
+  it('carries every finding that explains the row, not just the first', () => {
+    // A room can have two things wrong with its walls. Printing one of them
+    // silently drops the other from the only column a reader checks.
+    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall', 'ceiling'] }, [
+      { category: 'WALLS', description: 'Multiple wall cracks.' },
+      { category: 'WALLS', description: 'Water staining near the ceiling.' },
+    ]);
+
+    expect(row.comment).toBe('Multiple wall cracks. Water staining near the ceiling.');
+  });
+
+  it('leads with the reviewer note and keeps the findings after it', () => {
+    const view = buildReportView(
+      report({
+        rooms: [
+          {
+            ...ROOM,
+            checklist: [
+              {
+                id: 'item-1',
+                label: 'Walls and ceilings',
+                keywords: ['wall', 'ceiling'],
+                comment: 'Tenant reported this on move-in day.',
+                isClean: false,
+                isUndamaged: true,
+                isWorking: true,
+              },
+            ],
+          },
+        ],
+        findings: [{ ...FINDING, category: 'WALLS', description: 'Multiple wall cracks.' }],
+      }),
+    );
+
+    expect(view.rooms[0].checklist[0].comment).toBe(
+      'Tenant reported this on move-in day. Multiple wall cracks.',
+    );
+  });
+
+  it('says nothing about a row that passed', () => {
+    // A comment against an all-Y row reads as a defect that was never found.
+    const row = rowFor({ label: 'Walls and ceilings', keywords: ['wall'], isClean: true }, [
+      { category: 'WALLS', description: 'Multiple wall cracks.' },
+    ]);
+
+    expect(row.comment).toBe('');
+  });
+
+  it('does not attach a finding about something else in the room', () => {
+    const row = rowFor({ label: 'Smoke alarms', keywords: ['smoke', 'alarm'] }, [
+      { category: 'Flooring', description: 'Floor stained and unclean.' },
+    ]);
+
+    expect(row.comment).toBe('');
+  });
+
+  it('still matches on the label when the item carries no keywords', () => {
+    // Reports generated against a backend that predates `keywords` still have
+    // to explain their failed rows.
+    const row = rowFor({ label: 'Smoke alarms' }, [
+      { category: 'Smoke alarm', description: 'No smoke alarm observed.' },
+    ]);
+
+    expect(row.comment).toBe('No smoke alarm observed.');
+  });
+});

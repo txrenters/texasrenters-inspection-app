@@ -250,7 +250,10 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
         <Text style={[styles.checklistHeadCell, styles.checklistComment]}>Comments</Text>
       </View>
       {room.checklist.map((row) => (
-        <View key={row.id} style={styles.checklistRow} wrap={false}>
+        // Wrappable. A row whose comment borrows two findings can run longer
+        // than the space left on the page, and `wrap={false}` there does not
+        // move it — it clips it, losing the explanation the column exists for.
+        <View key={row.id} style={styles.checklistRow}>
           <Text style={[styles.checklistCell, styles.checklistLabel]}>{row.label}</Text>
           {/* Colour is an accent on the letter, never a substitute for it —
               the table has to survive a monochrome print. */}
