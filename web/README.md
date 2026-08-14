@@ -1,15 +1,19 @@
-# web-shadcn
+# web
 
-A rebuild of `web-app/` on canonical shadcn/ui. **Same backend, same auth, same feature set** — only
-the UI layer is new. It runs beside `web-app`, does not replace it, and nothing in `web-app` was
-modified.
+The TexasRenters admin console. Next.js 15 App Router on canonical shadcn/ui.
 
 ```bash
-pnpm --filter @texasrenters/web-shadcn dev     # http://localhost:5456
+pnpm dev:web     # http://localhost:5456
 ```
 
-Port **5456** (`WEB_SHADCN_PORT`), deliberately clear of web-app's 5454 (`next dev`) and 5455 (local
-production build), both of which are routinely running at the same time.
+Port **5456** (`WEB_DEV_PORT`), deliberately clear of the `web` container's **5454** (`WEB_PORT` in
+the compose files), which is routinely up at the same time. Those two are different things: 5454
+serves a production build with no hot reload, so pointing this dev server at it is how you end up
+unsure which one you are looking at.
+
+> **Naming.** This package began as `web-shadcn/`, a rebuild running beside the original `web-app/`.
+> `web-app` was deleted and this took its name in `aadd149`. Sections below that compare the two are
+> kept as the record of *why* the rebuild happened; `web-app` no longer exists in the tree.
 
 > The backend must allow `http://localhost:5456`. It is in `DEVELOPMENT_ORIGINS` in
 > `backend/src/main.ts` and in `backend/.env.local`, but the remote-beta stack runs
@@ -120,24 +124,25 @@ Consequences worth knowing before changing it:
 
 ## Deployment
 
-**This is the console the Docker stack serves.** As of 2026-08-11 the compose `web` service builds
-`docker/web-shadcn/Dockerfile` instead of `docker/web/Dockerfile`, on the same port (**5454**), with
-the same healthcheck and the same place in the tunnel. `docker/web/Dockerfile` is kept, unchanged, as
-the revert path — switch the one `dockerfile:` line in `compose.yaml` back and rebuild to serve
-`web-app` again.
+**This is the console the Docker stack serves.** The compose `web` service builds
+`docker/web/Dockerfile` on port **5454**. There is no longer a choice of console to make here: the
+`dockerfile:` line used to select between this package and `web-app`, and since `aadd149` deleted
+`web-app` there is only one, with no revert path to switch back to.
 
-The env-file moved with it. Compose interpolates `NEXT_PUBLIC_*` **build args** from its
-`--env-file`, so all three entry points now point at `web-shadcn/.env.local`:
+Compose interpolates `NEXT_PUBLIC_*` **build args** from its `--env-file`, and it reads only that
+flag and the root `.env` — never a service's own `env_file`. All three entry points point at
+`web/.env.local`, and missing one still starts a stack, with the console silently talking to
+whichever backend that file happens to name:
 
 | | |
 |---|---|
-| `pnpm docker:up` | `--env-file web-shadcn/.env.local` |
+| `pnpm docker:up` | `--env-file web/.env.local` |
 | `scripts/remote-beta/start.mjs` | `WEB_ENV_FILE` |
 | `scripts/remote-beta/status.mjs` | `WEB_ENV_FILE` |
 
-Only `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_ENABLE_DEMO_DATA` are interpolated; the two
-`NEXT_PUBLIC_SUPABASE_*` keys still sitting in `web-app/.env.local` are read by nothing. **A change
-to that file needs a rebuild, not a restart** — Next inlines the value into the bundle at build time.
+Only `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_ENABLE_DEMO_DATA` are interpolated, and those are
+exactly the two keys `web/.env.local` defines. **A change to that file needs a rebuild, not a
+restart** — Next inlines the value into the bundle at build time.
 
 **The console is not published to the internet, and never has been.** The tunnel maps
 `backend.erniecodev.win → backend:3000` and `mobile.erniecodev.win → host:8082`; there is no
@@ -148,10 +153,11 @@ that looks like a backend bug.
 
 ## Status
 
-**Feature-complete.** Every route in `web-app` has a counterpart here — verified by diffing the two
-route trees, not by assumption:
+**Feature-complete.** Every route in `web-app` had a counterpart here before it was deleted, verified
+by diffing the two route trees rather than by assumption. The check was, while both existed:
 
 ```bash
+# Historical. Neither path exists now; kept as the record of how parity was established.
 diff <(find web-app/app -name page.tsx -o -name route.ts | sed 's|web-app/app||') \
      <(find web-shadcn/app -name page.tsx -o -name route.ts | sed 's|web-shadcn/app||')
 ```
@@ -169,7 +175,7 @@ diff <(find web-app/app -name page.tsx -o -name route.ts | sed 's|web-app/app||'
 | Dialogs | technician/user create, role editor, assignment create + reassign, delete account, report share, edit/cancel/unassign/finalize/merge |
 | Primitives | 32 in `components/ui/` at stock shadcn defaults |
 
-**Tests:** 18 suites, 125 tests, all passing (`pnpm test:web-shadcn`).
+**Tests:** 21 suites, 182 tests, all passing (`pnpm test:web`).
 
 The eleven pure-logic suites — `lib/api`, `auth`, `clock`, `playback`, `property-label`,
 `admin-navigation`, `inspection-progress`, `state-consistency`, `use-debounced-value`,
@@ -196,7 +202,7 @@ Three ported suites needed updating, each because the markup they asserted on ch
 
 ### Inspection deletion
 
-`web-shadcn` adds a capability `web-app` does not have: permanently deleting an inspection, behind a
+This console added a capability `web-app` never had: permanently deleting an inspection, behind a
 new **`inspections:delete`** permission.
 
 It is a separate key from `inspections:manage` on purpose — managing means editing and cancelling,

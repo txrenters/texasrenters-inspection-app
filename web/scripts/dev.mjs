@@ -3,16 +3,21 @@ import { createConnection } from 'node:net';
 import { createRequire } from 'node:module';
 
 /**
- * Port 5456, deliberately clear of the existing web app.
+ * Port 5456, deliberately clear of the Docker stack.
  *
- * `web-app` owns 5454 for `next dev` and 5455 for a local production build, and
- * both are routinely running while this one is worked on. Sharing a port would
- * mean the two apps silently take turns, and whichever answered would look like
- * the other one failing to pick up a change.
+ * The `web` container publishes 5454 (`WEB_PORT` in the compose files) and is
+ * routinely up while this dev server is worked on. Sharing a port would mean the
+ * two silently take turns, and whichever answered would look like the other one
+ * failing to pick up a change — which matters more than usual here, because the
+ * container serves a production build with no hot reload.
+ *
+ * `WEB_DEV_PORT`, not `WEB_PORT`: those are two different things, and naming the
+ * dev server after the container port is how someone ends up pointing this at
+ * 5454 and wondering which one they are looking at.
  */
 const require = createRequire(import.meta.url);
 const host = '127.0.0.1';
-const port = Number(process.env.WEB_SHADCN_PORT ?? 5456);
+const port = Number(process.env.WEB_DEV_PORT ?? 5456);
 
 function portIsListening() {
   return new Promise((resolve) => {
@@ -49,10 +54,10 @@ const listening = await portIsListening();
 
 if (listening) {
   if (await texasRentersIsRunning()) {
-    console.log(`TexasRenters web-shadcn is already running at http://localhost:${port}.`);
+    console.log(`The TexasRenters console is already running at http://localhost:${port}.`);
   } else {
     console.error(
-      `Port ${port} is occupied by another application. Stop that process or set WEB_SHADCN_PORT to a free port.`,
+      `Port ${port} is occupied by another application. Stop that process or set WEB_DEV_PORT to a free port.`,
     );
     process.exitCode = 1;
   }
@@ -66,7 +71,7 @@ if (listening) {
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 
   child.once('error', () => {
-    console.error('Unable to start the TexasRenters web-shadcn development server.');
+    console.error('Unable to start the TexasRenters console development server.');
     process.exitCode = 1;
   });
   child.once('exit', (code, signal) => {

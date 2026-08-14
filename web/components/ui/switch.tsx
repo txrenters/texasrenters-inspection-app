@@ -5,8 +5,8 @@
  *
  * The standalone package pins `@types/react` to 19.1.x while the workspace
  * hoists 19.2.x, so installing it puts a second copy of the React types inside
- * `web-shadcn/node_modules` — which shadows the hoisted one for this package
- * only. Every component then fails to typecheck with "Two different types with
+ * `web/node_modules` — which shadows the hoisted one for this package only.
+ * Every component then fails to typecheck with "Two different types with
  * this name exist, but they are unrelated", pointing at files that have nothing
  * to do with switches. The meta package carries no nested types.
  */
