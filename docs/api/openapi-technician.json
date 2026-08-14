@@ -3,7 +3,7 @@
   "info": {
     "title": "TexasRenters Technician API",
     "version": "1.0",
-    "description": "Technician-facing endpoints for the TexasRenters mobile inspection app. All /technician routes require a Supabase JWT in the Authorization header and the INSPECTION_TECHNICIAN role."
+    "description": "Technician-facing endpoints for the TexasRenters mobile inspection app. All /technician routes require an access token issued by this backend in the Authorization header and the INSPECTION_TECHNICIAN role."
   },
   "servers": [
     {

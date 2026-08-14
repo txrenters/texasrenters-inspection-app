@@ -19,7 +19,6 @@ import { resolve } from 'node:path';
 
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { ownerPrismaClient } from './owner-prisma.mjs';
-import { createClient } from '@supabase/supabase-js';
 
 const APPLY = process.argv.includes('--apply');
 
@@ -46,20 +45,15 @@ const r2 = new S3Client({
   },
 });
 
-const supabase =
-  process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-        auth: { autoRefreshToken: false, persistSession: false },
-      })
-    : null;
-
-async function readSource(provider, bucket, localRoot, key) {
-  if (provider === 'supabase') {
-    if (!supabase) throw new Error('Supabase credentials are not configured.');
-    const { data, error } = await supabase.storage.from(bucket).download(key);
-    if (error || !data) throw new Error(error?.message ?? 'not found');
-    return Buffer.from(await data.arrayBuffer());
-  }
+/**
+ * Local disk is the only source left.
+ *
+ * The Supabase Storage branch is gone with the migration off it, and it had
+ * stopped working before it was removed: `@supabase/supabase-js` is no longer
+ * a dependency, so this file imported a package that is not installed and the
+ * script failed at load regardless of which provider was asked for.
+ */
+async function readSource(_provider, _bucket, localRoot, key) {
   return readFile(resolve(localRoot, key));
 }
 

@@ -40,8 +40,6 @@
     "stream:webhook": "node --env-file-if-exists=.env.local scripts/configure-cloudflare-stream-webhook.mjs",
     "db:reset-inspections": "node --env-file-if-exists=.env.local scripts/reset-inspection-data.mjs",
     "db:backfill-area-classification": "node --env-file-if-exists=.env.local scripts/backfill-area-classification.mjs",
-    "db:migrate-to-local": "node --env-file-if-exists=.env.local scripts/migrate-to-local-postgres.mjs",
-    "db:import-credentials": "node --env-file-if-exists=.env.local scripts/import-supabase-credentials.mjs",
     "db:setup-app-role": "node --env-file-if-exists=.env.local scripts/setup-app-database-role.mjs"
   },
   "dependencies": {
