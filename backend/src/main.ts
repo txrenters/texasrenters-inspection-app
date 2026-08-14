@@ -11,13 +11,15 @@ import { ApplicationExceptionFilter } from './common/errors';
 
 const DEVELOPMENT_ORIGINS = [
   'http://localhost:3001',
-  // web-app: 5454 is `next dev`, 5455 a local production build.
+  // The admin console in Docker: 5454 is the published container port
+  // (`WEB_PORT`), 5455 a local production build beside it.
   'http://localhost:5454',
   'http://localhost:5455',
-  // web-shadcn, the shadcn rebuild of the web app. Same API and same session
-  // cookies, so it fails at the CORS preflight rather than anywhere informative
-  // if this is missing — the browser reports a missing Access-Control-Allow-Origin
-  // on /admin/profile, which reads like a backend misconfiguration.
+  // The console's dev server (`WEB_DEV_PORT`, web/scripts/dev.mjs). Same API and
+  // same session cookies, so it fails at the CORS preflight rather than anywhere
+  // informative if this is missing — the browser reports a missing
+  // Access-Control-Allow-Origin on /admin/profile, which reads like a backend
+  // misconfiguration.
   'http://localhost:5456',
   'http://localhost:8081',
   'http://localhost:8082',

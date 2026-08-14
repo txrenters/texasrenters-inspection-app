@@ -145,7 +145,7 @@ export function SearchableSelect({
         <button
           aria-expanded={open}
           className={cn(
-            'border-input flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none',
+            'border-input flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm outline-none',
             'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
             'dark:bg-input/30 dark:hover:bg-input/50 transition-[color,box-shadow]',
             'disabled:cursor-not-allowed disabled:opacity-50',

@@ -17,20 +17,33 @@ import { cn } from '@/lib/utils';
 export function PageHeader({
   title,
   description,
+  badges,
   actions,
   className,
 }: {
   title: string;
   description?: string;
+  /**
+   * Status alongside the title, not below it in the first card on the page.
+   *
+   * "What state is this record in" is part of identifying the record, and a
+   * reviewer scanning back to the top wants it in the same glance as the name.
+   * Separate from `actions` on purpose: that slot is buttons, and a badge that
+   * sits in a row of buttons reads as one you can press.
+   */
+  badges?: ReactNode;
   actions?: ReactNode;
   className?: string;
 }) {
   return (
     <div
-      className={cn('flex flex-wrap items-start justify-between gap-3 pb-4 sm:gap-4', className)}
+      className={cn('flex flex-wrap items-start justify-between gap-3 pb-3 sm:gap-4', className)}
     >
-      <div className="min-w-0 space-y-1">
-        <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
+      <div className="min-w-0 space-y-0.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
+          {badges ? <div className="flex flex-wrap items-center gap-1.5">{badges}</div> : null}
+        </div>
         {description ? (
           <p className="text-muted-foreground max-w-2xl text-sm text-pretty">{description}</p>
         ) : null}

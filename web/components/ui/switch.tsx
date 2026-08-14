@@ -5,8 +5,8 @@
  *
  * The standalone package pins `@types/react` to 19.1.x while the workspace
  * hoists 19.2.x, so installing it puts a second copy of the React types inside
- * `web-shadcn/node_modules` — which shadows the hoisted one for this package
- * only. Every component then fails to typecheck with "Two different types with
+ * `web/node_modules` — which shadows the hoisted one for this package only.
+ * Every component then fails to typecheck with "Two different types with
  * this name exist, but they are unrelated", pointing at files that have nothing
  * to do with switches. The meta package carries no nested types.
  */
@@ -20,7 +20,7 @@ function Switch({ className, ...props }: ComponentProps<typeof SwitchPrimitive.R
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        'peer data-[state=checked]:bg-primary data-[state=unchecked]:bg-input focus-visible:border-ring focus-visible:ring-ring/50 dark:data-[state=unchecked]:bg-input/80 inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50',
+        'peer data-[state=checked]:bg-primary data-[state=unchecked]:bg-input focus-visible:border-ring focus-visible:ring-ring/50 dark:data-[state=unchecked]:bg-input/80 inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent transition-all outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50',
         className,
       )}
       {...props}

@@ -7,7 +7,7 @@ import { DataTable, DataTableSkeleton, type Column } from '@/components/data-tab
 import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
-import { StatCard } from '@/components/stat-card';
+import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { TechnicianCreateDialog } from '@/components/technician-create-dialog';
@@ -99,19 +99,19 @@ export default function TechniciansPage() {
       {creating ? <TechnicianCreateDialog onClose={() => setCreating(false)} /> : null}
 
       {workload && !busy ? (
-        <div
+        <StatGroup
           aria-label="Visible technician workload"
-          className="mb-4 grid gap-3 sm:grid-cols-3"
-          role="group"
+          className="mb-4"
+          columns="grid-cols-1 sm:grid-cols-3"
         >
-          <StatCard
+          <Stat
             detail="Across the accounts on this page"
             label="Current assignments"
             value={workload.current}
           />
-          <StatCard detail="Active in the field" label="In progress" value={workload.inProgress} />
-          <StatCard detail="Finished inspections" label="Completed" value={workload.completed} />
-        </div>
+          <Stat detail="Active in the field" label="In progress" value={workload.inProgress} />
+          <Stat detail="Finished inspections" label="Completed" value={workload.completed} />
+        </StatGroup>
       ) : null}
 
       <ListToolbar
