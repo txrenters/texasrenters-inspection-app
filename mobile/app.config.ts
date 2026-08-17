@@ -79,6 +79,23 @@ const config: ExpoConfig = {
     ],
   ],
   experiments: { typedRoutes: true },
+  // Over-the-air updates. Without this block a bad production build can only be
+  // corrected by building again and going back through App Review — days, during
+  // which technicians in the field have a broken app and no way back.
+  //
+  // The URL is derived from the EAS project rather than hard-coded, for the same
+  // reason `extra.eas` is: the id is deployment configuration, not source. When
+  // the variable is absent the key is omitted entirely and `expo-updates` simply
+  // stays dormant — a local or unconfigured build is unaffected.
+  ...(easProjectId ? { updates: { url: `https://u.expo.dev/${easProjectId}` } } : {}),
+  // `fingerprint`, not `appVersion`. The policy decides which builds an update is
+  // allowed to reach, and `appVersion` answers that with the marketing version —
+  // which says nothing about the native layer. Add a native module without
+  // touching `version` and `appVersion` would happily deliver JavaScript that
+  // calls into it to a binary that does not contain it, crashing on launch, with
+  // no way to recall the update. `fingerprint` hashes the native project itself,
+  // so an update reaches exactly the builds that can run it and no others.
+  runtimeVersion: { policy: 'fingerprint' },
   extra: {
     dataSource: process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true' ? 'mock' : 'api',
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? null,
@@ -87,6 +104,14 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'com.texasrenters.inspection',
+    infoPlist: {
+      // The app's only cryptography is the HTTPS it speaks to our own API, which
+      // is exempt. Declaring that here answers Apple's export-compliance question
+      // once, in the build; leaving it unset asks it again by hand on every
+      // single upload, and an absent-minded "yes" commits the account to filing
+      // encryption paperwork it does not owe.
+      ITSAppUsesNonExemptEncryption: false,
+    },
   },
   android: {
     adaptiveIcon: {
