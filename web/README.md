@@ -3,7 +3,7 @@
 The TexasRenters admin console. Next.js 15 App Router on canonical shadcn/ui.
 
 ```bash
-pnpm dev:web     # http://localhost:5456
+npm run dev:web     # http://localhost:5456
 ```
 
 Port **5456** (`WEB_DEV_PORT`), deliberately clear of the `web` container's **5454** (`WEB_PORT` in
@@ -136,7 +136,7 @@ whichever backend that file happens to name:
 
 | | |
 |---|---|
-| `pnpm docker:up` | `--env-file web/.env.local` |
+| `npm run docker:up` | `--env-file web/.env.local` |
 | `scripts/remote-beta/start.mjs` | `WEB_ENV_FILE` |
 | `scripts/remote-beta/status.mjs` | `WEB_ENV_FILE` |
 
@@ -175,7 +175,7 @@ diff <(find web-app/app -name page.tsx -o -name route.ts | sed 's|web-app/app||'
 | Dialogs | technician/user create, role editor, assignment create + reassign, delete account, report share, edit/cancel/unassign/finalize/merge |
 | Primitives | 32 in `components/ui/` at stock shadcn defaults |
 
-**Tests:** 21 suites, 182 tests, all passing (`pnpm test:web`).
+**Tests:** 21 suites, 182 tests, all passing (`npm test:web`).
 
 The eleven pure-logic suites — `lib/api`, `auth`, `clock`, `playback`, `property-label`,
 `admin-navigation`, `inspection-progress`, `state-consistency`, `use-debounced-value`,
@@ -287,6 +287,6 @@ The dialog lives in `components/inspection-complete-dialog.tsx` here; the other 
 - Never put a raw colour in a `className` — ESLint fails the build on it. Use the tokens.
 - `asChild` needs an element-typed slot from `components/ui/slot.ts`; the bare `Slot` export is typed
   `HTMLAttributes<HTMLElement>` and will not accept `ComponentProps<'button'>`.
-- Keep `@types/react` at `^19.2.0`. Dropping to `^19.1.0` makes pnpm nest a second copy under
+- Keep `@types/react` at `^19.2.0`. Dropping to `^19.1.0` makes npm run nest a second copy under
   `@types/react-dom`, and every `asChild` component then fails with "Two different types with this
   name exist".

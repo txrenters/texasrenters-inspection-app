@@ -127,7 +127,7 @@ See §3 — all 22 migrated.
 Completed July 29, 2026.
 
 - [x] Generated the current official `sidebar` primitive with
-  `pnpm dlx shadcn@latest add sidebar`.
+  `npx shadcn@latest add sidebar`.
 - [x] `components/ui/sidebar.tsx` is the unmodified current CLI output.
 - [x] Kept the repository-owned Button, Input, Separator, Sheet, Skeleton, and
   Tooltip implementations when the CLI offered to overwrite them.

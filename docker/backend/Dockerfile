@@ -5,26 +5,26 @@ FROM node:24-bookworm-slim AS build
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-ENV PNPM_HOME=/pnpm
-ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 WORKDIR /app
 
 # Manifests first so the install layer is cached until a dependency changes.
-# Every workspace package listed in pnpm-workspace.yaml is copied, otherwise
-# --frozen-lockfile compares the lockfile against an incomplete workspace.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Every package named in the root `workspaces` array is copied, otherwise
+# `npm ci` compares the lockfile against an incomplete workspace and refuses.
+# package.json carries `allowScripts`, without which Prisma, sharp and
+# ffmpeg-static install with their scripts unrun and the image builds a backend
+# with no query engine.
+COPY package.json package-lock.json ./
 COPY shared/package.json ./shared/
 COPY backend/package.json ./backend/
 COPY web/package.json ./web/
 COPY mobile/package.json ./mobile/
-RUN pnpm install --frozen-lockfile
+RUN npm ci
 
 COPY shared ./shared
 COPY backend ./backend
-RUN pnpm --filter @texasrenters/backend db:generate \
-  && pnpm --filter @texasrenters/shared build \
-  && pnpm --filter @texasrenters/backend build
+RUN npm run db:generate --workspace @texasrenters/backend \
+  && npm run build --workspace @texasrenters/shared \
+  && npm run build --workspace @texasrenters/backend
 
 FROM node:24-bookworm-slim AS runtime
 RUN apt-get update -y \

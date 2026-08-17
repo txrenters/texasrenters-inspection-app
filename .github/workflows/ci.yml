@@ -12,8 +12,7 @@ on:
       - 'web/**'
       - 'infrastructure/**'
       - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
+      - 'package-lock.json'
       - '.github/workflows/ci.yml'
   push:
     branches: [main]
@@ -27,8 +26,7 @@ on:
       - 'web/**'
       - 'infrastructure/**'
       - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
+      - 'package-lock.json'
       - '.github/workflows/ci.yml'
 
 jobs:
@@ -76,14 +74,15 @@ jobs:
       AUTH_JWT_SECRET: ci-not-a-real-secret-tokens-die-with-the-runner
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 11.9.0 }
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm db:generate
+          cache: npm
+      # `npm ci` honours the `allowScripts` list in package.json. Without those
+      # approvals Prisma, sharp and ffmpeg-static install with their scripts
+      # unrun, and db:generate below fails on a missing query engine.
+      - run: npm ci
+      - run: npm run db:generate
       # `shared` must be built before anything lints or typechecks against it.
       #
       # Its package exports point at ./dist, so on a clean checkout that path
@@ -92,8 +91,8 @@ jobs:
       # resolve path to module '@texasrenters/shared'" - on every run since the
       # workflow was written, while passing on developer machines where a stale
       # dist happened to be lying around. Same reason `db:generate` is above.
-      - run: pnpm --filter @texasrenters/shared build
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
+      - run: npm run build --workspace @texasrenters/shared
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

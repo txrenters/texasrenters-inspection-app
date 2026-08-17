@@ -26,7 +26,7 @@ Cloudflare Tunnel is not part of this workflow.
 ## Prerequisites
 
 - Docker Desktop installed
-- Node and pnpm versions accepted by the root workspace
+- Node and npm run versions accepted by the root workspace
 - `backend/.env.local` present
 - `NGROK_AUTHTOKEN` and `NGROK_DOMAIN` present in that ignored file
 - Real backend provider credentials already configured there
@@ -38,7 +38,7 @@ Never put backend credentials in an `EXPO_PUBLIC_*` variable.
 From the repository root:
 
 ```bash
-pnpm remote-beta
+npm run remote-beta
 ```
 
 This command:
@@ -54,7 +54,7 @@ This command:
 To clear Metro's cache during the same cold start:
 
 ```bash
-pnpm remote-beta -- --clear
+npm run remote-beta -- --clear
 ```
 
 ## Metro only
@@ -63,16 +63,16 @@ Use this only when the Docker remote-beta stack is already running with the curr
 
 ```bash
 cd mobile
-pnpm start:clear
+npm start:clear
 ```
 
 The script refuses to continue if the live ngrok agent still points directly at the backend,
-because that old topology cannot carry Metro. Run `pnpm remote-beta` once to recreate it.
+because that old topology cannot carry Metro. Run `npm run remote-beta` once to recreate it.
 
 ## Status
 
 ```bash
-pnpm remote-beta:status
+npm run remote-beta:status
 ```
 
 The status output reports Docker services, the public gateway, its internal upstream, REST
@@ -97,7 +97,7 @@ It can contain captured request payloads and must never be published.
 
 Before inviting remote testers:
 
-1. Run `pnpm remote-beta`.
+1. Run `npm run remote-beta`.
 2. Confirm the printed public REST health result is successful.
 3. On a physical iPhone, disable Wi-Fi and use cellular data.
 4. Scan the V2 QR code in Expo Go.
@@ -119,7 +119,7 @@ Repository and desktop checks cannot prove the final cellular/Expo Go step.
 | `NGROK_AUTHTOKEN` or `NGROK_DOMAIN` missing     | Remote-beta environment is incomplete           | Add it to ignored `backend/.env.local`                 |
 | Backend unhealthy                               | Backend dependency or environment failure       | Inspect `compose ... logs backend`                     |
 | `remote gone away`                              | Old workflow launched a second Expo ngrok agent | Use the current scripts; do not add `--tunnel` to Expo |
-| Tunnel points at `backend` instead of `gateway` | Existing containers predate the gateway change  | Run root `pnpm remote-beta` once                       |
+| Tunnel points at `backend` instead of `gateway` | Existing containers predate the gateway change  | Run root `npm run remote-beta` once                       |
 | Public REST health is 502                       | Gateway or backend is not ready                 | Inspect gateway/backend logs and rerun                 |
 | Public root is 502 while Metro is stopped       | Expected; the non-API route targets port 8082   | Start V2 Metro                                         |
 | Port 8082 is occupied                           | Another V2 Metro process is still running       | Stop that process, then rerun                          |
@@ -131,7 +131,7 @@ Repository and desktop checks cannot prove the final cellular/Expo Go step.
 Confirm pending uploads are zero, stop Metro with Ctrl+C, then:
 
 ```bash
-pnpm remote-beta:stop
+npm run remote-beta:stop
 ```
 
 The helper does not pass `-v`; it does not delete volumes or device evidence.

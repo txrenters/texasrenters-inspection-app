@@ -24,7 +24,7 @@ EXPO_PUBLIC_API_BASE_URL=http://localhost:3000
 ```
 
 A device reaches the backend through the Cloudflare Tunnel, never the LAN.
-`pnpm start` sets `EXPO_PUBLIC_API_BASE_URL` from `CLOUDFLARE_TUNNEL_HOSTNAME` in
+`npm start` sets `EXPO_PUBLIC_API_BASE_URL` from `CLOUDFLARE_TUNNEL_HOSTNAME` in
 `backend/.env.local`, so the value in this file only matters for a simulator
 running on the same machine as the backend.
 
@@ -59,8 +59,8 @@ the build exists, so it reports the fault rather than preventing it.
 ## Run from the repository root
 
 ```bash
-pnpm install
-pnpm dev:mobile
+npm install
+npm run dev:mobile
 ```
 
 V2 is the default root mobile target and uses Metro port `8082`. The legacy
@@ -69,14 +69,14 @@ client is available only through explicit `:v1` commands.
 Other root commands:
 
 ```bash
-pnpm dev:mobile:clear
-pnpm lint:mobile
-pnpm typecheck:mobile
-pnpm test:mobile
-pnpm build:mobile
+npm run dev:mobile:clear
+npm run lint:mobile
+npm run typecheck:mobile
+npm test:mobile
+npm run build:mobile
 ```
 
-There is one way to start Metro, and it always goes through the tunnel. `pnpm
+There is one way to start Metro, and it always goes through the tunnel. `npm
 start` reads two published hostnames from `backend/.env.local` and hands them to
 Expo: `CLOUDFLARE_TUNNEL_HOSTNAME` becomes the API origin, and
 `CLOUDFLARE_METRO_HOSTNAME` becomes `EXPO_PACKAGER_PROXY_URL`, so the manifest,
@@ -86,9 +86,9 @@ They must be different hostnames. The API host answers 404 for every path Metro
 needs, so pointing both at it leaves Expo Go unable to download the app with
 nothing explaining why — the script refuses to start rather than let that happen.
 
-For a cold start, use `pnpm remote-beta -- --clear` from the repository root.
+For a cold start, use `npm run remote-beta -- --clear` from the repository root.
 When the current Docker gateway is already running, enter `mobile` and
-use `pnpm start:clear`.
+use `npm start:clear`.
 
 ## Data and evidence flow
 

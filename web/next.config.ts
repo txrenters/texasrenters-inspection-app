@@ -5,10 +5,10 @@ const nextConfig: NextConfig = {
   eslint: {
     /**
      * Linting happens through this workspace's own eslint.config.mjs, run as
-     * `pnpm lint:web`. Next's build-time pass is turned off because it expects
+     * `npm run lint:web`. Next's build-time pass is turned off because it expects
      * `eslint-config-next`, which this workspace has never declared.
      *
-     * It used to pass anyway: web-app depended on that config and pnpm's hoisted
+     * It used to pass anyway: web-app depended on that config and the hoisted
      * linker put it where this workspace could resolve it. Deleting web-app took
      * it away, and the build started failing on `@next/next/no-img-element`
      * disable comments referring to a rule that was no longer defined - a lint
@@ -26,7 +26,7 @@ const nextConfig: NextConfig = {
   // Emit a self-contained server bundle so a Docker runtime stage needs no
   // node_modules and no package manager.
   output: 'standalone',
-  // The default trace root is this package. In a pnpm workspace that misses the
+  // The default trace root is this package. In a workspace that misses the
   // symlinked @texasrenters/shared package and any hoisted dependency living at
   // the repository root, which produces an image that starts and then fails on
   // the first import. Anchoring the trace at the workspace root includes them.

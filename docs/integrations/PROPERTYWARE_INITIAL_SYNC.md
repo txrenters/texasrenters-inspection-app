@@ -4,16 +4,16 @@ Initial synchronization is a one-time, explicit full import of required active P
 
 Run from `backend/`:
 
-1. `pnpm propertyware:sync:dry-run`
+1. `npm run propertyware:sync:dry-run`
 2. Review sanitized page, record, mapping, and warning counts.
-3. `pnpm propertyware:sync:initial`
-4. `pnpm propertyware:verify:db`
+3. `npm run propertyware:sync:initial`
+4. `npm run propertyware:verify:db`
 
 The worker processes portfolios, buildings, units, and leases in parent-first order. It omits `lastModifiedDateTimeStart`, validates provider and normalized DTOs, applies idempotent upserts, saves a cursor only after each entity completes, and records per-entity and aggregate metrics.
 
 During the portfolios-and-buildings integration phase, use
-`pnpm propertyware:sync:buildings:dry-run` followed by
-`pnpm propertyware:sync:buildings:initial`. This limits the run to the provider
+`npm run propertyware:sync:buildings:dry-run` followed by
+`npm run propertyware:sync:buildings:initial`. This limits the run to the provider
 contracts that have been approved while preserving the required parent-first order.
 
 Do not proceed to incremental scheduling if any requested entity failed, lacks a cursor, or unexpectedly returned zero rows. A zero-row response emits `ZERO_RECORDS_WARNING`; check account scope, organization ID, endpoint permissions, active filters, response shape, and pagination before accepting it.

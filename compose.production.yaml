@@ -3,7 +3,7 @@
 #   docker compose --env-file .env.production \
 #     -f compose.yaml -f compose.production.yaml up -d
 #
-# Or `pnpm prod:up`, which is the same command.
+# Or `npm run prod:up`, which is the same command.
 #
 # Named explicitly alongside compose.yaml, which is what stops Compose loading
 # compose.override.yaml — the development overlay, which publishes Postgres and

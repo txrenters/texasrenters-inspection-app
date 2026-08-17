@@ -137,7 +137,7 @@ services:
         #
         # Compose fills these by interpolation, which reads the CLI --env-file
         # and the root .env, never a service's env_file. The values live in
-        # web/.env.local, so the pnpm docker:* scripts pass that file
+        # web/.env.local, so the npm run docker:* scripts pass that file
         # explicitly. Build without it and the bundle inlines the default API
         # URL, and the console talks to the wrong backend.
         #

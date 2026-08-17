@@ -86,7 +86,7 @@ export const themeFonts: ThemeFonts = {
  * quiet. A text field's boundary is the only thing telling you where to tap, so
  * it carries the 3:1 that WCAG 1.4.11 asks of a control boundary.
  *
- * Verified by `pnpm --filter @texasrenters/mobile test theme-contrast`.
+ * Verified by `npm test --workspace @texasrenters/mobile -- theme-contrast`.
  */
 
 /**

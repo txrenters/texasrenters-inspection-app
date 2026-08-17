@@ -123,7 +123,7 @@ Swagger is served at `/api/docs` but is **disabled during remote beta** (`APP_EN
 so the public tunnel does not expose the full API surface. To browse it locally:
 
 ```bash
-cd backend && pnpm dev
+cd backend && npm run dev
 ```
 
 then open <http://localhost:3000/api/docs>. To expose it through the tunnel temporarily, set

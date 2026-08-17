@@ -6,26 +6,23 @@
 # the previous console is a one-line change and a rebuild.
 #
 # Uses Next's standalone output, which traces only the modules the server
-# actually imports. In a pnpm workspace that trace must be rooted at the repo
-# root or the symlinked @texasrenters/shared package is left out — see
+# actually imports. In a workspace that trace must be rooted at the repo root or
+# the linked @texasrenters/shared package is left out — see
 # outputFileTracingRoot in web/next.config.ts.
 FROM node:24-bookworm-slim AS build
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-ENV PNPM_HOME=/pnpm
-ENV PATH=$PNPM_HOME:$PATH
-RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
 WORKDIR /app
 
-# Every workspace package listed in pnpm-workspace.yaml is copied, otherwise
-# pnpm resolves the lockfile against a workspace that does not match it.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Every package named in the root `workspaces` array is copied, otherwise
+# `npm ci` resolves the lockfile against a workspace that does not match it.
+COPY package.json package-lock.json ./
 COPY shared/package.json ./shared/
 COPY backend/package.json ./backend/
 COPY web/package.json ./web/
 COPY mobile/package.json ./mobile/
-RUN pnpm install --frozen-lockfile
+RUN npm ci
 
 COPY shared ./shared
 COPY web ./web
@@ -34,9 +31,10 @@ COPY web ./web
 # must be present here rather than at runtime. Both are browser-readable by
 # definition; a secret must never be passed as a build arg.
 #
-# Compose fills these by interpolation from its --env-file, which the pnpm
-# docker:* scripts point at web/.env.local. Changing that file needs a
-# rebuild, not a restart — the value is compiled into the bundle.
+# Compose fills these by interpolation from its --env-file, which the docker:*
+# scripts point at web/.env.local and the prod:* scripts at .env.production.
+# Changing that file needs a rebuild, not a restart — the value is compiled
+# into the bundle.
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
 ARG NEXT_PUBLIC_ENABLE_DEMO_DATA=false
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
@@ -44,8 +42,8 @@ ENV NEXT_PUBLIC_ENABLE_DEMO_DATA=$NEXT_PUBLIC_ENABLE_DEMO_DATA
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
-RUN pnpm --filter @texasrenters/shared build \
-  && pnpm --filter @texasrenters/web build
+RUN npm run build --workspace @texasrenters/shared \
+  && npm run build --workspace @texasrenters/web
 
 FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production

@@ -3,7 +3,7 @@
 #   docker compose --env-file backend/.env.local \
 #     -f compose.yaml -f compose.remote-beta.yaml up -d --build
 #
-# Or simply: pnpm remote-beta
+# Or simply: npm run remote-beta
 #
 # This is an overlay on compose.yaml, not a rival stack. It joins the same
 # `texasrenters` project and the same network, so the Redis defined in
@@ -105,5 +105,5 @@ services:
     #
     # The real signal is /ready on the published metrics port, which reports
     # registered edge connections rather than merely that a process exists.
-    # `pnpm remote-beta` and `pnpm remote-beta:status` both read it.
+    # `npm run remote-beta` and `npm run remote-beta:status` both read it.
     restart: unless-stopped

@@ -1,6 +1,6 @@
 # Dependencies and package-manager state
 node_modules/
-.pnpm-store/
+.npm/
 .yarn/
 .pnp.*
 
