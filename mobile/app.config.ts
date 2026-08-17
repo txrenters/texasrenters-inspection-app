@@ -1,6 +1,28 @@
 import type { ExpoConfig } from 'expo/config';
 
-const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
+/**
+ * The EAS project, hardcoded on purpose.
+ *
+ * This is a public identifier, not a secret: it ships inside every binary as
+ * `extra.eas.projectId` and again in the update URL, and it is fixed for the
+ * life of the app. There is nothing to protect by holding it in the environment,
+ * and holding it there cost more than it looked:
+ *
+ * - `expo` loads `.env.local`, but **`eas-cli` does not**. Every `eas build`,
+ *   `submit`, `update` and `env` command needed the variable exported by hand,
+ *   and forgetting it reports "EAS project not configured" — which sends you
+ *   looking at the project link rather than at your shell.
+ * - Worse, EAS Build re-evaluates this file on the build server. If the variable
+ *   were missing there, `updates.url` would simply be absent and the build would
+ *   ship unable to *ever* receive an over-the-air update, silently, with no way
+ *   to correct it except another trip through review.
+ *
+ * The environment still wins if it is set, so a fork or a second project can
+ * override it without editing source.
+ */
+const EAS_PROJECT_ID = 'ce9b1d5f-5851-4369-aa12-59b081b4556b';
+
+const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim() || EAS_PROJECT_ID;
 
 /**
  * The splash artwork's own background, sampled from the images themselves.
@@ -31,7 +53,19 @@ const SPLASH_DARK_BACKGROUND = '#0C1E42';
 // web console's own branding.
 const config: ExpoConfig = {
   name: 'TexasRenters Inspection',
-  slug: 'texasrenters-inspection',
+  // Deliberately the odd one out, and **not** a typo to be tidied up.
+  //
+  // `slug` must equal the slug of the EAS project named by `extra.eas.projectId`
+  // or every `eas` command refuses to run. That project was created as
+  // `inspection-texas-renters`, and Expo fixes a project's slug at creation —
+  // Project settings offers only a display name, so it cannot be renamed to
+  // match the rest of this file. Changing it here is the only lever available.
+  //
+  // Nothing user-facing depends on it: the slug reaches no store listing, is not
+  // the deep-link `scheme` below, and no application code reads it. Aligning it
+  // with the others would cost a new EAS project, which means a new project id,
+  // which means a new update URL compiled into every build.
+  slug: 'inspection-texas-renters',
   version: '0.1.0',
   orientation: 'portrait',
   scheme: 'texasrenters-inspection',
@@ -82,12 +116,7 @@ const config: ExpoConfig = {
   // Over-the-air updates. Without this block a bad production build can only be
   // corrected by building again and going back through App Review — days, during
   // which technicians in the field have a broken app and no way back.
-  //
-  // The URL is derived from the EAS project rather than hard-coded, for the same
-  // reason `extra.eas` is: the id is deployment configuration, not source. When
-  // the variable is absent the key is omitted entirely and `expo-updates` simply
-  // stays dormant — a local or unconfigured build is unaffected.
-  ...(easProjectId ? { updates: { url: `https://u.expo.dev/${easProjectId}` } } : {}),
+  updates: { url: `https://u.expo.dev/${easProjectId}` },
   // `fingerprint`, not `appVersion`. The policy decides which builds an update is
   // allowed to reach, and `appVersion` answers that with the marketing version —
   // which says nothing about the native layer. Add a native module without
@@ -99,7 +128,7 @@ const config: ExpoConfig = {
   extra: {
     dataSource: process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true' ? 'mock' : 'api',
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? null,
-    ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
+    eas: { projectId: easProjectId },
   },
   ios: {
     supportsTablet: true,
