@@ -41,6 +41,11 @@ COPY --from=build /app/backend/node_modules ./backend/node_modules
 COPY --from=build /app/backend/dist ./backend/dist
 COPY --from=build /app/backend/package.json ./backend/package.json
 COPY --from=build /app/backend/prisma ./backend/prisma
+# Operational scripts, not application code: the first-administrator bootstrap
+# runs from here, and so does anything a deployed database needs doing to it
+# later. Without them a VPS has no way to run maintenance that is not a
+# hand-written one-off against a live database.
+COPY --from=build /app/backend/scripts ./backend/scripts
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/shared/package.json ./shared/package.json
 USER node

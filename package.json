@@ -59,6 +59,10 @@
     "prod:down": "docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml down",
     "prod:ps": "docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml ps",
     "prod:logs": "docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml logs -f",
+    "staging:build": "docker compose --env-file .env.staging -f compose.yaml -f compose.production.yaml -f compose.staging.yaml build",
+    "staging:up": "docker compose --env-file .env.staging -f compose.yaml -f compose.production.yaml -f compose.staging.yaml up -d",
+    "staging:down": "docker compose --env-file .env.staging -f compose.yaml -f compose.production.yaml -f compose.staging.yaml down",
+    "staging:logs": "docker compose --env-file .env.staging -f compose.yaml -f compose.production.yaml -f compose.staging.yaml logs -f",
     "remote-beta": "node scripts/remote-beta/start.mjs",
     "remote-beta:status": "node scripts/remote-beta/status.mjs",
     "remote-beta:stop": "node scripts/remote-beta/stop.mjs"

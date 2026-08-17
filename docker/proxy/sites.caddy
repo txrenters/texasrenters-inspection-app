@@ -1,0 +1,53 @@
+# Routing shared by production and staging.
+#
+# Both Caddyfiles import these. The only thing that differs between the two
+# environments is where certificates come from — Let's Encrypt against the real
+# hostnames, or Caddy's own CA against the same hostnames pointed at localhost —
+# and everything a test could actually catch is in here, so it has to be the
+# same bytes in both. Duplicating the body limit or the compression matcher into
+# two files is how a staging pass stops predicting production.
+
+# ---------------------------------------------------------------------------
+# Admin console, and the tenant-facing report links
+# ---------------------------------------------------------------------------
+(console) {
+	encode zstd gzip
+
+	# Caddy does not send HSTS on its own. No `includeSubDomains`: this is one
+	# subdomain of texasrenters.com and the directive would speak for all of
+	# them, including hosts this server knows nothing about.
+	header Strict-Transport-Security "max-age=31536000"
+
+	reverse_proxy web:5454
+}
+
+# ---------------------------------------------------------------------------
+# API, mobile app, report photographs, and the technician event stream
+# ---------------------------------------------------------------------------
+(api) {
+	# Skip images: report photographs are already-compressed JPEG, and gzipping
+	# them spends CPU to make them very slightly larger.
+	@compressible not header Content-Type image/*
+	encode @compressible zstd gzip
+
+	# The backend caps a floor-plan upload at 20 MB. This sits just above it so
+	# an oversized file is refused by the application, with its own error, rather
+	# than by the proxy with a bare 413.
+	#
+	# Video is not covered by this and does not need to be: recordings upload
+	# from the phone straight to Cloudflare Stream and never traverse this proxy.
+	request_body {
+		max_size 25MB
+	}
+
+	# Upgrades pass through untouched — Caddy needs no directive for that, which
+	# is the point. The technician event stream is Socket.IO with
+	# `transports: ['websocket']` and no polling fallback, so a proxy that drops
+	# the Upgrade header does not degrade it, it removes it, while the REST API
+	# keeps working and hides the fault.
+	#
+	# Helmet on the backend sets its own security headers, including the
+	# Cross-Origin-Resource-Policy that lets the console embed report
+	# photographs, so nothing here rewrites them.
+	reverse_proxy backend:3000
+}

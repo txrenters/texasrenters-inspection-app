@@ -1,0 +1,30 @@
+# TLS termination and routing for the VPS.
+#
+# Caddy rather than nginx + certbot for two reasons that matter here:
+# certificates are obtained and renewed with no cron job and no reload hook, and
+# WebSocket upgrades are proxied correctly with no configuration.
+#
+# The routing lives in sites.caddy, which staging imports too. This file is only
+# the production certificate story.
+#
+# Requires the DNS records to be DNS-only (grey cloud, not proxied through
+# Cloudflare). Certificates are issued over HTTP-01 on port 80, which needs the
+# challenge to reach *this* server. If these names are ever put behind
+# Cloudflare's proxy, HTTP-01 stops working and this needs the DNS-01 challenge
+# and an API token instead.
+
+{
+	# Let's Encrypt sends expiry warnings here. Without it Caddy registers an
+	# anonymous ACME account and nobody is told when renewal is failing.
+	email {$ACME_EMAIL}
+}
+
+import sites.caddy
+
+{$WEB_HOST} {
+	import console
+}
+
+{$API_HOST} {
+	import api
+}

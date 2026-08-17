@@ -1,0 +1,38 @@
+# Staging — the production stack, run locally, before shipping to the VPS.
+#
+#   docker compose --env-file .env.staging \
+#     -f compose.yaml -f compose.production.yaml -f compose.staging.yaml up -d
+#
+# Or `npm run staging:up`, which is the same command.
+#
+# Layered on compose.production.yaml rather than replacing it, so this runs the
+# same images, the same Caddy routing and the same loopback-free networking that
+# production will. Exactly two things change: certificates come from Caddy's own
+# CA instead of Let's Encrypt, and the project name is different so this cannot
+# touch production's database volume.
+#
+# Requires the two hostnames to resolve here. Add to the hosts file:
+#   127.0.0.1 inspection.texasrenters.com inspection-api.texasrenters.com
+
+services:
+  caddy:
+    # `caddy run` defaults to /etc/caddy/Caddyfile; this points it at the
+    # sibling that issues locally. Both import the same sites.caddy.
+    command: ['caddy', 'run', '--config', '/etc/caddy/Caddyfile.local', '--adapter', 'caddyfile']
+    environment:
+      # Not used by Caddyfile.local — no ACME account is registered — but the
+      # production file declares it, and Compose still interpolates the value
+      # before Caddy ever reads a config. A default keeps `:?` from stopping a
+      # staging run over a variable staging does not need.
+      ACME_EMAIL: ${ACME_EMAIL:-staging@localhost}
+
+volumes:
+  # Named for this stack, so a staging run cannot adopt production's
+  # certificates or its database. The project name differs too; this is the
+  # belt to that pair of braces.
+  production-postgres-data:
+    name: texasrenters-staging_postgres-data
+  caddy-data:
+    name: texasrenters-staging_caddy-data
+  caddy-config:
+    name: texasrenters-staging_caddy-config
