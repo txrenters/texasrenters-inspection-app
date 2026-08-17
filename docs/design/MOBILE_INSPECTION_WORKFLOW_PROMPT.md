@@ -34,7 +34,7 @@ now, do it on a branch and do not merge before the beta.
 
 ## 1. Stack — [CHANGED] current, verified
 
-- Expo SDK **54.0.36**, React Native **0.81.5**, TypeScript, Expo Router, pnpm workspace
+- Expo SDK **54.0.36**, React Native **0.81.5**, TypeScript, Expo Router, npm run workspace
 - **NativeWind 4.2.6 + Tailwind 3.4.19** — installed and confirmed bundling on iOS and web
 - React Native Reusables, installed under **`src/components/ui/`**
   (`components.json` maps `@/*` → `src/*`, so *not* `components/ui/`)
@@ -42,7 +42,7 @@ now, do it on a branch and do not merge before the beta.
 
 ### [ADDED] The RNR CLI does not work in this workspace
 
-`@react-native-reusables/cli` and `shadcn@latest` both die on a pnpm hoisted-linker reconcile
+`@react-native-reusables/cli` and `shadcn@latest` both die on a npm run hoisted-linker reconcile
 before writing files. Install components by fetching the registry payload directly:
 
 ```
@@ -187,7 +187,7 @@ Original list, minus what is already true, plus what verification actually requi
 - [ ] Slow/failed mock actions do not flash old state
 - [ ] Empty, loading, error and offline states on every new screen
 - [ ] Existing camera, upload and navigation behaviour **unchanged**
-- [ ] `pnpm lint`, `pnpm typecheck`, `pnpm test` pass
+- [ ] `npm run lint`, `npm run typecheck`, `npm test` pass
 - [ ] `npx expo export --platform ios` succeeds
 
 Current baseline to preserve: **18 test suites / 94 tests**, iOS bundle **8.98 MB**, web bundle

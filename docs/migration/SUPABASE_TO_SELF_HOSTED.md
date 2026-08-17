@@ -154,7 +154,7 @@ URL back.
 
 1. ✅ Postgres promoted out of the `local-db` profile to a first-class service.
 2. ✅ `backend/scripts/migrate-to-local-postgres.mjs` — copies `public` and
-   verifies the result. `pnpm db:migrate-to-local[ --confirm | --verify]`.
+   verifies the result. `npm run db:migrate-to-local[ --confirm | --verify]`.
 3. ✅ Copy run and verified: **53 tables, 1797 rows, 138 indexes, 90 unique
    indexes, 79 foreign keys**, all matching the source.
 
@@ -172,7 +172,7 @@ URL back.
 both the table `GRANT`s and the `pg_default_acl` rows are keyed on that
 namespace — so a copy silently leaves `texasrenters_app` able to read nothing,
 and `ALTER DEFAULT PRIVILEGES` does not survive either. **Re-run
-`pnpm db:setup-app-role --confirm` after every copy.** The migration script now
+`npm run db:setup-app-role --confirm` after every copy.** The migration script now
 says so on completion.
 
 **The stack is deliberately mixed right now: new database, old code.** The
@@ -181,7 +181,7 @@ works, because the `UserProfile` rows were copied with identical `authUserId`
 values, so a Supabase token resolves the same person out of the local database.
 That state is coherent and was worth keeping while the database move settles.
 
-Rebuilding (`pnpm docker:up`) deploys Phase 2 as well, at which point sign-in
+Rebuilding (`npm run docker:up`) deploys Phase 2 as well, at which point sign-in
 moves to `/auth/login` and **everyone signs in again once**.
 
 Implementation notes worth keeping:
@@ -205,7 +205,7 @@ the transition.
 1. ✅ **Password store.** `AuthCredential` + `AuthRefreshToken`. 3 accounts
    imported from `auth.users`, hashes verified byte for byte. `authUserId`
    preserved, so both systems resolve the same person.
-   `pnpm db:import-credentials`.
+   `npm run db:import-credentials`.
 2. ✅ **Token issuing.** `TokenService` mints HS256 through the Phase 0 seam.
    Hand-rolled on `node:crypto` rather than adding a JWT library, because
    `verifySupabaseJwt` already implements this exact algorithm and two
@@ -305,7 +305,7 @@ assignments persist for the next on a shared device.
 Every application-level `organizationId` filter stays. A missed filter should
 become a returned-nothing bug, never a cross-tenant leak.
 
-1. ✅ **Dedicated application role.** `pnpm db:setup-app-role`, idempotent,
+1. ✅ **Dedicated application role.** `npm run db:setup-app-role`, idempotent,
    creates `texasrenters_app`: `NOSUPERUSER`, `NOBYPASSRLS`, owns nothing, DML
    on every table and no DDL — so it cannot drop a policy that constrains it.
    `ALTER DEFAULT PRIVILEGES` covers tables added later, or the next migration

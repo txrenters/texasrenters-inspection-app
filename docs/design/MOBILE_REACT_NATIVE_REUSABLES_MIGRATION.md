@@ -16,7 +16,7 @@
 
 ## 2. Package manager
 
-**pnpm** (workspace root lockfile; `mobile` is a workspace package). Do not switch.
+**npm** (workspace root lockfile; `mobile` is a workspace package). Migrated from pnpm.
 
 ## 3. Styling system found
 
@@ -64,7 +64,7 @@ Files created / wired:
   `src/`, semantic colour mapping.
 - `babel.config.js` — `jsxImportSource: 'nativewind'` + `nativewind/babel`.
 - `metro.config.js` — `withNativeWind(config, { input: './global.css', inlineRem: 16 })`
-  applied **last**, so the existing pnpm `_tmp_` blockList, the zustand resolver shim and the
+  applied **last**, so the existing `_tmp_` blockList, the zustand resolver shim and the
   `/api/v1` → :3000 proxy all survive.
 - `app/_layout.tsx` — `import '../global.css'` and one `<PortalHost />` inside `AppProviders`.
 - `src/lib/utils.ts` (`cn`) and `src/lib/theme.ts` (`NAV_THEME`).
@@ -90,7 +90,7 @@ cosmetic without checking.**
 ### [x] RESOLVED — install components via the registry payload
 
 `shadcn@4.15.0` writes files where `@latest` cannot, but **any** component needing a new
-dependency still dies on the workspace-wide pnpm reconcile (`+N -103` every run), because
+dependency still dies on the workspace-wide npm run reconcile (`+N -103` every run), because
 shadcn installs deps *before* writing files. Pre-satisfying the deps did not help.
 
 Working method: fetch the official registry JSON directly and apply the alias rewriting the
@@ -109,16 +109,16 @@ Then rewrite `@/registry/nativewind/components/` → `@/components/` and
 **Bundle verified:** `expo export --platform ios` produced 8.97 MB of Hermes bytecode, so the
 NativeWind Babel/Metro wiring is confirmed working — this was previously the top open risk.
 
-### [historical] pnpm hoisted-linker race defeats the component installer
+### [historical] npm run hoisted-linker race defeats the component installer
 
 Every `add` attempt fails the same way. The RNR CLI shells out to
-`pnpm dlx shadcn@latest add <registry urls>`; shadcn installs peer deps **before** writing
+`npx shadcn@latest add <registry urls>`; shadcn installs peer deps **before** writing
 files; that install hits `ERR_PNPM_ENOENT` on this workspace's hoisted linker
 (`node_modules/<pkg>_tmp_<pid>_<n>`), and the command aborts before any component is written.
 
 Confirmed, not assumed:
 - Pre-installing `@rn-primitives/slot` so the step would be a no-op did **not** help.
-- Plain `pnpm install` reconciles only after repeated targeted removals — it cycles
+- Plain `npm install` reconciles only after repeated targeted removals — it cycles
   `+8 -103` and needs 4–8 retries to converge.
 
 Workarounds to try next, in order:
@@ -168,8 +168,8 @@ Root: `app/index` · `(app)/_layout`
 
 ### Sequenced plan
 
-1. **Get the doctor to run.** `pnpm add -D @react-native-reusables/cli` inside `mobile`,
-   then `pnpm exec @react-native-reusables/cli doctor --log-level all`. The `npx` path hangs
+1. **Get the doctor to run.** `npm install -D @react-native-reusables/cli` inside `mobile`,
+   then `npm run exec @react-native-reusables/cli doctor --log-level all`. The `npx` path hangs
    here.
 2. **Install the styling engine** — NativeWind v4 matched to Expo SDK 54, plus `tailwindcss`,
    `metro.config.js` wiring, `global.css`, `babel.config.js` preset, and
@@ -194,7 +194,7 @@ behaviour outranks decorative UI. Step 2 should be validated on a real device an
 separately, so it can be reverted without unwinding component work.
 
 **Next command:**
-`cd mobile-app && pnpm add -D @react-native-reusables/cli && pnpm exec @react-native-reusables/cli doctor --log-level all`
+`cd mobile-app && npm install -D @react-native-reusables/cli && npm run exec @react-native-reusables/cli doctor --log-level all`
 
 
 ---
@@ -207,7 +207,7 @@ typecheck passes**, **mobile-app typecheck passes**.
 
 Changed so far: `mobile/{components.json, global.css, tailwind.config.js, babel.config.js,
 metro.config.js, package.json}`, `mobile/app/_layout.tsx`,
-`mobile/src/lib/{utils,theme}.ts`, root `pnpm-lock.yaml`.
+`mobile/src/lib/{utils,theme}.ts`, root `package-lock.json`.
 
 **Not yet done:** zero components installed, zero screens migrated, `src/components/ui.tsx`
 untouched, 24 `StyleSheet.create` files untouched.
@@ -217,7 +217,7 @@ highest-risk item — those two files are what the Expo Go tunnel workflow depen
 
 ### Next commands
 
-1. `cd mobile-app && pnpm start` — confirm Metro still boots and the tunnel works **before**
+1. `cd mobile-app && npm start` — confirm Metro still boots and the tunnel works **before**
    anything else. Revert `babel.config.js` + `metro.config.js` if not.
 2. `cd mobile-app && npx shadcn@4.15.0 add https://reactnativereusables.com/r/nativewind/text.json`
    — single component, older shadcn, to test the blocker fix in isolation.

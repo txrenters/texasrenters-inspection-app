@@ -5,11 +5,11 @@
 Run from the repository root:
 
 ```powershell
-pnpm --filter @texasrenters/mobile lint
-pnpm --filter @texasrenters/mobile typecheck
-pnpm --filter @texasrenters/mobile test
-pnpm --filter @texasrenters/mobile build
-pnpm --dir mobile exec expo-doctor
+npm run lint --workspace @texasrenters/mobile
+npm run typecheck --workspace @texasrenters/mobile
+npm test --workspace @texasrenters/mobile
+npm run build --workspace @texasrenters/mobile
+npm exec --workspace @texasrenters/mobile -- expo-doctor
 ```
 
 Also export an iOS bundle to a temporary directory. Do not commit export artifacts.

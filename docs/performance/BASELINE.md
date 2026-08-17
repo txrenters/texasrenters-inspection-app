@@ -5,11 +5,11 @@ Measured on 2026-07-21 from the development workstation in the Philippines again
 ## Reproduce
 
 ```powershell
-pnpm perf:database
-pnpm perf:database:session
+npm run perf:database
+npm run perf:database:session
 $env:PERF_API_BASE_URL='http://127.0.0.1:3000'
-pnpm perf:endpoints
-pnpm perf:query-plans
+npm run perf:endpoints
+npm run perf:query-plans
 ```
 
 The scripts never print credentials or SQL parameters. Endpoint instrumentation is exposed through `Server-Timing`, `X-Database-Query-Count`, and `X-Response-Bytes`. Global fallback query counting is intended only for isolated development benchmarks and is disabled in production unless explicitly enabled.

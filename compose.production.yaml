@@ -3,7 +3,7 @@
 #   docker compose --env-file .env.production \
 #     -f compose.yaml -f compose.production.yaml up -d
 #
-# Or `pnpm prod:up`, which is the same command.
+# Or `npm run prod:up`, which is the same command.
 #
 # Named explicitly alongside compose.yaml, which is what stops Compose loading
 # compose.override.yaml — the development overlay, which publishes Postgres and
@@ -34,31 +34,141 @@ services:
     command: ['redis-server', '--save', '', '--appendonly', 'no']
 
   backend:
-    # The root production file, rather than backend/.env.local. One file per
+    # Names the published artifact. `compose.yaml` still carries the `build:`,
+    # so `--build` compiles from source on the box and tags it here, while a
+    # plain `up` (or `pull`) fetches what CI published. Both paths work; the
+    # VPS should prefer pulling, because building the web image needs more RAM
+    # than a small instance has.
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${IMAGE_TAG:-latest}
+    # The root environment file, rather than backend/.env.local. One file per
     # environment is the whole point of the split, and this is also the file
     # Compose interpolates from, so a value cannot be set in one place for the
     # build and another for the runtime.
-    env_file:
-      - path: ./.env.production
+    #
+    # `!override` because Compose *merges* env_file lists across overlays rather
+    # than replacing them. Without it this appends to compose.yaml's
+    # `backend/.env.local`, and a developer's machine-local secrets are layered
+    # under the deployment's — silently, and only for the keys the deployment
+    # file happens not to set. Staging found it: the stack refused to boot
+    # because PROPERTYWARE_PROVIDER=live arrived from a file it never named.
+    #
+    # On a fresh VPS that file does not exist and the base entry is
+    # `required: false`, so this was harmless there and would have stayed
+    # invisible until someone copied an .env.local onto the server.
+    #
+    # Named by a variable so staging can layer on this file and point at its
+    # own copy.
+    env_file: !override
+      - path: ${APP_ENV_FILE:-./.env.production}
         required: true
     environment:
       NODE_ENV: production
-    # Loopback only. TLS terminates at the reverse proxy on this host, which
-    # forwards to these ports; binding 0.0.0.0 would publish the API to the
-    # internet unencrypted alongside it.
-    ports:
-      - '127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}'
+    # No published port at all. Caddy reaches this over the project network by
+    # service name, so the API has no path from the internet that does not pass
+    # through TLS termination. To reach it for debugging:
+    #   docker compose exec backend node -e "fetch('http://127.0.0.1:3000/api/v1/health')..."
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # Schema migration — runs once, before the backend is allowed to start
+  # ---------------------------------------------------------------------------
+  #
+  # Nothing applied migrations before this existed. On a workstation that went
+  # unnoticed because the database had been migrated by hand months earlier, but
+  # a fresh Postgres volume — which is exactly what a new VPS gets — came up
+  # with zero tables. The backend then started, reported healthy (the liveness
+  # route touches no database), and returned 500 from every real request.
+  #
+  # `migrate deploy` only applies migrations that already exist; it never
+  # generates one and never prompts, which is what makes it safe unattended.
+  migrate:
+    # The backend image with a different command — not a third build of the
+    # same thing, which is what three identical `build:` blocks were producing.
+    # `image:` with no `build:` means a local build of the backend tags this
+    # same reference, so staging resolves it without a registry, and production
+    # pulls it like any other published image.
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${IMAGE_TAG:-latest}
+    env_file: !override
+      - path: ${APP_ENV_FILE:-./.env.production}
+        required: true
+    # Overrides the image's CMD. `--schema` because the working directory is
+    # the repo root inside the image, not backend/.
+    command: ['npx', 'prisma', 'migrate', 'deploy', '--schema', 'backend/prisma/schema.prisma']
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # First administrator — `docker compose ... run --rm bootstrap-admin`
+  # ---------------------------------------------------------------------------
+  #
+  # Not in the default startup path, which is why it carries a profile. It is
+  # run once by hand on a new deployment; the script itself refuses if any user
+  # already exists, so a stray invocation later is a no-op rather than a way to
+  # mint an administrator.
+  bootstrap-admin:
+    profiles: ['bootstrap']
+    # The backend image with a different command — not a third build of the
+    # same thing, which is what three identical `build:` blocks were producing.
+    # `image:` with no `build:` means a local build of the backend tags this
+    # same reference, so staging resolves it without a registry, and production
+    # pulls it like any other published image.
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${IMAGE_TAG:-latest}
+    env_file: !override
+      - path: ${APP_ENV_FILE:-./.env.production}
+        required: true
+    command: ['node', 'backend/scripts/bootstrap-admin.mjs']
+    restart: 'no'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   web:
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/web:${IMAGE_TAG:-latest}
     environment:
       NODE_ENV: production
+
+  # ---------------------------------------------------------------------------
+  # TLS termination — the only service that listens on the public interface
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
     ports:
-      - '127.0.0.1:${WEB_PORT:-5454}:${WEB_PORT:-5454}'
+      - '80:80'
+      - '443:443'
+      # HTTP/3. Harmless if the provider's firewall drops UDP; clients fall back.
+      - '443:443/udp'
+    environment:
+      # `:?` so a missing value stops the stack here, with the variable named,
+      # rather than at certificate issuance where the error is about ACME.
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.production}
+      WEB_HOST: ${WEB_HOST:?set WEB_HOST in .env.production}
+      API_HOST: ${API_HOST:?set API_HOST in .env.production}
+    volumes:
+      # The whole directory, not the single file: the Caddyfile imports
+      # sites.caddy from beside it, and a lone file mount leaves that missing.
+      - ./docker/proxy:/etc/caddy:ro
+      # Certificates and the ACME account key. This volume is the one piece of
+      # state here that must survive: lose it and every restart re-issues, which
+      # runs into Let's Encrypt's rate limit of 5 duplicate certificates per
+      # week and leaves the site without TLS until it clears.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      web:
+        condition: service_healthy
 
 volumes:
   production-postgres-data:
+  caddy-data:
+  caddy-config:

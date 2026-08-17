@@ -36,7 +36,8 @@ const ENV_FILE = join(ROOT, 'backend', '.env.local');
 const WEB_ENV_FILE = join(ROOT, 'web', '.env.local');
 const MOBILE_ENV = join(ROOT, 'mobile', '.env.local');
 const TUNNEL_READY_URL = 'http://127.0.0.1:2000/ready';
-const PNPM_CLI = join(dirname(process.execPath), 'node_modules', 'corepack', 'dist', 'pnpm.js');
+// npm ships beside the Node binary, so this needs no corepack and no shim.
+const NPM_CLI = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
 
 const log = (message) => console.log(message);
 const fail = (message) => {
@@ -266,18 +267,15 @@ log(`
 `);
 
 const extraArgs = process.argv.slice(2).filter((argument) => argument !== '--');
-if (!existsSync(PNPM_CLI)) {
-  fail(
-    `Corepack's pnpm entrypoint was not found at ${PNPM_CLI}.\n` +
-      'Run corepack enable, then retry pnpm remote-beta.',
-  );
+if (!existsSync(NPM_CLI)) {
+  fail(`npm's entrypoint was not found at ${NPM_CLI}. Reinstall Node, then retry npm run remote-beta.`);
 }
 
-// Launch pnpm through Node instead of pnpm.cmd. Node 24 on Windows can throw
+// Launch npm through Node rather than npm.cmd. Node 24 on Windows can throw
 // spawn EINVAL for .cmd shims when stdio is inherited.
 // The same command a developer runs by hand. There is one way to start Metro
 // now, so this cannot drift from it.
-const metro = spawn(process.execPath, [PNPM_CLI, 'run', 'start', ...extraArgs], {
+const metro = spawn(process.execPath, [NPM_CLI, 'run', 'start', ...extraArgs], {
   cwd: join(ROOT, 'mobile'),
   stdio: 'inherit',
 });

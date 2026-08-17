@@ -37,7 +37,7 @@ a second ngrok agent. Cloudflare Tunnel is not used by this workflow.
 
 The following checks passed on 2026-07-30:
 
-- `pnpm remote-beta -- --clear` cold-started Docker, the gateway, ngrok, and V2 Metro.
+- `npm run remote-beta -- --clear` cold-started Docker, the gateway, ngrok, and V2 Metro.
 - Backend container reached `healthy`.
 - The ngrok agent reported `http://gateway:80` as its upstream.
 - Public `GET /api/v1/health` returned HTTP 200.
@@ -46,7 +46,7 @@ The following checks passed on 2026-07-30:
 - The manifest launch asset used the same public ngrok origin.
 - The complete iOS JavaScript bundle was generated and fetched through ngrok with HTTP 200.
 - The terminal QR advertised the public ngrok origin and did not emit `remote gone away`.
-- `cd mobile && pnpm start --check` passed against the running stack.
+- `cd mobile && npm start --check` passed against the running stack.
 
 The first cold bundle was approximately 16.6 MB and took about one minute to generate and
 transfer. Subsequent requests use Metro's cache.
@@ -88,24 +88,24 @@ Record those results in this file after the device test.
 Cold start from the repository root:
 
 ```powershell
-pnpm remote-beta -- --clear
+npm run remote-beta -- --clear
 ```
 
 When the Docker stack is already current:
 
 ```powershell
 cd mobile
-pnpm start:clear
+npm start:clear
 ```
 
 Status:
 
 ```powershell
-pnpm remote-beta:status
+npm run remote-beta:status
 ```
 
 Stop Docker beta services after testers have finished and pending uploads are zero:
 
 ```powershell
-pnpm remote-beta:stop
+npm run remote-beta:stop
 ```

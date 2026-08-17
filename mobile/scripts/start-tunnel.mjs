@@ -166,7 +166,7 @@ async function verifyBackend(publicUrl) {
           : '  The backend is healthy on http://127.0.0.1:3000, so this is most likely a\n' +
             '  slow edge rather than a broken tunnel — the device may reach it fine.\n' +
             '  Starting Metro anyway. If the device cannot reach the API, restart:\n' +
-            '    pnpm remote-beta:stop && pnpm remote-beta\n'),
+            '    npm run remote-beta:stop && npm run remote-beta\n'),
     );
     return;
   }
@@ -176,7 +176,7 @@ async function verifyBackend(publicUrl) {
       `after ${attempts} attempts (${lastReason}),\n` +
       'and the backend is not answering on http://127.0.0.1:3000 either.\n' +
       'Check the containers:\n' +
-      '  pnpm remote-beta:status',
+      '  npm run remote-beta:status',
   );
 }
 

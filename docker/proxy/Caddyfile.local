@@ -1,0 +1,35 @@
+# Staging: the production stack, on the production hostnames, without ACME.
+#
+# `tls internal` issues from Caddy's own CA instead of Let's Encrypt. That is
+# the single difference from the production Caddyfile — the routing is imported
+# from the same sites.caddy both use — so a pass here exercises everything a
+# certificate cannot change:
+#
+#   * the API URL baked into the web bundle at build time, which is a build arg
+#     and therefore untestable by editing environment variables
+#   * CORS between two different hostnames, which localhost:5454 never exercised
+#   * the Cross-Origin-Resource-Policy header that lets report photographs be
+#     embedded across those two origins
+#   * the WebSocket upgrade for the technician event stream
+#
+# The hostnames have to resolve to this machine. Add to the hosts file
+# (C:\Windows\System32\drivers\etc\hosts, or /etc/hosts):
+#
+#   127.0.0.1 inspection.texasrenters.com inspection-api.texasrenters.com
+#
+# Browsers will warn about the certificate, because Caddy's CA is not in the
+# trust store. That is expected and is not the thing under test — click through,
+# or install the root from the caddy-data volume at
+# /data/caddy/pki/authorities/local/root.crt.
+
+import sites.caddy
+
+{$WEB_HOST} {
+	tls internal
+	import console
+}
+
+{$API_HOST} {
+	tls internal
+	import api
+}

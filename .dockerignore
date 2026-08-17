@@ -35,7 +35,7 @@ tmp
 *.log
 
 # Expo/native output. mobile/ itself stays in context because its package.json is
-# required for `pnpm install --frozen-lockfile` to match the workspace lockfile.
+# required for `npm ci` to match the workspace lockfile.
 **/.expo
 mobile/android
 mobile/ios

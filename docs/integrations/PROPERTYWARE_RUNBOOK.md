@@ -9,13 +9,13 @@
 
 ## Safe execution order
 
-1. Run `pnpm propertyware:status` and ensure no sync is active.
-2. Run `pnpm propertyware:sync:dry-run`. This performs no database writes.
+1. Run `npm run propertyware:status` and ensure no sync is active.
+2. Run `npm run propertyware:sync:dry-run`. This performs no database writes.
 3. Resolve authentication, validation, pagination, or zero-record warnings.
-4. Run `pnpm propertyware:sync:initial` once the dry-run counts are credible.
-5. Run `pnpm propertyware:verify:db` and compare the database counts with the completed sync metrics.
-6. Only then use `pnpm propertyware:sync:incremental` for changed records.
-7. Use `pnpm propertyware:reconcile` periodically to confirm and soft-deactivate inactive parents and units.
+4. Run `npm run propertyware:sync:initial` once the dry-run counts are credible.
+5. Run `npm run propertyware:verify:db` and compare the database counts with the completed sync metrics.
+6. Only then use `npm run propertyware:sync:incremental` for changed records.
+7. Use `npm run propertyware:reconcile` periodically to confirm and soft-deactivate inactive parents and units.
 
 ## Failure handling
 

@@ -6,7 +6,7 @@ repository and runtime evidence only.
 ## Environment
 
 - [x] Expo SDK 54.0.36, React Native 0.81.5, Expo Router 6.0.24
-- [x] pnpm 11 workspace
+- [x] npm workspace
 - [x] NativeWind 4.2.6 and Tailwind CSS 3.4.x
 - [x] React Native Reusables CLI doctor passes
 - [x] One root `PortalHost`

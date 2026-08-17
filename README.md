@@ -31,10 +31,25 @@ Screens call feature hooks, which call repository interfaces. The repository con
 
 ## Install
 
-Requirements: Node.js `22.13` or newer and pnpm `11.9.0`.
+Requirements: Node.js `22.13` or newer. npm ships with it; no other package manager is needed.
 
 ```bash
-pnpm install --frozen-lockfile
+npm ci
+```
+
+npm gates package install scripts behind the `allowScripts` block in the root
+`package.json`. Six packages are approved there — Prisma, its engines and
+client, sharp, ffmpeg-static and unrs-resolver — and `@scarf/scarf` telemetry is
+deliberately denied. This matters because a missing approval only *warns*: the
+install reports success and leaves you with no Prisma query engine, no sharp
+binary and no ffmpeg. If a dependency bump changes one of those versions, run
+`npm approve-scripts <pkg>` and commit the result.
+
+Per-package commands take a workspace flag:
+
+```bash
+npm run <script> --workspace @texasrenters/backend
+npm run <script> --workspaces --if-present
 ```
 
 No `.env`, backend, Docker service, API key, Supabase project, or provider credential is required for the explicit mobile demo mode.
@@ -44,29 +59,29 @@ No `.env`, backend, Docker service, API key, Supabase project, or provider crede
 From the repository root:
 
 ```bash
-pnpm dev:mobile
+npm run dev:mobile
 ```
 
 From `mobile/`:
 
 ```bash
-pnpm start
+npm start
 ```
 
 Metro runs on port `8082` and is served through the Cloudflare Tunnel, not the
 LAN. That is the only mode: the office network isolates clients, so LAN never
 worked there, and every hostname is published through the tunnel now.
 
-`pnpm start` reads `CLOUDFLARE_TUNNEL_HOSTNAME` and `CLOUDFLARE_METRO_HOSTNAME`
+`npm start` reads `CLOUDFLARE_TUNNEL_HOSTNAME` and `CLOUDFLARE_METRO_HOSTNAME`
 from `backend/.env.local` and hands both to Expo — the first as the API origin,
 the second as `EXPO_PACKAGER_PROXY_URL`. Bring the stack up first with
-`pnpm remote-beta`, which starts the backend and the tunnel and then runs the
+`npm run remote-beta`, which starts the backend and the tunnel and then runs the
 same command.
 
 To clear Metro's cache once:
 
 ```bash
-pnpm dev:mobile:clear
+npm run dev:mobile:clear
 ```
 
 If port `8082` is occupied, stop the existing Metro process rather than letting
