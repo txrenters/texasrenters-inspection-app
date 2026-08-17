@@ -34,6 +34,12 @@ services:
     command: ['redis-server', '--save', '', '--appendonly', 'no']
 
   backend:
+    # Names the published artifact. `compose.yaml` still carries the `build:`,
+    # so `--build` compiles from source on the box and tags it here, while a
+    # plain `up` (or `pull`) fetches what CI published. Both paths work; the
+    # VPS should prefer pulling, because building the web image needs more RAM
+    # than a small instance has.
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${IMAGE_TAG:-latest}
     # The root environment file, rather than backend/.env.local. One file per
     # environment is the whole point of the split, and this is also the file
     # Compose interpolates from, so a value cannot be set in one place for the
@@ -82,10 +88,12 @@ services:
   # `migrate deploy` only applies migrations that already exist; it never
   # generates one and never prompts, which is what makes it safe unattended.
   migrate:
-    build:
-      context: .
-      dockerfile: docker/backend/Dockerfile
-      target: runtime
+    # The backend image with a different command — not a third build of the
+    # same thing, which is what three identical `build:` blocks were producing.
+    # `image:` with no `build:` means a local build of the backend tags this
+    # same reference, so staging resolves it without a registry, and production
+    # pulls it like any other published image.
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${IMAGE_TAG:-latest}
     env_file: !override
       - path: ${APP_ENV_FILE:-./.env.production}
         required: true
@@ -107,10 +115,12 @@ services:
   # mint an administrator.
   bootstrap-admin:
     profiles: ['bootstrap']
-    build:
-      context: .
-      dockerfile: docker/backend/Dockerfile
-      target: runtime
+    # The backend image with a different command — not a third build of the
+    # same thing, which is what three identical `build:` blocks were producing.
+    # `image:` with no `build:` means a local build of the backend tags this
+    # same reference, so staging resolves it without a registry, and production
+    # pulls it like any other published image.
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${IMAGE_TAG:-latest}
     env_file: !override
       - path: ${APP_ENV_FILE:-./.env.production}
         required: true
@@ -121,6 +131,7 @@ services:
         condition: service_completed_successfully
 
   web:
+    image: ${IMAGE_REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/web:${IMAGE_TAG:-latest}
     environment:
       NODE_ENV: production
 
