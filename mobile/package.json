@@ -1,7 +1,7 @@
 {
   "name": "@texasrenters/mobile",
   "main": "expo-router/entry",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "TexasRenters technician inspection application",
   "scripts": {
     "prestart": "npm run build --prefix ../shared",

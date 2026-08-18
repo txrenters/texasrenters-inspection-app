@@ -66,7 +66,7 @@ const config: ExpoConfig = {
   // with the others would cost a new EAS project, which means a new project id,
   // which means a new update URL compiled into every build.
   slug: 'inspection-texas-renters',
-  version: '0.1.0',
+  version: '1.0.0',
   orientation: 'portrait',
   scheme: 'texasrenters-inspection',
   icon: './assets/icon.png',
