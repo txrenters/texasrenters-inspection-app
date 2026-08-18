@@ -68,7 +68,7 @@ function AnswerRow({
             accessibilityLabel={option ? 'Yes' : 'No'}
             accessibilityRole="button"
             accessibilityState={{ selected: active }}
-            className={`min-h-20 flex-1 items-center justify-center gap-1 rounded-2xl border-2 active:scale-[0.97] ${
+            className={`min-h-20 flex-1 items-center justify-center gap-1 rounded-2xl border-2 active:scale-[0.98] ${
               active
                 ? option
                   ? 'border-chart-3 bg-chart-3/20'
@@ -261,7 +261,7 @@ export function ConditionPromptSheet({
           <Pressable
             accessibilityLabel="Close checklist"
             accessibilityRole="button"
-            className="min-h-11 flex-row items-center gap-1.5 rounded-full bg-muted px-3 active:scale-[0.97]"
+            className="min-h-11 flex-row items-center gap-1.5 rounded-full bg-muted px-3 active:scale-[0.98]"
             hitSlop={8}
             onPress={onClose}
           >
@@ -276,7 +276,7 @@ export function ConditionPromptSheet({
           <Pressable
             accessibilityLabel="Previous item"
             accessibilityRole="button"
-            className="h-11 w-11 items-center justify-center rounded-full bg-muted active:scale-[0.95]"
+            className="h-11 w-11 items-center justify-center rounded-full bg-muted active:scale-[0.98]"
             disabled={atFirst}
             hitSlop={4}
             onPress={() => goToItem(index - 1)}
@@ -294,7 +294,7 @@ export function ConditionPromptSheet({
           <Pressable
             accessibilityLabel="Next item"
             accessibilityRole="button"
-            className="h-11 w-11 items-center justify-center rounded-full bg-muted active:scale-[0.95]"
+            className="h-11 w-11 items-center justify-center rounded-full bg-muted active:scale-[0.98]"
             disabled={atLast}
             hitSlop={4}
             onPress={() => goToItem(index + 1)}

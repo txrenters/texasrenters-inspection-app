@@ -1,0 +1,20 @@
+# Normalise to LF in the repository, check out with the platform's native
+# endings. core.autocrlf is already true on this machine, so this changes
+# nothing today — it makes the behaviour a property of the repository rather
+# than of whoever happened to clone it.
+* text=auto
+
+# Files executed on Linux no matter where they were edited, so they must keep
+# LF in the working tree as well as in the repository.
+#
+# provision-vps.sh is the one that bites: it is scp'd to the VPS and run by bash
+# there. Under `text=auto` alone a Windows checkout gives it CRLF, and bash
+# fails on the first line with $'\r': command not found — before the script has
+# done anything, and with an error that names neither the file nor the cause.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+
+# Regenerated rather than merged, and ignored — see .gitignore. The driver named
+# here exists only in local git config.
+graphify-out/graph.json merge=graphify

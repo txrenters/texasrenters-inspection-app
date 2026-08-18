@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { router } from 'expo-router';
-import { useColorScheme } from 'nativewind';
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -39,6 +38,8 @@ import {
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
+import { ScreenHeader } from '@/src/components/ui';
 
 registerIcons(
   AlertTriangleIcon,
@@ -176,8 +177,7 @@ function InspectionRow({ item }: { item: Inspection }) {
 }
 
 export default function InspectionsScreen() {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const [filter, setFilter] = useState<InspectionFilterKey>('ALL');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), SEARCH_DEBOUNCE_MS);
@@ -219,7 +219,7 @@ export default function InspectionsScreen() {
         ListFooterComponent={
           inspections.isFetchingNextPage ? (
             <View className="py-6">
-              <ActivityIndicator color={isDark ? '#2dd4bf' : '#145347'} />
+              <ActivityIndicator color={theme.primary} />
             </View>
           ) : null
         }
@@ -227,32 +227,29 @@ export default function InspectionsScreen() {
           <RefreshControl
             refreshing={pull.refreshing}
             onRefresh={pull.onRefresh}
-            tintColor={isDark ? '#2dd4bf' : '#145347'}
+            tintColor={theme.primary}
           />
         }
         ListHeaderComponent={
           <View>
-            <View className="px-5 pb-2 pt-4">
-              <Text className="text-2xl font-bold tracking-tight text-foreground">Inspections</Text>
-              {/* The server's count for the active chip and search, so it is
-                  the real number. It reported the length of whatever page was
-                  in hand before, which saturated at 25 forever — a technician
-                  with three hundred inspections read "25 total".
+            {/* The server's count for the active chip and search, so it is
+                the real number. It reported the length of whatever page was
+                in hand before, which saturated at 25 forever — a technician
+                with three hundred inspections read "25 total".
 
-                  "shown" only appears while there is more to load, because
-                  once every page is in, shown and total are the same number and
-                  printing both invites the reader to look for a difference. */}
-              <Text className="mt-0.5 text-sm text-muted-foreground">
-                {total} total
-                {rows.length < total ? ` · ${rows.length} loaded` : ''}
-              </Text>
-            </View>
+                "loaded" only appears while there is more to come, because once
+                every page is in, loaded and total are the same number and
+                printing both invites the reader to look for a difference. */}
+            <ScreenHeader
+              subtitle={`${total} total${rows.length < total ? ` · ${rows.length} loaded` : ''}`}
+              title="Inspections"
+            />
             <View className="mx-5 mt-3 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
               <SearchIcon size={18} className="text-muted-foreground" />
               <TextInput
                 className="flex-1 text-base text-foreground"
                 placeholder="Search address, city, or unit..."
-                placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+                placeholderTextColor={theme.mutedForeground}
                 value={search}
                 onChangeText={setSearch}
               />
@@ -271,7 +268,7 @@ export default function InspectionsScreen() {
                       accessibilityLabel={`Filter: ${item.label}`}
                       accessibilityRole="radio"
                       accessibilityState={{ selected: active }}
-                      className={`min-h-11 justify-center rounded-full px-4 py-2 active:scale-[0.97] ${
+                      className={`min-h-11 justify-center rounded-full px-4 py-2 active:scale-[0.98] ${
                         active ? 'bg-primary' : 'border border-border bg-card'
                       }`}
                       onPress={() => setFilter(item.key)}

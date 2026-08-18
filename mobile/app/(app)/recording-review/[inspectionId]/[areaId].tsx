@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useColorScheme } from 'nativewind';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { HomeButton } from '@/src/components/HomeButton';
@@ -12,6 +11,7 @@ import { useInspection, useRoom, useRooms, useSaveRecording } from '@/src/featur
 import { deleteDraftRecording } from '@/src/media/local-recordings';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { nextInspectionRoom } from '@/src/utils/room-workflow';
+import { useThemeColors } from '@/src/lib/theme-colors';
 
 const ADDITIONAL_CATEGORIES: readonly {
   value: AdditionalVideoCategory;
@@ -25,8 +25,7 @@ const ADDITIONAL_CATEGORIES: readonly {
 ];
 
 export default function RecordingReviewScreen() {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const {
     inspectionId = '',
     areaId = '',
@@ -198,7 +197,7 @@ export default function RecordingReviewScreen() {
             multiline
             textAlignVertical="top"
             placeholder="Add context for the reviewer"
-            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            placeholderTextColor={theme.mutedForeground}
           />
         </View>
         {isAdditional ? (
@@ -213,7 +212,7 @@ export default function RecordingReviewScreen() {
               value={label}
               onChangeText={setLabel}
               placeholder="e.g. Sink leak follow-up"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+              placeholderTextColor={theme.mutedForeground}
             />
             <Text className="mt-4 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               Category

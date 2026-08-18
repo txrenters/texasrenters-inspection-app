@@ -339,7 +339,7 @@ export default function DiagnosticsScreen() {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Clear the problem log"
-                className="rounded-full bg-muted px-3 py-1 active:opacity-70"
+                className="rounded-full bg-muted px-3 py-1 active:scale-[0.98]"
                 onPress={() => void clearErrorLog()}
               >
                 <Text className="text-xs font-semibold text-muted-foreground">Clear</Text>

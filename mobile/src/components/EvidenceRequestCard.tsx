@@ -50,7 +50,7 @@ export function EvidenceRequestCard({
             accessibilityLabel="Mark this request done"
             accessibilityRole="button"
             accessibilityState={{ busy: resolving, disabled: resolving }}
-            className="mt-3 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-muted py-3 active:opacity-70"
+            className="mt-3 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-muted py-3 active:scale-[0.98]"
             disabled={resolving}
             onPress={() => onResolve(request.id)}
           >

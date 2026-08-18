@@ -147,6 +147,19 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 8,
   },
+  /**
+   * These colours are deliberately not theme tokens.
+   *
+   * This overlay sits on the live camera feed, so what is behind it is a room
+   * — not a surface the palette controls. Tinting it with `--foreground` or
+   * `--card` would mean a technician filming a white wall in light mode gets
+   * near-black text on near-white video, and the same overlay is unreadable
+   * against a dark cabinet. Fixed white on a translucent scrim, with amber and
+   * green for the warning and complete states, is legible over anything.
+   *
+   * Every other colour in the app should come from a token; this file is the
+   * exception, and the reason it is one.
+   */
   copy: {
     minHeight: 52,
     maxWidth: 238,

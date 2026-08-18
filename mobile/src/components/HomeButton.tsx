@@ -48,7 +48,7 @@ export function HomeButton({
         accessibilityHint="Leaves this inspection and returns to your work queue"
         accessibilityLabel="Home"
         accessibilityRole="button"
-        className={`items-center justify-center rounded-full active:scale-[0.95] ${
+        className={`items-center justify-center rounded-full active:scale-[0.98] ${
           overlay ? 'h-10 w-10 bg-black/40' : 'h-9 w-9 bg-card'
         }`}
         hitSlop={8}

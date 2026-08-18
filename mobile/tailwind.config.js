@@ -18,11 +18,33 @@ module.exports = {
   ],
   theme: {
     extend: {
+      /**
+       * One monotonic ramp off `--radius` (12).
+       *
+       * Only `sm`/`md`/`lg`/DEFAULT were overridden before, which left `lg` at
+       * `--radius * 1.5` = 18 while `xl` kept Tailwind's default 12. The scale
+       * ran backwards in the middle: `rounded-lg` was rounder than
+       * `rounded-xl`, so the small chips and skeleton blocks using it were the
+       * softest shapes on the screen. Declaring the whole ramp keeps that from
+       * happening again the next time `--radius` moves.
+       *
+       * `xl`, `2xl` and `3xl` resolve to the same 12 / 16 / 24 they already
+       * did, so the 158 existing usages are untouched — this only puts `lg`
+       * back where it belongs.
+       *
+       * The house rule the primitives in `src/components/ui` enforce:
+       *   xl (12)  interactive — buttons, inputs, inset rows, icon wells
+       *   2xl (16) surfaces — cards and sheets
+       *   full     pills — badges, chips, avatars
+       */
       borderRadius: {
-        DEFAULT: 'var(--radius)',
-        lg: 'calc(var(--radius) * 1.5)',
-        md: 'var(--radius)',
-        sm: 'calc(var(--radius) * 0.5)',
+        'sm': 'calc(var(--radius) * 0.5)',
+        'DEFAULT': 'var(--radius)',
+        'md': 'calc(var(--radius) * 0.67)',
+        'lg': 'calc(var(--radius) * 0.83)',
+        'xl': 'var(--radius)',
+        '2xl': 'calc(var(--radius) * 1.33)',
+        '3xl': 'calc(var(--radius) * 2)',
       },
       colors: {
         // Core semantic colors (CSS variable-based from theme.ts)

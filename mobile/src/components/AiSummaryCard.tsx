@@ -96,7 +96,7 @@ export function AiSummaryCard({
               accessibilityLabel="Confirm this summary matches the area"
               accessibilityRole="button"
               accessibilityState={{ busy: confirming, disabled: confirming }}
-              className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3 active:opacity-80"
+              className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-xl bg-primary py-3 active:scale-[0.98]"
               disabled={confirming}
               onPress={onConfirm}
             >

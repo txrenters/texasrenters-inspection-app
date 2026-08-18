@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useColorScheme } from 'nativewind';
 import { EyeIcon, EyeOffIcon } from 'lucide-react-native';
 import {
   KeyboardAvoidingView,
@@ -20,13 +19,13 @@ import {
 
 import { useRequiredPasswordChange } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
 
 registerIcons(EyeIcon, EyeOffIcon);
 
 
 export default function ChangePasswordScreen() {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const changePassword = useRequiredPasswordChange();
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
@@ -106,7 +105,7 @@ export default function ChangePasswordScreen() {
               accessibilityLabel="New password"
               className="min-h-12 flex-1 px-4 py-4 text-base text-foreground"
               placeholder="New password"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+              placeholderTextColor={theme.mutedForeground}
               secureTextEntry={!showPassword}
               textContentType="newPassword"
               value={password}
@@ -131,7 +130,7 @@ export default function ChangePasswordScreen() {
             accessibilityLabel="Confirm new password"
             className="mt-3 min-h-12 rounded-xl border border-border bg-card px-4 py-4 text-base text-foreground"
             placeholder="Confirm new password"
-            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            placeholderTextColor={theme.mutedForeground}
             secureTextEntry={!showPassword}
             textContentType="newPassword"
             value={confirmation}

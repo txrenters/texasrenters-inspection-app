@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useColorScheme } from 'nativewind';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -16,6 +15,8 @@ import { EyeIcon, EyeOffIcon, LogInIcon, ShieldCheckIcon } from 'lucide-react-na
 
 import { useApiLogin } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
+import { Button } from '@/src/components/ui';
 
 registerIcons(LogInIcon);
 registerIcons(ShieldCheckIcon);
@@ -23,8 +24,7 @@ registerIcons(EyeIcon);
 registerIcons(EyeOffIcon);
 
 export default function LoginScreen() {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const appName = Constants.expoConfig?.name ?? 'TexasRenters Inspect';
   const login = useApiLogin();
   const [email, setEmail] = useState('');
@@ -100,7 +100,7 @@ export default function LoginScreen() {
               accessibilityLabelledBy="login-email-label"
               className="min-h-12 rounded-xl border border-border bg-card px-4 py-3.5 text-base text-foreground"
               placeholder="you@texasrenters.com"
-              placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+              placeholderTextColor={theme.mutedForeground}
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
@@ -123,7 +123,7 @@ export default function LoginScreen() {
                 accessibilityLabelledBy="login-password-label"
                 className="min-h-12 flex-1 px-4 py-3.5 text-base text-foreground"
                 placeholder="Enter your password"
-                placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+                placeholderTextColor={theme.mutedForeground}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
@@ -145,21 +145,17 @@ export default function LoginScreen() {
             </View>
           </View>
 
-          <Pressable
-            accessibilityLabel={login.isPending ? 'Signing in' : 'Sign in'}
-            accessibilityRole="button"
-            accessibilityState={{ busy: login.isPending, disabled: login.isPending }}
-            className={`min-h-12 items-center rounded-xl bg-primary py-3.5 active:scale-[0.98] ${login.isPending ? 'opacity-70' : ''}`}
+          {/* `opacity-70` over the primary fill used to carry the label down
+              with the background, so the least readable control on the screen
+              was the one the technician was waiting on. `Button` swaps the fill
+              instead. */}
+          <Button
+            busy={login.isPending}
+            busyLabel="Signing in…"
+            icon={<LogInIcon size={20} className="text-primary-foreground" />}
+            label="Sign in"
             onPress={() => void handleLogin()}
-            disabled={login.isPending}
-          >
-            <View className="flex-row items-center gap-2">
-              <LogInIcon size={20} className="text-primary-foreground" />
-              <Text className="text-base font-bold text-primary-foreground">
-                {login.isPending ? 'Signing in…' : 'Sign in'}
-              </Text>
-            </View>
-          </Pressable>
+          />
 
           <View className="mt-8 items-center">
             <Text className="text-xs text-muted-foreground">

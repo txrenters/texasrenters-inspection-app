@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { useColorScheme } from 'nativewind';
 
 import type { AreaEnvironment } from '../domain/models';
 import { useAddArea } from '../features/queries';
@@ -8,6 +7,7 @@ import { announce } from '../lib/announce';
 import { BottomSheet } from './BottomSheet';
 import { Loader } from './ui/Loader';
 import type { AddAreaInput } from '../repositories/contracts';
+import { useThemeColors } from '../lib/theme-colors';
 
 const ENVIRONMENTS: { value: AreaEnvironment; label: string }[] = [
   { value: 'INDOOR', label: 'Indoor' },
@@ -49,8 +49,7 @@ export function AddAreaSheet({
   /** Called with the new area's id, so the caller can send the technician straight into it. */
   onAdded?: (roomId: string) => void;
 }) {
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const addArea = useAddArea(inspectionId);
   const [name, setName] = useState('');
   const [environment, setEnvironment] = useState<AreaEnvironment>('INDOOR');
@@ -222,7 +221,7 @@ export function AddAreaSheet({
             autoFocus
             className="mt-2 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
             placeholder="Storage shed, hall closet…"
-            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            placeholderTextColor={theme.mutedForeground}
             value={name}
             onChangeText={setName}
             returnKeyType="done"
@@ -267,7 +266,7 @@ export function AddAreaSheet({
             accessibilityLabelledBy="add-area-floor-label"
             className="mt-2 min-h-12 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
             placeholder="Ground floor, Basement…"
-            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            placeholderTextColor={theme.mutedForeground}
             value={floorName}
             onChangeText={setFloorName}
           />
@@ -288,7 +287,7 @@ export function AddAreaSheet({
             multiline
             textAlignVertical="top"
             placeholder="Why this area needs inspecting"
-            placeholderTextColor={isDark ? '#5e6b78' : '#9a9484'}
+            placeholderTextColor={theme.mutedForeground}
             value={notes}
             onChangeText={setNotes}
           />

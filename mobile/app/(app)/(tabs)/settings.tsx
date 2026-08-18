@@ -26,6 +26,8 @@ import { useDemoStore } from '@/src/stores/demo.store';
 import { useNetworkStore } from '@/src/stores/network.store';
 import { usePreferencesStore } from '@/src/stores/preferences.store';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
+import { GroupLabel, ScreenHeader } from '@/src/components/ui';
 
 registerIcons(
   BellIcon,
@@ -148,12 +150,7 @@ export default function SettingsScreen() {
         contentContainerStyle={{ paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
       >
-        <View className="px-5 pb-2 pt-4">
-          <Text className="text-2xl font-bold tracking-tight text-foreground">Settings</Text>
-          <Text className="mt-0.5 text-sm text-muted-foreground">
-            Configure your inspection workflow
-          </Text>
-        </View>
+        <ScreenHeader title="Settings" subtitle="Configure your inspection workflow" />
 
         <View className="mx-5 mt-5 flex-row items-center gap-4 rounded-2xl bg-card p-5">
           <View className="h-14 w-14 items-center justify-center rounded-full bg-primary/10">
@@ -170,9 +167,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <Text className="mb-2 mt-6 px-5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Preferences
-        </Text>
+        <GroupLabel>Preferences</GroupLabel>
         <View className="mx-5 overflow-hidden rounded-2xl bg-card">
           <SettingSwitchRow
             icon={BellIcon}
@@ -234,9 +229,7 @@ export default function SettingsScreen() {
           />
         </View>
 
-        <Text className="mb-2 mt-6 px-5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Data & Storage
-        </Text>
+        <GroupLabel>Data &amp; Storage</GroupLabel>
         <View className="mx-5 overflow-hidden rounded-2xl bg-card">
           <SettingLinkRow
             icon={DatabaseIcon}
@@ -267,9 +260,7 @@ export default function SettingsScreen() {
           />
         </View>
 
-        <Text className="mb-2 mt-6 px-5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Support
-        </Text>
+        <GroupLabel>Support</GroupLabel>
         <View className="mx-5 overflow-hidden rounded-2xl bg-card">
           <SettingLinkRow
             icon={HelpCircleIcon}
@@ -326,6 +317,7 @@ function SettingSwitchRow({
   onValueChange: (value: boolean) => void;
   last?: boolean;
 }) {
+  const theme = useThemeColors();
   return (
     <View
       className={`min-h-14 flex-row items-center gap-3 px-4 py-3.5 ${
@@ -350,8 +342,15 @@ function SettingSwitchRow({
         accessibilityState={{ checked: value }}
         value={value}
         onValueChange={onValueChange}
-        trackColor={{ false: '#d1d5db', true: '#14967d' }}
-        thumbColor="#fff"
+        // Was `#14967d` on, which is `--chart-2` — so the app's toggles were
+        // the one control not using the brand colour, and they used the same
+        // pair in both themes. The off track is `--input`, the token that
+        // already carries the 3:1 a control boundary needs.
+        trackColor={{ false: theme.input, true: theme.primary }}
+        // Fixed `#fff` sat at 1.9:1 on dark mode's bright teal, so a switch that
+        // was on looked like a switch with no thumb. `card` contrasts with the
+        // track in both themes.
+        thumbColor={theme.card}
       />
     </View>
   );
