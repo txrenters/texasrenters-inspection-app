@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+function isValidAiCredentialsEncryptionKey(value: string) {
+  const trimmed = value.trim();
+  if (/^[a-f\d]{64}$/i.test(trimmed)) return true;
+  if (!/^[A-Za-z\d+/]+={0,2}$/.test(trimmed)) return false;
+  return Buffer.from(trimmed, 'base64').length === 32;
+}
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -159,6 +166,22 @@ const environmentSchema = z
         code: 'custom',
         message: 'AUTH_JWT_SECRET is required.',
         path: ['AUTH_JWT_SECRET'],
+      });
+    if (config.NODE_ENV === 'production' && !config.AI_CREDENTIALS_ENCRYPTION_KEY)
+      context.addIssue({
+        code: 'custom',
+        message:
+          'AI_CREDENTIALS_ENCRYPTION_KEY is required in production so provider credentials can be managed securely.',
+        path: ['AI_CREDENTIALS_ENCRYPTION_KEY'],
+      });
+    if (
+      config.AI_CREDENTIALS_ENCRYPTION_KEY &&
+      !isValidAiCredentialsEncryptionKey(config.AI_CREDENTIALS_ENCRYPTION_KEY)
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'AI_CREDENTIALS_ENCRYPTION_KEY must decode to exactly 32 bytes.',
+        path: ['AI_CREDENTIALS_ENCRYPTION_KEY'],
       });
     if (
       config.PROPERTYWARE_PROVIDER === 'live' &&

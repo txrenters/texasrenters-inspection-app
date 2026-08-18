@@ -1,11 +1,12 @@
 {
   "name": "@texasrenters/mobile",
   "main": "expo-router/entry",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "TexasRenters technician inspection application",
   "scripts": {
     "prestart": "npm run build --prefix ../shared",
     "prestart:clear": "npm run build --prefix ../shared",
+    "eas-build-post-install": "npm run build --prefix ../shared",
     "start": "node scripts/start-tunnel.mjs",
     "start:clear": "node scripts/start-tunnel.mjs --clear",
     "android": "expo start --android",

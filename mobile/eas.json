@@ -33,6 +33,14 @@
         "EXPO_PUBLIC_ENABLE_TEST_VIDEO_PICKER": "false",
         "EXPO_PUBLIC_USE_ADB_REVERSE": "false"
       }
+    },
+    "production-apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "autoIncrement": false,
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
