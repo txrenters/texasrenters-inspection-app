@@ -18,7 +18,15 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   const refreshToken = request.cookies.get(REFRESH_COOKIE)?.value;
-  if (!refreshToken) return NextResponse.json({ message: 'No session.' }, { status: 401 });
+  if (!refreshToken) {
+    // AuthProvider also runs on public pages. No refresh cookie means the
+    // visitor is simply signed out, not that an authenticated request failed.
+    // A no-content response keeps that normal state out of the browser's error
+    // console while `getSession()` still resolves to null.
+    const response = new NextResponse(null, { status: 204 });
+    clearSession(response);
+    return response;
+  }
 
   let upstream: Response;
   try {

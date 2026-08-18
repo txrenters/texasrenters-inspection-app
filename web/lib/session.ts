@@ -83,6 +83,7 @@ function readCookie(name: string) {
 }
 
 let inFlightRefresh: Promise<AppSession | null> | null = null;
+const SESSION_REFRESH_LOCK = 'texasrenters-session-refresh';
 
 /**
  * The current session, refreshing it first if it is about to expire.
@@ -92,10 +93,11 @@ let inFlightRefresh: Promise<AppSession | null> | null = null;
  * that without ever calling `refreshSession()`. Something has to keep doing it,
  * or tokens start expiring in the middle of an ordinary click.
  *
- * Concurrent callers share one refresh. A page that fires six requests at once
- * would otherwise rotate the refresh token six times, and five of those would
- * be replays — which the backend correctly treats as a stolen token and
- * responds to by ending every session.
+ * Concurrent callers in this tab share one refresh. `refreshSession()` also
+ * takes a browser-wide lock so two tabs cannot rotate the same refresh token at
+ * once. A replay is correctly treated by the backend as a stolen token and
+ * ends every session, so cross-tab coordination is a security requirement,
+ * not merely an optimization.
  */
 export async function getSession(): Promise<AppSession | null> {
   const raw = readCookie(ACCESS_COOKIE);
@@ -115,6 +117,29 @@ export async function getSession(): Promise<AppSession | null> {
  * httpOnly and unreachable from here by design.
  */
 async function refreshSession(): Promise<AppSession | null> {
+  const exchange = async () => {
+    // Another tab may have refreshed while this one waited for the lock. The
+    // access cookie is shared by tabs, so use it rather than rotating again.
+    const raw = readCookie(ACCESS_COOKIE);
+    const current = raw ? decodeSession(raw) : null;
+    if (current && !sessionIsExpired(current)) return current;
+
+    return exchangeRefreshToken();
+  };
+
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    try {
+      return await navigator.locks.request(SESSION_REFRESH_LOCK, exchange);
+    } catch {
+      // Some embedded browsers expose the API but refuse lock requests. The
+      // per-tab in-flight guard still prevents duplicate requests in this tab.
+    }
+  }
+
+  return exchange();
+}
+
+async function exchangeRefreshToken(): Promise<AppSession | null> {
   try {
     const response = await fetch('/api/session/refresh', { method: 'POST' });
     if (!response.ok) return null;
