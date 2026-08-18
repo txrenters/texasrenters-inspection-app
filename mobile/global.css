@@ -3,58 +3,66 @@
 @tailwind utilities;
 
 /* Base light mode (default) — CSS variables are set by ThemeProvider via inline style,
-   these are fallbacks that ensure content is visible even before JS hydrates */
+   these are fallbacks that ensure content is visible even before JS hydrates.
+
+   Kept byte-for-byte in step with `theme.ts`. When these drifted apart the app
+   rendered one palette for the first frame and another once the provider
+   mounted, which reads as a flash of the wrong brand on every cold start. */
 @layer base {
   :root {
     color-scheme: light;
-    --background: 252 251 248;
-    --foreground: 15 23 42;
+    --background: 244 242 237;
+    --foreground: 26 24 22;
     --card: 255 255 255;
-    --card-foreground: 15 23 42;
-    --primary: 20 83 73;
-    --primary-foreground: 240 253 250;
-    --secondary: 245 240 235;
-    --secondary-foreground: 20 83 73;
-    --muted: 241 239 235;
-    --muted-foreground: 120 113 105;
-    --accent: 250 245 238;
-    --accent-foreground: 20 83 73;
-    --destructive: 185 28 28;
-    --border: 226 222 217;
-    --input: 226 222 217;
-    --ring: 20 83 73;
-    --chart-1: 231 111 81;
-    --chart-2: 20 150 130;
-    --chart-3: 59 130 100;
-    --chart-4: 217 140 65;
-    --chart-5: 142 100 186;
+    --card-foreground: 26 24 22;
+    --popover: 255 255 255;
+    --popover-foreground: 26 24 22;
+    --primary: 17 78 69;
+    --primary-foreground: 247 254 252;
+    --secondary: 236 233 228;
+    --secondary-foreground: 17 78 69;
+    --muted: 236 233 228;
+    --muted-foreground: 87 81 75;
+    --accent: 238 234 227;
+    --accent-foreground: 17 78 69;
+    --destructive: 168 22 22;
+    --border: 224 220 213;
+    --input: 150 143 134;
+    --ring: 17 78 69;
+    --chart-1: 166 62 38;
+    --chart-2: 13 110 96;
+    --chart-3: 42 106 76;
+    --chart-4: 146 87 15;
+    --chart-5: 109 74 150;
     --radius: 12;
   }
 
   .dark,
   :root.dark {
     color-scheme: dark;
-    --background: 10 15 24;
-    --foreground: 236 240 243;
-    --card: 17 24 35;
-    --card-foreground: 236 240 243;
+    --background: 18 17 16;
+    --foreground: 242 240 236;
+    --card: 30 28 26;
+    --card-foreground: 242 240 236;
+    --popover: 36 34 31;
+    --popover-foreground: 242 240 236;
     --primary: 45 212 191;
-    --primary-foreground: 4 40 35;
-    --secondary: 25 35 48;
-    --secondary-foreground: 236 240 243;
-    --muted: 25 35 48;
-    --muted-foreground: 94 107 120;
-    --accent: 30 42 55;
-    --accent-foreground: 236 240 243;
-    --destructive: 239 68 68;
-    --border: 30 42 55;
-    --input: 25 35 48;
+    --primary-foreground: 6 42 37;
+    --secondary: 42 40 37;
+    --secondary-foreground: 242 240 236;
+    --muted: 42 40 37;
+    --muted-foreground: 167 160 151;
+    --accent: 48 45 42;
+    --accent-foreground: 242 240 236;
+    --destructive: 248 113 113;
+    --border: 54 51 47;
+    --input: 110 104 97;
     --ring: 45 212 191;
-    --chart-1: 248 140 110;
+    --chart-1: 248 150 120;
     --chart-2: 45 212 191;
-    --chart-3: 74 222 128;
-    --chart-4: 251 191 99;
-    --chart-5: 177 130 208;
+    --chart-3: 110 231 158;
+    --chart-4: 251 196 110;
+    --chart-5: 190 150 225;
     --radius: 12;
   }
 }

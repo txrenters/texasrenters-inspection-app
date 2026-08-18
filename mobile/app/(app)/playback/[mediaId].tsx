@@ -58,7 +58,7 @@ export default function PlaybackScreen() {
         <Pressable
           accessibilityLabel="Back"
           accessibilityRole="button"
-          className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.95]"
+          className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-[0.98]"
           hitSlop={8}
           onPress={() => goBack()}
         >
@@ -98,7 +98,12 @@ export default function PlaybackScreen() {
             fullscreenOptions={{ enable: true }}
             nativeControls
             player={player}
-            style={{ flex: 1, borderRadius: 18, backgroundColor: '#000' }}
+            // 16 is the surface radius every card uses. The 18 here was the
+            // value the old `rounded-lg` resolved to, copied in as a literal
+            // back when that class was accidentally rounder than `rounded-xl`.
+            // Black stays hardcoded on purpose: a video letterboxes to black
+            // regardless of which theme the app is in.
+            style={{ flex: 1, borderRadius: 16, backgroundColor: '#000' }}
           />
         </View>
       )}

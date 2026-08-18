@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Animated, Easing, View, type ViewStyle } from 'react-native';
 
 import { useReducedMotion } from '../../lib/reduced-motion';
+import { Card } from './Card';
 
 type SkeletonProps = {
   /** Tailwind classes for shape and spacing — height and width belong here. */
@@ -93,10 +94,17 @@ export function SkeletonScreen({
   );
 }
 
-/** Placeholder for one assignment or inspection row. */
+/**
+ * Placeholder for one assignment or inspection row.
+ *
+ * Goes through `Card` for the same reason the real row does. These drew
+ * `border border-border` and `mt-3` while the rows they stood in for drew no
+ * border and `mb-3`, so the list changed both texture and rhythm at the moment
+ * the data landed — the one moment a technician is looking straight at it.
+ */
 export function InspectionCardSkeleton() {
   return (
-    <View className="mx-5 mt-3 rounded-2xl border border-border bg-card p-4">
+    <Card density="row" className="mx-5 mb-3">
       <View className="flex-row items-center justify-between">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-5 w-20 rounded-full" />
@@ -107,7 +115,7 @@ export function InspectionCardSkeleton() {
         <Skeleton className="h-3 w-16" />
         <Skeleton className="h-3 w-16" />
       </View>
-    </View>
+    </Card>
   );
 }
 
@@ -128,10 +136,10 @@ export function StatsRowSkeleton() {
     <SkeletonScreen label="Loading summary">
       <View className="mx-5 mt-5 flex-row gap-3">
         {Array.from({ length: 3 }, (_, index) => (
-          <View key={index} className="flex-1 rounded-2xl border border-border bg-card p-4">
+          <Card density="row" key={index} className="flex-1">
             <Skeleton className="h-7 w-10" />
             <Skeleton className="mt-2 h-3 w-full" />
-          </View>
+          </Card>
         ))}
       </View>
     </SkeletonScreen>
@@ -148,11 +156,11 @@ export function DetailSkeleton({ sections = 3 }: { sections?: number }) {
         <Skeleton className="mt-2 h-4 w-1/2" />
       </View>
       {Array.from({ length: sections }, (_, index) => (
-        <View key={index} className="mx-5 mt-4 rounded-2xl border border-border bg-card p-4">
+        <Card key={index} className="mx-5 mt-4">
           <Skeleton className="h-4 w-28" />
           <Skeleton className="mt-3 h-3 w-full" />
           <Skeleton className="mt-2 h-3 w-5/6" />
-        </View>
+        </Card>
       ))}
     </SkeletonScreen>
   );
@@ -163,7 +171,7 @@ export function UploadListSkeleton({ rows = 3 }: { rows?: number }) {
   return (
     <SkeletonScreen label="Loading upload queue">
       {Array.from({ length: rows }, (_, index) => (
-        <View key={index} className="mx-5 mt-3 rounded-2xl border border-border bg-card p-4">
+        <Card density="row" key={index} className="mx-5 mb-3">
           <View className="flex-row items-center gap-3">
             <Skeleton className="h-10 w-10 rounded-xl" />
             <View className="flex-1 gap-2">
@@ -172,7 +180,7 @@ export function UploadListSkeleton({ rows = 3 }: { rows?: number }) {
             </View>
           </View>
           <Skeleton className="mt-3 h-2 w-full rounded-full" />
-        </View>
+        </Card>
       ))}
     </SkeletonScreen>
   );

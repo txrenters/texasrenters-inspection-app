@@ -51,7 +51,7 @@ export default function RequestsScreen() {
                 accessibilityHint="Opens the area this request is about"
                 accessibilityLabel={`${request.roomName} at ${request.propertyName}. ${request.note}`}
                 accessibilityRole="button"
-                className="mx-5 mb-2 gap-1 rounded-2xl bg-card p-4 active:opacity-70"
+                className="mx-5 mb-2 gap-1 rounded-2xl bg-card p-4 active:scale-[0.98]"
                 key={request.id}
                 onPress={() =>
                   router.push({

@@ -1,6 +1,5 @@
 import { router } from 'expo-router';
 import { useMemo } from 'react';
-import { useColorScheme } from 'nativewind';
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -30,6 +29,8 @@ import { usePreferencesStore } from '@/src/stores/preferences.store';
 import { progressBarWidth, progressPercent } from '@/src/utils/upload-progress';
 import { describeUpload } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
+import { ScreenHeader } from '@/src/components/ui';
 
 registerIcons(
   AlertTriangleIcon,
@@ -245,8 +246,7 @@ export default function UploadsScreen() {
     () => new Set((localUploadIds ?? []).map((upload) => upload.id)),
     [localUploadIds],
   );
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const isOnline = useNetworkStore((state) => state.isOnline);
   const isMetered = useNetworkStore((state) => state.isMetered);
   const autoUpload = usePreferencesStore((state) => state.autoUpload);
@@ -281,19 +281,15 @@ export default function UploadsScreen() {
           <RefreshControl
             refreshing={pull.refreshing}
             onRefresh={pull.onRefresh}
-            tintColor={isDark ? '#2dd4bf' : '#145347'}
+            tintColor={theme.primary}
           />
         }
         ListHeaderComponent={
           <View>
-            <View className="px-5 pb-2 pt-4">
-              <Text className="text-2xl font-bold tracking-tight text-foreground">
-                Upload Center
-              </Text>
-              <Text className="mt-0.5 text-sm text-muted-foreground">
-                Manage and monitor all evidence uploads
-              </Text>
-            </View>
+            <ScreenHeader
+              subtitle="Manage and monitor all evidence uploads"
+              title="Upload Center"
+            />
 
             {uploads.isError ? (
               <View className="mx-5 mt-4 rounded-xl border border-destructive/20 bg-destructive/10 p-3">
@@ -383,7 +379,7 @@ export default function UploadsScreen() {
                 <Pressable
                   accessibilityLabel="Retry all failed uploads"
                   accessibilityRole="button"
-                  className="min-h-11 flex-row items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 active:scale-[0.97]"
+                  className="min-h-11 flex-row items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 active:scale-[0.98]"
                   onPress={() =>
                     sorted
                       .filter((item) => item.status === 'FAILED')

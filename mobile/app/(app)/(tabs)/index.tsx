@@ -1,5 +1,4 @@
 import { router } from 'expo-router';
-import { useColorScheme } from 'nativewind';
 import {
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -23,6 +22,8 @@ import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { greetingFor } from '@/src/utils/greeting';
 import { registerIcons } from '@/src/lib/icons';
+import { useThemeColors } from '@/src/lib/theme-colors';
+import { PRESS_ROW, ScreenHeader, SectionHeader } from '@/src/components/ui';
 
 registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon, Settings2Icon);
 
@@ -91,8 +92,7 @@ export default function HomeScreen() {
   // spinner appear on its own every 60s, when the assignment poll ran.
   const pull = usePullToRefresh([dashboard.refetch]);
   const user = useCurrentUser();
-  const { colorScheme } = useColorScheme();
-  const isDark = colorScheme === 'dark';
+  const theme = useThemeColors();
   const firstName = user.data?.name.split(/\s+/)[0] || 'Technician';
   // Both of these read the device's own clock and time zone, so they are
   // already right whether the technician is in Texas or Manila. Ticking rather
@@ -133,27 +133,25 @@ export default function HomeScreen() {
           <RefreshControl
             refreshing={pull.refreshing}
             onRefresh={pull.onRefresh}
-            tintColor={isDark ? '#2dd4bf' : '#145347'}
+            tintColor={theme.primary}
           />
         }
       >
-        <View className="px-5 pb-2 pt-4">
-          <Text className="text-sm text-muted-foreground">{today}</Text>
-          <Text className="mt-1 text-2xl font-bold tracking-tight text-foreground">
-            {greeting}, {firstName}
-          </Text>
-          {/* "Ready for your inspections today" is a strange thing to read on a
-              screen with no inspections on it — and the first thing a new
-              technician sees. It only claims that when there is something to
-              be ready for. */}
-          <Text className="mt-0.5 text-sm text-muted-foreground">
-            {neverAssigned
+        {/* "Ready for your inspections today" is a strange thing to read on a
+            screen with no inspections on it — and the first thing a new
+            technician sees. It only claims that when there is something to
+            be ready for. */}
+        <ScreenHeader
+          eyebrow={today}
+          subtitle={
+            neverAssigned
               ? 'Nothing assigned to you yet'
               : assigned.length + inProgress.length > 0
                 ? 'Ready for your inspections today'
-                : 'No inspections pending right now'}
-          </Text>
-        </View>
+                : 'No inspections pending right now'
+          }
+          title={`${greeting}, ${firstName}`}
+        />
 
         {dashboard.isError ? (
           <View className="mx-5 mt-5 rounded-2xl border border-destructive/20 bg-destructive/10 p-4">
@@ -196,9 +194,7 @@ export default function HomeScreen() {
 
         {inProgress.length > 0 ? (
           <View className="mt-6">
-            <Text className="mb-3 px-5 text-lg font-semibold text-foreground">
-              Continue Inspection
-            </Text>
+            <SectionHeader title="Continue Inspection" />
             {inProgress.map((inspection) => (
               <Pressable
                 key={inspection.id}
@@ -248,17 +244,19 @@ export default function HomeScreen() {
         ) : null}
 
         <View className="mt-6">
-          <View className="mb-3 flex-row items-center justify-between px-5">
-            <Text className="text-lg font-semibold text-foreground">Upcoming</Text>
-            <Pressable
-              accessibilityLabel="See all inspections"
-              accessibilityRole="button"
-              className="min-h-11 justify-center px-1"
-              onPress={() => router.push('/inspections')}
-            >
-              <Text className="text-sm font-semibold text-primary">See all</Text>
-            </Pressable>
-          </View>
+          <SectionHeader
+            action={
+              <Pressable
+                accessibilityLabel="See all inspections"
+                accessibilityRole="button"
+                className={`min-h-11 justify-center px-1 ${PRESS_ROW}`}
+                onPress={() => router.push('/inspections')}
+              >
+                <Text className="text-sm font-semibold text-primary">See all</Text>
+              </Pressable>
+            }
+            title="Upcoming"
+          />
           {assigned.map((inspection) => (
             <AssignedInspectionRow inspection={inspection} key={inspection.id} />
           ))}
@@ -272,9 +270,7 @@ export default function HomeScreen() {
 
         {completed.length > 0 ? (
           <View className="mb-2 mt-6">
-            <Text className="mb-3 px-5 text-lg font-semibold text-foreground">
-              Recently Completed
-            </Text>
+            <SectionHeader title="Recently Completed" />
             {completed.slice(0, 2).map((inspection) => (
               <Pressable
                 key={inspection.id}

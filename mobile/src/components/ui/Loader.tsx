@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, Text, View } from 'react-native';
-import { useColorScheme } from 'nativewind';
 import Svg, { Circle } from 'react-native-svg';
 
 import { useReducedMotion } from '../../lib/reduced-motion';
+import { useThemeColors } from '../../lib/theme-colors';
 
 const AnimatedSvg = Animated.createAnimatedComponent(Svg);
 
@@ -27,9 +27,9 @@ type LoaderProps = {
  * brand teal on both platforms.
  */
 export function Loader({ size = 'md', accessibilityLabel = 'Loading' }: LoaderProps) {
-  const { colorScheme } = useColorScheme();
   const reducedMotion = useReducedMotion();
-  const tint = colorScheme === 'dark' ? '#2dd4bf' : '#145347';
+  // `stroke` is an SVG prop, so it needs a real colour rather than a class.
+  const { primary: tint } = useThemeColors();
   const spin = useRef(new Animated.Value(0)).current;
   const diameter = SIZES[size];
   const stroke = STROKE[size];
