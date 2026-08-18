@@ -133,3 +133,9 @@ backups/
 .agents/
 skills-lock.json
 .claude/skills/
+
+# Generated knowledge graph. 43 MB across ~200 files, including dated snapshots
+# and a local cache, and `graphify update .` regenerates it from the source that
+# is already tracked here. The merge driver named in .gitattributes only applies
+# if this is ever tracked deliberately.
+graphify-out/
