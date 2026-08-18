@@ -117,14 +117,30 @@ const config: ExpoConfig = {
   // corrected by building again and going back through App Review — days, during
   // which technicians in the field have a broken app and no way back.
   updates: { url: `https://u.expo.dev/${easProjectId}` },
-  // `fingerprint`, not `appVersion`. The policy decides which builds an update is
-  // allowed to reach, and `appVersion` answers that with the marketing version —
-  // which says nothing about the native layer. Add a native module without
-  // touching `version` and `appVersion` would happily deliver JavaScript that
-  // calls into it to a binary that does not contain it, crashing on launch, with
-  // no way to recall the update. `fingerprint` hashes the native project itself,
-  // so an update reaches exactly the builds that can run it and no others.
-  runtimeVersion: { policy: 'fingerprint' },
+  // `appVersion`, and the reason it is not `fingerprint` is worth recording,
+  // because `fingerprint` is the better policy everywhere this repository is
+  // not a monorepo.
+  //
+  // The policy decides which installed builds an update may reach. `appVersion`
+  // answers with the marketing version above, which says nothing about the
+  // native layer: add a native module without touching `version` and an update
+  // can deliver JavaScript calling into it to a binary that does not contain it.
+  // `fingerprint` avoids that by hashing the native project instead — and fails
+  // here. This is an npm workspace, so dependencies hoist to the repository root
+  // and the hash covers `../node_modules/**`, which does not resolve identically
+  // on EAS Build. The first Android build errored on exactly that:
+  //
+  //   Runtime version mismatch
+  //     local 24c02f17d44e620326bbb1a446505da534096c4d
+  //     EAS   f53870102006c9f0d57fb5314fbc1ebc1a041b50
+  //
+  // the whole difference being hoisted `@expo/config-plugins` files. A mismatch
+  // is fatal, not a warning, so no build could complete at all.
+  //
+  // What this costs: `version` must be bumped whenever native code, a plugin or
+  // a native dependency changes, or an update may reach a binary that cannot run
+  // it. That is a discipline rather than a guarantee — see the README.
+  runtimeVersion: { policy: 'appVersion' },
   extra: {
     dataSource: process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true' ? 'mock' : 'api',
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? null,

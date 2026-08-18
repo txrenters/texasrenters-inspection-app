@@ -43,14 +43,16 @@ environment (`eas env:create`, or Project settings → Environment variables):
 | Variable | development | preview | production |
 | --- | --- | --- | --- |
 | `EXPO_PUBLIC_API_BASE_URL` | — | tunnel hostname | public HTTPS API |
-| `EXPO_PUBLIC_EAS_PROJECT_ID` | EAS project id | EAS project id | EAS project id |
 
-`EXPO_PUBLIC_EAS_PROJECT_ID` is load-bearing twice over: it supplies
-`extra.eas.projectId`, and it builds the `updates.url`. Both keys are omitted
-from the config when it is unset, so a build made without it is not merely
-missing an id — it **permanently cannot receive an over-the-air update**, and
-nothing about the build fails to announce that. Confirm it resolves before
-building: `npx expo config --json` should show a `updates.url`.
+The EAS project id is **not** an environment variable. It is hardcoded in
+`app.config.ts`, because `expo` reads `.env.local` and `eas-cli` does not — so
+every `eas` command needed it exported by hand, and a build server missing it
+would have produced an app with no `updates.url` and no way to ever receive an
+over-the-air fix. `EXPO_PUBLIC_EAS_PROJECT_ID` still overrides the constant if
+set, for a fork pointing at a different project.
+
+Confirm the config resolves before building: `npx expo config --json` should
+report both `extra.eas.projectId` and `updates.url`.
 
 ### Over-the-air updates
 
@@ -58,17 +60,34 @@ building: `npx expo config --json` should show a `updates.url`.
 `preview` and `production`, matching their profile names. Publish with
 `eas update --channel production`.
 
-`runtimeVersion` uses the **`fingerprint`** policy, not `appVersion`. The policy
-decides which installed builds an update is allowed to reach. `appVersion`
-answers that with the marketing version, which says nothing about the native
-layer — add a native module without touching `version` and it would deliver
-JavaScript calling into that module to a binary that does not contain it,
-crashing on launch, with no way to recall it. `fingerprint` hashes the native
-project, so an update reaches exactly the builds that can run it.
+`runtimeVersion` uses the **`appVersion`** policy, so the runtime version is the
+`version` field in `app.config.ts`. An update published for `0.1.0` reaches
+installs built from `0.1.0` and no others.
 
-The practical consequence: **any change to native code, plugins or native
-dependencies changes the fingerprint**, and those changes require a new store
-build. Only JavaScript and asset changes ship over the air.
+**This makes `version` load-bearing, not cosmetic.** Bump it whenever native
+code, a config plugin or a native dependency changes. Ship a native change
+without bumping, and an over-the-air update can deliver JavaScript that calls
+into a module the installed binary does not contain — which crashes on launch,
+for every device that takes the update, with no way to recall it.
+
+`fingerprint` is the policy that makes that impossible rather than merely
+discouraged, and it does not work here. It hashes the native project including
+`node_modules`, and this is an npm workspace, so dependencies hoist to the
+repository root and the hash covers `../node_modules/**` — which does not
+resolve identically on EAS Build. The first Android build failed on it:
+
+```
+Runtime version mismatch
+  local 24c02f17d44e620326bbb1a446505da534096c4d
+  EAS   f53870102006c9f0d57fb5314fbc1ebc1a041b50
+```
+
+The entire difference was hoisted `@expo/config-plugins` files. A mismatch is
+fatal rather than a warning, so no build completed at all. Revisit the policy if
+the workspace layout changes.
+
+Either way, only JavaScript and assets ship over the air. Native changes need a
+new store build.
 
 **The app holds no provider credential of any kind.** It authenticates against
 the TexasRenters API and receives a token; nothing else. Database passwords, the
