@@ -126,24 +126,48 @@ say "Done. What is left, and why it is not automated"
 cat <<EOF
     1. Get the code onto the box, as ${DEPLOY_USER}:
          git clone <repo> ${DEPLOY_DIR}
-       There is no image registry yet — CI runs lint, typecheck, tests and
-       builds, but publishes nothing — so the VPS builds from source. If you
-       would rather it pulled, that needs a publish workflow first.
+       Only the compose files and .env.production are read from this checkout.
+       The images themselves come from the registry — nothing here is built.
 
-    2. Write ${DEPLOY_DIR}/.env.production from .env.production.example.
+    2. Authenticate to the registry, as ${DEPLOY_USER}:
+         docker login ghcr.io -u <github-user>
+       The repository is private, so its packages are too. A pull without this
+       fails with 'denied', which reads like the image does not exist rather
+       than like a login problem. The token needs read:packages.
+
+    3. Write ${DEPLOY_DIR}/.env.production from .env.production.example.
        Every secret is empty on purpose; the stack refuses to start rather than
        boot on a development value. Not scripted because this file is the one
        place the real credentials live.
 
-    3. Point DNS at $(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo '<this server>') with A records — not CNAMEs, which
+       Set IMAGE_TAG to the release being deployed — 1.0.0, with no leading v,
+       because docker/metadata-action strips it and IMAGE_TAG=v1.0.0 fails to
+       pull. It defaults to 'latest', which a release does publish, but 'latest'
+       moves under you at the next release and a server should be able to say
+       what it is running.
+
+    4. Point DNS at $(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo '<this server>') with A records — not CNAMEs, which
        cannot hold an IP — before starting, or Caddy cannot complete the
-       HTTP-01 challenge and no certificate is issued.
+       HTTP-01 challenge and no certificate is issued. Both WEB_HOST and
+       API_HOST need one.
 
-    4. Start it:
+       If the zone is on Cloudflare, both records must be DNS-only (grey
+       cloud). Proxying them terminates port 80 at Cloudflare, the challenge
+       never reaches this server, and the failure looks like a Caddy problem.
+
+    5. Start it:
          cd ${DEPLOY_DIR}
-         docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml up -d --build
+         docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml pull
+         docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml up -d
 
-    5. Create the first administrator, once:
+       Note there is no --build. CI publishes both images on release, so this
+       host only pulls; building here would compile the Next bundle on a box
+       provisioned to run it, which is what the swap check above exists to
+       survive. Never a bare 'docker compose up' — without the two -f flags it
+       loads the development overlay, publishes Postgres and forces
+       NODE_ENV=development.
+
+    6. Create the first administrator, once:
          docker compose --env-file .env.production -f compose.yaml -f compose.production.yaml run --rm bootstrap-admin
 
     Log out and back in before running docker as ${DEPLOY_USER}; group
