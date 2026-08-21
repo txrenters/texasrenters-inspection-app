@@ -8,6 +8,7 @@ import {
   InspectionVideoController,
 } from './inspection-video.controller';
 import { InspectionVideoService } from './inspection-video.service';
+import { StreamReconcileScheduler } from './stream-reconcile.scheduler';
 import { TechnicianModule } from '../technician/technician.module';
 
 /**
@@ -28,6 +29,10 @@ import { TechnicianModule } from '../technician/technician.module';
     CloudflareStreamService,
     CloudflareStreamWebhookGuard,
     ApiAuthGuard,
+    // The safety net for a webhook that never arrives. Registered here rather
+    // than left as an uncalled method — see the class docstring for what a
+    // lost delivery actually costs.
+    StreamReconcileScheduler,
   ],
   exports: [CloudflareStreamService, InspectionVideoService],
 })

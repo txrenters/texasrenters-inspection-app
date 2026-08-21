@@ -22,6 +22,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import type { Inspection } from '@/src/domain/models';
 import {
   InspectionUrgencyBadge,
@@ -177,6 +178,7 @@ function InspectionRow({ item }: { item: Inspection }) {
 }
 
 export default function InspectionsScreen() {
+  const tabBarInset = useTabBarInset();
   const theme = useThemeColors();
   const [filter, setFilter] = useState<InspectionFilterKey>('ALL');
   const [search, setSearch] = useState('');
@@ -205,7 +207,7 @@ export default function InspectionsScreen() {
       <FlatList
         data={rows}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
         showsVerticalScrollIndicator={false}
         // Half a screen of runway, so the next page is usually in hand before
         // the technician reaches the bottom.

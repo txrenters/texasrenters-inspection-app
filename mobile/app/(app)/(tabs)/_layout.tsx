@@ -1,3 +1,4 @@
+import * as Haptics from 'expo-haptics';
 import { Tabs } from 'expo-router';
 import {
   HomeIcon,
@@ -6,7 +7,9 @@ import {
   UploadCloudIcon,
   CogIcon,
 } from 'lucide-react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { useAssignedInspectionCount, useOpenEvidenceRequests } from '@/src/features/queries';
+import { TabBarBackground } from '@/src/components/ui/TabBarBackground';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
 
@@ -14,6 +17,24 @@ registerIcons(HomeIcon);
 registerIcons(ClipboardListIcon);
 registerIcons(UploadCloudIcon);
 registerIcons(CogIcon);
+
+/**
+ * Selection feedback on a tab change, iOS only.
+ *
+ * `selectionAsync` is the light tick Apple uses for a segmented control or a
+ * picker landing on a new value, which is exactly what changing tab is. It is
+ * deliberately not `impactAsync` — impact is for something arriving or
+ * completing, and the camera screen already uses it for capture milestones.
+ * Firing the heavier one here would make routine navigation feel more
+ * consequential than taking a photograph.
+ *
+ * Android is left alone: the platform does not tick on tab changes, and adding
+ * it reads as a rattle rather than as feedback.
+ */
+function tabPressFeedback() {
+  if (Platform.OS !== 'ios') return;
+  void Haptics.selectionAsync().catch(() => undefined);
+}
 
 export default function TabsLayout() {
   // The tab bar is React Navigation's, so it takes real colours rather than
@@ -35,26 +56,55 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
+        tabBarBackground: TabBarBackground,
         tabBarStyle: {
-          backgroundColor: theme.background,
+          // Absolute on iOS so content scrolls *under* the translucent bar,
+          // which is the whole point of the blur. Every tab screen pays for this
+          // by insetting its scroll container with `useBottomTabBarHeight()` —
+          // without that the last row of a list sits under the bar unreachable.
+          //
+          // Android keeps the bar in normal flow, where the platform expects an
+          // opaque navigation surface that content stops above.
+          ...Platform.select({
+            ios: { position: 'absolute' as const, backgroundColor: 'transparent' },
+            default: { backgroundColor: theme.background },
+          }),
+          // A hairline, not a 1px rule. On a 3x screen `hairlineWidth` is 0.33pt
+          // — the separator iOS actually draws. A full point reads as a drawn
+          // border, and next to system chrome it is visibly heavier than
+          // anything the OS puts on screen.
+          borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: theme.border,
-          paddingBottom: 4,
-          height: 56,
+          // Height and bottom padding are left to React Navigation, which
+          // derives them from the safe-area inset. The previous fixed
+          // `height: 56` + `paddingBottom: 4` ignored the home indicator, so on
+          // a notched device the labels sat inside the swipe region.
         },
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.mutedForeground,
         tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
+          // 10pt is the iOS tab label size. 11 with `600` weight was heavier and
+          // larger than any system tab bar, which is what made the bar read as
+          // an app's own control rather than as chrome.
+          fontSize: 10,
+          fontWeight: '500',
+          // iOS sets tab labels tight under the glyph.
+          marginBottom: Platform.OS === 'ios' ? 0 : 2,
         },
+        tabBarItemStyle: { paddingTop: 6 },
+      }}
+      screenListeners={{
+        tabPress: tabPressFeedback,
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Home',
+          // 25 rather than 22: the iOS tab glyph is 25pt, and at 22 the icons
+          // read as undersized against a system-weight label.
           tabBarIcon: ({ focused }) => (
-            <HomeIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={22} />
+            <HomeIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={25} />
           ),
         }}
       />
@@ -83,7 +133,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => (
             <ClipboardListIcon
               className={focused ? 'text-primary' : 'text-muted-foreground'}
-              size={22}
+              size={25}
             />
           ),
         }}
@@ -113,10 +163,7 @@ export default function TabsLayout() {
               ? `Requests, ${requestCount} area${requestCount === 1 ? '' : 's'} the office is waiting on`
               : 'Requests',
           tabBarIcon: ({ focused }) => (
-            <InboxIcon
-              className={focused ? 'text-primary' : 'text-muted-foreground'}
-              size={22}
-            />
+            <InboxIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={25} />
           ),
         }}
       />
@@ -127,7 +174,7 @@ export default function TabsLayout() {
           tabBarIcon: ({ focused }) => (
             <UploadCloudIcon
               className={focused ? 'text-primary' : 'text-muted-foreground'}
-              size={22}
+              size={25}
             />
           ),
         }}
@@ -137,7 +184,7 @@ export default function TabsLayout() {
         options={{
           title: 'Settings',
           tabBarIcon: ({ focused }) => (
-            <CogIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={22} />
+            <CogIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={25} />
           ),
         }}
       />

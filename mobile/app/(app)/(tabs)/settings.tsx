@@ -19,6 +19,7 @@ import {
 import { Alert, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import { useCurrentUser, useSignOut, useUploads } from '@/src/features/queries';
 import { clearLocalRecordings } from '@/src/media/local-recordings';
 import { clearLocalSnapshots } from '@/src/media/local-snapshots';
@@ -45,6 +46,7 @@ registerIcons(
 );
 
 export default function SettingsScreen() {
+  const tabBarInset = useTabBarInset();
   const user = useCurrentUser();
   const uploads = useUploads();
   const signOut = useSignOut();
@@ -147,7 +149,7 @@ export default function SettingsScreen() {
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
         showsVerticalScrollIndicator={false}
       >
         <ScreenHeader title="Settings" subtitle="Configure your inspection workflow" />

@@ -142,3 +142,14 @@ graphify-out/
 
 # Loose Hostinger MCP config: contains a live API token inline
 hostingermcp.json
+
+# Expo writes a bare {"expo": {}} here when an `expo` or `eas` command is run
+# from the repository root instead of from mobile/. It is not configuration —
+# the mobile app is configured by mobile/app.config.ts — and its presence makes
+# the root register as a second, phantom Expo project: `expo install` run inside
+# mobile/ then resolves the project root upward and writes dependencies to the
+# root package.json, which is how expo-updates landed in the wrong workspace.
+#
+# Ignored so it stops reappearing in `git status`. Deleting it is still the fix;
+# ignoring only stops it being committed by mistake.
+/app.json

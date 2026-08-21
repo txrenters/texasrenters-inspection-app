@@ -17,6 +17,7 @@ import {
 import { FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import type { UploadItem } from '@/src/domain/models';
 import { useUploadActions, useUploads } from '@/src/features/queries';
 import { useLiveUploadProgress } from '@/src/features/useLiveUploadProgress';
@@ -231,6 +232,7 @@ function UploadRow({
 }
 
 export default function UploadsScreen() {
+  const tabBarInset = useTabBarInset();
   const uploads = useUploads();
   const pull = usePullToRefresh([uploads.refetch]);
   const actions = useUploadActions();
@@ -275,7 +277,7 @@ export default function UploadsScreen() {
       <FlatList
         data={sorted}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
