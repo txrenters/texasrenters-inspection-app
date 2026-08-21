@@ -32,7 +32,7 @@ describe('technician push delivery', () => {
    * acting on.
    */
   it('pushes every event that puts work back in a technician’s hands', async () => {
-    for (const kind of ['ASSIGNED', 'REOPENED', 'EVIDENCE_REQUESTED']) {
+    for (const kind of ['ASSIGNED', 'REOPENED', 'EVIDENCE_REQUESTED', 'UPDATED']) {
       const fetchMock = respondWith({ data: [{ status: 'ok' }] });
       const { service } = build();
 
@@ -49,7 +49,13 @@ describe('technician push delivery', () => {
   it('stays quiet for queue churn', async () => {
     // These still reach an open app over the socket. Pushing every one is how
     // people learn to swipe a notification away without reading it.
-    for (const kind of ['UPDATED', 'REASSIGNED', 'UNASSIGNED', 'CANCELLED']) {
+    //
+    // UPDATED used to sit here and now pushes: it is only ever published when
+    // the office adds an area to an inspection a technician is already
+    // carrying, which is more rooms to walk rather than churn — and a
+    // technician who has left the property needs to know before they drive
+    // away, not at their next poll.
+    for (const kind of ['REASSIGNED', 'UNASSIGNED', 'CANCELLED']) {
       const fetchMock = respondWith({ data: [] });
       const { prisma, service } = build();
 

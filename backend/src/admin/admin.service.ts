@@ -49,6 +49,7 @@ import type {
   InspectionTbdDto,
   InspectionUnderReviewDto,
   LeaseListQueryDto,
+  AddInspectionAreasDto,
   MergeInspectionAreasDto,
   PaginationDto,
   PortfolioListQueryDto,
@@ -1919,6 +1920,183 @@ export class AdminService {
       mediaCount: area._count.media,
       photoCount: area._count.photos,
     }));
+  }
+
+  /**
+   * Adds approved areas to an inspection that is already under way.
+   *
+   * The area list an inspection covers is a snapshot: InspectionArea rows are
+   * created once, at creation, from the property's approved layout. That split
+   * is deliberate — the same room is assessed again at every visit, and last
+   * quarter's answers must not appear as this quarter's — but it left no way to
+   * correct a room the office notices is missing after a technician is already
+   * carrying the job. Editing the property's layout does not reach an
+   * inspection in the field, so the only routes were to cancel and rebook, or
+   * to ask the technician to add it from the handset and approve it afterwards.
+   *
+   * APPROVED areas only. A manually created area is DRAFT until an
+   * administrator approves the permanent layout, and accepting one here would
+   * approve it as a side effect of a per-inspection decision — a different, and
+   * larger, claim than the one being made.
+   *
+   * Eligibility is resolved exactly as it is at creation: the unit's own
+   * approved areas when it has any, the building-level layout otherwise. Doing
+   * it differently here is how an inspection ends up holding an area from a
+   * layout it was never built against.
+   *
+   * MOVE_IN and MOVE_OUT are compared area by area against their baseline, so
+   * an area added to one end has no counterpart at the other. That is allowed
+   * rather than refused — a room nobody inspected is the worse outcome — but it
+   * is recorded in the audit metadata, and the console warns before asking.
+   */
+  async addInspectionAreas(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    input: AddInspectionAreasDto,
+  ) {
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { id: inspectionId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        status: true,
+        inspectionType: true,
+        finalizedAt: true,
+        propertywareBuildingId: true,
+        propertywareUnitId: true,
+      },
+    });
+    if (!inspection)
+      throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
+
+    /**
+     * Finalization freezes the evidence permanently, and an empty area added
+     * after the fact would reopen a settled record — the report has been issued
+     * and may already have been charged against a deposit.
+     */
+    if (inspection.finalizedAt)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'This inspection has been finalized. Its areas can no longer be changed.',
+      );
+    if (
+      inspection.status === InspectionStatus.CANCELLED ||
+      inspection.status === InspectionStatus.COMPLETED
+    )
+      throw new ApplicationError(
+        409,
+        'INSPECTION_NOT_EDITABLE',
+        'A completed or cancelled inspection cannot take new areas.',
+      );
+
+    /**
+     * The building is nullable on Inspection, and without one there is no
+     * approved layout to choose from — so this is refused rather than narrowed
+     * to an empty eligible set, which would report every id as invalid and send
+     * the caller looking for a permissions problem.
+     */
+    const propertyId = inspection.propertywareBuildingId;
+    if (!propertyId)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_HAS_NO_PROPERTY',
+        'This inspection is not linked to a property, so it has no approved areas to add.',
+      );
+
+    const requestedIds = [...new Set(input.propertyAreaIds)];
+    const areaFilter = {
+      propertyId,
+      status: PropertyAreaStatus.APPROVED,
+      archivedAt: null,
+    };
+    const unitAreas = inspection.propertywareUnitId
+      ? await this.prisma.propertyArea.findMany({
+          where: { ...areaFilter, unitId: inspection.propertywareUnitId },
+          select: { id: true, name: true },
+        })
+      : [];
+    const eligible = unitAreas.length
+      ? unitAreas
+      : await this.prisma.propertyArea.findMany({
+          where: { ...areaFilter, unitId: null },
+          select: { id: true, name: true },
+        });
+    const eligibleById = new Map(eligible.map((area) => [area.id, area]));
+
+    /**
+     * A rejected id is refused rather than quietly dropped. "Not approved yet"
+     * and "belongs to another property" are different mistakes with the same
+     * symptom, and silently adding three of four areas produces an inspection
+     * missing a room nobody notices until a technician is standing in it.
+     */
+    const unknown = requestedIds.filter((id) => !eligibleById.has(id));
+    if (unknown.length)
+      throw new ApplicationError(
+        422,
+        'INVALID_AREA_SELECTION',
+        'Select only approved areas belonging to this property. An area that is still a draft must be approved first.',
+      );
+
+    const existingAreas = await this.prisma.inspectionArea.findMany({
+      where: { inspectionId, propertyAreaId: { in: requestedIds } },
+      select: { propertyAreaId: true },
+    });
+    const alreadyPresent = new Set(existingAreas.map((area) => area.propertyAreaId));
+    const toAdd = requestedIds.filter((id) => !alreadyPresent.has(id));
+    if (!toAdd.length)
+      throw new ApplicationError(
+        409,
+        'AREAS_ALREADY_PRESENT',
+        'Every area selected is already part of this inspection.',
+      );
+
+    // Ids, not a count: each of these technicians has to be told, and the count
+    // alone cannot address them.
+    const currentAssignees = await this.prisma.inspectionAssignment.findMany({
+      where: { inspectionId, isCurrent: true },
+      select: { technicianId: true },
+    });
+    const comparisonAffected =
+      inspection.inspectionType === InspectionType.MOVE_IN ||
+      inspection.inspectionType === InspectionType.MOVE_OUT;
+
+    await this.prisma.$transaction(async (tx) => {
+      // skipDuplicates rather than a second existence check: the unique index on
+      // (inspectionId, propertyAreaId) is the real guard, and two administrators
+      // adding the same missed room at once should produce one area and no error.
+      await tx.inspectionArea.createMany({
+        data: toAdd.map((propertyAreaId) => ({ inspectionId, propertyAreaId })),
+        skipDuplicates: true,
+      });
+      await this.audit(tx, user, 'INSPECTION_AREAS_ADDED', inspectionId, {
+        propertyAreaIds: toAdd,
+        // Names too: a property area can be renamed or archived later, and an
+        // audit row of bare uuids cannot be read back into what was decided.
+        areaNames: toAdd.map((id) => eligibleById.get(id)?.name ?? null),
+        inspectionType: inspection.inspectionType,
+        fromStatus: inspection.status,
+        // The baseline comparison will show these as unmatched. Worth stating
+        // here rather than leaving someone to infer it from the report.
+        comparisonAffected,
+        notifiedTechnicians: currentAssignees.length,
+      });
+    }, ADMIN_TRANSACTION_OPTIONS);
+
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    /**
+     * Tell the technician, in real time.
+     *
+     * Without this the area appears on their next sixty-second poll with no
+     * signal that anything changed — and if they have already left the property,
+     * a poll is far too late. UPDATED was declared as an event kind from the
+     * start and never published by anything; this is what it was for.
+     */
+    for (const assignee of currentAssignees)
+      this.technicianEvents?.publish(assignee.technicianId, inspectionId, 'UPDATED');
+    return this.inspection(user, inspectionId);
   }
 
   /**

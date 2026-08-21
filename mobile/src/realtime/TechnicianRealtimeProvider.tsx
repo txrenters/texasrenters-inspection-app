@@ -158,9 +158,19 @@ async function registerRemotePushDevice() {
 /**
  * Copy for the events a technician has to be told about immediately.
  *
- * Only kinds that put work back in their hands. UPDATED and the assignment
- * churn kinds refresh the queue silently — a notification for every edit the
- * office makes is how people learn to ignore them.
+ * Only kinds that put work back in their hands. The assignment churn kinds
+ * refresh the queue silently — a notification for every edit the office makes is
+ * how people learn to ignore them.
+ *
+ * UPDATED is on this list rather than among them, because the server only ever
+ * publishes it when the office adds an area to an inspection this technician is
+ * already carrying. That is more rooms to walk, and someone who has finished and
+ * left needs to hear about it before they drive away.
+ *
+ * Mirrors MobilePushService.COPY on the server, which fires instead of this
+ * whenever a push token is registered. The two lists must agree: a kind here and
+ * not there is silent for anyone with the app closed, and the reverse is a
+ * technician notified twice for one event.
  */
 const NOTIFIABLE: Partial<Record<string, { title: string; body: string }>> = {
   ASSIGNED: {
@@ -174,6 +184,10 @@ const NOTIFIABLE: Partial<Record<string, { title: string; body: string }>> = {
   EVIDENCE_REQUESTED: {
     title: 'More evidence requested',
     body: 'The office asked for more evidence on one of your areas.',
+  },
+  UPDATED: {
+    title: 'Inspection updated',
+    body: 'The office added an area to one of your inspections.',
   },
 };
 

@@ -62,6 +62,7 @@ import {
   InspectionTbdDto,
   InspectionUnderReviewDto,
   LeaseListQueryDto,
+  AddInspectionAreasDto,
   MergeInspectionAreasDto,
   PetCandidateReviewDto,
   PortfolioListQueryDto,
@@ -566,6 +567,23 @@ export class AdminController {
     @Body() body: AdminChecklistAssessmentDto,
   ) {
     return this.areaEvidence.recordChecklistItem(request.user, inspectionId, areaId, itemId, body);
+  }
+  /**
+   * Adds approved property areas to an inspection already under way.
+   *
+   * `inspections:manage`, the same permission as assigning and reopening: this
+   * changes what a technician is expected to walk, which is the same kind of
+   * decision. `inspections:read` would let anyone who can view the queue add
+   * work to someone else's day.
+   */
+  @Post('inspections/:inspectionId/areas')
+  @RequirePermissions('inspections:manage')
+  addInspectionAreas(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: AddInspectionAreasDto,
+  ) {
+    return this.service.addInspectionAreas(request.user, id, body);
   }
   @Post('inspections/:inspectionId/merge-areas')
   @RequirePermissions('inspections:manage')

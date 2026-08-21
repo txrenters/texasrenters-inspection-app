@@ -181,6 +181,25 @@ export class ReopenInspectionDto {
 }
 
 /** Merge a duplicate inspection area into another within the same inspection. */
+/**
+ * Areas to add to an inspection that is already under way.
+ *
+ * Ids of *property* areas, not inspection areas: the caller is choosing from the
+ * property's approved layout, and the InspectionArea row is what this creates.
+ *
+ * A list rather than one id, because the office discovers a missed room and a
+ * missed hallway in the same breath, and two requests would mean two
+ * notifications on the technician's handset for one decision.
+ */
+export class AddInspectionAreasDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  // The whole layout of a large property, and nothing near a runaway payload.
+  @ArrayMaxSize(50)
+  @IsUUID('4', { each: true })
+  propertyAreaIds!: string[];
+}
+
 export class MergeInspectionAreasDto {
   @IsUUID() sourceAreaId!: string;
   @IsUUID() targetAreaId!: string;
