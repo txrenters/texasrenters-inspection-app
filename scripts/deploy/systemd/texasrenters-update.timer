@@ -1,0 +1,23 @@
+[Unit]
+Description=Check for a new TexasRenters release every 15 minutes
+Documentation=file:///opt/texasrenters/scripts/deploy/auto-update.sh
+
+[Timer]
+# Fifteen minutes is the gap between cutting a release and it being live. Most
+# runs do nothing at all: the script compares the running tag to the newest
+# release and exits, which is one API call.
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+# Without this every check lands on the quarter hour. It costs nothing to
+# scatter them, and it keeps a deploy from colliding with anything else on the
+# host that also runs on a round number.
+RandomizedDelaySec=120
+
+# If the host was off when a run was due, run once after boot rather than
+# skipping the window. A release published overnight should not wait for the
+# next quarter hour.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

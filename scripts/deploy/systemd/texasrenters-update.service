@@ -1,0 +1,45 @@
+[Unit]
+Description=Deploy the newest TexasRenters release, rolling back if it is unhealthy
+Documentation=file:///opt/texasrenters/scripts/deploy/auto-update.sh
+# Docker has to be up before this means anything. Without these the unit runs at
+# boot, fails to reach the daemon, and reports a failure that looks like a bad
+# release rather than a start-up ordering problem.
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# GITHUB_TOKEN lives here, not in .env.production. That file is the
+# application's, is read by every container, and is mounted into them; a
+# registry credential belongs to the host that deploys, not to the processes
+# being deployed. Create it root-owned and mode 600:
+#
+#   install -d -m 700 /etc/texasrenters
+#   printf 'GITHUB_TOKEN=ghp_xxx\n' > /etc/texasrenters/update.env
+#   chmod 600 /etc/texasrenters/update.env
+#
+# The token needs `read:packages` to pull, and `repo` to read releases from a
+# private repository.
+EnvironmentFile=/etc/texasrenters/update.env
+
+ExecStart=/opt/texasrenters/scripts/deploy/auto-update.sh
+
+# The script exits 1 when it rolled back successfully — the deployment failed
+# but the host is serving again. That is a real outcome worth seeing in
+# `systemctl status`, so it is deliberately not masked with SuccessExitStatus.
+
+# A deploy that pulls two images, restarts the stack and then waits up to four
+# minutes for readiness needs room. The timeout is above that ceiling so a slow
+# but succeeding deploy is never killed halfway.
+TimeoutStartSec=900
+
+# Journal only. The script prints timestamps itself and never echoes the
+# environment file, so nothing here should carry a secret — but a deploy log is
+# still not something to leave in a world-readable file.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
