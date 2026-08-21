@@ -139,3 +139,6 @@ skills-lock.json
 # is already tracked here. The merge driver named in .gitattributes only applies
 # if this is ever tracked deliberately.
 graphify-out/
+
+# Loose Hostinger MCP config: contains a live API token inline
+hostingermcp.json
