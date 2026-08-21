@@ -3,6 +3,7 @@ import { InboxIcon } from 'lucide-react-native';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { useOpenEvidenceRequests } from '@/src/features/queries';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
@@ -19,6 +20,7 @@ registerIcons(InboxIcon);
  * Kept current by the realtime gateway, not by opening this screen.
  */
 export default function RequestsScreen() {
+  const tabBarInset = useTabBarInset();
   const requests = useOpenEvidenceRequests();
   const pull = usePullToRefresh([requests.refetch]);
   const items = requests.data ?? [];
@@ -39,7 +41,7 @@ export default function RequestsScreen() {
       ) : (
         <ScrollView
           className="flex-1"
-          contentContainerStyle={{ paddingBottom: 40 }}
+          contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
           refreshControl={
             <RefreshControl onRefresh={pull.onRefresh} refreshing={pull.refreshing} />
           }

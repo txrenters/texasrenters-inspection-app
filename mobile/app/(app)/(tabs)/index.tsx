@@ -9,6 +9,7 @@ import {
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useTabBarInset } from '@/src/lib/tab-bar-inset';
 import type { Inspection } from '@/src/domain/models';
 import {
   InspectionUrgencyBadge,
@@ -87,6 +88,7 @@ function AssignedInspectionRow({ inspection }: { inspection: Inspection }) {
 }
 
 export default function HomeScreen() {
+  const tabBarInset = useTabBarInset();
   const dashboard = useDashboard();
   // Bound to a user-initiated pull only. Wiring this to `isRefetching` made the
   // spinner appear on its own every 60s, when the assignment poll ran.
@@ -127,7 +129,7 @@ export default function HomeScreen() {
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={{ paddingBottom: tabBarInset + 24 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
