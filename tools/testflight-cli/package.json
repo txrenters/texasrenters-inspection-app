@@ -1,0 +1,12 @@
+{
+  "name": "@texasrenters/testflight-cli",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-platform TestFlight launcher for the TexasRenters mobile app",
+  "bin": {
+    "testflight": "index.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

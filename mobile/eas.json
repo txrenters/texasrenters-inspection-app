@@ -44,6 +44,12 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "appdev@texasrenters.com",
+        "appleTeamId": "6X66FCCP42",
+        "ascAppId": "6802440141"
+      }
+    }
   }
 }
