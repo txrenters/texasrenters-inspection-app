@@ -1,7 +1,7 @@
 'use client';
 
 import type { AdminInspection } from '@texasrenters/shared';
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
 import { RequestEvidenceDialog } from '@/components/evidence-request/RequestEvidenceDialog';
 import { StatusBadge } from '@/components/status-badge';
@@ -17,6 +17,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DatePicker } from '@/components/ui/date-picker';
 import {
   Dialog,
@@ -38,7 +39,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { usePermissions } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/format';
-import { useAdminMutations, useEvidenceRequests } from '@/lib/queries';
+import { useAdminMutations, useEvidenceRequests, usePropertyAreas } from '@/lib/queries';
 // Type-only: the merge dialog is handed areas already fetched by its caller.
 import type { useInspectionAreas } from '@/lib/queries';
 
@@ -443,6 +444,151 @@ function WorkflowActionDialog({
  * reviewer is actually looking at rather than in a second list further down the
  * page that existed only to host this one button.
  */
+/**
+ * Adds an approved area to an inspection that is already under way.
+ *
+ * The area list is a snapshot taken when the inspection was created, so editing
+ * the property's layout does not reach it — which is exactly the surprise this
+ * dialog exists to remove. It offers the property's approved areas that this
+ * inspection does not already hold, and nothing else: a draft area has to be
+ * approved on the property first, because adding it here would approve the
+ * permanent layout as a side effect of a per-inspection decision.
+ *
+ * The eligible set mirrors the server's own resolution — the unit's approved
+ * areas when it has any, the building-level layout otherwise — computed over
+ * every approved area *before* subtracting the ones already present. Filtering
+ * first would flip a fully-covered unit back to the building-level list and
+ * offer areas the server then refuses.
+ */
+export function AddAreasDialog({
+  inspectionId,
+  propertyId,
+  unitId,
+  inspectionType,
+  existingPropertyAreaIds,
+  onClose,
+}: {
+  inspectionId: string;
+  propertyId: string;
+  unitId: string | null;
+  inspectionType: AdminInspection['inspectionType'];
+  existingPropertyAreaIds: string[];
+  onClose: () => void;
+}) {
+  const areas = usePropertyAreas(propertyId);
+  const mutation = useAdminMutations().addInspectionAreas;
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const candidates = useMemo(() => {
+    const approved = (areas.data ?? []).filter((area) => area.status === 'APPROVED');
+    const scope = unitId
+      ? approved.filter((area) => area.unitId === unitId)
+      : ([] as typeof approved);
+    const eligible = scope.length ? scope : approved.filter((area) => !area.unitId);
+    const present = new Set(existingPropertyAreaIds);
+    return eligible
+      .filter((area) => !present.has(area.id))
+      .sort((a, b) => a.inspectionOrder - b.inspectionOrder);
+  }, [areas.data, existingPropertyAreaIds, unitId]);
+
+  /**
+   * Move-in and move-out are compared area by area against their baseline, so
+   * an area added to one end has no counterpart at the other. Said before the
+   * decision rather than after it — the server allows this deliberately, and
+   * finding out from a report that does not line up is the outcome this avoids.
+   */
+  const breaksComparison = inspectionType === 'MOVE_IN' || inspectionType === 'MOVE_OUT';
+
+  function toggle(id: string) {
+    setSelected((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    );
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!selected.length) return;
+    try {
+      await mutation.mutateAsync({ id: inspectionId, propertyAreaIds: selected });
+      onClose();
+    } catch {
+      // The mutation surfaces the sanitized API error inline.
+    }
+  }
+
+  return (
+    <AlertDialog onOpenChange={(next) => (next ? undefined : onClose())} open>
+      <AlertDialogContent className="sm:max-w-lg">
+        <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Add areas to this inspection</AlertDialogTitle>
+            <AlertDialogDescription>
+              The assigned technician is notified immediately, and the areas appear on their
+              handset without a reload.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {breaksComparison ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                This is a {inspectionType === 'MOVE_IN' ? 'move-in' : 'move-out'} inspection. An
+                area added now has no counterpart in the inspection it is compared against, and
+                will show as unmatched in the comparison.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {areas.isPending ? (
+            <p className="text-muted-foreground text-sm">Loading the property&apos;s areas…</p>
+          ) : candidates.length ? (
+            <div className="grid max-h-72 gap-1 overflow-y-auto">
+              {candidates.map((area) => (
+                <label
+                  className="hover:bg-muted/50 flex items-center gap-3 rounded-md px-2 py-2 text-sm"
+                  key={area.id}
+                >
+                  <Checkbox
+                    checked={selected.includes(area.id)}
+                    onCheckedChange={() => toggle(area.id)}
+                  />
+                  <span className="min-w-0">
+                    {area.name}
+                    {area.floor?.name ? (
+                      <span className="text-muted-foreground"> · {area.floor.name}</span>
+                    ) : null}
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              Every approved area of this property is already part of this inspection. A newly
+              added area is a draft until it is approved on the property, and only approved areas
+              can be inspected.
+            </p>
+          )}
+
+          {mutation.error ? (
+            <Alert variant="destructive">
+              <AlertDescription>{mutation.error.message}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={onClose} type="button">
+              Cancel
+            </AlertDialogCancel>
+            <Button disabled={!selected.length || mutation.isPending} type="submit">
+              {mutation.isPending ? <Spinner /> : null}
+              Add {selected.length || ''} {selected.length === 1 ? 'area' : 'areas'}
+            </Button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 export function MergeAreasDialog({
   inspectionId,
   areas,

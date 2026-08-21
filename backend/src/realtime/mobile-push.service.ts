@@ -69,6 +69,18 @@ export class MobilePushService {
       body: 'The office asked for more evidence on one of your areas.',
       channelId: 'assignments',
     },
+    /**
+     * An area was added to an inspection the technician is already carrying.
+     *
+     * This qualifies under the rule above — it is not queue churn, it is more
+     * rooms to walk, and a technician who has already left the property needs to
+     * know before they drive away rather than at their next sixty-second poll.
+     */
+    UPDATED: {
+      title: 'Inspection updated',
+      body: 'The office added an area to one of your inspections.',
+      channelId: 'assignments',
+    },
   };
 
   /**

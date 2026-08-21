@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AreaChecklistDialog } from '@/components/area-checklist/AreaChecklistDialog';
-import { MergeAreasDialog } from '@/components/inspection-workflow';
+import { AddAreasDialog, MergeAreasDialog } from '@/components/inspection-workflow';
 import { ErrorState, PageSkeleton } from '@/components/states';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { usePermissions } from '@/lib/auth';
-import { useAreaEvidenceSummary, useInspectionAreas } from '@/lib/queries';
+import { useAreaEvidenceSummary, useInspection, useInspectionAreas } from '@/lib/queries';
 import { cn } from '@/lib/utils';
 
 import { AreaDetailPanel } from './AreaDetailPanel';
@@ -99,6 +99,11 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
   const manageableAreas = useInspectionAreas(inspectionId).data ?? [];
   const canMerge = usePermissions().has('inspections:manage');
   const [merging, setMerging] = useState(false);
+  // The property and unit the add dialog chooses areas from, and the type it
+  // warns about. Already cached by the page around this card, so this is a read
+  // of the same query rather than a second request.
+  const inspection = useInspection(inspectionId).data;
+  const [addingAreas, setAddingAreas] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
   // The open area lives in the URL so refresh restores it, Back steps through
@@ -186,6 +191,19 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
               down whose only unique capability was this button — the rest of it
               repeated the navigator below, so the page offered two lists and no
               way to tell which one to use. */}
+          {/* Adding an area is only possible while the inspection can still
+              change: finalization freezes the evidence, and a completed or
+              cancelled one is a record rather than work in hand. The server
+              refuses these too — this just does not offer what it would. */}
+          {canMerge &&
+          inspection?.propertywareBuilding?.id &&
+          !inspection.finalizedAt &&
+          inspection.status !== 'COMPLETED' &&
+          inspection.status !== 'CANCELLED' ? (
+            <Button onClick={() => setAddingAreas(true)} size="sm" type="button" variant="outline">
+              Add area
+            </Button>
+          ) : null}
           {canMerge && manageableAreas.length >= 2 ? (
             <Button onClick={() => setMerging(true)} size="sm" type="button" variant="outline">
               Merge duplicates
@@ -363,6 +381,17 @@ export function AreaEvidenceWorkspace({ inspectionId }: { inspectionId: string }
           </div>
         </div>
       </CardContent>
+
+      {addingAreas && inspection?.propertywareBuilding?.id ? (
+        <AddAreasDialog
+          existingPropertyAreaIds={manageableAreas.map((area) => area.propertyAreaId)}
+          inspectionId={inspectionId}
+          inspectionType={inspection.inspectionType}
+          onClose={() => setAddingAreas(false)}
+          propertyId={inspection.propertywareBuilding.id}
+          unitId={inspection.propertywareUnit?.id ?? null}
+        />
+      ) : null}
 
       {merging && manageableAreas.length ? (
         <MergeAreasDialog

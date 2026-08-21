@@ -1473,6 +1473,24 @@ export function useAdminMutations() {
         });
       },
     }),
+    /**
+     * Adds approved property areas to an inspection already under way.
+     *
+     * `refreshWorkflow` covers the console's own views. The technician's handset
+     * is told by the backend over the realtime socket rather than from here — a
+     * client that has just made a change is the one client guaranteed to be
+     * looking, and the person who needs to know is somewhere else entirely.
+     */
+    addInspectionAreas: useMutation({
+      mutationFn: ({ id, propertyAreaIds }: { id: string; propertyAreaIds: string[] }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/areas`, {
+          method: 'POST',
+          body: JSON.stringify({ propertyAreaIds }),
+        }),
+      onSuccess: (_data, variables) => {
+        refreshWorkflow(variables.id);
+      },
+    }),
     mergeInspectionAreas: useMutation({
       mutationFn: ({
         id,
