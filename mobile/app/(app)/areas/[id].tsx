@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
-  ArrowLeftIcon,
   CameraIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -23,6 +22,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
@@ -53,7 +53,6 @@ import { useThemeColors } from '@/src/lib/theme-colors';
 import { Button } from '@/src/components/ui';
 
 registerIcons(
-  ArrowLeftIcon,
   CameraIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -199,7 +198,7 @@ export default function AreaDetailScreen() {
             hitSlop={8}
             onPress={() => goBack()}
           >
-            <ArrowLeftIcon size={18} className="text-foreground" />
+            <BackGlyph size={18} className="text-foreground" />
           </Pressable>
           <View className="min-w-0 flex-1">
             <View className="flex-row items-center gap-2">

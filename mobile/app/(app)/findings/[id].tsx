@@ -1,7 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
-  ArrowLeftIcon,
   ClockIcon,
   EyeIcon,
   HistoryIcon,
@@ -12,6 +11,7 @@ import {
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
@@ -30,7 +30,6 @@ import {
 
 registerIcons(
   AlertTriangleIcon,
-  ArrowLeftIcon,
   ClockIcon,
   EyeIcon,
   HistoryIcon,
@@ -146,7 +145,7 @@ export default function FindingDetailScreen() {
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
             onPress={() => goBack()}
           >
-            <ArrowLeftIcon size={18} className="text-foreground" />
+            <BackGlyph size={18} className="text-foreground" />
           </Pressable>
           <View className="min-w-0 flex-1">
             <Text className="text-lg font-bold text-foreground" numberOfLines={1}>

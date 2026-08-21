@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
-  ArrowLeftIcon,
   CameraIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -17,6 +16,7 @@ import {
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
@@ -40,7 +40,6 @@ import {
 
 registerIcons(
   AlertTriangleIcon,
-  ArrowLeftIcon,
   CameraIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
@@ -222,7 +221,7 @@ export default function InspectionOverviewScreen() {
             hitSlop={8}
             onPress={() => goBack()}
           >
-            <ArrowLeftIcon size={18} className="text-foreground" />
+            <BackGlyph size={18} className="text-foreground" />
           </Pressable>
           <View className="min-w-0 flex-1">
             <Text numberOfLines={1} className="text-lg font-bold text-foreground">

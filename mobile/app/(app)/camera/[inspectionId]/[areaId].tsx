@@ -9,7 +9,6 @@ import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
-  ArrowLeftIcon,
   CameraIcon,
   FocusIcon,
   ImageIcon,
@@ -30,6 +29,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
 import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
@@ -64,7 +64,6 @@ import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
-  ArrowLeftIcon,
   CameraIcon,
   FocusIcon,
   ImageIcon,
@@ -643,7 +642,7 @@ export default function RoomCameraScreen() {
             hitSlop={8}
             onPress={() => (recording ? stopRecording() : goBack())}
           >
-            <ArrowLeftIcon size={21} className="text-white" />
+            <BackGlyph size={21} className="text-white" />
           </Pressable>
           <View className="min-w-0 flex-1">
             <Text numberOfLines={1} className="text-xl font-bold text-white">

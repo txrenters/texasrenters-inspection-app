@@ -1,17 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { ArrowLeftIcon, RotateCwIcon } from 'lucide-react-native';
+import { RotateCwIcon } from 'lucide-react-native';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import { environment } from '@/src/config/environment';
 import { registerIcons } from '@/src/lib/icons';
 import { resolveMobilePlayback } from '@/src/media/playback-source';
 import { repositories } from '@/src/repositories';
 
-registerIcons(ArrowLeftIcon, RotateCwIcon);
+registerIcons(RotateCwIcon);
 
 /**
  * Plays one uploaded recording.
@@ -62,7 +63,7 @@ export default function PlaybackScreen() {
           hitSlop={8}
           onPress={() => goBack()}
         >
-          <ArrowLeftIcon size={18} className="text-foreground" />
+          <BackGlyph size={18} className="text-foreground" />
         </Pressable>
         <Text className="min-w-0 flex-1 text-lg font-bold text-foreground" numberOfLines={1}>
           {title || 'Recording'}

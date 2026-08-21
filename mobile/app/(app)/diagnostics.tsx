@@ -4,7 +4,6 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import {
   AlertTriangleIcon,
-  ArrowLeftIcon,
   CheckCircle2Icon,
   ClipboardCopyIcon,
   Clock3Icon,
@@ -19,6 +18,7 @@ import {
 import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import { environment } from '@/src/config/environment';
 import { useUploads } from '@/src/features/queries';
@@ -31,7 +31,6 @@ import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
   AlertTriangleIcon,
-  ArrowLeftIcon,
   CheckCircle2Icon,
   ClipboardCopyIcon,
   Clock3Icon,
@@ -176,7 +175,7 @@ export default function DiagnosticsScreen() {
             className="h-9 w-9 items-center justify-center rounded-full bg-card active:scale-95"
             onPress={() => goBack()}
           >
-            <ArrowLeftIcon size={18} className="text-foreground" />
+            <BackGlyph size={18} className="text-foreground" />
           </Pressable>
           <View className="min-w-0 flex-1">
             <Text className="text-lg font-bold text-foreground">Diagnostics</Text>
