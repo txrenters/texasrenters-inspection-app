@@ -81,7 +81,8 @@
     "shared",
     "backend",
     "web",
-    "mobile"
+    "mobile",
+    "tools/testflight-cli"
   ],
   "allowScripts": {
     "prisma@6.19.0": true,

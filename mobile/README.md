@@ -54,6 +54,17 @@ set, for a fork pointing at a different project.
 Confirm the config resolves before building: `npx expo config --json` should
 report both `extra.eas.projectId` and `updates.url`.
 
+From `mobile`, build the production iOS binary and submit it to TestFlight with:
+
+```bash
+npx testflight
+```
+
+The repository supplies this command because Expo's published
+`testflight@1.0.4` wrapper attempts to spawn `npx` directly, which fails against
+the `npx.cmd` shim on Windows. The local launcher runs the equivalent supported
+EAS command with the `production` build and submit profiles.
+
 ### Over-the-air updates
 
 `expo-updates` is installed and both shipping profiles carry a channel —
