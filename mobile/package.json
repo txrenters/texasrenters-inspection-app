@@ -22,7 +22,9 @@
     "build:preview": "eas build -p all --profile preview",
     "build:production": "eas build -p all --profile production",
     "submit": "eas submit",
-    "update": "eas update",
+    "update": "eas update --channel production",
+    "update:preview": "eas update --channel preview",
+    "update:check": "eas update:list --branch production --limit 5",
     "export:web": "expo export -p web"
   },
   "dependencies": {
