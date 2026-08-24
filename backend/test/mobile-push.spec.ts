@@ -1,5 +1,7 @@
 import 'reflect-metadata';
 
+import { Logger } from '@nestjs/common';
+
 import { MobilePushService } from '../src/realtime/mobile-push.service';
 
 const TECH = '10000000-0000-4000-8000-000000000004';
@@ -84,10 +86,7 @@ describe('technician push delivery', () => {
      * notification never being sent.
      */
     respondWith({
-      data: [
-        { status: 'ok' },
-        { status: 'error', details: { error: 'DeviceNotRegistered' } },
-      ],
+      data: [{ status: 'ok' }, { status: 'error', details: { error: 'DeviceNotRegistered' } }],
     });
     const { prisma, service } = build([
       { expoPushToken: 'ExponentPushToken[live]' },
@@ -113,6 +112,37 @@ describe('technician push delivery', () => {
     await service.send('ASSIGNED', TECH, 'insp-1');
 
     expect(prisma.mobilePushDevice.updateMany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The failure that made "push does not work" unanswerable. Expo replies 200
+   * and refuses every message in the body when the project has no FCM
+   * credential, so a push that reached nobody was indistinguishable from a
+   * delivered one — in the logs and on the handset alike. The ticket is the
+   * only evidence that exists, so it has to be read.
+   */
+  it('logs the ticket when Expo refuses to deliver', async () => {
+    respondWith({
+      data: [
+        {
+          status: 'error',
+          message: 'Unable to retrieve the FCM server key for the recipient app.',
+          details: { error: 'InvalidCredentials' },
+        },
+      ],
+    });
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { service } = build();
+
+    await service.send('ASSIGNED', TECH, 'insp-1');
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'technician_push_rejected',
+        tickets: [expect.objectContaining({ error: 'InvalidCredentials' })],
+      }),
+    );
+    warn.mockRestore();
   });
 
   it('never lets a push failure escape to the caller', async () => {

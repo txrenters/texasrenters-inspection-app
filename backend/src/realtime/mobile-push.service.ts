@@ -96,7 +96,18 @@ export class MobilePushService {
       where: { userProfileId: technicianId, isActive: true },
       select: { expoPushToken: true },
     });
-    if (devices.length === 0) return;
+    if (devices.length === 0) {
+      // Not a fault — a technician who has never opened the app has no token.
+      // Logged anyway because it is otherwise indistinguishable from a delivery
+      // failure, and "the push was never attempted" is the answer half the time.
+      this.logger.log({
+        event: 'technician_push_skipped',
+        reason: 'no_active_device',
+        kind,
+        technicianId,
+      });
+      return;
+    }
     try {
       const response = await fetch(EXPO_PUSH_URL, {
         method: 'POST',
@@ -124,7 +135,7 @@ export class MobilePushService {
   }
 
   /**
-   * Deactivates tokens Expo says no longer exist.
+   * Reads Expo's per-ticket verdicts: retires dead tokens, logs the rest.
    *
    * A 200 from Expo means the batch was accepted, not that it was delivered:
    * per-ticket errors ride in the body. `DeviceNotRegistered` is the one that
@@ -133,20 +144,32 @@ export class MobilePushService {
    * silently swallowed. Which is indistinguishable, from their side, from the
    * notification never being sent.
    */
-  private async retireUnregistered(
-    devices: { expoPushToken: string }[],
-    response: Response,
-  ) {
+  private async retireUnregistered(devices: { expoPushToken: string }[], response: Response) {
     const payload = (await response.json().catch(() => null)) as {
-      data?: { status?: string; details?: { error?: string } }[];
+      data?: { status?: string; message?: string; details?: { error?: string } }[];
     } | null;
-    const dead = (payload?.data ?? [])
-      .map((ticket, index) =>
-        ticket?.status === 'error' && ticket.details?.error === 'DeviceNotRegistered'
-          ? devices[index]?.expoPushToken
-          : undefined,
-      )
-      .filter((token): token is string => Boolean(token));
+    const dead: string[] = [];
+    const rejected: { error: string; message?: string }[] = [];
+    (payload?.data ?? []).forEach((ticket, index) => {
+      if (ticket?.status !== 'error') return;
+      if (ticket.details?.error === 'DeviceNotRegistered') {
+        const token = devices[index]?.expoPushToken;
+        if (token) dead.push(token);
+        return;
+      }
+      rejected.push({ error: ticket.details?.error ?? 'Unspecified', message: ticket.message });
+    });
+    // Everything that is not DeviceNotRegistered used to be dropped on the
+    // floor. That is why an EAS project with no FCM credential looked exactly
+    // like a successful send: Expo answers 200, refuses every message in the
+    // body, and nothing here read the body. These tickets are the only evidence
+    // that a push failed, so they must reach the log.
+    if (rejected.length)
+      this.logger.warn({
+        event: 'technician_push_rejected',
+        count: rejected.length,
+        tickets: rejected,
+      });
     if (!dead.length) return;
     await this.prisma.mobilePushDevice.updateMany({
       where: { expoPushToken: { in: dead } },

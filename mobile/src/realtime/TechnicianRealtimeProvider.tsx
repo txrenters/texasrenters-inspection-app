@@ -10,6 +10,7 @@ import { io, type Socket } from 'socket.io-client';
 import { getSession, onSessionChange } from '../auth/session';
 import { environment, isDemoMode, resolveEasProjectId } from '../config/environment';
 import { queryKeys } from '../features/queries';
+import { reportError } from '../lib/error-log';
 import { verifyQueries } from '../features/state-consistency';
 import { requestJson } from '../repositories/api/repositories';
 import { areNotificationsEnabled } from '../stores/preferences.store';
@@ -137,12 +138,15 @@ async function registerRemotePushDevice() {
     if (!Notifications) return undefined;
     await configureNotifications(Notifications);
     const permission = await Notifications.getPermissionsAsync();
-    if (!permission.granted) return undefined;
+    if (!permission.granted) return pushUnavailable('Notification permission was not granted.');
     const projectId = resolveEasProjectId(
       Constants.easConfig?.projectId,
       (Constants.expoConfig?.extra?.eas as { projectId?: unknown } | undefined)?.projectId,
     );
-    if (!projectId) return undefined;
+    if (!projectId)
+      return pushUnavailable(
+        'This build has no EAS project id, so Expo cannot issue a push token.',
+      );
     const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
     await requestJson('/api/v1/technician/notification-devices', {
       method: 'POST',
@@ -150,9 +154,24 @@ async function registerRemotePushDevice() {
     });
     await pushDeviceStorage.set(token);
     return token;
-  } catch {
-    return undefined;
+  } catch (error) {
+    return pushUnavailable(error);
   }
+}
+
+/**
+ * Records why this device will not receive pushes, then gives up quietly.
+ *
+ * Every failure here used to end at a bare `return undefined`, which is how
+ * "push notifications do not work" arrived with no evidence at all: a denied
+ * permission, an EAS project with no FCM credential and a rejected POST were
+ * all indistinguishable, on the handset and in the backend alike. Registration
+ * stays best-effort — a technician must still be able to work — but the reason
+ * now reaches Diagnostics, which is the only channel they have in the field.
+ */
+function pushUnavailable(reason: unknown) {
+  void reportError(reason, { source: 'push-registration' });
+  return undefined;
 }
 
 /**
