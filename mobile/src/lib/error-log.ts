@@ -28,6 +28,31 @@ const STORAGE_KEY = 'texasrenters-inspection-error-log-v1';
 const MAX_ENTRIES = 20;
 const MAX_STACK_LINES = 6;
 
+/**
+ * TEMPORARY — diagnostic build only.
+ *
+ * The overlay needs the error synchronously and cannot wait on storage, which
+ * is in-memory anyway and dies with the process.
+ */
+export type FatalErrorReport = { source: string; message: string; stack?: string };
+const fatalListeners = new Set<(error: FatalErrorReport) => void>();
+let lastFatal: FatalErrorReport | null = null;
+
+export function subscribeToFatalError(listener: (error: FatalErrorReport) => void): () => void {
+  fatalListeners.add(listener);
+  if (lastFatal) listener(lastFatal);
+  return () => fatalListeners.delete(listener);
+}
+
+function announceFatal(error: unknown, source: string) {
+  lastFatal = {
+    source,
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  };
+  fatalListeners.forEach((listener) => listener(lastFatal!));
+}
+
 let cache: LoggedError[] | null = null;
 const listeners = new Set<(entries: LoggedError[]) => void>();
 
@@ -167,9 +192,17 @@ export function installGlobalErrorHandlers(): void {
     const previous = errorUtils.getGlobalHandler?.();
     errorUtils.setGlobalHandler((error, isFatal) => {
       void reportError(error, { source: 'uncaught', fatal: Boolean(isFatal) });
-      // Chain to the default handler so the red box still appears in dev and
-      // the platform still records the crash.
-      previous?.(error, isFatal);
+      announceFatal(error, isFatal ? 'uncaught (fatal)' : 'uncaught');
+      /**
+       * TEMPORARY — diagnostic build only.
+       *
+       * The default handler is what terminates the process on a fatal error in
+       * a release build, which is precisely the "splash then close" being
+       * chased. Skipping it keeps the app alive long enough to show the error.
+       *
+       * Development still chains, so the red box and its source map survive.
+       */
+      if (__DEV__ || !isFatal) previous?.(error, isFatal);
     });
   }
 
@@ -178,5 +211,6 @@ export function installGlobalErrorHandlers(): void {
   };
   rejectionTracking.process?.on?.('unhandledRejection', (reason) => {
     void reportError(reason, { source: 'promise' });
+    announceFatal(reason, 'unhandled promise rejection');
   });
 }
