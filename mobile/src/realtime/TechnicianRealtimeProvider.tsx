@@ -14,7 +14,7 @@ import { reportError } from '../lib/error-log';
 import { verifyQueries } from '../features/state-consistency';
 import { requestJson } from '../repositories/api/repositories';
 import { areNotificationsEnabled } from '../stores/preferences.store';
-import { loadNotifications } from './notifications';
+import { loadNotifications, shouldNotifyLocally } from './notifications';
 import { pushDeviceStorage } from './push-device-storage';
 
 type NotificationsModule = typeof ExpoNotifications;
@@ -66,9 +66,12 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
           // that only ever counts up is worse than none.
           queryKeys.openEvidenceRequests,
         ]);
-        // Local notification only when no push token is registered — otherwise
-        // the server's push and this would both fire for the same event.
-        if (!registeredPushToken)
+        // Not only when no token is registered: a foreground push arrives and
+        // is then dropped without being shown, so a technician working inside
+        // one inspection heard nothing about the next one. See
+        // shouldNotifyLocally for what was measured and why the app state is
+        // part of the rule.
+        if (shouldNotifyLocally(Boolean(registeredPushToken), AppState.currentState))
           void notifyTechnician(event.kind, event.inspectionId).catch(() => undefined);
       });
     };
