@@ -3,7 +3,6 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import '@/global.css';
 import { createErrorBoundary } from '@/src/components/AppErrorBoundary';
-import { StartupErrorOverlay } from '@/src/components/StartupErrorOverlay';
 import { installGlobalErrorHandlers } from '@/src/lib/error-log';
 import { ThemeProvider } from '@/src/providers/ThemeProvider';
 import { TexasRentersProviders } from '@/src/providers/TexasRentersProviders';
@@ -32,16 +31,11 @@ function RootLayoutNav() {
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      {/* TEMPORARY — diagnostic build only. Outside the providers on purpose:
-          if one of them is what throws, an overlay mounted inside it would go
-          down with it and show nothing. */}
-      <StartupErrorOverlay>
-        <ThemeProvider>
-          <TexasRentersProviders>
-            <RootLayoutNav />
-          </TexasRentersProviders>
-        </ThemeProvider>
-      </StartupErrorOverlay>
+      <ThemeProvider>
+        <TexasRentersProviders>
+          <RootLayoutNav />
+        </TexasRentersProviders>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
