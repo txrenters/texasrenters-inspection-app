@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import type { ExpoConfig } from 'expo/config';
 
 /**
@@ -167,6 +170,24 @@ const config: ExpoConfig = {
       backgroundColor: SPLASH_DARK_BACKGROUND,
     },
     package: 'com.texasrenters.inspection',
+    /**
+     * Firebase, which `expo-notifications` requires on Android and nothing else
+     * here needs.
+     *
+     * Android delivers push through FCM, so the notifications module expects a
+     * configured FirebaseApp at startup. Without one the app installs, shows
+     * the splash screen, and closes — a native failure, before any JavaScript
+     * runs, so the guarded try/catch around push registration never sees it.
+     * iOS is unaffected: APNs needs no Firebase.
+     *
+     * Conditional rather than unconditional. Naming a file that is not there
+     * fails the build outright, and this repository has never carried one, so a
+     * hard reference would break every build for everyone until the file
+     * appeared. Drop `google-services.json` into mobile/ and it is picked up.
+     */
+    ...(existsSync(resolve(__dirname, 'google-services.json'))
+      ? { googleServicesFile: './google-services.json' }
+      : {}),
   },
   web: { bundler: 'metro' },
 };
