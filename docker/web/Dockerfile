@@ -36,6 +36,11 @@ COPY web ./web
 # Changing that file needs a rebuild, not a restart — the value is compiled
 # into the bundle.
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
+# The release this image is, shown in the console sidebar. Build-time by
+# necessity: Next inlines NEXT_PUBLIC_* and a version that a restart could
+# change would not be describing the build.
+ARG NEXT_PUBLIC_APP_VERSION
+ENV NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION
 ARG NEXT_PUBLIC_ENABLE_DEMO_DATA=false
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_ENABLE_DEMO_DATA=$NEXT_PUBLIC_ENABLE_DEMO_DATA

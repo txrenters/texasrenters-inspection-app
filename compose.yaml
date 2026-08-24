@@ -145,6 +145,8 @@ services:
         # against this backend now, and nothing in the bundle reads them.
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000}
         NEXT_PUBLIC_ENABLE_DEMO_DATA: ${NEXT_PUBLIC_ENABLE_DEMO_DATA:-false}
+        # Matches the tag being deployed, so the sidebar and IMAGE_TAG agree.
+        NEXT_PUBLIC_APP_VERSION: ${IMAGE_TAG:-dev}
     environment:
       NODE_ENV: production
       HOSTNAME: 0.0.0.0
