@@ -362,6 +362,19 @@ describe('playback', () => {
         token: 'signed.jwt.value',
         expiresAt: new Date(Date.now() + 7_200_000).toISOString(),
       }),
+      // Playback re-checks Cloudflare when `readyAt` is null rather than
+      // reporting "still processing" on our word alone. The default here is
+      // Cloudflare agreeing it is unfinished, so the tests below that expect
+      // `processing` still describe an encode genuinely in progress.
+      getVideo: jest.fn().mockResolvedValue({
+        streamUid: 'stream-uid',
+        state: 'inprogress',
+        durationSeconds: null,
+        widthPx: null,
+        heightPx: null,
+        thumbnailUrl: null,
+        errorReasonText: null,
+      }),
     };
     return {
       prisma,
