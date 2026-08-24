@@ -52,6 +52,19 @@ ios/DerivedData/
 **/credentials*.json
 **/service-account*.json
 **/google-services.json
+# ...except the Android app's own, which has to be committed.
+#
+# EAS builds from the git state, so a file ignored here never reaches the build
+# server and the APK ships without Firebase — which on Android means
+# expo-notifications has no FCM config and the app closes straight after the
+# splash screen. That is the bug this file exists to fix, and leaving it ignored
+# reproduces it exactly.
+#
+# Unlike its neighbours above it is not a credential: it carries project
+# identifiers and an API key scoped to the package name, which Google documents
+# as safe to commit. The FCM service-account key, which *is* a credential, stays
+# ignored by the **/service-account*.json rule and lives only in EAS.
+!mobile/google-services.json
 **/GoogleService-Info.plist
 !**/*.example.json
 **/.npmrc
