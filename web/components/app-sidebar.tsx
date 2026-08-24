@@ -49,6 +49,7 @@ import {
 } from '@/lib/admin-navigation';
 import { useAuth, usePermissions } from '@/lib/auth';
 import { initials } from '@/lib/format';
+import { APP_VERSION_LABEL } from '@/lib/app-version';
 import { cn } from '@/lib/utils';
 
 /**
@@ -339,6 +340,18 @@ export function AppSidebar() {
             </DropdownMenu>
           </SidebarMenuItem>
         </SidebarMenu>
+        {/* Which release is actually serving this page.
+            
+            Read from the image tag at build time, not from package.json, whose
+            version is a scaffolded 0.1.0 nobody maintains. Reporting a number
+            that does not move is worse than reporting none: it invites somebody
+            to conclude a deploy landed when it did not.
+            
+            Hidden when collapsed to icons — the rail has no room for it, and it
+            is reference information rather than navigation. */}
+        <p className="text-muted-foreground px-2 pb-1 text-[11px] tabular-nums group-data-[collapsible=icon]:hidden">
+          {APP_VERSION_LABEL}
+        </p>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

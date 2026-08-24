@@ -37,14 +37,37 @@ module.exports = {
        *   2xl (16) surfaces — cards and sheets
        *   full     pills — badges, chips, avatars
        */
+      // Literal lengths, not `var(--radius)`.
+      //
+      // This ramp crashed every Android build on launch. NativeWind hands the
+      // custom property through as text, so `rounded-xl` reached the native
+      // side as the string "12" — and Android's Fabric setter for
+      // AndroidTextInput casts hard:
+      //
+      //   JSApplicationIllegalArgumentException: Error while updating property
+      //   'borderRadius' of a view managed by: AndroidTextInput
+      //   Caused by: java.lang.String cannot be cast to java.lang.Double
+      //
+      // The login screen is the first thing rendered after the splash and its
+      // fields are `rounded-xl`, so the app died before anything could report
+      // it. iOS coerces the same string and never noticed; Expo Go survived it
+      // too, which is why this looked like a build problem for days.
+      //
+      // Nothing is lost by inlining. `--radius` was 12 in both the light and
+      // dark blocks of global.css — it never varied by theme, so it was a
+      // constant wearing a variable's clothes. The ramp is unchanged and still
+      // monotonic: 6, 8, 10, 12, 12, 16, 24.
+      //
+      // Keep these literal. A CSS variable here is not a styling preference,
+      // it is a crash.
       borderRadius: {
-        'sm': 'calc(var(--radius) * 0.5)',
-        'DEFAULT': 'var(--radius)',
-        'md': 'calc(var(--radius) * 0.67)',
-        'lg': 'calc(var(--radius) * 0.83)',
-        'xl': 'var(--radius)',
-        '2xl': 'calc(var(--radius) * 1.33)',
-        '3xl': 'calc(var(--radius) * 2)',
+        'sm': '6px',
+        'md': '8px',
+        'lg': '10px',
+        'DEFAULT': '12px',
+        'xl': '12px',
+        '2xl': '16px',
+        '3xl': '24px',
       },
       colors: {
         // Core semantic colors (CSS variable-based from theme.ts)

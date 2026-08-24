@@ -492,16 +492,45 @@ export class InspectionVideoService {
         failureMessage: media.failureMessage,
       };
 
-    if (!media.readyAt)
-      return {
-        videoId: media.id,
-        provider: 'cloudflare_stream' as const,
-        status: 'processing' as const,
-        streamUid: media.streamUid,
-        failureMessage: media.failureMessage,
-      };
+    /**
+     * Ask Cloudflare rather than reporting "still processing" on our word alone.
+     *
+     * `readyAt` is written in exactly one place — `applyWebhook` — so a webhook
+     * that never arrived leaves it null forever while the rest of the record
+     * moves on. The observed result is a recording whose badge reads Ready,
+     * whose transcript and findings are present, and whose player still says
+     * Cloudflare is preparing it, above a "Check again" button that re-reads
+     * the same null and can never succeed. The reviewer is invited to retry an
+     * operation with no path to a different answer.
+     *
+     * The scheduled reconciler fixes this within five minutes, but only for
+     * recordings older than ten. Somebody looking at an area right now is
+     * inside both windows, and this is the one moment we know a human is
+     * waiting on that specific video — so spend one API call on it.
+     *
+     * Bounded by construction: only when `readyAt` is null, so a playable
+     * recording costs nothing, and a failure to reach Cloudflare falls through
+     * to the same "processing" answer this replaced.
+     */
+    // Narrowed by the `!media.streamUid` return above, and held so the refresh
+    // below cannot widen it back to nullable.
+    const streamUid = media.streamUid;
+    let durationSeconds = media.durationSeconds;
 
-    const { token, expiresAt } = this.stream.signPlaybackToken(media.streamUid, PLAYBACK_TTL_SECONDS);
+    if (!media.readyAt) {
+      const refreshed = await this.refreshFromStream(streamUid);
+      if (!refreshed?.readyAt)
+        return {
+          videoId: media.id,
+          provider: 'cloudflare_stream' as const,
+          status: 'processing' as const,
+          streamUid,
+          failureMessage: refreshed?.failureMessage ?? media.failureMessage,
+        };
+      durationSeconds = refreshed.durationSeconds;
+    }
+
+    const { token, expiresAt } = this.stream.signPlaybackToken(streamUid, PLAYBACK_TTL_SECONDS);
     const customer = this.stream.customerCode;
     if (!customer)
       throw new ApplicationError(
@@ -517,12 +546,12 @@ export class InspectionVideoService {
       videoId: media.id,
       provider: 'cloudflare_stream' as const,
       status: 'ready' as const,
-      streamUid: media.streamUid,
+      streamUid,
       hlsUrl: `${base}/manifest/video.m3u8`,
       dashUrl: `${base}/manifest/video.mpd`,
       iframeUrl: `${base}/iframe`,
       thumbnailUrl: `${base}/thumbnails/thumbnail.jpg`,
-      durationSeconds: media.durationSeconds,
+      durationSeconds,
       expiresAt,
     };
   }
@@ -683,6 +712,40 @@ export class InspectionVideoService {
    * and an inspection that can never be reviewed. Bounded so one run cannot
    * sweep the whole table.
    */
+  /**
+   * Re-reads one video's state from Cloudflare and applies it.
+   *
+   * The single-video form of `reconcileStuckVideos`, for the moment a reviewer
+   * opens a recording that our record still calls unprocessed. Returns the
+   * fields playback cares about, or null when Cloudflare cannot be reached or
+   * still has nothing new — both of which leave the caller reporting exactly
+   * what it would have reported anyway.
+   */
+  private async refreshFromStream(streamUid: string) {
+    const video = await this.stream.getVideo(streamUid).catch(() => null);
+    if (!video) return null;
+    const applied = await this.applyWebhook({
+      uid: video.streamUid,
+      status: { state: video.state, errorReasonText: video.errorReasonText },
+      duration: video.durationSeconds,
+      input: { width: video.widthPx, height: video.heightPx },
+      thumbnail: video.thumbnailUrl,
+    }).catch(() => null);
+    if (!applied?.accepted) return null;
+    return withSystemTenant(() =>
+      this.prisma.inspectionMedia.findUnique({
+        where: { streamUid },
+        select: {
+          readyAt: true,
+          processingStatus: true,
+          durationSeconds: true,
+          thumbnailUrl: true,
+          failureMessage: true,
+        },
+      }),
+    );
+  }
+
   async reconcileStuckVideos(limit = 25) {
     const stuck = await this.prisma.inspectionMedia.findMany({
       where: {
