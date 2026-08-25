@@ -137,6 +137,7 @@ export default function AreaDetailScreen() {
    * what they come back to this screen to check.
    */
   const snapshots = useDemoStore((state) => state.snapshots);
+  const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
   const areaSnapshots = useMemo(
     () => (snapshots ?? []).filter((snapshot) => snapshot.roomId === id),
     [snapshots, id],
@@ -198,6 +199,9 @@ export default function AreaDetailScreen() {
   // and no video still has evidence, and hiding it because there is no video
   // would be telling them nothing was saved.
   const hasEvidence = hasRecording || areaSnapshots.length > 0;
+  const strandedSnapshots = areaSnapshots.filter(
+    (snapshot) => snapshot.uploadStatus !== 'UPLOADED',
+  );
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -359,23 +363,58 @@ export default function AreaDetailScreen() {
                 horizontal
                 showsHorizontalScrollIndicator={false}
               >
-                {areaSnapshots.map((snapshot) => (
-                  <Pressable
-                    accessibilityHint="Opens this photo full screen"
-                    accessibilityLabel={`Photo taken ${new Date(snapshot.capturedAt).toLocaleTimeString()}`}
-                    accessibilityRole="imagebutton"
-                    key={snapshot.id}
-                    onPress={() => setViewedPhoto(snapshot.uri)}
-                  >
-                    <Image
-                      accessibilityIgnoresInvertColors
-                      className="mx-1 h-20 w-20 rounded-xl bg-muted"
-                      resizeMode="cover"
-                      source={{ uri: snapshot.uri }}
-                    />
-                  </Pressable>
-                ))}
+                {areaSnapshots.map((snapshot) => {
+                  const onServer = snapshot.uploadStatus === 'UPLOADED';
+                  return (
+                    <Pressable
+                      accessibilityHint="Opens this photo full screen"
+                      // The state belongs in the label, not only in the dot: a
+                      // technician using VoiceOver has no other way to learn
+                      // that a photograph is still sitting on the handset.
+                      accessibilityLabel={`Photo taken ${new Date(snapshot.capturedAt).toLocaleTimeString()}${
+                        onServer ? '' : ', not uploaded yet'
+                      }`}
+                      accessibilityRole="imagebutton"
+                      key={snapshot.id}
+                      onPress={() => setViewedPhoto(snapshot.uri)}
+                    >
+                      <Image
+                        accessibilityIgnoresInvertColors
+                        className="mx-1 h-20 w-20 rounded-xl bg-muted"
+                        resizeMode="cover"
+                        source={{ uri: snapshot.uri }}
+                      />
+                      {/* A photograph still on the device looked exactly like
+                          one safely on the server, which is how they went
+                          unnoticed. */}
+                      {onServer ? null : (
+                        <View className="absolute right-2 top-1 h-3 w-3 rounded-full border border-background bg-chart-4" />
+                      )}
+                    </Pressable>
+                  );
+                })}
               </ScrollView>
+            ) : null}
+
+            {/* Automatic retry gives up on a refusal the server will repeat, and
+                after enough attempts. Without a way back by hand, those
+                photographs would stay on the handset for good. */}
+            {strandedSnapshots.length ? (
+              <Button
+                accessibilityHint="Queues them to send again"
+                className="mt-1"
+                label={`Retry ${strandedSnapshots.length} photo${strandedSnapshots.length === 1 ? '' : 's'}`}
+                onPress={() => {
+                  for (const snapshot of strandedSnapshots)
+                    updateSnapshot(snapshot.id, {
+                      uploadStatus: 'PENDING',
+                      attempts: 0,
+                      nextAttemptAt: undefined,
+                      lastError: undefined,
+                    });
+                }}
+                variant="secondary"
+              />
             ) : null}
 
             {!recordingCount ? (

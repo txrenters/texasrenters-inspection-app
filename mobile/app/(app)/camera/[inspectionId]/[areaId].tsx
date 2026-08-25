@@ -63,7 +63,7 @@ import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
 import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
-import { uploadRoomPhoto } from '@/src/media/photo-upload';
+import { uploadSnapshotNow } from '@/src/media/snapshot-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -497,26 +497,12 @@ export default function RoomCameraScreen() {
     setConfirmStopOpen(true);
   };
 
-  const uploadSnapshot = async (snapshot: RoomSnapshot) => {
-    updateSnapshot(snapshot.id, { uploadStatus: 'UPLOADING' });
-    try {
-      const uploaded = await uploadRoomPhoto({
-        roomId: areaId,
-        uri: snapshot.uri,
-        captureType: snapshot.captureType ?? 'AREA_OVERVIEW',
-        idempotencyKey: snapshot.id,
-        width: snapshot.width,
-        height: snapshot.height,
-        recordingSessionId: snapshot.recordingSessionId,
-        videoTimestampMs: snapshot.videoTimestampMs,
-        captureSource: snapshot.captureSource,
-        sequenceNumber: snapshot.sequenceNumber,
-      });
-      updateSnapshot(snapshot.id, { uploadStatus: 'UPLOADED', serverPhotoId: uploaded.id });
-    } catch {
-      updateSnapshot(snapshot.id, { uploadStatus: 'FAILED' });
-    }
-  };
+  // Sending it here is a head start, not the guarantee. A failure records why
+  // and when to try again, and the upload runner picks it up from there —
+  // this used to be a bare catch that marked the photo FAILED and left the
+  // JPEG on the device with nothing anywhere to re-send it.
+  const uploadSnapshot = (snapshot: RoomSnapshot) =>
+    uploadSnapshotNow(snapshot, { update: updateSnapshot });
 
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
