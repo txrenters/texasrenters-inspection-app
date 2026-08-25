@@ -6,12 +6,50 @@ import {
   InboxIcon,
   UploadCloudIcon,
   CogIcon,
+  type LucideIcon,
 } from 'lucide-react-native';
 import { Platform, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAssignedInspectionCount, useOpenEvidenceRequests } from '@/src/features/queries';
 import { TabBarBackground } from '@/src/components/ui/TabBarBackground';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
+
+/**
+ * The bar's own height on Android, before the system inset is added.
+ *
+ * A 25pt glyph, 6pt above it and a 10pt label come to about 50; 56 is the
+ * Material bottom-navigation height and leaves the row breathing room without
+ * making the bar taller than the platform's own.
+ */
+const ANDROID_TAB_BAR_HEIGHT = 56;
+
+/**
+ * One tab glyph, drawn the way each platform draws its own.
+ *
+ * iOS fills the selected glyph — that is what SF Symbols' `.fill` variants are
+ * for, and a tab bar whose selected icon is merely a different colour is the
+ * clearest tell that a bar was not built for the platform. Android keeps every
+ * glyph outlined and leans on colour, which is what Material does.
+ *
+ * Takes React Navigation's own `color` rather than a class, so the glyph cannot
+ * drift from `tabBarActiveTintColor` the way two separately-specified colours
+ * eventually do.
+ */
+function tabGlyph(Icon: LucideIcon) {
+  return function TabGlyph({ color, focused }: { color: string; focused: boolean }) {
+    return (
+      <Icon
+        color={color}
+        // 25 rather than 22: the iOS tab glyph is 25pt, and at 22 the icons
+        // read as undersized against a system-weight label.
+        size={25}
+        strokeWidth={focused ? 2 : 1.8}
+        fill={Platform.OS === 'ios' && focused ? color : 'none'}
+      />
+    );
+  };
+}
 
 registerIcons(HomeIcon);
 registerIcons(ClipboardListIcon);
@@ -42,6 +80,11 @@ export default function TabsLayout() {
   // `--muted-foreground` as six hex literals, which meant the one piece of
   // chrome visible on every screen was the one piece a palette change missed.
   const theme = useThemeColors();
+  // Android 15 draws every app edge-to-edge whether it asks to or not, so the
+  // system navigation bar sits *over* the window. Read here and applied to the
+  // bar below, because leaving it to React Navigation left the tab labels
+  // underneath the gesture pill.
+  const insets = useSafeAreaInsets();
   // Assigned-but-not-started work. Live: the realtime provider invalidates the
   // inspection queries when an assignment lands, so this moves without the
   // technician reopening anything.
@@ -67,7 +110,16 @@ export default function TabsLayout() {
           // opaque navigation surface that content stops above.
           ...Platform.select({
             ios: { position: 'absolute' as const, backgroundColor: 'transparent' },
-            default: { backgroundColor: theme.background },
+            default: {
+              backgroundColor: theme.background,
+              // Stated outright rather than derived. React Navigation does add
+              // `insets.bottom` to its own padding, but the bar still came out
+              // under the system navigation bar on Android; giving both the
+              // height and the padding here settles the layout instead of
+              // depending on which of the two wins the style merge.
+              height: ANDROID_TAB_BAR_HEIGHT + insets.bottom,
+              paddingBottom: insets.bottom,
+            },
           }),
           // A hairline, not a 1px rule. On a 3x screen `hairlineWidth` is 0.33pt
           // — the separator iOS actually draws. A full point reads as a drawn
@@ -75,10 +127,11 @@ export default function TabsLayout() {
           // anything the OS puts on screen.
           borderTopWidth: StyleSheet.hairlineWidth,
           borderTopColor: theme.border,
-          // Height and bottom padding are left to React Navigation, which
-          // derives them from the safe-area inset. The previous fixed
-          // `height: 56` + `paddingBottom: 4` ignored the home indicator, so on
-          // a notched device the labels sat inside the swipe region.
+          // iOS still leaves height and bottom padding to React Navigation,
+          // which derives them from the safe-area inset. A fixed height there
+          // ignored the home indicator and put the labels inside the swipe
+          // region; Android has the opposite problem and is set explicitly
+          // above.
         },
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.mutedForeground,
@@ -101,11 +154,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Home',
-          // 25 rather than 22: the iOS tab glyph is 25pt, and at 22 the icons
-          // read as undersized against a system-weight label.
-          tabBarIcon: ({ focused }) => (
-            <HomeIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={25} />
-          ),
+          tabBarIcon: tabGlyph(HomeIcon),
         }}
       />
       <Tabs.Screen
@@ -130,12 +179,7 @@ export default function TabsLayout() {
             assignedCount > 0
               ? `Inspections, ${assignedCount} assigned and not started`
               : 'Inspections',
-          tabBarIcon: ({ focused }) => (
-            <ClipboardListIcon
-              className={focused ? 'text-primary' : 'text-muted-foreground'}
-              size={25}
-            />
-          ),
+          tabBarIcon: tabGlyph(ClipboardListIcon),
         }}
       />
       <Tabs.Screen
@@ -162,30 +206,21 @@ export default function TabsLayout() {
             requestCount > 0
               ? `Requests, ${requestCount} area${requestCount === 1 ? '' : 's'} the office is waiting on`
               : 'Requests',
-          tabBarIcon: ({ focused }) => (
-            <InboxIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={25} />
-          ),
+          tabBarIcon: tabGlyph(InboxIcon),
         }}
       />
       <Tabs.Screen
         name="uploads"
         options={{
           title: 'Uploads',
-          tabBarIcon: ({ focused }) => (
-            <UploadCloudIcon
-              className={focused ? 'text-primary' : 'text-muted-foreground'}
-              size={25}
-            />
-          ),
+          tabBarIcon: tabGlyph(UploadCloudIcon),
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ focused }) => (
-            <CogIcon className={focused ? 'text-primary' : 'text-muted-foreground'} size={25} />
-          ),
+          tabBarIcon: tabGlyph(CogIcon),
         }}
       />
     </Tabs>
