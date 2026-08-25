@@ -264,7 +264,8 @@ export class PetObservationDto {
 
 /** A reviewer's determination for a pet candidate (uniqueness + authorization). */
 export class PetCandidateReviewDto {
-  @IsIn(['PENDING_REVIEW', 'UNIQUE_PET', 'DUPLICATE', 'INSUFFICIENT_EVIDENCE']) reviewStatus!: string;
+  @IsIn(['PENDING_REVIEW', 'UNIQUE_PET', 'DUPLICATE', 'INSUFFICIENT_EVIDENCE'])
+  reviewStatus!: string;
   @IsOptional() @IsIn(['UNKNOWN', 'AUTHORIZED', 'UNAUTHORIZED']) authorizationStatus?: string;
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
@@ -276,7 +277,11 @@ export class CreateChargeDto {
   @IsOptional() @IsUUID() propertyAreaId?: string;
   @IsOptional() @IsUUID() findingId?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000) quantity?: number;
-  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(1_000_000) unitAmount!: number;
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1_000_000)
+  unitAmount!: number;
   @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
@@ -328,6 +333,15 @@ export class UnassignDto {
 
 export class AssignmentListQueryDto extends PaginationDto {
   @IsOptional() @IsUUID() inspectionId?: string;
+  /**
+   * Which kind of visit these assignments are for.
+   *
+   * Strict `@IsEnum`, matching the inspection list rather than the loose
+   * `@IsIn` the assignment statuses use: an unrecognised type is a mistake
+   * worth a 400, not a filter that silently does nothing and returns the whole
+   * list looking like a section.
+   */
+  @IsOptional() @IsEnum(InspectionType) inspectionType?: InspectionType;
   @IsOptional() @IsUUID() technicianId?: string;
   @IsOptional() @IsUUID() propertyId?: string;
   @IsOptional()

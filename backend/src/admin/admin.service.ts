@@ -2452,6 +2452,7 @@ export class AdminService {
         ...(query.inspectionId ? { id: query.inspectionId } : {}),
         ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
         ...(query.inspectionStatus ? { status: query.inspectionStatus as InspectionStatus } : {}),
+        ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
       },
       ...(query.technicianId ? { technicianId: query.technicianId } : {}),
       // Only assignments actually in force, unless history is asked for. A
@@ -2522,6 +2523,11 @@ export class AdminService {
       assignments: { none: { isCurrent: true } },
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
       ...(query.inspectionStatus ? { status: query.inspectionStatus as InspectionStatus } : {}),
+      // The same filter, and the half that is easy to forget. These rows come
+      // from a separate query against Inspection, so without it every section
+      // would list every unassigned inspection regardless of type — and those
+      // are precisely the rows somebody opens a section to find.
+      ...(query.inspectionType ? { inspectionType: query.inspectionType } : {}),
     };
     const offset = (query.page - 1) * query.pageSize;
     const includeAssignments = query.assignmentStatus !== 'UNASSIGNED';

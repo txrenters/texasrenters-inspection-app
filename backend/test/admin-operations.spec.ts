@@ -818,7 +818,10 @@ describe('which assignments a work list shows', () => {
       // Answered rather than left undefined: without `includeUnassigned:false`
       // the service also lists inspections that have no assignment at all, and
       // that is the default path these tests are meant to exercise.
-      inspection: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+      inspection: {
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
     };
     return { prisma, service: new AdminService(prisma as never) };
   }
@@ -858,5 +861,41 @@ describe('which assignments a work list shows', () => {
     const { prisma, service } = harness();
     await service.assignments(user, { page: 1, pageSize: 20, technicianId: 'tech-1' });
     expect(whereOf(prisma)).toMatchObject({ isCurrent: true, technicianId: 'tech-1' });
+  });
+
+  it('narrows to one kind of visit when a section asks for it', async () => {
+    const { prisma, service } = harness();
+    await service.assignments(user, {
+      page: 1,
+      pageSize: 20,
+      inspectionType: 'ROOF',
+    } as never);
+    expect(whereOf(prisma)).toMatchObject({ inspection: { inspectionType: 'ROOF' } });
+  });
+
+  /**
+   * The half that is easy to miss. Inspections with no current assignment come
+   * from a second query against `Inspection`, so filtering only the assignment
+   * side would show every unassigned visit in every section — and those are
+   * precisely the rows somebody opens a section to find.
+   */
+  it('narrows the unassigned inspections by the same kind of visit', async () => {
+    const { prisma, service } = harness();
+    await service.assignments(user, {
+      page: 1,
+      pageSize: 20,
+      inspectionType: 'ROOF',
+    } as never);
+    expect(prisma.inspection.findMany.mock.calls[0][0].where).toMatchObject({
+      inspectionType: 'ROOF',
+      assignments: { none: { isCurrent: true } },
+    });
+  });
+
+  it('asks for every kind when no section is open', async () => {
+    const { prisma, service } = harness();
+    await service.assignments(user, { page: 1, pageSize: 20 });
+    expect(whereOf(prisma).inspection).not.toHaveProperty('inspectionType');
+    expect(prisma.inspection.findMany.mock.calls[0][0].where).not.toHaveProperty('inspectionType');
   });
 });

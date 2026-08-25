@@ -118,22 +118,32 @@ describe('NavigationSection', () => {
    * quietly missing from the sidebar is the failure that would go unnoticed
    * longest, because nothing else links to these lists.
    */
-  it('offers every declared inspection section', () => {
-    // The real navigation rather than this file's two-child fixture: the thing
-    // worth asserting is that the config and the component agree, and the
-    // fixture cannot disagree with itself.
-    const declared = adminNavigation
+  it.each(
+    adminNavigation
       .flatMap((group) => group.items)
-      .find((item) => item.children?.length)!;
+      .filter((item) => item.children?.length)
+      .map((item) => [item.title, item] as const),
+  )('offers every declared %s section', (_title, declared) => {
+    // The real navigation rather than this file's two-child fixture: the thing
+    // worth asserting is that the config and the component agree, and a
+    // fixture cannot disagree with itself.
+    //
+    // Every sectioned item, not the first one found — written that way, this
+    // silently only ever covered Inspections, and Assignments could have
+    // shipped with no sub-items at all and still gone green.
     renderSection({ item: declared });
-    fireEvent.click(header());
-    const list = document.getElementById(header().getAttribute('aria-controls')!)!;
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(declared.title, 'i') }));
+    const list = document.getElementById(
+      screen
+        .getByRole('button', { name: new RegExp(declared.title, 'i') })
+        .getAttribute('aria-controls')!,
+    )!;
 
     expect(declared.children!.length).toBeGreaterThan(5);
     for (const child of declared.children!) {
       expect(within(list).getByRole('link', { name: child.title })).toHaveAttribute(
         'href',
-        `/inspections?type=${child.type}`,
+        child.type ? `${declared.href}?type=${child.type}` : declared.href,
       );
     }
   });

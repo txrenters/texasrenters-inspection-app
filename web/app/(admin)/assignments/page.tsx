@@ -13,6 +13,7 @@ import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { EMPTY, formatDateTime, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
 import { useAssignments, useTechnicians } from '@/lib/queries';
@@ -34,6 +35,16 @@ const COLUMNS: Array<Column<AssignmentRow>> = [
     header: 'Unit',
     hideBelow: 'lg',
     cell: (row) => row.inspection?.propertywareUnit?.name ?? 'Entire property',
+  },
+  {
+    // Which kind of visit this is. The row already reaches through
+    // `row.inspection` for the property and the unit, and the type has always
+    // been on the wire — it was simply never shown, so two assignments to the
+    // same property were indistinguishable.
+    key: 'type',
+    header: 'Type',
+    hideBelow: 'lg',
+    cell: (row) => <StatusBadge value={row.inspection?.inspectionType ?? EMPTY} />,
   },
   {
     key: 'technician',
@@ -73,18 +84,27 @@ const COLUMNS: Array<Column<AssignmentRow>> = [
 export default function AssignmentsPage() {
   const canAssign = usePermissions().has('inspections:assign');
   const [creating, setCreating] = useState(false);
-  const [state, setState, reset] = useUrlState({ page: 1, technician: '', status: '' });
+  const [state, setState, reset] = useUrlState({ page: 1, technician: '', status: '', type: '' });
 
   const assignments = useAssignments({
     page: state.page,
     pageSize: 20,
     technicianId: state.technician,
     assignmentStatus: state.status,
+    inspectionType: state.type,
   });
   const technicians = useTechnicians({ page: 1, pageSize: 100 });
 
   const busy = assignments.isLoading || assignments.isPlaceholderData;
+  // `type` is not counted. It is the section rather than a filter, so an empty
+  // one must not offer "Clear filters" — that would eject somebody out of the
+  // section they had just opened.
   const hasActiveFilters = Boolean(state.technician || state.status);
+  // The heading comes from the sidebar's own label, so the two cannot drift and
+  // there is no second nine-entry table of copy to keep in step.
+  const section = state.type
+    ? INSPECTION_TYPE_CHILDREN.find((child) => child.type === state.type)
+    : undefined;
   const resultLabel = busy
     ? 'Filtering assignment history…'
     : `${(assignments.data?.total ?? 0).toLocaleString()} assignment records`;
@@ -114,10 +134,16 @@ export default function AssignmentsPage() {
     <>
       <PageHeader
         actions={
-          canAssign ? <Button onClick={() => setCreating(true)}>Create assignment</Button> : undefined
+          canAssign ? (
+            <Button onClick={() => setCreating(true)}>Create assignment</Button>
+          ) : undefined
         }
-        description="Current and historical technician assignments. Reassignment never overwrites prior records."
-        title="Assignments"
+        description={
+          section
+            ? `Technician assignments for ${section.title.toLowerCase()} visits. Reassignment never overwrites prior records.`
+            : 'Current and historical technician assignments. Reassignment never overwrites prior records.'
+        }
+        title={section ? `${section.title} assignments` : 'Assignments'}
       />
 
       <ListToolbar
@@ -176,7 +202,9 @@ export default function AssignmentsPage() {
                 : 'Assignment history will appear after an inspection is assigned.'
           }
           icon={WorkflowIcon}
-          title={state.status === 'UNASSIGNED' ? 'No unassigned inspections' : 'No assignments found'}
+          title={
+            state.status === 'UNASSIGNED' ? 'No unassigned inspections' : 'No assignments found'
+          }
         >
           {hasActiveFilters ? (
             <Button onClick={reset} variant="outline">
