@@ -630,58 +630,58 @@ export default function RoomCameraScreen() {
             thing a technician reads while turning was furthest from their eye
             line and competing with the shutter row. */}
         <View>
-        <View className="flex-row items-center gap-3 px-5 py-3">
-          <Pressable
-            // While recording this button stops the take rather than leaving,
-            // so the label must not say "Back" — that would read as discarding.
-            accessibilityLabel={recording ? 'Stop recording and review' : 'Back to area'}
-            accessibilityRole="button"
-            className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
-            // 40pt visual, 44pt target: hitSlop keeps the design and still
-            // clears the minimum for a gloved or unsteady hand.
-            hitSlop={8}
-            onPress={() => (recording ? stopRecording() : goBack())}
-          >
-            <BackGlyph size={21} className="text-white" />
-          </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text numberOfLines={1} className="text-xl font-bold text-white">
-              {room.data?.name ?? 'Room'}
-            </Text>
-            <Text className="text-xs text-white/70">
-              {isAdditional ? 'Additional evidence clip' : 'Primary room walkthrough'}
-            </Text>
-          </View>
-          {/* Hidden mid-take: a technician one turn into a walkthrough must not
+          <View className="flex-row items-center gap-3 px-5 py-3">
+            <Pressable
+              // While recording this button stops the take rather than leaving,
+              // so the label must not say "Back" — that would read as discarding.
+              accessibilityLabel={recording ? 'Stop recording and review' : 'Back to area'}
+              accessibilityRole="button"
+              className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
+              // 40pt visual, 44pt target: hitSlop keeps the design and still
+              // clears the minimum for a gloved or unsteady hand.
+              hitSlop={8}
+              onPress={() => (recording ? stopRecording() : goBack())}
+            >
+              <BackGlyph size={21} className="text-white" />
+            </Pressable>
+            <View className="min-w-0 flex-1">
+              <Text numberOfLines={1} className="text-xl font-bold text-white">
+                {room.data?.name ?? 'Room'}
+              </Text>
+              <Text className="text-xs text-white/70">
+                {isAdditional ? 'Additional evidence clip' : 'Primary room walkthrough'}
+              </Text>
+            </View>
+            {/* Hidden mid-take: a technician one turn into a walkthrough must not
               lose it to a mistap, and the back control already doubles as stop
               while recording. */}
-          {recording ? null : <HomeButton tone="overlay" />}
-          <Pressable
-            accessibilityLabel="Flashlight"
-            accessibilityRole="switch"
-            accessibilityState={{ checked: torch, disabled: facing !== 'back' }}
-            className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
-            hitSlop={8}
-            onPress={() => setTorch((value) => !value)}
-          >
-            {torch ? (
-              <ZapIcon size={20} className="text-white" />
-            ) : (
-              <ZapOffIcon size={20} className="text-white" />
-            )}
-          </Pressable>
-          <Pressable
-            accessibilityLabel={
-              facing === 'back' ? 'Switch to front camera' : 'Switch to rear camera'
-            }
-            accessibilityRole="button"
-            className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
-            hitSlop={8}
-            onPress={() => setFacing((value) => (value === 'back' ? 'front' : 'back'))}
-          >
-            <RotateCcwIcon size={20} className="text-white" />
-          </Pressable>
-        </View>
+            {recording ? null : <HomeButton tone="overlay" />}
+            <Pressable
+              accessibilityLabel="Flashlight"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: torch, disabled: facing !== 'back' }}
+              className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
+              hitSlop={8}
+              onPress={() => setTorch((value) => !value)}
+            >
+              {torch ? (
+                <ZapIcon size={20} className="text-white" />
+              ) : (
+                <ZapOffIcon size={20} className="text-white" />
+              )}
+            </Pressable>
+            <Pressable
+              accessibilityLabel={
+                facing === 'back' ? 'Switch to front camera' : 'Switch to rear camera'
+              }
+              accessibilityRole="button"
+              className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
+              hitSlop={8}
+              onPress={() => setFacing((value) => (value === 'back' ? 'front' : 'back'))}
+            >
+              <RotateCcwIcon size={20} className="text-white" />
+            </Pressable>
+          </View>
 
           {/* Live 360° guidance. Only while recording a primary walkthrough, so
               the idle screen keeps its uncluttered layout; additional evidence
