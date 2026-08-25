@@ -25,6 +25,21 @@ import { useThemeColors } from '@/src/lib/theme-colors';
 const ANDROID_TAB_BAR_HEIGHT = 56;
 
 /**
+ * The least room left below the row on Android.
+ *
+ * `insets.bottom` comes back as 0 on this build: there is no edge-to-edge
+ * integration, so the window never receives the navigation bar's insets, and
+ * deriving the padding from them left the glyphs and labels flush against the
+ * bottom edge of the bar — reading as cropped, which is exactly what it was.
+ *
+ * 24 is Android's own gesture-navigation inset. Applied as a floor rather than
+ * a replacement, so the real value still wins the day it starts arriving —
+ * which is what installing `react-native-edge-to-edge` would do, at the cost of
+ * a native rebuild.
+ */
+const ANDROID_MIN_BOTTOM_INSET = 24;
+
+/**
  * One tab glyph, drawn the way each platform draws its own.
  *
  * iOS fills the selected glyph — that is what SF Symbols' `.fill` variants are
@@ -85,6 +100,8 @@ export default function TabsLayout() {
   // bar below, because leaving it to React Navigation left the tab labels
   // underneath the gesture pill.
   const insets = useSafeAreaInsets();
+  // See ANDROID_MIN_BOTTOM_INSET: the reported inset is 0 on this build.
+  const androidBottomInset = Math.max(insets.bottom, ANDROID_MIN_BOTTOM_INSET);
   // Assigned-but-not-started work. Live: the realtime provider invalidates the
   // inspection queries when an assignment lands, so this moves without the
   // technician reopening anything.
@@ -113,12 +130,13 @@ export default function TabsLayout() {
             default: {
               backgroundColor: theme.background,
               // Stated outright rather than derived. React Navigation does add
-              // `insets.bottom` to its own padding, but the bar still came out
-              // under the system navigation bar on Android; giving both the
-              // height and the padding here settles the layout instead of
-              // depending on which of the two wins the style merge.
-              height: ANDROID_TAB_BAR_HEIGHT + insets.bottom,
-              paddingBottom: insets.bottom,
+              // `insets.bottom` to its own padding, but that value is 0 here,
+              // so both its padding and the first version of this fix came to
+              // nothing. The floor is what actually keeps the row off the
+              // bottom edge; the max keeps the real inset winning if it ever
+              // starts being reported.
+              height: ANDROID_TAB_BAR_HEIGHT + androidBottomInset,
+              paddingBottom: androidBottomInset,
             },
           }),
           // A hairline, not a 1px rule. On a 3x screen `hairlineWidth` is 0.33pt
