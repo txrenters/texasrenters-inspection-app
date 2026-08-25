@@ -13,6 +13,7 @@ import { router } from 'expo-router';
 import Constants from 'expo-constants';
 import { EyeIcon, EyeOffIcon, LogInIcon, ShieldCheckIcon } from 'lucide-react-native';
 
+import { SessionConflictError } from '@/src/auth/session';
 import { useApiLogin } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -32,19 +33,23 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [validationError, setValidationError] = useState('');
 
-  const handleLogin = async () => {
+  const handleLogin = async (takeOver = false) => {
     setValidationError('');
     if (!email.trim() || !password) {
       setValidationError('Enter your work email and password.');
       return;
     }
     try {
-      const user = await login.mutateAsync({ email, password });
+      const user = await login.mutateAsync({ email, password, takeOver });
       router.replace(user.mustChangePassword ? '/change-password' : '/(app)/(tabs)');
     } catch {
       // The repository returns a safe, technician-facing error message.
     }
   };
+
+  // Only this one is answerable from here. A wrong password is not something a
+  // second button can fix, so the takeover is offered for nothing else.
+  const sessionHeldElsewhere = login.error instanceof SessionConflictError;
 
   const error =
     validationError ||
@@ -156,6 +161,23 @@ export default function LoginScreen() {
             label="Sign in"
             onPress={() => void handleLogin()}
           />
+
+          {/* Deliberately the quieter control, and never the default. Taking a
+              handset over signs somebody out, possibly mid-walkthrough, so it
+              should read as the considered second choice rather than as a way
+              past an error message. */}
+          {sessionHeldElsewhere ? (
+            <Button
+              accessibilityHint="Signs this account out on the other device and signs in here"
+              busy={login.isPending}
+              busyLabel="Signing in…"
+              className="mt-3"
+              disabled={login.isPending}
+              label="Sign in here instead"
+              onPress={() => void handleLogin(true)}
+              variant="secondary"
+            />
+          ) : null}
 
           <View className="mt-8 items-center">
             <Text className="text-xs text-muted-foreground">

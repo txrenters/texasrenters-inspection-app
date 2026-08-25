@@ -106,8 +106,16 @@ export function useDemoLogin() {
 export function useApiLogin() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ email, password }: { email: string; password: string }) =>
-      repositories.auth.signInWithPassword(email.trim(), password),
+    mutationFn: ({
+      email,
+      password,
+      takeOver,
+    }: {
+      email: string;
+      password: string;
+      /** Ends the session on the technician's other device. Asked for, never assumed. */
+      takeOver?: boolean;
+    }) => repositories.auth.signInWithPassword(email.trim(), password, takeOver === true),
     onSuccess: (user) => client.setQueryData(queryKeys.currentUser, user),
   });
 }

@@ -4,7 +4,15 @@ import {
   PASSWORD_MESSAGES,
   PASSWORD_PATTERNS,
 } from '@texasrenters/shared';
-import { IsEmail, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 /**
  * Policy for replacing a temporary password.
@@ -52,6 +60,18 @@ export class SignInDto {
   @IsString()
   @MaxLength(MAXIMUM_PASSWORD_LENGTH)
   password!: string;
+
+  /**
+   * Sign in here and end the session on the technician's other device.
+   *
+   * Absent on the first attempt. A technician who is already signed in
+   * somewhere is refused with SESSION_ALREADY_ACTIVE, and the app offers this
+   * as an explicit second step — so taking a handset over is a decision, not
+   * something that happens silently to whoever is holding the other one.
+   */
+  @IsOptional()
+  @IsBoolean()
+  takeOverExistingSession?: boolean;
 }
 
 /**

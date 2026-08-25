@@ -46,7 +46,14 @@ export interface UpdateAreaInput {
 export interface AuthRepository {
   listDemoUsers(): Promise<DemoUser[]>;
   signIn(role: DemoRole): Promise<DemoUser>;
-  signInWithPassword(email: string, password: string): Promise<DemoUser>;
+  /**
+   * `takeOver` ends the session on the technician's other device.
+   *
+   * Optional so the first attempt cannot carry it: a technician is refused
+   * with SESSION_ALREADY_ACTIVE and only then offered this, so signing another
+   * handset out is always something that was asked for.
+   */
+  signInWithPassword(email: string, password: string, takeOver?: boolean): Promise<DemoUser>;
   changeRequiredPassword(password: string): Promise<void>;
   resetPassword(email: string): Promise<void>;
   currentUser(): Promise<DemoUser | null>;
