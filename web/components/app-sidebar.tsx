@@ -135,7 +135,19 @@ export function NavigationSection({
             const childActive = activeChild?.type === child.type;
             return (
               <SidebarMenuSubItem key={child.type}>
-                <SidebarMenuSubButton asChild isActive={childActive}>
+                {/* The row grows rather than clipping. The base style is
+                    `flex h-7 … overflow-hidden`, and its truncate rule only
+                    reaches a `span` child — a bare text label wraps inside a
+                    fixed 28px box and spills over the rows above and below,
+                    which is what "Supra + lockbox placement" did. Height is
+                    left to the content and the label is allowed two lines,
+                    because the office's wording is theirs, not ours to
+                    abbreviate until it fits. */}
+                <SidebarMenuSubButton
+                  asChild
+                  className="h-auto min-h-7 py-1 leading-snug"
+                  isActive={childActive}
+                >
                   <Link
                     aria-current={childActive ? 'page' : undefined}
                     href={navigationChildHref(item, child)}
@@ -216,7 +228,10 @@ function NavigationTree({
   );
 }
 
-function NavigationTreeWithActiveType(props: { groups: AdminNavigationGroup[]; onNavigate: () => void }) {
+function NavigationTreeWithActiveType(props: {
+  groups: AdminNavigationGroup[];
+  onNavigate: () => void;
+}) {
   const activeType = useSearchParams().get('type');
   return <NavigationTree {...props} activeType={activeType} />;
 }

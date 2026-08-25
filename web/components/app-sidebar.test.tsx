@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { NavigationSection } from './app-sidebar';
 import { SidebarMenu, SidebarMenuItem, SidebarProvider } from './ui/sidebar';
-import type { AdminNavigationItem } from '@/lib/admin-navigation';
+import { adminNavigation, type AdminNavigationItem } from '@/lib/admin-navigation';
 
 const inspections: AdminNavigationItem = {
   title: 'Inspections',
@@ -82,10 +82,7 @@ describe('NavigationSection', () => {
     renderSection({ isActive: true, activeChild: { title: 'Move-out', type: 'MOVE_OUT' } });
 
     expect(header()).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('link', { name: 'Move-out' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    expect(screen.getByRole('link', { name: 'Move-out' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Move-in' })).not.toHaveAttribute('aria-current');
   });
 
@@ -109,5 +106,35 @@ describe('NavigationSection', () => {
     fireEvent.click(within(list).getByRole('link', { name: 'Move-in' }));
     document.removeEventListener('click', swallowNavigation);
     expect(onNavigate).toHaveBeenCalled();
+  });
+
+  /**
+   * Every section the navigation declares is reachable.
+   *
+   * The list grew from five to nine when the office added its off-cycle work,
+   * and the row that carried the longest label wrapped inside a fixed-height
+   * box and spilled over its neighbours. Layout is not something jsdom can
+   * judge, but "the section exists and points somewhere" is — and a section
+   * quietly missing from the sidebar is the failure that would go unnoticed
+   * longest, because nothing else links to these lists.
+   */
+  it('offers every declared inspection section', () => {
+    // The real navigation rather than this file's two-child fixture: the thing
+    // worth asserting is that the config and the component agree, and the
+    // fixture cannot disagree with itself.
+    const declared = adminNavigation
+      .flatMap((group) => group.items)
+      .find((item) => item.children?.length)!;
+    renderSection({ item: declared });
+    fireEvent.click(header());
+    const list = document.getElementById(header().getAttribute('aria-controls')!)!;
+
+    expect(declared.children!.length).toBeGreaterThan(5);
+    for (const child of declared.children!) {
+      expect(within(list).getByRole('link', { name: child.title })).toHaveAttribute(
+        'href',
+        `/inspections?type=${child.type}`,
+      );
+    }
   });
 });
