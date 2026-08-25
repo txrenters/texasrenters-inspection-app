@@ -17,10 +17,20 @@ function credentialRow(overrides: Record<string, unknown> = {}) {
     authUserId: AUTH_USER_ID,
     passwordHash: hashOf(PASSWORD),
     mustChangePassword: false,
-    profile: { isActive: true },
+    // No memberships by default: an account with no technician role is the
+    // case that must never be held to one device.
+    profile: { isActive: true, memberships: [] },
     ...overrides,
   };
 }
+
+const TECHNICIAN = { isActive: true, memberships: [{ role: 'INSPECTION_TECHNICIAN' }] };
+
+/** A refresh token row that is live right now. */
+const liveSession = {
+  createdAt: new Date('2026-08-26T09:00:00.000Z'),
+  userAgent: 'okhttp/4.12.0 (Android 13)',
+};
 
 function prismaFor(credential: unknown) {
   return {
@@ -31,6 +41,7 @@ function prismaFor(credential: unknown) {
     },
     authRefreshToken: {
       create: jest.fn().mockResolvedValue({ id: 'refresh-1' }),
+      findFirst: jest.fn().mockResolvedValue(null),
       findUnique: jest.fn(),
       update: jest.fn().mockResolvedValue({}),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -113,6 +124,88 @@ describe('self-hosted token issuing', () => {
   });
 });
 
+/**
+ * One signed-in device per technician.
+ *
+ * Two handsets signed in as the same technician can both film the same rooms,
+ * and the second copy is not extra evidence — it is a conflict somebody has to
+ * reconcile. Nothing below the session layer can tell two handsets apart, so
+ * this is the only place it can be enforced.
+ */
+describe('one device per technician', () => {
+  beforeEach(() => {
+    process.env.AUTH_JWT_SECRET = 'self-hosted-secret';
+  });
+  afterEach(() => delete process.env.AUTH_JWT_SECRET);
+
+  it('refuses a technician already signed in elsewhere, and names the device', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.signIn('user@example.com', PASSWORD)).rejects.toMatchObject({
+      status: 409,
+      code: 'SESSION_ALREADY_ACTIVE',
+    });
+    // Refused, not evicted: the other handset may be mid-walkthrough.
+    expect(prisma.authRefreshToken.updateMany).not.toHaveBeenCalled();
+    expect(prisma.authRefreshToken.create).not.toHaveBeenCalled();
+  });
+
+  it('signs in and ends the other session when the takeover is asked for', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    const session = await service.signIn('user@example.com', PASSWORD, {
+      takeOverExistingSession: true,
+    });
+
+    expect(session.accessToken).toBeTruthy();
+    expect(prisma.authRefreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ revokedAt: null }) }),
+    );
+  });
+
+  it('lets a technician sign in when no session is live', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.signIn('user@example.com', PASSWORD)).resolves.toMatchObject({
+      tokenType: 'Bearer',
+    });
+  });
+
+  /**
+   * An administrator on a laptop and carrying the app is doing something
+   * normal. Refusing it would teach people to share logins, which is the thing
+   * this rule exists to prevent.
+   */
+  it('never holds a non-technician to one device', async () => {
+    const prisma = prismaFor(credentialRow());
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.signIn('user@example.com', PASSWORD)).resolves.toMatchObject({
+      tokenType: 'Bearer',
+    });
+    // Not even looked for: the query is skipped before it is asked.
+    expect(prisma.authRefreshToken.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('still reads a wrong password as a wrong password', async () => {
+    // The refusal must not become the answer to everything: a technician with
+    // a live session and a typo needs to be told about the typo.
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.signIn('user@example.com', 'wrong')).rejects.toMatchObject({
+      status: 401,
+    });
+  });
+});
+
 describe('sign-in', () => {
   beforeEach(() => {
     process.env.AUTH_JWT_SECRET = 'self-hosted-secret';
@@ -164,7 +257,7 @@ describe('sign-in', () => {
   });
 
   it('rejects a deactivated profile even with the right password', async () => {
-    const prisma = prismaFor(credentialRow({ profile: { isActive: false } }));
+    const prisma = prismaFor(credentialRow({ profile: { isActive: false, memberships: [] } }));
     const service = new SessionService(prisma as never, new TokenService());
 
     await expect(service.signIn('user@example.com', PASSWORD)).rejects.toMatchObject({
@@ -482,7 +575,11 @@ describe('password reset', () => {
       authUserId: AUTH_USER_ID,
       profile: { displayName: 'Ada', isActive: true },
     });
-    const service = new PasswordResetService(prisma as never, identities() as never, mailer() as never);
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      mailer() as never,
+    );
 
     await service.request('ada@example.com');
 
@@ -556,14 +653,17 @@ describe('password reset', () => {
     // Distinguishing "never existed" from "expired" tells someone guessing
     // tokens which guesses were closer.
     const prisma = resetPrisma(null);
-    const service = new PasswordResetService(prisma as never, identities() as never, mailer() as never);
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      mailer() as never,
+    );
 
     await expect(service.reset(RESET_TOKEN, PASSWORD)).rejects.toMatchObject({
       status: 400,
       code: 'RESET_TOKEN_INVALID',
     });
   });
-
 });
 
 describe('replacing a temporary password', () => {
@@ -611,7 +711,11 @@ describe('replacing a temporary password', () => {
 
   it('refuses for an account that no longer exists', async () => {
     const identity = identities();
-    const service = new PasswordResetService(prisma(null) as never, identity as never, undefined as never);
+    const service = new PasswordResetService(
+      prisma(null) as never,
+      identity as never,
+      undefined as never,
+    );
 
     await expect(service.changeRequiredPassword(AUTH_USER_ID, PASSWORD)).rejects.toMatchObject({
       status: 404,

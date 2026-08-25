@@ -537,8 +537,8 @@ const unavailable = (message: string): never => {
 export class ApiAuthRepository implements AuthRepository {
   listDemoUsers = async () => unavailable('Demo accounts are disabled in this app build.');
   signIn = async () => unavailable('Demo sign-in is disabled in this app build.');
-  async signInWithPassword(email: string, password: string) {
-    await signIn(email, password);
+  async signInWithPassword(email: string, password: string, takeOver = false) {
+    await signIn(email, password, { takeOver });
     const user = await this.currentUser();
     if (!user) throw new Error('No active TexasRenters profile or organization membership.');
     return user;

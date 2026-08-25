@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { compare, hashSync } from 'bcryptjs';
+import { UserRole } from '@prisma/client';
 
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
@@ -28,6 +29,21 @@ const ABSENT_ACCOUNT_HASH = hashSync(
 );
 
 /** One message for every failure mode, so none of them identify an account. */
+/**
+ * Names the other handset, when the user agent says anything worth repeating.
+ *
+ * Recorded user agents are `okhttp/…` and `CFNetwork/…` — accurate and useless
+ * to a technician standing in a hallway. The platform is the one part that
+ * helps them recognise which phone is meant, so that is all this repeats, and
+ * it says nothing at all rather than quoting a library version.
+ */
+function describeDevice(userAgent: string | null): string {
+  if (!userAgent) return '';
+  if (/android/i.test(userAgent)) return ' (an Android phone)';
+  if (/iphone|ipad|ios|darwin|cfnetwork/i.test(userAgent)) return ' (an iPhone)';
+  return '';
+}
+
 const REJECTED = new ApplicationError(
   401,
   'INVALID_CREDENTIALS',
@@ -60,7 +76,11 @@ export class SessionService {
   async signIn(
     email: string,
     password: string,
-    context: { userAgent?: string; ipAddress?: string } = {},
+    context: {
+      userAgent?: string;
+      ipAddress?: string;
+      takeOverExistingSession?: boolean;
+    } = {},
   ): Promise<SessionTokens> {
     const credential = await this.prisma.authCredential.findUnique({
       where: { email: email.trim().toLowerCase() },
@@ -68,7 +88,8 @@ export class SessionService {
         authUserId: true,
         passwordHash: true,
         mustChangePassword: true,
-        profile: { select: { isActive: true } },
+        // `memberships` for the role: only a technician is held to one device.
+        profile: { select: { isActive: true, memberships: { select: { role: true } } } },
       },
     });
 
@@ -80,6 +101,8 @@ export class SessionService {
     // deactivated account fail faster than a wrong password, which is the same
     // timing oracle in a different place.
     if (!credential.profile.isActive) throw REJECTED;
+
+    await this.enforceSingleDevice(credential.authUserId, credential.profile, context);
 
     const session = await this.issueSession(credential.authUserId, context);
     await this.prisma.authCredential.update({
@@ -206,6 +229,53 @@ export class SessionService {
       data: { revokedAt: new Date() },
     });
     if (count > 0) this.logger.log(`Revoked ${count} session(s) for ${authUserId}: ${reason}.`);
+  }
+
+  /**
+   * Holds a technician to one signed-in device.
+   *
+   * Two handsets signed in as the same technician can both film the same rooms,
+   * and the second copy is not extra evidence — it is a conflict somebody has
+   * to reconcile afterwards. Nothing below the session layer can tell the two
+   * apart: there is no device identity anywhere in the token, the request or
+   * the schema, so one live session per account is the only place this can be
+   * enforced today.
+   *
+   * Technicians only. An administrator signed in to the console and carrying
+   * the app is doing something normal, and refusing it would teach people to
+   * share logins — which is the thing this is trying to prevent.
+   *
+   * Refusing rather than evicting, and then taking over only when asked: the
+   * device already in the field may be mid-walkthrough, and signing it out from
+   * under somebody without being asked to is how filmed work goes missing.
+   */
+  private async enforceSingleDevice(
+    authUserId: string,
+    profile: { memberships: { role: UserRole }[] },
+    context: { takeOverExistingSession?: boolean },
+  ) {
+    const isTechnician = profile.memberships.some(
+      (membership) => membership.role === UserRole.INSPECTION_TECHNICIAN,
+    );
+    if (!isTechnician) return;
+
+    if (context.takeOverExistingSession) {
+      await this.revokeAllFor(authUserId, 'signed in on another device');
+      return;
+    }
+
+    const live = await this.prisma.authRefreshToken.findFirst({
+      where: { authUserId, revokedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true, userAgent: true },
+    });
+    if (!live) return;
+
+    throw new ApplicationError(
+      409,
+      'SESSION_ALREADY_ACTIVE',
+      `This account is already signed in on another device${describeDevice(live.userAgent)}, since ${live.createdAt.toISOString()}. Sign in there, or take this device over — the other one is signed out, and keeps uploading anything it has already filmed for a short while.`,
+    );
   }
 
   private async issueSession(

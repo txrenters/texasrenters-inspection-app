@@ -83,7 +83,10 @@ export class AuthController {
   @Post('login')
   @HttpCode(200)
   signIn(@Req() request: Request, @Body() body: SignInDto) {
-    return this.sessions.signIn(body.email, body.password, clientContext(request));
+    return this.sessions.signIn(body.email, body.password, {
+      ...clientContext(request),
+      takeOverExistingSession: body.takeOverExistingSession === true,
+    });
   }
 
   /**

@@ -171,17 +171,47 @@ async function refresh(refreshToken: string): Promise<MobileSession | null> {
   return next;
 }
 
-export async function signIn(email: string, password: string): Promise<MobileSession> {
+/**
+ * The account is signed in on another handset.
+ *
+ * A distinct type because the login screen has to treat it differently from a
+ * wrong password: this one is answerable, by taking the other device over, and
+ * offering that on a genuine credential failure would be nonsense.
+ */
+export class SessionConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionConflictError';
+  }
+}
+
+export async function signIn(
+  email: string,
+  password: string,
+  options: { takeOver?: boolean } = {},
+): Promise<MobileSession> {
   const response = await fetch(endpoint('/api/v1/auth/login'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({
+      email,
+      password,
+      // Omitted rather than sent false: a first attempt should never carry a
+      // flag that ends somebody else's session.
+      ...(options.takeOver ? { takeOverExistingSession: true } : {}),
+    }),
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(
-      body?.message ?? 'That email address and password do not match an active account.',
-    );
+    const body = (await response.json().catch(() => null)) as {
+      message?: string;
+      code?: string;
+    } | null;
+    const message =
+      body?.message ?? 'That email address and password do not match an active account.';
+    // The code, not the status: 409 alone would not tell the screen whether it
+    // can offer a way forward.
+    if (body?.code === 'SESSION_ALREADY_ACTIVE') throw new SessionConflictError(message);
+    throw new Error(message);
   }
   const issued = (await response.json()) as { accessToken: string; refreshToken: string };
   const session = toSession(issued.accessToken, issued.refreshToken);
