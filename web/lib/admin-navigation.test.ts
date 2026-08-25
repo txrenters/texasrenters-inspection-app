@@ -52,11 +52,40 @@ describe('admin navigation', () => {
   });
 
   describe('inspection type sub-items', () => {
-    it('covers every inspection type, so none is unreachable from the nav', () => {
-      // The sub-items are the primary way into a type's history. A type added to
-      // the enum and not here would exist only behind the toolbar dropdown.
-      expect([...(inspections.children ?? [])].map((child) => child.type).sort()).toEqual(
-        [...Object.values(InspectionType)].sort(),
+    it('covers every inspection type, in every section that has sub-items', () => {
+      // The sub-items are the primary way into a type's history. A type added
+      // to the enum and not here would exist only behind the toolbar dropdown.
+      //
+      // Over every section rather than only Inspections: Assignments carries
+      // the same list, and asserting one of them is how the two drift.
+      const sectioned = adminNavigation
+        .flatMap((group) => group.items)
+        .filter((item) => item.children?.length);
+      expect(sectioned.length).toBeGreaterThan(1);
+
+      for (const item of sectioned) {
+        const types = (item.children ?? [])
+          .map((child) => child.type)
+          // The empty type is "everything", not a type. Only Assignments has
+          // one, because a section list with no way back to the whole list is
+          // a list you cannot see all of.
+          .filter((type) => type !== '')
+          .sort();
+        expect(types).toEqual([...Object.values(InspectionType)].sort());
+      }
+    });
+
+    it('sends the all-assignments sub-item to the plain list, not to an empty filter', () => {
+      // `?type=` is not "no filter" — the page would forward the blank to an
+      // API that rejects anything outside the enum.
+      const assignments = adminNavigation
+        .flatMap((group) => group.items)
+        .find((item) => item.href === '/assignments')!;
+      expect(navigationChildHref(assignments, { title: 'All assignments', type: '' })).toBe(
+        '/assignments',
+      );
+      expect(activeNavigationChild(assignments, '/assignments', null)?.title).toBe(
+        'All assignments',
       );
     });
 
@@ -69,7 +98,9 @@ describe('admin navigation', () => {
     });
 
     it('marks a sub-item active only on the list itself', () => {
-      expect(activeNavigationChild(inspections, '/inspections', 'MOVE_OUT')?.title).toBe('Move-out');
+      expect(activeNavigationChild(inspections, '/inspections', 'MOVE_OUT')?.title).toBe(
+        'Move-out',
+      );
 
       // No type selected: the parent is active, no child is.
       expect(activeNavigationChild(inspections, '/inspections', null)).toBeUndefined();

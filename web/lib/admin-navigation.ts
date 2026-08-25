@@ -45,6 +45,29 @@ export type AdminBreadcrumb = {
   href?: string;
 };
 
+/**
+ * The inspection types, as sidebar sections.
+ *
+ * Ordered by the tenancy lifecycle — move-in, occupied, back-to-market,
+ * move-out — rather than alphabetically, because that is the sequence a
+ * property actually moves through. Everything scheduled independently of the
+ * tenancy follows, in the order the office listed it.
+ *
+ * Shared by Inspections and Assignments rather than written out twice, so a
+ * tenth type cannot appear in one list and be missing from the other.
+ */
+export const INSPECTION_TYPE_CHILDREN: readonly AdminNavigationChild[] = [
+  { title: 'Move-in', type: 'MOVE_IN' },
+  { title: 'Occupied', type: 'OCCUPIED' },
+  { title: 'Back-to-market', type: 'BACK_TO_MARKET' },
+  { title: 'Move-out', type: 'MOVE_OUT' },
+  { title: 'HVAC', type: 'HVAC' },
+  { title: 'Roof', type: 'ROOF' },
+  { title: 'Supra + lockbox placement', type: 'SUPRA_LOCKBOX_PLACEMENT' },
+  { title: 'Supra + lockbox removal', type: 'SUPRA_LOCKBOX_REMOVAL' },
+  { title: 'AC filter delivery', type: 'AC_FILTER_DELIVERY' },
+];
+
 export const adminNavigation: AdminNavigationGroup[] = [
   {
     title: 'Overview',
@@ -76,27 +99,18 @@ export const adminNavigation: AdminNavigationGroup[] = [
         href: '/inspections',
         icon: ClipboardCheck,
         permission: 'inspections:read',
-        // Ordered by the tenancy lifecycle — move-in, occupied, back-to-market,
-        // move-out — rather than alphabetically, because that is the sequence a
-        // property actually moves through. Everything scheduled independently
-        // of the tenancy follows, in the order the office listed it.
-        children: [
-          { title: 'Move-in', type: 'MOVE_IN' },
-          { title: 'Occupied', type: 'OCCUPIED' },
-          { title: 'Back-to-market', type: 'BACK_TO_MARKET' },
-          { title: 'Move-out', type: 'MOVE_OUT' },
-          { title: 'HVAC', type: 'HVAC' },
-          { title: 'Roof', type: 'ROOF' },
-          { title: 'Supra + lockbox placement', type: 'SUPRA_LOCKBOX_PLACEMENT' },
-          { title: 'Supra + lockbox removal', type: 'SUPRA_LOCKBOX_REMOVAL' },
-          { title: 'AC filter delivery', type: 'AC_FILTER_DELIVERY' },
-        ],
+        children: [...INSPECTION_TYPE_CHILDREN],
       },
       {
         title: 'Assignments',
         href: '/assignments',
         icon: Workflow,
         permission: 'inspections:assign',
+        // "All assignments" first, and it is not decoration. An item with
+        // children becomes a toggle rather than a destination, so without this
+        // the combined list — the view this page exists to serve — would have
+        // no route into it at all.
+        children: [{ title: 'All assignments', type: '' }, ...INSPECTION_TYPE_CHILDREN],
       },
     ],
   },
@@ -182,13 +196,19 @@ export function activeNavigationChild(
   pathname: string,
   type: string | null,
 ) {
-  if (!item.children || !type) return undefined;
+  if (!item.children) return undefined;
   if (normalizePathname(pathname) !== normalizePathname(item.href)) return undefined;
-  return item.children.find((child) => child.type === type);
+  // No type means the unfiltered list, which is a child in its own right where
+  // one is declared. Falling through to `undefined` would leave the section
+  // open with nothing in it highlighted.
+  return item.children.find((child) => child.type === (type ?? ''));
 }
 
 /** `/inspections?type=MOVE_OUT` for a child, `/inspections` for the parent. */
 export function navigationChildHref(item: AdminNavigationItem, child: AdminNavigationChild) {
+  // An empty type is the unfiltered list, and `?type=` is not that — it is a
+  // blank filter the page would forward to an API that rejects it.
+  if (!child.type) return item.href;
   return `${item.href}?type=${encodeURIComponent(child.type)}`;
 }
 
