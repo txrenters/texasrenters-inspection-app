@@ -6,6 +6,7 @@ import {
   inspectionRequiresEveryArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
+import { checklistKindWhere } from '../common/checklist-kind';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
@@ -152,7 +153,6 @@ const TECHNICIAN_ACTIVE_STATUSES: InspectionStatus[] = [
   InspectionStatus.SCHEDULED,
   InspectionStatus.IN_PROGRESS,
 ];
-
 
 const technicianRoomSelect = {
   id: true,
@@ -423,9 +423,7 @@ export class TechnicianService {
       // An explicit filter is always a subset of what the list may show:
       // CANCELLED is not accepted by the DTO, so `in` cannot widen visibility
       // past `visibleStatuses`.
-      status: query.status?.length
-        ? { in: query.status as InspectionStatus[] }
-        : visibleStatuses,
+      status: query.status?.length ? { in: query.status as InspectionStatus[] } : visibleStatuses,
       assignments: { some: { technicianId: user.id, isCurrent: true } },
       ...(query.search
         ? {
@@ -854,7 +852,11 @@ export class TechnicianService {
           action: 'TECHNICIAN_AREA_ADDED',
           entityType: 'PropertyArea',
           entityId: area.id,
-          metadata: { inspectionId, environment: input.environment, category: input.category ?? null },
+          metadata: {
+            inspectionId,
+            environment: input.environment,
+            category: input.category ?? null,
+          },
         },
       });
       return inspectionArea;
@@ -907,7 +909,10 @@ export class TechnicianService {
         where: {
           propertyAreaId: room.propertyAreaId,
           archivedAt: null,
-          kind: checklistKindFor(room.inspection.inspectionType),
+          // A visit whose evidence is the answer asks nothing, and an empty
+          // `in` matches no rows — the same result as skipping the query,
+          // without the caller having to handle a different shape back.
+          ...checklistKindWhere(checklistKindFor(room.inspection.inspectionType)),
         },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         select: { id: true, label: true, keywords: true },
@@ -1191,7 +1196,12 @@ export class TechnicianService {
   async updateArea(
     user: AuthenticatedUser,
     roomId: string,
-    input: { name?: string; environment?: AreaEnvironment; category?: AreaCategory | null; notes?: string },
+    input: {
+      name?: string;
+      environment?: AreaEnvironment;
+      category?: AreaCategory | null;
+      notes?: string;
+    },
   ) {
     const room = await this.assignedRoom(user, roomId);
 

@@ -31,7 +31,16 @@ describe('inspection tabs', () => {
    * reviewers to ignore the row.
    */
   it('offers the comparison only on a move-out', () => {
-    for (const type of ['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'HVAC']) {
+    for (const type of [
+      'MOVE_IN',
+      'OCCUPIED',
+      'BACK_TO_MARKET',
+      'HVAC',
+      'ROOF',
+      'SUPRA_LOCKBOX_PLACEMENT',
+      'SUPRA_LOCKBOX_REMOVAL',
+      'AC_FILTER_DELIVERY',
+    ]) {
       const { unmount } = render(
         <InspectionTabs active="overview" inspectionId={ID} inspectionType={type} />,
       );

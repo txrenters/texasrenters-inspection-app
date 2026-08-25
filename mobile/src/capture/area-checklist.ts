@@ -77,9 +77,15 @@ export function checklistForArea(
     inspectionType?: string | null;
   },
 ): ChecklistItem[] {
+  const kind = checklistKindFor(area.inspectionType);
+  // A visit whose evidence is the answer has nothing to score — a lockbox is
+  // fitted or it is not. Generating the room list here would put "Floor and
+  // coverings" in front of a technician standing at a front door with a key
+  // safe, which is the HVAC bug this rule exists to have fixed.
+  if (kind === 'NONE') return [];
   return checklistTemplateForKind(
     { name: area.name, environment: area.environment, category: area.category },
-    checklistKindFor(area.inspectionType),
+    kind,
   ).map((label) => ({
     id: label,
     label,
@@ -99,7 +105,10 @@ export function checklistForArea(
  * with a keyword table.
  */
 export function matchChecklistMentions(items: readonly ChecklistItem[], spoken: string): string[] {
-  const haystack = ` ${spoken.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ')} `;
+  const haystack = ` ${spoken
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')} `;
   if (haystack.trim().length === 0) return [];
   return items
     .filter((item) =>

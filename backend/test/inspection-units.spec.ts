@@ -226,6 +226,90 @@ describe('multi-unit inspection creation', () => {
     expect(tx.inspection.create).not.toHaveBeenCalled();
   });
 
+  /**
+   * Roof is scoped the same way, against the area's category rather than a
+   * boolean. Same reasoning: the property records where its roof is, so
+   * scheduling the visit is not somebody remembering to tick something.
+   */
+  it('attaches only the areas categorised as a roof', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'hall', hasAirConditioning: true, category: 'INDOOR_ROOM' },
+          { id: 'roof', hasAirConditioning: false, category: 'ROOF' },
+        ]),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'ROOF',
+      priority: 'STANDARD',
+    } as never);
+
+    const createData = tx.inspection.create.mock.calls[0][0].data;
+    expect(createData.areas.create).toEqual([{ propertyAreaId: 'roof' }]);
+  });
+
+  it('refuses a roof visit when the property records no roof', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'hall', hasAirConditioning: false, category: 'INDOOR_ROOM' }]),
+      },
+    });
+    const service = buildService(tx);
+
+    await expect(
+      service.createInspection(admin, {
+        propertyId: 'building-1',
+        scheduledAt: '2026-08-01T15:00:00.000Z',
+        inspectionType: 'ROOF',
+        priority: 'STANDARD',
+      } as never),
+    ).rejects.toMatchObject({ status: 409, code: 'NO_ROOF_AREAS' });
+    expect(tx.inspection.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The trap every off-cycle type falls into. The scheduler refuses a visit
+   * that reads against a move-in when the property has never had one — so a
+   * type not exempted is refused on most of the portfolio, with an error
+   * blaming the missing move-in rather than the missing exemption.
+   *
+   * `inspection.findFirst` is not stubbed to return a baseline here, so this
+   * passing means the lookup was never reached.
+   */
+  it('schedules off-cycle work on a property that has never had a move-in', async () => {
+    for (const inspectionType of [
+      'ROOF',
+      'AC_FILTER_DELIVERY',
+      'SUPRA_LOCKBOX_PLACEMENT',
+      'SUPRA_LOCKBOX_REMOVAL',
+    ]) {
+      const tx = buildTx({
+        propertyArea: {
+          findMany: jest
+            .fn()
+            .mockResolvedValue([{ id: 'roof', hasAirConditioning: true, category: 'ROOF' }]),
+        },
+      });
+      const service = buildService(tx);
+
+      await expect(
+        service.createInspection(admin, {
+          propertyId: 'building-1',
+          scheduledAt: '2026-08-01T15:00:00.000Z',
+          inspectionType,
+          priority: 'STANDARD',
+        } as never),
+      ).resolves.toBeDefined();
+    }
+  });
+
   it('refuses a hand-picked area list on an HVAC visit', async () => {
     const tx = buildTx({
       propertyArea: {
@@ -374,7 +458,12 @@ describe('technician payloads for unit inspections', () => {
         }),
       },
     };
-    const service = new TechnicianService(prisma as never, {} as never, {} as never, mediaProcessingDouble());
+    const service = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      mediaProcessingDouble(),
+    );
 
     const context = await service.inspectionContext(technician, 'inspection-1');
 

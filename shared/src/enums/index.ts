@@ -36,6 +36,22 @@ export const InspectionType = {
    * on a schedule of its own, on tenanted and vacant properties alike.
    */
   HVAC: 'HVAC',
+  /**
+   * Off-cycle work, all of it outside the tenancy chain for the same reason
+   * HVAC is: none of these is a stage a tenancy passes through, and none of
+   * them is compared against a move-in.
+   *
+   * They differ from the five above in what they cover. A roof inspection and
+   * a filter delivery are scoped by the property itself — the areas recorded
+   * as a roof, or as holding an air conditioner — so the office cannot forget
+   * one and cannot send a technician looking for something that was never
+   * there. The two lockbox visits have no fixed subject, so the office says
+   * which area the box goes on.
+   */
+  ROOF: 'ROOF',
+  SUPRA_LOCKBOX_PLACEMENT: 'SUPRA_LOCKBOX_PLACEMENT',
+  SUPRA_LOCKBOX_REMOVAL: 'SUPRA_LOCKBOX_REMOVAL',
+  AC_FILTER_DELIVERY: 'AC_FILTER_DELIVERY',
 } as const;
 export type InspectionType = (typeof InspectionType)[keyof typeof InspectionType];
 export enum UploadQueueStatus {

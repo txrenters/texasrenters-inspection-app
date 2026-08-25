@@ -50,6 +50,12 @@ const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
   OCCUPIED: process.env.REPORT_TEMPLATE_LABEL_OCCUPIED ?? 'Routine Inspection',
   BACK_TO_MARKET: process.env.REPORT_TEMPLATE_LABEL_BACK_TO_MARKET ?? 'Back to Market Inspection',
   HVAC: process.env.REPORT_TEMPLATE_LABEL_HVAC ?? 'HVAC Maintenance Inspection',
+  ROOF: process.env.REPORT_TEMPLATE_LABEL_ROOF ?? 'Roof Inspection',
+  SUPRA_LOCKBOX_PLACEMENT:
+    process.env.REPORT_TEMPLATE_LABEL_SUPRA_LOCKBOX_PLACEMENT ?? 'Supra Lockbox Placement',
+  SUPRA_LOCKBOX_REMOVAL:
+    process.env.REPORT_TEMPLATE_LABEL_SUPRA_LOCKBOX_REMOVAL ?? 'Supra Lockbox Removal',
+  AC_FILTER_DELIVERY: process.env.REPORT_TEMPLATE_LABEL_AC_FILTER_DELIVERY ?? 'AC Filter Delivery',
 };
 
 @Injectable()
