@@ -23,6 +23,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
+import { Badge, type BadgeTone } from '@/src/components/ui';
+import { AreaAnalysisCard } from '@/src/areas/AreaAnalysisCard';
+import { BaselineCard } from '@/src/areas/BaselineCard';
+import { WalkthroughGuideCard } from '@/src/areas/WalkthroughGuideCard';
+import { areaStage, deriveAreaStatus, type AreaStatusDescriptor } from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
@@ -30,7 +35,6 @@ import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
 import { EvidenceRequestCard } from '@/src/components/EvidenceRequestCard';
 import { BottomSheet } from '@/src/components/BottomSheet';
-import { FindingRow } from '@/src/components/FindingRow';
 import {
   useEvidenceRequests,
   useFindings,
@@ -62,6 +66,22 @@ registerIcons(
   PlayCircleIcon,
   RotateCwIcon,
 );
+
+/**
+ * The status ramp this screen shares with the inspection list, expressed as the
+ * badge tones the design system actually ships. Mapped rather than renamed:
+ * `AreaStatusTone` describes what a state means, `BadgeTone` describes how a
+ * pill is drawn, and collapsing the two would put UI vocabulary into a module
+ * that is deliberately free of it.
+ */
+const STATUS_BADGE_TONE: Record<AreaStatusDescriptor['tone'], BadgeTone> = {
+  neutral: 'neutral',
+  info: 'active',
+  progress: 'active',
+  success: 'done',
+  warning: 'pending',
+  danger: 'critical',
+};
 
 export default function AreaDetailScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
@@ -167,14 +187,17 @@ export default function AreaDetailScreen() {
     uploadSettled: hasRecording && item.uploadStatus !== 'FAILED',
   });
   const gate = areaCompletionGate(requirements);
-  const alreadyFinished =
-    item.completionStatus === 'COMPLETED' || item.completionStatus === 'SKIPPED';
-  const completionTone =
-    item.completionStatus === 'COMPLETED'
-      ? 'chart-3'
-      : item.completionStatus === 'RECORDING_SAVED'
-        ? 'chart-2'
-        : 'chart-4';
+  // The same derivation the inspection list uses, rather than this screen's own
+  // reading of `completionStatus`. The hand-rolled tone covered three of six
+  // statuses and sent the rest to the amber warning branch, so a skipped or an
+  // uploaded area was coloured as a problem.
+  const status = deriveAreaStatus(item);
+  const stage = areaStage(status.status, hasRecording);
+  const alreadyFinished = stage === 'FINISHED';
+  // Photographs can exist without a recording — a technician who shot stills
+  // and no video still has evidence, and hiding it because there is no video
+  // would be telling them nothing was saved.
+  const hasEvidence = hasRecording || areaSnapshots.length > 0;
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -228,27 +251,10 @@ export default function AreaDetailScreen() {
             </Text>
           </View>
           <HomeButton />
-          <View
-            className={`rounded-full px-3 py-1 ${
-              completionTone === 'chart-3'
-                ? 'bg-chart-3/15'
-                : completionTone === 'chart-2'
-                  ? 'bg-chart-2/15'
-                  : 'bg-chart-4/15'
-            }`}
-          >
-            <Text
-              className={`text-xs font-semibold capitalize ${
-                completionTone === 'chart-3'
-                  ? 'text-chart-3'
-                  : completionTone === 'chart-2'
-                    ? 'text-chart-2'
-                    : 'text-chart-4'
-              }`}
-            >
-              {item.completionStatus.replaceAll('_', ' ').toLowerCase()}
-            </Text>
-          </View>
+          {/* `deriveAreaStatus` already returns a cased label, which is also
+              what stops a raw `RECORDING_SAVED` reaching the screen when the
+              server sends a status outside the union. */}
+          <Badge label={status.label} tone={STATUS_BADGE_TONE[status.tone]} />
         </View>
 
         {/* First thing in the area, above the baseline: an outstanding request
@@ -259,213 +265,143 @@ export default function AreaDetailScreen() {
           resolving={resolveRequest.isPending}
         />
 
-        {/* Absent on a visit that does not deal in baselines. An HVAC job is
-            outside the move-in chain, so the whole card goes rather than
-            showing "No move-in baseline is available" — which read as a gap in
-            the record instead of a question that does not apply. */}
-        {item.baseline ? (
-          <View className="mx-5 mt-2 gap-3 rounded-2xl bg-card p-5">
-            <View className="flex-row items-center justify-between gap-3">
-              <View className="flex-row items-center gap-2">
-                <FileTextIcon size={18} className="text-primary" />
-                <Text className="text-base font-semibold text-foreground">Baseline Condition</Text>
-              </View>
-              <View className="rounded-full bg-muted px-3 py-1">
-                <Text className="text-xs font-semibold capitalize text-muted-foreground">
-                  {item.baseline.condition.replaceAll('_', ' ').toLowerCase()}
-                </Text>
-              </View>
-            </View>
-            <Text className="text-sm leading-6 text-muted-foreground">
-              {item.baseline.summary || 'No baseline condition is available for this room.'}
-            </Text>
-            <Text className="text-xs text-muted-foreground">
-              {item.baseline.evidenceCount} reference photos available
-            </Text>
-            <Text className="mt-2 text-xs font-bold uppercase tracking-wider text-primary">
-              Existing documented defects
-            </Text>
-            <Text className="text-sm text-muted-foreground">
-              {item.baseline.existingDefects.length
-                ? item.baseline.existingDefects.join(' · ')
-                : 'No existing defects documented.'}
-            </Text>
-            <View className="mt-1 flex-row items-center gap-2 self-start rounded-lg bg-muted px-3 py-1.5">
-              <Edit3Icon size={14} className="text-muted-foreground" />
-              <Text className="text-xs font-semibold text-muted-foreground">
-                Baseline is read-only
-              </Text>
-            </View>
-          </View>
+        {/* Before anything is filmed the screen is a briefing: what this room
+            was like, and how to walk it. Both drop away once a recording
+            exists — a technician returning to a room they had already walked
+            was reading four steps of filming instructions above the evidence
+            they came back to check. The baseline reappears below the evidence,
+            where it is reference rather than preparation. */}
+        {stage === 'NOT_FILMED' ? (
+          <>
+            {item.baseline ? <BaselineCard baseline={item.baseline} /> : null}
+            <WalkthroughGuideCard isEquipmentVisit={isEquipmentVisit} />
+          </>
         ) : null}
 
-        <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
-          <View className="flex-row items-start gap-3">
-            <View className="h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-              <RotateCwIcon size={19} className="text-primary" />
-            </View>
-            <View className="min-w-0 flex-1">
-              <Text className="text-base font-semibold text-foreground">
-                {isEquipmentVisit ? 'Equipment Walkthrough' : 'Clockwise Walkthrough'}
-              </Text>
-              <Text className="mt-1 text-xs leading-5 text-muted-foreground">
-                {isEquipmentVisit
-                  ? 'Cover the unit itself. There is no room sweep to complete: film what you are working on and narrate what you find.'
-                  : 'Narrate one slow pass around the room. Use snapshots to document the overview and focused finding context without interrupting the video.'}
-              </Text>
-            </View>
-          </View>
-          <View className="mt-4 overflow-hidden rounded-xl bg-muted">
-            {(isEquipmentVisit
-              ? ([
-                  ['1', 'Indoor unit', 'Film the head unit, its filter and the coil behind it'],
-                  ['2', 'Drain and tray', 'Show the condensate path and any standing water'],
-                  ['3', 'Running check', 'Narrate airflow, noise and vibration with it running'],
-                  ['4', 'Outdoor unit', 'Capture the condenser and the refrigerant lines'],
-                ] as const)
-              : ([
-                  ['1', 'Room overview', 'Capture the full room and primary circulation path'],
-                  ['2', 'Walls & surfaces', 'Move clockwise and narrate visible conditions'],
-                  ['3', 'Fixtures & details', 'Pause briefly on appliances, doors, and windows'],
-                  ['4', 'Exit pass', 'Confirm the room name before ending the recording'],
-                ] as const)
-            ).map(([number, title, description], index) => (
-              <View
-                key={number}
-                className={`flex-row items-center gap-3 px-3 py-3 ${
-                  index === 3 ? '' : 'border-b border-border'
-                }`}
-              >
-                <View className="h-7 w-7 items-center justify-center rounded-full bg-primary/10">
-                  <Text className="text-xs font-bold text-primary">{number}</Text>
-                </View>
-                <View className="min-w-0 flex-1">
-                  <Text className="text-sm font-semibold text-foreground">{title}</Text>
-                  <Text className="mt-0.5 text-xs text-muted-foreground">{description}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <View className="mx-5 mt-4 gap-3 rounded-2xl bg-card p-5">
-          <View className="flex-row items-center justify-between">
-            <Text className="text-base font-semibold text-foreground">Room Evidence</Text>
-            {/* Counts both kinds. It read "N saved" off recordings alone, so a
+        {/* Only once something has been captured. An empty evidence card above
+            a "Begin Walkthrough" button told the technician nothing they could
+            not already see, and its own "No recording saved yet" row competed
+            with the footer for the same tap. */}
+        {hasEvidence ? (
+          <View className="mx-5 mt-4 gap-3 rounded-2xl bg-card p-5">
+            <View className="flex-row items-center justify-between">
+              <Text className="text-base font-semibold text-foreground">Room Evidence</Text>
+              {/* Counts both kinds. It read "N saved" off recordings alone, so a
                 technician who had taken ten photos and no video was told
                 nothing was saved. */}
-            <Text className="text-xs text-muted-foreground">
-              {recordingCount} video{recordingCount === 1 ? '' : 's'} · {areaSnapshots.length} photo
-              {areaSnapshots.length === 1 ? '' : 's'}
+              <Text className="text-xs text-muted-foreground">
+                {recordingCount} video{recordingCount === 1 ? '' : 's'} · {areaSnapshots.length}{' '}
+                photo
+                {areaSnapshots.length === 1 ? '' : 's'}
+              </Text>
+            </View>
+            <Text className="text-xs leading-relaxed text-muted-foreground">
+              Capture one narrated room walkthrough. Snapshots can be taken before or during the
+              recording and upload independently.
             </Text>
-          </View>
-          <Text className="text-xs leading-relaxed text-muted-foreground">
-            Capture one narrated room walkthrough. Snapshots can be taken before or during the
-            recording and upload independently.
-          </Text>
-          {media.data?.length ? (
-            media.data.map((recording) => {
-              // A recording that only exists on this device has nothing on the
-              // server to stream, so it stays a plain row rather than offering
-              // playback that would fail.
-              const uploaded = !recording.id.startsWith('local-media-');
-              const label = recording.label || 'Primary room walkthrough';
-              const body = (
-                <>
-                  <View className="flex-1">
-                    <Text className="text-sm font-semibold text-foreground">{label}</Text>
-                    <Text className="mt-0.5 text-xs text-muted-foreground">
-                      {recording.durationSeconds}s · {describeRecordingLocation(recording.id)}
-                    </Text>
-                  </View>
-                  {uploaded ? (
-                    <PlayCircleIcon size={20} className="text-primary" />
+            {media.data?.length
+              ? media.data.map((recording) => {
+                  // A recording that only exists on this device has nothing on the
+                  // server to stream, so it stays a plain row rather than offering
+                  // playback that would fail.
+                  const uploaded = !recording.id.startsWith('local-media-');
+                  const label = recording.label || 'Primary room walkthrough';
+                  const body = (
+                    <>
+                      <View className="flex-1">
+                        <Text className="text-sm font-semibold text-foreground">{label}</Text>
+                        <Text className="mt-0.5 text-xs text-muted-foreground">
+                          {recording.durationSeconds}s · {describeRecordingLocation(recording.id)}
+                        </Text>
+                      </View>
+                      {uploaded ? (
+                        <PlayCircleIcon size={20} className="text-primary" />
+                      ) : (
+                        <CheckCircle2Icon size={18} className="text-chart-3" />
+                      )}
+                    </>
+                  );
+                  return uploaded ? (
+                    <Pressable
+                      accessibilityLabel={`Play ${label}`}
+                      accessibilityRole="button"
+                      className="flex-row items-center justify-between rounded-xl bg-muted p-3 active:scale-[0.98]"
+                      key={recording.id}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/(app)/playback/[mediaId]',
+                          params: { mediaId: recording.id, title: label },
+                        })
+                      }
+                    >
+                      {body}
+                    </Pressable>
                   ) : (
-                    <CheckCircle2Icon size={18} className="text-chart-3" />
-                  )}
-                </>
-              );
-              return uploaded ? (
-                <Pressable
-                  accessibilityLabel={`Play ${label}`}
-                  accessibilityRole="button"
-                  className="flex-row items-center justify-between rounded-xl bg-muted p-3 active:scale-[0.98]"
-                  key={recording.id}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/(app)/playback/[mediaId]',
-                      params: { mediaId: recording.id, title: label },
-                    })
-                  }
-                >
-                  {body}
-                </Pressable>
-              ) : (
-                <View
-                  className="flex-row items-center justify-between rounded-xl bg-muted p-3"
-                  key={recording.id}
-                >
-                  {body}
-                </View>
-              );
-            })
-          ) : null}
+                    <View
+                      className="flex-row items-center justify-between rounded-xl bg-muted p-3"
+                      key={recording.id}
+                    >
+                      {body}
+                    </View>
+                  );
+                })
+              : null}
 
-          {/* Photos, below the recordings in the same card. They were captured
+            {/* Photos, below the recordings in the same card. They were captured
               here and counted toward completion but never shown, so a technician
               had no way to check what they had actually shot without leaving the
               app. Horizontal because a room can hold twenty and a grid would
               push everything below it off the screen. */}
-          {areaSnapshots.length ? (
-            <ScrollView
-              accessibilityLabel={`${areaSnapshots.length} photos in this area`}
-              className="-mx-1"
-              horizontal
-              showsHorizontalScrollIndicator={false}
-            >
-              {areaSnapshots.map((snapshot) => (
-                <Pressable
-                  accessibilityHint="Opens this photo full screen"
-                  accessibilityLabel={`Photo taken ${new Date(snapshot.capturedAt).toLocaleTimeString()}`}
-                  accessibilityRole="imagebutton"
-                  key={snapshot.id}
-                  onPress={() => setViewedPhoto(snapshot.uri)}
-                >
-                  <Image
-                    accessibilityIgnoresInvertColors
-                    className="mx-1 h-20 w-20 rounded-xl bg-muted"
-                    resizeMode="cover"
-                    source={{ uri: snapshot.uri }}
-                  />
-                </Pressable>
-              ))}
-            </ScrollView>
-          ) : null}
+            {areaSnapshots.length ? (
+              <ScrollView
+                accessibilityLabel={`${areaSnapshots.length} photos in this area`}
+                className="-mx-1"
+                horizontal
+                showsHorizontalScrollIndicator={false}
+              >
+                {areaSnapshots.map((snapshot) => (
+                  <Pressable
+                    accessibilityHint="Opens this photo full screen"
+                    accessibilityLabel={`Photo taken ${new Date(snapshot.capturedAt).toLocaleTimeString()}`}
+                    accessibilityRole="imagebutton"
+                    key={snapshot.id}
+                    onPress={() => setViewedPhoto(snapshot.uri)}
+                  >
+                    <Image
+                      accessibilityIgnoresInvertColors
+                      className="mx-1 h-20 w-20 rounded-xl bg-muted"
+                      resizeMode="cover"
+                      source={{ uri: snapshot.uri }}
+                    />
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : null}
 
-          {!recordingCount ? (
-            <Pressable
-              accessibilityHint="Opens the camera for the primary room walkthrough"
-              accessibilityLabel="No recording saved yet. Start the primary room walkthrough."
-              accessibilityRole="button"
-              className="min-h-14 flex-row items-center gap-3 rounded-xl bg-muted p-4 active:scale-[0.98]"
-              onPress={() => router.push(`/camera/${inspectionId}/${id}`)}
-            >
-              <View className="h-9 w-9 items-center justify-center rounded-full bg-primary/10">
-                <CameraIcon size={18} className="text-primary" />
-              </View>
-              <View className="min-w-0 flex-1">
-                <Text className="text-sm font-semibold text-foreground">
-                  No recording saved yet
-                </Text>
-                <Text className="mt-0.5 text-xs text-muted-foreground">
-                  Start the primary room walkthrough
-                </Text>
-              </View>
-              <ChevronRightIcon size={16} className="text-muted-foreground" />
-            </Pressable>
-          ) : null}
-        </View>
-
+            {!recordingCount ? (
+              <Pressable
+                accessibilityHint="Opens the camera for the primary room walkthrough"
+                accessibilityLabel="No recording saved yet. Start the primary room walkthrough."
+                accessibilityRole="button"
+                className="min-h-14 flex-row items-center gap-3 rounded-xl bg-muted p-4 active:scale-[0.98]"
+                onPress={() => router.push(`/camera/${inspectionId}/${id}`)}
+              >
+                <View className="h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+                  <CameraIcon size={18} className="text-primary" />
+                </View>
+                <View className="min-w-0 flex-1">
+                  <Text className="text-sm font-semibold text-foreground">
+                    No recording saved yet
+                  </Text>
+                  <Text className="mt-0.5 text-xs text-muted-foreground">
+                    Start the primary room walkthrough
+                  </Text>
+                </View>
+                <ChevronRightIcon size={16} className="text-muted-foreground" />
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* Replaces a hard-coded four-item list whose first row ("Baseline
             reviewed") was literally `true` and whose contents had no bearing on
@@ -483,73 +419,32 @@ export default function AreaDetailScreen() {
             each axis is a judgement about that evidence. The technician's job on
             site is to capture it. */}
 
-
-        {/* Where analysis stands, and a way to run it again.
-            Shown only when there is a recording but nothing came back from it:
-            with findings on screen the state is self-evident, and with no
-            recording there is nothing to analyse. Until now this screen said
-            nothing at all in that case — a technician whose analysis had failed
-            saw an area that simply looked empty, with no way to retry. */}
-        {hasRecording && !roomFindings.length ? (
-          <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
-            <Text className="text-base font-semibold text-foreground">AI analysis</Text>
-            <Text className="mt-1 text-sm leading-6 text-muted-foreground">
-              {item.analysisPending
-                ? 'Running now. Findings appear here on their own, usually within a minute.'
-                : item.processingStatus === 'FAILED'
-                  ? 'Analysis could not be completed for this recording. Your video and photos are still saved.'
-                  : 'No findings were produced from this recording.'}
-            </Text>
-            {/* Offered only once analysis has stopped: asking to re-run
-                something already running would queue a second pass over the
-                same recording. */}
-            {!item.analysisPending && primaryMediaId ? (
-              <Button
-                busy={uploadActions.retryProcessing.isPending}
-                busyLabel="Starting…"
-                className="mt-4"
-                icon={<RotateCwIcon size={16} className="text-primary" />}
-                label="Run analysis again"
-                onPress={() => uploadActions.retryProcessing.mutate(primaryMediaId)}
-                variant="ghost"
-              />
-            ) : null}
-            {uploadActions.retryProcessing.error ? (
-              <Text className="mt-2 text-xs leading-5 text-muted-foreground">
-                {uploadActions.retryProcessing.error.message}
-              </Text>
-            ) : null}
-          </View>
+        {/* One card for the analysis and its findings. They are the same
+            subject at two moments and were never both on screen, so the second
+            heading only ever made a reader work out which one applied. Shown
+            only with a recording, because there is nothing else to analyse. */}
+        {hasRecording ? (
+          <AreaAnalysisCard
+            analysisPending={item.analysisPending}
+            findings={roomFindings}
+            onOpenFinding={(findingId) =>
+              router.push({
+                pathname: '/(app)/findings/[id]',
+                params: { id: findingId, inspectionId },
+              })
+            }
+            onRetry={(mediaId) => uploadActions.retryProcessing.mutate(mediaId)}
+            primaryMediaId={primaryMediaId}
+            processingStatus={item.processingStatus}
+            retryError={uploadActions.retryProcessing.error}
+            retrying={uploadActions.retryProcessing.isPending}
+          />
         ) : null}
 
-        {/* Only shown once analysis has produced something. An empty "Findings"
-            card during processing reads as "nothing wrong", which is a
-            different and much more dangerous claim than "not analyzed yet". */}
-        {roomFindings.length ? (
-          <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
-            <View className="flex-row items-center justify-between">
-              <Text className="text-base font-semibold text-foreground">AI findings</Text>
-              <View className="rounded-full bg-muted px-2.5 py-1">
-                <Text className="text-xs font-semibold text-muted-foreground">
-                  {roomFindings.length}
-                </Text>
-              </View>
-            </View>
-            {roomFindings.map((finding, index) => (
-              <FindingRow
-                finding={finding}
-                key={finding.id}
-                last={index === roomFindings.length - 1}
-                onPress={() =>
-                  router.push({
-                    pathname: '/(app)/findings/[id]',
-                    params: { id: finding.id, inspectionId },
-                  })
-                }
-              />
-            ))}
-          </View>
-        ) : null}
+        {/* Reference rather than preparation once the room is filmed: this is
+            what a technician checks a finding against, so it belongs under the
+            evidence rather than above the instructions. */}
+        {stage !== 'NOT_FILMED' && item.baseline ? <BaselineCard baseline={item.baseline} /> : null}
 
         {/* There is no "Mark Complete" here any more.
 
@@ -561,19 +456,9 @@ export default function AreaDetailScreen() {
 
             Adding more video stays available at every stage, including after
             the area completes: noticing something else in a room is normal, and
-            an extra clip does not undo the walkthrough. */}
-        {hasRecording ? (
-          <View className="mx-5 mt-4">
-            <Button
-              accessibilityHint="Records an extra clip without replacing the main walkthrough"
-              label="Add Additional Video"
-              onPress={() =>
-                router.push(`/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`)
-              }
-              variant="secondary"
-            />
-          </View>
-        ) : null}
+            an extra clip does not undo the walkthrough. The footer is the one
+            place that offers it — a second button here pushed the identical
+            route and was pure duplication. */}
         {/* Only while there is nothing to skip.
             Skipping means "this area was not inspected", which is a claim the
             evidence contradicts once a walkthrough has been recorded — and
