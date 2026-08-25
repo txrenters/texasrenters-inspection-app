@@ -30,12 +30,16 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
+import { PRESS_SURFACE } from '@/src/components/ui';
 import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
 import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
 import { checklistProgress } from '@/src/capture/area-checklist';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
+import { ShutterFlash } from '@/src/capture/ShutterFlash';
+import { StopRecordingSheet } from '@/src/capture/StopRecordingSheet';
+import { snapshotMode, stopRequestOutcome } from '@/src/capture/capture-intents';
 import {
   GUIDED_CAPTURE_POLICY,
   clampRotationDegrees,
@@ -174,9 +178,13 @@ export default function RoomCameraScreen() {
   const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
   const [photoCount, setPhotoCount] = useState(0);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
+  // A count, not a flag: two shutter taps in a row have to be distinguishable
+  // or the second renders the same value and nothing flashes.
+  const [flashTrigger, setFlashTrigger] = useState(0);
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [conditionOpen, setConditionOpen] = useState(false);
   const [sweepPromptOpen, setSweepPromptOpen] = useState(false);
+  const [confirmStopOpen, setConfirmStopOpen] = useState(false);
 
   /**
    * Authored items only, straight from `useRoomChecklist`.
@@ -472,6 +480,19 @@ export default function RoomCameraScreen() {
     camera?.stopRecording();
   };
 
+  /**
+   * Both stop controls route through here, so neither ends a take outright.
+   *
+   * A walkthrough cannot be resumed — stopping closes the recording and moves
+   * on to review — and the header arrow that doubles as stop sits exactly where
+   * a thumb reaches to go back. The second tap costs a second; refilming a room
+   * costs the visit.
+   */
+  const requestStopRecording = () => {
+    if (stopRequestOutcome({ recording, stopping }) === 'ignore') return;
+    setConfirmStopOpen(true);
+  };
+
   const uploadSnapshot = async (snapshot: RoomSnapshot) => {
     updateSnapshot(snapshot.id, { uploadStatus: 'UPLOADING' });
     try {
@@ -495,20 +516,30 @@ export default function RoomCameraScreen() {
 
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
-    if (recording && Platform.OS === 'android') {
+
+    // Everything the technician perceives when the shutter fires, shared by
+    // both capture modes. It used to hang off the still path alone, so on
+    // Android mid-recording — where no still is possible — a tap produced a
+    // haptic and nothing else.
+    const confirmCapture = (announcement: string) => {
+      setFlashTrigger((count) => count + 1);
+      void Haptics.selectionAsync().catch(() => undefined);
+      announce(announcement);
+    };
+
+    if (snapshotMode(Platform.OS, recording) === 'marker') {
       // Android cannot photograph mid-recording: expo-camera binds either the
       // image-capture or the video-capture use case, never both, so
       // takePictureAsync has nothing to shoot with while a video is running.
       // Rather than making the technician stop the walkthrough — the one thing
       // a continuous 360° capture must not do — the shutter records the moment
-      // and the server cuts that frame out of the uploaded video.
+      // and extractMarkerStills cuts that frame out of the finished video.
       const atMs = secondsRef.current * 1000;
       frameMarkersRef.current = [...frameMarkersRef.current, atMs];
       snapshotTypesRef.current.push(captureType);
       setPhotoCount((count) => count + 1);
       if (captureType === 'AREA_OVERVIEW') setCaptureType('FINDING_CONTEXT');
-      void Haptics.selectionAsync().catch(() => undefined);
-      announce(`Moment marked at ${formatDuration(secondsRef.current)}. Keep recording.`);
+      confirmCapture(`Moment marked at ${formatDuration(secondsRef.current)}. Keep recording.`);
       return;
     }
     setCapturingPhoto(true);
@@ -543,11 +574,10 @@ export default function RoomCameraScreen() {
       // Capturing an overview advances the selector to finding context.
       const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
       if (advancedToFindingContext) setCaptureType('FINDING_CONTEXT');
-      void Haptics.selectionAsync().catch(() => undefined);
       // Haptics alone do not say *what* happened, and the shutter is muted so
       // it never lands on the inspection audio. Announce the count, and the new
       // selection when it just changed underneath the technician.
-      announce(
+      confirmCapture(
         `Photo ${photoCount + 1} saved.${
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
         }`,
@@ -632,15 +662,16 @@ export default function RoomCameraScreen() {
         <View>
           <View className="flex-row items-center gap-3 px-5 py-3">
             <Pressable
-              // While recording this button stops the take rather than leaving,
-              // so the label must not say "Back" — that would read as discarding.
-              accessibilityLabel={recording ? 'Stop recording and review' : 'Back to area'}
+              // While recording this button ends the take rather than leaving, so
+              // the label must not say "Back" — that would read as discarding. It
+              // asks before ending anything; see requestStopRecording.
+              accessibilityLabel={recording ? 'Stop recording' : 'Back to area'}
               accessibilityRole="button"
               className="h-10 w-10 items-center justify-center rounded-full bg-black/40"
               // 40pt visual, 44pt target: hitSlop keeps the design and still
               // clears the minimum for a gloved or unsteady hand.
               hitSlop={8}
-              onPress={() => (recording ? stopRecording() : goBack())}
+              onPress={() => (recording ? requestStopRecording() : goBack())}
             >
               <BackGlyph size={21} className="text-white" />
             </Pressable>
@@ -804,7 +835,7 @@ export default function RoomCameraScreen() {
                 accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
                 accessibilityRole="button"
                 accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
-                className="h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10"
+                className={`h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10 ${PRESS_SURFACE}`}
                 onPress={() => void takeSnapshot()}
                 disabled={!ready || capturingPhoto}
               >
@@ -837,7 +868,7 @@ export default function RoomCameraScreen() {
                 accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
                 className="h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500"
                 disabled={!ready || stopping}
-                onPress={recording ? stopRecording : () => void beginRecording()}
+                onPress={recording ? requestStopRecording : () => void beginRecording()}
               >
                 {recording ? (
                   <SquareIcon size={26} className="text-white" />
@@ -892,6 +923,10 @@ export default function RoomCameraScreen() {
         </View>
       </SafeAreaView>
 
+      {/* Above the chrome so the blink covers the whole frame, below the sheets
+          so it never fires over a question. */}
+      <ShutterFlash trigger={flashTrigger} />
+
       <AreaChecklistSheet
         areaName={room.data?.name ?? 'Area'}
         // Keyed by item id so a row can read its own answers without scanning
@@ -943,6 +978,17 @@ export default function RoomCameraScreen() {
         areaName={room.data?.name ?? 'this area'}
         onClose={() => setSweepPromptOpen(false)}
         visible={sweepPromptOpen}
+      />
+
+      <StopRecordingSheet
+        elapsedLabel={formatDuration(seconds)}
+        onFinish={() => {
+          setConfirmStopOpen(false);
+          stopRecording();
+        }}
+        onKeepRecording={() => setConfirmStopOpen(false)}
+        photoCount={photoCount}
+        visible={confirmStopOpen}
       />
     </View>
   );
