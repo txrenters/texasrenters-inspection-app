@@ -40,6 +40,7 @@ interface DemoState {
   removeMedia: (id: string) => void;
   addSnapshot: (snapshot: RoomSnapshot) => void;
   updateSnapshot: (id: string, update: Partial<RoomSnapshot>) => void;
+  removeSnapshots: (ids: readonly string[]) => void;
   toggleChecklistItem: (areaId: string, itemId: string) => void;
   /** Marks items covered without unticking anything — used by transcript matching. */
   markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
@@ -144,6 +145,13 @@ export const useDemoStore = create<DemoState>()(
             item.id === id ? { ...item, ...update } : item,
           ),
         })),
+      removeSnapshots: (ids) =>
+        set((state) => {
+          // A Set because a discarded walkthrough can carry a dozen
+          // photographs, and this runs while the technician waits.
+          const doomed = new Set(ids);
+          return { snapshots: (state.snapshots ?? []).filter((item) => !doomed.has(item.id)) };
+        }),
       enqueueUpload: (item) => set((state) => ({ uploads: [item, ...state.uploads] })),
       updateUpload: (id, update) =>
         set((state) => ({

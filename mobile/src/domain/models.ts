@@ -15,12 +15,7 @@ export type InspectionStatus =
   | 'CANCELLED';
 export type Priority = 'STANDARD' | 'HIGH';
 export type RoomCompletionStatus =
-  | 'NOT_STARTED'
-  | 'RECORDING_SAVED'
-  | 'UPLOADED'
-  | 'COMPLETED'
-  | 'SKIPPED'
-  | 'FAILED';
+  'NOT_STARTED' | 'RECORDING_SAVED' | 'UPLOADED' | 'COMPLETED' | 'SKIPPED' | 'FAILED';
 export type UploadStatus = 'PENDING' | 'UPLOADING' | 'PAUSED' | 'FAILED' | 'COMPLETED';
 export type ProcessingStatus =
   | 'NOT_STARTED'
@@ -265,6 +260,16 @@ export interface LocalMedia {
   recordedAt: string;
   note: string;
   captureSummary?: GuidedCaptureSummary;
+  /**
+   * The capture session that produced this take.
+   *
+   * Snapshots carry the same id. Without it the review screen cannot tell
+   * which photographs belong to the recording in front of it, which is how
+   * discarding a take used to leave its photographs behind — including the
+   * copies already uploaded, which then appeared in the report for a
+   * walkthrough that was thrown away.
+   */
+  recordingSessionId?: string;
   /**
    * Video offsets, in milliseconds, where the technician asked for a still.
    *

@@ -454,6 +454,10 @@ export default function RoomCameraScreen() {
           sizeBytes: stored.sizeBytes,
           recordingType: isAdditional ? 'ADDITIONAL_ISSUE' : 'PRIMARY_AREA',
           frameMarkersMs: frameMarkersRef.current,
+          // The same id every snapshot in this take carries, so review can find
+          // them again — discarding a walkthrough has to take its photographs
+          // with it, and they are already uploaded by then.
+          recordingSessionId: captureSessionIdRef.current,
           // Rotation coverage travels with the recording so the backend can
           // judge walkthrough completeness alongside the video itself.
           captureSummary: createCaptureSummary(Math.max(1, secondsRef.current)),
