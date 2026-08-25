@@ -70,6 +70,10 @@ const INSPECTION_TYPE_LABEL: Record<string, string> = {
   OCCUPIED: 'Occupied inspection',
   BACK_TO_MARKET: 'Back-to-market inspection',
   HVAC: 'HVAC service visit',
+  ROOF: 'Roof inspection',
+  SUPRA_LOCKBOX_PLACEMENT: 'Lockbox placement',
+  SUPRA_LOCKBOX_REMOVAL: 'Lockbox removal',
+  AC_FILTER_DELIVERY: 'AC filter delivery',
 };
 
 const TONE_TEXT: Record<AreaStatusDescriptor['tone'], string> = {
@@ -390,7 +394,9 @@ export default function InspectionOverviewScreen() {
                     onPress={() => setAddAreaOpen(true)}
                   >
                     <PlusIcon size={16} className="text-primary-foreground" />
-                    <Text className="font-semibold text-primary-foreground">Add the first area</Text>
+                    <Text className="font-semibold text-primary-foreground">
+                      Add the first area
+                    </Text>
                   </Pressable>
                 ) : null}
               </>
@@ -411,9 +417,7 @@ export default function InspectionOverviewScreen() {
           coverage={coverage}
           items={priorityItems}
           onOpenArea={(roomId) => router.push(`/areas/${roomId}`)}
-          onOpenFinding={(findingId) =>
-            router.push(`/findings/${findingId}?inspectionId=${id}`)
-          }
+          onOpenFinding={(findingId) => router.push(`/findings/${findingId}?inspectionId=${id}`)}
         />
 
         <View className="mt-5">

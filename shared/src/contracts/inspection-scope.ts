@@ -35,6 +35,17 @@ export const AreaScope = {
    * technician to look for a unit that was never there.
    */
   AIR_CONDITIONED: 'AIR_CONDITIONED',
+  /**
+   * Every approved area recorded as a roof. The same idea as
+   * `AIR_CONDITIONED`, against `PropertyArea.category` rather than a boolean:
+   * the property says where its roof is, so scheduling a roof inspection is
+   * not an operator remembering to tick something.
+   *
+   * A property with no roof area recorded inspects nothing, and creation
+   * refuses rather than producing an empty visit — the same safe direction
+   * `hasAirConditioning` takes by defaulting to false.
+   */
+  ROOF_AREAS: 'ROOF_AREAS',
 } as const;
 
 export type AreaScope = (typeof AreaScope)[keyof typeof AreaScope];
@@ -53,7 +64,12 @@ export function areaScopeFor(inspectionType: string | null | undefined): AreaSco
     case InspectionType.MOVE_OUT:
       return AreaScope.ALL;
     case InspectionType.HVAC:
+    // A filter is fitted to the unit, so the visit covers exactly the areas an
+    // HVAC inspection would — no separate rule to keep in step.
+    case InspectionType.AC_FILTER_DELIVERY:
       return AreaScope.AIR_CONDITIONED;
+    case InspectionType.ROOF:
+      return AreaScope.ROOF_AREAS;
     default:
       return AreaScope.CHOSEN;
   }
@@ -72,6 +88,25 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 }
 
 /**
+ * Whether this visit has to be preceded by a completed move-in.
+ *
+ * Occupied, back-to-market and move-out are all read against the condition the
+ * move-in recorded, so scheduling one without that baseline produces a report
+ * with nothing to compare to. Everything else stands on its own: a move-in is
+ * the baseline, and the off-cycle visits never look at one.
+ *
+ * Named rather than left as a pair of literals in the scheduler, because that
+ * is where it kept being got wrong — every type added since has had to be
+ * remembered there, and forgetting means the new type is refused on any
+ * property that has never had a move-in.
+ */
+export function inspectionRequiresLifecycleBaseline(
+  inspectionType: string | null | undefined,
+): boolean {
+  return inspectionComparesToBaseline(inspectionType);
+}
+
+/**
  * Which set of checklist items this visit asks about an area.
  *
  * Both sets are persisted against the same area and only one is asked at a
@@ -81,8 +116,22 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
  */
 export function checklistKindFor(
   inspectionType: string | null | undefined,
-): 'ROOM' | 'AIR_CONDITIONING' {
-  return areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED ? 'AIR_CONDITIONING' : 'ROOM';
+): 'ROOM' | 'AIR_CONDITIONING' | 'NONE' {
+  switch (inspectionType) {
+    // Nothing to score. A lockbox is placed or it is not, and a filter is
+    // delivered or it is not; the evidence is the answer. Asking the room
+    // checklist here would be the original bug in a new costume — a technician
+    // fitting a lockbox asked whether the floor coverings are clean.
+    case InspectionType.SUPRA_LOCKBOX_PLACEMENT:
+    case InspectionType.SUPRA_LOCKBOX_REMOVAL:
+    case InspectionType.AC_FILTER_DELIVERY:
+    case InspectionType.ROOF:
+      return 'NONE';
+    default:
+      return areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED
+        ? 'AIR_CONDITIONING'
+        : 'ROOM';
+  }
 }
 
 /**
@@ -92,9 +141,7 @@ export function checklistKindFor(
  * Only a move-in. It has no baseline of its own to show a technician, because
  * it *is* the baseline.
  */
-export function inspectionEstablishesBaseline(
-  inspectionType: string | null | undefined,
-): boolean {
+export function inspectionEstablishesBaseline(inspectionType: string | null | undefined): boolean {
   return inspectionType === InspectionType.MOVE_IN;
 }
 
@@ -109,9 +156,7 @@ export function inspectionEstablishesBaseline(
  * a fault in the record rather than what it is, which is a question that does
  * not apply to servicing an air conditioner.
  */
-export function inspectionComparesToBaseline(
-  inspectionType: string | null | undefined,
-): boolean {
+export function inspectionComparesToBaseline(inspectionType: string | null | undefined): boolean {
   switch (inspectionType) {
     case InspectionType.OCCUPIED:
     case InspectionType.BACK_TO_MARKET:

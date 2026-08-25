@@ -102,6 +102,13 @@ enum InspectionType {
   MOVE_OUT
   /// Equipment maintenance, outside the tenancy lifecycle chain.
   HVAC
+  /// Off-cycle work, also outside the chain. Scoped by the property itself
+  /// (roof areas, air-conditioned areas) or by the office picking the area a
+  /// lockbox goes on. None of them is compared against a move-in.
+  ROOF
+  SUPRA_LOCKBOX_PLACEMENT
+  SUPRA_LOCKBOX_REMOVAL
+  AC_FILTER_DELIVERY
 }
 
 enum InspectionAreaCompletionStatus {

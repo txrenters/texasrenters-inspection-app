@@ -67,6 +67,22 @@ const DESCRIPTIONS: Record<string, { title: string; description: string }> = {
     title: 'Occupied inspections',
     description: 'Periodic checks during an active tenancy.',
   },
+  ROOF: {
+    title: 'Roof inspections',
+    description: 'Covers every area the property records as a roof.',
+  },
+  SUPRA_LOCKBOX_PLACEMENT: {
+    title: 'Supra + lockbox placement',
+    description: 'Fitting the lockbox, with photographs of where it went.',
+  },
+  SUPRA_LOCKBOX_REMOVAL: {
+    title: 'Supra + lockbox removal',
+    description: 'Collecting the lockbox at the end of the listing.',
+  },
+  AC_FILTER_DELIVERY: {
+    title: 'AC filter delivery',
+    description: 'Filters delivered to every area that has a unit.',
+  },
 };
 
 const COLUMNS: Array<Column<InspectionRow>> = [
@@ -82,14 +98,24 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     hideBelow: 'lg',
     cell: (row) => row.propertywareUnit?.name ?? 'Entire property',
   },
-  { key: 'type', header: 'Type', hideBelow: 'md', cell: (row) => <StatusBadge value={row.inspectionType} /> },
+  {
+    key: 'type',
+    header: 'Type',
+    hideBelow: 'md',
+    cell: (row) => <StatusBadge value={row.inspectionType} />,
+  },
   {
     key: 'scheduled',
     header: 'Scheduled',
     hideBelow: 'sm',
     cell: (row) => formatDateTime(row.scheduledAt),
   },
-  { key: 'priority', header: 'Priority', hideBelow: 'xl', cell: (row) => <StatusBadge value={row.priority} /> },
+  {
+    key: 'priority',
+    header: 'Priority',
+    hideBelow: 'xl',
+    cell: (row) => <StatusBadge value={row.priority} />,
+  },
   { key: 'status', header: 'Status', cell: (row) => <StatusBadge value={row.status} /> },
   {
     key: 'technician',
@@ -102,9 +128,7 @@ const COLUMNS: Array<Column<InspectionRow>> = [
       // A dash was the only sign nobody had it. An inspection can be scheduled
       // with "Leave unassigned" and then nothing ever raises it again, so the
       // one place they are all listed has to say so in words.
-      return (
-        current?.technician?.displayName ?? <StatusBadge value="UNASSIGNED" />
-      );
+      return current?.technician?.displayName ?? <StatusBadge value="UNASSIGNED" />;
     },
   },
 ];
@@ -184,7 +208,9 @@ export default function InspectionsPage() {
   const createHref = section
     ? `/inspections/new?type=${encodeURIComponent(state.type)}`
     : '/inspections/new';
-  const createLabel = section ? `Create ${humanize(state.type).toLowerCase()} inspection` : 'Create inspection';
+  const createLabel = section
+    ? `Create ${humanize(state.type).toLowerCase()} inspection`
+    : 'Create inspection';
 
   const rows = useMemo(() => inspections.data?.items ?? [], [inspections.data?.items]);
   const asDeletable = useCallback(
@@ -490,10 +516,7 @@ export default function InspectionsPage() {
       {/* No `redirectTo`: the list is not about the deleted record, and
           navigating away would discard the filters mid-cleanup. */}
       {pendingDelete ? (
-        <InspectionDeleteDialog
-          inspection={pendingDelete}
-          onClose={() => setPendingDelete(null)}
-        />
+        <InspectionDeleteDialog inspection={pendingDelete} onClose={() => setPendingDelete(null)} />
       ) : null}
 
       {bulkOpen && selectedRows.length ? (

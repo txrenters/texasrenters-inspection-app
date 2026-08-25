@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { FindingReviewStatus, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
 import { checklistKindFor } from '@texasrenters/shared';
+import { checklistKindWhere } from '../common/checklist-kind';
 import type {
   AreaEvidenceBundle,
   AreaEvidenceSummary,
@@ -78,7 +79,11 @@ export class AreaEvidenceService {
       select: { id: true, propertyAreaId: true },
     });
     if (!area)
-      throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'Inspection area was not found.');
+      throw new ApplicationError(
+        404,
+        'INSPECTION_AREA_NOT_FOUND',
+        'Inspection area was not found.',
+      );
 
     // The item has to belong to *this* area, or the report would show an
     // assessment against a room nobody inspected.
@@ -216,59 +221,61 @@ export class AreaEvidenceService {
         unassigned: { recordings: 0, photos: 0 },
       };
 
-    const [media, photoGroups, findingGroups, summaryFindings, checklistGroups] = await Promise.all([
-      // Recordings are few per inspection; the rows carry the flags needed for
-      // primary-presence and processing state in one pass.
-      this.prisma.inspectionMedia.findMany({
-        where: { inspectionId },
-        select: {
-          inspectionAreaId: true,
-          recordingType: true,
-          processingStatus: true,
-          createdAt: true,
-        },
-      }),
-      // Photos can number in the hundreds, so they are counted, never listed.
-      this.prisma.inspectionPhoto.groupBy({
-        by: ['inspectionAreaId', 'captureType'],
-        where: { inspectionId },
-        _count: { _all: true },
-        _max: { capturedAt: true },
-      }),
-      // Findings key on the catalog area, not the inspection area.
-      this.prisma.inspectionFinding.groupBy({
-        by: ['propertyAreaId', 'reviewStatus'],
-        where: { inspectionId, NOT: { ...ROOM_SUMMARY_WHERE } },
-        _count: { _all: true },
-      }),
-      this.prisma.inspectionFinding.groupBy({
-        by: ['propertyAreaId'],
-        where: { inspectionId, ...ROOM_SUMMARY_WHERE },
-        _count: { _all: true },
-      }),
-      /**
-       * How many checklist items carry an actual assessment.
-       *
-       * "Assessed" means at least one axis was answered. A row where the
-       * technician answered only Clean still says something about the room,
-       * and the printed reports the office issues contain exactly such
-       * partial rows — requiring all three would report real work as missing.
-       * A comment alone does not count: a note without a verdict is context,
-       * not an assessment.
-       */
-      this.prisma.inspectionAreaChecklistResponse.groupBy({
-        by: ['inspectionAreaId'],
-        where: {
-          inspectionArea: { inspectionId },
-          OR: [
-            { isClean: { not: null } },
-            { isUndamaged: { not: null } },
-            { isWorking: { not: null } },
-          ],
-        },
-        _count: { _all: true },
-      }),
-    ]);
+    const [media, photoGroups, findingGroups, summaryFindings, checklistGroups] = await Promise.all(
+      [
+        // Recordings are few per inspection; the rows carry the flags needed for
+        // primary-presence and processing state in one pass.
+        this.prisma.inspectionMedia.findMany({
+          where: { inspectionId },
+          select: {
+            inspectionAreaId: true,
+            recordingType: true,
+            processingStatus: true,
+            createdAt: true,
+          },
+        }),
+        // Photos can number in the hundreds, so they are counted, never listed.
+        this.prisma.inspectionPhoto.groupBy({
+          by: ['inspectionAreaId', 'captureType'],
+          where: { inspectionId },
+          _count: { _all: true },
+          _max: { capturedAt: true },
+        }),
+        // Findings key on the catalog area, not the inspection area.
+        this.prisma.inspectionFinding.groupBy({
+          by: ['propertyAreaId', 'reviewStatus'],
+          where: { inspectionId, NOT: { ...ROOM_SUMMARY_WHERE } },
+          _count: { _all: true },
+        }),
+        this.prisma.inspectionFinding.groupBy({
+          by: ['propertyAreaId'],
+          where: { inspectionId, ...ROOM_SUMMARY_WHERE },
+          _count: { _all: true },
+        }),
+        /**
+         * How many checklist items carry an actual assessment.
+         *
+         * "Assessed" means at least one axis was answered. A row where the
+         * technician answered only Clean still says something about the room,
+         * and the printed reports the office issues contain exactly such
+         * partial rows — requiring all three would report real work as missing.
+         * A comment alone does not count: a note without a verdict is context,
+         * not an assessment.
+         */
+        this.prisma.inspectionAreaChecklistResponse.groupBy({
+          by: ['inspectionAreaId'],
+          where: {
+            inspectionArea: { inspectionId },
+            OR: [
+              { isClean: { not: null } },
+              { isUndamaged: { not: null } },
+              { isWorking: { not: null } },
+            ],
+          },
+          _count: { _all: true },
+        }),
+      ],
+    );
 
     const summaryAreas = new Set(summaryFindings.map((row) => row.propertyAreaId));
     const checklistAssessedByArea = new Map(
@@ -407,7 +414,11 @@ export class AreaEvidenceService {
       },
     });
     if (!area)
-      throw new ApplicationError(404, 'INSPECTION_AREA_NOT_FOUND', 'Inspection area was not found.');
+      throw new ApplicationError(
+        404,
+        'INSPECTION_AREA_NOT_FOUND',
+        'Inspection area was not found.',
+      );
 
     const [recordings, photos, findings, summaryFinding, checklistItems] = await Promise.all([
       this.prisma.inspectionMedia.findMany({
@@ -494,7 +505,10 @@ export class AreaEvidenceService {
         where: {
           propertyAreaId: area.propertyArea.id,
           archivedAt: null,
-          kind: checklistKindFor(inspection.inspectionType),
+          // A visit whose evidence is the answer asks nothing, and an empty
+          // `in` matches no rows — the same result as skipping the query,
+          // without the caller having to handle a different shape back.
+          ...checklistKindWhere(checklistKindFor(inspection.inspectionType)),
         },
         orderBy: { sortOrder: 'asc' },
         select: {

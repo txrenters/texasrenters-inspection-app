@@ -1,12 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import {
-  AreaScope,
-  InspectionType,
-  areaScopeFor,
-  type AdminProperty,
-} from '@texasrenters/shared';
+import { AreaScope, InspectionType, areaScopeFor, type AdminProperty } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -82,6 +77,10 @@ function inspectionTypeLabel(type: InspectionType) {
     [InspectionType.BACK_TO_MARKET]: 'Back-to-market',
     [InspectionType.MOVE_OUT]: 'Move-out',
     [InspectionType.HVAC]: 'HVAC',
+    [InspectionType.ROOF]: 'Roof',
+    [InspectionType.SUPRA_LOCKBOX_PLACEMENT]: 'Supra + lockbox placement',
+    [InspectionType.SUPRA_LOCKBOX_REMOVAL]: 'Supra + lockbox removal',
+    [InspectionType.AC_FILTER_DELIVERY]: 'AC filter delivery',
   }[type];
 }
 
@@ -93,6 +92,14 @@ function inspectionTypeGuidance(type: InspectionType) {
     [InspectionType.MOVE_OUT]: 'Final condition inspection after the back-to-market inspection.',
     [InspectionType.HVAC]:
       'Heating and cooling equipment check. Scheduled independently of the tenancy lifecycle.',
+    [InspectionType.ROOF]:
+      'Covers every area recorded as a roof. The property decides the scope, so there is nothing to select.',
+    [InspectionType.SUPRA_LOCKBOX_PLACEMENT]:
+      'Fitting the lockbox. Choose the area it goes on so the photographs have somewhere to file.',
+    [InspectionType.SUPRA_LOCKBOX_REMOVAL]:
+      'Collecting the lockbox. Choose the area it is coming off.',
+    [InspectionType.AC_FILTER_DELIVERY]:
+      'Covers every area that has an air conditioner, the same scope as an HVAC visit.',
   }[type];
 }
 
@@ -211,7 +218,8 @@ function CreateInspectionForm() {
   const approvedAreas =
     propertyAreas.data?.filter(
       (area) =>
-        area.status === 'APPROVED' && (unitId ? !area.unitId || area.unitId === unitId : !area.unitId),
+        area.status === 'APPROVED' &&
+        (unitId ? !area.unitId || area.unitId === unitId : !area.unitId),
     ) ?? [];
   const hasApprovedAreas = approvedAreas.length > 0;
   const needsAreaSetup =
@@ -259,6 +267,8 @@ function CreateInspectionForm() {
   const scopeIsChoosable = areaScopeFor(inspectionType) === AreaScope.CHOSEN && hasApprovedAreas;
   const airConditionedScope = areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED;
   const airConditionedAreas = approvedAreas.filter((area) => area.hasAirConditioning);
+  const roofScope = areaScopeFor(inspectionType) === AreaScope.ROOF_AREAS;
+  const roofAreas = approvedAreas.filter((area) => area.category === 'ROOF');
   const selectedAreas = approvedAreas.filter((area) => !excludedAreaIds.has(area.id));
 
   useEffect(() => {
@@ -331,7 +341,11 @@ function CreateInspectionForm() {
           the old single ten-field grid, where "Portfolio (optional filter)" sat
           between the inspection type and the property with nothing to say it was
           a search aid rather than part of the record. */}
-      <form className="grid gap-4" noValidate onSubmit={(event) => void handleSubmit(submit)(event)}>
+      <form
+        className="grid gap-4"
+        noValidate
+        onSubmit={(event) => void handleSubmit(submit)(event)}
+      >
         <Card>
           <CardHeader>
             <CardTitle>What kind of inspection</CardTitle>
@@ -701,7 +715,9 @@ function CreateInspectionForm() {
                   />
                   <span className="min-w-0 flex-1 truncate">{area.name}</span>
                   {area.floor?.name ? (
-                    <span className="text-muted-foreground shrink-0 text-xs">{area.floor.name}</span>
+                    <span className="text-muted-foreground shrink-0 text-xs">
+                      {area.floor.name}
+                    </span>
                   ) : null}
                 </label>
               ))}
@@ -731,8 +747,8 @@ function CreateInspectionForm() {
             <CardHeader>
               <CardTitle>Which areas</CardTitle>
               <CardDescription>
-                An HVAC inspection covers every area recorded as having an air conditioner, so it
-                is not chosen here — the floor plan decides it.
+                This visit covers every area recorded as having an air conditioner, so it is not
+                chosen here — the floor plan decides it.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -763,6 +779,43 @@ function CreateInspectionForm() {
           </Card>
         ) : null}
 
+        {roofScope && hasApprovedAreas ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Which areas</CardTitle>
+              <CardDescription>
+                A roof inspection covers every area categorised as a roof, so it is not chosen here
+                — the floor plan decides it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {roofAreas.length ? (
+                <p className="text-sm">
+                  {roofAreas.length} of {approvedAreas.length} areas:{' '}
+                  <span className="font-medium">
+                    {roofAreas.map((area) => area.name).join(', ')}
+                  </span>
+                </p>
+              ) : (
+                <Alert variant="destructive">
+                  <TriangleAlertIcon />
+                  <AlertDescription>
+                    No area of this property is categorised as a roof, so this visit would cover
+                    nothing.{' '}
+                    <Link
+                      className="underline underline-offset-4"
+                      href={`/properties/${propertyId}#floor-plan`}
+                    >
+                      Set an area&rsquo;s category to Roof
+                    </Link>{' '}
+                    first.
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
+
         {!needsAreaSetup && approvedAreas.length ? (
           <Alert variant={areasWithChecklist === approvedAreas.length ? 'success' : 'default'}>
             <AlertDescription>
@@ -770,8 +823,8 @@ function CreateInspectionForm() {
                 <>All {approvedAreas.length} areas have a coverage checklist.</>
               ) : (
                 <>
-                  {areasWithChecklist} of {approvedAreas.length} areas have a coverage checklist. The
-                  rest fall back to a generated list.{' '}
+                  {areasWithChecklist} of {approvedAreas.length} areas have a coverage checklist.
+                  The rest fall back to a generated list.{' '}
                   <Link
                     className="underline underline-offset-4"
                     href={`/properties/${propertyId}#floor-plan`}
@@ -848,9 +901,7 @@ function CreateInspectionForm() {
           </Alert>
         ) : mutation.error || fallbackArea.error ? (
           <Alert variant="destructive">
-            <AlertDescription>
-              {(mutation.error ?? fallbackArea.error)?.message}
-            </AlertDescription>
+            <AlertDescription>{(mutation.error ?? fallbackArea.error)?.message}</AlertDescription>
           </Alert>
         ) : null}
 

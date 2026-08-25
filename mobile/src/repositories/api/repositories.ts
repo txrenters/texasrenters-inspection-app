@@ -37,13 +37,10 @@ import type {
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
-import {
-  runStreamUpload,
-  type StreamUploadSession,
-} from '../../media/stream-upload-runner';
+import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import { resolveApiUrl } from '@texasrenters/shared';
-
+import type { InspectionType } from '@texasrenters/shared';
 
 import { z } from 'zod';
 
@@ -84,7 +81,12 @@ const inspectionSchema = z.object({
   propertyId: z.string(),
   unitId: z.string().nullable().optional(),
   unitName: z.string().nullable().optional(),
-  type: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT', 'HVAC']),
+  // Permissive, like `completionStatus` on the room schema below and for the
+  // same reason: a strict list rejects the *whole* payload when the office
+  // adds a kind of visit, so every technician's inspection list breaks on a
+  // change that has nothing to do with them. The screens label what they know
+  // and fall back to the raw value for anything else.
+  type: z.string().transform((value) => value as InspectionType),
   baselineInspectionId: z.string().nullable().optional(),
   baselineScheduledAt: nullableString,
   scheduledAt: z.string(),
@@ -141,7 +143,9 @@ export const roomSchema = z.object({
   floorName: z.string(),
   order: z.number(),
   isRequired: z.boolean(),
-  inspectionType: z.enum(['MOVE_IN', 'OCCUPIED', 'BACK_TO_MARKET', 'MOVE_OUT', 'HVAC']),
+  // Permissive for the same reason as `type` on the summary above: a new
+  // inspection type must never cost a technician their area list.
+  inspectionType: z.string().transform((value) => value as InspectionType),
   /**
    * Optional, because a visit outside the tenancy chain has no baseline to
    * send. The server omits the block entirely for an HVAC inspection — absent
@@ -166,9 +170,7 @@ export const roomSchema = z.object({
   // members the server can send, and a strict list here would have rejected
   // the whole area rather than one field. The screens fall back to
   // NOT_STARTED for anything they do not recognise.
-  completionStatus: z
-    .string()
-    .transform((value) => value as RoomCompletionStatus),
+  completionStatus: z.string().transform((value) => value as RoomCompletionStatus),
   uploadStatus: z.enum(['PENDING', 'UPLOADING', 'PAUSED', 'FAILED', 'COMPLETED']),
   processingStatus: z.enum([
     'NOT_STARTED',
@@ -400,7 +402,8 @@ async function createStreamUploadSession(input: {
   if (!response.ok) {
     const detail = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(
-      detail?.message ?? `The upload could not be started (${response.status} from ${new URL(url).host}).`,
+      detail?.message ??
+        `The upload could not be started (${response.status} from ${new URL(url).host}).`,
     );
   }
   return (await response.json()) as StreamUploadSession;
@@ -1210,7 +1213,8 @@ export class ApiUploadRepository implements UploadRepository {
           ...(streamOutcome.retryable
             ? {
                 nextAttemptAt: new Date(
-                  Date.now() + Math.min(60, 2 ** Math.min((pending.attemptCount ?? 0) + 1, 6)) * 1_000,
+                  Date.now() +
+                    Math.min(60, 2 ** Math.min((pending.attemptCount ?? 0) + 1, 6)) * 1_000,
                 ).toISOString(),
               }
             : {}),

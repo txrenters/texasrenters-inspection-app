@@ -47,9 +47,7 @@ describe('checklist assessment contract', () => {
   it('reads an item from a backend that cannot score as unassessed', () => {
     // The pre-assessment shape: id, label, keywords and nothing else. It must
     // parse — and must not imply the item was found faulty.
-    const { first, second } = roundTrip([
-      { id: 'item-1', label: 'Doors and locks', keywords: [] },
-    ]);
+    const { first, second } = roundTrip([{ id: 'item-1', label: 'Doors and locks', keywords: [] }]);
     expect(first[0]).toMatchObject({
       isClean: null,
       isUndamaged: null,
@@ -144,6 +142,26 @@ describe('room contract', () => {
     const parsed = roomSchema.parse({ ...room, inspectionType: 'HVAC' });
     expect(parsed.baseline).toBeUndefined();
     expect(parsed.name).toBe('Hall');
+  });
+
+  /**
+   * The failure this schema keeps having. A closed enum here rejects the
+   * *whole* room, so the office adding a kind of visit costs every technician
+   * their area list — for a change that has nothing to do with them. The
+   * screens label the types they know and fall back for the rest.
+   */
+  it('reads a room from a kind of visit it has never heard of', () => {
+    for (const inspectionType of [
+      'ROOF',
+      'SUPRA_LOCKBOX_PLACEMENT',
+      'SUPRA_LOCKBOX_REMOVAL',
+      'AC_FILTER_DELIVERY',
+      'SOMETHING_ADDED_NEXT_YEAR',
+    ]) {
+      const parsed = roomSchema.parse({ ...room, inspectionType });
+      expect(parsed.inspectionType).toBe(inspectionType);
+      expect(parsed.name).toBe('Hall');
+    }
   });
 
   it('still reads the baseline when the visit has one', () => {

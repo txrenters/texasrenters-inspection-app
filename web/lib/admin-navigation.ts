@@ -78,14 +78,18 @@ export const adminNavigation: AdminNavigationGroup[] = [
         permission: 'inspections:read',
         // Ordered by the tenancy lifecycle — move-in, occupied, back-to-market,
         // move-out — rather than alphabetically, because that is the sequence a
-        // property actually moves through. HVAC last: it is scheduled
-        // independently of the tenancy.
+        // property actually moves through. Everything scheduled independently
+        // of the tenancy follows, in the order the office listed it.
         children: [
           { title: 'Move-in', type: 'MOVE_IN' },
           { title: 'Occupied', type: 'OCCUPIED' },
           { title: 'Back-to-market', type: 'BACK_TO_MARKET' },
           { title: 'Move-out', type: 'MOVE_OUT' },
           { title: 'HVAC', type: 'HVAC' },
+          { title: 'Roof', type: 'ROOF' },
+          { title: 'Supra + lockbox placement', type: 'SUPRA_LOCKBOX_PLACEMENT' },
+          { title: 'Supra + lockbox removal', type: 'SUPRA_LOCKBOX_REMOVAL' },
+          { title: 'AC filter delivery', type: 'AC_FILTER_DELIVERY' },
         ],
       },
       {
@@ -207,7 +211,10 @@ export function getAdminBreadcrumbs(pathname: string, type?: string | null): Adm
       : [{ title: item.title }];
   }
 
-  const remainder = normalized.slice(normalizePathname(item.href).length).split('/').filter(Boolean);
+  const remainder = normalized
+    .slice(normalizePathname(item.href).length)
+    .split('/')
+    .filter(Boolean);
   const breadcrumbs: AdminBreadcrumb[] = [{ title: item.title, href: item.href }];
 
   if (remainder[0] === 'new') return [...breadcrumbs, { title: 'Create' }];

@@ -1,5 +1,6 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  AreaCategory,
   EvidenceRequestStatus,
   FindingReviewStatus,
   InspectionStatus,
@@ -15,6 +16,7 @@ import {
   AreaScope,
   LEASE_EXPIRING_SOON_DAYS,
   areaScopeFor,
+  inspectionRequiresLifecycleBaseline,
   daysUntilLeaseEnd,
   leaseExpiryStatus,
 } from '@texasrenters/shared';
@@ -239,9 +241,7 @@ function mediaStorageReadiness(
   const provider = process.env.INSPECTION_MEDIA_STORAGE_PROVIDER;
   if (provider === 'r2') {
     const configured = Boolean(
-      process.env.R2_ACCOUNT_ID &&
-      process.env.R2_ACCESS_KEY_ID &&
-      process.env.R2_SECRET_ACCESS_KEY,
+      process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY,
     );
     return {
       provider: 'Cloudflare R2 (photos)',
@@ -1011,9 +1011,9 @@ export class AdminService {
         createdAt: true,
         updatedAt: true,
         internalNotes: true,
-      nextInspectionAlert: true,
-      maintenanceComments: true,
-      generalComments: true,
+        nextInspectionAlert: true,
+        maintenanceComments: true,
+        generalComments: true,
         propertywareBuilding: {
           select: { id: true, name: true, addressLine1: true, city: true, state: true },
         },
@@ -1162,9 +1162,10 @@ export class AdminService {
               status: PropertyAreaStatus.APPROVED,
             },
             orderBy: { inspectionOrder: 'asc' },
-            // `hasAirConditioning` for the HVAC scope below, which picks areas
-            // by equipment rather than by anything the caller sent.
-            select: { id: true, hasAirConditioning: true },
+            // `hasAirConditioning` and `category` for the equipment scopes
+            // below, which pick areas by what the property records rather than
+            // by anything the caller sent.
+            select: { id: true, hasAirConditioning: true, category: true },
           })
         : [];
       const approvedAreas = unitAreas.length
@@ -1176,9 +1177,10 @@ export class AdminService {
               status: PropertyAreaStatus.APPROVED,
             },
             orderBy: { inspectionOrder: 'asc' },
-            // `hasAirConditioning` for the HVAC scope below, which picks areas
-            // by equipment rather than by anything the caller sent.
-            select: { id: true, hasAirConditioning: true },
+            // `hasAirConditioning` and `category` for the equipment scopes
+            // below, which pick areas by what the property records rather than
+            // by anything the caller sent.
+            select: { id: true, hasAirConditioning: true, category: true },
           });
       // An inspection normally starts from an approved layout. The exception is
       // a property nobody has surveyed yet: rather than block it, or flatten it
@@ -1218,8 +1220,10 @@ export class AdminService {
           422,
           'AREA_SELECTION_NOT_ALLOWED',
           areaScope === AreaScope.AIR_CONDITIONED
-            ? 'An HVAC inspection covers every area that has air conditioning, so it cannot be limited to a selection.'
-            : 'A move-in or move-out covers every area, so it cannot be limited to a selection.',
+            ? 'This visit covers every area that has air conditioning, so it cannot be limited to a selection.'
+            : areaScope === AreaScope.ROOF_AREAS
+              ? 'A roof inspection covers every area recorded as a roof, so it cannot be limited to a selection.'
+              : 'A move-in or move-out covers every area, so it cannot be limited to a selection.',
         );
       if (requestedAreaIds) {
         const approvedIds = new Set(approvedAreas.map((area) => area.id));
@@ -1234,9 +1238,11 @@ export class AdminService {
       const scopedAreas =
         areaScope === AreaScope.AIR_CONDITIONED
           ? approvedAreas.filter((area) => area.hasAirConditioning)
-          : requestedAreaIds
-            ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
-            : approvedAreas;
+          : areaScope === AreaScope.ROOF_AREAS
+            ? approvedAreas.filter((area) => area.category === AreaCategory.ROOF)
+            : requestedAreaIds
+              ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
+              : approvedAreas;
 
       /**
        * The property has a layout, but nothing in it is marked as having a unit.
@@ -1251,7 +1257,21 @@ export class AdminService {
         throw new ApplicationError(
           409,
           'NO_AIR_CONDITIONED_AREAS',
-          'No approved area of this property is marked as having air conditioning. Mark the areas that have a unit before scheduling an HVAC inspection.',
+          'No approved area of this property is marked as having air conditioning. Mark the areas that have a unit before scheduling this visit.',
+        );
+
+      /**
+       * The same refusal, for the same reason, against a different marker.
+       *
+       * A property whose layout records no roof would produce a roof inspection
+       * covering nothing — a scheduling success that reaches the technician as
+       * an empty job. Saying so names the fix: categorise the roof area.
+       */
+      if (areaScope === AreaScope.ROOF_AREAS && approvedAreas.length && !scopedAreas.length)
+        throw new ApplicationError(
+          409,
+          'NO_ROOF_AREAS',
+          'No approved area of this property is recorded as a roof. Set an area’s category to Roof before scheduling a roof inspection.',
         );
 
       const technicianWillCapture = input.allowTechnicianAreaCapture === true;
@@ -1605,7 +1625,11 @@ export class AdminService {
         followUpTasks: input.tasks ?? null,
         completionBlockedReason: input.reason ?? 'Follow-up inspection required.',
       },
-      metadata: { dueAt: input.dueAt ?? null, tasks: input.tasks ?? null, reason: input.reason ?? null },
+      metadata: {
+        dueAt: input.dueAt ?? null,
+        tasks: input.tasks ?? null,
+        reason: input.reason ?? null,
+      },
     });
     return this.inspection(user, id);
   }
@@ -2115,11 +2139,7 @@ export class AdminService {
     input: MergeInspectionAreasDto,
   ) {
     if (input.sourceAreaId === input.targetAreaId)
-      throw new ApplicationError(
-        422,
-        'INVALID_MERGE',
-        'Choose two different areas to merge.',
-      );
+      throw new ApplicationError(422, 'INVALID_MERGE', 'Choose two different areas to merge.');
     const inspection = await this.requireInspection(user.organizationId, inspectionId);
     if (FROZEN_INSPECTION_STATUSES.includes(inspection.status))
       throw new ApplicationError(
@@ -2809,7 +2829,11 @@ export class AdminService {
    * The socket event and the push already cover a running app. This is for the
    * technician who has not opened it since Friday.
    */
-  private notifyAssignmentByEmail(organizationId: string, inspectionId: string, technicianId: string) {
+  private notifyAssignmentByEmail(
+    organizationId: string,
+    inspectionId: string,
+    technicianId: string,
+  ) {
     if (!this.mailer) return;
     void (async () => {
       try {
@@ -3469,7 +3493,9 @@ export class AdminService {
        * The reverse order is not symmetric — nothing in `InspectionMedia` points
        * back at a finding.
        */
-      const deletedFindings = await tx.inspectionFinding.deleteMany({ where: { inspectionId: id } });
+      const deletedFindings = await tx.inspectionFinding.deleteMany({
+        where: { inspectionId: id },
+      });
       const deletedMedia = await tx.inspectionMedia.deleteMany({ where: { inspectionId: id } });
 
       await tx.mediaUploadSession.deleteMany({
@@ -3568,13 +3594,18 @@ export class AdminService {
       scheduledAt: Date;
     },
   ) {
-    if (input.inspectionType === InspectionType.MOVE_IN) return null;
-    // HVAC is equipment maintenance, not a tenancy lifecycle stage. It is
-    // scheduled on its own cadence against tenanted and vacant properties
-    // alike, so requiring a completed move-in — or any predecessor — would
-    // block legitimate work on every property this system has not onboarded
-    // through a full lease cycle.
-    if (input.inspectionType === InspectionType.HVAC) return null;
+    // Only the three visits read against a move-in need one. The taxonomy
+    // lives in the shared contract rather than as literals here, because this
+    // is where it kept being got wrong: every type added since has had to be
+    // remembered in this function, and forgetting means the new type is
+    // refused on every property that has never been through a move-in — with
+    // an error blaming the missing move-in rather than the missing exemption.
+    //
+    // A move-in establishes the baseline rather than comparing to one, and the
+    // off-cycle visits — HVAC, roof, filter delivery, both lockbox calls — sit
+    // outside the tenancy chain entirely and are scheduled against tenanted
+    // and vacant properties alike.
+    if (!inspectionRequiresLifecycleBaseline(input.inspectionType)) return null;
 
     const lifecycleScope = {
       organizationId: input.organizationId,
@@ -3603,11 +3634,20 @@ export class AdminService {
         'Complete the move-in inspection for this property, unit, and lease before scheduling a later lifecycle inspection.',
       );
 
-    const requiredPredecessor = {
-      [InspectionType.OCCUPIED]: null,
+    /**
+     * Partial by nature: only the two visits that follow another one in the
+     * chain have a predecessor at all.
+     *
+     * Typed as partial rather than leaning on the early returns above to narrow
+     * the union — that narrowing was doing real work and vanished the moment
+     * the exemption became a shared rule, and a map that has to be widened for
+     * every new inspection type is a map that will eventually be forgotten.
+     */
+    const predecessors: Partial<Record<InspectionType, InspectionType>> = {
       [InspectionType.BACK_TO_MARKET]: InspectionType.OCCUPIED,
       [InspectionType.MOVE_OUT]: InspectionType.BACK_TO_MARKET,
-    }[input.inspectionType];
+    };
+    const requiredPredecessor = predecessors[input.inspectionType];
     if (requiredPredecessor) {
       const predecessor = await tx.inspection.findFirst({
         where: { ...lifecycleScope, inspectionType: requiredPredecessor },
