@@ -19,10 +19,12 @@ const ENVIRONMENTS: { value: AreaEnvironment; label: string }[] = [
  * Grace period between confirming and actually writing the area.
  *
  * An added area is a draft an administrator has to review, so a mistyped or
- * accidental one costs somebody else time. Five seconds is long enough to
- * notice and stop, short enough not to feel like waiting.
+ * accidental one costs somebody else time. Three seconds is long enough to
+ * catch the mistake you already know you made, and short enough that a
+ * technician adding several rooms in a row is not waiting on a countdown each
+ * time. It was five, which read as a delay rather than a safeguard.
  */
-const UNDO_SECONDS = 5;
+const UNDO_SECONDS = 3;
 
 /**
  * Lets a technician add an area the floor plan does not have.
