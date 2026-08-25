@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useAndroidKeyboardInset } from '../lib/keyboard-inset';
+
 /**
  * A panel anchored to the bottom of the screen, over a dimmed backdrop.
  *
@@ -41,6 +43,7 @@ export function BottomSheet({
   accessibilityRole?: 'alert';
 }) {
   const insets = useSafeAreaInsets();
+  const keyboardInset = useAndroidKeyboardInset();
 
   return (
     <Modal
@@ -51,8 +54,13 @@ export function BottomSheet({
       onRequestClose={onClose}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        // iOS keeps its own padding behaviour, which works because its modal
+        // window resizes. Android gets none — `height` had nothing to act on,
+        // since `statusBarTranslucent` stops this window resizing at all — and
+        // is lifted by the keyboard's reported height instead.
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         className="flex-1 justify-end bg-black/55"
+        style={{ paddingBottom: keyboardInset }}
       >
         <View
           accessibilityRole={accessibilityRole}
