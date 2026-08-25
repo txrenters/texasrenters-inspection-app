@@ -89,6 +89,20 @@ export function persistRoomSnapshot(
   return { uri: storedFile.uri, sizeBytes: storedFile.size || undefined };
 }
 
+/**
+ * Removes one stored snapshot from the device.
+ *
+ * Guarded the same way deleteDraftRecording is: only files this module wrote
+ * are ours to delete. A snapshot that never made it out of the camera's
+ * temporary directory has no managed path, and unlinking an arbitrary uri
+ * because it arrived in a discard call is not a risk worth taking.
+ */
+export function deleteRoomSnapshot(uri: string) {
+  if (Platform.OS === 'web' || !uri.includes(SNAPSHOTS_FOLDER)) return;
+  const file = new File(uri);
+  if (file.exists) file.delete();
+}
+
 export function clearLocalSnapshots() {
   if (Platform.OS === 'web') return;
   const directory = new Directory(Paths.document, SNAPSHOTS_FOLDER);

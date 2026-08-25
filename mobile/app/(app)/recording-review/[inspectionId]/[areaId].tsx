@@ -9,6 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { AdditionalVideoCategory } from '@/src/domain/models';
 import { useInspection, useRoom, useRooms, useSaveRecording } from '@/src/features/queries';
 import { deleteDraftRecording } from '@/src/media/local-recordings';
+import { discardCaptureSession } from '@/src/media/discard-capture-session';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { nextInspectionRoom } from '@/src/utils/room-workflow';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -43,9 +44,13 @@ export default function RecordingReviewScreen() {
     state.draftRecording?.ownerUserId === selectedUserId ? state.draftRecording : null,
   );
   const setDraft = useDemoStore((state) => state.setDraftRecording);
+  const snapshots = useDemoStore((state) => state.snapshots);
+  const removeSnapshots = useDemoStore((state) => state.removeSnapshots);
   const save = useSaveRecording();
   const [note, setNote] = useState(draft?.note ?? '');
   const [confirmed, setConfirmed] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
   /**
    * The video's own shape, so the box matches the footage instead of the
    * footage sitting letterboxed inside a fixed 300px band.
@@ -142,12 +147,46 @@ export default function RecordingReviewScreen() {
     );
   };
 
+  /**
+   * Throws away the take and everything it produced.
+   *
+   * Shared by Retake and Discard because they differ only in where they go
+   * next — both abandon this walkthrough, and a retake that left the previous
+   * take's photographs behind would quietly stack two sets of evidence on one
+   * room.
+   *
+   * Nothing local is touched until the server has let go of the uploaded
+   * copies. If it refuses — offline, most likely — the take is left exactly as
+   * it was and the technician can try again, because the alternative is
+   * telling them the evidence is gone while it is still bound for the report.
+   */
+  const discardTake = async (next: () => void) => {
+    if (!draft || discarding) return;
+    setDiscarding(true);
+    setDiscardError(null);
+    try {
+      const { removedIds, failed } = await discardCaptureSession(
+        snapshots ?? [],
+        draft.recordingSessionId,
+      );
+      if (failed.length) {
+        setDiscardError(
+          `${failed.length} photo${failed.length === 1 ? '' : 's'} could not be removed from the server. Nothing was discarded — check your connection and try again.`,
+        );
+        return;
+      }
+      if (removedIds.length) removeSnapshots(removedIds);
+      deleteDraftRecording(draft.uri);
+      setDraft(null);
+      next();
+    } finally {
+      setDiscarding(false);
+    }
+  };
+
   return (
     <SafeAreaView edges={['top', 'bottom']} className="flex-1 bg-background">
-      <ScrollView
-        className="flex-1"
-        contentContainerStyle={{ padding: 20, paddingBottom: 24 }}
-      >
+      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20, paddingBottom: 24 }}>
         <View className="flex-row items-start gap-3">
           <View className="min-w-0 flex-1">
             <Text className="text-2xl font-bold text-foreground">Review recording</Text>
@@ -281,38 +320,51 @@ export default function RecordingReviewScreen() {
             {save.error instanceof Error ? save.error.message : 'Could not queue the recording.'}
           </Text>
         ) : null}
+        {discardError ? (
+          <Text
+            accessibilityLiveRegion="assertive"
+            accessibilityRole="alert"
+            className="mt-3 text-sm text-destructive"
+          >
+            {discardError}
+          </Text>
+        ) : null}
         <View className="mt-5 flex-row gap-3">
-          {/* Both discard the take. The hints say so explicitly, because these
-              sit side by side and an accidental tap loses the recording. */}
+          {/* Both discard the take — the video and the photographs shot during
+              it, which are already uploaded by this point. The hints say so
+              explicitly, because these sit side by side and an accidental tap
+              loses the walkthrough. */}
           <Pressable
-            accessibilityHint="Deletes this recording and reopens the camera"
+            accessibilityHint="Deletes this recording and its photos, and reopens the camera"
             accessibilityLabel="Retake recording"
             accessibilityRole="button"
+            accessibilityState={{ busy: discarding, disabled: discarding }}
             className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border bg-card py-3"
-            onPress={() => {
-              deleteDraftRecording(draft.uri);
-              setDraft(null);
-              router.replace(
-                isAdditional
-                  ? `/camera/${inspectionId}/${areaId}?recordingType=ADDITIONAL_ISSUE`
-                  : `/camera/${inspectionId}/${areaId}`,
-              );
-            }}
+            disabled={discarding}
+            onPress={() =>
+              void discardTake(() =>
+                router.replace(
+                  isAdditional
+                    ? `/camera/${inspectionId}/${areaId}?recordingType=ADDITIONAL_ISSUE`
+                    : `/camera/${inspectionId}/${areaId}`,
+                ),
+              )
+            }
           >
             <Text className="font-semibold text-foreground">Retake</Text>
           </Pressable>
           <Pressable
-            accessibilityHint="Deletes this recording and returns to the area without saving"
+            accessibilityHint="Deletes this recording and its photos, and returns to the area without saving"
             accessibilityLabel="Discard recording"
             accessibilityRole="button"
+            accessibilityState={{ busy: discarding, disabled: discarding }}
             className="min-h-12 flex-1 items-center justify-center rounded-xl bg-destructive/10 py-3"
-            onPress={() => {
-              deleteDraftRecording(draft.uri);
-              setDraft(null);
-              router.replace(`/areas/${areaId}`);
-            }}
+            disabled={discarding}
+            onPress={() => void discardTake(() => router.replace(`/areas/${areaId}`))}
           >
-            <Text className="font-semibold text-destructive">Discard</Text>
+            <Text className="font-semibold text-destructive">
+              {discarding ? 'Discarding…' : 'Discard'}
+            </Text>
           </Pressable>
         </View>
       </ScrollView>

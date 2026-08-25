@@ -17,6 +17,7 @@ type RecordingDraftInput = {
   recordingType?: VideoRecordingType;
   captureSummary?: GuidedCaptureSummary;
   frameMarkersMs?: number[];
+  recordingSessionId?: string;
 };
 
 export function buildRecordingDraft({
@@ -29,6 +30,7 @@ export function buildRecordingDraft({
   recordingType = 'PRIMARY_AREA',
   captureSummary,
   frameMarkersMs,
+  recordingSessionId,
 }: RecordingDraftInput): LocalMedia {
   const normalizedDuration = Math.max(1, Math.round(durationSeconds));
 
@@ -46,6 +48,9 @@ export function buildRecordingDraft({
         : normalizedDuration * FALLBACK_MEGABYTES_PER_SECOND,
     recordedAt: new Date().toISOString(),
     note: '',
+    // Carried so the review screen can find this take's photographs. They are
+    // uploaded as they are shot, so discarding has to reach the server too.
+    recordingSessionId,
     // Additional clips are focused evidence, not full-room walkthroughs. Keep
     // their upload contract free of 360-completion pressure even if a stale
     // caller accidentally supplies a primary capture summary.
