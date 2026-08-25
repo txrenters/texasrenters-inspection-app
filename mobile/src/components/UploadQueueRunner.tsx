@@ -3,6 +3,8 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { queryKeys } from '../features/queries';
+import { snapshotsAwaitingUpload, uploadSnapshotNow } from '../media/snapshot-upload';
+import { useDemoStore } from '../stores/demo.store';
 import { verifyQueries } from '../features/state-consistency';
 import { evaluateUploadGate } from '../lib/connectivity';
 import { repositories } from '../repositories';
@@ -19,7 +21,14 @@ const FOREGROUND_QUEUE_INTERVAL_MS = 4_000;
  */
 const MAX_DRAIN_PASSES = 25;
 
-/** Runs the durable device queue independently of whichever screen is open. */
+/**
+ * Runs the durable device queues independently of whichever screen is open.
+ *
+ * Recordings and photographs both. Photographs had no runner at all: the
+ * camera sent each one once and a failure ended in a bare catch, so a photo
+ * taken in a basement stayed on the handset with nothing anywhere to send it
+ * and nothing to say so.
+ */
 export function UploadQueueRunner() {
   const client = useQueryClient();
   const running = useRef(false);
@@ -57,6 +66,20 @@ export function UploadQueueRunner() {
         // instead of jumping at the end of the whole batch.
         client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
       }
+      // Photographs, after the recordings. They are small and there are more
+      // of them, but a walkthrough video is the evidence an inspection cannot
+      // be finished without, so it goes first when the signal is poor.
+      //
+      // One per pass: the store is read fresh each time, so a photo that has
+      // just been marked FAILED carries its backoff and drops out of the next
+      // pass rather than being retried immediately.
+      const { snapshots, updateSnapshot } = useDemoStore.getState();
+      const [due] = snapshotsAwaitingUpload(snapshots ?? []);
+      if (due) {
+        await uploadSnapshotNow(due, { update: updateSnapshot });
+        uploaded += 1;
+      }
+
       if (!uploaded) return;
       await verifyQueries(client, [queryKeys.roomsRoot, queryKeys.roomRoot, queryKeys.dashboard]);
     } finally {

@@ -7,6 +7,24 @@ import type { PhotoCaptureType } from '../domain/models';
 import type { SnapshotCaptureSource } from '../capture/guided-capture';
 import { SessionExpiredError } from '../storage/offline-record-cache';
 
+/**
+ * A photo upload that did not succeed, carrying the status that explains it.
+ *
+ * The status is the whole point. Without it every failure looked the same, so
+ * the only honest thing a caller could do was give up — which is what the
+ * camera did, silently. A 409 will never succeed and a 503 almost certainly
+ * will on the next try, and nothing could tell them apart.
+ */
+export class PhotoUploadError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'PhotoUploadError';
+  }
+}
+
 export interface UploadRoomPhotoInput {
   roomId: string;
   uri: string;
@@ -77,7 +95,10 @@ export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id
         return undefined;
       }
     })();
-    throw new Error(message ?? `The photo upload failed (${result?.status ?? 'no response'}).`);
+    throw new PhotoUploadError(
+      message ?? `The photo upload failed (${result?.status ?? 'no response'}).`,
+      result?.status,
+    );
   }
   return JSON.parse(result.body ?? '{}') as { id: string };
 }

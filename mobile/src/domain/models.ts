@@ -327,6 +327,17 @@ export interface RoomSnapshot {
   findingId?: string;
   uploadStatus?: PhotoUploadStatus;
   serverPhotoId?: string;
+  /**
+   * Why the last upload attempt failed, and when to try again.
+   *
+   * A photo used to fail into silence: a bare catch marked it FAILED, the
+   * JPEG stayed on the device, and nothing re-sent it or said so. These three
+   * are what let it be retried and, when it genuinely cannot be, explained.
+   */
+  lastError?: string;
+  attempts?: number;
+  /** ISO timestamp. Absent means "due now". */
+  nextAttemptAt?: string;
 }
 
 export interface UploadItem {
