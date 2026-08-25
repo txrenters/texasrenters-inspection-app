@@ -218,3 +218,27 @@ export function pickUpNextArea(rooms: readonly InspectionRoom[]): InspectionRoom
   };
   return [...outstanding].sort((a, b) => rank(a) - rank(b) || a.order - b.order)[0];
 }
+
+/**
+ * How much of an area's story there is to tell yet.
+ *
+ * Coarser than `AreaStatus` on purpose. Ten statuses answer "what is happening
+ * to this area"; three stages answer "what should the technician be reading",
+ * which is the only question the area screen asks. Filming instructions matter
+ * before there is a recording and are noise afterwards; evidence and findings
+ * are the reverse.
+ *
+ * Takes the derived status rather than the room, so a screen that already
+ * called `deriveAreaStatus` does not derive it twice — and so `UPLOADED`, which
+ * that function folds into `COMPLETED`, cannot be treated as unfinished here
+ * while the submission gate treats it as finished.
+ */
+export type AreaStage = 'NOT_FILMED' | 'FILMED' | 'FINISHED';
+
+export function areaStage(status: AreaStatus, hasRecording: boolean): AreaStage {
+  // Terminal first: a skipped area has no recording and must still never be
+  // offered the filming guidance, and a completed one is not "in progress"
+  // because its media is still listed.
+  if (status === 'COMPLETED' || status === 'SKIPPED') return 'FINISHED';
+  return hasRecording ? 'FILMED' : 'NOT_FILMED';
+}
