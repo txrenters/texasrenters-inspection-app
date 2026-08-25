@@ -29,7 +29,17 @@ export function AuthLayout({
       </div>
 
       <div className="w-full max-w-sm space-y-6">
-        <div className="flex flex-col items-center gap-2">
+        {/* The product name is the wordmark, not a caption.
+
+            It was 12px, muted and letter-spaced under the logo — the smallest
+            text on a screen whose whole job is to say which TexasRenters
+            application you have arrived at. The maintenance app sets its own
+            name at wordmark scale directly beneath the same logo, and this now
+            matches: one lock-up, read as a unit.
+
+            `leading-none` and a tight gap so the two lines sit as one mark
+            rather than as a heading with a subtitle under it. */}
+        <div className="flex flex-col items-center gap-1">
           <Image
             alt="TexasRenters"
             className="h-8 w-auto dark:brightness-0 dark:invert"
@@ -38,7 +48,7 @@ export function AuthLayout({
             src="/texasrenterslogo-transparent.png"
             width={600}
           />
-          <span className="text-muted-foreground text-xs font-medium tracking-[0.18em] uppercase">
+          <span className="text-primary text-4xl leading-none font-extrabold tracking-tight uppercase">
             Inspection
           </span>
         </div>
