@@ -7,6 +7,7 @@ import { UploadQueueRunner } from '@/src/components/UploadQueueRunner';
 import { ScreenLoader } from '@/src/components/ui/Loader';
 import { useCurrentUser } from '@/src/features/queries';
 import { useQueryCacheHydration } from '@/src/features/useQueryCacheHydration';
+import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
 
 // Scoped to the signed-in area so a crash inside an inspection recovers here,
 // keeping the session and the upload queue rather than resetting to the root.
@@ -30,6 +31,11 @@ export default function AppLayout() {
           not the concern of any one of them. */}
       <OfflineBanner />
       <UploadQueueRunner />
+      {/* A sibling of the navigator, like the offline banner: which build is
+          running is not the concern of any one screen, and the prompt has to be
+          able to appear over all of them. It knows to stay quiet on the two
+          that would lose work. */}
+      <UpdatePrompt />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="inspections/[id]" />
