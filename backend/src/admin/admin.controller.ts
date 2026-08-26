@@ -107,6 +107,19 @@ import type { ComparisonClassification } from '@prisma/client';
  */
 export const CONSOLE_MAP_TAG = 'Console map';
 
+/**
+ * The other groupings worth pulling out of this controller.
+ *
+ * `Administrator application` is where every console route lands by default,
+ * and at ninety-odd entries it stops being a category and becomes a haystack.
+ * These three are coherent bodies of work a reader arrives looking for, so they
+ * get headings of their own — again per-handler, because the routes belong here
+ * and only their documentation wants separating.
+ */
+export const FLOOR_PLAN_TAG = 'Floor plans';
+export const AREA_EVIDENCE_TAG = 'Area evidence';
+export const CHARGES_TAG = 'Charges';
+
 @ApiTags('Administrator application')
 @ApiBearerAuth()
 @UseGuards(ApiAuthGuard, PermissionsGuard)
@@ -177,11 +190,13 @@ export class AdminController {
   }
 
   @Get('properties/:propertyId/floor-plans')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:read')
   floorPlanList(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {
     return this.floorPlans.list(request.user, id);
   }
   @Post('properties/:propertyId/floor-plans')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20_000_000, files: 1 } }))
   uploadFloorPlan(
@@ -193,6 +208,7 @@ export class AdminController {
     return this.floorPlans.upload(request.user, id, file, body.unitId);
   }
   @Get('floor-plans/:floorPlanId/content')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:read')
   @Header('Cache-Control', 'private, no-store')
   async floorPlanContent(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
@@ -204,6 +220,7 @@ export class AdminController {
   }
   /** Poll target for the extraction started by POST .../extract. */
   @Get('floor-plans/:floorPlanId/extraction-jobs/:jobId')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:manage')
   floorPlanExtractionJob(
     @Req() request: AuthenticatedRequest,
@@ -213,11 +230,13 @@ export class AdminController {
     return this.floorPlans.extractionJob(request.user, floorPlanId, jobId);
   }
   @Post('floor-plans/:floorPlanId/extract')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:manage')
   extractFloorPlan(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
     return this.floorPlans.extract(request.user, id);
   }
   @Post('floor-plans/:floorPlanId/retry-missing-markers')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:manage')
   retryMissingMarkers(@Req() request: AuthenticatedRequest, @Param('floorPlanId') id: string) {
     return this.floorPlans.retryMissingMarkers(request.user, id);
@@ -286,6 +305,7 @@ export class AdminController {
     return this.floorPlans.updateArea(request.user, id, body);
   }
   @Patch('property-areas/:areaId/marker')
+  @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:manage')
   updateAreaMarker(
     @Req() request: AuthenticatedRequest,
@@ -518,6 +538,7 @@ export class AdminController {
    * finalization the way reopen can.
    */
   @Post('inspections/:inspectionId/evidence-requests')
+  @ApiTags(AREA_EVIDENCE_TAG)
   @RequirePermissions('inspections:manage')
   createEvidenceRequest(
     @Req() request: AuthenticatedRequest,
@@ -527,11 +548,13 @@ export class AdminController {
     return this.service.createEvidenceRequest(request.user, id, body);
   }
   @Get('inspections/:inspectionId/evidence-requests')
+  @ApiTags(AREA_EVIDENCE_TAG)
   @RequirePermissions('inspections:read')
   evidenceRequests(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.service.evidenceRequests(request.user, id);
   }
   @Delete('evidence-requests/:requestId')
+  @ApiTags(AREA_EVIDENCE_TAG)
   @RequirePermissions('inspections:manage')
   cancelEvidenceRequest(@Req() request: AuthenticatedRequest, @Param('requestId') id: string) {
     return this.service.cancelEvidenceRequest(request.user, id);
@@ -550,11 +573,13 @@ export class AdminController {
    * The review screen loads this first and fetches one area's evidence on open.
    */
   @Get('inspections/:inspectionId/area-evidence-summary')
+  @ApiTags(AREA_EVIDENCE_TAG)
   @RequirePermissions('inspections:read')
   areaEvidenceSummary(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.areaEvidence.summary(request.user, id);
   }
   @Get('inspections/:inspectionId/areas/:areaId/evidence')
+  @ApiTags(AREA_EVIDENCE_TAG)
   @RequirePermissions('inspections:read')
   areaEvidenceDetail(
     @Req() request: AuthenticatedRequest,
@@ -652,26 +677,31 @@ export class AdminController {
     );
   }
   @Get('charge-rules')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   chargeRules(@Req() request: AuthenticatedRequest) {
     return this.charges.listRules(request.user);
   }
   @Post('charge-rules')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:configure')
   upsertChargeRule(@Req() request: AuthenticatedRequest, @Body() body: ChargeRuleDto) {
     return this.charges.upsertRule(request.user, body);
   }
   @Get('inspections/:inspectionId/pets')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   inspectionPets(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.charges.listPets(request.user, id);
   }
   @Post('inspections/:inspectionId/pets/generate')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   generatePetCandidates(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.charges.generateCandidates(request.user, id);
   }
   @Post('pet-candidates/:candidateId/review')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   reviewPetCandidate(
     @Req() request: AuthenticatedRequest,
@@ -681,16 +711,19 @@ export class AdminController {
     return this.charges.reviewCandidate(request.user, id, body);
   }
   @Get('inspections/:inspectionId/charges')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   inspectionCharges(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.charges.listCharges(request.user, id);
   }
   @Post('inspections/:inspectionId/charges/generate')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   generateCharges(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.charges.generateCharges(request.user, id);
   }
   @Post('inspections/:inspectionId/charges')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   createCharge(
     @Req() request: AuthenticatedRequest,
@@ -700,6 +733,7 @@ export class AdminController {
     return this.charges.createCharge(request.user, id, body);
   }
   @Post('charges/:chargeId/review')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   reviewCharge(
     @Req() request: AuthenticatedRequest,
@@ -709,6 +743,7 @@ export class AdminController {
     return this.charges.reviewCharge(request.user, id, body);
   }
   @Get('inspections/:inspectionId/charge-report')
+  @ApiTags(CHARGES_TAG)
   @RequirePermissions('charges:review')
   chargeReport(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.charges.report(request.user, id);
