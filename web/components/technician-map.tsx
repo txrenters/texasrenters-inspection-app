@@ -4,8 +4,8 @@ import 'leaflet/dist/leaflet.css';
 
 import type { PropertyPosition, TechnicianPosition } from '@texasrenters/shared';
 import { divIcon, type LatLngBoundsExpression } from 'leaflet';
-import { Fragment, useMemo } from 'react';
-import { Circle, MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
+import { Fragment, useEffect, useMemo, useRef } from 'react';
+import { Circle, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 
 import { formatRelative } from '@/lib/format';
 
@@ -78,6 +78,53 @@ function propertyPin() {
   });
 }
 
+/**
+ * The view the map opens with, before any data has arrived.
+ *
+ * **`zoom` is not optional and its absence is not cosmetic.** react-leaflet
+ * only sets a view when `center != null && zoom != null`, falling back to
+ * `bounds` and otherwise doing nothing at all. A map with no view cannot
+ * project, so every layer added to it fails to compute `_point`, and the next
+ * `setStyle` dies on `undefined.subtract` — taking the whole page down with a
+ * client-side exception rather than merely rendering an empty map.
+ *
+ * That is reachable here on any cold load: both queries are still pending on
+ * first render, so there are no points to fit and `bounds` is undefined. It
+ * looked intermittent only because a warm react-query cache supplied bounds
+ * before the map was built.
+ */
+const FALLBACK_CENTER: [number, number] = [31.0, -99.0];
+const FALLBACK_ZOOM = 5;
+
+/**
+ * Fits the map to the data once it arrives.
+ *
+ * `MapContainer`'s own `bounds` prop is read exactly once, when the map is
+ * constructed, so it cannot do this: positions that load a moment later would
+ * leave the map sitting on its fallback view with every pin off screen.
+ *
+ * Keyed on a signature of the coordinates rather than the array itself. The
+ * positions query re-fetches every 60 seconds and hands back a fresh array
+ * each time; refitting on identity would wrench the map back to its default
+ * framing every minute, undoing whatever the person was looking at.
+ */
+function FitToData({ points }: { points: [number, number][] }) {
+  const map = useMap();
+  const signature = points.map((point) => point.join()).join('|');
+
+  // Held in a ref so the effect can read the current points without listing
+  // them as a dependency — `signature` is their stable identity.
+  const latest = useRef(points);
+  latest.current = points;
+
+  useEffect(() => {
+    if (!latest.current.length) return;
+    map.fitBounds(latest.current as LatLngBoundsExpression, { padding: [48, 48], maxZoom: 15 });
+  }, [map, signature]);
+
+  return null;
+}
+
 export function TechnicianMap({
   positions,
   properties = [],
@@ -89,24 +136,22 @@ export function TechnicianMap({
   // on a fixed point: this office works one metropolitan area today, but a
   // hard-coded centre is the kind of thing that silently stops making sense
   // when a second one is added.
-  const bounds = useMemo<LatLngBoundsExpression | undefined>(() => {
-    const points: [number, number][] = [
+  const points = useMemo<[number, number][]>(
+    () => [
       ...positions.map((position) => [position.latitude, position.longitude] as [number, number]),
       ...properties.map((property) => [property.latitude, property.longitude] as [number, number]),
-    ];
-    return points.length ? points : undefined;
-  }, [positions, properties]);
+    ],
+    [positions, properties],
+  );
 
   return (
     <MapContainer
-      // Austin, used only when there is nothing at all to fit. With any point
-      // the bounds above take over immediately.
-      center={[30.2672, -97.7431]}
-      bounds={bounds}
-      boundsOptions={{ padding: [48, 48], maxZoom: 15 }}
+      center={FALLBACK_CENTER}
+      zoom={FALLBACK_ZOOM}
       className="h-full w-full rounded-lg"
       scrollWheelZoom
     >
+      <FitToData points={points} />
       <TileLayer attribution={ATTRIBUTION} url={TILE_URL} />
 
       {/* Properties first so they paint underneath, and pinned below the
@@ -143,15 +188,12 @@ export function TechnicianMap({
                 are very different statements, and a map that drew them as the
                 same dot would be asserting something nobody knows.
 
-                A sibling of the marker, never a child of it. A `Marker` is not
-                a layer container — react-leaflet gives it a context so that
-                `Popup` and `Tooltip` can find it, and a `Circle` parented there
-                is never added to the map, so it is never projected. Leaflet
-                then throws the moment `pathOptions` is applied, because
-                `setStyle` reaches for a `_point` that only `_project` sets:
-                "Cannot read properties of undefined (reading 'subtract')",
-                which takes the whole page down with it. Drawn before the
-                marker so it sits underneath. */}
+                A sibling of the marker rather than a child, because only
+                `Popup` and `Tooltip` belong inside a `Marker`. Nesting it did
+                work — `useLayerLifecycle` falls back to `context.map`, and a
+                `Marker` sets `overlayContainer`, not `layerContainer` — but
+                relying on that is relying on a detail nothing guarantees.
+                Drawn before the marker so it sits underneath. */}
             {position.accuracyMeters && position.accuracyMeters > 25 ? (
               <Circle
                 center={[position.latitude, position.longitude]}
