@@ -24,6 +24,11 @@ x-backend-env: &backend-env
   # name; a `localhost` value inherited from backend/.env.local would resolve to
   # the backend container itself and silently disable the cache.
   REDIS_URL: redis://redis:6379
+  # Routing, when the `routing` profile is up. Addressed by service name on this
+  # network — OSRM publishes no host port because it has no authentication.
+  # Unset means routing is unavailable, which the API reports rather than
+  # answering with a guess.
+  OSRM_URL: ${OSRM_URL:-http://osrm:5000}
   CACHE_ENABLED: 'true'
   CACHE_PROVIDER: redis
   CACHE_FAIL_OPEN: 'true'
@@ -172,5 +177,89 @@ services:
       retries: 10
       start_period: 20s
 
+  # ---------------------------------------------------------------------------
+  # Routing — road distances and travel times for a technician's day
+  # ---------------------------------------------------------------------------
+  #
+  # Self-hosted OSRM rather than a routing API: no key to keep out of the
+  # client, no per-request cost, no terms-of-service ceiling, and property
+  # coordinates never leave this network. It also keeps working when somebody
+  # else's service does not.
+  #
+  # All three are behind `profiles: ['routing']` and therefore OPT-IN. The first
+  # run downloads ~1.4GB and then spends twenty minutes preprocessing, which is
+  # not something `npm run docker:up` should ever do to somebody who just wanted
+  # the app. Start them deliberately:
+  #
+  #   npm run routing:up
+  #
+  # The backend treats a missing OSRM_URL as "routing unavailable" and says so,
+  # rather than pretending it has an answer.
+
+  # Downloads the region extract, once. Its own service because the OSRM image
+  # is not guaranteed to carry a download tool, and depending on that would be
+  # a failure that only appears on a fresh host.
+  osrm-fetch:
+    profiles: ['routing']
+    image: curlimages/curl:latest
+    volumes:
+      - osrm-data:/data
+    # `-C -` resumes rather than restarting: this is a large file on a link that
+    # may drop, and starting again from zero is how a first run never finishes.
+    command:
+      - -fSL
+      - -C
+      - '-'
+      - --retry
+      - '5'
+      - -o
+      - /data/region.osm.pbf
+      - ${OSRM_REGION_URL:-https://download.geofabrik.de/north-america/us/texas-latest.osm.pbf}
+    restart: 'no'
+
+  # Extract, partition, customize. Minutes to tens of minutes, and idempotent:
+  # it checks for its own output first, so a restart does not redo the work.
+  osrm-prepare:
+    profiles: ['routing']
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    volumes:
+      - osrm-data:/data
+    entrypoint: ['/bin/bash', '-c']
+    command:
+      - |
+        set -eu
+        if [ -f /data/region.osrm.mldgr ]; then
+          echo "osrm: already prepared, nothing to do"
+          exit 0
+        fi
+        echo "osrm: preparing — this takes a while and only happens once"
+        osrm-extract -p /opt/car.lua /data/region.osm.pbf
+        osrm-partition /data/region.osrm
+        osrm-customize /data/region.osrm
+        echo "osrm: ready"
+    restart: 'no'
+    depends_on:
+      osrm-fetch:
+        condition: service_completed_successfully
+
+  osrm:
+    profiles: ['routing']
+    image: ghcr.io/project-osrm/osrm-backend:latest
+    volumes:
+      - osrm-data:/data
+    # MLD to match how the data was prepared above; the algorithms are not
+    # interchangeable and mismatching them fails at startup.
+    command: ['osrm-routed', '--algorithm', 'mld', '/data/region.osrm']
+    # Deliberately NO published port. OSRM has no authentication of any kind —
+    # anything that can reach it can ask it to route anywhere, forever. It is
+    # reachable on the compose network and nowhere else.
+    expose:
+      - '5000'
+    restart: unless-stopped
+    depends_on:
+      osrm-prepare:
+        condition: service_completed_successfully
+
 volumes:
+  osrm-data:
   postgres-data:

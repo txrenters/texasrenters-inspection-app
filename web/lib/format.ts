@@ -88,3 +88,29 @@ export function initials(name: string) {
       .toUpperCase() || '?'
   );
 }
+
+/**
+ * A driving duration, rounded to something a person would say out loud.
+ *
+ * Minutes, or hours and minutes past an hour. Never seconds: these come from a
+ * routing engine with no traffic data, and "23 min" already claims more
+ * precision than free-flow timing can support — "23 min 41 s" would be a
+ * fiction with a decimal point.
+ */
+export function formatDuration(seconds?: number | null) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return EMPTY;
+
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  if (minutes < 60) return `${minutes} min`;
+
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} hr ${rest} min` : `${hours} hr`;
+}
+
+/** Distance in miles, which is what everybody here reads. */
+export function formatDistance(meters?: number | null) {
+  if (meters === null || meters === undefined || !Number.isFinite(meters)) return EMPTY;
+  const miles = meters / 1609.344;
+  return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
+}

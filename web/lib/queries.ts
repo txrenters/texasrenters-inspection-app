@@ -7,6 +7,7 @@ import type {
   AdminAssignment,
   AdminAssignmentListItem,
   PropertyPosition,
+  TechnicianRoute,
   TechnicianPosition,
   AdminAuditEvent,
   AdminBulkDeleteResult,
@@ -123,6 +124,7 @@ export const keys = {
     ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
   technicianLocations: ['technician-locations'] as const,
   propertyLocations: ['property-locations'] as const,
+  technicianRoute: (id: string, date: string) => ['technician-route', id, date] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   techniciansRoot: ['admin', 'technicians'] as const,
@@ -448,6 +450,25 @@ export const usePropertyLocations = (enabled = true) =>
     queryKey: keys.propertyLocations,
     queryFn: ({ signal }) => api<PropertyPosition[]>('/api/v1/admin/property-locations', { signal }),
     staleTime: 30 * 60_000,
+    enabled,
+  });
+/**
+ * A technician's day, ordered from where they are now.
+ *
+ * Refetched on an interval because the route starts at a live position: as the
+ * technician drives, the remaining order and the times change. Slower than the
+ * position feed itself, because re-ordering the same stops every few seconds
+ * would make the panel restless without telling anybody anything new.
+ */
+export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.technicianRoute(id, date),
+    queryFn: ({ signal }) =>
+      api<TechnicianRoute>(
+        `/api/v1/admin/technicians/${id}/route${queryString({ date })}`,
+        { signal },
+      ),
+    refetchInterval: 2 * 60_000,
     enabled,
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>

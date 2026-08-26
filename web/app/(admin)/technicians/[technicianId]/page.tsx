@@ -23,9 +23,15 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { TechnicianRouteCard } from '@/components/technician-route-card';
 import { EMPTY, formatDateTime } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
-import { useAdminMutations, useAssignments, useTechnician } from '@/lib/queries';
+import {
+  useAdminMutations,
+  useAssignments,
+  useTechnician,
+  useTechnicianRoute,
+} from '@/lib/queries';
 import { useUrlState } from '@/lib/url-state';
 
 type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
@@ -64,6 +70,10 @@ export default function TechnicianDetailPage() {
   const [state, setState] = useUrlState({ page: 1 });
   const technician = useTechnician(id);
   const assignments = useAssignments({ technicianId: id, page: state.page, pageSize: 20 });
+  // Today, in the technician's own calendar day. The schema stores a date with
+  // no clock value, so there is no narrower window to ask for.
+  const today = new Date().toISOString().slice(0, 10);
+  const route = useTechnicianRoute(id, today, permissions.has('technicians:read'));
   const {
     updateTechnician: mutation,
     deleteTechnician: remove,
@@ -222,6 +232,8 @@ export default function TechnicianDetailPage() {
           value={item.workload?.completed ?? 0}
         />
       </StatGroup>
+
+      <TechnicianRouteCard displayName={item.displayName} route={route.data} />
 
       <Card className="mt-4">
         <CardHeader>

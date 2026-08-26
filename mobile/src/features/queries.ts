@@ -52,6 +52,7 @@ const assignmentRefreshInterval = process.env.NODE_ENV === 'test' ? false : 60_0
 const ACTIVE_INSPECTION_PAGE_SIZE = 100;
 
 export const queryKeys = {
+  dayRoute: ['day-route'] as const,
   all: [] as const,
   demoUsers: ['demoUsers'] as const,
   currentUser: ['currentUser'] as const,
@@ -142,6 +143,25 @@ export function useSignOut() {
 export function usePasswordReset() {
   return useMutation({
     mutationFn: (email: string) => repositories.auth.resetPassword(email.trim()),
+  });
+}
+/**
+ * The technician's own day, ordered from where they are now.
+ *
+ * Refetched while the app is in front, because the route is measured from a
+ * live position and the remaining order changes as they drive. Not in the
+ * background: re-planning a route nobody is looking at spends battery on a
+ * handset that is also filming video all day.
+ */
+export function useDayRoute() {
+  return useQuery({
+    queryKey: queryKeys.dayRoute,
+    queryFn: () => repositories.inspections.route(),
+    refetchInterval: 2 * 60_000,
+    refetchIntervalInBackground: false,
+    // A failed route is not worth hammering: the technician still has the
+    // stops, they are simply unordered.
+    retry: 1,
   });
 }
 export function useDashboard() {

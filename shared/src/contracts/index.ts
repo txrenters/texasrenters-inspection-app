@@ -67,4 +67,5 @@ export * from './area-checklist-template.js';
 export * from './area-classification.js';
 export * from './inspection-scope.js';
 export * from './property-location.js';
+export * from './route-plan.js';
 export * from './technician-location.js';

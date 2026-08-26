@@ -9,6 +9,7 @@ import { AccessController } from './access.controller';
 import { AccessService } from './access.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { RoutingModule } from '../routing/routing.module';
 import { PropertyGeocodeScheduler } from './property-geocode.scheduler';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
@@ -37,7 +38,7 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
   // TechnicianModule for the location service the console's map reads. Safe in
   // this direction only — that module must never import this one, which is why
   // AreaChecklistAiService is provided there rather than imported from here.
-  imports: [RealtimeModule, MailModule, AuthModule, MediaModule, TechnicianModule],
+  imports: [RealtimeModule, MailModule, AuthModule, MediaModule, TechnicianModule, RoutingModule],
   controllers: [AdminController, AccessController, ReportsController],
   providers: [
     AdminService,
