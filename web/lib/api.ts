@@ -105,6 +105,76 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
 }
 
 /**
+ * One request, reported in full: status, headers, timing and body, whether it
+ * succeeded or not.
+ *
+ * `api` is the wrong shape for the API reference console. It throws on a
+ * non-2xx and keeps only the code and message, but a 422's validation details
+ * and a 429's rate-limit headers are precisely what an operator opened the
+ * console to read — and a 404 is a legitimate, informative answer there rather
+ * than a failure.
+ *
+ * Uses the caller's own session, deliberately. The console mints no credential
+ * and holds none: a request sent from it can do exactly what the person sending
+ * it could already do through the rest of the application, and their permissions
+ * are enforced by the same guards.
+ */
+export interface RawApiResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: unknown;
+  /** The response as text when it was not JSON, so a non-JSON answer is still visible. */
+  text?: string;
+  durationMs: number;
+}
+
+export async function apiRawRequest(
+  path: string,
+  options: { method: string; body?: string; signal?: AbortSignal },
+): Promise<RawApiResponse> {
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
+  if (!baseUrl)
+    throw new ApiError(0, 'API_NOT_CONFIGURED', 'The administrator API is not configured.');
+  const session = await getSession();
+  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+
+  const startedAt = performance.now();
+  let response: Response;
+  try {
+    response = await fetch(resolveApiUrl(baseUrl, path), {
+      method: options.method,
+      signal: options.signal,
+      ...(options.body === undefined ? {} : { body: options.body }),
+      headers: {
+        'content-type': 'application/json',
+        ...NGROK_SKIP_INTERSTITIAL,
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    });
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'The API could not be reached. Check your connection.');
+  }
+  const durationMs = Math.round(performance.now() - startedAt);
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    headers[name] = value;
+  });
+
+  const raw = await response.text();
+  let body: unknown;
+  let text: string | undefined;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    // A PDF, an image, or an HTML error page from something in front of the API.
+    body = null;
+    text = raw.slice(0, 4_000);
+  }
+  return { status: response.status, statusText: response.statusText, headers, body, text, durationMs };
+}
+
+/**
  * Unauthenticated write for the few endpoints reachable while signed out.
  *
  * `api` demands a session and rejects with "Your session has expired." before
