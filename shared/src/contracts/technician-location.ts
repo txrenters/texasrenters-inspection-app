@@ -89,3 +89,26 @@ export function usableLocationFixes<T extends TechnicianLocationFix>(
     .filter((fix) => rejectLocationFix(fix, now) === null)
     .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt));
 }
+
+/**
+ * A technician's most recent known position, as the console receives it.
+ *
+ * Coordinates are numbers here because the API converts them at its edge: the
+ * database column is a decimal, and a Prisma `Decimal` serialises to a string
+ * through JSON, which a map cannot plot.
+ *
+ * `recordedAt` is when the handset took the fix. The age of that is the whole
+ * story on a map — a position from six hours ago is not a lie, but drawing it
+ * the same as one from a minute ago would be — so it travels with the point
+ * and the console decides how to show it.
+ */
+export interface TechnicianPosition {
+  id: string;
+  technicianId: string;
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number | null;
+  batteryPercent: number | null;
+  recordedAt: string;
+  technician: { id: string; displayName: string } | null;
+}
