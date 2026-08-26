@@ -31,6 +31,7 @@ import {
   type AuthenticatedRequest,
 } from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
+import { TechnicianLocationService } from '../technician/technician-location.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
 import { MailService } from '../mail/mail.service';
@@ -105,6 +106,7 @@ export class AdminController {
     private readonly floorPlans: FloorPlanAdminService,
     private readonly reportShares: ReportShareService,
     private readonly comparison: ComparisonService,
+    private readonly locations: TechnicianLocationService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
@@ -378,7 +380,11 @@ export class AdminController {
     /** Bounded gallery variant; omit for the full-resolution original. */
     @Query('w') width?: string,
   ) {
-    const file = await this.service.photoContent(request.user, id, width ? Number(width) : undefined);
+    const file = await this.service.photoContent(
+      request.user,
+      id,
+      width ? Number(width) : undefined,
+    );
     return new StreamableFile(file.bytes, {
       type: file.mimeType,
       disposition: `inline; filename="${file.fileName}"`,
@@ -512,10 +518,7 @@ export class AdminController {
   }
   @Delete('evidence-requests/:requestId')
   @RequirePermissions('inspections:manage')
-  cancelEvidenceRequest(
-    @Req() request: AuthenticatedRequest,
-    @Param('requestId') id: string,
-  ) {
+  cancelEvidenceRequest(@Req() request: AuthenticatedRequest, @Param('requestId') id: string) {
     return this.service.cancelEvidenceRequest(request.user, id);
   }
   @Post('inspections/:inspectionId/reopen')
@@ -723,6 +726,20 @@ export class AdminController {
     return this.service.unassign(request.user, id, body);
   }
 
+  /**
+   * Every technician's most recent position, for the map.
+   *
+   * Behind `technicians:read` rather than `inspections:read`: this says where a
+   * named employee was at a given minute, which is a fact about a person
+   * rather than about an inspection, and the two should not be reachable with
+   * the same grant.
+   */
+  @Get('technician-locations')
+  @RequirePermissions('technicians:read')
+  technicianLocations(@Req() request: AuthenticatedRequest) {
+    return this.locations.latestPositions(request.user);
+  }
+
   @Get('assignments')
   @RequirePermissions('inspections:assign')
   assignments(@Req() request: AuthenticatedRequest, @Query() query: AssignmentListQueryDto) {
@@ -799,10 +816,7 @@ export class AdminController {
    */
   @Post('inspections/delete')
   @RequirePermissions('inspections:delete')
-  deleteInspections(
-    @Req() request: AuthenticatedRequest,
-    @Body() body: DeleteInspectionsDto,
-  ) {
+  deleteInspections(@Req() request: AuthenticatedRequest, @Body() body: DeleteInspectionsDto) {
     return this.service.deleteInspections(request.user, body.inspectionIds);
   }
 

@@ -67,6 +67,19 @@ const environmentSchema = z
     AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
     AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     AUTH_PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
+    // Third-party API access. The pepper keys the hash every API client secret
+    // is stored under; without it no key can be issued and none can authenticate,
+    // which is the intended state for a deployment that has no integrations.
+    // Optional here rather than required, deliberately: making it mandatory
+    // would stop every existing deployment from booting to enable a feature it
+    // may never use. It is checked where it is used, and refuses there.
+    API_KEY_PEPPER: z.string().min(32).optional(),
+    // How many reverse proxies sit in front of this process. Zero — the default —
+    // means Express reports the socket address, which is correct for a directly
+    // exposed service and wrong behind the production nginx, where every request
+    // would appear to come from the proxy. An API client IP allowlist is only
+    // meaningful once this matches the real deployment.
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
     // Turns off per-query tenant scoping AND relaxes the RLS policies with it,
     // so it degrades rather than locking the application out.
     RLS_TENANT_SCOPE_ENABLED: z.enum(['true', 'false']).default('true'),
@@ -112,6 +125,15 @@ const environmentSchema = z
     // evidence about someone's home and must not be publicly addressable.
     CLOUDFLARE_STREAM_SIGNING_KEY_ID: z.string().optional(),
     CLOUDFLARE_STREAM_SIGNING_KEY_PEM: z.string().optional(),
+    /**
+     * How long a technician's position history is kept, in days.
+     *
+     * Defaulted rather than required, and defaulted to expiry rather than to
+     * forever: this records where named employees were, and keeping that
+     * indefinitely should take a decision, not an omission.
+     */
+    TECHNICIAN_LOCATION_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+    TECHNICIAN_LOCATION_RETENTION_CRON: z.string().optional(),
     PROPERTYWARE_PROVIDER: z.enum(['mock', 'live']).default('mock'),
     PROPERTYWARE_STORE: z.enum(['memory', 'prisma']).default('memory'),
     PROPERTYWARE_BASE_URL: z

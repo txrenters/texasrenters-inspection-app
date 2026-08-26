@@ -13,6 +13,8 @@ const technician: AuthenticatedUser = {
   roles: [UserRole.INSPECTION_TECHNICIAN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const ROOM_ID = '20000000-0000-4000-8000-000000000001';
@@ -56,9 +58,11 @@ function build({
   const prisma = {
     inspectionArea: {
       findFirst: jest.fn().mockResolvedValue(room),
-      update: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve(roomRecord({ summaryConfirmedAt: data.summaryConfirmedAt })),
-      ),
+      update: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(roomRecord({ summaryConfirmedAt: data.summaryConfirmedAt })),
+        ),
     },
     inspectionFinding: {
       findFirst: jest.fn().mockResolvedValue(summary),

@@ -11,6 +11,8 @@ const user: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const AREA = '20000000-0000-4000-8000-000000000001';
@@ -34,9 +36,11 @@ function makeService() {
     prisma as never,
     {} as never,
     {} as never,
-      // Returns nothing per area, so the service falls back to the shared
-      // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+    // Returns nothing per area, so the service falls back to the shared
+    // templates and these assertions stay deterministic and offline.
+    {
+      generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+    } as never,
     {} as never,
   );
   return { service, created };

@@ -12,6 +12,8 @@ const user: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 describe('administrator catalog operations', () => {

@@ -11,6 +11,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const BUILDING = 'building-1';
@@ -41,7 +43,9 @@ function service(overrides: Record<string, unknown> = {}) {
       {} as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {} as never,
     ),
   };
@@ -101,9 +105,10 @@ describe('batch area deletion', () => {
   it('rejects a duplicated selection rather than under-deleting silently', async () => {
     const { service: subject, tx } = service();
 
-    await expect(
-      subject.deleteAreas(admin, BUILDING, ['area-1', 'area-1']),
-    ).rejects.toMatchObject({ status: 422, code: 'INVALID_AREA_SELECTION' });
+    await expect(subject.deleteAreas(admin, BUILDING, ['area-1', 'area-1'])).rejects.toMatchObject({
+      status: 422,
+      code: 'INVALID_AREA_SELECTION',
+    });
     expect(tx.propertyArea.deleteMany).not.toHaveBeenCalled();
   });
 });

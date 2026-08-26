@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { ApiAuthGuard, PermissionsGuard } from '../common/auth';
 import { MailModule } from '../mail/mail.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { TechnicianModule } from '../technician/technician.module';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { AccessController } from './access.controller';
 import { AccessService } from './access.service';
@@ -31,7 +32,10 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
   // MediaModule for CloudflareStreamService: deleting an inspection has to
   // remove its Stream videos, or the footage stays billed for and unreachable.
   // No cycle — MediaModule imports TechnicianModule, never this one.
-  imports: [RealtimeModule, MailModule, AuthModule, MediaModule],
+  // TechnicianModule for the location service the console's map reads. Safe in
+  // this direction only — that module must never import this one, which is why
+  // AreaChecklistAiService is provided there rather than imported from here.
+  imports: [RealtimeModule, MailModule, AuthModule, MediaModule, TechnicianModule],
   controllers: [AdminController, AccessController, ReportsController],
   providers: [
     AdminService,
@@ -54,5 +58,8 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
     ApiAuthGuard,
     PermissionsGuard,
   ],
+  // For the third-party gateway controller, which serves a curated read-only
+  // slice of the same data rather than reimplementing the queries behind it.
+  exports: [AdminService],
 })
 export class AdminModule {}

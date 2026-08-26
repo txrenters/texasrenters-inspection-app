@@ -11,6 +11,8 @@ const technician: AuthenticatedUser = {
   roles: [UserRole.INSPECTION_TECHNICIAN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const area = { id: 'area-1', inspectionId: 'insp-1', propertyAreaId: 'pa-1' };
@@ -44,9 +46,13 @@ function build(overrides: Record<string, unknown> = {}) {
     inspectionFinding: { findFirst: jest.fn().mockResolvedValue({ id: 'f-1' }) },
     inspectionPhoto: {
       findUnique: jest.fn().mockResolvedValue(null),
-      create: jest.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve(photoRecord({ captureType: data.captureType, findingId: data.findingId ?? null })),
-      ),
+      create: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(
+            photoRecord({ captureType: data.captureType, findingId: data.findingId ?? null }),
+          ),
+        ),
       findUniqueOrThrow: jest.fn().mockResolvedValue(photoRecord()),
     },
     ...overrides,
@@ -65,10 +71,15 @@ const jpeg = { path: '/tmp/nope.jpg', mimetype: 'image/jpeg', size: 12345, origi
 describe('technician photo evidence', () => {
   it('stores a photo with its capture type and never touches the video pipeline', async () => {
     const { service, prisma, mediaStorage } = build();
-    const result = await service.uploadPhoto(technician, 'area-1', {
-      idempotencyKey: 'photo-key-abc123',
-      captureType: 'FINDING_DETAIL' as never,
-    }, jpeg);
+    const result = await service.uploadPhoto(
+      technician,
+      'area-1',
+      {
+        idempotencyKey: 'photo-key-abc123',
+        captureType: 'FINDING_DETAIL' as never,
+      },
+      jpeg,
+    );
 
     expect(mediaStorage.putFromFile).toHaveBeenCalledTimes(1);
     expect(prisma.inspectionPhoto.create).toHaveBeenCalledWith(
@@ -126,10 +137,15 @@ describe('technician photo evidence', () => {
         create: jest.fn(),
       },
     });
-    const result = await service.uploadPhoto(technician, 'area-1', {
-      idempotencyKey: 'photo-key-abc123',
-      captureType: 'AREA_OVERVIEW' as never,
-    }, jpeg);
+    const result = await service.uploadPhoto(
+      technician,
+      'area-1',
+      {
+        idempotencyKey: 'photo-key-abc123',
+        captureType: 'AREA_OVERVIEW' as never,
+      },
+      jpeg,
+    );
     expect(result).toMatchObject({ id: 'photo-1' });
     expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
     expect(mediaStorage.putFromFile).not.toHaveBeenCalled();
@@ -138,10 +154,15 @@ describe('technician photo evidence', () => {
   it('rejects a non-image upload', async () => {
     const { service } = build();
     await expect(
-      service.uploadPhoto(technician, 'area-1', {
-        idempotencyKey: 'photo-key-abc123',
-        captureType: 'AREA_OVERVIEW' as never,
-      }, { ...jpeg, mimetype: 'application/pdf' }),
+      service.uploadPhoto(
+        technician,
+        'area-1',
+        {
+          idempotencyKey: 'photo-key-abc123',
+          captureType: 'AREA_OVERVIEW' as never,
+        },
+        { ...jpeg, mimetype: 'application/pdf' },
+      ),
     ).rejects.toMatchObject({ status: 415, code: 'PHOTO_TYPE_UNSUPPORTED' });
   });
 
@@ -152,11 +173,16 @@ describe('technician photo evidence', () => {
       inspectionPhoto: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
     });
     await expect(
-      service.uploadPhoto(technician, 'area-1', {
-        idempotencyKey: 'photo-key-abc123',
-        captureType: 'FINDING_DETAIL' as never,
-        findingId: '10000000-0000-4000-8000-0000000000ff',
-      }, jpeg),
+      service.uploadPhoto(
+        technician,
+        'area-1',
+        {
+          idempotencyKey: 'photo-key-abc123',
+          captureType: 'FINDING_DETAIL' as never,
+          findingId: '10000000-0000-4000-8000-0000000000ff',
+        },
+        jpeg,
+      ),
     ).rejects.toMatchObject({ status: 422, code: 'FINDING_NOT_IN_AREA' });
   });
 });

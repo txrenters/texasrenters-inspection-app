@@ -14,6 +14,8 @@ const technician: AuthenticatedUser = {
   roles: [UserRole.INSPECTION_TECHNICIAN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const AREA_ID = '10000000-0000-4000-8000-00000000000a';
@@ -33,13 +35,15 @@ const areaRecord = {
   inspection: { id: 'insp-1', status: 'IN_PROGRESS', propertyId: 'prop-1' },
 };
 
-function build(overrides: {
-  area?: unknown;
-  existing?: unknown;
-  stream?: Partial<{ createDirectUpload: jest.Mock; getVideo: jest.Mock }>;
-  /** The pipeline the webhook starts; absent in tests that do not assert on it. */
-  mediaProcessing?: { queue: jest.Mock };
-} = {}) {
+function build(
+  overrides: {
+    area?: unknown;
+    existing?: unknown;
+    stream?: Partial<{ createDirectUpload: jest.Mock; getVideo: jest.Mock }>;
+    /** The pipeline the webhook starts; absent in tests that do not assert on it. */
+    mediaProcessing?: { queue: jest.Mock };
+  } = {},
+) {
   const prisma = {
     inspectionArea: {
       findFirst: jest.fn().mockResolvedValue('area' in overrides ? overrides.area : areaRecord),
@@ -235,7 +239,9 @@ describe('stream webhook', () => {
     // Cloudflare re-delivers. "When did this become available" has to stay
     // answerable, so the stamp is written once.
     const { service, prisma } = build();
-    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('PROCESSING', new Date('2026-01-01')));
+    prisma.inspectionMedia.findUnique.mockResolvedValue(
+      mediaRow('PROCESSING', new Date('2026-01-01')),
+    );
 
     await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
     expect(prisma.inspectionMedia.update.mock.calls[0][0].data.readyAt).toBeUndefined();
@@ -260,7 +266,9 @@ describe('stream webhook', () => {
     // keyed on the transition rather than on the event arriving.
     const mediaProcessing = { queue: jest.fn() };
     const { service, prisma } = build({ mediaProcessing });
-    prisma.inspectionMedia.findUnique.mockResolvedValue(mediaRow('PROCESSING', new Date('2026-01-01')));
+    prisma.inspectionMedia.findUnique.mockResolvedValue(
+      mediaRow('PROCESSING', new Date('2026-01-01')),
+    );
 
     await service.applyWebhook({ uid: 'uid-1', status: { state: 'ready' } });
 

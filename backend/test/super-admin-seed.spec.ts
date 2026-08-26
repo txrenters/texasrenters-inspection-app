@@ -32,8 +32,8 @@ describe('development super-admin seed', () => {
   it('defaults the password reset to off', () => {
     // Re-running the seed to repair a membership must not silently change the
     // password of an account somebody is signing in with.
-    expect(superAdminSeedEnvironmentSchema.parse(environment).SEED_SUPER_ADMIN_RESET_PASSWORD).not.toBe(
-      'true',
-    );
+    expect(
+      superAdminSeedEnvironmentSchema.parse(environment).SEED_SUPER_ADMIN_RESET_PASSWORD,
+    ).not.toBe('true');
   });
 });

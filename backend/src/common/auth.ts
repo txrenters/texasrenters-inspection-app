@@ -17,6 +17,17 @@ import { type PermissionKey, resolveEffectivePermissions } from '@texasrenters/s
 import { PrismaService } from './prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
 
+/**
+ * What kind of caller a request resolved to.
+ *
+ * Required rather than defaulted, so every principal states what it is. A
+ * machine credential reaches a deliberately narrow slice of this API and can
+ * never hold the permissions in MACHINE_FORBIDDEN_PERMISSIONS, and code that
+ * needs to know the difference — audit rows, above all — must not have to infer
+ * it from a missing field.
+ */
+export type PrincipalType = 'USER' | 'API_KEY';
+
 export interface AuthenticatedUser {
   id: string;
   authUserId: string;
@@ -28,6 +39,29 @@ export interface AuthenticatedUser {
   // administrator-created custom roles.
   permissions: PermissionKey[];
   mustChangePassword: boolean;
+  principalType: PrincipalType;
+  /** Set only for `API_KEY` principals: which registered integration is calling. */
+  apiClientId?: string;
+}
+
+/** Whether this request is a third-party integration rather than a person. */
+export function isMachinePrincipal(user: Pick<AuthenticatedUser, 'principalType'>) {
+  return user.principalType === 'API_KEY';
+}
+
+/**
+ * The actor columns for an audit row.
+ *
+ * A machine principal's `id` is its ApiClient id, not a UserProfile id. Writing
+ * it into `actorUserId` — which is what a bare `actorUserId: user.id` does —
+ * produces an audit row pointing at a user that does not exist, and the failure
+ * is silent because the column carries no foreign key. Routing through here
+ * keeps "who changed this" answerable for both kinds of caller.
+ */
+export function auditActor(user: AuthenticatedUser) {
+  return user.principalType === 'API_KEY'
+    ? { actorUserId: null, actorApiClientId: user.apiClientId ?? user.id }
+    : { actorUserId: user.id, actorApiClientId: null };
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -88,6 +122,7 @@ export async function authenticateApplicationUser(
     roles,
     permissions: resolveEffectivePermissions(roles, customRolePermissions),
     mustChangePassword: claims.app_metadata?.must_change_password === true,
+    principalType: 'USER',
   };
 }
 

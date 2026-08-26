@@ -11,6 +11,8 @@ const user: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 function area(propertyAreaId: string, name: string, category = 'INDOOR_ROOM', floor = '1') {
@@ -136,9 +138,7 @@ describe('move-in vs move-out comparison (spec §12)', () => {
 
     await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
 
-    const byArea = Object.fromEntries(
-      areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]),
-    );
+    const byArea = Object.fromEntries(areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]));
     expect(byArea['pa-kitchen']).toMatchObject({
       classification: 'NEW_DAMAGE',
       matchMethod: 'LOCAL_AREA_ID',
@@ -280,7 +280,11 @@ describe('comparison review + override (spec §12)', () => {
       inspectionComparison: {
         findFirst: jest
           .fn()
-          .mockResolvedValueOnce({ id: 'comparison-1', status: 'DRAFT', moveOutInspectionId: 'move-out-1' })
+          .mockResolvedValueOnce({
+            id: 'comparison-1',
+            status: 'DRAFT',
+            moveOutInspectionId: 'move-out-1',
+          })
           .mockResolvedValueOnce({
             id: 'comparison-1',
             moveOutInspectionId: 'move-out-1',
@@ -361,7 +365,12 @@ describe('comparison review + override (spec §12)', () => {
     };
     const service = new ComparisonService(prisma as never);
 
-    await service.overrideArea(user, 'area-comparison-1', 'UNCHANGED' as never, 'Pre-existing wear');
+    await service.overrideArea(
+      user,
+      'area-comparison-1',
+      'UNCHANGED' as never,
+      'Pre-existing wear',
+    );
     expect(tx.inspectionAreaComparison.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'area-comparison-1' },

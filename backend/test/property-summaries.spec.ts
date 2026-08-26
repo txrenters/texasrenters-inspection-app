@@ -11,6 +11,8 @@ const user: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const SYNCED = new Date('2026-07-24T00:00:00.000Z');
@@ -118,7 +120,11 @@ describe('property lease summary', () => {
             units: [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }],
             leases: [
               { unitId: 'u1', sourceStatus: 'Active', scheduledMoveOutDate: null },
-              { unitId: 'u2', sourceStatus: 'Notice given', scheduledMoveOutDate: new Date('2026-09-01') },
+              {
+                unitId: 'u2',
+                sourceStatus: 'Notice given',
+                scheduledMoveOutDate: new Date('2026-09-01'),
+              },
             ],
             _count: { units: 3, inspections: 0 },
           }),
@@ -240,9 +246,7 @@ describe('property lease summary', () => {
   it('shows a vacant unit even when the property has no active leases', async () => {
     const prisma = {
       propertywareBuilding: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue([building({ units: [{ id: 'u1' }], leases: [] })]),
+        findMany: jest.fn().mockResolvedValue([building({ units: [{ id: 'u1' }], leases: [] })]),
         count: jest.fn().mockResolvedValue(1),
       },
     };
@@ -294,8 +298,24 @@ describe('property detail per-unit lease status', () => {
           manualAreaUnit: null,
           portfolio,
           units: [
-            { id: 'u1', externalId: 'e1', name: 'A', bedrooms: 3, bathrooms: 2, isActive: true, lastSyncedAt: SYNCED },
-            { id: 'u2', externalId: 'e2', name: 'B', bedrooms: 2, bathrooms: 1, isActive: true, lastSyncedAt: SYNCED },
+            {
+              id: 'u1',
+              externalId: 'e1',
+              name: 'A',
+              bedrooms: 3,
+              bathrooms: 2,
+              isActive: true,
+              lastSyncedAt: SYNCED,
+            },
+            {
+              id: 'u2',
+              externalId: 'e2',
+              name: 'B',
+              bedrooms: 2,
+              bathrooms: 1,
+              isActive: true,
+              lastSyncedAt: SYNCED,
+            },
           ],
           leases: [
             {

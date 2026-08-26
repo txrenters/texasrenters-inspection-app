@@ -11,6 +11,8 @@ import { InspectionMediaStorageService } from './inspection-media-storage.servic
 import { MediaProcessingService } from './media-processing.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { TechnicianController } from './technician.controller';
+import { LocationRetentionScheduler } from './location-retention.scheduler';
+import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService } from './technician.service';
 
 @Module({
@@ -18,6 +20,8 @@ import { TechnicianService } from './technician.service';
   controllers: [TechnicianController],
   providers: [
     TechnicianService,
+    TechnicianLocationService,
+    LocationRetentionScheduler,
     FloorPlanStorageService,
     InspectionMediaStorageService,
     MediaProcessingService,
@@ -37,6 +41,8 @@ import { TechnicianService } from './technician.service';
   // Exported so the Cloudflare Stream webhook can start the pipeline. A video
   // uploaded straight to Stream never passes through this module's controller,
   // so without this nothing queued transcription or analysis for it.
-  exports: [MediaProcessingService],
+  // `TechnicianLocationService` too, so the console's map can read the same
+  // positions the handsets write without a second copy of the query.
+  exports: [MediaProcessingService, TechnicianLocationService],
 })
 export class TechnicianModule {}

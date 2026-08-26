@@ -20,6 +20,8 @@ const technician: AuthenticatedUser = {
   roles: [UserRole.INSPECTION_TECHNICIAN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 function mediaProcessingDouble() {
@@ -807,7 +809,7 @@ describe('technician inspection list filtering', () => {
       ),
     };
   }
-  const whereOf = (prisma: { inspection: { findMany: jest.Mock } } ) =>
+  const whereOf = (prisma: { inspection: { findMany: jest.Mock } }) =>
     prisma.inspection.findMany.mock.calls[0]![0].where;
 
   it('filters on every status a chip asks for, not just the first', async () => {

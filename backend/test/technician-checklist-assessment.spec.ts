@@ -16,6 +16,8 @@ const technician: AuthenticatedUser = {
   roles: [UserRole.INSPECTION_TECHNICIAN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const ROOM_ID = '20000000-0000-4000-8000-000000000001';

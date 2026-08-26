@@ -1,6 +1,6 @@
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { SwaggerModule } from '@nestjs/swagger';
 // compression is a CommonJS `export =` package; this form avoids a broken `.default` call at runtime.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import compression = require('compression');
@@ -8,6 +8,8 @@ import helmet from 'helmet';
 
 import { AppModule } from './app.module';
 import { ApplicationExceptionFilter } from './common/errors';
+import { buildOpenApiConfig } from './openapi/openapi.document';
+import { OpenApiDocumentService } from './openapi/openapi.service';
 
 const DEVELOPMENT_ORIGINS = [
   'http://localhost:3001',
@@ -46,6 +48,14 @@ export function allowedCorsOrigins(environment: NodeJS.ProcessEnv = process.env)
 
 export function configureApplication(app: Awaited<ReturnType<typeof NestFactory.create>>) {
   app.setGlobalPrefix('api');
+  // How many proxies to believe about the caller's address. Zero by default, so
+  // an unconfigured deployment reports the socket address rather than trusting
+  // an X-Forwarded-For header anyone can write. It has to match the real
+  // topology for an API client's IP allowlist to mean anything: set too low and
+  // every request looks like it came from nginx, set too high and the allowlist
+  // can be talked around by the caller.
+  const proxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+  if (proxyHops > 0) app.getHttpAdapter().getInstance().set('trust proxy', proxyHops);
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.use(
     compression({
@@ -67,6 +77,16 @@ export function configureApplication(app: Awaited<ReturnType<typeof NestFactory.
   );
   app.useGlobalFilters(new ApplicationExceptionFilter());
   app.enableShutdownHooks();
+  // The document service describes *this* application, so it needs the instance.
+  // Done here rather than in `bootstrap` so every entry point that boots a real
+  // application — including the e2e tests — can serve the document, and
+  // best-effort because a test that assembles a narrower module than AppModule
+  // has no reason to fail over documentation being unavailable.
+  try {
+    app.get(OpenApiDocumentService, { strict: false }).attach(app);
+  } catch {
+    // No document service in this composition; /admin/system/openapi will 503.
+  }
 }
 
 async function bootstrap() {
@@ -80,13 +100,13 @@ async function bootstrap() {
     process.env.NODE_ENV !== 'production' &&
     (process.env.APP_ENV !== 'remote-beta' || process.env.ENABLE_SWAGGER === 'true');
   if (swaggerEnabled) {
-    const config = new DocumentBuilder()
-      .setTitle('TexasRenters Inspection API')
-      .setDescription('Mock-first REST API foundation. AI findings always require human review.')
-      .setVersion('1.0')
-      .addBearerAuth()
-      .build();
-    SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app, config));
+    // The same configuration the guarded document endpoint uses, so the public
+    // UI and the console cannot describe the same API differently.
+    SwaggerModule.setup(
+      'api/docs',
+      app,
+      SwaggerModule.createDocument(app, buildOpenApiConfig()),
+    );
   }
   // Bind every interface: inside a container, listening only on loopback makes
   // the service unreachable from the Docker network and therefore from ngrok.

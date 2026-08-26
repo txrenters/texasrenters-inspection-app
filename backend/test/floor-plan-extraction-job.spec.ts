@@ -11,6 +11,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const PLAN = {
@@ -33,9 +35,11 @@ function service(prisma: Record<string, unknown>, extraction: Record<string, unk
       extract: jest.fn(),
       ...extraction,
     } as never,
-      // Returns nothing per area, so the service falls back to the shared
-      // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+    // Returns nothing per area, so the service falls back to the shared
+    // templates and these assertions stay deterministic and offline.
+    {
+      generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+    } as never,
     { resolve: jest.fn().mockResolvedValue({ provider: 'OPENAI', modelId: 'm' }) } as never,
   );
 }
@@ -117,7 +121,13 @@ describe('asynchronous floor plan extraction', () => {
       floorPlanExtractionJob: {
         findFirst: jest
           .fn()
-          .mockResolvedValue({ id: 'job-1', status: 'RUNNING', errorCode: null, output: null, updatedAt: abandoned }),
+          .mockResolvedValue({
+            id: 'job-1',
+            status: 'RUNNING',
+            errorCode: null,
+            output: null,
+            updatedAt: abandoned,
+          }),
         update: jest.fn().mockResolvedValue({}),
       },
     };

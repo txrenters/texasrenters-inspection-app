@@ -22,6 +22,8 @@ function reviewer(
     roles: [UserRole.PROPERTY_ADMIN],
     permissions,
     mustChangePassword: false,
+    // Added with `principalType`; these fixtures are people, not integrations.
+    principalType: 'USER',
   };
 }
 

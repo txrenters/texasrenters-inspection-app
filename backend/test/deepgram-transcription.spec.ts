@@ -12,7 +12,9 @@ afterEach(() => {
 
 const payload = (overrides: Record<string, unknown> = {}) => ({
   results: {
-    channels: [{ alternatives: [{ transcript: 'The kitchen sink is leaking.' }], detected_language: 'en' }],
+    channels: [
+      { alternatives: [{ transcript: 'The kitchen sink is leaking.' }], detected_language: 'en' },
+    ],
     utterances: [
       { start: 1.2, end: 4.8, transcript: 'The kitchen sink is leaking.' },
       { start: 5.0, end: 7.5, transcript: 'Grout is cracked behind the tap.' },
@@ -168,8 +170,15 @@ describe('transcribing media Deepgram fetches itself', () => {
   it('asks for the same timings as the byte path', async () => {
     // Both paths must produce segments a finding can be anchored to; a Stream
     // recording should not silently lose them.
-    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
-    const result = await requestDeepgramTranscriptionFromUrl('dg-key', 'https://host/a.mp4', 120, fetchMock as never);
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => payload() });
+    const result = await requestDeepgramTranscriptionFromUrl(
+      'dg-key',
+      'https://host/a.mp4',
+      120,
+      fetchMock as never,
+    );
     expect(fetchMock.mock.calls[0][0]).toContain('utterances=true');
     expect(result.segments).toHaveLength(2);
   });
