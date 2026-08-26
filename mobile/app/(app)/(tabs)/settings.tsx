@@ -14,12 +14,18 @@ import {
   Trash2Icon,
   UserIcon,
   WifiIcon,
+  MapPinIcon,
   WrenchIcon,
 } from 'lucide-react-native';
 import { Alert, Pressable, ScrollView, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useTabBarInset } from '@/src/lib/tab-bar-inset';
+import {
+  isShiftTrackingActive,
+  startShiftTracking,
+  stopShiftTracking,
+} from '@/src/location/shift-tracking';
 import { useCurrentUser, useSignOut, useUploads } from '@/src/features/queries';
 import { clearLocalRecordings } from '@/src/media/local-recordings';
 import { clearLocalSnapshots } from '@/src/media/local-snapshots';
@@ -38,6 +44,7 @@ registerIcons(
   HelpCircleIcon,
   InfoIcon,
   LogOutIcon,
+  MapPinIcon,
   MoonIcon,
   Trash2Icon,
   UserIcon,
@@ -47,6 +54,14 @@ registerIcons(
 
 export default function SettingsScreen() {
   const tabBarInset = useTabBarInset();
+  // The OS is the source of truth for whether a shift is running, not a stored
+  // preference: the service can be stopped from the notification, and a switch
+  // that disagreed with the notification would be worse than no switch.
+  const [onShift, setOnShift] = useState(false);
+  const [shiftBusy, setShiftBusy] = useState(false);
+  useEffect(() => {
+    void isShiftTrackingActive().then(setOnShift);
+  }, []);
   const user = useCurrentUser();
   const uploads = useUploads();
   const signOut = useSignOut();
@@ -145,6 +160,33 @@ export default function SettingsScreen() {
       `Version ${appVersion}\n\nSecure property evidence capture for authorized TexasRenters technicians.\n\n© ${new Date().getFullYear()} TexasRenters.`,
     );
 
+  const toggleShift = async (next: boolean) => {
+    if (shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      if (!next) {
+        await stopShiftTracking();
+        setOnShift(false);
+        return;
+      }
+      const result = await startShiftTracking();
+      setOnShift(result.started);
+      if (result.started) return;
+      // Named, not generic. "Location unavailable" sends somebody to the wrong
+      // settings screen; each of these is fixed in a different place.
+      Alert.alert(
+        'Could not start your shift',
+        result.reason === 'UNAVAILABLE'
+          ? 'Location services are switched off for this device. Turn them on in the system settings and try again.'
+          : result.reason === 'FOREGROUND_DENIED'
+            ? 'TexasRenters Inspect needs location access to record your shift. Allow it in the app’s settings and try again.'
+            : 'Your shift needs location access set to “Allow all the time”, so it keeps recording while the app is in the background. Change it in the app’s settings and try again.',
+      );
+    } finally {
+      setShiftBusy(false);
+    }
+  };
+
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <ScrollView
@@ -167,6 +209,24 @@ export default function SettingsScreen() {
             </Text>
             <Text className="mt-0.5 text-xs text-muted-foreground">Secure mobile account</Text>
           </View>
+        </View>
+
+        <GroupLabel>Shift</GroupLabel>
+        <View className="mx-5 overflow-hidden rounded-2xl bg-card">
+          {/* Off by default and never started automatically. Location is
+              recorded only while a technician says they are working, and the
+              notification stays up the whole time so it is never running
+              unnoticed. */}
+          <SettingSwitchRow
+            icon={MapPinIcon}
+            iconClassName="text-chart-2"
+            iconBackground="bg-chart-2/15"
+            title="On shift"
+            description="Records your location for dispatch while you are working"
+            last
+            value={onShift}
+            onValueChange={(next) => void toggleShift(next)}
+          />
         </View>
 
         <GroupLabel>Preferences</GroupLabel>
