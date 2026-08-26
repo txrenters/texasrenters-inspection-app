@@ -9,6 +9,8 @@ import { AccessController } from './access.controller';
 import { AccessService } from './access.service';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { PropertyGeocodeScheduler } from './property-geocode.scheduler';
+import { PropertyGeocodingService } from './property-geocoding.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonService } from './comparison.service';
@@ -39,6 +41,8 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
   controllers: [AdminController, AccessController, ReportsController],
   providers: [
     AdminService,
+    PropertyGeocodingService,
+    PropertyGeocodeScheduler,
     AccessService,
     AreaEvidenceService,
     AiProviderSettingsService,

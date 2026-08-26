@@ -31,6 +31,7 @@ import {
   type AuthenticatedRequest,
 } from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
+import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService } from '../cache/cache.service';
@@ -107,6 +108,7 @@ export class AdminController {
     private readonly reportShares: ReportShareService,
     private readonly comparison: ComparisonService,
     private readonly locations: TechnicianLocationService,
+    private readonly propertyGeocoding: PropertyGeocodingService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
@@ -738,6 +740,19 @@ export class AdminController {
   @RequirePermissions('technicians:read')
   technicianLocations(@Req() request: AuthenticatedRequest) {
     return this.locations.latestPositions(request.user);
+  }
+
+  /**
+   * Every property that has been placed on the map.
+   *
+   * Behind `properties:read`, the same grant that lists them anywhere else: a
+   * property's location is part of the property, not a separate secret, and it
+   * is on the tenancy agreement long before it reaches this console.
+   */
+  @Get('property-locations')
+  @RequirePermissions('properties:read')
+  propertyLocations(@Req() request: AuthenticatedRequest) {
+    return this.propertyGeocoding.positions(request.user);
   }
 
   @Get('assignments')
