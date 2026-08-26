@@ -90,6 +90,12 @@ export class PropertyGeocodeScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
+      // Buildings first: they are what the console's property list and its map
+      // both read, so coverage there is what anybody actually notices. The
+      // `Property` pass after it is small — only rows the inspection workflow
+      // created — but it is what the route planner measures from, so it cannot
+      // be dropped.
+      await this.geocoding.geocodePendingBuildings(this.batchSize());
       await this.geocoding.geocodePending(this.batchSize());
     } catch (error) {
       // Never throw out of a cron callback: an unhandled rejection takes the

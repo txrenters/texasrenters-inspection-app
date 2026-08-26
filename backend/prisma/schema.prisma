@@ -1110,6 +1110,25 @@ model PropertywareBuilding {
   lastSyncedAt        DateTime               @default(now())
   lastSeenAt          DateTime               @default(now())
   deactivatedAt       DateTime?
+
+  /// Where this building is, once its address has been looked up.
+  ///
+  /// On the synced record rather than on `Property`, because the console's
+  /// property list and its map must answer from the same table. They did not:
+  /// the list reads these rows while the map read the handful of `Property`
+  /// rows the inspection workflow happens to have created, so the map silently
+  /// disagreed with the page beside it.
+  ///
+  /// Keeping it here also makes the sync the only thing that has to be right.
+  /// A building deactivated in Propertyware leaves the map because the map
+  /// filters on `isActive`, and a new one joins as soon as it is geocoded --
+  /// no promotion step to forget, and nothing to reconcile.
+  latitude            Decimal?               @db.Decimal(9, 6)
+  longitude           Decimal?               @db.Decimal(9, 6)
+  geocodedFor         String?
+  geocodedAt          DateTime?
+  geocodeSource       String?
+  geocodePrecision    String?
   sourceHash          String?
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
