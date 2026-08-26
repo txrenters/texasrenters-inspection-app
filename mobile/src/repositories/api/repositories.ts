@@ -556,9 +556,9 @@ export class ApiAuthRepository implements AuthRepository {
    * The link points at the admin console, which is where the form lives — the
    * app registers no deep-link handler, so it could not receive one.
    *
-   * Reachable only through `usePasswordReset`, which no screen renders — the
-   * sign-in screen offers no "forgot password" route, so a technician asks the
-   * office. Kept because this is the endpoint that route should call.
+   * Reached through `usePasswordReset` from the "Forgot password?" route on
+   * the sign-in screen, and mirrored by an administrator button in the console
+   * for a technician who cannot get to their mail.
    */
   async resetPassword(email: string) {
     await writeJson('/api/v1/auth/request-password-reset', 'POST', { email });

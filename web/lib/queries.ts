@@ -1279,6 +1279,21 @@ export function useAdminMutations() {
         void verifyAffectedQueries(client, [keys.techniciansRoot, keys.dashboard]);
       },
     }),
+    /**
+     * Mail a technician a reset link.
+     *
+     * No cache invalidation, deliberately: this changes nothing that is
+     * displayed. The token lives in a mailbox, not in the technician record,
+     * so refetching the roster afterwards would only make the button look like
+     * it did more than it did.
+     */
+    sendTechnicianPasswordReset: useMutation({
+      mutationFn: (technicianId: string) =>
+        api<{ email: string; delivered: boolean }>(
+          `/api/v1/admin/technicians/${technicianId}/password-reset`,
+          { method: 'POST' },
+        ),
+    }),
     createInspection: useMutation({
       mutationFn: (input: object) =>
         api<AdminInspection>('/api/v1/admin/inspections', {

@@ -24,6 +24,9 @@ import { TokenService } from './token.service';
     TokenService,
     RequiredPasswordAuthGuard,
   ],
-  exports: [LocalIdentityProvider, SessionService, TokenService],
+  // `PasswordResetService` too, so the console can send a technician a reset
+  // link through the same token machinery the sign-in form uses rather than a
+  // second implementation that could drift from it.
+  exports: [LocalIdentityProvider, PasswordResetService, SessionService, TokenService],
 })
 export class AuthModule {}
