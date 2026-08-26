@@ -591,6 +591,31 @@ model Property {
   city           String
   state          String               @default("TX")
   postalCode     String
+
+  /// Where this property actually is, once its address has been looked up.
+  ///
+  /// `Decimal(9, 6)` — roughly 11cm — and unlike the `Decimal(6, 5)` used for
+  /// floor-plan markers it can hold a Texas longitude, which needs two digits
+  /// before the point. Null until the geocoder has run: nothing in the sync
+  /// supplies coordinates, because Propertyware sends none.
+  latitude         Decimal?  @db.Decimal(9, 6)
+  longitude        Decimal?  @db.Decimal(9, 6)
+
+  /// The address string these coordinates were derived from.
+  ///
+  /// Kept so that an edited address can be *noticed*. Without it a property
+  /// that moved from one street to another would keep its old pin for ever,
+  /// and a wrong pin is worse than no pin — it sends somebody to the wrong door.
+  geocodedFor      String?
+  geocodedAt       DateTime?
+
+  /// Which service answered, and how precisely.
+  ///
+  /// Precision is stored because a ZIP-code centroid and a street match are
+  /// very different claims. Drawing them identically would have the map assert
+  /// something nobody knows, so the console is told and decides.
+  geocodeSource    String?
+  geocodePrecision String?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   organization   Organization         @relation(fields: [organizationId], references: [id])

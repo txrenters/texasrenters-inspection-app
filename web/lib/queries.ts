@@ -6,6 +6,7 @@ import type {
   AccountDeletionResult,
   AdminAssignment,
   AdminAssignmentListItem,
+  PropertyPosition,
   TechnicianPosition,
   AdminAuditEvent,
   AdminBulkDeleteResult,
@@ -121,6 +122,7 @@ export const keys = {
   inspectionFindings: (id: string, page: number, reviewStatus: string, kind = 'ALL') =>
     ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
   technicianLocations: ['technician-locations'] as const,
+  propertyLocations: ['property-locations'] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   techniciansRoot: ['admin', 'technicians'] as const,
@@ -429,6 +431,21 @@ export const useTechnicianLocations = (enabled = true) =>
     // Matches the handset's own reporting interval. Asking more often than the
     // devices report would spend requests to redraw the same pins.
     refetchInterval: 60_000,
+    enabled,
+  });
+/**
+ * Where the properties are.
+ *
+ * No refetch interval, unlike the technician positions beside it: a building
+ * does not move. New rows appear only when the sync adds a property and the
+ * geocoder places it, which is hours of work at the fastest — so this is
+ * fetched once and left alone.
+ */
+export const usePropertyLocations = (enabled = true) =>
+  useQuery({
+    queryKey: keys.propertyLocations,
+    queryFn: ({ signal }) => api<PropertyPosition[]>('/api/v1/admin/property-locations', { signal }),
+    staleTime: 30 * 60_000,
     enabled,
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>
