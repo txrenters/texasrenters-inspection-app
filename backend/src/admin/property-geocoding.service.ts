@@ -195,16 +195,26 @@ export class PropertyGeocodingService {
   }
 
   /**
-   * Every property this organization can see that has a coordinate.
+   * Every property the console can see that has been placed on a map.
    *
-   * Rows without one are absent rather than sent with nulls: a map has nothing
-   * to do with a property it cannot place, and filtering here saves every
-   * consumer from having to remember to.
+   * Reads `propertywareBuilding`, the same table `AdminService.properties()`
+   * lists. It previously read `Property`, which is a different and much
+   * smaller set — the rows the inspection workflow happens to have created —
+   * so the map showed nine while the page beside it showed five hundred and
+   * seventy and neither mentioned the other.
+   *
+   * `isActive` is what makes removal work. The Propertyware sync deactivates a
+   * building that has gone, and it leaves the map on the next read with no
+   * deletion path of its own to maintain.
+   *
+   * Rows without a coordinate are absent rather than sent with nulls: a map has
+   * nothing to do with a property it cannot place.
    */
   async positions(user: AuthenticatedUser): Promise<PropertyPosition[]> {
-    const rows = await this.prisma.property.findMany({
+    const rows = await this.prisma.propertywareBuilding.findMany({
       where: {
         organizationId: user.organizationId,
+        isActive: true,
         latitude: { not: null },
         longitude: { not: null },
       },
@@ -224,11 +234,100 @@ export class PropertyGeocodingService {
 
     // Numbers, not Prisma `Decimal`s: a Decimal serialises to a *string*
     // through JSON, and a map given "-95.4012" plots nothing at all.
+    //
+    // The address parts are nullable on a synced record and not on the
+    // contract, so they fall back to empty rather than being dropped — a pin
+    // with a thin popup is still a property somebody can find.
     return rows.map((row) => ({
-      ...row,
+      id: row.id,
+      name: row.name,
+      addressLine1: row.addressLine1 ?? '',
+      city: row.city ?? '',
+      state: row.state ?? '',
+      postalCode: row.postalCode ?? '',
       latitude: row.latitude?.toNumber() ?? 0,
       longitude: row.longitude?.toNumber() ?? 0,
       geocodePrecision: (row.geocodePrecision as GeocodePrecision | null) ?? null,
     }));
+  }
+
+  /**
+   * Look up buildings that have never been placed, or whose address changed.
+   *
+   * The map's source, so this is the one that matters for coverage. Same rules
+   * and the same `withSystemTenant` as the property pass below: maintenance
+   * crosses organizations, and without the system tenant the row-level
+   * policies match nothing and it reports "nothing to do" for ever.
+   */
+  async geocodePendingBuildings(limit: number) {
+    return withSystemTenant(async () => {
+      const candidates = await this.prisma.propertywareBuilding.findMany({
+        where: {
+          isActive: true,
+          addressLine1: { not: null },
+          OR: [{ latitude: null }, { longitude: null }, { geocodedFor: null }],
+        },
+        select: {
+          id: true,
+          addressLine1: true,
+          city: true,
+          state: true,
+          postalCode: true,
+          latitude: true,
+          longitude: true,
+          geocodedFor: true,
+        },
+        take: limit,
+      });
+
+      const pending = candidates.filter((building) =>
+        needsGeocoding({
+          addressLine1: building.addressLine1 ?? '',
+          city: building.city ?? '',
+          state: building.state ?? '',
+          postalCode: building.postalCode ?? '',
+          latitude: building.latitude?.toNumber() ?? null,
+          longitude: building.longitude?.toNumber() ?? null,
+          geocodedFor: building.geocodedFor,
+        }),
+      );
+      if (!pending.length) return { examined: candidates.length, geocoded: 0, failed: 0 };
+
+      let geocoded = 0;
+      let failed = 0;
+
+      for (const [index, building] of pending.entries()) {
+        if (index > 0)
+          await new Promise((resolve) => setTimeout(resolve, PAUSE_BETWEEN_REQUESTS_MS));
+
+        const address = geocodableAddress({
+          addressLine1: building.addressLine1 ?? '',
+          city: building.city ?? '',
+          state: building.state ?? '',
+          postalCode: building.postalCode ?? '',
+        });
+        const answer = await this.geocodeAddress(address);
+        if (!answer) {
+          failed += 1;
+          continue;
+        }
+
+        await this.prisma.propertywareBuilding.update({
+          where: { id: building.id },
+          data: {
+            latitude: answer.latitude,
+            longitude: answer.longitude,
+            geocodedFor: address,
+            geocodedAt: new Date(),
+            geocodeSource: GEOCODE_SOURCE,
+            geocodePrecision: answer.precision,
+          },
+        });
+        geocoded += 1;
+      }
+
+      this.logger.log({ event: 'buildings_geocoded', geocoded, failed });
+      return { examined: candidates.length, geocoded, failed };
+    });
   }
 }
