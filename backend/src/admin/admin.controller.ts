@@ -32,6 +32,7 @@ import {
 } from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { PasswordResetService } from '../auth/password-reset.service';
+import { RouteService } from '../routing/route.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
@@ -135,6 +136,7 @@ export class AdminController {
     private readonly locations: TechnicianLocationService,
     private readonly propertyGeocoding: PropertyGeocodingService,
     private readonly passwordResets: PasswordResetService,
+    private readonly routes: RouteService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
@@ -835,6 +837,30 @@ export class AdminController {
     @Param('technicianId') id: string,
   ) {
     return this.passwordResets.sendForTechnician(request.user, id);
+  }
+
+  /**
+   * A technician's day, ordered from where they are now.
+   *
+   * `technicians:read`, the same key as the map: this reads a named person's
+   * live position to decide where the route starts.
+   *
+   * `date` defaults to today. The schema stores a calendar day and no clock
+   * value, so there is no narrower window to ask for.
+   */
+  @Get('technicians/:technicianId/route')
+  @RequirePermissions('technicians:read')
+  technicianRoute(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Query('date') date?: string,
+  ) {
+    const day = date ? new Date(date) : new Date();
+    return this.routes.planDay(
+      request.user.organizationId,
+      id,
+      Number.isNaN(day.getTime()) ? new Date() : day,
+    );
   }
 
   @Get('technicians/:technicianId')

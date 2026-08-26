@@ -7,6 +7,7 @@ import { ChargeService } from '../admin/charge.service';
 import { ComparisonService } from '../admin/comparison.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { RoutingModule } from '../routing/routing.module';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { MediaProcessingService } from './media-processing.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
@@ -16,7 +17,7 @@ import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService } from './technician.service';
 
 @Module({
-  imports: [RealtimeModule],
+  imports: [RealtimeModule, RoutingModule],
   controllers: [TechnicianController],
   providers: [
     TechnicianService,

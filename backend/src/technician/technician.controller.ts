@@ -44,6 +44,7 @@ import {
   TechnicianUpdateAreaDto,
   TechnicianLocationBatchDto,
 } from './technician.dto';
+import { RouteService } from '../routing/route.service';
 import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService, type UploadedRoomVideo } from './technician.service';
 
@@ -57,6 +58,7 @@ export class TechnicianController {
     private readonly service: TechnicianService,
     private readonly mobilePush: MobilePushService,
     private readonly locations: TechnicianLocationService,
+    private readonly routes: RouteService,
     private readonly mediaProcessing: MediaProcessingService,
     private readonly charges: ChargeService,
   ) {}
@@ -69,6 +71,25 @@ export class TechnicianController {
    * were stored and how many were dropped, so a device losing points to a bad
    * clock finds out rather than reporting a technician standing still.
    */
+  /**
+   * The technician's own day, ordered from where they are now.
+   *
+   * No permission beyond being themselves: the id comes from the token, never
+   * from the request, so this cannot be pointed at a colleague. That is also
+   * why it is here rather than reusing the console's route — the admin
+   * endpoint takes an id, and an endpoint that takes an id is one a technician
+   * must never be handed.
+   */
+  @Get('route')
+  technicianRoute(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
+    const day = date ? new Date(date) : new Date();
+    return this.routes.planDay(
+      request.user.organizationId,
+      request.user.id,
+      Number.isNaN(day.getTime()) ? new Date() : day,
+    );
+  }
+
   @Post('locations')
   recordLocations(@Req() request: AuthenticatedRequest, @Body() body: TechnicianLocationBatchDto) {
     return this.locations.record(request.user, body);

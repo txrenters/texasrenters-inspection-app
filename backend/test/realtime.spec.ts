@@ -98,7 +98,48 @@ describe('technician realtime authorization', () => {
     // Derived from the authenticated profile, never from the handshake — an
     // administrator cannot ask to watch somebody else's organization.
     expect(client.join).not.toHaveBeenCalledWith('organization:other-organization');
-    expect(client.join).toHaveBeenCalledTimes(1);
+    // Positions are a second room, and this account holds `technicians:read`.
+    expect(client.join).toHaveBeenCalledWith('organization:organization-1:locations');
+    // Two rooms, and neither of them a technician's.
+    expect(client.join).toHaveBeenCalledTimes(2);
+    expect(client.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('withholds live positions from an account that may read inspections but not technicians', async () => {
+    // The boundary this room exists for. The organization room is joined on
+    // `inspections:read`, but a position says where a named employee is, and
+    // the HTTP endpoint serving the same data requires `technicians:read`.
+    // Publishing positions into the organization room would hand them to every
+    // account holding the weaker grant.
+    const prisma = {
+      userProfile: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'coordinator-profile',
+          authUserId: 'auth-coordinator',
+          displayName: 'Dana Coordinator',
+          isActive: true,
+          memberships: [{ organizationId: 'organization-1', role: UserRole.CHARGE_APPROVER }],
+          roleAssignments: [
+            {
+              organizationId: 'organization-1',
+              role: { permissions: ['inspections:read'] },
+            },
+          ],
+        }),
+      },
+    };
+    const client = {
+      handshake: { auth: { accessToken: accessToken('auth-coordinator') } },
+      data: {},
+      join: jest.fn().mockResolvedValue(undefined),
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+    };
+
+    await new TechnicianEventsGateway(prisma as never).handleConnection(client as never);
+
+    expect(client.join).toHaveBeenCalledWith('organization:organization-1');
+    expect(client.join).not.toHaveBeenCalledWith('organization:organization-1:locations');
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 
