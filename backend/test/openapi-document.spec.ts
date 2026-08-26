@@ -1,6 +1,7 @@
 import { Controller, Get, Injectable, Module, Post, UseGuards, VersioningType } from '@nestjs/common';
 import type { CanActivate } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
+import { ApiTags } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
 
 import { PermissionsGuard, RequirePermissions } from '../src/common/auth';
@@ -75,6 +76,7 @@ class PublicController {
  * suffix was stripped with a pattern greedy enough to match the `_v` inside the
  * method name, so every handler beginning with `v` lost its annotations.
  */
+@ApiTags('Multi path')
 @UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller(['integrations/thing', 'admin/integrations/thing'])
 class MultiPathController {
@@ -85,6 +87,7 @@ class MultiPathController {
   }
 
   @Post('validate')
+  @ApiTags('Specifically tagged')
   @RequirePermissions('integrations:manage')
   validateThing() {
     return {};
@@ -244,6 +247,27 @@ describe('OpenAPI document', () => {
     expect(document.paths['/api/v1/integrations/thing/validate']?.post).toMatchObject({
       'x-required-permissions': ['integrations:manage'],
     });
+
+    await app.close();
+  });
+
+  it('puts a method-level tag after the controller tag, which is what the console groups on', async () => {
+    const { app, document } = await buildDocument();
+
+    // The console groups by the LAST tag, so that a handler can be filed under
+    // its own heading without moving it to a new controller — the map's two
+    // feeds live on AdminController and still want their own section.
+    //
+    // Pinned because it is an ordering guarantee of @nestjs/swagger rather than
+    // of this code: if it ever reversed, every method-tagged route would silently
+    // regroup under its controller and simply look missing.
+    expect(document.paths['/api/v1/integrations/thing/status']?.get?.tags).toEqual([
+      'Multi path',
+    ]);
+    expect(document.paths['/api/v1/integrations/thing/validate']?.post?.tags).toEqual([
+      'Multi path',
+      'Specifically tagged',
+    ]);
 
     await app.close();
   });
