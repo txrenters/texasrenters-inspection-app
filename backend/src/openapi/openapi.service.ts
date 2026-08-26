@@ -148,8 +148,43 @@ export class OpenApiDocumentService {
     return routes;
   }
 
+  /**
+   * The map key for an operation id.
+   *
+   * With URI versioning enabled — which production does — Swagger emits
+   * `AdminController_dashboard_v1`, not `AdminController_dashboard`. Keying only
+   * on the unsuffixed form matched nothing at all, and the failure was silent in
+   * the worst possible way: the document still served, still listed every route,
+   * and simply reported no permissions and no authentication anywhere. A reader
+   * would have concluded the entire API was unguarded.
+   *
+   * Three suffixes have to come off, and each one was found the hard way by
+   * asking the running application which operations it could not match:
+   *
+   * - `_v1` — the URI version, on every operation.
+   * - `[0]`, `[1]` — one entry per path when a controller declares several, as
+   *   PropertywareIntegrationController does with `['integrations/propertyware',
+   *   'admin/integrations/propertyware']`. Both entries are the same handler and
+   *   share its authorization.
+   * - `_<n>` — Swagger's disambiguator for a duplicated operation id.
+   *
+   * `[^_]*` rather than `[\w.]*` in the version pattern, and that is not
+   * cosmetic. A greedy class matches the `_v` inside the *method name*, so
+   * `AdminController_validateAiProvider_v1` collapsed to `AdminController` and
+   * matched nothing — every handler whose name begins with `v` was silently
+   * unannotated. A version cannot contain an underscore; a method name reached
+   * this way always does.
+   */
+  private static annotationKey(operationId: string) {
+    return operationId
+      .replace(/_v[^_]*$/, '')
+      .replace(/\[\d+\]$/, '')
+      .replace(/_\d+$/, '');
+  }
+
   private annotate(document: OpenAPIObject): OpenAPIObject {
     const routes = this.routeAuthorization();
+    const unmatched: string[] = [];
     for (const item of Object.values(document.paths)) {
       for (const operation of Object.values(item)) {
         // A PathItem also carries `parameters`, `$ref` and `servers`, none of
@@ -157,8 +192,13 @@ export class OpenApiDocumentService {
         if (!operation || typeof operation !== 'object' || Array.isArray(operation)) continue;
         const candidate = operation as { operationId?: string } & Record<string, unknown>;
         if (!candidate.operationId) continue;
-        const route = routes.get(candidate.operationId);
-        if (!route) continue;
+        const route =
+          routes.get(candidate.operationId) ??
+          routes.get(OpenApiDocumentService.annotationKey(candidate.operationId));
+        if (!route) {
+          unmatched.push(candidate.operationId);
+          continue;
+        }
         candidate['x-required-permissions'] = route.permissions;
         candidate['x-authentication'] = route.credentials;
         // Reported separately from `x-authentication` because they answer
@@ -168,6 +208,12 @@ export class OpenApiDocumentService {
         candidate['x-machine-accessible'] = route.machineAccessible;
       }
     }
+    // Said out loud rather than left to be noticed. An operation the walk could
+    // not match carries no annotations, which reads exactly like a route that
+    // enforces nothing — so the console is told which ones, and shows them as
+    // unknown instead of as unguarded.
+    if (unmatched.length > 0)
+      (document as unknown as Record<string, unknown>)['x-unannotated-operations'] = unmatched;
     return document;
   }
 }

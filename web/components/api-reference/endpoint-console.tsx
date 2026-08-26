@@ -9,6 +9,7 @@ import { resolveSchema, schemaSkeleton, schemaTypeLabel } from '@/components/api
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -217,12 +218,7 @@ export function EndpointConsole({
               the audit trail under your name. There is no sandbox behind this button.
             </p>
             <label className="flex items-center gap-2 text-sm">
-              <input
-                checked={armed}
-                className="accent-primary size-4"
-                onChange={(event) => setArmed(event.target.checked)}
-                type="checkbox"
-              />
+              <Checkbox checked={armed} onCheckedChange={(next) => setArmed(next === true)} />
               I understand this is a real {method.toUpperCase()} against live data.
             </label>
             {isDelete ? (

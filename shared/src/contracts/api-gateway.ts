@@ -120,6 +120,16 @@ export interface ApiDocument {
     schemas?: Record<string, ApiSchema>;
     securitySchemes?: Record<string, { type: string; name?: string; in?: string; scheme?: string }>;
   };
+  /**
+   * Operations the backend could not match to route metadata, and therefore
+   * could not annotate.
+   *
+   * Present only when something went wrong. It exists because the failure it
+   * reports is otherwise invisible: an unannotated operation looks exactly like
+   * one that enforces nothing, so the reference has to be able to say "unknown"
+   * rather than quietly showing "no credential".
+   */
+  'x-unannotated-operations'?: string[];
 }
 
 /** HTTP methods a path item can carry, in the order the reference lists them. */
