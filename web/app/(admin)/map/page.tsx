@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 
 import { PageHeader } from '@/components/page-header';
-import { EmptyState, ErrorState } from '@/components/states';
+import { EmptyState } from '@/components/states';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
@@ -51,21 +51,41 @@ export default function TechnicianMapPage() {
           description="Ask an administrator for the technicians permission if you need it."
           title="You do not have access to technician locations"
         />
-      ) : positions.isError ? (
-        <ErrorState error={positions.error} retry={() => void positions.refetch()} />
-      ) : positions.isLoading ? (
-        <Skeleton className="h-[70vh] w-full rounded-lg" />
-      ) : !positions.data?.length ? (
-        // Distinguished from an error on purpose. Nothing here usually means
-        // nobody is on shift, which is a normal state at seven in the evening
-        // and not a fault anybody should go looking for.
-        <EmptyState
-          description="Positions appear here once a technician turns their shift on in the app."
-          title="No technician has reported a position yet"
-        />
       ) : (
-        <div className="h-[70vh] w-full overflow-hidden rounded-lg border">
-          <TechnicianMap positions={positions.data} />
+        /* The map is the page, and it renders whether or not anybody has
+           reported. An empty map still says where the work is — the city, the
+           streets, the shape of the patch — and replacing it with a card meant
+           the most ordinary state of all, nobody on shift, showed nothing at
+           all. Anything worth saying is said over the top of it instead. */
+        <div className="relative h-[70vh] w-full overflow-hidden rounded-lg border">
+          <TechnicianMap positions={positions.data ?? []} />
+
+          {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
+            /* `pointer-events-none` on the wrapper and restored on the notice:
+               a banner that swallowed drags would make the map behind it look
+               broken. z-[1000] because Leaflet's own panes sit at 400-700. */
+            <div className="pointer-events-none absolute inset-x-0 top-3 z-[1000] flex justify-center px-3">
+              <div className="bg-background/95 pointer-events-auto rounded-md border px-3 py-2 text-sm shadow-sm">
+                {positions.isError ? (
+                  <span className="flex items-center gap-2">
+                    <span className="text-destructive">Could not load positions.</span>
+                    <button
+                      className="underline underline-offset-4"
+                      onClick={() => void positions.refetch()}
+                      type="button"
+                    >
+                      Try again
+                    </button>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    No technician has reported a position yet — they appear once somebody turns
+                    their shift on in the app.
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </>
