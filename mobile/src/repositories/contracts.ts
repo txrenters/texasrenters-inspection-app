@@ -114,7 +114,44 @@ export interface InspectionPage {
   totalPages: number;
 }
 
+/**
+ * The technician's day, ordered from where they are now.
+ *
+ * A suggestion. Nothing records whether it was followed, and it is recomputed
+ * from wherever they actually are, so taking a different stop first simply
+ * produces a different suggestion rather than putting anybody off-plan.
+ */
+export interface DayRouteStop {
+  inspectionId: string;
+  propertyId: string;
+  propertyName: string;
+  addressLine1: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface DayRouteLeg {
+  fromStopId: string | null;
+  toStopId: string;
+  distanceMeters: number;
+  durationSeconds: number;
+}
+
+export interface TechnicianDayRoute {
+  technicianId: string;
+  origin: { latitude: number; longitude: number; recordedAt: string } | null;
+  stops: DayRouteStop[];
+  legs: DayRouteLeg[];
+  totalDistanceMeters: number;
+  totalDurationSeconds: number;
+  /** Carried, not dropped: the inspection is still theirs, the address is not on a map. */
+  unroutable: { inspectionId: string; propertyName: string }[];
+}
+
 export interface InspectionRepository {
+  /** Ordered stops for today. Never served from cache — see the API repository. */
+  route(): Promise<TechnicianDayRoute>;
   dashboard(): Promise<DashboardSummary>;
   listPage(filters?: InspectionListFilters): Promise<InspectionPage>;
   list(filters?: InspectionListFilters): Promise<Inspection[]>;

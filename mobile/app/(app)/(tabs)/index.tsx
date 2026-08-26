@@ -15,9 +15,10 @@ import {
   InspectionUrgencyBadge,
   useInspectionUrgency,
 } from '@/src/components/InspectionUrgencyBadge';
-import { useCurrentUser, useDashboard } from '@/src/features/queries';
+import { useCurrentUser, useDashboard, useDayRoute } from '@/src/features/queries';
 import { InspectionListSkeleton } from '@/src/components/ui/Skeleton';
 import { HomeEmptyState } from '@/src/components/HomeEmptyState';
+import { DayRouteSummary } from '@/src/components/DayRouteSummary';
 import { hasNeverBeenAssigned } from '@/src/utils/home-state';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
@@ -90,9 +91,10 @@ function AssignedInspectionRow({ inspection }: { inspection: Inspection }) {
 export default function HomeScreen() {
   const tabBarInset = useTabBarInset();
   const dashboard = useDashboard();
+  const dayRoute = useDayRoute();
   // Bound to a user-initiated pull only. Wiring this to `isRefetching` made the
   // spinner appear on its own every 60s, when the assignment poll ran.
-  const pull = usePullToRefresh([dashboard.refetch]);
+  const pull = usePullToRefresh([dashboard.refetch, dayRoute.refetch]);
   const user = useCurrentUser();
   const theme = useThemeColors();
   const firstName = user.data?.name.split(/\s+/)[0] || 'Technician';
@@ -244,6 +246,8 @@ export default function HomeScreen() {
             ))}
           </View>
         ) : null}
+
+        <DayRouteSummary route={dayRoute.data} />
 
         <View className="mt-6">
           <SectionHeader

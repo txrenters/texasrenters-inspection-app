@@ -86,6 +86,22 @@ export class MockPropertyRepository implements PropertyRepository {
 }
 
 export class MockInspectionRepository implements InspectionRepository {
+  /**
+   * No route from a fixture. A route is measured from a live position, and
+   * inventing one would put a plausible-looking drive time in front of somebody
+   * with no way to tell it was fabricated.
+   */
+  async route() {
+    return {
+      technicianId: 'mock-technician',
+      origin: null,
+      stops: [],
+      legs: [],
+      totalDistanceMeters: 0,
+      totalDurationSeconds: 0,
+      unroutable: [],
+    };
+  }
   async dashboard() {
     await mockDelay();
     ensureMockAvailable();
