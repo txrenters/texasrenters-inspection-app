@@ -83,8 +83,7 @@ const config: ExpoConfig = {
     [
       'expo-sensors',
       {
-        motionPermission:
-          'Allow TexasRenters Inspect to guide a slow clockwise room walkthrough.',
+        motionPermission: 'Allow TexasRenters Inspect to guide a slow clockwise room walkthrough.',
       },
     ],
     [
@@ -110,8 +109,31 @@ const config: ExpoConfig = {
       {
         cameraPermission:
           'Allow TexasRenters Inspect to capture room-specific inspection evidence.',
-        microphonePermission:
-          'Allow TexasRenters Inspect to record technician narration.',
+        microphonePermission: 'Allow TexasRenters Inspect to record technician narration.',
+      },
+    ],
+    [
+      'expo-location',
+      {
+        /**
+         * Two strings, because iOS asks twice and the second ask is the one
+         * people refuse. The wording names the shift explicitly — a technician
+         * granting "always" needs to know it means while working, not always
+         * in the ordinary sense of the word, and the app only ever starts
+         * tracking behind a toggle they set themselves.
+         */
+        locationWhenInUsePermission:
+          'Allow TexasRenters Inspect to record your location while you are on shift.',
+        locationAlwaysAndWhenInUsePermission:
+          'Allow TexasRenters Inspect to record your location while you are on shift, including when the app is in the background.',
+        locationAlwaysPermission:
+          'Allow TexasRenters Inspect to record your location while you are on shift, including when the app is in the background.',
+        // Android's foreground service. Without it the OS stops delivering
+        // updates the moment the app leaves the screen, which is most of a
+        // shift — and the persistent notification it requires is the thing
+        // that keeps the technician aware it is running.
+        isAndroidForegroundServiceEnabled: true,
+        isAndroidBackgroundLocationEnabled: true,
       },
     ],
   ],
@@ -159,6 +181,16 @@ const config: ExpoConfig = {
       // single upload, and an absent-minded "yes" commits the account to filing
       // encryption paperwork it does not owe.
       ITSAppUsesNonExemptEncryption: false,
+      /**
+       * Keeps location updates arriving once the app leaves the screen.
+       *
+       * App Review asks what this is for and rejects builds whose answer is
+       * vague. The answer here is that a technician on shift is tracked for
+       * dispatch and for proof of attendance, it is disclosed in their terms of
+       * employment, it runs only while they have turned a shift on, and the
+       * app shows that it is running the whole time.
+       */
+      UIBackgroundModes: ['location'],
     },
   },
   android: {
@@ -170,6 +202,21 @@ const config: ExpoConfig = {
       backgroundColor: SPLASH_DARK_BACKGROUND,
     },
     package: 'com.texasrenters.inspection',
+    /**
+     * Declared rather than left to the plugin.
+     *
+     * `FOREGROUND_SERVICE_LOCATION` is separately required from Android 14, and
+     * a build missing it crashes the moment the service starts rather than
+     * failing at install — which surfaces as a technician's app dying when they
+     * go on shift, with nothing in JavaScript to catch it.
+     */
+    permissions: [
+      'android.permission.ACCESS_COARSE_LOCATION',
+      'android.permission.ACCESS_FINE_LOCATION',
+      'android.permission.ACCESS_BACKGROUND_LOCATION',
+      'android.permission.FOREGROUND_SERVICE',
+      'android.permission.FOREGROUND_SERVICE_LOCATION',
+    ],
     /**
      * Firebase, which `expo-notifications` requires on Android and nothing else
      * here needs.
