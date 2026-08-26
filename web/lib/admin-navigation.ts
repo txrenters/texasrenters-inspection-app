@@ -3,6 +3,7 @@ import {
   ClipboardCheck,
   Gauge,
   KeyRound,
+  MapPin,
   RefreshCw,
   ShieldCheck,
   UserRound,
@@ -112,6 +113,15 @@ export const adminNavigation: AdminNavigationGroup[] = [
         // the combined list — the view this page exists to serve — would have
         // no route into it at all.
         children: [{ title: 'All assignments', type: '' }, ...INSPECTION_TYPE_CHILDREN],
+      },
+      {
+        // Beside assignments rather than under People: this answers "where is
+        // the work happening now", which is a dispatch question, and it is the
+        // assignment list a reader jumps to from it.
+        title: 'Technician map',
+        href: '/map',
+        icon: MapPin,
+        permission: 'technicians:read',
       },
     ],
   },
