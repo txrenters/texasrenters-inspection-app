@@ -134,24 +134,25 @@ const FALLBACK_ZOOM = 5;
  * constructed, so it cannot do this: positions that load a moment later would
  * leave the map sitting on its fallback view with every pin off screen.
  *
- * Keyed on a signature of the coordinates rather than the array itself. The
- * positions query re-fetches every 60 seconds and hands back a fresh array
- * each time; refitting on identity would wrench the map back to its default
- * framing every minute, undoing whatever the person was looking at.
+ * **Keyed on which entities are present, never on where they are.** Positions
+ * now arrive over the socket every few seconds, and refitting on coordinates
+ * would drag the view back to a computed framing under the hands of whoever is
+ * reading the map — the more often technicians moved, the less usable it would
+ * become. So the map re-fits when somebody comes on shift or a property loads,
+ * and holds still while people drive around.
  */
-function FitToData({ points }: { points: [number, number][] }) {
+function FitToData({ fitKey, points }: { fitKey: string; points: [number, number][] }) {
   const map = useMap();
-  const signature = points.map((point) => point.join()).join('|');
 
-  // Held in a ref so the effect can read the current points without listing
-  // them as a dependency — `signature` is their stable identity.
+  // Held in a ref so the effect can read current coordinates without listing
+  // them as a dependency — they change constantly and must not trigger it.
   const latest = useRef(points);
   latest.current = points;
 
   useEffect(() => {
     if (!latest.current.length) return;
     map.fitBounds(latest.current as LatLngBoundsExpression, { padding: [48, 48], maxZoom: 15 });
-  }, [map, signature]);
+  }, [map, fitKey]);
 
   return null;
 }
@@ -175,6 +176,18 @@ export function TechnicianMap({
     [positions, properties],
   );
 
+  // Who is on the map, not where they are. Keyed on `technicianId` rather than
+  // the position row's own id, which is a new row for every fix and would make
+  // this change as often as the coordinates do.
+  const fitKey = useMemo(
+    () =>
+      [
+        ...positions.map((position) => position.technicianId).sort(),
+        ...properties.map((property) => property.id).sort(),
+      ].join('|'),
+    [positions, properties],
+  );
+
   return (
     <MapContainer
       center={FALLBACK_CENTER}
@@ -182,7 +195,7 @@ export function TechnicianMap({
       className="h-full w-full rounded-lg"
       scrollWheelZoom
     >
-      <FitToData points={points} />
+      <FitToData fitKey={fitKey} points={points} />
       <TileLayer attribution={ATTRIBUTION} url={TILE_URL} />
 
       {/* Properties first so they paint underneath, and pinned below the

@@ -1,5 +1,6 @@
 'use client';
 
+import { mergeLatestPosition, type TechnicianPosition } from '@texasrenters/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
@@ -86,6 +87,25 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
       // points at, or clicking through lands on a stale page.
       void queryClient.invalidateQueries({ queryKey: keys.inspection(event.inspectionId) });
       void queryClient.invalidateQueries({ queryKey: keys.inspectionsRoot });
+    });
+
+    /**
+     * A technician moved.
+     *
+     * Written straight into the cache rather than invalidated. An invalidation
+     * would refetch every technician's position to learn that one of them moved
+     * a few metres, several times a minute, for as long as anybody has the map
+     * open. The payload is already the exact row the query holds.
+     *
+     * No toast either — this is ambient. A technician walking a property would
+     * otherwise bury every notification that actually needs reading.
+     */
+    socket.on('technician:position', (position: TechnicianPosition) => {
+      queryClient.setQueryData<TechnicianPosition[]>(keys.technicianLocations, (current) =>
+        // Undefined means the map has never loaded; there is no list to fold
+        // into and the fetch on mount will bring a complete one.
+        current ? mergeLatestPosition(current, position) : current,
+      );
     });
 
     socket.on('area:added', (event: AreaAddedEvent) => {

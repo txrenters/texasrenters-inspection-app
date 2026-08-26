@@ -1,8 +1,9 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { rejectLocationFix, usableLocationFixes } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
+import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import type { TechnicianLocationBatchDto } from './technician.dto';
 
 /**
@@ -16,7 +17,12 @@ import type { TechnicianLocationBatchDto } from './technician.dto';
 export class TechnicianLocationService {
   private readonly logger = new Logger(TechnicianLocationService.name);
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(TechnicianEventsGateway)
+    private readonly events?: TechnicianEventsGateway,
+  ) {}
 
   /**
    * Stores a batch of fixes and says what it did with them.
@@ -55,7 +61,60 @@ export class TechnicianLocationService {
         })),
       });
 
+    if (usable.length) await this.publishLatest(user);
+
     return { accepted: usable.length, rejected };
+  }
+
+  /**
+   * Push the newest position to the console.
+   *
+   * **Only the newest fix of the batch.** A handset back from a dead zone
+   * flushes everything it queued — up to `MAX_LOCATION_BATCH` points — and all
+   * but the last are history the moment they arrive. Emitting each would fire
+   * two hundred events to move one marker to the place the last one already
+   * describes.
+   *
+   * Re-read rather than assembled from the batch, so the socket carries exactly
+   * the shape `latestPositions` returns over HTTP. The console then drops it
+   * into the cache it already holds instead of reconciling two nearly identical
+   * payloads — and there is no second definition of a position to drift.
+   *
+   * Never throws. A position that fails to broadcast is replaced seconds later
+   * by the next one, and losing one is not a reason to fail the handset's
+   * upload — which would make it retry the whole batch it just delivered.
+   */
+  private async publishLatest(user: AuthenticatedUser) {
+    if (!this.events) return;
+    try {
+      const newest = await this.prisma.technicianLocationPing.findFirst({
+        where: { organizationId: user.organizationId, technicianId: user.id },
+        orderBy: { recordedAt: 'desc' },
+        select: {
+          id: true,
+          technicianId: true,
+          latitude: true,
+          longitude: true,
+          accuracyMeters: true,
+          batteryPercent: true,
+          recordedAt: true,
+          technician: { select: { id: true, displayName: true } },
+        },
+      });
+      if (!newest) return;
+
+      this.events.publishTechnicianPosition(user.organizationId, {
+        ...newest,
+        latitude: newest.latitude.toNumber(),
+        longitude: newest.longitude.toNumber(),
+        recordedAt: newest.recordedAt.toISOString(),
+      });
+    } catch (error) {
+      this.logger.warn({
+        event: 'location_broadcast_failed',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
