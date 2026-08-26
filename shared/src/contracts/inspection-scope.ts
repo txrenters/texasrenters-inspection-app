@@ -63,9 +63,14 @@ export function areaScopeFor(inspectionType: string | null | undefined): AreaSco
     case InspectionType.MOVE_IN:
     case InspectionType.MOVE_OUT:
       return AreaScope.ALL;
-    case InspectionType.HVAC:
-    // A filter is fitted to the unit, so the visit covers exactly the areas an
+    // A filter is fitted to the unit, so a delivery covers exactly the areas an
     // HVAC inspection would — no separate rule to keep in step.
+    //
+    // The comment sits above both labels rather than between them. `no-fallthrough`
+    // permits an empty case but not one whose body is a comment, so the original
+    // placement failed lint on every branch, main included, and blocked CI before
+    // it reached typecheck or the tests.
+    case InspectionType.HVAC:
     case InspectionType.AC_FILTER_DELIVERY:
       return AreaScope.AIR_CONDITIONED;
     case InspectionType.ROOF:
