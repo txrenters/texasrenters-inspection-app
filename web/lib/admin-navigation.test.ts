@@ -24,6 +24,32 @@ describe('admin navigation', () => {
     expect(isAdminNavigationItemActive('/properties-archive', '/properties')).toBe(false);
   });
 
+  describe('IT tools', () => {
+    it('is gated on system:manage, like the other operator controls', () => {
+      const withoutSystem = getVisibleAdminNavigation((permission) =>
+        ['dashboard:read', 'roles:read'].includes(permission),
+      );
+      expect(withoutSystem.map((group) => group.title)).not.toContain('IT tools');
+
+      const withSystem = getVisibleAdminNavigation((permission) => permission === 'system:manage');
+      expect(withSystem.map((group) => group.title)).toEqual(['IT tools']);
+      expect(withSystem[0]!.items.map((item) => item.title)).toEqual(['API', 'API clients']);
+    });
+
+    it('does not let the reference route swallow the client registry', () => {
+      // `/it-tools/api` is a prefix of `/it-tools/api-clients` as a string but
+      // not as a path, and the active-state check has to know the difference —
+      // otherwise opening the registry highlights both entries at once.
+      expect(isAdminNavigationItemActive('/it-tools/api-clients', '/it-tools/api')).toBe(false);
+      expect(isAdminNavigationItemActive('/it-tools/api', '/it-tools/api')).toBe(true);
+    });
+
+    it('names both pages in the breadcrumb rather than calling them a detail view', () => {
+      expect(getAdminBreadcrumbs('/it-tools/api')).toEqual([{ title: 'API' }]);
+      expect(getAdminBreadcrumbs('/it-tools/api-clients')).toEqual([{ title: 'API clients' }]);
+    });
+  });
+
   it('removes unauthorized items and empty groups without changing route ownership', () => {
     const visible = getVisibleAdminNavigation((permission) =>
       ['dashboard:read', 'properties:read'].includes(permission),

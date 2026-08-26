@@ -3,6 +3,14 @@
 import type { ApiDocument, ApiSchema } from '@texasrenters/shared';
 
 import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 
 /**
  * How far `$ref` chains and nested objects are followed.
@@ -130,43 +138,41 @@ export function SchemaTable({
   const required = new Set(resolved?.required ?? []);
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="text-muted-foreground border-b text-left text-xs">
-            <th className="py-1.5 pr-3 font-medium">Field</th>
-            <th className="py-1.5 pr-3 font-medium">Type</th>
-            <th className="py-1.5 font-medium">Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {properties.map(([name, property]) => {
-            const resolvedProperty = resolveSchema(property, document);
-            const notes = constraints(resolvedProperty);
-            return (
-              <tr className="border-b last:border-0" key={name}>
-                <td className="py-1.5 pr-3 align-top">
-                  <span className="font-mono text-xs">{name}</span>
-                  {required.has(name) ? (
-                    <Badge className="ml-1.5 align-middle" variant="secondary">
-                      required
-                    </Badge>
-                  ) : null}
-                </td>
-                <td className="text-muted-foreground py-1.5 pr-3 align-top font-mono text-xs">
-                  {schemaTypeLabel(property, document)}
-                </td>
-                <td className="text-muted-foreground py-1.5 align-top text-xs">
-                  {resolvedProperty?.description ? (
-                    <p className="text-pretty">{resolvedProperty.description}</p>
-                  ) : null}
-                  {notes.length ? <p className="tabular-nums">{notes.join(' · ')}</p> : null}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Field</TableHead>
+          <TableHead>Type</TableHead>
+          <TableHead>Notes</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {properties.map(([name, property]) => {
+          const resolvedProperty = resolveSchema(property, document);
+          const notes = constraints(resolvedProperty);
+          return (
+            <TableRow key={name}>
+              <TableCell className="align-top">
+                <span className="font-mono text-xs">{name}</span>
+                {required.has(name) ? (
+                  <Badge className="ml-1.5 align-middle" variant="secondary">
+                    required
+                  </Badge>
+                ) : null}
+              </TableCell>
+              <TableCell className="text-muted-foreground align-top font-mono text-xs">
+                {schemaTypeLabel(property, document)}
+              </TableCell>
+              <TableCell className="text-muted-foreground align-top text-xs">
+                {resolvedProperty?.description ? (
+                  <p className="text-pretty">{resolvedProperty.description}</p>
+                ) : null}
+                {notes.length ? <p className="tabular-nums">{notes.join(' · ')}</p> : null}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }

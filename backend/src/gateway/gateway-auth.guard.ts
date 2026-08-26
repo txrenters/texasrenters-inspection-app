@@ -1,5 +1,4 @@
 /* Injection tokens are runtime imports required by Nest metadata. */
-/* eslint-disable @typescript-eslint/consistent-type-imports */
 import { Inject, Injectable } from '@nestjs/common';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';

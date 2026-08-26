@@ -1,5 +1,4 @@
 /* Guards are runtime imports required by Nest metadata. */
-/* eslint-disable @typescript-eslint/consistent-type-imports */
 import { Controller, Get, Header, Inject, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
