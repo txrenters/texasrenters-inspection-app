@@ -11,6 +11,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 function buildService() {
@@ -39,9 +41,11 @@ function buildService() {
     prisma as never,
     {} as never,
     {} as never,
-      // Returns nothing per area, so the service falls back to the shared
-      // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+    // Returns nothing per area, so the service falls back to the shared
+    // templates and these assertions stay deterministic and offline.
+    {
+      generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+    } as never,
     {} as never,
   );
   return { service, prisma };

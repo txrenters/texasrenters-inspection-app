@@ -81,9 +81,10 @@ describe('a handler that wrote its own response', () => {
     const response = sentResponse();
 
     expect(() =>
-      new ApplicationExceptionFilter().catch(new Error('resize failed'), contextFor(
-        response,
-      ) as never),
+      new ApplicationExceptionFilter().catch(
+        new Error('resize failed'),
+        contextFor(response) as never,
+      ),
     ).not.toThrow();
     expect(response.json).not.toHaveBeenCalled();
     expect(response.end).toHaveBeenCalled();

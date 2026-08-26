@@ -1,8 +1,12 @@
 import { AreaCategory, AreaEnvironment, PhotoCaptureType } from '@prisma/client';
+import { MAX_LOCATION_BATCH } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
+  IsISO8601,
+  ValidateNested,
   IsEnum,
   IsBoolean,
   IsIn,
@@ -159,13 +163,30 @@ export class TechnicianMediaUploadDto {
   coverageStatus?: string;
   @IsOptional() @IsIn(['HIGH', 'MEDIUM', 'LOW', 'UNAVAILABLE']) sensorConfidence?: string;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(720) clockwiseRotationDegrees?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(720) counterClockwiseRotationDegrees?: number;
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(720)
+  counterClockwiseRotationDegrees?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(360) startHeadingDegrees?: number;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(360) endHeadingDegrees?: number;
-  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() returnedToStart?: boolean;
-  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() sensorSupported?: boolean;
-  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() manualConfirmation?: boolean;
-  @IsOptional() @Transform(({ value }) => parseMultipartBoolean(value)) @IsBoolean() evidenceComplete?: boolean;
+  @IsOptional()
+  @Transform(({ value }) => parseMultipartBoolean(value))
+  @IsBoolean()
+  returnedToStart?: boolean;
+  @IsOptional()
+  @Transform(({ value }) => parseMultipartBoolean(value))
+  @IsBoolean()
+  sensorSupported?: boolean;
+  @IsOptional()
+  @Transform(({ value }) => parseMultipartBoolean(value))
+  @IsBoolean()
+  manualConfirmation?: boolean;
+  @IsOptional()
+  @Transform(({ value }) => parseMultipartBoolean(value))
+  @IsBoolean()
+  evidenceComplete?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(500) snapshotCount?: number;
   /**
    * Video offsets, in milliseconds, where the technician asked for a still.
@@ -228,11 +249,7 @@ export class TechnicianPhotoUploadDto {
   @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/) recordingSessionId?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(7_200_000) videoTimestampMs?: number;
   @IsOptional()
-  @IsIn([
-    'NATIVE_STILL_DURING_VIDEO',
-    'VIDEO_FRAME_EXTRACTION',
-    'SEPARATE_PHOTO_CAPTURE',
-  ])
+  @IsIn(['NATIVE_STILL_DURING_VIDEO', 'VIDEO_FRAME_EXTRACTION', 'SEPARATE_PHOTO_CAPTURE'])
   captureSource?: string;
 }
 
@@ -303,4 +320,37 @@ export class RemoveMobilePushDeviceDto {
   @IsString()
   @Matches(/^(Expo|Exponent)PushToken\[[A-Za-z0-9_-]+\]$/)
   expoPushToken!: string;
+}
+
+/**
+ * One position report from a handset.
+ *
+ * The bounds here are the shape of a coordinate, not the judgement about
+ * whether it is worth storing — that lives in `rejectLocationFix`, which the
+ * device applies before queueing so it never spends signal on a fix the server
+ * will refuse. This layer only makes sure the numbers are numbers.
+ */
+export class TechnicianLocationFixDto {
+  @Type(() => Number) @IsNumber() @Min(-90) @Max(90) latitude!: number;
+  @Type(() => Number) @IsNumber() @Min(-180) @Max(180) longitude!: number;
+  /** The handset's clock at the moment of the fix, not when it was sent. */
+  @IsISO8601() recordedAt!: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100000) accuracyMeters?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) batteryPercent?: number;
+}
+
+/**
+ * A batch of fixes, which is how they always arrive.
+ *
+ * A handset out of signal for an hour has a great deal to say at once, and
+ * asking it to send them one at a time is how a queue never drains. Bounded so
+ * one request cannot ask for an unbounded write.
+ */
+export class TechnicianLocationBatchDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_LOCATION_BATCH)
+  @ValidateNested({ each: true })
+  @Type(() => TechnicianLocationFixDto)
+  fixes!: TechnicianLocationFixDto[];
 }

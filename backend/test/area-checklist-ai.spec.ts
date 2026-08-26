@@ -16,7 +16,10 @@ function reply(text: string, ok = true, status = 200) {
   return {
     ok,
     status,
-    json: async () => ({ content: [{ type: 'text', text }], usage: { input_tokens: 1, output_tokens: 2 } }),
+    json: async () => ({
+      content: [{ type: 'text', text }],
+      usage: { input_tokens: 1, output_tokens: 2 },
+    }),
   } as never;
 }
 
@@ -36,7 +39,10 @@ describe('area checklist generation', () => {
         JSON.stringify([
           // The point of the whole exercise: a staircase with no doors, no
           // locks and no windows.
-          { index: 0, items: ['  Floor and coverings ', 'Walls and ceilings', 'walls and CEILINGS'] },
+          {
+            index: 0,
+            items: ['  Floor and coverings ', 'Walls and ceilings', 'walls and CEILINGS'],
+          },
           { index: 1, items: ['Sink, taps and spouts', 'Refrigerator'] },
         ]),
       ),

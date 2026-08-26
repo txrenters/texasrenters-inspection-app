@@ -11,6 +11,8 @@ const user: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const INSPECTION = 'inspection-1';
@@ -34,10 +36,13 @@ function area(id: string, propertyAreaId: string, overrides: Record<string, unkn
 }
 
 function service(prisma: Record<string, unknown>, storage: Record<string, unknown> = {}) {
-  return new AreaEvidenceService(prisma as never, {
-    signedUrl: jest.fn().mockResolvedValue('https://cdn.example/poster.jpg'),
-    ...storage,
-  } as never);
+  return new AreaEvidenceService(
+    prisma as never,
+    {
+      signedUrl: jest.fn().mockResolvedValue('https://cdn.example/poster.jpg'),
+      ...storage,
+    } as never,
+  );
 }
 
 function summaryPrisma(overrides: Record<string, unknown> = {}) {

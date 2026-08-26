@@ -267,12 +267,14 @@ describe('Propertyware pagination and client', () => {
     process.env.PROPERTYWARE_CLIENT_ID = 'client';
     process.env.PROPERTYWARE_CLIENT_SECRET = 'secret';
     process.env.PROPERTYWARE_ORGANIZATION_ID = 'system';
-    global.fetch = jest.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify([{ ...mockPropertywareRecords.buildings[0], portfolioID: null }]),
-        { status: 200, headers: { 'x-total-count': '1' } },
-      ),
-    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify([{ ...mockPropertywareRecords.buildings[0], portfolioID: null }]),
+          { status: 200, headers: { 'x-total-count': '1' } },
+        ),
+      );
     const page = await new PropertywareClient().fetchPage(
       'buildings',
       { offset: 0, limit: 1 },
@@ -280,7 +282,9 @@ describe('Propertyware pagination and client', () => {
     );
     expect(page.validationErrors).toEqual([]);
     expect(page.records).toHaveLength(1);
-    expect(mapBuilding(page.records[0] as RawPropertywareBuilding).portfolioExternalId).toBeUndefined();
+    expect(
+      mapBuilding(page.records[0] as RawPropertywareBuilding).portfolioExternalId,
+    ).toBeUndefined();
   });
 
   it('validates a single-record building response', async () => {

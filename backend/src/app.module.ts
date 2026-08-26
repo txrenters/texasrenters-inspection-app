@@ -11,10 +11,12 @@ import { RequestIdMiddleware } from './common/request-id.middleware';
 import { RequestPerformanceInterceptor } from './common/request-performance.interceptor';
 import { validateEnvironment } from './config/environment';
 import { DatabaseModule } from './database/database.module';
+import { GatewayModule } from './gateway/gateway.module';
 import { TenantScopeInterceptor } from './database/tenant-scope.interceptor';
 import { HealthController } from './health/health.controller';
 import { PropertywareModule } from './integrations/propertyware/propertyware.module';
 import { MediaModule } from './media/media.module';
+import { OpenApiModule } from './openapi/openapi.module';
 import { TechnicianModule } from './technician/technician.module';
 import { RealtimeModule } from './realtime/realtime.module';
 
@@ -43,6 +45,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     TechnicianModule,
     MediaModule,
     RealtimeModule,
+    OpenApiModule,
+    GatewayModule,
   ],
   controllers: [HealthController],
   providers: [

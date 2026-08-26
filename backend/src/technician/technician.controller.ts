@@ -42,7 +42,9 @@ import {
   TechnicianPhotoUploadDto,
   TechnicianReasonDto,
   TechnicianUpdateAreaDto,
+  TechnicianLocationBatchDto,
 } from './technician.dto';
+import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService, type UploadedRoomVideo } from './technician.service';
 
 @ApiTags('Technician mobile application')
@@ -54,9 +56,23 @@ export class TechnicianController {
   constructor(
     private readonly service: TechnicianService,
     private readonly mobilePush: MobilePushService,
+    private readonly locations: TechnicianLocationService,
     private readonly mediaProcessing: MediaProcessingService,
     private readonly charges: ChargeService,
   ) {}
+
+  /**
+   * Where this handset has been since it last reached the API.
+   *
+   * A batch, because that is how they arrive: a phone out of signal for an
+   * hour has a great deal to say at once. The response says how many fixes
+   * were stored and how many were dropped, so a device losing points to a bad
+   * clock finds out rather than reporting a technician standing still.
+   */
+  @Post('locations')
+  recordLocations(@Req() request: AuthenticatedRequest, @Body() body: TechnicianLocationBatchDto) {
+    return this.locations.record(request.user, body);
+  }
 
   @Post('notification-devices')
   registerNotificationDevice(

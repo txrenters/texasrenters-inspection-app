@@ -22,6 +22,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const building = {
@@ -49,7 +51,9 @@ describe('administrator floor plans', () => {
       {} as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {} as never,
     );
 
@@ -83,7 +87,9 @@ describe('administrator floor plans', () => {
       {} as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {} as never,
     );
     const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
@@ -118,7 +124,9 @@ describe('administrator floor plans', () => {
       {} as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {} as never,
     );
 
@@ -179,7 +187,9 @@ describe('administrator floor plans', () => {
       extraction as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {
         resolve: jest.fn().mockResolvedValue({
           provider: 'ANTHROPIC',
@@ -315,7 +325,9 @@ describe('administrator floor plans', () => {
       extraction as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       aiSettings as never,
     );
 
@@ -379,7 +391,9 @@ describe('administrator floor plans', () => {
       {} as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {} as never,
     );
     jest.spyOn(service, 'areas').mockResolvedValue([]);
@@ -440,7 +454,9 @@ describe('administrator floor plans', () => {
       {} as never,
       // Returns nothing per area, so the service falls back to the shared
       // templates and these assertions stay deterministic and offline.
-      { generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }) } as never,
+      {
+        generate: async (list: unknown[]) => ({ items: list.map(() => []), fellBack: true }),
+      } as never,
       {} as never,
     );
 

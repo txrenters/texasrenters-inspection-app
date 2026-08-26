@@ -8,6 +8,7 @@ import {
   UserRound,
   UsersRound,
   Workflow,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -133,6 +134,28 @@ export const adminNavigation: AdminNavigationGroup[] = [
     ],
   },
   {
+    // Flat items rather than a collapsible section with sub-items. The sub-item
+    // mechanism exists for filtered views of one route, which is what the
+    // inspection types are; these are two separate pages, and modelling them as
+    // children would mean generalising `?type=` children into route children to
+    // produce a menu that reads worse than Access control's does beside it.
+    title: 'IT tools',
+    items: [
+      {
+        title: 'API',
+        href: '/it-tools/api',
+        icon: Wrench,
+        permission: 'system:manage',
+      },
+      {
+        title: 'API clients',
+        href: '/it-tools/api-clients',
+        icon: KeyRound,
+        permission: 'system:manage',
+      },
+    ],
+  },
+  {
     title: 'Integrations',
     items: [
       {
@@ -175,6 +198,7 @@ export function getVisibleAdminNavigation(hasPermission: (permission: string) =>
 
 function detailTitle(item: AdminNavigationItem) {
   const singular: Record<string, string> = {
+    'API clients': 'Client detail',
     Assignments: 'Assignment detail',
     Inspections: 'Inspection detail',
     Properties: 'Property detail',

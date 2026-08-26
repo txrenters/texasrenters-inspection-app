@@ -91,6 +91,26 @@ export class RedisCacheConnection implements OnModuleInit, OnModuleDestroy {
     return this.command((client) => client.incr(key));
   }
 
+  /**
+   * Increment a counter and make sure it expires, in one round trip.
+   *
+   * `INCR` then `EXPIRE` as separate calls has a real failure mode: if the
+   * second is lost, the counter never resets and the caller it belongs to is
+   * rate-limited forever. Pipelining them removes the window; setting the TTL on
+   * every increment rather than only on creation costs nothing and means a
+   * counter that somehow lost its expiry repairs itself on the next request.
+   *
+   * Returns `undefined` when Redis is unavailable, like every other command
+   * here, so the caller decides what an unavailable limiter should mean.
+   */
+  async incrementInWindow(key: string, ttlSeconds: number) {
+    const results = await this.command((client) =>
+      client.pipeline().incr(key).expire(key, ttlSeconds).exec(),
+    );
+    const count = results?.[0]?.[1];
+    return typeof count === 'number' ? count : undefined;
+  }
+
   private async command<T>(operation: (client: Redis) => Promise<T>): Promise<T | undefined> {
     if (!this.isConnected() || !this.client) return undefined;
     const startedAt = performance.now();

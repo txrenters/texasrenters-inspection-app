@@ -11,6 +11,8 @@ const user: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const technician = { organizationId: user.organizationId, userId: 'tech-1' };
@@ -35,12 +37,18 @@ describe('pet observation + dedup (spec §13)', () => {
     };
     const service = new ChargeService(prisma as never);
     await expect(
-      service.recordObservation(technician, 'insp-1', { temporaryLabel: 'Brown dog', species: 'Dog' }),
+      service.recordObservation(technician, 'insp-1', {
+        temporaryLabel: 'Brown dog',
+        species: 'Dog',
+      }),
     ).resolves.toEqual({ id: 'obs-1' });
 
     prisma.inspection.findFirst.mockResolvedValue({ id: 'insp-1', inspectionType: 'MOVE_IN' });
     await expect(
-      service.recordObservation(technician, 'insp-1', { temporaryLabel: 'Brown dog', species: 'Dog' }),
+      service.recordObservation(technician, 'insp-1', {
+        temporaryLabel: 'Brown dog',
+        species: 'Dog',
+      }),
     ).rejects.toMatchObject({ status: 422, code: 'PET_OBSERVATION_OCCUPIED_ONLY' });
   });
 
@@ -185,10 +193,12 @@ describe('configurable charges (spec §13/§14)', () => {
     const createMany = { data: [] as Array<Record<string, unknown>> };
     const tx = {
       charge: {
-        createMany: jest.fn().mockImplementation((args: { data: Array<Record<string, unknown>> }) => {
-          createMany.data = args.data;
-          return Promise.resolve({ count: args.data.length });
-        }),
+        createMany: jest
+          .fn()
+          .mockImplementation((args: { data: Array<Record<string, unknown>> }) => {
+            createMany.data = args.data;
+            return Promise.resolve({ count: args.data.length });
+          }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
@@ -269,7 +279,9 @@ describe('configurable charges (spec §13/§14)', () => {
     };
     const prisma = {
       charge: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'charge-1', proposedAmount: 25, reason: null }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: 'charge-1', proposedAmount: 25, reason: null }),
       },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
@@ -296,12 +308,16 @@ describe('configurable charges (spec §13/§14)', () => {
   it('requires an amount when adjusting a charge', async () => {
     const prisma = {
       charge: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'charge-1', proposedAmount: 25, reason: null }),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ id: 'charge-1', proposedAmount: 25, reason: null }),
       },
       $transaction: jest.fn(),
     };
     const service = new ChargeService(prisma as never);
-    await expect(service.reviewCharge(user, 'charge-1', { decision: 'ADJUST' })).rejects.toMatchObject({
+    await expect(
+      service.reviewCharge(user, 'charge-1', { decision: 'ADJUST' }),
+    ).rejects.toMatchObject({
       status: 422,
       code: 'ADJUSTED_AMOUNT_REQUIRED',
     });

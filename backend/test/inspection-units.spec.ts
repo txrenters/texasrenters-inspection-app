@@ -12,6 +12,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.SYSTEM_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 function mediaProcessingDouble() {
@@ -428,6 +430,8 @@ describe('technician payloads for unit inspections', () => {
     roles: [UserRole.INSPECTION_TECHNICIAN],
     permissions: [],
     mustChangePassword: false,
+    // Added with `principalType`; these fixtures are people, not integrations.
+    principalType: 'USER',
   };
 
   it("uses the inspection's own unit for identity and bed/bath counts", async () => {

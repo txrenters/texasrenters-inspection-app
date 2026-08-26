@@ -13,6 +13,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const technician: AuthenticatedUser = {
@@ -127,7 +129,10 @@ describe('inspection status lifecycle (spec §11)', () => {
     const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
     const prisma = {
       inspection: {
-        findFirst: jest.fn().mockResolvedValueOnce(reviewableInspection()).mockResolvedValueOnce(detail),
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(reviewableInspection())
+          .mockResolvedValueOnce(detail),
       },
       inspectionFinding: {
         findMany: jest
@@ -158,7 +163,10 @@ describe('inspection status lifecycle (spec §11)', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           action: 'INSPECTION_FINALIZED',
-          metadata: expect.objectContaining({ override: true, overrideReason: 'Owner approved closure' }),
+          metadata: expect.objectContaining({
+            override: true,
+            overrideReason: 'Owner approved closure',
+          }),
         }),
       }),
     );
@@ -208,7 +216,9 @@ describe('inspection status lifecycle (spec §11)', () => {
       }),
     );
     expect(tx.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ action: 'INSPECTION_MARKED_TBD' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'INSPECTION_MARKED_TBD' }),
+      }),
     );
   });
 
@@ -260,13 +270,11 @@ describe('inspection status lifecycle (spec §11)', () => {
       // findMany, not count: reopen needs the technician ids so it can tell
       // each of them, which a count cannot address.
       inspectionAssignment: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue(
-            Array.from({ length: currentAssignments }, (_, index) => ({
-              technicianId: `tech-${index + 1}`,
-            })),
-          ),
+        findMany: jest.fn().mockResolvedValue(
+          Array.from({ length: currentAssignments }, (_, index) => ({
+            technicianId: `tech-${index + 1}`,
+          })),
+        ),
       },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };

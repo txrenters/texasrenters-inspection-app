@@ -324,6 +324,7 @@ model Organization {
   properties           Property[]
   inspections          Inspection[]
   auditLogs            AuditLog[]
+  technicianLocations  TechnicianLocationPing[]
   aiSettings           OrganizationAiSettings?
   aiProviders          AiProviderConfiguration[]
   aiUsageEvents        AiUsageEvent[]
@@ -332,6 +333,8 @@ model Organization {
   checklistItems       AreaChecklistItem[]
   checklistResponses   InspectionAreaChecklistResponse[]
   areaEvidenceRequests AreaEvidenceRequest[]
+  apiClients           ApiClient[]
+  apiClientKeys        ApiClientKey[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -413,28 +416,29 @@ model AiUsageEvent {
 }
 
 model UserProfile {
-  id                   String                  @id @default(uuid()) @db.Uuid
-  authUserId           String                  @unique
-  email                String                  @unique
+  id                   String                   @id @default(uuid()) @db.Uuid
+  authUserId           String                   @unique
+  email                String                   @unique
   displayName          String
-  isActive             Boolean                 @default(true)
-  createdAt            DateTime                @default(now())
-  updatedAt            DateTime                @updatedAt
+  isActive             Boolean                  @default(true)
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
   memberships          OrganizationMember[]
   roleAssignments      UserRoleAssignment[]
-  assignments          InspectionAssignment[]  @relation("AssignedTechnician")
-  assignmentsCreated   InspectionAssignment[]  @relation("AssignmentActor")
-  assignmentsEnded     InspectionAssignment[]  @relation("AssignmentEndActor")
+  assignments          InspectionAssignment[]   @relation("AssignedTechnician")
+  assignmentsCreated   InspectionAssignment[]   @relation("AssignmentActor")
+  assignmentsEnded     InspectionAssignment[]   @relation("AssignmentEndActor")
   media                InspectionMedia[]
   reviews              FindingReview[]
   pushDevices          MobilePushDevice[]
+  locationPings        TechnicianLocationPing[] @relation("TechnicianLocation")
   reportShares         InspectionReportShare[]
-  createdAreas         PropertyArea[]          @relation("AreaCreatedBy")
-  markerUpdatedAreas   PropertyArea[]          @relation("AreaMarkerUpdatedBy")
-  areaAliases          PropertyAreaAlias[]     @relation("AreaAliasCreatedBy")
-  checklistItems       AreaChecklistItem[]     @relation("ChecklistItemCreatedBy")
+  createdAreas         PropertyArea[]           @relation("AreaCreatedBy")
+  markerUpdatedAreas   PropertyArea[]           @relation("AreaMarkerUpdatedBy")
+  areaAliases          PropertyAreaAlias[]      @relation("AreaAliasCreatedBy")
+  checklistItems       AreaChecklistItem[]      @relation("ChecklistItemCreatedBy")
   photos               InspectionPhoto[]
-  finalizedInspections Inspection[]            @relation("InspectionFinalizedBy")
+  finalizedInspections Inspection[]             @relation("InspectionFinalizedBy")
   credential           AuthCredential?
 }
 
@@ -1783,6 +1787,11 @@ model AuditLog {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
   actorUserId    String?      @db.Uuid
+  /// The API client that acted, when the actor was a machine rather than a
+  /// person. Without it a third-party write is indistinguishable from an
+  /// anonymous one, because `actorUserId` is null for every key-authenticated
+  /// request — and "who changed this" is the entire point of the table.
+  actorApiClientId String?    @db.Uuid
   action         String
   entityType     String
   entityId       String
@@ -1805,4 +1814,123 @@ model WebhookEvent {
   updatedAt       DateTime                @updatedAt
 
   @@unique([provider, providerEventId])
+}
+
+/// One position report from a technician's handset.
+///
+/// Append-only and high volume: a phone on shift produces one of these every
+/// minute or two, so nothing here is edited after the fact and the table is
+/// pruned on a schedule rather than kept for ever.
+model TechnicianLocationPing {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  technicianId   String @db.Uuid
+
+  /// `Decimal(9, 6)`, not the `Decimal(6, 5)` the floor-plan markers use. That
+  /// type holds a single integer digit and cannot represent a longitude at all
+  /// — -97.7431 would overflow it. Six decimal places is roughly 11cm, far
+  /// finer than any phone's GPS actually resolves.
+  latitude  Decimal @db.Decimal(9, 6)
+  longitude Decimal @db.Decimal(9, 6)
+
+  /// The radius the device claims, in metres. Kept because a 2km fix and a 5m
+  /// fix mean entirely different things on a map, and drawing them the same
+  /// way would be the map lying.
+  accuracyMeters Int?
+
+  /// 0-100 where the handset reports it. A trail that simply stops says much
+  /// more when you can see the battery was nearly flat when it did.
+  batteryPercent Int?
+
+  /// When the handset took the fix, which is not when the API heard about it.
+  /// The same split `InspectionMedia.recordedAt` exists for: a point captured
+  /// in a basement arrives whenever signal returns, sometimes hours later, and
+  /// ordering a trail by arrival would draw the route in the wrong sequence.
+  recordedAt DateTime
+  createdAt  DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  technician   UserProfile  @relation("TechnicianLocation", fields: [technicianId], references: [id])
+
+  /// One technician's trail, in order.
+  @@index([technicianId, recordedAt])
+  /// Everyone's latest position, for the map.
+  @@index([organizationId, recordedAt])
+}
+
+/// Whether a client's keys address production or a sandbox. Carried in the key
+/// itself (`trk_live_` / `trk_test_`) so a credential pasted into the wrong
+/// environment is obvious on sight rather than after it writes something.
+enum ApiClientEnvironment {
+  LIVE
+  TEST
+}
+
+/// A registered third-party integration.
+///
+/// The principal a machine credential resolves to. It deliberately mirrors the
+/// shape of a human principal — one organization, a set of permission keys — so
+/// the existing PermissionsGuard, tenant interceptor and row-level security
+/// apply to third-party traffic unchanged, rather than a second authorization
+/// path existing for machines to drift out of step with.
+///
+/// Permissions here are a subset: MACHINE_FORBIDDEN_PERMISSIONS can never
+/// appear, enforced when a client is created rather than only when it calls.
+model ApiClient {
+  id                 String               @id @default(uuid()) @db.Uuid
+  organizationId     String               @db.Uuid
+  name               String
+  description        String?
+  environment        ApiClientEnvironment @default(LIVE)
+  permissions        String[]
+  /// Requests per minute, counted per client across every key it holds.
+  rateLimitPerMinute Int                  @default(60)
+  /// Require an HMAC body signature in addition to the key. Off by default for
+  /// read-only integrations; the API refuses to open a write route to a client
+  /// without it.
+  requireSignature   Boolean              @default(false)
+  /// Optional source-address allowlist. Empty means any address.
+  allowedIps         String[]
+  isActive           Boolean              @default(true)
+  createdByUserId    String?              @db.Uuid
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  revokedAt          DateTime?
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  keys               ApiClientKey[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isActive])
+}
+
+/// One issued credential for a client.
+///
+/// Separate from ApiClient so a key can be rotated without the integration
+/// losing its identity, its scopes or its audit history: issue the replacement,
+/// let both work while the third party redeploys, then revoke the old one.
+///
+/// The secret is never stored. `prefix` is the non-secret half — indexed, and
+/// safe to show in a console or a log line — and `secretHash` is a keyed hash
+/// of the other half, compared in constant time.
+model ApiClientKey {
+  id              String    @id @default(uuid()) @db.Uuid
+  apiClientId     String    @db.Uuid
+  /// Denormalised from the client so row-level security can police this table
+  /// with the same predicate as every other, without a join.
+  organizationId  String    @db.Uuid
+  prefix          String    @unique
+  secretHash      String
+  /// What this key is for ("staging worker"), so revoking the right one does
+  /// not require guessing from timestamps.
+  label           String?
+  expiresAt       DateTime?
+  lastUsedAt      DateTime?
+  lastUsedIp      String?
+  createdByUserId String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  revokedAt       DateTime?
+  client          ApiClient @relation(fields: [apiClientId], references: [id], onDelete: Cascade)
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([apiClientId, revokedAt])
 }

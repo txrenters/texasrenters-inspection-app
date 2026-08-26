@@ -17,6 +17,8 @@ const actor: AuthenticatedUser = {
   roles: [UserRole.SYSTEM_ADMIN],
   permissions: ['users:manage', 'technicians:manage'],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 interface Counts {

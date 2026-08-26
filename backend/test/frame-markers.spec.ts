@@ -56,9 +56,9 @@ describe('readFrameMarkers', () => {
   });
 
   it('drops non-numeric and negative entries rather than trusting them', () => {
-    expect(
-      readFrameMarkers({ frameMarkersMs: [1000, '2000', -1, Number.NaN, 3000] }, 60),
-    ).toEqual([1000, 3000]);
+    expect(readFrameMarkers({ frameMarkersMs: [1000, '2000', -1, Number.NaN, 3000] }, 60)).toEqual([
+      1000, 3000,
+    ]);
   });
 
   it('sorts and de-duplicates so frames come out in recording order', () => {

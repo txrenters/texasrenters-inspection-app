@@ -13,6 +13,8 @@ const technician: AuthenticatedUser = {
   roles: [UserRole.INSPECTION_TECHNICIAN],
   permissions: [],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const ROOM = '20000000-0000-4000-8000-000000000001';
@@ -89,7 +91,7 @@ describe('technician correcting an area they added', () => {
    * renaming one from the field would silently change work nobody in this
    * inspection is responsible for.
    */
-  it("refuses an area the technician did not add", async () => {
+  it('refuses an area the technician did not add', async () => {
     const { prisma, service } = build({ ownArea: null });
 
     await expect(service.updateArea(technician, ROOM, { name: 'Hall' })).rejects.toMatchObject({

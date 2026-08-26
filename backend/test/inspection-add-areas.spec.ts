@@ -11,6 +11,8 @@ const admin: AuthenticatedUser = {
   roles: [UserRole.PROPERTY_ADMIN],
   permissions: ['inspections:manage'],
   mustChangePassword: false,
+  // Added with `principalType`; these fixtures are people, not integrations.
+  principalType: 'USER',
 };
 
 const INSPECTION_ID = '20000000-0000-4000-8000-000000000001';

@@ -7,6 +7,7 @@ import { UploadQueueRunner } from '@/src/components/UploadQueueRunner';
 import { ScreenLoader } from '@/src/components/ui/Loader';
 import { useCurrentUser } from '@/src/features/queries';
 import { useQueryCacheHydration } from '@/src/features/useQueryCacheHydration';
+import { LocationShiftRunner } from '@/src/location/LocationShiftRunner';
 import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
 
 // Scoped to the signed-in area so a crash inside an inspection recovers here,
@@ -31,6 +32,10 @@ export default function AppLayout() {
           not the concern of any one of them. */}
       <OfflineBanner />
       <UploadQueueRunner />
+      {/* Sends whatever the location task collected, whether or not a shift is
+          currently on — fixes taken in a basement must not sit on the handset
+          because the technician clocked off before signal returned. */}
+      <LocationShiftRunner />
       {/* A sibling of the navigator, like the offline banner: which build is
           running is not the concern of any one screen, and the prompt has to be
           able to appear over all of them. It knows to stay quiet on the two

@@ -256,3 +256,46 @@ export function resolveEffectivePermissions(
     if (isPermissionKey(permission)) effective.add(permission);
   return [...effective];
 }
+
+/**
+ * Permissions a third-party API key can never hold.
+ *
+ * Two categories, and both matter for a different reason.
+ *
+ * **Self-escalation.** `roles:manage` composes the very permissions this list
+ * restricts, and `users:manage` can assign those roles. A key holding either
+ * could grant itself everything it is denied here, which would make the rest of
+ * this list decorative. `system:manage` and `ai:configure` reach operator
+ * controls and provider secrets, which are not integration surface at all.
+ *
+ * **Irreversibility.** `inspections:delete` hard-deletes an inspection *and its
+ * media* — there is no restore, and a machine caller looping over a list is
+ * exactly how that becomes catastrophic rather than merely bad. Finalization
+ * freezes evidence permanently, and charge review is money. A person, holding
+ * the permission and looking at the screen, may do these things; a credential
+ * left in a third party's configuration file may not.
+ *
+ * Enforced where keys are issued, not only where they are used, so a key that
+ * should never have existed cannot be created in the first place.
+ */
+export const MACHINE_FORBIDDEN_PERMISSIONS = [
+  'roles:manage',
+  'users:manage',
+  'system:manage',
+  'ai:configure',
+  'inspections:delete',
+  'inspections:finalize',
+  'charges:review',
+] as const satisfies readonly PermissionKey[];
+
+const MACHINE_FORBIDDEN_SET: ReadonlySet<string> = new Set(MACHINE_FORBIDDEN_PERMISSIONS);
+
+/** Whether a permission may be granted to an API client. */
+export function isMachineGrantablePermission(value: string): value is PermissionKey {
+  return isPermissionKey(value) && !MACHINE_FORBIDDEN_SET.has(value);
+}
+
+/** The permissions an API client may be granted, in catalog order. */
+export const MACHINE_GRANTABLE_PERMISSIONS: PermissionKey[] = PERMISSION_KEYS.filter(
+  (key): key is PermissionKey => !MACHINE_FORBIDDEN_SET.has(key),
+);

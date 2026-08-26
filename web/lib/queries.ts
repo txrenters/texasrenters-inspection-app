@@ -36,6 +36,10 @@ import type {
   AdminUser,
   AdminUserDetail,
   AiProviderName,
+  ApiClientRevocation,
+  ApiClientSummary,
+  ApiDocument,
+  IssuedApiKey,
   AiSettings,
   AreaChecklistEntry,
   AreaEvidenceBundle,
@@ -137,6 +141,9 @@ export const keys = {
     ['admin', 'propertyware', 'runs', runId, 'errors', page] as const,
   providers: ['admin', 'providers'] as const,
   aiSettings: ['admin', 'ai-settings'] as const,
+  openApiDocument: ['admin', 'system', 'openapi'] as const,
+  apiClientsRoot: ['admin', 'api-clients'] as const,
+  apiClients: (query: object) => ['admin', 'api-clients', query] as const,
 };
 
 export const useDashboard = () =>
@@ -1866,6 +1873,100 @@ export function useAdminMutations() {
           keys.dashboard,
         ]);
       },
+    }),
+  };
+}
+
+/**
+ * The API's own description, for the IT tools reference.
+ *
+ * Held for the session rather than refetched: the document is a few hundred
+ * kilobytes and only changes when the backend is redeployed, at which point the
+ * page has been reloaded anyway. `retry: false` because the two realistic
+ * failures — the caller lacks `system:manage`, or the deployment cannot build
+ * the document — are both answers, not blips, and retrying them three times only
+ * delays saying so.
+ */
+export const useOpenApiDocument = () =>
+  useQuery({
+    queryKey: keys.openApiDocument,
+    queryFn: ({ signal }) => api<ApiDocument>('/api/v1/admin/system/openapi', { signal }),
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: false,
+  });
+
+export const useApiClients = (query: { page: number; pageSize: number; search: string }) =>
+  useQuery({
+    queryKey: keys.apiClients(query),
+    queryFn: ({ signal }) =>
+      api<{ data: ApiClientSummary[]; page: number; pageSize: number; total: number }>(
+        `/api/v1/admin/api-clients?${new URLSearchParams({
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+          ...(query.search ? { search: query.search } : {}),
+        }).toString()}`,
+        { signal },
+      ),
+    placeholderData: keepPreviousData,
+  });
+
+export interface ApiClientInput {
+  name: string;
+  description?: string;
+  environment: 'LIVE' | 'TEST';
+  permissions: string[];
+  rateLimitPerMinute: number;
+  requireSignature: boolean;
+  allowedIps: string[];
+}
+
+/**
+ * Registration and key lifecycle.
+ *
+ * Deliberately plain invalidation rather than the optimistic entity machinery
+ * the inspection lists use. That machinery exists to keep a list someone edits
+ * dozens of times a minute from flickering; a credential is issued once and
+ * revoked once, and showing a key as revoked a moment before the server agrees
+ * is the one place optimism is actively wrong.
+ */
+export function useApiClientMutations() {
+  const client = useQueryClient();
+  const refresh = () => client.invalidateQueries({ queryKey: keys.apiClientsRoot });
+  return {
+    createClient: useMutation({
+      mutationFn: (input: ApiClientInput) =>
+        api<ApiClientSummary>('/api/v1/admin/api-clients', {
+          method: 'POST',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: refresh,
+    }),
+    updateClient: useMutation({
+      mutationFn: ({ id, ...input }: Partial<ApiClientInput> & { id: string; isActive?: boolean }) =>
+        api<ApiClientSummary>(`/api/v1/admin/api-clients/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: refresh,
+    }),
+    revokeClient: useMutation({
+      mutationFn: (id: string) =>
+        api<ApiClientRevocation>(`/api/v1/admin/api-clients/${id}`, { method: 'DELETE' }),
+      onSuccess: refresh,
+    }),
+    issueKey: useMutation({
+      mutationFn: ({ id, label, expiresAt }: { id: string; label?: string; expiresAt?: string }) =>
+        api<IssuedApiKey>(`/api/v1/admin/api-clients/${id}/keys`, {
+          method: 'POST',
+          body: JSON.stringify({ label, expiresAt }),
+        }),
+      onSuccess: refresh,
+    }),
+    revokeKey: useMutation({
+      mutationFn: ({ id, keyId }: { id: string; keyId: string }) =>
+        api(`/api/v1/admin/api-clients/${id}/keys/${keyId}`, { method: 'DELETE' }),
+      onSuccess: refresh,
     }),
   };
 }
