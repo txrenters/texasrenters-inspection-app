@@ -53,6 +53,7 @@
      rather than each status owning a second hard-coded token, which is what let
      "approved" and "completed" drift apart in the old app. */
   --color-success: var(--success);
+  --color-map-property: var(--map-property);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
@@ -164,6 +165,12 @@
   --success: oklch(0.478 0.132 150);
   --warning: oklch(0.508 0.122 71);
   --info: oklch(0.407 0.136 262.1);
+
+  /* Property markers on the technician map.
+     Declared once and NOT repeated in the dark block on purpose: the map tiles
+     stay light whatever the console theme is, so a marker that inverted with
+     the theme would become a white square on a white street. */
+  --map-property: oklch(0.45 0.03 250);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);

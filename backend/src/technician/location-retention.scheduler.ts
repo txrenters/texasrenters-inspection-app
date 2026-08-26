@@ -8,6 +8,7 @@ import {
 import { CronJob } from 'cron';
 
 import { PrismaService } from '../common/prisma.service';
+import { withSystemTenant } from '../database/tenant-context';
 
 /**
  * Deletes position history once it is older than the retention window.
@@ -67,11 +68,18 @@ export class LocationRetentionScheduler implements OnModuleInit, OnModuleDestroy
     try {
       const days = this.retentionDays();
       const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const { count } = await this.prisma.technicianLocationPing.deleteMany({
-        // On `recordedAt`, the device's own clock, so a batch that arrived late
-        // is aged from when it was taken rather than from when it landed.
-        where: { recordedAt: { lt: cutoff } },
-      });
+      // `withSystemTenant` because a prune belongs to no organization. The
+      // row-level policies fail closed, so without it this deletes nothing at
+      // all and reports a clean run for ever while the table grows — the
+      // quietest possible way for a retention guarantee to be broken.
+      const { count } = await withSystemTenant(() =>
+        this.prisma.technicianLocationPing.deleteMany({
+          // On `recordedAt`, the device's own clock, so a batch that arrived
+          // late is aged from when it was taken rather than from when it
+          // landed.
+          where: { recordedAt: { lt: cutoff } },
+        }),
+      );
       if (count > 0)
         this.logger.log({ event: 'location_history_pruned', deleted: count, retentionDays: days });
     } catch (error) {
