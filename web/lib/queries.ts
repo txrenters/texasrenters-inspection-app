@@ -6,6 +6,7 @@ import type {
   AccountDeletionResult,
   AdminAssignment,
   AdminAssignmentListItem,
+  TechnicianPosition,
   AdminAuditEvent,
   AdminBulkDeleteResult,
   AdminCharge,
@@ -119,6 +120,7 @@ export const keys = {
   reportShares: (id: string) => ['admin', 'inspection', id, 'report-shares'] as const,
   inspectionFindings: (id: string, page: number, reviewStatus: string, kind = 'ALL') =>
     ['admin', 'inspection', id, 'findings', page, reviewStatus, kind] as const,
+  technicianLocations: ['technician-locations'] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   techniciansRoot: ['admin', 'technicians'] as const,
@@ -379,7 +381,9 @@ export const useInspectionComparison = (id: string, enabled = true) =>
   useQuery({
     queryKey: keys.inspectionComparison(id),
     queryFn: ({ signal }) =>
-      api<AdminInspectionComparison | null>(`/api/v1/admin/inspections/${id}/comparison`, { signal }),
+      api<AdminInspectionComparison | null>(`/api/v1/admin/inspections/${id}/comparison`, {
+        signal,
+      }),
     enabled: Boolean(id) && enabled,
   });
 export const useInspectionPets = (id: string, enabled = true) =>
@@ -407,6 +411,24 @@ export const useChargeRules = (enabled = true) =>
   useQuery({
     queryKey: keys.chargeRules,
     queryFn: ({ signal }) => api<AdminChargeRule[]>('/api/v1/admin/charge-rules', { signal }),
+    enabled,
+  });
+/**
+ * Every technician's last known position.
+ *
+ * Polled rather than pushed, for now. The realtime gateway could broadcast
+ * these — the console already holds that socket — but that is the live-movement
+ * stage; a minute-old view of where everyone is answers the question this page
+ * exists for, and polling cannot get stuck in a state a reconnect has to fix.
+ */
+export const useTechnicianLocations = (enabled = true) =>
+  useQuery({
+    queryKey: keys.technicianLocations,
+    queryFn: ({ signal }) =>
+      api<TechnicianPosition[]>('/api/v1/admin/technician-locations', { signal }),
+    // Matches the handset's own reporting interval. Asking more often than the
+    // devices report would spend requests to redraw the same pins.
+    refetchInterval: 60_000,
     enabled,
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>
@@ -641,16 +663,10 @@ export function useAiSettingsMutations() {
 export function useAccessMutations() {
   const client = useQueryClient();
   const refreshUsers = (id?: string) => {
-    void verifyAffectedQueries(client, [
-      keys.usersRoot,
-      ...(id ? [keys.user(id)] : []),
-    ]);
+    void verifyAffectedQueries(client, [keys.usersRoot, ...(id ? [keys.user(id)] : [])]);
   };
   const refreshRoles = (id?: string) => {
-    void verifyAffectedQueries(client, [
-      keys.rolesRoot,
-      ...(id ? [keys.role(id)] : []),
-    ]);
+    void verifyAffectedQueries(client, [keys.rolesRoot, ...(id ? [keys.role(id)] : [])]);
   };
   return {
     createUser: useMutation({
@@ -676,10 +692,16 @@ export function useAccessMutations() {
         const operationId = beginEntityOperation(variables.id, 'UPDATING', {
           isActive: variables.isActive,
         });
-        patchEntityById(client, keys.all, variables.id, { isActive: variables.isActive }, {
-          state: 'UPDATING',
-          operationId,
-        });
+        patchEntityById(
+          client,
+          keys.all,
+          variables.id,
+          { isActive: variables.isActive },
+          {
+            state: 'UPDATING',
+            operationId,
+          },
+        );
         return { operationId, previous };
       },
       onSuccess: (data, variables, context) => {
@@ -837,7 +859,9 @@ export function useAdminMutations() {
         });
       },
       onSuccess: (data, variables) => {
-        const current = client.getQueryData<AdminFloorPlan[]>(keys.floorPlans(variables.propertyId));
+        const current = client.getQueryData<AdminFloorPlan[]>(
+          keys.floorPlans(variables.propertyId),
+        );
         client.setQueryData(
           keys.floorPlans(variables.propertyId),
           current?.some((plan) => plan.id === data.id)
@@ -1008,12 +1032,8 @@ export function useAdminMutations() {
               }
             : {}),
           ...(variables.name ? { name: variables.name } : {}),
-          ...(variables.inspectionOrder
-            ? { inspectionOrder: variables.inspectionOrder }
-            : {}),
-          ...(variables.isRequired === undefined
-            ? {}
-            : { isRequired: variables.isRequired }),
+          ...(variables.inspectionOrder ? { inspectionOrder: variables.inspectionOrder } : {}),
+          ...(variables.isRequired === undefined ? {} : { isRequired: variables.isRequired }),
           // `=== undefined`, like isRequired and unlike the truthy checks
           // above: false is a meaningful value here, and a truthy test would
           // make unticking the box invisible until the refetch landed.
@@ -1035,11 +1055,7 @@ export function useAdminMutations() {
       onError: (_error, variables, context) => {
         if (!context || !failEntityOperation(variables.areaId, context.operationId)) return;
         if (context.previous)
-          patchEntityInQueries(
-            client,
-            keys.propertyAreas(variables.propertyId),
-            context.previous,
-          );
+          patchEntityInQueries(client, keys.propertyAreas(variables.propertyId), context.previous);
       },
       onSettled: (data, error, variables) => {
         if (!error && data) refreshFloorPlan(variables.propertyId);
@@ -1066,11 +1082,7 @@ export function useAdminMutations() {
       onError: (_error, variables, context) => {
         if (!context || !failEntityOperation(variables.areaId, context.operationId)) return;
         if (context.previous)
-          insertEntityIntoList(
-            client,
-            keys.propertyAreas(variables.propertyId),
-            context.previous,
-          );
+          insertEntityIntoList(client, keys.propertyAreas(variables.propertyId), context.previous);
       },
       onSettled: (data, error, variables) => {
         if (!error && data) refreshFloorPlan(variables.propertyId);
@@ -1121,10 +1133,16 @@ export function useAdminMutations() {
           updatedAt: new Date().toISOString(),
         };
         const operationId = beginEntityOperation(variables.areaId, 'UPDATING', { marker });
-        patchEntityById(client, queryKey, variables.areaId, { marker }, {
-          state: 'UPDATING',
-          operationId,
-        });
+        patchEntityById(
+          client,
+          queryKey,
+          variables.areaId,
+          { marker },
+          {
+            state: 'UPDATING',
+            operationId,
+          },
+        );
         return { operationId, previous };
       },
       onSuccess: (data, variables, context) => {
@@ -1134,11 +1152,7 @@ export function useAdminMutations() {
       onError: (_error, variables, context) => {
         if (!context || !failEntityOperation(variables.areaId, context.operationId)) return;
         if (context.previous)
-          patchEntityInQueries(
-            client,
-            keys.propertyAreas(variables.propertyId),
-            context.previous,
-          );
+          patchEntityInQueries(client, keys.propertyAreas(variables.propertyId), context.previous);
       },
       onSettled: (data, error, variables) => {
         if (!error && data) refreshFloorPlan(variables.propertyId);
@@ -1174,11 +1188,7 @@ export function useAdminMutations() {
           if (!failEntityOperation(id, operationId)) continue;
           const previous = context.previous.find((area) => area.id === id);
           if (previous)
-            insertEntityIntoList(
-              client,
-              keys.propertyAreas(variables.propertyId),
-              previous,
-            );
+            insertEntityIntoList(client, keys.propertyAreas(variables.propertyId), previous);
         }
       },
       onSettled: (data, error, variables) => {
@@ -1213,8 +1223,7 @@ export function useAdminMutations() {
       },
       onError: (_error, variables, context) => {
         if (!context) return;
-        for (const [id, operationId] of context.operations)
-          failEntityOperation(id, operationId);
+        for (const [id, operationId] of context.operations) failEntityOperation(id, operationId);
         client.setQueryData(keys.propertyAreas(variables.propertyId), context.previous);
       },
       onSettled: (data, error, variables) => {
@@ -1472,7 +1481,10 @@ export function useAdminMutations() {
       }) =>
         api<{ id: string; atMs: number; reused: boolean }>(
           `/api/v1/inspection-videos/${mediaId}/snapshot`,
-          { method: 'POST', body: JSON.stringify({ atMs: body.atMs, checklistItemId: body.checklistItemId }) },
+          {
+            method: 'POST',
+            body: JSON.stringify({ atMs: body.atMs, checklistItemId: body.checklistItemId }),
+          },
         ),
       onSuccess: (_data, variables) => {
         void client.invalidateQueries({
@@ -1815,10 +1827,7 @@ export function useAdminMutations() {
           body: JSON.stringify({ isActive }),
         }),
       onMutate: async (variables) => {
-        await cancelAffectedQueries(client, [
-          keys.techniciansRoot,
-          keys.technician(variables.id),
-        ]);
+        await cancelAffectedQueries(client, [keys.techniciansRoot, keys.technician(variables.id)]);
         const previous = snapshotEntity<AdminTechnician>(
           client,
           keys.techniciansRoot,
@@ -1827,10 +1836,16 @@ export function useAdminMutations() {
         const operationId = beginEntityOperation(variables.id, 'UPDATING', {
           isActive: variables.isActive,
         });
-        patchEntityById(client, keys.all, variables.id, { isActive: variables.isActive }, {
-          state: 'UPDATING',
-          operationId,
-        });
+        patchEntityById(
+          client,
+          keys.all,
+          variables.id,
+          { isActive: variables.isActive },
+          {
+            state: 'UPDATING',
+            operationId,
+          },
+        );
         return { operationId, previous };
       },
       onSuccess: (data, variables, context) => {
@@ -1846,10 +1861,7 @@ export function useAdminMutations() {
         if (context) failEntityOperation(variables.id, context.operationId);
         if (context?.previous) patchEntityInQueries(client, keys.all, context.previous);
         else
-          void verifyAffectedQueries(client, [
-            keys.techniciansRoot,
-            keys.technician(variables.id),
-          ]);
+          void verifyAffectedQueries(client, [keys.techniciansRoot, keys.technician(variables.id)]);
       },
     }),
     sync: useMutation({
@@ -1943,7 +1955,10 @@ export function useApiClientMutations() {
       onSuccess: refresh,
     }),
     updateClient: useMutation({
-      mutationFn: ({ id, ...input }: Partial<ApiClientInput> & { id: string; isActive?: boolean }) =>
+      mutationFn: ({
+        id,
+        ...input
+      }: Partial<ApiClientInput> & { id: string; isActive?: boolean }) =>
         api<ApiClientSummary>(`/api/v1/admin/api-clients/${id}`, {
           method: 'PATCH',
           body: JSON.stringify(input),
