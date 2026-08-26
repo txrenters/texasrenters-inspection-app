@@ -54,6 +54,8 @@
      "approved" and "completed" drift apart in the old app. */
   --color-success: var(--success);
   --color-map-property: var(--map-property);
+  --color-map-technician: var(--map-technician);
+  --color-map-technician-stale: var(--map-technician-stale);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
@@ -166,11 +168,19 @@
   --warning: oklch(0.508 0.122 71);
   --info: oklch(0.407 0.136 262.1);
 
-  /* Property markers on the technician map.
+  /* Markers on the technician map.
      Declared once and NOT repeated in the dark block on purpose: the map tiles
      stay light whatever the console theme is, so a marker that inverted with
-     the theme would become a white square on a white street. */
-  --map-property: oklch(0.45 0.03 250);
+     the theme would vanish against a white street.
+
+     Strong and far apart in hue, because these are read at a glance over busy
+     cartography — a muted palette that works in a data table disappears on top
+     of roads, parks and rivers. Green reads as a fixed place, red as a person
+     to attend to; the stale grey deliberately drains the urgency out of a
+     position nobody should still be acting on. */
+  --map-property: oklch(0.52 0.16 152);
+  --map-technician: oklch(0.55 0.22 27);
+  --map-technician-stale: oklch(0.55 0.02 260);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);
@@ -287,4 +297,13 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* The accuracy ring belongs to the technician marker it surrounds, so it takes
+   the same colour. Applied as a class rather than through Leaflet's `color`
+   option because that lands in an SVG presentation attribute, where `var()`
+   is not reliably substituted -- a rule is. */
+.map-accuracy-ring {
+  stroke: var(--map-technician);
+  fill: var(--map-technician);
 }
