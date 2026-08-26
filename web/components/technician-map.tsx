@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 
 import type { PropertyPosition, TechnicianPosition } from '@texasrenters/shared';
 import { divIcon, type LatLngBoundsExpression } from 'leaflet';
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 import { Circle, MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
 
 import { formatRelative } from '@/lib/format';
@@ -138,24 +138,20 @@ export function TechnicianMap({
       {positions.map((position) => {
         const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
         return (
-          <Marker
-            key={position.id}
-            icon={technicianPin(stale)}
-            position={[position.latitude, position.longitude]}
-            zIndexOffset={500}
-          >
-            <Popup>
-              <span className="font-medium">
-                {position.technician?.displayName ?? 'Unknown technician'}
-              </span>
-              <br />
-              {formatRelative(position.recordedAt)}
-              {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
-              {position.batteryPercent === null ? null : <> · {position.batteryPercent}% battery</>}
-            </Popup>
+          <Fragment key={position.id}>
             {/* The claimed accuracy, drawn to scale. A 5m fix and a 300m fix
                 are very different statements, and a map that drew them as the
-                same dot would be asserting something nobody knows. */}
+                same dot would be asserting something nobody knows.
+
+                A sibling of the marker, never a child of it. A `Marker` is not
+                a layer container — react-leaflet gives it a context so that
+                `Popup` and `Tooltip` can find it, and a `Circle` parented there
+                is never added to the map, so it is never projected. Leaflet
+                then throws the moment `pathOptions` is applied, because
+                `setStyle` reaches for a `_point` that only `_project` sets:
+                "Cannot read properties of undefined (reading 'subtract')",
+                which takes the whole page down with it. Drawn before the
+                marker so it sits underneath. */}
             {position.accuracyMeters && position.accuracyMeters > 25 ? (
               <Circle
                 center={[position.latitude, position.longitude]}
@@ -163,7 +159,24 @@ export function TechnicianMap({
                 pathOptions={{ weight: 1, opacity: 0.4, fillOpacity: 0.08 }}
               />
             ) : null}
-          </Marker>
+            <Marker
+              icon={technicianPin(stale)}
+              position={[position.latitude, position.longitude]}
+              zIndexOffset={500}
+            >
+              <Popup>
+                <span className="font-medium">
+                  {position.technician?.displayName ?? 'Unknown technician'}
+                </span>
+                <br />
+                {formatRelative(position.recordedAt)}
+                {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
+                {position.batteryPercent === null ? null : (
+                  <> · {position.batteryPercent}% battery</>
+                )}
+              </Popup>
+            </Marker>
+          </Fragment>
         );
       })}
     </MapContainer>
