@@ -18,11 +18,24 @@ import { PropertyGeocodingService } from './property-geocoding.service';
  * remembered every time, and the symptom of forgetting — a property quietly
  * missing from the map — is one nobody would report.
  *
- * It is deliberately unhurried. Nothing in the product waits on a coordinate,
- * so a small batch on a slow cron keeps a free public service comfortable and
- * still clears any realistic backlog within a day.
+ * Unhurried, but not slow. Nothing in the product waits on a coordinate, so
+ * this stays polite — one request at a time with a pause between — but the
+ * batch has to be large enough that a real portfolio actually finishes.
+ *
+ * At 25 a run, a 570-property portfolio took twenty-three hours to appear, and
+ * for that whole day the map under-reported the business while looking like it
+ * was working. 250 clears the same portfolio in three runs, and costs about a
+ * minute of wall clock each.
+ *
+ * For a first backfill of a large portfolio, set `PROPERTY_GEOCODE_BATCH`
+ * above the property count and let one run do the lot; the ongoing trickle
+ * from the Propertyware sync is a handful a day and never approaches this.
+ *
+ * If the portfolio grows into the thousands, the right answer stops being a
+ * bigger number here and becomes the Census **batch** endpoint, which takes up
+ * to 10,000 addresses in a single upload.
  */
-const DEFAULT_BATCH = 25;
+const DEFAULT_BATCH = 250;
 
 /**
  * How long after boot the first run happens.
