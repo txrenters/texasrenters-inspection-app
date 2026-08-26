@@ -202,6 +202,15 @@ services:
   osrm-fetch:
     profiles: ['routing']
     image: curlimages/curl:latest
+    # As root, because a fresh named volume is created owned by root:root and
+    # this image runs as uid 100. Without it curl cannot open its output file
+    # and exits 23 — a "write error" that reads like a network fault and sends
+    # you looking at the download rather than at the filesystem.
+    #
+    # Safe here: the volume holds a public map extract and nothing else, and
+    # the OSRM containers that read it run as root too, so this keeps one owner
+    # across all three rather than leaving a mixed-ownership volume behind.
+    user: root
     volumes:
       - osrm-data:/data
     # `-C -` resumes rather than restarting: this is a large file on a link that

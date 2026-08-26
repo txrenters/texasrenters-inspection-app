@@ -4,9 +4,10 @@ import 'leaflet/dist/leaflet.css';
 
 import type { PropertyPosition, TechnicianPosition } from '@texasrenters/shared';
 import { divIcon, type LatLngBoundsExpression } from 'leaflet';
-import { Fragment, useEffect, useMemo, useRef } from 'react';
-import { Circle, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Circle, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 
+import { clusterByGrid } from '@/components/map-clusters';
 import { formatRelative } from '@/lib/format';
 
 /**
@@ -110,6 +111,31 @@ function technicianPin(stale: boolean) {
 }
 
 /**
+ * A badge standing in for several properties too close to draw separately.
+ *
+ * Sized by how many it hides, in three coarse steps rather than continuously:
+ * the useful signal is "a few" versus "a lot", and a smoothly growing circle
+ * just makes every cluster look slightly different from every other one.
+ */
+function clusterPin(count: number) {
+  const size = count < 10 ? 30 : count < 50 ? 36 : 42;
+  return divIcon({
+    className: '',
+    html: `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 3}"
+        class="fill-map-property" opacity="0.35"/>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 6}"
+        class="fill-map-property" stroke="#fff" stroke-width="2"/>
+      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
+        fill="#fff" font-size="${count < 100 ? 12 : 10}" font-weight="600"
+        font-family="system-ui, sans-serif">${count}</text>
+    </svg>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+/**
  * The view the map opens with, before any data has arrived.
  *
  * **`zoom` is not optional and its absence is not cosmetic.** react-leaflet
@@ -157,6 +183,90 @@ function FitToData({ fitKey, points }: { fitKey: string; points: [number, number
   return null;
 }
 
+/**
+ * Every property, grouped when the pins would overlap.
+ *
+ * Clustered because this is a portfolio of hundreds: drawn individually at
+ * metropolitan zoom they merge into a green smear that reports neither where
+ * the work is nor how much of it there is. Three Houston properties within
+ * 250m already drew as one pin while the legend said three.
+ *
+ * **Only properties cluster.** Technicians are the thing being watched, and
+ * folding two of them into a badge would hide exactly what somebody opened the
+ * map to see.
+ */
+function PropertyLayer({ properties }: { properties: readonly PropertyPosition[] }) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(() => map.getZoom());
+
+  // Grouping is computed in projected pixels at the current zoom, so it changes
+  // when the zoom does and never when panning — a clustering that reshuffled as
+  // you dragged would read as the data itself moving.
+  useMapEvents({ zoomend: () => setZoom(map.getZoom()) });
+
+  const clusters = useMemo(
+    () => clusterByGrid(map, properties, zoom),
+    [map, properties, zoom],
+  );
+
+  return (
+    <>
+      {clusters.map((cluster) =>
+        cluster.members.length === 1 ? (
+          <Marker
+            key={cluster.key}
+            icon={propertyPin()}
+            position={[cluster.latitude, cluster.longitude]}
+            zIndexOffset={-500}
+          >
+            <Popup>
+              <span className="font-medium">{cluster.members[0]?.name}</span>
+              <br />
+              {cluster.members[0]?.addressLine1}
+              <br />
+              {cluster.members[0]?.city}, {cluster.members[0]?.state}{' '}
+              {cluster.members[0]?.postalCode}
+              {/* Census geocoding interpolates along a street segment rather
+                  than pointing at a roof, so the pin is the right block and
+                  approximately the right house. Saying so is cheaper than
+                  somebody discovering it while standing in a driveway. */}
+              <br />
+              <span className="text-muted-foreground text-xs">Approximate location</span>
+            </Popup>
+          </Marker>
+        ) : (
+          <Marker
+            key={cluster.key}
+            icon={clusterPin(cluster.members.length)}
+            position={[cluster.latitude, cluster.longitude]}
+            zIndexOffset={-500}
+            eventHandlers={{
+              // Zoom to the members rather than stepping in by a fixed amount:
+              // a cluster of three neighbours and a cluster spanning a county
+              // need very different zooms to come apart.
+              click: () =>
+                map.fitBounds(
+                  cluster.members.map(
+                    (member) => [member.latitude, member.longitude] as [number, number],
+                  ),
+                  { padding: [64, 64], maxZoom: 17 },
+                ),
+            }}
+          >
+            <Popup>
+              <span className="font-medium">{cluster.members.length} properties here</span>
+              <br />
+              <span className="text-muted-foreground text-xs">
+                Click the cluster to zoom in.
+              </span>
+            </Popup>
+          </Marker>
+        ),
+      )}
+    </>
+  );
+}
+
 export function TechnicianMap({
   positions,
   properties = [],
@@ -201,28 +311,7 @@ export function TechnicianMap({
       {/* Properties first so they paint underneath, and pinned below the
           technicians by z-index as well — marker order alone does not decide
           it once Leaflet starts sorting by latitude. */}
-      {properties.map((property) => (
-        <Marker
-          key={property.id}
-          icon={propertyPin()}
-          position={[property.latitude, property.longitude]}
-          zIndexOffset={-500}
-        >
-          <Popup>
-            <span className="font-medium">{property.name}</span>
-            <br />
-            {property.addressLine1}
-            <br />
-            {property.city}, {property.state} {property.postalCode}
-            {/* Census geocoding interpolates along a street segment rather
-                than pointing at a roof, so the pin is the right block and
-                approximately the right house. Saying so is cheaper than
-                somebody discovering it while standing in a driveway. */}
-            <br />
-            <span className="text-muted-foreground text-xs">Approximate location</span>
-          </Popup>
-        </Marker>
-      ))}
+      <PropertyLayer properties={properties} />
 
       {positions.map((position) => {
         const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;

@@ -50,7 +50,7 @@
     "propertyware:reconcile": "npm run --workspace @texasrenters/backend propertyware:reconcile",
     "propertyware:verify:db": "npm run --workspace @texasrenters/backend propertyware:verify:db",
     "docker:up": "docker compose --env-file web/.env.local up -d --build",
-    "routing:up": "docker compose --env-file web/.env.local --profile routing up -d",
+    "routing:up": "docker compose --env-file web/.env.local --profile routing up -d --build",
     "routing:logs": "docker compose --env-file web/.env.local --profile routing logs -f osrm-fetch osrm-prepare osrm",
     "docker:down": "docker compose down",
     "docker:ps": "docker compose ps",
