@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 
+import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { MailService } from '../mail/mail.service';
@@ -70,18 +72,38 @@ export class PasswordResetService {
       return;
     }
 
+    await this.issueAndDeliver({
+      authUserId: credential.authUserId,
+      email: normalized,
+      displayName: credential.profile.displayName,
+    });
+  }
+
+  /**
+   * Mint a link and mail it. Shared by the anonymous form and the admin
+   * button, so both retire outstanding tokens the same way and neither can
+   * drift into a weaker version of the other.
+   *
+   * Returns whether the mail actually left, which the anonymous caller
+   * discards and the administrator is shown — see `sendForTechnician`.
+   */
+  private async issueAndDeliver(account: {
+    authUserId: string;
+    email: string;
+    displayName: string;
+  }) {
     const token = randomBytes(32).toString('base64url');
     await this.prisma.$transaction(async (tx) => {
       // Outstanding links for this account are retired first. Otherwise every
       // request leaves another live credential in another mailbox, and asking
       // twice quietly doubles the exposure.
       await tx.authPasswordResetToken.updateMany({
-        where: { authUserId: credential.authUserId, consumedAt: null },
+        where: { authUserId: account.authUserId, consumedAt: null },
         data: { consumedAt: new Date() },
       });
       await tx.authPasswordResetToken.create({
         data: {
-          authUserId: credential.authUserId,
+          authUserId: account.authUserId,
           tokenHash: this.hash(token),
           expiresAt: new Date(Date.now() + this.ttlMs()),
         },
@@ -91,12 +113,96 @@ export class PasswordResetService {
     const origin = (process.env.WEB_APP_ORIGIN ?? '').replace(/\/$/, '');
     const resetUrl = `${origin}/reset-password?token=${encodeURIComponent(token)}`;
     const delivery = await this.mailer?.sendPasswordReset({
-      to: normalized,
-      displayName: credential.profile.displayName,
+      to: account.email,
+      displayName: account.displayName,
       resetUrl,
     });
     if (delivery?.status !== 'SENT')
       this.logger.warn({ event: 'password_reset_email_failed', status: delivery?.status });
+    return delivery?.status === 'SENT';
+  }
+
+  /**
+   * An administrator sends a technician a reset link.
+   *
+   * **This deliberately does not hide whether the account exists.** The
+   * anonymous form answers every address identically so it cannot be used to
+   * discover which ones are real; that protection is for a stranger. An
+   * administrator has already read this technician out of their own roster, so
+   * repeating the silence here would only mean clicking "send" and being told
+   * nothing while nothing happened — the failure they are least equipped to
+   * diagnose and most likely to blame on the technician's mailbox.
+   *
+   * Scoped through an `INSPECTION_TECHNICIAN` membership in the caller's own
+   * organization, which does two jobs at once: an administrator cannot reach
+   * another tenant's people, and cannot turn a permission called "create
+   * technicians" into a way to mint a reset link for an administrator.
+   */
+  async sendForTechnician(user: AuthenticatedUser, technicianId: string) {
+    const technician = await this.prisma.userProfile.findFirst({
+      where: {
+        id: technicianId,
+        memberships: {
+          some: {
+            organizationId: user.organizationId,
+            role: UserRole.INSPECTION_TECHNICIAN,
+          },
+        },
+      },
+      select: { id: true, authUserId: true, email: true, displayName: true, isActive: true },
+    });
+
+    // Indistinguishable from "not a technician" and from "another tenant's
+    // technician", on purpose: all three are equally none of this caller's
+    // business, and a more specific message would describe the roster of an
+    // organization they cannot see.
+    if (!technician)
+      throw new ApplicationError(404, 'TECHNICIAN_NOT_FOUND', 'Technician not found.');
+
+    // Same rule the anonymous path applies, but said out loud. Mailing a
+    // working reset link to somebody whose access was revoked would undo the
+    // revocation, and an administrator who just deactivated this account needs
+    // to be told that rather than left assuming the mail is in flight.
+    if (!technician.isActive)
+      throw new ApplicationError(
+        409,
+        'TECHNICIAN_INACTIVE',
+        'This technician is deactivated. Reactivate the account before sending a reset link.',
+      );
+
+    const credential = await this.prisma.authCredential.findUnique({
+      where: { authUserId: technician.authUserId },
+      select: { id: true },
+    });
+    if (!credential)
+      throw new ApplicationError(
+        409,
+        'TECHNICIAN_HAS_NO_CREDENTIAL',
+        'This technician has no sign-in credential yet, so there is no password to reset.',
+      );
+
+    const sent = await this.issueAndDeliver({
+      authUserId: technician.authUserId,
+      email: technician.email,
+      displayName: technician.displayName,
+    });
+
+    // Audited whether or not the mail left. Issuing the token is the sensitive
+    // act -- a live credential now exists in a mailbox -- and it happened even
+    // when delivery failed, so a record that only covered successes would omit
+    // exactly the cases somebody later needs to reconstruct.
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+        action: 'PASSWORD_RESET_SENT',
+        entityType: 'UserProfile',
+        entityId: technician.id,
+        metadata: { delivered: sent },
+      },
+    });
+
+    return { email: technician.email, delivered: sent };
   }
 
   /**

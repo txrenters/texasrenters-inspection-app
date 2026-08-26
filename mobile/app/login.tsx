@@ -179,6 +179,16 @@ export default function LoginScreen() {
             />
           ) : null}
 
+          {/* Under the sign-in button rather than beside the password field:
+              it is the answer to a failed attempt, so it belongs where the eye
+              already is once signing in has not worked. */}
+          <Button
+            className="mt-3"
+            label="Forgot password?"
+            onPress={() => router.push('/forgot-password')}
+            variant="quiet"
+          />
+
           <View className="mt-8 items-center">
             <Text className="text-xs text-muted-foreground">
               Secure access for authorized technicians only

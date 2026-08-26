@@ -31,6 +31,7 @@ import {
   type AuthenticatedRequest,
 } from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
+import { PasswordResetService } from '../auth/password-reset.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
@@ -109,6 +110,7 @@ export class AdminController {
     private readonly comparison: ComparisonService,
     private readonly locations: TechnicianLocationService,
     private readonly propertyGeocoding: PropertyGeocodingService,
+    private readonly passwordResets: PasswordResetService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
@@ -770,6 +772,23 @@ export class AdminController {
   createTechnician(@Req() request: AuthenticatedRequest, @Body() body: CreateTechnicianDto) {
     return this.technicianProvisioning.create(request.user, body);
   }
+  /**
+   * Mail a technician a password reset link.
+   *
+   * Behind `technicians:provision` — the permission that already covers
+   * issuing a technician their first temporary password. A reset link is the
+   * same act performed again, so it belongs with that rather than with
+   * `technicians:manage`, which is about activating and deactivating people.
+   */
+  @Post('technicians/:technicianId/password-reset')
+  @RequirePermissions('technicians:provision')
+  sendTechnicianPasswordReset(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+  ) {
+    return this.passwordResets.sendForTechnician(request.user, id);
+  }
+
   @Get('technicians/:technicianId')
   @RequirePermissions('technicians:read')
   technician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {

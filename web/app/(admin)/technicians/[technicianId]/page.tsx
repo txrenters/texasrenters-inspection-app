@@ -55,11 +55,20 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
 export default function TechnicianDetailPage() {
   const id = useParams<{ technicianId: string }>().technicianId;
   const router = useRouter();
-  const canManage = usePermissions().has('technicians:manage');
+  const permissions = usePermissions();
+  const canManage = permissions.has('technicians:manage');
+  // A separate grant from `technicians:manage`: issuing a credential and
+  // activating an account are different powers, and somebody may hold one
+  // without the other.
+  const canProvision = permissions.has('technicians:provision');
   const [state, setState] = useUrlState({ page: 1 });
   const technician = useTechnician(id);
   const assignments = useAssignments({ technicianId: id, page: state.page, pageSize: 20 });
-  const { updateTechnician: mutation, deleteTechnician: remove } = useAdminMutations();
+  const {
+    updateTechnician: mutation,
+    deleteTechnician: remove,
+    sendTechnicianPasswordReset: sendReset,
+  } = useAdminMutations();
 
   // isError first: a failed fetch has no data either.
   if (technician.isError)
@@ -72,6 +81,14 @@ export default function TechnicianDetailPage() {
       await mutation.mutateAsync({ id, isActive: !item.isActive });
     } catch {
       // The mutation surfaces the sanitized API error inline.
+    }
+  }
+
+  async function sendPasswordReset() {
+    try {
+      await sendReset.mutateAsync(id);
+    } catch {
+      // Rendered inline below, alongside the other mutation errors.
     }
   }
 
@@ -90,9 +107,35 @@ export default function TechnicianDetailPage() {
     <>
       <PageHeader
         actions={
-          canManage ? (
+          canManage || canProvision ? (
             <>
-              <AlertDialog>
+              {canProvision ? (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button disabled={sendReset.isPending} variant="outline">
+                      {sendReset.isPending ? 'Sending…' : 'Send password reset'}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Send {item.displayName} a reset link?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        A link goes to {item.email} and expires in an hour. It sets a new password
+                        and nothing else — it is not a way to sign in as them. Any reset link sent
+                        earlier stops working.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void sendPasswordReset()}>
+                        Send link
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : null}
+              {canManage ? (
+                <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
                     disabled={mutation.isPending}
@@ -125,14 +168,17 @@ export default function TechnicianDetailPage() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
-              <DeleteAccountDialog
-                displayName={item.displayName}
-                error={remove.error}
-                id={id}
-                isPending={remove.isPending}
-                onDelete={deleteTechnician}
-                scope="TECHNICIAN"
-              />
+              ) : null}
+              {canManage ? (
+                <DeleteAccountDialog
+                  displayName={item.displayName}
+                  error={remove.error}
+                  id={id}
+                  isPending={remove.isPending}
+                  onDelete={deleteTechnician}
+                  scope="TECHNICIAN"
+                />
+              ) : null}
             </>
           ) : undefined
         }
@@ -143,6 +189,26 @@ export default function TechnicianDetailPage() {
       {mutation.error ? (
         <Alert className="mb-4" variant="destructive">
           <AlertDescription>{mutation.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {sendReset.error ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertDescription>{sendReset.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* `delivered` is reported separately because the two outcomes need
+          different actions. The link exists either way — that is the sensitive
+          part and it is audited — but if the mail did not leave, telling the
+          technician to check their inbox sends them looking for nothing. */}
+      {sendReset.data ? (
+        <Alert className="mb-4" variant={sendReset.data.delivered ? 'default' : 'destructive'}>
+          <AlertDescription>
+            {sendReset.data.delivered
+              ? `Reset link sent to ${sendReset.data.email}. It expires in an hour.`
+              : `A reset link was created for ${sendReset.data.email}, but the email could not be sent. Check mail delivery before telling them to look for it.`}
+          </AlertDescription>
         </Alert>
       ) : null}
 
