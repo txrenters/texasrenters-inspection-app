@@ -78,7 +78,7 @@ export class TechnicianLocationService {
     });
     if (!newest.length) return [];
 
-    return this.prisma.technicianLocationPing.findMany({
+    const rows = await this.prisma.technicianLocationPing.findMany({
       where: {
         organizationId: user.organizationId,
         OR: newest
@@ -100,5 +100,16 @@ export class TechnicianLocationService {
       },
       orderBy: { recordedAt: 'desc' },
     });
+
+    // Numbers, not Prisma `Decimal`s. A Decimal serialises to a *string*
+    // through JSON, so the map would receive "-97.7431" and either plot
+    // nothing or silently coerce it somewhere far away. Converting at the
+    // edge keeps that out of every consumer.
+    return rows.map((row) => ({
+      ...row,
+      latitude: row.latitude.toNumber(),
+      longitude: row.longitude.toNumber(),
+      recordedAt: row.recordedAt.toISOString(),
+    }));
   }
 }
