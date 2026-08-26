@@ -96,6 +96,17 @@ import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
 import type { ComparisonClassification } from '@prisma/client';
 
+/**
+ * The map's two feeds are tagged separately from the rest of this controller.
+ *
+ * The API reference groups by tag, and a reader looking for "where do the map
+ * pins come from" should not have to know they are served by AdminController
+ * alongside ninety-six other routes. The tag is per-handler rather than a new
+ * controller because that is all this needs: the routes belong here, only their
+ * *documentation* wants its own heading.
+ */
+export const CONSOLE_MAP_TAG = 'Console map';
+
 @ApiTags('Administrator application')
 @ApiBearerAuth()
 @UseGuards(ApiAuthGuard, PermissionsGuard)
@@ -739,6 +750,7 @@ export class AdminController {
    * the same grant.
    */
   @Get('technician-locations')
+  @ApiTags(CONSOLE_MAP_TAG)
   @RequirePermissions('technicians:read')
   technicianLocations(@Req() request: AuthenticatedRequest) {
     return this.locations.latestPositions(request.user);
@@ -752,6 +764,7 @@ export class AdminController {
    * is on the tenancy agreement long before it reaches this console.
    */
   @Get('property-locations')
+  @ApiTags(CONSOLE_MAP_TAG)
   @RequirePermissions('properties:read')
   propertyLocations(@Req() request: AuthenticatedRequest) {
     return this.propertyGeocoding.positions(request.user);

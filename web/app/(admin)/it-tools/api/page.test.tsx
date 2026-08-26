@@ -33,6 +33,14 @@ const document = {
     '/api/v1/gateway/inspections': {
       get: operation('Third-party gateway', 'inspections', 'inspections:read'),
     },
+    '/api/v1/admin/property-locations': {
+      // Two tags, as Swagger emits them for a handler that carries its own
+      // `@ApiTags` on top of its controller's.
+      get: {
+        ...operation('Administrator application', 'propertyLocations', 'properties:read'),
+        tags: ['Administrator application', 'Console map'],
+      },
+    },
   },
 };
 
@@ -121,6 +129,19 @@ describe('API reference endpoint list', () => {
     // The selection is resolved against every endpoint, not the filtered set —
     // looking something else up must not blank the contract you were reading.
     expect(screen.getByRole('tab', { name: /try it/i })).toBeInTheDocument();
+  });
+
+  it('files a handler under its most specific tag, not its controller', () => {
+    renderPage();
+
+    // The map's feeds live on AdminController with ninety-odd other routes, and
+    // a reader looking for "where do the map pins come from" should not have to
+    // know that. Grouping on the last tag is what lets a handler have its own
+    // heading without moving to a new controller.
+    expect(tagButton(/console map/i)).toBeInTheDocument();
+    expect(tagButton(/console map/i)).toHaveTextContent('1');
+    // And it is filed there *instead of*, not as well as, its controller.
+    expect(tagButton(/administrator application/i)).toHaveTextContent('1');
   });
 
   it('marks the collapsed section that holds the open endpoint', () => {

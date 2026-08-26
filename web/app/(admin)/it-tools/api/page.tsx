@@ -63,7 +63,11 @@ function flatten(document: ApiDocument | undefined): Endpoint[] {
         id: `${method} ${path}`,
         method,
         path,
-        tag: operation.tags?.[0] ?? 'Other',
+        // The LAST tag, not the first. Swagger appends a method-level `@ApiTags`
+        // after the controller's, so the last one is the most specific — which
+        // is how the map's two feeds get their own heading while still living on
+        // AdminController alongside ninety-six other routes.
+        tag: operation.tags?.at(-1) ?? 'Other',
         operation,
       });
     }
