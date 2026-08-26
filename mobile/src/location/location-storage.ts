@@ -1,19 +1,18 @@
-import { Storage as SQLiteStorage } from 'expo-sqlite/kv-store';
-
+import { locationKeyValueStore } from './location-kv';
 import { LOCATION_QUEUE_KEY, trimQueue, type QueuedFix } from './location-queue';
 
 /**
  * Reading and writing the queue from anywhere, including a headless task.
  *
- * `expo-sqlite/kv-store` directly rather than through the app's zustand stores:
- * background location is delivered to a `TaskManager` task the OS may run with
- * no app on screen, where nothing has hydrated and no React state exists. The
- * same store the rest of the app persists into, reached without React.
+ * The backing store is reached through `location-kv`, which Metro resolves per
+ * platform. Importing `expo-sqlite/kv-store` here directly is what broke the web
+ * export: a file with no platform suffix drags SQLite's web build — and the
+ * `wa-sqlite.wasm` worker Metro cannot resolve — into the web bundle.
  */
 
 export async function readLocationQueue(): Promise<QueuedFix[]> {
   try {
-    const raw = await SQLiteStorage.getItem(LOCATION_QUEUE_KEY);
+    const raw = await locationKeyValueStore.getItem(LOCATION_QUEUE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as QueuedFix[]) : [];
@@ -27,7 +26,7 @@ export async function readLocationQueue(): Promise<QueuedFix[]> {
 
 export async function writeLocationQueue(queue: readonly QueuedFix[]) {
   try {
-    await SQLiteStorage.setItem(LOCATION_QUEUE_KEY, JSON.stringify(trimQueue(queue)));
+    await locationKeyValueStore.setItem(LOCATION_QUEUE_KEY, JSON.stringify(trimQueue(queue)));
   } catch {
     // Dropping a fix is survivable; crashing the location service is not.
   }
