@@ -112,3 +112,30 @@ export interface TechnicianPosition {
   recordedAt: string;
   technician: { id: string; displayName: string } | null;
 }
+
+/**
+ * Fold a freshly reported position into the list the console is holding.
+ *
+ * The list is latest-per-technician, so an arriving position **replaces** that
+ * technician's row rather than joining it. Appending would grow a second marker
+ * for the same person on every fix, and within a minute the map would show a
+ * breadcrumb trail nobody asked for.
+ *
+ * An older fix is discarded rather than applied. Batches can race — a handset
+ * that regained signal may deliver a queued flush moments after a live fix has
+ * already arrived — and letting the late one win would walk the marker
+ * backwards in time, which reads as the technician driving in reverse.
+ */
+export function mergeLatestPosition(
+  positions: readonly TechnicianPosition[],
+  incoming: TechnicianPosition,
+): TechnicianPosition[] {
+  const existing = positions.find((position) => position.technicianId === incoming.technicianId);
+  if (existing && Date.parse(existing.recordedAt) >= Date.parse(incoming.recordedAt))
+    return [...positions];
+
+  return [
+    incoming,
+    ...positions.filter((position) => position.technicianId !== incoming.technicianId),
+  ];
+}

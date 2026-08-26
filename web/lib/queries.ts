@@ -428,9 +428,11 @@ export const useTechnicianLocations = (enabled = true) =>
     queryKey: keys.technicianLocations,
     queryFn: ({ signal }) =>
       api<TechnicianPosition[]>('/api/v1/admin/technician-locations', { signal }),
-    // Matches the handset's own reporting interval. Asking more often than the
-    // devices report would spend requests to redraw the same pins.
-    refetchInterval: 60_000,
+    // A safety net, not the mechanism. Positions arrive over the socket now
+    // (`technician:position`), so this exists only for the case the socket has
+    // quietly gone away — which looks identical to nobody moving, and would
+    // otherwise leave the map confidently wrong for as long as it stayed open.
+    refetchInterval: 5 * 60_000,
     enabled,
   });
 /**

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import type { OnGatewayConnection } from '@nestjs/websockets';
-import { UserRole } from '@texasrenters/shared';
+import { UserRole, type TechnicianPosition } from '@texasrenters/shared';
 import type { Server, Socket } from 'socket.io';
 
 import { authenticateApplicationUser, type AuthenticatedUser } from '../common/auth';
@@ -111,11 +111,22 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
       // The same permission the inspection list requires, so what a socket can
       // hear cannot exceed what the same account could already fetch.
       const watchesOrganization = user.permissions.includes('inspections:read');
-      if (!isTechnician && !watchesOrganization) throw new Error('No realtime audience.');
+      // Live positions are a **separate** room on a **separate** permission,
+      // and the distinction is the whole point. The organization room is joined
+      // on `inspections:read`; the map endpoint that serves these same
+      // positions is gated on `technicians:read`, because where a named person
+      // was at a given minute is a fact about them rather than about an
+      // inspection. Broadcasting positions to the organization room would hand
+      // them to every account holding `inspections:read` and quietly undo that
+      // boundary — so it gets its own room, joined on its own grant.
+      const watchesLocations = user.permissions.includes('technicians:read');
+      if (!isTechnician && !watchesOrganization && !watchesLocations)
+        throw new Error('No realtime audience.');
 
       client.data.user = user;
       if (isTechnician) await client.join(this.technicianRoom(user.id));
       if (watchesOrganization) await client.join(this.organizationRoom(user.organizationId));
+      if (watchesLocations) await client.join(this.locationRoom(user.organizationId));
       client.emit('technician:ready', { connectedAt: new Date().toISOString() });
     } catch {
       client.emit('technician:error', { message: 'Realtime authentication failed.' });
@@ -167,8 +178,29 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
     return token;
   }
 
+  /**
+   * A technician's handset reported where it is.
+   *
+   * Carries the same `TechnicianPosition` the map already fetches over HTTP, so
+   * the console can drop it straight into the cache it already holds rather
+   * than reshaping a second, nearly identical payload.
+   *
+   * Fire-and-forget by design. A dropped position is replaced by the next one
+   * seconds later, and the HTTP endpoint remains the source of truth — so this
+   * never needs delivery guarantees, and the console keeps a slow poll for the
+   * case where the socket has quietly gone away.
+   */
+  publishTechnicianPosition(organizationId: string, position: TechnicianPosition) {
+    this.server?.to(this.locationRoom(organizationId)).emit('technician:position', position);
+  }
+
   private technicianRoom(technicianId: string) {
     return `technician:${technicianId}`;
+  }
+
+  /** Positions only, and only for `technicians:read`. See `handleConnection`. */
+  private locationRoom(organizationId: string) {
+    return `organization:${organizationId}:locations`;
   }
 
   private organizationRoom(organizationId: string) {
