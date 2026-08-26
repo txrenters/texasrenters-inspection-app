@@ -23,6 +23,39 @@ const TechnicianMap = dynamic(
   },
 );
 
+/** The technician badge, small enough to sit in a line of text. */
+function TechnicianSwatch({ stale = false }: { stale?: boolean }) {
+  return (
+    <svg aria-hidden="true" height="14" viewBox="0 0 28 28" width="14">
+      <circle
+        className={stale ? 'fill-map-technician-stale' : 'fill-map-technician'}
+        cx="14"
+        cy="14"
+        r="11"
+        stroke="#fff"
+        strokeWidth="2.5"
+      />
+      <circle cx="14" cy="11.1" fill="#fff" r="2.9" />
+      <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff" />
+    </svg>
+  );
+}
+
+/** The property pin, at the same scale. */
+function PropertySwatch() {
+  return (
+    <svg aria-hidden="true" height="15" viewBox="0 0 24 32" width="11">
+      <path
+        className="fill-map-property"
+        d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
+        stroke="#fff"
+        strokeWidth="2"
+      />
+      <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff" />
+    </svg>
+  );
+}
+
 function LegendKey({ children, swatch }: { children: React.ReactNode; swatch: React.ReactNode }) {
   return (
     <span className="text-muted-foreground flex items-center gap-1.5">
@@ -73,7 +106,14 @@ export default function TechnicianMapPage() {
            the most ordinary state of all, nobody on shift, showed nothing at
            all. Anything worth saying is said over the top of it instead. */
         <div className="space-y-2">
-          <div className="relative h-[70vh] w-full overflow-hidden rounded-lg border">
+          {/* `isolate` is load-bearing, not decoration. Leaflet gives its own
+              controls `z-index: 1000` and its panes 400-700, and without a
+              stacking context here those values compete with the whole page —
+              so the theme menu and every other popover rendered into a portal
+              at `z-50` came out *underneath* the map. Isolating confines
+              Leaflet's z-indexes to this box, where they still order its own
+              layers correctly and stop escaping. */}
+          <div className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border">
             <TechnicianMap positions={positions.data ?? []} properties={properties.data ?? []} />
 
             {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
@@ -104,26 +144,15 @@ export default function TechnicianMapPage() {
             ) : null}
           </div>
 
+          {/* The swatches repeat the markers' own shapes rather than reducing
+              them all to dots. A legend whose keys look nothing like the thing
+              they explain makes the reader do the translation twice. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-            <LegendKey
-              swatch={
-                <span className="bg-primary block h-2.5 w-2.5 rounded-full border border-white" />
-              }
-            >
-              Technician, reported recently
-            </LegendKey>
-            <LegendKey
-              swatch={
-                <span className="bg-muted-foreground block h-2.5 w-2.5 rounded-full border border-white" />
-              }
-            >
+            <LegendKey swatch={<TechnicianSwatch />}>Technician, reported recently</LegendKey>
+            <LegendKey swatch={<TechnicianSwatch stale />}>
               Technician, over 30 minutes ago
             </LegendKey>
-            <LegendKey
-              swatch={
-                <span className="block h-2.5 w-2.5 rounded-[2px] border border-white bg-map-property" />
-              }
-            >
+            <LegendKey swatch={<PropertySwatch />}>
               Property {properties.data?.length ? `(${properties.data.length})` : null}
             </LegendKey>
           </div>

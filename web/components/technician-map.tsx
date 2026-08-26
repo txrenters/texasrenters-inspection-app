@@ -42,39 +42,70 @@ const ATTRIBUTION =
 const STALE_AFTER_MS = 30 * 60_000;
 
 /**
- * Pins drawn in the page's own CSS rather than Leaflet's marker images.
+ * Markers drawn as inline SVG rather than Leaflet's own images.
  *
  * Leaflet's default icon resolves its PNGs relative to the stylesheet, which
  * bundlers rewrite and break — the usual symptom is a map with invisible
- * markers. A `divIcon` sidesteps the asset question entirely and lets a stale
- * pin be drawn differently from a fresh one.
+ * markers. A `divIcon` sidesteps the asset question entirely, and vectors stay
+ * sharp on the high-density displays these are actually read on.
+ *
+ * The two are separated by **shape as well as colour**: a property is the
+ * classic teardrop pin planted at a spot, a technician is a round badge with a
+ * person in it. Anyone who cannot reliably tell green from red still reads the
+ * map correctly, which colour alone would not give them.
+ *
+ * White outlines on both. These sit on cartography full of green parks, blue
+ * water and red arterial roads, and an unoutlined marker disappears into
+ * whatever it happens to land on.
  */
-function technicianPin(stale: boolean) {
-  return divIcon({
-    className: '',
-    html: `<span class="block h-3.5 w-3.5 rounded-full border-2 border-white shadow ${
-      stale ? 'bg-muted-foreground' : 'bg-primary'
-    }"></span>`,
-    iconSize: [14, 14],
-    iconAnchor: [7, 7],
-  });
-}
+const MARKER_SHADOW =
+  '<filter id="pin-shadow" x="-40%" y="-40%" width="180%" height="180%">' +
+  '<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.35"/></filter>';
 
 /**
- * Properties are squares, technicians are circles.
+ * A teardrop pin with a house in it, anchored at its point.
  *
- * Shape rather than only colour, because the two layers have to be told apart
- * at a glance and by people who cannot reliably distinguish two hues. Smaller
- * and paler as well: the properties are the board, not the pieces — they are
- * there so a technician's dot means something, and a map where the fixed
- * points shouted louder than the moving ones would have it backwards.
+ * `iconAnchor` is the tip rather than the centre — a pin whose point does not
+ * touch the coordinate is simply showing the wrong place, and at street zoom
+ * the half-height error is most of a block.
  */
 function propertyPin() {
   return divIcon({
     className: '',
-    html: '<span class="block h-2.5 w-2.5 rounded-[2px] border border-white bg-map-property shadow-sm"></span>',
-    iconSize: [10, 10],
-    iconAnchor: [5, 5],
+    html: `<svg width="24" height="32" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
+      <defs>${MARKER_SHADOW}</defs>
+      <path filter="url(#pin-shadow)"
+        d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
+        class="fill-map-property" stroke="#fff" stroke-width="2"/>
+      <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff"/>
+    </svg>`,
+    iconSize: [24, 32],
+    iconAnchor: [12, 31],
+    popupAnchor: [0, -28],
+  });
+}
+
+/**
+ * A round badge with a person in it, anchored at its centre.
+ *
+ * Centred rather than pointed, because unlike a property this is a reading of
+ * where somebody was, not a marked spot — and the accuracy circle it sits
+ * inside is drawn from the same centre.
+ */
+function technicianPin(stale: boolean) {
+  const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
+  return divIcon({
+    className: '',
+    html: `<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
+      <defs>${MARKER_SHADOW}</defs>
+      <circle filter="url(#pin-shadow)" cx="14" cy="14" r="11"
+        class="${fill}" stroke="#fff" stroke-width="2.5"/>
+      <circle cx="14" cy="11.1" r="2.9" fill="#fff"/>
+      <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff"/>
+    </svg>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
   });
 }
 
@@ -198,7 +229,12 @@ export function TechnicianMap({
               <Circle
                 center={[position.latitude, position.longitude]}
                 radius={position.accuracyMeters}
-                pathOptions={{ weight: 1, opacity: 0.4, fillOpacity: 0.08 }}
+                pathOptions={{
+                  className: 'map-accuracy-ring',
+                  weight: 1,
+                  opacity: 0.45,
+                  fillOpacity: 0.1,
+                }}
               />
             ) : null}
             <Marker
