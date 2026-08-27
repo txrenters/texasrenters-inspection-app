@@ -235,6 +235,36 @@ export async function signIn(
  * The stored tokens go whatever the API says. A technician signing out on a
  * shared handset in a unit with no signal must still be signed out.
  */
+/**
+ * Ask the office to mail a reset link.
+ *
+ * Here, beside sign-in, because it is the other request made by somebody who
+ * is **not** signed in. It used to go through the repository's `writeJson`,
+ * which begins by reading the session and throwing `SessionExpiredError` when
+ * there is none -- so the one screen a locked-out technician reaches answered
+ * "Your session has expired. Sign in again", which is both untrue and the
+ * exact thing they were trying to fix.
+ *
+ * Resolves whatever the address turns out to be. The server answers the same
+ * way for a real address and an invented one so the form cannot be used to
+ * discover which technicians exist, and a screen that reported "no such
+ * account" would give away precisely what the endpoint withholds.
+ */
+export async function requestPasswordReset(email: string) {
+  const response = await fetch(endpoint('/api/v1/auth/request-password-reset'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: email.trim() }),
+  });
+
+  // A refusal is worth reporting -- the address was malformed, or the service
+  // is down -- but not a 404, which this endpoint does not distinguish anyway.
+  if (!response.ok && response.status !== 404) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? 'Could not send the reset link. Try again in a moment.');
+  }
+}
+
 export async function signOut() {
   const current = await load();
   await persist(null);
