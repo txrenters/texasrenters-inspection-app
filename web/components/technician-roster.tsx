@@ -76,6 +76,26 @@ export function buildRoster(
 }
 
 /**
+ * Whether this route actually is one.
+ *
+ * **Legs, not stops.** `stops` is the day's work and is present whether or not
+ * anything was routed -- the planner returns it even when it refuses to plan,
+ * because the inspections still exist. Reading it as "a route exists" is what
+ * made the panel say *no suggested order* and then print *1 min driving, 0.0 mi,
+ * suggested order* directly underneath, over a route that had been correctly
+ * refused. The zero read as a minute only because `formatDuration` floors at
+ * one, so a total of nothing looked like a short drive.
+ *
+ * A leg is produced only when OSRM returned a drive, so this is true exactly
+ * when there is an order and a time worth showing -- and it is false whenever
+ * `originOutsideServiceArea` is set, which is what keeps the two messages from
+ * ever appearing together.
+ */
+function isPlanned(route: TechnicianRoute | null | undefined): route is TechnicianRoute {
+  return Boolean(route?.legs.length);
+}
+
+/**
  * The stops in the order they should be driven, when that is known.
  *
  * The route only carries stops it could place, so anything it dropped is
@@ -84,7 +104,10 @@ export function buildRoster(
  * would be the worse failure.
  */
 function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undefined) {
-  if (!route?.stops.length) return stops;
+  // Guarded on the same predicate as everything else: a refused plan still
+  // carries stops, in whatever order the database returned them, and quietly
+  // reordering the panel to match would present that as a recommendation.
+  if (!isPlanned(route)) return stops;
 
   const byInspection = new Map(stops.map((stop) => [stop.inspectionId, stop]));
   const ordered = route.stops
@@ -152,6 +175,7 @@ export function TechnicianRoster({
   // Built once per render rather than per stop: the same answer for every row,
   // and rebuilding it inside the list would make it O(stops x refusals).
   const refused = offRoadNetwork(route);
+  const planned = isPlanned(route);
 
   if (!entries.length)
     return (
@@ -218,7 +242,7 @@ export function TechnicianRoster({
                       </p>
                     ) : null}
 
-                    {route?.stops.length ? (
+                    {planned && route ? (
                       <p className="text-muted-foreground mb-2 text-xs">
                         <span className="text-foreground font-medium">
                           {formatDuration(route.totalDurationSeconds)}
@@ -229,14 +253,14 @@ export function TechnicianRoster({
 
                     <ol className="space-y-1.5">
                       {orderStops(entry.stops, route).map((stop, index) => {
-                        const leg = route?.stops.length ? route.legs[index] : undefined;
+                        const leg = planned ? route?.legs[index] : undefined;
                         const offNetwork = refused.has(stop.inspectionId);
                         return (
                           <li className="flex gap-2 text-xs leading-snug" key={stop.inspectionId}>
                             {/* Numbered only when there is a route to number
                                 against. A bare list with numbers on it would
                                 read as an order somebody chose. */}
-                            {route?.stops.length ? (
+                            {planned ? (
                               <span className="text-muted-foreground w-3 shrink-0 tabular-nums">
                                 {index + 1}
                               </span>
@@ -266,7 +290,7 @@ export function TechnicianRoster({
                       })}
                     </ol>
 
-                    {route?.stops.length ? (
+                    {planned ? (
                       <p className="text-muted-foreground mt-2 text-[11px]">
                         Estimated from speed limits, without traffic.
                       </p>
