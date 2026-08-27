@@ -1,6 +1,6 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
-import { getSession, signIn, signOut } from '../../auth/session';
+import { getSession, requestPasswordReset, signIn, signOut } from '../../auth/session';
 import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type {
@@ -601,7 +601,11 @@ export class ApiAuthRepository implements AuthRepository {
    * for a technician who cannot get to their mail.
    */
   async resetPassword(email: string) {
-    await writeJson('/api/v1/auth/request-password-reset', 'POST', { email });
+    // Not `writeJson`. That path reads the session first and throws
+    // `SessionExpiredError` when there is none -- and nobody asking for a reset
+    // link is signed in, so this screen reported "Your session has expired.
+    // Sign in again" to the one person who could not act on it.
+    await requestPasswordReset(email);
   }
   async currentUser() {
     const session = await getSession();

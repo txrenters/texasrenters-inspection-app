@@ -7,6 +7,7 @@ import { divIcon, type LatLngBoundsExpression } from 'leaflet';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 
+import { pointsToFit } from '@/components/map-bounds';
 import { clusterByGrid } from '@/components/map-clusters';
 import { formatRelative } from '@/lib/format';
 
@@ -152,6 +153,18 @@ function clusterPin(count: number, dim = false) {
  */
 const FALLBACK_CENTER: [number, number] = [31.0, -99.0];
 const FALLBACK_ZOOM = 5;
+
+/**
+ * One Earth, and only one.
+ *
+ * Latitude stops at ±85 rather than ±90 because Web Mercator cannot project
+ * the poles — they sit at infinity, and asking Leaflet to bound them produces
+ * a map that will not settle.
+ */
+const WORLD_BOUNDS: LatLngBoundsExpression = [
+  [-85, -180],
+  [85, 180],
+];
 
 /**
  * Fits the map to the data once it arrives.
@@ -303,13 +316,12 @@ export function TechnicianMap({
   // on a fixed point: this office works one metropolitan area today, but a
   // hard-coded centre is the kind of thing that silently stops making sense
   // when a second one is added.
-  const points = useMemo<[number, number][]>(
-    () => [
-      ...positions.map((position) => [position.latitude, position.longitude] as [number, number]),
-      ...properties.map((property) => [property.latitude, property.longitude] as [number, number]),
-    ],
-    [positions, properties],
-  );
+  // Not simply everything. A handset reporting from another continent -- a
+  // test device, a phone that travelled -- would otherwise drag the view out
+  // to a world map on which neither it nor the properties could be read. The
+  // properties anchor the frame; an outlier is still drawn, it just does not
+  // get to decide the zoom.
+  const points = useMemo(() => pointsToFit(properties, positions), [positions, properties]);
 
   // Who is on the map, not where they are. Keyed on `technicianId` rather than
   // the position row's own id, which is a new row for every fix and would make
@@ -328,10 +340,25 @@ export function TechnicianMap({
       center={FALLBACK_CENTER}
       zoom={FALLBACK_ZOOM}
       className="h-full w-full rounded-lg"
+      // Leaflet tiles the world endlessly on the horizontal axis, so zooming
+      // out drew the Earth three times over with the properties repeated in
+      // each copy — and a technician could appear to be in two places at once.
+      // `maxBounds` pins the map to one world, and the viscosity makes the
+      // edge firm rather than springy.
+      maxBounds={WORLD_BOUNDS}
+      maxBoundsViscosity={1}
+      // Below this the whole world is smaller than the viewport, which is
+      // where the repetition became visible and where the map stops answering
+      // any question anyway.
+      minZoom={3}
       scrollWheelZoom
     >
       <FitToData fitKey={fitKey} points={points} />
-      <TileLayer attribution={ATTRIBUTION} url={TILE_URL} />
+      {/* `noWrap` stops the tile layer itself repeating. Both this and the
+          container's `maxBounds` are needed: one bounds the view, the other
+          bounds what is painted, and without the pair the copies come back at
+          the edges. */}
+      <TileLayer attribution={ATTRIBUTION} noWrap url={TILE_URL} />
 
       {/* Properties first so they paint underneath, and pinned below the
           technicians by z-index as well — marker order alone does not decide
