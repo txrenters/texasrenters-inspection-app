@@ -28,19 +28,30 @@ const EAS_PROJECT_ID = 'ce9b1d5f-5851-4369-aa12-59b081b4556b';
 const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim() || EAS_PROJECT_ID;
 
 /**
- * The splash artwork's own background, sampled from the images themselves.
+ * The splash backgrounds.
  *
- * Deliberately *not* the app tokens above. `resizeMode: 'contain'` letterboxes
- * the image, and the surrounding area is painted with `backgroundColor` — so a
- * value that does not match the artwork draws a visible band around it for the
- * whole of the launch. The dark pair was the worse of the two: navy artwork on
- * a near-black surround.
- *
- * The cost is a slight step at hand-off to the first screen instead of a hard
- * edge for the entire splash. Update these if the artwork is ever re-exported.
+ * The artwork is now a **transparent** logo rather than a pre-composited
+ * image, which removes the problem the old note here described: with a baked-in
+ * background, `resizeMode: 'contain'` letterboxed the image and any mismatch
+ * between the artwork's background and this value drew a visible band for the
+ * whole launch. A transparent logo has no background to mismatch — the colour
+ * below is the entire surface.
  */
 const SPLASH_LIGHT_BACKGROUND = '#FFFFFF';
-const SPLASH_DARK_BACKGROUND = '#0C1E42';
+
+/**
+ * The brand navy, from the splash artwork's own specification.
+ *
+ * Serves two jobs. It is the dark splash background, where the logo is now a
+ * transparent PNG rather than a pre-composited image — so this colour *is* the
+ * splash, and the letterboxing problem the old note described cannot happen.
+ *
+ * It is also the Android adaptive-icon background. Sampled against the icon
+ * itself: the artwork's gradient runs from #24539F at the top-left to a darker
+ * navy, and this sits inside that range. The previous #0C1E42 was near-black
+ * and well outside it, so a launcher mask exposed a colour the icon never uses.
+ */
+const BRAND_NAVY = '#1A3F7C';
 
 // The store identity, and the one part of this file that is effectively
 // permanent: `bundleIdentifier` and `package` cannot be changed after the first
@@ -111,11 +122,13 @@ const config: ExpoConfig = {
         resizeMode: 'contain',
         backgroundColor: SPLASH_LIGHT_BACKGROUND,
         dark: {
-          // A separate asset, not a tint: the logo's "TEXAS" and ".com" are
-          // dark navy and vanish on a dark background, while the green
-          // "RENTERS" reads fine. See scripts/build-splash.mjs.
+          // A separate asset, not a tint. The wordmark's "TEXAS" and ".com" are
+          // navy and vanish on a dark background, while the green "RENTERS"
+          // reads fine — so the designer supplied two versions rather than one
+          // that gets recoloured: white-and-green for navy, navy-and-green for
+          // white.
           image: './assets/splash-dark.png',
-          backgroundColor: SPLASH_DARK_BACKGROUND,
+          backgroundColor: BRAND_NAVY,
         },
       },
     ],
@@ -214,7 +227,7 @@ const config: ExpoConfig = {
       // The artwork's own navy, so nothing shows through where the launcher's
       // mask exposes background. Was the brand green, which framed the navy
       // foreground in a ring of a colour the icon does not otherwise use.
-      backgroundColor: SPLASH_DARK_BACKGROUND,
+      backgroundColor: BRAND_NAVY,
     },
     package: 'com.texasrenters.inspection',
     /**
