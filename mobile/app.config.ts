@@ -69,7 +69,22 @@ const config: ExpoConfig = {
   // with the others would cost a new EAS project, which means a new project id,
   // which means a new update URL compiled into every build.
   slug: 'inspection-texas-renters',
-  version: '1.0.0',
+  /**
+   * Also the runtime version, via `runtimeVersion: { policy: 'appVersion' }`
+   * below — which makes this the fence between JavaScript and the native code
+   * it needs.
+   *
+   * **Bump it in the same change that adds a native module.** `expo-location`
+   * and `expo-task-manager` landed on 2026-08-26 while this still said 1.0.0
+   * and the newest build was from the 24th. An OTA would therefore have been
+   * judged compatible with binaries that had no location code in them, and
+   * `shift-tracking.ts` calls `TaskManager.defineTask` at module scope, so it
+   * would have crashed on import rather than degrading.
+   *
+   * 1.1.0 fences those builds out: JavaScript published from here can now only
+   * reach a build made from this version or later.
+   */
+  version: '1.1.0',
   orientation: 'portrait',
   scheme: 'texasrenters-inspection',
   icon: './assets/icon.png',
