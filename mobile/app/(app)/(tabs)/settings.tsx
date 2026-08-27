@@ -176,11 +176,13 @@ export default function SettingsScreen() {
       // settings screen; each of these is fixed in a different place.
       Alert.alert(
         'Could not start your shift',
-        result.reason === 'UNAVAILABLE'
-          ? 'Location services are switched off for this device. Turn them on in the system settings and try again.'
-          : result.reason === 'FOREGROUND_DENIED'
-            ? 'TexasRenters Inspect needs location access to record your shift. Allow it in the app’s settings and try again.'
-            : 'Your shift needs location access set to “Allow all the time”, so it keeps recording while the app is in the background. Change it in the app’s settings and try again.',
+        result.reason === 'UNSUPPORTED'
+          ? 'This build of the app cannot record location. Ask the office for the current build, then try again.'
+          : result.reason === 'UNAVAILABLE'
+            ? 'Location services are switched off for this device. Turn them on in the system settings and try again.'
+            : result.reason === 'FOREGROUND_DENIED'
+              ? 'TexasRenters Inspect needs location access to record your shift. Allow it in the app’s settings and try again.'
+              : 'Your shift needs location access set to “Allow all the time”, so it keeps recording while the app is in the background. Change it in the app’s settings and try again.',
       );
     } finally {
       setShiftBusy(false);

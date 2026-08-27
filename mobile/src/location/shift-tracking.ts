@@ -66,9 +66,41 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
 
 export type ShiftStartResult =
   | { started: true }
-  | { started: false; reason: 'FOREGROUND_DENIED' | 'BACKGROUND_DENIED' | 'UNAVAILABLE' };
+  | {
+      started: false;
+      reason: 'FOREGROUND_DENIED' | 'BACKGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED';
+    };
 
+/**
+ * Turn shift tracking on, and never throw doing it.
+ *
+ * Every failure is a returned reason, because the caller toggles a switch and
+ * has to put it back. A throw here surfaced as
+ * `Uncaught (in promise) Error: One of the NSLocation*UsageDescription keys
+ * must be present in Info.plist` — the app's own error screen, from tapping a
+ * setting.
+ *
+ * `requestForegroundPermissionsAsync` is the one that does it. On a binary
+ * whose Info.plist has no location strings it **throws** rather than reporting
+ * denial, which is every build made before `expo-location` was added, and Expo
+ * Go. The app config declares those strings correctly; a handset running an
+ * older binary against a current bundle does not have them, and that is
+ * ordinary during development.
+ *
+ * `UNSUPPORTED` is kept distinct from `UNAVAILABLE` because they are fixed in
+ * different places, and the old copy sent people to the wrong one: "location
+ * services are switched off" is useless advice when the truth is that this
+ * build cannot do location at all.
+ */
 export async function startShiftTracking(): Promise<ShiftStartResult> {
+  try {
+    return await beginShiftTracking();
+  } catch {
+    return { started: false, reason: 'UNSUPPORTED' };
+  }
+}
+
+async function beginShiftTracking(): Promise<ShiftStartResult> {
   if (!(await Location.hasServicesEnabledAsync().catch(() => false)))
     return { started: false, reason: 'UNAVAILABLE' };
 
