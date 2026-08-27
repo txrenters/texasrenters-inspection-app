@@ -3,6 +3,7 @@ import {
   parseTableResponse,
   toOsrmCoordinates,
 } from '../src/routing/osrm.client';
+import { toLatLngPath } from '../src/routing/route.service';
 
 describe('OSRM coordinate order', () => {
   it('writes longitude first', () => {
@@ -101,5 +102,29 @@ describe('parseRouteResponse', () => {
   it('survives a malformed body', () => {
     for (const body of [null, undefined, {}, { code: 'Ok' }, { routes: [{}] }])
       expect(parseRouteResponse(body)).toBeNull();
+  });
+});
+
+describe('toLatLngPath', () => {
+  it('flips OSRM lon,lat into the lat,lng a map draws', () => {
+    // The third place these two orders meet in this codebase, and the failure
+    // is always silent: the line simply appears somewhere else on Earth.
+    expect(toLatLngPath([[-95.4169, 29.7264]])).toEqual([[29.7264, -95.4169]]);
+  });
+
+  it('keeps the path in order', () => {
+    expect(
+      toLatLngPath([
+        [-95.4169, 29.7264],
+        [-95.204, 29.8665],
+      ]),
+    ).toEqual([
+      [29.7264, -95.4169],
+      [29.8665, -95.204],
+    ]);
+  });
+
+  it('has nothing to draw for an empty path', () => {
+    expect(toLatLngPath([])).toEqual([]);
   });
 });

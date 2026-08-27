@@ -2,10 +2,23 @@
 
 import 'leaflet/dist/leaflet.css';
 
-import type { PropertyPosition, TechnicianPosition } from '@texasrenters/shared';
+import type {
+  PropertyPosition,
+  TechnicianPosition,
+  TechnicianRoute,
+} from '@texasrenters/shared';
 import { divIcon, type LatLngBoundsExpression } from 'leaflet';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import {
+  Circle,
+  MapContainer,
+  Marker,
+  Polyline,
+  Popup,
+  TileLayer,
+  useMap,
+  useMapEvents,
+} from 'react-leaflet';
 
 import { pointsToFit } from '@/components/map-bounds';
 import { clusterByGrid } from '@/components/map-clusters';
@@ -318,6 +331,74 @@ function PropertyLayer({
 }
 
 /**
+ * The drive, along the roads it actually uses.
+ *
+ * Two lines rather than one: a wide pale casing under a narrower solid stroke.
+ * That is how every road map draws a route, and for the same reason — a single
+ * line the width of a street disappears into the street beneath it, while the
+ * casing separates it from the cartography without hiding what it crosses.
+ *
+ * Numbered markers sit at each stop, because the order is the recommendation.
+ * Without them the line says where somebody drives and not which end they
+ * start from, which is the question the panel exists to answer.
+ */
+function RouteLayer({ route }: { route: TechnicianRoute | null }) {
+  if (!route?.geometry.length) return null;
+
+  return (
+    <>
+      <Polyline
+        pathOptions={{ className: 'map-route-casing', weight: 9, opacity: 0.9 }}
+        positions={route.geometry}
+      />
+      <Polyline
+        pathOptions={{ className: 'map-route-line', weight: 4, opacity: 1 }}
+        positions={route.geometry}
+      />
+      {route.stops.map((stop, index) => (
+        <Marker
+          icon={stopPin(index + 1)}
+          key={stop.inspectionId}
+          position={[stop.latitude, stop.longitude]}
+          zIndexOffset={800}
+        >
+          <Popup>
+            <span className="font-medium">
+              {index + 1}. {stop.propertyName}
+            </span>
+            <br />
+            {stop.addressLine1}
+            {stop.city ? `, ${stop.city}` : null}
+          </Popup>
+        </Marker>
+      ))}
+    </>
+  );
+}
+
+/**
+ * A numbered stop on the recommended route.
+ *
+ * Above the property pin it sits on, and above the technician, because while a
+ * route is shown the order is the thing being read. It carries its own dark
+ * ground so a number stays legible over both the line and the map.
+ */
+function stopPin(order: number) {
+  return divIcon({
+    className: '',
+    html: `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" class="fill-map-route" stroke="#fff" stroke-width="2"/>
+      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
+        fill="#fff" font-size="11" font-weight="700"
+        font-family="system-ui, sans-serif">${order}</text>
+    </svg>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    popupAnchor: [0, -12],
+  });
+}
+
+/**
  * How close the map goes when somebody is picked from the roster.
  *
  * Street level rather than rooftop. The position is a Balanced-accuracy fix
@@ -381,11 +462,14 @@ export function TechnicianMap({
   highlightedBuildingIds = null,
   positions,
   properties = [],
+  route = null,
   selectedTechnicianId = null,
 }: {
   highlightedBuildingIds?: ReadonlySet<string> | null;
   positions: readonly TechnicianPosition[];
   properties?: readonly PropertyPosition[];
+  /** The selected technician's drive, when one has been worked out. */
+  route?: TechnicianRoute | null;
   selectedTechnicianId?: string | null;
 }) {
   // Fit to everything, technicians and properties alike, rather than centring
@@ -457,6 +541,10 @@ export function TechnicianMap({
           bounds what is painted, and without the pair the copies come back at
           the edges. */}
       <TileLayer attribution={ATTRIBUTION} noWrap url={TILE_URL} />
+
+      {/* Under the markers and over the properties: the route is context for
+          the pins, not a thing to be read on its own. */}
+      <RouteLayer route={route} />
 
       {/* Properties first so they paint underneath, and pinned below the
           technicians by z-index as well — marker order alone does not decide

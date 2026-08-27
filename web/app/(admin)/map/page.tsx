@@ -12,8 +12,10 @@ import {
   useMapAssignments,
   usePropertyLocations,
   useTechnicianLocations,
+  useTechnicianRoute,
 } from '@/lib/queries';
 import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
+import { DatePicker } from '@/components/ui/date-picker';
 
 /**
  * `ssr: false` is not optional. Leaflet reads `window` at import time and
@@ -86,10 +88,20 @@ export default function TechnicianMapPage() {
 
   // Today, in the reader's own calendar day. The schema stores a date with no
   // clock value, so there is no narrower window to ask for.
-  const today = new Date().toISOString().slice(0, 10);
-  const assignments = useMapAssignments(today, canView);
+  //
+  // `toISOString` would be UTC and would roll over an evening early for a Texas
+  // office, showing tomorrow's work as today's. `en-CA` is the shortest way to
+  // get `yyyy-MM-dd` out of the browser's own locale machinery.
+  const today = useMemo(() => new Date().toLocaleDateString('en-CA'), []);
+  const [date, setDate] = useState(today);
+  const assignments = useMapAssignments(date, canView);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Only for the selected technician. Planning a route calls OSRM once per
+  // person, so doing it for the whole roster to draw one line would be paying
+  // for five answers to use one.
+  const route = useTechnicianRoute(selectedId ?? '', date, Boolean(selectedId));
 
   const roster = useMemo(
     () => buildRoster(positions.data ?? [], assignments.data ?? []),
@@ -103,7 +115,13 @@ export default function TechnicianMapPage() {
   const highlighted = useMemo(() => {
     if (!selectedId) return null;
     const match = assignments.data?.find((entry) => entry.technicianId === selectedId);
-    return new Set(match?.buildingIds ?? []);
+    // Stops with no building are dropped here and only here: they cannot be
+    // highlighted on a map. The panel still lists them, and says why.
+    return new Set(
+      (match?.stops ?? [])
+        .map((stop) => stop.buildingId)
+        .filter((buildingId): buildingId is string => Boolean(buildingId)),
+    );
   }, [assignments.data, selectedId]);
 
   const newest = positions.data?.reduce<string | null>(
@@ -139,15 +157,42 @@ export default function TechnicianMapPage() {
               faster answer to "who is out", and a map you have to scroll past
               to reach it is the wrong way round. */}
           <div className="grid gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="bg-card h-[70vh] overflow-y-auto rounded-lg border">
-              <div className="text-muted-foreground border-b px-4 py-2.5 text-xs font-medium tracking-wide uppercase">
-                Today
+            <div className="bg-card flex h-[70vh] flex-col rounded-lg border">
+              {/* The date sits above the list rather than beside the map,
+                  because it governs the list: positions are always live, and
+                  only the assignments below answer to it. Putting it over the
+                  map would suggest it moved the pins through time. */}
+              <div className="space-y-2 border-b px-3 py-3">
+                <label
+                  className="text-muted-foreground block text-xs font-medium tracking-wide uppercase"
+                  htmlFor="roster-date"
+                >
+                  Assignments for
+                </label>
+                <DatePicker
+                  aria-label="Show assignments for this date"
+                  id="roster-date"
+                  onChange={(next) => {
+                    // Empty means the picker was cleared. A day is required
+                    // here, so it falls back to today rather than asking the
+                    // API for assignments on no date at all.
+                    setDate(next || today);
+                    // The selected technician may have no work on the new day,
+                    // and a highlight left over from a different date would be
+                    // quietly wrong.
+                    setSelectedId(null);
+                  }}
+                  value={date}
+                />
               </div>
-              <TechnicianRoster
-                entries={roster}
-                onSelect={setSelectedId}
-                selectedId={selectedId}
-              />
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <TechnicianRoster
+                  entries={roster}
+                  onSelect={setSelectedId}
+                  route={selectedId ? (route.data ?? null) : null}
+                  selectedId={selectedId}
+                />
+              </div>
             </div>
 
             {/* `isolate` is load-bearing, not decoration. Leaflet gives its own
@@ -162,6 +207,7 @@ export default function TechnicianMapPage() {
                 highlightedBuildingIds={highlighted}
                 positions={positions.data ?? []}
                 properties={properties.data ?? []}
+                route={selectedId ? (route.data ?? null) : null}
                 selectedTechnicianId={selectedId}
               />
 
