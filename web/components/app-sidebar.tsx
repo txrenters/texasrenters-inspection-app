@@ -7,7 +7,6 @@ import {
   SettingsIcon,
   UserRoundIcon,
 } from 'lucide-react';
-import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useId, useState } from 'react';
@@ -265,20 +264,49 @@ export function AppSidebar() {
           href="/dashboard"
           onClick={closeMobileNavigation}
         >
-          {/* The sidebar is a light surface here rather than the old navy bar, so
-              the wordmark needs no brightness lift or drop shadow to separate
-              from it — it sits on the same near-white it was designed for. */}
-          <Image
-            alt="TexasRenters"
-            className="h-6 w-auto shrink-0 dark:brightness-0 dark:invert"
-            height={167}
-            priority
-            src="/texasrenterslogo-transparent.png"
-            width={600}
-          />
-          <span className="border-sidebar-border text-muted-foreground truncate border-l pl-2.5 text-xs font-medium tracking-wide uppercase group-data-[collapsible=icon]:hidden">
-            Inspection
+          {/* Expanded: the horizontal lockup, plus the product name.
+              Everything here hides together when the rail collapses — the mark
+              below replaces it rather than the wordmark being squeezed into a
+              48px slot, which is what turned it into colour noise.
+
+              Vector rather than the old PNG so it stays sharp at 20px, and two
+              files rather than one filtered with `brightness-0 invert`. That
+              filter made a white silhouette: it flattened the green out of the
+              mark entirely, so dark mode showed half a brand. */}
+          <span className="flex items-center gap-2.5 group-data-[collapsible=icon]:hidden">
+            {/* Decorative: the Link already carries the accessible name, so a
+                second announcement of "TexasRenters" would just be repetition. */}
+            {/* `next/image` would need `dangerouslyAllowSVG`, which opens the
+                optimizer to every SVG for no gain — these are vector already,
+                and 12KB. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt=""
+              className="h-5 w-auto shrink-0 dark:hidden"
+              src="/brand/logo-horizontal.svg"
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt=""
+              className="hidden h-5 w-auto shrink-0 dark:block"
+              src="/brand/logo-horizontal-dark.svg"
+            />
+            <span className="border-sidebar-border text-muted-foreground truncate border-l pl-2.5 text-xs font-medium tracking-wide uppercase">
+              Inspection
+            </span>
           </span>
+
+          {/* Collapsed: the mark alone, on its own navy tile.
+              The tile rather than the bare mark because it carries its own
+              background, so it reads on a light sidebar and a dark one without
+              a second asset — and it matches the app icon and the avatar at the
+              foot of the sidebar, which bookends the rail. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt=""
+            className="hidden size-7 shrink-0 group-data-[collapsible=icon]:block"
+            src="/brand/logo-mark-tile.svg"
+          />
         </Link>
       </SidebarHeader>
 
