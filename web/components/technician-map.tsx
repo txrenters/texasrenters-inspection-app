@@ -180,7 +180,23 @@ const WORLD_BOUNDS: LatLngBoundsExpression = [
  * become. So the map re-fits when somebody comes on shift or a property loads,
  * and holds still while people drive around.
  */
-function FitToData({ fitKey, points }: { fitKey: string; points: [number, number][] }) {
+function FitToData({
+  fitKey,
+  points,
+  suspended,
+}: {
+  fitKey: string;
+  points: [number, number][];
+  /**
+   * True while somebody is selected from the roster.
+   *
+   * Without this the two fits fight: a technician coming on shift changes the
+   * key, this re-frames the whole patch, and the view somebody deliberately
+   * focused is pulled away by a colleague opening their app. A deliberate
+   * choice outranks an automatic one.
+   */
+  suspended: boolean;
+}) {
   const map = useMap();
 
   // Held in a ref so the effect can read current coordinates without listing
@@ -189,9 +205,9 @@ function FitToData({ fitKey, points }: { fitKey: string; points: [number, number
   latest.current = points;
 
   useEffect(() => {
-    if (!latest.current.length) return;
+    if (suspended || !latest.current.length) return;
     map.fitBounds(latest.current as LatLngBoundsExpression, { padding: [48, 48], maxZoom: 15 });
-  }, [map, fitKey]);
+  }, [map, fitKey, suspended]);
 
   return null;
 }
@@ -301,6 +317,66 @@ function PropertyLayer({
   );
 }
 
+/**
+ * How close the map goes when somebody is picked from the roster.
+ *
+ * Street level rather than rooftop. The position is a Balanced-accuracy fix
+ * from a handset, good to a few tens of metres, so a closer zoom would imply a
+ * precision the dot does not have -- and a technician standing in a garden
+ * would appear to be in next door's kitchen.
+ */
+const SELECTED_ZOOM = 15;
+
+/**
+ * Moves the map to whoever was selected in the roster.
+ *
+ * **Keyed on the selection, never on the position.** Positions arrive every
+ * fifteen seconds now, and re-centring on each one would drag the map out from
+ * under anybody who had panned away to look at something — following a moving
+ * dot is a different feature, and one that has to be asked for rather than
+ * imposed the moment a name is clicked.
+ *
+ * Falls back to the technician's stops when they have no position: somebody who
+ * has not opened the app yet still has a round, and showing where their work is
+ * answers more than leaving the map where it was.
+ */
+function FocusSelected({
+  fallback,
+  position,
+  selectedTechnicianId,
+}: {
+  fallback: [number, number][];
+  position: TechnicianPosition | null;
+  selectedTechnicianId: string | null;
+}) {
+  const map = useMap();
+
+  // Read through refs so the effect depends on the selection alone. Both change
+  // as fixes arrive, and listing them would re-run this every fifteen seconds.
+  const latest = useRef({ fallback, position });
+  latest.current = { fallback, position };
+
+  useEffect(() => {
+    if (!selectedTechnicianId) return;
+    const { fallback: stops, position: at } = latest.current;
+
+    // Animation is a courtesy, not the point: somebody who has asked for less
+    // motion gets the same destination without the flight.
+    const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+    if (at) {
+      map.flyTo([at.latitude, at.longitude], SELECTED_ZOOM, {
+        animate,
+        duration: 0.6,
+      });
+      return;
+    }
+    if (stops.length) map.fitBounds(stops, { padding: [64, 64], maxZoom: SELECTED_ZOOM });
+  }, [map, selectedTechnicianId]);
+
+  return null;
+}
+
 export function TechnicianMap({
   highlightedBuildingIds = null,
   positions,
@@ -322,6 +398,23 @@ export function TechnicianMap({
   // properties anchor the frame; an outlier is still drawn, it just does not
   // get to decide the zoom.
   const points = useMemo(() => pointsToFit(properties, positions), [positions, properties]);
+
+  const selectedPosition = useMemo(
+    () => positions.find((position) => position.technicianId === selectedTechnicianId) ?? null,
+    [positions, selectedTechnicianId],
+  );
+
+  // Where the selected technician's work is, for the case where they have no
+  // position to fly to yet.
+  const selectedStops = useMemo<[number, number][]>(
+    () =>
+      highlightedBuildingIds
+        ? properties
+            .filter((property) => highlightedBuildingIds.has(property.id))
+            .map((property) => [property.latitude, property.longitude])
+        : [],
+    [highlightedBuildingIds, properties],
+  );
 
   // Who is on the map, not where they are. Keyed on `technicianId` rather than
   // the position row's own id, which is a new row for every fix and would make
@@ -353,7 +446,12 @@ export function TechnicianMap({
       minZoom={3}
       scrollWheelZoom
     >
-      <FitToData fitKey={fitKey} points={points} />
+      <FitToData fitKey={fitKey} points={points} suspended={Boolean(selectedTechnicianId)} />
+      <FocusSelected
+        fallback={selectedStops}
+        position={selectedPosition}
+        selectedTechnicianId={selectedTechnicianId}
+      />
       {/* `noWrap` stops the tile layer itself repeating. Both this and the
           container's `maxBounds` are needed: one bounds the view, the other
           bounds what is painted, and without the pair the copies come back at
