@@ -70,6 +70,28 @@ export class RouteService {
         inspection: {
           select: {
             id: true,
+            // Both, and the building first.
+            //
+            // A real inspection carries `propertywareBuildingId` and leaves
+            // `propertyId` null -- `Property` rows only exist where the
+            // inspection workflow happened to create one. Reading only the
+            // `property` relation therefore found nothing on real data and
+            // reported every stop as unplaceable, while passing a test built
+            // on fabricated rows that had `propertyId` set.
+            //
+            // The building is also what the map draws, so a route and a pin
+            // now refer to the same record rather than two views of a
+            // property that may not agree.
+            propertywareBuilding: {
+              select: {
+                id: true,
+                name: true,
+                addressLine1: true,
+                city: true,
+                latitude: true,
+                longitude: true,
+              },
+            },
             property: {
               select: {
                 id: true,
@@ -89,7 +111,10 @@ export class RouteService {
     const unroutable: TechnicianRoute['unroutable'] = [];
 
     for (const { inspection } of assignments) {
-      const property = inspection.property;
+      // The synced building is the truth for where a property is; the
+      // `Property` row is a fallback for the handful of inspections created
+      // through the floor-plan or technician paths.
+      const property = inspection.propertywareBuilding ?? inspection.property;
       // Carried, not dropped. A property that never geocoded cannot be routed
       // to, and quietly omitting it turns "you have five inspections" into a
       // route of four with nothing to explain the difference.
@@ -105,8 +130,11 @@ export class RouteService {
         inspectionId: inspection.id,
         propertyId: property.id,
         propertyName: property.name,
-        addressLine1: property.addressLine1,
-        city: property.city,
+        // Nullable on a synced record and not on the contract. An empty string
+        // rather than dropping the stop: a thin label is still a place to
+        // drive to, a missing stop is a property nobody is told about.
+        addressLine1: property.addressLine1 ?? '',
+        city: property.city ?? '',
         latitude: property.latitude.toNumber(),
         longitude: property.longitude.toNumber(),
       });

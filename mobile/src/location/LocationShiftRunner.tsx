@@ -16,8 +16,12 @@ import { drainLocationQueue } from './location-sender';
  * exist because a walkthrough video is tens of megabytes on a personal data
  * plan; a batch of coordinates is a few hundred bytes, and holding a position
  * trail back to save that is the wrong trade.
+ *
+ * Fifteen seconds, matching the fix interval. A minute meant the console could
+ * be a minute behind a technician who was moving, which is not what anybody
+ * means by a live map. The payload is a handful of coordinates.
  */
-const DRAIN_INTERVAL_MS = 60_000;
+const DRAIN_INTERVAL_MS = 15_000;
 
 export function LocationShiftRunner() {
   const running = useRef(false);

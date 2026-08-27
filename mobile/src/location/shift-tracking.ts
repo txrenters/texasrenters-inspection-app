@@ -24,11 +24,17 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
  *
  * `Balanced` rather than `BestForNavigation`: this runs all day on a handset
  * that also films video, and metre-accurate positioning would cost the battery
- * the rest of the shift depends on. A minute and 25 metres is enough to say
- * which property somebody is at and which way they are going.
+ * the rest of the shift depends on.
+ *
+ * Fifteen seconds rather than the minute it used to be. A minute is fine for
+ * "which property is she at" and useless for watching somebody move -- a van
+ * covers half a mile between fixes, so the console drew a technician
+ * teleporting between two points on a road it never showed them taking. The
+ * cost is real and worth naming: more frequent fixes mean more battery, on a
+ * phone that is also filming video.
  */
-const FIX_INTERVAL_MS = 60_000;
-const FIX_DISTANCE_M = 25;
+const FIX_INTERVAL_MS = 15_000;
+const FIX_DISTANCE_M = 10;
 
 /** Same shape the camera uses for snapshot ids — no new dependency for this. */
 function fixId() {
@@ -191,9 +197,14 @@ async function startBackgroundUpdates(): Promise<boolean> {
     pausesUpdatesAutomatically: false,
     showsBackgroundLocationIndicator: true,
       foregroundService: {
-        notificationTitle: 'On shift',
-        notificationBody: 'TexasRenters Inspect is recording your location.',
-        killServiceOnDestroy: false,
+        notificationTitle: 'Recording your location',
+        notificationBody: 'TexasRenters Inspect is on. Close the app to stop.',
+        // Stops when the app is closed, keeps running when it is merely
+        // minimised -- which is the whole working day, since the phone is in a
+        // pocket between rooms. `false` kept the service alive after the app
+        // was swiped away, which is tracking somebody who has finished, and is
+        // the one behaviour nobody would think to check for.
+        killServiceOnDestroy: true,
       },
     });
     return true;

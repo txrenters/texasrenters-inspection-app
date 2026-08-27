@@ -54,13 +54,16 @@ registerIcons(
 
 export default function SettingsScreen() {
   const tabBarInset = useTabBarInset();
-  // The OS is the source of truth for whether a shift is running, not a stored
-  // preference: the service can be stopped from the notification, and a switch
-  // that disagreed with the notification would be worse than no switch.
-  const [onShift, setOnShift] = useState(false);
+  // Recording is automatic now, so this switch is a pause rather than a start.
+  // It still reads the OS on mount: the Android service can be stopped from its
+  // own notification, and a switch that disagreed with the notification would
+  // be worse than no switch at all.
+  const locationPaused = usePreferencesStore((state) => state.locationPaused);
+  const setLocationPaused = usePreferencesStore((state) => state.setLocationPaused);
+  const [recording, setRecording] = useState(!locationPaused);
   const [shiftBusy, setShiftBusy] = useState(false);
   useEffect(() => {
-    void isShiftTrackingActive().then(setOnShift);
+    void isShiftTrackingActive().then(setRecording);
   }, []);
   const user = useCurrentUser();
   const uploads = useUploads();
@@ -164,13 +167,19 @@ export default function SettingsScreen() {
     if (shiftBusy) return;
     setShiftBusy(true);
     try {
+      // The preference is what `ShiftAutoStart` watches, so it is set first and
+      // in both directions. Starting is then done here as well rather than left
+      // to that effect, because this is the one moment somebody is looking at
+      // the screen and can be told why it did not work.
+      setLocationPaused(!next);
+
       if (!next) {
         await stopShiftTracking();
-        setOnShift(false);
+        setRecording(false);
         return;
       }
       const result = await startShiftTracking();
-      setOnShift(result.started);
+      setRecording(result.started);
       if (result.started) {
         // Said plainly rather than left to be discovered. Foreground-only is a
         // working shift, but it stops recording the moment the phone is
@@ -178,8 +187,8 @@ export default function SettingsScreen() {
         // gap somebody would otherwise notice as missing minutes on the map.
         if (result.mode === 'FOREGROUND_ONLY')
           Alert.alert(
-            'Recording while the app is open',
-            'Your shift is on, but this device has not allowed location in the background, so it records only while TexasRenters Inspect is on screen. To record the whole shift, allow location "all the time" in the app settings.',
+            'Recording only while the app is on screen',
+            'This device has not allowed location in the background, so recording stops whenever the app is minimised — including while you are driving with the phone in your pocket. To record the whole shift, allow location "all the time" in the app settings.',
           );
         return;
       }
@@ -224,18 +233,19 @@ export default function SettingsScreen() {
 
         <GroupLabel>Shift</GroupLabel>
         <View className="mx-5 overflow-hidden rounded-2xl bg-card">
-          {/* Off by default and never started automatically. Location is
-              recorded only while a technician says they are working, and the
-              notification stays up the whole time so it is never running
-              unnoticed. */}
+          {/* On by default, because it now starts with the app rather than
+              waiting to be switched on. Left here so it can be switched off --
+              a day off, an errand, a handset shared with family -- and because
+              a technician should be able to see it, not just be told about it
+              once. The Android notification stays up the whole time it runs. */}
           <SettingSwitchRow
             icon={MapPinIcon}
             iconClassName="text-chart-2"
             iconBackground="bg-chart-2/15"
-            title="On shift"
-            description="Records your location for dispatch while you are working"
+            title="Share my location"
+            description="Records your location for dispatch while the app is open. Stops when you close the app."
             last
-            value={onShift}
+            value={recording}
             onValueChange={(next) => void toggleShift(next)}
           />
         </View>

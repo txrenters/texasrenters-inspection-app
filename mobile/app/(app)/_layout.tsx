@@ -8,6 +8,7 @@ import { ScreenLoader } from '@/src/components/ui/Loader';
 import { useCurrentUser } from '@/src/features/queries';
 import { useQueryCacheHydration } from '@/src/features/useQueryCacheHydration';
 import { LocationShiftRunner } from '@/src/location/LocationShiftRunner';
+import { ShiftAutoStart } from '@/src/location/ShiftAutoStart';
 import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
 
 // Scoped to the signed-in area so a crash inside an inspection recovers here,
@@ -36,6 +37,10 @@ export default function AppLayout() {
           currently on — fixes taken in a basement must not sit on the handset
           because the technician clocked off before signal returned. */}
       <LocationShiftRunner />
+      {/* Starts recording because the app is open, rather than because somebody
+          remembered a switch. Inside the auth gate, so it can only ever run for
+          a signed-in technician. */}
+      <ShiftAutoStart />
       {/* A sibling of the navigator, like the offline banner: which build is
           running is not the concern of any one screen, and the prompt has to be
           able to appear over all of them. It knows to stay quiet on the two
