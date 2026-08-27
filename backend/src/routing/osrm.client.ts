@@ -102,6 +102,32 @@ export function parseRouteResponse(body: unknown): OsrmRoute | null {
 /** A free public service gets a strict timeout; so does one of our own. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * How far from a coordinate OSRM may look for a road before giving up.
+ *
+ * **Without this OSRM never gives up at all**, and that is the whole reason it
+ * is here. The extract is Texas only, but a coordinate outside Texas is not
+ * rejected: OSRM snaps it to the nearest road in the graph however distant, and
+ * returns `code: "Ok"` with a duration computed from that substituted point.
+ *
+ * Measured against our own container: `123.806345, 8.481640` (the Philippines)
+ * came back snapped to `-93.390923, 31.050802` -- a road in east Texas, some
+ * twelve thousand kilometres away -- and `/table` reported a four-hour drive to
+ * Houston without a hint that anything was wrong. The map drew it. That is the
+ * failure mode this constant exists to stop, and it is the dangerous kind:
+ * confident, plausible, and entirely fabricated.
+ *
+ * Five kilometres is generous for a road network -- rural Texas addresses sit
+ * well inside it -- while being far tighter than an ocean. Verified that a
+ * Houston pair still routes normally under it.
+ */
+const SNAP_RADIUS_METERS = 5_000;
+
+/** `radiuses` takes one value per coordinate, in the same order. */
+function snapRadiuses(count: number): string {
+  return Array.from({ length: count }, () => String(SNAP_RADIUS_METERS)).join(';');
+}
+
 @Injectable()
 export class OsrmClient {
   private readonly logger = new Logger(OsrmClient.name);
@@ -126,8 +152,21 @@ export class OsrmClient {
         headers: { accept: 'application/json' },
       });
       if (!response.ok) {
-        this.logger.warn({ event: 'osrm_http_error', status: response.status });
-        return null;
+        // The body is returned rather than swallowed. OSRM reports a refused
+        // coordinate as a 400 carrying `code: "NoSegment"`, and that is a
+        // different fact from the service being unreachable -- one means the
+        // point is off the road network, the other means we know nothing at
+        // all. Callers can only tell them apart if the body survives.
+        //
+        // Both parsers below already reject any body whose `code` is not
+        // `Ok`, so handing them an error body changes nothing for them.
+        const body: unknown = await response.json().catch(() => null);
+        this.logger.warn({
+          event: 'osrm_http_error',
+          status: response.status,
+          code: (body as { code?: unknown } | null)?.code ?? null,
+        });
+        return body;
       }
       return await response.json();
     } catch (error) {
@@ -141,11 +180,21 @@ export class OsrmClient {
     }
   }
 
-  /** Travel seconds between every pair, origin first. Null when unavailable. */
+  /**
+   * Travel seconds between every pair, origin first. Null when unavailable.
+   *
+   * Null now also covers "one of these points is nowhere near a road", which
+   * `radiuses` turns from a silently substituted answer into an HTTP 400. The
+   * caller cannot tell which point from this alone -- `snappable` answers that,
+   * and is only worth calling once this has already failed.
+   */
   async durations(points: readonly GeoPoint[]): Promise<number[][] | null> {
     if (!this.configured || points.length < 2) return null;
     return parseTableResponse(
-      await this.get(`/table/v1/driving/${toOsrmCoordinates(points)}?annotations=duration`),
+      await this.get(
+        `/table/v1/driving/${toOsrmCoordinates(points)}?annotations=duration` +
+          `&radiuses=${snapRadiuses(points.length)}`,
+      ),
     );
   }
 
@@ -154,8 +203,46 @@ export class OsrmClient {
     if (!this.configured || points.length < 2) return null;
     return parseRouteResponse(
       await this.get(
-        `/route/v1/driving/${toOsrmCoordinates(points)}?overview=full&geometries=geojson`,
+        `/route/v1/driving/${toOsrmCoordinates(points)}?overview=full&geometries=geojson` +
+          `&radiuses=${snapRadiuses(points.length)}`,
       ),
     );
+  }
+
+  /**
+   * Which of these points sit near a road we can actually route on.
+   *
+   * One `/nearest` call each, in parallel, under the same radius the matrix
+   * uses. Asking per point rather than reading the `/table` error message: OSRM
+   * names only the first coordinate it could not match, and it names it in
+   * English prose, so a system depending on that string would break on an OSRM
+   * upgrade and would still learn about one point at a time.
+   *
+   * Called only after `durations` has already returned null, so the ordinary
+   * path costs one request and this costs nothing.
+   *
+   * **Null means "cannot tell", not "all bad".** If OSRM is unreachable every
+   * point would otherwise look unroutable, and the console would blame the
+   * technician's position for what is actually an outage. A single point that
+   * fails to answer at all is enough to refuse the whole diagnosis.
+   */
+  async snappable(points: readonly GeoPoint[]): Promise<boolean[] | null> {
+    if (!this.configured || !points.length) return null;
+
+    const results = await Promise.all(
+      points.map(async (point) => {
+        const body = (await this.get(
+          `/nearest/v1/driving/${toOsrmCoordinates([point])}` +
+            `?number=1&radiuses=${SNAP_RADIUS_METERS}`,
+        )) as { code?: unknown } | null;
+
+        // No body at all is a dead service; a body saying anything other than
+        // `Ok` -- in practice `NoSegment` -- is a point off the network.
+        if (body === null || typeof body !== 'object') return null;
+        return body.code === 'Ok';
+      }),
+    );
+
+    return results.some((result) => result === null) ? null : (results as boolean[]);
   }
 }

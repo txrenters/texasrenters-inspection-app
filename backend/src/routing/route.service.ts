@@ -9,7 +9,7 @@ import {
 } from '@texasrenters/shared';
 
 import { PrismaService } from '../common/prisma.service';
-import { type GeoPoint, OsrmClient } from './osrm.client';
+import { OsrmClient } from './osrm.client';
 
 /**
  * A technician's day, in the order it should be driven.
@@ -264,6 +264,7 @@ export class RouteService {
       totalDurationSeconds: 0,
       unroutable,
       geometry: [],
+      originOutsideServiceArea: false,
       estimated: true,
     };
 
@@ -272,15 +273,56 @@ export class RouteService {
     // than an error: the day is still known, it simply has no route yet.
     if (!origin || !routable.length) return empty;
 
-    const points: GeoPoint[] = [origin, ...routable];
-    const matrix = await this.osrm.durations(points);
-    if (!matrix) return empty;
+    let stops = routable;
+    let matrix = await this.osrm.durations([origin, ...stops]);
+
+    if (!matrix) {
+      // The matrix refuses the whole request when any one point is off the
+      // road network, and does not say which. Ask per point.
+      //
+      // This is the branch that used to not exist, and its absence is what
+      // drew a four-hour drive from a technician who was on another continent:
+      // OSRM answered `Ok` for a point it had quietly relocated, so there was
+      // never a failure to handle.
+      const reachable = await this.osrm.snappable([origin, ...stops]);
+
+      // Null means OSRM could not be asked, which is an outage rather than a
+      // fact about any of these points. Blaming the technician's position for
+      // it would be a confident wrong answer of exactly the kind this whole
+      // change is about.
+      if (!reachable) return empty;
+
+      // The origin first, because a route without a starting point is not a
+      // shorter route -- it is a different question. Starting from the first
+      // stop instead would silently answer that different question.
+      if (!reachable[0]) return { ...empty, originOutsideServiceArea: true };
+
+      const kept: RouteStop[] = [];
+      stops.forEach((stop, index) => {
+        if (reachable[index + 1]) kept.push(stop);
+        else
+          // Moved rather than dropped, so the panel still lists the property
+          // and can say why it is not in the drive. A geocode that landed in
+          // open water is a data fault worth seeing, not one worth hiding.
+          unroutable.push({
+            inspectionId: stop.inspectionId,
+            propertyName: stop.propertyName,
+            reason: 'OUTSIDE_SERVICE_AREA',
+          });
+      });
+
+      if (!kept.length) return { ...empty, stops: [], unroutable };
+
+      stops = kept;
+      matrix = await this.osrm.durations([origin, ...stops]);
+      if (!matrix) return { ...empty, stops, unroutable };
+    }
 
     const order = shortestRouteOrder(matrix);
-    const ordered = order.map((index) => routable[index - 1]).filter(Boolean) as RouteStop[];
+    const ordered = order.map((index) => stops[index - 1]).filter(Boolean) as RouteStop[];
 
     const drive = await this.osrm.route([origin, ...ordered]);
-    if (!drive) return { ...empty, stops: ordered };
+    if (!drive) return { ...empty, stops: ordered, unroutable };
 
     // OSRM returns one leg per consecutive pair, so leg `i` arrives at stop
     // `i`. The first has no `fromStopId` because it starts at the technician.
@@ -300,6 +342,8 @@ export class RouteService {
       totalDurationSeconds: Math.round(drive.durationSeconds),
       unroutable,
       geometry: toLatLngPath(drive.geometry),
+      // False by construction: getting here means the origin snapped to a road.
+      originOutsideServiceArea: false,
       estimated: true,
     };
   }

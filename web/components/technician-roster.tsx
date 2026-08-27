@@ -76,6 +76,26 @@ export function buildRoster(
 }
 
 /**
+ * Whether this route actually is one.
+ *
+ * **Legs, not stops.** `stops` is the day's work and is present whether or not
+ * anything was routed -- the planner returns it even when it refuses to plan,
+ * because the inspections still exist. Reading it as "a route exists" is what
+ * made the panel say *no suggested order* and then print *1 min driving, 0.0 mi,
+ * suggested order* directly underneath, over a route that had been correctly
+ * refused. The zero read as a minute only because `formatDuration` floors at
+ * one, so a total of nothing looked like a short drive.
+ *
+ * A leg is produced only when OSRM returned a drive, so this is true exactly
+ * when there is an order and a time worth showing -- and it is false whenever
+ * `originOutsideServiceArea` is set, which is what keeps the two messages from
+ * ever appearing together.
+ */
+function isPlanned(route: TechnicianRoute | null | undefined): route is TechnicianRoute {
+  return Boolean(route?.legs.length);
+}
+
+/**
  * The stops in the order they should be driven, when that is known.
  *
  * The route only carries stops it could place, so anything it dropped is
@@ -84,7 +104,10 @@ export function buildRoster(
  * would be the worse failure.
  */
 function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undefined) {
-  if (!route?.stops.length) return stops;
+  // Guarded on the same predicate as everything else: a refused plan still
+  // carries stops, in whatever order the database returned them, and quietly
+  // reordering the panel to match would present that as a recommendation.
+  if (!isPlanned(route)) return stops;
 
   const byInspection = new Map(stops.map((stop) => [stop.inspectionId, stop]));
   const ordered = route.stops
@@ -93,6 +116,21 @@ function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undef
 
   const seen = new Set(ordered.map((stop) => stop.inspectionId));
   return [...ordered, ...stops.filter((stop) => !seen.has(stop.inspectionId))];
+}
+
+/**
+ * Stops the router had to refuse because nothing drivable is near them.
+ *
+ * Separate from a stop with no coordinate at all, which the panel already marks
+ * as "not on the map" -- this one has a coordinate and it is wrong, which is
+ * worth saying differently because the fix is different.
+ */
+function offRoadNetwork(route: TechnicianRoute | null | undefined): Set<string> {
+  return new Set(
+    (route?.unroutable ?? [])
+      .filter((entry) => entry.reason === 'OUTSIDE_SERVICE_AREA')
+      .map((entry) => entry.inspectionId),
+  );
 }
 
 function Dot({ position }: { position: TechnicianPosition | null }) {
@@ -134,6 +172,11 @@ export function TechnicianRoster({
   route?: TechnicianRoute | null;
   selectedId: string | null;
 }) {
+  // Built once per render rather than per stop: the same answer for every row,
+  // and rebuilding it inside the list would make it O(stops x refusals).
+  const refused = offRoadNetwork(route);
+  const planned = isPlanned(route);
+
   if (!entries.length)
     return (
       <p className="text-muted-foreground p-4 text-sm">
@@ -185,7 +228,21 @@ export function TechnicianRoster({
                   </p>
                 ) : (
                   <>
-                    {route?.stops.length ? (
+                    {/* Said plainly, because the alternative is a panel that
+                        lists the day with no order and no explanation -- and
+                        the reader has no way to tell that from the routing
+                        service being down. Previously this case did not
+                        surface at all: a position too far from any road was
+                        quietly snapped to the nearest one that existed, and
+                        the drive was reported as though it were real. */}
+                    {route?.originOutsideServiceArea ? (
+                      <p className="text-muted-foreground mb-2 text-xs">
+                        No suggested order: the last reported position is not near any road we
+                        can route on, so there is no start point to drive from.
+                      </p>
+                    ) : null}
+
+                    {planned && route ? (
                       <p className="text-muted-foreground mb-2 text-xs">
                         <span className="text-foreground font-medium">
                           {formatDuration(route.totalDurationSeconds)}
@@ -196,13 +253,14 @@ export function TechnicianRoster({
 
                     <ol className="space-y-1.5">
                       {orderStops(entry.stops, route).map((stop, index) => {
-                        const leg = route?.stops.length ? route.legs[index] : undefined;
+                        const leg = planned ? route?.legs[index] : undefined;
+                        const offNetwork = refused.has(stop.inspectionId);
                         return (
                           <li className="flex gap-2 text-xs leading-snug" key={stop.inspectionId}>
                             {/* Numbered only when there is a route to number
                                 against. A bare list with numbers on it would
                                 read as an order somebody chose. */}
-                            {route?.stops.length ? (
+                            {planned ? (
                               <span className="text-muted-foreground w-3 shrink-0 tabular-nums">
                                 {index + 1}
                               </span>
@@ -215,6 +273,11 @@ export function TechnicianRoster({
                                     highlights: the technician still has to go,
                                     the address simply is not on the map. */}
                                 {stop.buildingId ? null : ' · not on the map'}
+                                {/* A different fault from having no
+                                    coordinate: this one has a position and it
+                                    is nowhere a road reaches, which usually
+                                    means the address geocoded badly. */}
+                                {offNetwork ? ' · off the road network' : null}
                               </span>
                             </span>
                             {leg ? (
@@ -227,7 +290,7 @@ export function TechnicianRoster({
                       })}
                     </ol>
 
-                    {route?.stops.length ? (
+                    {planned ? (
                       <p className="text-muted-foreground mt-2 text-[11px]">
                         Estimated from speed limits, without traffic.
                       </p>

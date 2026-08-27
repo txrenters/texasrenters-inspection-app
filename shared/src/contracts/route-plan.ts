@@ -174,7 +174,30 @@ export interface TechnicianRoute {
   legs: RouteLeg[];
   totalDistanceMeters: number;
   totalDurationSeconds: number;
-  unroutable: { inspectionId: string; propertyName: string; reason: 'NO_COORDINATES' }[];
+  unroutable: {
+    inspectionId: string;
+    propertyName: string;
+    /**
+     * `NO_COORDINATES` never geocoded. `OUTSIDE_SERVICE_AREA` has a coordinate
+     * that no road in the routing extract is near -- an address geocoded into
+     * open water, or one outside the region the extract covers at all.
+     */
+    reason: 'NO_COORDINATES' | 'OUTSIDE_SERVICE_AREA';
+  }[];
+  /**
+   * The technician's position exists but is nowhere near a road we can route on.
+   *
+   * Distinct from `origin: null`, which means no handset has reported at all.
+   * Here a position was reported and had to be refused, so the panel can say
+   * why the day has no suggested order instead of showing nothing.
+   *
+   * This exists because OSRM does **not** refuse such a point on its own. Given
+   * a coordinate outside its extract it snaps to the nearest road it does know,
+   * however far away, and answers `code: Ok`. A position in the Philippines was
+   * silently moved to a road in east Texas and reported as a four-hour drive to
+   * Houston -- a route that looked entirely plausible and was wholly invented.
+   */
+  originOutsideServiceArea: boolean;
   /**
    * The drive itself, as `[latitude, longitude]` along the road.
    *
