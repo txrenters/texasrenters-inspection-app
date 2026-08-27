@@ -95,6 +95,21 @@ function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undef
   return [...ordered, ...stops.filter((stop) => !seen.has(stop.inspectionId))];
 }
 
+/**
+ * Stops the router had to refuse because nothing drivable is near them.
+ *
+ * Separate from a stop with no coordinate at all, which the panel already marks
+ * as "not on the map" -- this one has a coordinate and it is wrong, which is
+ * worth saying differently because the fix is different.
+ */
+function offRoadNetwork(route: TechnicianRoute | null | undefined): Set<string> {
+  return new Set(
+    (route?.unroutable ?? [])
+      .filter((entry) => entry.reason === 'OUTSIDE_SERVICE_AREA')
+      .map((entry) => entry.inspectionId),
+  );
+}
+
 function Dot({ position }: { position: TechnicianPosition | null }) {
   if (!position)
     return (
@@ -134,6 +149,10 @@ export function TechnicianRoster({
   route?: TechnicianRoute | null;
   selectedId: string | null;
 }) {
+  // Built once per render rather than per stop: the same answer for every row,
+  // and rebuilding it inside the list would make it O(stops x refusals).
+  const refused = offRoadNetwork(route);
+
   if (!entries.length)
     return (
       <p className="text-muted-foreground p-4 text-sm">
@@ -185,6 +204,20 @@ export function TechnicianRoster({
                   </p>
                 ) : (
                   <>
+                    {/* Said plainly, because the alternative is a panel that
+                        lists the day with no order and no explanation -- and
+                        the reader has no way to tell that from the routing
+                        service being down. Previously this case did not
+                        surface at all: a position too far from any road was
+                        quietly snapped to the nearest one that existed, and
+                        the drive was reported as though it were real. */}
+                    {route?.originOutsideServiceArea ? (
+                      <p className="text-muted-foreground mb-2 text-xs">
+                        No suggested order: the last reported position is not near any road we
+                        can route on, so there is no start point to drive from.
+                      </p>
+                    ) : null}
+
                     {route?.stops.length ? (
                       <p className="text-muted-foreground mb-2 text-xs">
                         <span className="text-foreground font-medium">
@@ -197,6 +230,7 @@ export function TechnicianRoster({
                     <ol className="space-y-1.5">
                       {orderStops(entry.stops, route).map((stop, index) => {
                         const leg = route?.stops.length ? route.legs[index] : undefined;
+                        const offNetwork = refused.has(stop.inspectionId);
                         return (
                           <li className="flex gap-2 text-xs leading-snug" key={stop.inspectionId}>
                             {/* Numbered only when there is a route to number
@@ -215,6 +249,11 @@ export function TechnicianRoster({
                                     highlights: the technician still has to go,
                                     the address simply is not on the map. */}
                                 {stop.buildingId ? null : ' · not on the map'}
+                                {/* A different fault from having no
+                                    coordinate: this one has a position and it
+                                    is nowhere a road reaches, which usually
+                                    means the address geocoded badly. */}
+                                {offNetwork ? ' · off the road network' : null}
                               </span>
                             </span>
                             {leg ? (

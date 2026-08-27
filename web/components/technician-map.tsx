@@ -399,6 +399,49 @@ function stopPin(order: number) {
 }
 
 /**
+ * Lets the map zoom out far enough to actually show the whole world.
+ *
+ * The floor used to be a fixed `minZoom={3}`, which on a console-sized pane
+ * stops with a third of the planet off screen -- so the button greyed out with
+ * the map still cropped, and a technician reporting from outside Texas could
+ * not be brought into the same view as the properties. It read as the map being
+ * stuck, which is exactly what it was.
+ *
+ * The floor is now whatever zoom makes one Earth fit this pane, recomputed when
+ * the pane changes size. So "as far out as the world" is always reachable, and
+ * never further -- which is the part `minZoom` was there to protect, since past
+ * that point the world starts repeating.
+ *
+ * `Math.floor` rather than `ceil`: the fitting zoom is fractional, and rounding
+ * up leaves the world overflowing the pane by a few degrees, which is the whole
+ * complaint. Rounding down letterboxes it instead.
+ */
+function WorldMinZoom() {
+  const map = useMap();
+
+  useEffect(() => {
+    const apply = () => {
+      const fits = map.getBoundsZoom(WORLD_BOUNDS);
+      // Zero-sized containers and a not-yet-measured pane both produce
+      // nonsense here; leaving the floor alone is better than setting one from
+      // a bad measurement.
+      if (!Number.isFinite(fits)) return;
+
+      const floor = Math.max(0, Math.floor(fits));
+      if (floor !== map.getMinZoom()) map.setMinZoom(floor);
+    };
+
+    apply();
+    map.on('resize', apply);
+    return () => {
+      map.off('resize', apply);
+    };
+  }, [map]);
+
+  return null;
+}
+
+/**
  * How close the map goes when somebody is picked from the roster.
  *
  * Street level rather than rooftop. The position is a Balanced-accuracy fix
@@ -524,12 +567,13 @@ export function TechnicianMap({
       // edge firm rather than springy.
       maxBounds={WORLD_BOUNDS}
       maxBoundsViscosity={1}
-      // Below this the whole world is smaller than the viewport, which is
-      // where the repetition became visible and where the map stops answering
-      // any question anyway.
-      minZoom={3}
+      // No `minZoom` here on purpose: `WorldMinZoom` sets it from the pane's
+      // own size on mount and on resize. A constant cannot be right for both a
+      // wide console and a phone, and the one that was here stopped short of
+      // the whole world on both.
       scrollWheelZoom
     >
+      <WorldMinZoom />
       <FitToData fitKey={fitKey} points={points} suspended={Boolean(selectedTechnicianId)} />
       <FocusSelected
         fallback={selectedStops}
