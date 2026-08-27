@@ -171,7 +171,18 @@ export default function SettingsScreen() {
       }
       const result = await startShiftTracking();
       setOnShift(result.started);
-      if (result.started) return;
+      if (result.started) {
+        // Said plainly rather than left to be discovered. Foreground-only is a
+        // working shift, but it stops recording the moment the phone is
+        // pocketed -- which is most of the drive between properties, and the
+        // gap somebody would otherwise notice as missing minutes on the map.
+        if (result.mode === 'FOREGROUND_ONLY')
+          Alert.alert(
+            'Recording while the app is open',
+            'Your shift is on, but this device has not allowed location in the background, so it records only while TexasRenters Inspect is on screen. To record the whole shift, allow location "all the time" in the app settings.',
+          );
+        return;
+      }
       // Named, not generic. "Location unavailable" sends somebody to the wrong
       // settings screen; each of these is fixed in a different place.
       Alert.alert(
@@ -180,9 +191,7 @@ export default function SettingsScreen() {
           ? 'This build of the app cannot record location. Ask the office for the current build, then try again.'
           : result.reason === 'UNAVAILABLE'
             ? 'Location services are switched off for this device. Turn them on in the system settings and try again.'
-            : result.reason === 'FOREGROUND_DENIED'
-              ? 'TexasRenters Inspect needs location access to record your shift. Allow it in the app’s settings and try again.'
-              : 'Your shift needs location access set to “Allow all the time”, so it keeps recording while the app is in the background. Change it in the app’s settings and try again.',
+            : 'TexasRenters Inspect needs location access to record your shift. Allow it in the app’s settings and try again.',
       );
     } finally {
       setShiftBusy(false);
