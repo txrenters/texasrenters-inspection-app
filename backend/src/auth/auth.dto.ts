@@ -57,6 +57,18 @@ export class SignInDto {
   @MaxLength(320)
   email!: string;
 
+  /**
+   * Which handset is asking, as the handset itself reports.
+   *
+   * Optional because the console sends none, and because an older build will
+   * not send it either. Absent simply means "unknown device", which never
+   * matches an existing session and therefore behaves exactly as before.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  deviceId?: string;
+
   @IsString()
   @MaxLength(MAXIMUM_PASSWORD_LENGTH)
   password!: string;

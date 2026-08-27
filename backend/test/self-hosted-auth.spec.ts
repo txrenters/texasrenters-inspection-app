@@ -152,6 +152,64 @@ describe('one device per technician', () => {
     expect(prisma.authRefreshToken.create).not.toHaveBeenCalled();
   });
 
+  it('lets a reinstalled handset reclaim its own session without asking', async () => {
+    // The bug this fixes. Uninstalling never reaches the server, so the old
+    // refresh token outlives the app and the reinstall looked like a second
+    // phone for the rest of its thirty days -- a technician was told to take
+    // their own handset over.
+    //
+    // `findFirst` is asked for a session on a device OTHER than this one, so
+    // returning null is what "only this phone is signed in" looks like.
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(null);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    const session = await service.signIn('user@example.com', PASSWORD, {
+      deviceId: 'handset-a',
+    });
+
+    expect(session.accessToken).toBeTruthy();
+    // The stale session is retired rather than left to linger.
+    expect(prisma.authRefreshToken.updateMany).toHaveBeenCalled();
+    expect(prisma.authRefreshToken.create).toHaveBeenCalled();
+  });
+
+  it('asks about a session held on a different handset', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(
+      service.signIn('user@example.com', PASSWORD, { deviceId: 'handset-b' }),
+    ).rejects.toMatchObject({ status: 409, code: 'SESSION_ALREADY_ACTIVE' });
+  });
+
+  it('counts a session with no recorded device as another device', async () => {
+    // The null trap. Sessions predating the column have no `deviceId`, and SQL
+    // `!= 'x'` drops nulls rather than matching them -- so a naive filter would
+    // have let any reinstall silently evict a genuinely different handset.
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await service.signIn('user@example.com', PASSWORD, { deviceId: 'handset-a' });
+
+    const where = prisma.authRefreshToken.findFirst.mock.calls[0][0].where;
+    expect(where.OR).toEqual([{ deviceId: null }, { deviceId: { not: 'handset-a' } }]);
+  });
+
+  it('does not filter by device when the client sends none', async () => {
+    // An older build, or the console. Unknown device means the previous
+    // behaviour: any live session anywhere is a conflict.
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.signIn('user@example.com', PASSWORD)).rejects.toMatchObject({
+      status: 409,
+    });
+    expect(prisma.authRefreshToken.findFirst.mock.calls[0][0].where.OR).toBeUndefined();
+  });
+
   it('signs in and ends the other session when the takeover is asked for', async () => {
     const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
     prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);

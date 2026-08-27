@@ -1,6 +1,7 @@
 import { resolveApiUrl } from '@texasrenters/shared';
 
 import { environment } from '../config/environment';
+import { deviceId } from './device-id';
 import { sessionStorage } from './session-storage';
 
 /**
@@ -190,6 +191,11 @@ export async function signIn(
   password: string,
   options: { takeOver?: boolean } = {},
 ): Promise<MobileSession> {
+  // Named before the request so the server can tell "this phone again" from
+  // "a second phone". Without it a reinstall is indistinguishable from a
+  // colleague signing in, because uninstalling never reaches the server.
+  const device = await deviceId();
+
   const response = await fetch(endpoint('/api/v1/auth/login'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -199,6 +205,9 @@ export async function signIn(
       // Omitted rather than sent false: a first attempt should never carry a
       // flag that ends somebody else's session.
       ...(options.takeOver ? { takeOverExistingSession: true } : {}),
+      // Omitted when secure storage refused, which the server reads as an
+      // unknown device and handles exactly as it did before this existed.
+      ...(device ? { deviceId: device } : {}),
     }),
   });
   if (!response.ok) {
