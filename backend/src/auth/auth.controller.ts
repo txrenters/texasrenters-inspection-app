@@ -86,6 +86,7 @@ export class AuthController {
     return this.sessions.signIn(body.email, body.password, {
       ...clientContext(request),
       takeOverExistingSession: body.takeOverExistingSession === true,
+      deviceId: body.deviceId,
     });
   }
 

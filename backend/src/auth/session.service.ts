@@ -80,6 +80,7 @@ export class SessionService {
       userAgent?: string;
       ipAddress?: string;
       takeOverExistingSession?: boolean;
+      deviceId?: string;
     } = {},
   ): Promise<SessionTokens> {
     const credential = await this.prisma.authCredential.findUnique({
@@ -252,8 +253,9 @@ export class SessionService {
   private async enforceSingleDevice(
     authUserId: string,
     profile: { memberships: { role: UserRole }[] },
-    context: { takeOverExistingSession?: boolean },
+    context: { takeOverExistingSession?: boolean; deviceId?: string },
   ) {
+    const { deviceId } = context;
     const isTechnician = profile.memberships.some(
       (membership) => membership.role === UserRole.INSPECTION_TECHNICIAN,
     );
@@ -264,12 +266,33 @@ export class SessionService {
       return;
     }
 
+    // "Live somewhere that is not this handset."
+    //
+    // A null `deviceId` counts as another device, and that is deliberate: it
+    // is a session from before the column existed, or from a client that sends
+    // none, and neither can be shown to be this phone. Prisma's `not` would
+    // compile to `deviceId != '...'`, which SQL evaluates as unknown for null
+    // and drops — silently letting a reinstall take over a genuinely different
+    // handset. The `OR` says what is meant.
+    const otherDevice = deviceId
+      ? { OR: [{ deviceId: null }, { deviceId: { not: deviceId } }] }
+      : {};
+
     const live = await this.prisma.authRefreshToken.findFirst({
-      where: { authUserId, revokedAt: null, expiresAt: { gt: new Date() } },
+      where: { authUserId, revokedAt: null, expiresAt: { gt: new Date() }, ...otherDevice },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true, userAgent: true },
     });
-    if (!live) return;
+
+    // Nothing live anywhere else. Any sessions still open belong to this
+    // handset — a reinstall, a cleared app, or simply signing in again — so
+    // they are retired and this one proceeds without asking. Uninstalling
+    // never reaches the server, which is why the old token was still there at
+    // all, and being told to take your own phone over is nonsense.
+    if (!live) {
+      await this.revokeAllFor(authUserId, 'signed in again on the same device');
+      return;
+    }
 
     throw new ApplicationError(
       409,
@@ -280,7 +303,7 @@ export class SessionService {
 
   private async issueSession(
     authUserId: string,
-    context: { userAgent?: string; ipAddress?: string },
+    context: { userAgent?: string; ipAddress?: string; deviceId?: string },
   ) {
     const credential = await this.prisma.authCredential.findUniqueOrThrow({
       where: { authUserId },
@@ -294,6 +317,7 @@ export class SessionService {
         expiresAt: refresh.expiresAt,
         userAgent: context.userAgent ?? null,
         ipAddress: context.ipAddress ?? null,
+        deviceId: context.deviceId ?? null,
       },
     });
     const access = this.tokens.issueAccessToken({

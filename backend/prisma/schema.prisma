@@ -548,6 +548,19 @@ model AuthRefreshToken {
   userAgent String?
   ipAddress String?
 
+  /// Which handset this session belongs to, as the handset itself reports.
+  ///
+  /// Exists so a technician who reinstalls the app is not told they are
+  /// "signed in on another device". Uninstalling never reaches the server, so
+  /// the old refresh token outlives the app that owned it and the reinstall
+  /// looked like a second phone for the rest of the token's thirty days.
+  ///
+  /// Not a security boundary, and deliberately not treated as one: the value
+  /// comes from the client and could be copied. It gains an attacker nothing —
+  /// they would still need the password, and with the password they could take
+  /// the session over anyway. This only decides whether a person is *asked*.
+  deviceId  String?
+
   createdAt DateTime @default(now())
 
   credential AuthCredential @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
