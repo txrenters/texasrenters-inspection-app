@@ -176,6 +176,20 @@ export interface TechnicianRoute {
   totalDurationSeconds: number;
   unroutable: { inspectionId: string; propertyName: string; reason: 'NO_COORDINATES' }[];
   /**
+   * The drive itself, as `[latitude, longitude]` along the road.
+   *
+   * **Latitude first**, flipped from what OSRM returns. OSRM speaks
+   * `lon,lat`; Leaflet, and every coordinate elsewhere in this system, is
+   * `lat,lng`. Passing OSRM's order straight through draws a line through the
+   * Indian Ocean, which is the same axis mistake the Census geocoder invites in
+   * the opposite direction -- so the flip happens once, at the edge, and is
+   * tested.
+   *
+   * Empty when the route could not be drawn. The stops and legs may still be
+   * present: knowing the order and the times is useful without the line.
+   */
+  geometry: [number, number][];
+  /**
    * Free-flow, from the road network's speed limits. OSRM has no traffic data,
    * so this is optimistic in Houston at five o'clock and both surfaces must say
    * "estimate" rather than implying an arrival time.
@@ -196,8 +210,25 @@ export interface TechnicianRoute {
  * the inspection workflow happened to create one, so matching on those would
  * highlight almost nothing.
  */
+/** One inspection on somebody's day, as the console panel lists it. */
+export interface AssignedStop {
+  inspectionId: string;
+  /**
+   * The map marker this stop belongs to, or null when the inspection has no
+   * synced building.
+   *
+   * Nullable rather than filtered out: the technician still has to go, and a
+   * stop that cannot be highlighted is worth showing in the list with nothing
+   * to click. Dropping it would make the panel disagree with the workload.
+   */
+  buildingId: string | null;
+  propertyName: string;
+  inspectionType: string;
+  status: string;
+}
+
 export interface TechnicianAssignments {
   technicianId: string;
   displayName: string;
-  buildingIds: string[];
+  stops: AssignedStop[];
 }

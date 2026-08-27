@@ -34,6 +34,20 @@ const VISITABLE: InspectionStatus[] = [
   InspectionStatus.FOLLOW_UP_REQUIRED,
 ];
 
+/**
+ * OSRM's `[lon, lat]` path as `[lat, lng]`, which is what draws a map.
+ *
+ * Exported for its test. This is the third place in this codebase where the
+ * two orders meet -- the Census geocoder puts longitude in `x`, OSRM takes
+ * `lon,lat`, and Leaflet wants `lat,lng` -- and each time the failure is
+ * silent: the line simply appears somewhere else on Earth.
+ */
+export function toLatLngPath(
+  path: readonly [number, number][],
+): [number, number][] {
+  return path.map(([longitude, latitude]) => [latitude, longitude]);
+}
+
 @Injectable()
 export class RouteService {
   constructor(
@@ -74,7 +88,19 @@ export class RouteService {
       select: {
         technicianId: true,
         technician: { select: { displayName: true } },
-        inspection: { select: { propertywareBuildingId: true } },
+        inspection: {
+          select: {
+            id: true,
+            propertywareBuildingId: true,
+            inspectionType: true,
+            status: true,
+            // Both, for the same reason the route planner reads both: a real
+            // inspection names a synced building, and `Property` exists only
+            // where the inspection workflow happened to create one.
+            propertywareBuilding: { select: { name: true } },
+            property: { select: { name: true } },
+          },
+        },
       },
     });
 
@@ -83,16 +109,32 @@ export class RouteService {
       const existing = byTechnician.get(assignment.technicianId) ?? {
         technicianId: assignment.technicianId,
         displayName: assignment.technician?.displayName ?? 'Unknown technician',
-        buildingIds: [],
+        stops: [],
       };
-      // An inspection with no building cannot be highlighted on a map, but the
-      // technician still has work -- so they stay in the list with one fewer
-      // pin rather than vanishing from it.
-      const buildingId = assignment.inspection.propertywareBuildingId;
-      if (buildingId && !existing.buildingIds.includes(buildingId))
-        existing.buildingIds.push(buildingId);
+
+      const inspection = assignment.inspection;
+      existing.stops.push({
+        inspectionId: inspection.id,
+        // Null is carried rather than filtered. The technician still has to go
+        // there; it simply cannot be pointed at on a map.
+        buildingId: inspection.propertywareBuildingId,
+        propertyName:
+          inspection.propertywareBuilding?.name ??
+          inspection.property?.name ??
+          'Unknown property',
+        inspectionType: inspection.inspectionType,
+        status: inspection.status,
+      });
+
       byTechnician.set(assignment.technicianId, existing);
     }
+
+    for (const entry of byTechnician.values())
+      // By property, because the day has no order of its own: `scheduledAt` is
+      // a date with no clock value, so any sequence beyond alphabetical would
+      // be invented. The suggested driving order lives on the route endpoint,
+      // where it is computed rather than implied.
+      entry.stops.sort((left, right) => left.propertyName.localeCompare(right.propertyName));
 
     return [...byTechnician.values()].sort((left, right) =>
       left.displayName.localeCompare(right.displayName),
@@ -221,6 +263,7 @@ export class RouteService {
       totalDistanceMeters: 0,
       totalDurationSeconds: 0,
       unroutable,
+      geometry: [],
       estimated: true,
     };
 
@@ -256,6 +299,7 @@ export class RouteService {
       totalDistanceMeters: Math.round(drive.distanceMeters),
       totalDurationSeconds: Math.round(drive.durationSeconds),
       unroutable,
+      geometry: toLatLngPath(drive.geometry),
       estimated: true,
     };
   }

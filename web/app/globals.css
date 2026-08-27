@@ -56,6 +56,7 @@
   --color-map-property: var(--map-property);
   --color-map-technician: var(--map-technician);
   --color-map-technician-stale: var(--map-technician-stale);
+  --color-map-route: var(--map-route);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
@@ -181,6 +182,10 @@
   --map-property: oklch(0.52 0.16 152);
   --map-technician: oklch(0.55 0.22 27);
   --map-technician-stale: oklch(0.55 0.02 260);
+  /* The recommended drive. A blue that belongs to neither the properties nor
+     the technicians, so the line reads as a third thing rather than as either
+     of the two it connects. */
+  --map-route: oklch(0.52 0.18 258);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);
@@ -306,4 +311,15 @@
 .map-accuracy-ring {
   stroke: var(--map-technician);
   fill: var(--map-technician);
+}
+
+/* The route, drawn the way road maps draw one: a pale casing under a solid
+   line. A single stroke the width of a street vanishes into the street it
+   follows. */
+.map-route-casing {
+  stroke: #fff;
+}
+
+.map-route-line {
+  stroke: var(--map-route);
 }
