@@ -1,13 +1,19 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { useMemo, useState } from 'react';
 
 import { PageHeader } from '@/components/page-header';
 import { EmptyState } from '@/components/states';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
-import { usePropertyLocations, useTechnicianLocations } from '@/lib/queries';
+import {
+  useMapAssignments,
+  usePropertyLocations,
+  useTechnicianLocations,
+} from '@/lib/queries';
+import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
 
 /**
  * `ssr: false` is not optional. Leaflet reads `window` at import time and
@@ -78,6 +84,28 @@ export default function TechnicianMapPage() {
   // it knows will be refused.
   const properties = usePropertyLocations(canView && permissions.has('properties:read'));
 
+  // Today, in the reader's own calendar day. The schema stores a date with no
+  // clock value, so there is no narrower window to ask for.
+  const today = new Date().toISOString().slice(0, 10);
+  const assignments = useMapAssignments(today, canView);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const roster = useMemo(
+    () => buildRoster(positions.data ?? [], assignments.data ?? []),
+    [positions.data, assignments.data],
+  );
+
+  // Null when nobody is selected, which the map reads as "show everything at
+  // full strength". An empty set is different and means the selected person
+  // has no mapped stops -- worth seeing rather than silently drawing as though
+  // nothing were selected.
+  const highlighted = useMemo(() => {
+    if (!selectedId) return null;
+    const match = assignments.data?.find((entry) => entry.technicianId === selectedId);
+    return new Set(match?.buildingIds ?? []);
+  }, [assignments.data, selectedId]);
+
   const newest = positions.data?.reduce<string | null>(
     (latest, position) => (!latest || position.recordedAt > latest ? position.recordedAt : latest),
     null,
@@ -88,8 +116,8 @@ export default function TechnicianMapPage() {
       <PageHeader
         description={
           newest
-            ? `Last known position of each technician. Most recent report ${formatRelative(newest)}.`
-            : 'Last known position of each technician, reported while they are on shift.'
+            ? `Where each technician was last seen. Most recent report ${formatRelative(newest)}.`
+            : 'Last known position of each technician, reported while their app is open.'
         }
         title="Technician map"
       />
@@ -106,42 +134,65 @@ export default function TechnicianMapPage() {
            the most ordinary state of all, nobody on shift, showed nothing at
            all. Anything worth saying is said over the top of it instead. */
         <div className="space-y-2">
-          {/* `isolate` is load-bearing, not decoration. Leaflet gives its own
-              controls `z-index: 1000` and its panes 400-700, and without a
-              stacking context here those values compete with the whole page —
-              so the theme menu and every other popover rendered into a portal
-              at `z-50` came out *underneath* the map. Isolating confines
-              Leaflet's z-indexes to this box, where they still order its own
-              layers correctly and stop escaping. */}
-          <div className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border">
-            <TechnicianMap positions={positions.data ?? []} properties={properties.data ?? []} />
-
-            {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
-              /* `pointer-events-none` on the wrapper and restored on the notice:
-                 a banner that swallowed drags would make the map behind it look
-                 broken. z-[1000] because Leaflet's own panes sit at 400-700. */
-              <div className="pointer-events-none absolute inset-x-0 top-3 z-[1000] flex justify-center px-3">
-                <div className="bg-background/95 pointer-events-auto rounded-md border px-3 py-2 text-sm shadow-sm">
-                  {positions.isError ? (
-                    <span className="flex items-center gap-2">
-                      <span className="text-destructive">Could not load positions.</span>
-                      <button
-                        className="underline underline-offset-4"
-                        onClick={() => void positions.refetch()}
-                        type="button"
-                      >
-                        Try again
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">
-                      No technician has reported a position yet — they appear once somebody turns
-                      their shift on in the app.
-                    </span>
-                  )}
-                </div>
+          {/* The roster sits beside the map on a wide screen and above it on a
+              narrow one. Above rather than below: on a phone the list is the
+              faster answer to "who is out", and a map you have to scroll past
+              to reach it is the wrong way round. */}
+          <div className="grid gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <div className="bg-card h-[70vh] overflow-y-auto rounded-lg border">
+              <div className="text-muted-foreground border-b px-4 py-2.5 text-xs font-medium tracking-wide uppercase">
+                Today
               </div>
-            ) : null}
+              <TechnicianRoster
+                entries={roster}
+                onSelect={setSelectedId}
+                selectedId={selectedId}
+              />
+            </div>
+
+            {/* `isolate` is load-bearing, not decoration. Leaflet gives its own
+                controls `z-index: 1000` and its panes 400-700, and without a
+                stacking context here those values compete with the whole page —
+                so the theme menu and every other popover rendered into a portal
+                at `z-50` came out *underneath* the map. Isolating confines
+                Leaflet's z-indexes to this box, where they still order its own
+                layers correctly and stop escaping. */}
+            <div className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border">
+              <TechnicianMap
+                highlightedBuildingIds={highlighted}
+                positions={positions.data ?? []}
+                properties={properties.data ?? []}
+                selectedTechnicianId={selectedId}
+              />
+
+              {positions.isError || (!positions.isLoading && !positions.data?.length) ? (
+                /* `pointer-events-none` on the wrapper and restored on the
+                   notice: a banner that swallowed drags would make the map
+                   behind it look broken. z-[1000] because Leaflet's own panes
+                   sit at 400-700. */
+                <div className="pointer-events-none absolute inset-x-0 top-3 z-[1000] flex justify-center px-3">
+                  <div className="bg-background/95 pointer-events-auto rounded-md border px-3 py-2 text-sm shadow-sm">
+                    {positions.isError ? (
+                      <span className="flex items-center gap-2">
+                        <span className="text-destructive">Could not load positions.</span>
+                        <button
+                          className="underline underline-offset-4"
+                          onClick={() => void positions.refetch()}
+                          type="button"
+                        >
+                          Try again
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        No handset has reported a position yet — they appear once a technician
+                        opens the app.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {/* The swatches repeat the markers' own shapes rather than reducing
