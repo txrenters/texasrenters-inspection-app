@@ -70,10 +70,10 @@ const MARKER_SHADOW =
  * touch the coordinate is simply showing the wrong place, and at street zoom
  * the half-height error is most of a block.
  */
-function propertyPin() {
+function propertyPin(dim = false) {
   return divIcon({
     className: '',
-    html: `<svg width="24" height="32" viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
+    html: `<svg width="24" height="32" viewBox="0 0 24 32" opacity="${dim ? 0.25 : 1}" xmlns="http://www.w3.org/2000/svg">
       <defs>${MARKER_SHADOW}</defs>
       <path filter="url(#pin-shadow)"
         d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
@@ -93,11 +93,11 @@ function propertyPin() {
  * where somebody was, not a marked spot — and the accuracy circle it sits
  * inside is drawn from the same centre.
  */
-function technicianPin(stale: boolean) {
+function technicianPin(stale: boolean, dim = false) {
   const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
   return divIcon({
     className: '',
-    html: `<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
+    html: `<svg width="28" height="28" viewBox="0 0 28 28" opacity="${dim ? 0.3 : 1}" xmlns="http://www.w3.org/2000/svg">
       <defs>${MARKER_SHADOW}</defs>
       <circle filter="url(#pin-shadow)" cx="14" cy="14" r="11"
         class="${fill}" stroke="#fff" stroke-width="2.5"/>
@@ -117,11 +117,11 @@ function technicianPin(stale: boolean) {
  * the useful signal is "a few" versus "a lot", and a smoothly growing circle
  * just makes every cluster look slightly different from every other one.
  */
-function clusterPin(count: number) {
+function clusterPin(count: number, dim = false) {
   const size = count < 10 ? 30 : count < 50 ? 36 : 42;
   return divIcon({
     className: '',
-    html: `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+    html: `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" opacity="${dim ? 0.25 : 1}" xmlns="http://www.w3.org/2000/svg">
       <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 3}"
         class="fill-map-property" opacity="0.35"/>
       <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 6}"
@@ -195,7 +195,21 @@ function FitToData({ fitKey, points }: { fitKey: string; points: [number, number
  * folding two of them into a badge would hide exactly what somebody opened the
  * map to see.
  */
-function PropertyLayer({ properties }: { properties: readonly PropertyPosition[] }) {
+function PropertyLayer({
+  highlighted,
+  properties,
+}: {
+  /**
+   * The selected technician's buildings, or null when nobody is selected.
+   *
+   * Null rather than an empty set, because the two mean opposite things: null
+   * is "show everything at full strength", empty is "this person has no
+   * mapped stops", and drawing those the same way would make a technician with
+   * no work look like no selection at all.
+   */
+  highlighted: ReadonlySet<string> | null;
+  properties: readonly PropertyPosition[];
+}) {
   const map = useMap();
   const [zoom, setZoom] = useState(() => map.getZoom());
 
@@ -211,11 +225,18 @@ function PropertyLayer({ properties }: { properties: readonly PropertyPosition[]
 
   return (
     <>
-      {clusters.map((cluster) =>
-        cluster.members.length === 1 ? (
+      {clusters.map((cluster) => {
+        // A cluster stays bright if any of its members belong to the selected
+        // technician: dimming it would hide their stop inside a group of
+        // somebody else's properties, which is the case selection exists for.
+        const dim = highlighted
+          ? !cluster.members.some((member) => highlighted.has(member.id))
+          : false;
+
+        return cluster.members.length === 1 ? (
           <Marker
             key={cluster.key}
-            icon={propertyPin()}
+            icon={propertyPin(dim)}
             position={[cluster.latitude, cluster.longitude]}
             zIndexOffset={-500}
           >
@@ -237,7 +258,7 @@ function PropertyLayer({ properties }: { properties: readonly PropertyPosition[]
         ) : (
           <Marker
             key={cluster.key}
-            icon={clusterPin(cluster.members.length)}
+            icon={clusterPin(cluster.members.length, dim)}
             position={[cluster.latitude, cluster.longitude]}
             zIndexOffset={-500}
             eventHandlers={{
@@ -261,18 +282,22 @@ function PropertyLayer({ properties }: { properties: readonly PropertyPosition[]
               </span>
             </Popup>
           </Marker>
-        ),
-      )}
+        );
+      })}
     </>
   );
 }
 
 export function TechnicianMap({
+  highlightedBuildingIds = null,
   positions,
   properties = [],
+  selectedTechnicianId = null,
 }: {
+  highlightedBuildingIds?: ReadonlySet<string> | null;
   positions: readonly TechnicianPosition[];
   properties?: readonly PropertyPosition[];
+  selectedTechnicianId?: string | null;
 }) {
   // Fit to everything, technicians and properties alike, rather than centring
   // on a fixed point: this office works one metropolitan area today, but a
@@ -311,10 +336,13 @@ export function TechnicianMap({
       {/* Properties first so they paint underneath, and pinned below the
           technicians by z-index as well — marker order alone does not decide
           it once Leaflet starts sorting by latitude. */}
-      <PropertyLayer properties={properties} />
+      <PropertyLayer highlighted={highlightedBuildingIds} properties={properties} />
 
       {positions.map((position) => {
         const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
+        // Everybody else recedes rather than disappearing. A dispatcher looking
+        // at one technician still needs to see who is near them.
+        const dim = Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
         return (
           <Fragment key={position.id}>
             {/* The claimed accuracy, drawn to scale. A 5m fix and a 300m fix
@@ -340,7 +368,7 @@ export function TechnicianMap({
               />
             ) : null}
             <Marker
-              icon={technicianPin(stale)}
+              icon={technicianPin(stale, dim)}
               position={[position.latitude, position.longitude]}
               zIndexOffset={500}
             >

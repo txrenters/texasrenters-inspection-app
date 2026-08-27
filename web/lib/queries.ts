@@ -7,6 +7,7 @@ import type {
   AdminAssignment,
   AdminAssignmentListItem,
   PropertyPosition,
+  TechnicianAssignments,
   TechnicianRoute,
   TechnicianPosition,
   AdminAuditEvent,
@@ -125,6 +126,7 @@ export const keys = {
   technicianLocations: ['technician-locations'] as const,
   propertyLocations: ['property-locations'] as const,
   technicianRoute: (id: string, date: string) => ['technician-route', id, date] as const,
+  mapAssignments: (date: string) => ['map-assignments', date] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
   techniciansRoot: ['admin', 'technicians'] as const,
@@ -460,6 +462,23 @@ export const usePropertyLocations = (enabled = true) =>
  * position feed itself, because re-ordering the same stops every few seconds
  * would make the panel restless without telling anybody anything new.
  */
+/**
+ * Who is working today and which properties are theirs.
+ *
+ * Refetched slowly. Assignments change when the office moves work, not minute
+ * to minute — unlike positions, which arrive over the socket. Polling this at
+ * the same rate would spend requests to be told the same roster.
+ */
+export const useMapAssignments = (date: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.mapAssignments(date),
+    queryFn: ({ signal }) =>
+      api<TechnicianAssignments[]>(`/api/v1/admin/map/assignments${queryString({ date })}`, {
+        signal,
+      }),
+    refetchInterval: 5 * 60_000,
+    enabled,
+  });
 export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
   useQuery({
     queryKey: keys.technicianRoute(id, date),

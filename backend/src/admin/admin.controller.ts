@@ -848,6 +848,22 @@ export class AdminController {
    * `date` defaults to today. The schema stores a calendar day and no clock
    * value, so there is no narrower window to ask for.
    */
+  /**
+   * Who is working today and which properties are theirs, for the map panel.
+   *
+   * `technicians:read`, the same key as the map itself: this says where named
+   * people are expected to be, which is a fact about them.
+   */
+  @Get('map/assignments')
+  @RequirePermissions('technicians:read')
+  mapAssignments(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
+    const day = date ? new Date(date) : new Date();
+    return this.routes.assignmentsByTechnician(
+      request.user.organizationId,
+      Number.isNaN(day.getTime()) ? new Date() : day,
+    );
+  }
+
   @Get('technicians/:technicianId/route')
   @RequirePermissions('technicians:read')
   technicianRoute(

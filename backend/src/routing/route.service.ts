@@ -4,6 +4,7 @@ import {
   type RouteLeg,
   type RouteStop,
   shortestRouteOrder,
+  type TechnicianAssignments,
   type TechnicianRoute,
 } from '@texasrenters/shared';
 
@@ -39,6 +40,64 @@ export class RouteService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OsrmClient) private readonly osrm: OsrmClient,
   ) {}
+
+  /**
+   * Everyone with work today, and which properties it is at.
+   *
+   * One query for the whole roster rather than a route each: the console panel
+   * needs to list people and highlight their properties, which is a grouping
+   * problem, not a routing one. Planning a route per technician to answer it
+   * would call OSRM once per person to draw a list.
+   *
+   * Technicians with nothing scheduled are absent rather than listed empty --
+   * a dispatcher scanning the panel wants the people who are working, and a
+   * row saying "no stops" for everyone off that day is noise.
+   */
+  async assignmentsByTechnician(
+    organizationId: string,
+    date: Date,
+  ): Promise<TechnicianAssignments[]> {
+    const dayStart = new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+    );
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+    const assignments = await this.prisma.inspectionAssignment.findMany({
+      where: {
+        isCurrent: true,
+        inspection: {
+          organizationId,
+          status: { in: VISITABLE },
+          scheduledAt: { gte: dayStart, lt: dayEnd },
+        },
+      },
+      select: {
+        technicianId: true,
+        technician: { select: { displayName: true } },
+        inspection: { select: { propertywareBuildingId: true } },
+      },
+    });
+
+    const byTechnician = new Map<string, TechnicianAssignments>();
+    for (const assignment of assignments) {
+      const existing = byTechnician.get(assignment.technicianId) ?? {
+        technicianId: assignment.technicianId,
+        displayName: assignment.technician?.displayName ?? 'Unknown technician',
+        buildingIds: [],
+      };
+      // An inspection with no building cannot be highlighted on a map, but the
+      // technician still has work -- so they stay in the list with one fewer
+      // pin rather than vanishing from it.
+      const buildingId = assignment.inspection.propertywareBuildingId;
+      if (buildingId && !existing.buildingIds.includes(buildingId))
+        existing.buildingIds.push(buildingId);
+      byTechnician.set(assignment.technicianId, existing);
+    }
+
+    return [...byTechnician.values()].sort((left, right) =>
+      left.displayName.localeCompare(right.displayName),
+    );
+  }
 
   /**
    * Plan one technician's day.

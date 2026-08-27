@@ -182,3 +182,22 @@ export interface TechnicianRoute {
    */
   estimated: true;
 }
+
+/**
+ * Who is working today, and which properties are theirs.
+ *
+ * Deliberately only ids and a name. The console already holds every position
+ * and every property for its map, so sending those again would be a second
+ * copy to disagree with the first -- the panel joins what it has rather than
+ * being told twice.
+ *
+ * `buildingIds` point at `propertyware_buildings`, the same table the map
+ * draws. A real inspection carries that id; `Property` rows exist only where
+ * the inspection workflow happened to create one, so matching on those would
+ * highlight almost nothing.
+ */
+export interface TechnicianAssignments {
+  technicianId: string;
+  displayName: string;
+  buildingIds: string[];
+}
