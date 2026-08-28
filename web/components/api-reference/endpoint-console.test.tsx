@@ -19,12 +19,14 @@ const ok = {
   durationMs: 12,
 };
 
+const OPEN: ApiOperation = { 'x-machine-accessible': true };
+
 function renderConsole(method: string, operation: ApiOperation = {}) {
   return render(
     <EndpointConsole
       document={undefined}
       method={method}
-      operation={operation}
+      operation={{ ...OPEN, ...operation }}
       path="/api/v1/gateway/things"
     />,
   );
@@ -140,7 +142,7 @@ describe('EndpointConsole requests', () => {
       <EndpointConsole
         document={undefined}
         method="get"
-        operation={{ parameters: [{ name: 'propertyId', in: 'path', required: true }] }}
+        operation={{ ...OPEN, parameters: [{ name: 'propertyId', in: 'path', required: true }] }}
         path="/api/v1/gateway/properties/{propertyId}"
       />,
     );
@@ -164,6 +166,7 @@ describe('EndpointConsole requests', () => {
         document={undefined}
         method="get"
         operation={{
+          ...OPEN,
           parameters: [
             { name: 'search', in: 'query' },
             { name: 'status', in: 'query' },
@@ -204,5 +207,30 @@ describe('EndpointConsole requests', () => {
     // the route is simply not open to keys.
     expect(await screen.findByText(/403 Forbidden/)).toBeInTheDocument();
     expect(screen.getByText(/x-request-id: req-9/)).toBeInTheDocument();
+  });
+});
+
+describe('EndpointConsole on a route keys cannot reach', () => {
+  beforeEach(() => {
+    apiRawRequest.mockReset().mockResolvedValue(ok);
+  });
+
+  it('says so instead of asking for a credential that cannot work', () => {
+    render(
+      <EndpointConsole
+        document={undefined}
+        method="get"
+        operation={{ 'x-machine-accessible': false, 'x-authentication': ['BEARER'] }}
+        path="/api/v1/admin/technician-locations"
+      />,
+    );
+
+    // Most of this API is bearer-only: the guard never looks at x-api-key, so a
+    // key earns AUTH_TOKEN_MISSING — a message about bearer tokens, on a page
+    // that just asked for a key. Asking for a credential that cannot work is
+    // worse than not offering to send.
+    expect(screen.getByText(/does not accept api keys/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/key id/i)).toBeNull();
+    expect(sendButton()).toBeDisabled();
   });
 });
