@@ -28,6 +28,7 @@ import { ApplicationError } from '../common/errors';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
+import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
 // A pure function, not the service: the panel needs Stream's definition of
 // "ready" without AdminModule depending on MediaModule.
@@ -262,6 +263,7 @@ function mediaStorageReadiness(
 export class AdminService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(PresenceService) private readonly presence: PresenceService,
     @Optional()
     @Inject(TechnicianEventsGateway)
     private readonly technicianEvents?: TechnicianEventsGateway,
@@ -2592,12 +2594,29 @@ export class AdminService {
   }
 
   async technicians(user: AuthenticatedUser, query: TechnicianListQueryDto) {
-    return this.cacheRead({
+    const page = await this.cacheRead({
       resource: 'technicians',
       scope: user.organizationId,
       query,
       loader: () => this.loadTechnicians(user, query),
     });
+    /**
+     * Presence is attached *outside* the cache, deliberately.
+     *
+     * Everything else on this row survives being a minute stale; whether
+     * somebody is connected right now does not. Loading it inside the loader
+     * would freeze it for the life of the cache entry, so the dot would go on
+     * claiming someone is online long after they closed the app — the one
+     * failure that makes an indicator worse than none.
+     */
+    const presence = this.presence.presenceForMany(page.items.map((item) => item.id));
+    return {
+      ...page,
+      items: page.items.map((item) => ({
+        ...item,
+        ...(presence[item.id] ?? { isOnline: false, lastSeenAt: null }),
+      })),
+    };
   }
 
   private async loadTechnicians(user: AuthenticatedUser, query: TechnicianListQueryDto) {

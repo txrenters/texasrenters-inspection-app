@@ -12,6 +12,7 @@ import {
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
 import type {
   AccessListQueryDto,
@@ -39,6 +40,9 @@ export class AccessService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(IDENTITY_PROVIDER) private readonly identities: IdentityProvider,
+    // Appended rather than inserted: these are positional at every call site,
+    // and slotting a parameter in the middle silently rebinds the ones after it.
+    @Inject(PresenceService) private readonly presence: PresenceService,
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 
@@ -213,8 +217,14 @@ export class AccessService {
       }),
       this.prisma.userProfile.count({ where }),
     ]);
+    // Presence is live, so it is read here rather than baked into `mapUser`,
+    // which also serves cached and single-record paths.
+    const presence = this.presence.presenceForMany(records.map((record) => record.id));
     return this.page(
-      records.map((record) => this.mapUser(record)),
+      records.map((record) => ({
+        ...this.mapUser(record),
+        ...(presence[record.id] ?? { isOnline: false, lastSeenAt: null }),
+      })),
       total,
       query,
     );

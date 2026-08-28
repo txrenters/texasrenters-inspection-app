@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
-import type { OnGatewayConnection } from '@nestjs/websockets';
+import type { OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
 import { UserRole, type TechnicianPosition } from '@texasrenters/shared';
 import type { Server, Socket } from 'socket.io';
 
 import { authenticateApplicationUser, type AuthenticatedUser } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
+import { PresenceService } from './presence.service';
 import { MobilePushService } from './mobile-push.service';
 
 export type TechnicianInspectionEventKind =
@@ -81,11 +82,12 @@ type TechnicianSocket = Socket & { data: { user?: AuthenticatedUser } };
 
 @Injectable()
 @WebSocketGateway({ namespace: '/technician-events', transports: ['websocket'] })
-export class TechnicianEventsGateway implements OnGatewayConnection {
+export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() private server?: Server;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(PresenceService) private readonly presence: PresenceService,
     @Optional() @Inject(MobilePushService) private readonly mobilePush?: MobilePushService,
   ) {}
 
@@ -124,6 +126,10 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
         throw new Error('No realtime audience.');
 
       client.data.user = user;
+      // Recorded after authentication and before joining any room: an
+      // unauthenticated socket is not a person, and a person is present whether
+      // or not they qualified for a room.
+      this.presence.connected(user.id);
       if (isTechnician) await client.join(this.technicianRoom(user.id));
       if (watchesOrganization) await client.join(this.organizationRoom(user.organizationId));
       if (watchesLocations) await client.join(this.locationRoom(user.organizationId));
@@ -132,6 +138,20 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
       client.emit('technician:error', { message: 'Realtime authentication failed.' });
       client.disconnect(true);
     }
+  }
+
+  /**
+   * A socket closing is the only signal that someone stopped listening.
+   *
+   * The gateway had no disconnect handler at all, so nothing knew when anyone
+   * went away — which is why presence needed adding rather than reading.
+   *
+   * Keyed off `client.data.user`, so a socket that failed authentication and was
+   * disconnected in `handleConnection` decrements nothing: it was never counted.
+   */
+  handleDisconnect(client: TechnicianSocket) {
+    const user = client.data.user;
+    if (user) this.presence.disconnected(user.id);
   }
 
   publish(technicianId: string, inspectionId: string, kind: TechnicianInspectionEventKind) {

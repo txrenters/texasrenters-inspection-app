@@ -499,12 +499,24 @@ export const useAssignments = (query: Record<string, string | number | boolean |
       }),
     placeholderData: keepPreviousData,
   });
+/**
+ * Refetched on a timer because these rows carry presence.
+ *
+ * Everything else here is fine being a minute stale; "is this person online
+ * right now" is not, and a dot that goes on claiming someone is connected long
+ * after they left is worse than no dot. Thirty seconds is the coarsest interval
+ * at which the answer still means "now"; `refetchIntervalInBackground` is left
+ * off, so a console nobody is looking at stops asking.
+ */
+const PRESENCE_REFRESH_MS = 30_000;
+
 export const useTechnicians = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({
     queryKey: keys.technicians(query),
     queryFn: ({ signal }) =>
       api<Page<AdminTechnician>>(`/api/v1/admin/technicians${queryString(query)}`, { signal }),
     placeholderData: keepPreviousData,
+    refetchInterval: PRESENCE_REFRESH_MS,
   });
 export const useTechnician = (id: string) =>
   useQuery({
@@ -518,6 +530,7 @@ export const useUsers = (query: Record<string, string | number | boolean | undef
     queryFn: ({ signal }) =>
       api<Page<AdminUser>>(`/api/v1/admin/access/users${queryString(query)}`, { signal }),
     placeholderData: keepPreviousData,
+    refetchInterval: PRESENCE_REFRESH_MS,
   });
 export const useUser = (id: string) =>
   useQuery({

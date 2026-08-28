@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 
 import { UserRole } from '@texasrenters/shared';
 
+import { PresenceService } from '../src/realtime/presence.service';
 import { TechnicianEventsGateway } from '../src/realtime/technician-events.gateway';
 
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -56,7 +57,7 @@ describe('technician realtime authorization', () => {
       disconnect: jest.fn(),
     };
 
-    await new TechnicianEventsGateway(prisma as never).handleConnection(client as never);
+    await new TechnicianEventsGateway(prisma as never, new PresenceService()).handleConnection(client as never);
 
     expect(client.join).toHaveBeenCalledWith('technician:technician-profile');
     expect(client.join).not.toHaveBeenCalledWith('technician:attacker-selected-technician');
@@ -92,7 +93,7 @@ describe('technician realtime authorization', () => {
       disconnect: jest.fn(),
     };
 
-    await new TechnicianEventsGateway(prisma as never).handleConnection(client as never);
+    await new TechnicianEventsGateway(prisma as never, new PresenceService()).handleConnection(client as never);
 
     expect(client.join).toHaveBeenCalledWith('organization:organization-1');
     // Derived from the authenticated profile, never from the handshake — an
@@ -136,7 +137,7 @@ describe('technician realtime authorization', () => {
       disconnect: jest.fn(),
     };
 
-    await new TechnicianEventsGateway(prisma as never).handleConnection(client as never);
+    await new TechnicianEventsGateway(prisma as never, new PresenceService()).handleConnection(client as never);
 
     expect(client.join).toHaveBeenCalledWith('organization:organization-1');
     expect(client.join).not.toHaveBeenCalledWith('organization:organization-1:locations');
@@ -167,7 +168,7 @@ describe('technician realtime authorization', () => {
       disconnect: jest.fn(),
     };
 
-    await new TechnicianEventsGateway(prisma as never).handleConnection(client as never);
+    await new TechnicianEventsGateway(prisma as never, new PresenceService()).handleConnection(client as never);
 
     expect(client.join).not.toHaveBeenCalled();
     expect(client.disconnect).toHaveBeenCalledWith(true);
@@ -176,7 +177,7 @@ describe('technician realtime authorization', () => {
   it('broadcasts an added area to the organization, not to any technician', () => {
     const emit = jest.fn();
     const to = jest.fn().mockReturnValue({ emit });
-    const gateway = new TechnicianEventsGateway({} as never);
+    const gateway = new TechnicianEventsGateway({} as never, new PresenceService());
     (gateway as unknown as { server: unknown }).server = { to };
 
     gateway.publishAreaAdded('organization-1', {
@@ -210,7 +211,7 @@ describe('technician realtime authorization', () => {
      * the copy in MobilePushService rather than here.
      */
     const mobilePush = { send: jest.fn().mockResolvedValue(undefined) };
-    const gateway = new TechnicianEventsGateway({} as never, mobilePush as never);
+    const gateway = new TechnicianEventsGateway({} as never, new PresenceService(), mobilePush as never);
 
     gateway.publish('technician-1', 'inspection-1', 'ASSIGNED');
     gateway.publish('technician-1', 'inspection-2', 'REOPENED');
