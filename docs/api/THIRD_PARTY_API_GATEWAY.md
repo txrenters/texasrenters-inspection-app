@@ -178,7 +178,8 @@ exact request.
 
 | Status | `code` | Cause | What to do |
 | --- | --- | --- | --- |
-| 401 | `API_KEY_MISSING` | No `x-api-key` header, or it does not parse | Send the key as `trk_<env>_<prefix>.<secret>` |
+| 401 | `CREDENTIAL_MISSING` | Neither an `x-api-key` header nor a bearer token was sent | Send one. Gateway routes accept either, but an integration wants the key |
+| 401 | `API_KEY_MISSING` | An `x-api-key` header was sent but does not parse | Send the key as `trk_<env>_<prefix>.<secret>` |
 | 401 | `API_KEY_INVALID` | Unknown prefix, wrong secret, revoked, expired, wrong environment, or a deactivated client | Check the key; issue a replacement if unsure |
 | 401 | `API_SIGNATURE_INVALID` | Signature absent, malformed, outside the five-minute window, or not matching | Recompute per **Signing**. `details[0]` names which |
 | 403 | `API_ROUTE_NOT_OPEN_TO_KEYS` | The key is valid; the route is not open to integrations | Nothing — this route is not part of the contract |

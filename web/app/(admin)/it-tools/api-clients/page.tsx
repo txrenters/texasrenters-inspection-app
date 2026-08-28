@@ -116,17 +116,18 @@ function IssuedKeyDialog({ issued, onClose }: { issued: IssuedApiKey; onClose: (
               <CopyButton value={secretPart} />
             </dd>
           </div>
-          <div className="grid gap-1 p-3 sm:grid-cols-[10rem_1fr] sm:items-center">
-            <dt className="text-muted-foreground text-xs font-medium">
-              <code className="text-xs">x-api-key</code>
-              <span className="block font-normal">the two joined</span>
-            </dt>
-            <dd className="flex items-center gap-1">
-              <code className="text-xs break-all">{issued.key}</code>
-              <CopyButton value={issued.key} />
-            </dd>
-          </div>
         </dl>
+
+        {/* The joining rule as a sentence, not a third value.
+            
+            Showing the joined credential as well meant three near-identical
+            strings on one screen — the same ambiguity that made the single
+            undifferentiated blob get pasted into the wrong field. It is also the
+            one value here that can be reconstructed from the other two. */}
+        <p className="text-muted-foreground text-xs">
+          Send them joined, secret last:{' '}
+          <code className="text-xs">x-api-key: &lt;key id&gt;.&lt;secret&gt;</code>
+        </p>
         <Alert variant="warning">
           <ShieldAlertIcon aria-hidden />
           <AlertDescription>

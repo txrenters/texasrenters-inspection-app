@@ -4,6 +4,7 @@ import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
 
 import { ApiAuthGuard } from '../common/auth';
+import { ApplicationError } from '../common/errors';
 import { API_KEY_HEADER } from '../openapi/openapi.document';
 import { ApiKeyGuard } from './api-key.guard';
 
@@ -31,8 +32,22 @@ export class GatewayAuthGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
-    return request.header(API_KEY_HEADER)
-      ? this.apiKey.canActivate(context)
-      : this.bearer.canActivate(context);
+    if (request.header(API_KEY_HEADER)) return this.apiKey.canActivate(context);
+    if (request.header('authorization')) return this.bearer.canActivate(context);
+
+    /**
+     * Neither credential was sent, so neither guard should answer.
+     *
+     * Falling through to the bearer guard here — which is what this did — makes
+     * a route built for integrations reply "a bearer access token is required".
+     * An integrator who simply forgot the header is then sent looking for a
+     * login token they do not have and will never be issued. Naming both
+     * options is the only answer that points at the actual fix.
+     */
+    throw new ApplicationError(
+      401,
+      'CREDENTIAL_MISSING',
+      `This endpoint accepts either an ${API_KEY_HEADER} header or a bearer access token, and neither was sent.`,
+    );
   }
 }
