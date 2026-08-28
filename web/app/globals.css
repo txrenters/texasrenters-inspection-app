@@ -57,6 +57,7 @@
   --color-map-technician: var(--map-technician);
   --color-map-technician-stale: var(--map-technician-stale);
   --color-map-route: var(--map-route);
+  --color-map-air: var(--map-air);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
@@ -186,6 +187,9 @@
      the technicians, so the line reads as a third thing rather than as either
      of the two it connects. */
   --map-route: oklch(0.52 0.18 258);
+  /* Air travel. Deliberately not the route blue: this is a journey nobody
+     drove and nobody planned, and it must not be mistaken for the road line. */
+  --map-air: oklch(0.55 0.16 25);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);
@@ -362,4 +366,8 @@
     animation: none;
     opacity: 0;
   }
+}
+
+.map-air-line {
+  stroke: var(--map-air);
 }

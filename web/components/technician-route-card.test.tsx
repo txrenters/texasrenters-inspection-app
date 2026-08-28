@@ -37,6 +37,7 @@ const REFUSED: TechnicianRoute = {
   unroutable: [],
   geometry: [],
   originOutsideServiceArea: true,
+  airTravel: null,
   estimated: true,
 };
 

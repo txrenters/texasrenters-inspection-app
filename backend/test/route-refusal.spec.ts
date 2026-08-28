@@ -93,6 +93,31 @@ describe('a start OSRM will not accept', () => {
 
     // The day is still known; only its order is not.
     expect(route.stops).toHaveLength(1);
+
+    // How far away they actually are -- a real, computable fact, and the only
+    // one available once driving is off the table.
+    expect(route.airTravel?.inspectionId).toBe('inspection-mist-ln');
+    // Mindanao to Houston is roughly 13,700 km.
+    expect(route.airTravel!.distanceMeters / 1000).toBeGreaterThan(13_000);
+    expect(route.airTravel!.distanceMeters / 1000).toBeLessThan(14_500);
+  });
+
+  it('carries no flight time, because there is none to carry', async () => {
+    const osrm = {
+      durations: async () => null,
+      snappable: async () => [false, true],
+      route: async () => null,
+    };
+
+    const route = await new RouteService(
+      prismaStub([{ id: 'mist-ln', at: HOUSTON }], PHILIPPINES),
+      osrm as never,
+    ).planDay('org', 'tech', DAY);
+
+    // Distance is a fact about the Earth. A duration would need airports,
+    // schedules and connections this system does not have, and deriving one
+    // from distance is the same fabrication the snapping guard exists to stop.
+    expect(Object.keys(route.airTravel ?? {})).toEqual(['inspectionId', 'distanceMeters']);
   });
 
   it('does not blame the position when OSRM is simply down', async () => {

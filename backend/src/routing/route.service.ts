@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InspectionStatus } from '@prisma/client';
 import {
+  haversineMeters,
   type RouteLeg,
   type RouteStop,
   shortestRouteOrder,
@@ -46,6 +47,28 @@ export function toLatLngPath(
   path: readonly [number, number][],
 ): [number, number][] {
   return path.map(([longitude, latitude]) => [latitude, longitude]);
+}
+
+/**
+ * The closest stop as the crow flies, and how far that is.
+ *
+ * Only used when no road route exists, which is the one case where "nearest"
+ * cannot be answered by driving time. Null for an empty day, so the console has
+ * nothing to draw rather than a line to nowhere.
+ */
+function nearestByAir(
+  origin: { latitude: number; longitude: number },
+  stops: readonly RouteStop[],
+): TechnicianRoute['airTravel'] {
+  let best: TechnicianRoute['airTravel'] = null;
+
+  for (const stop of stops) {
+    const distanceMeters = Math.round(haversineMeters(origin, stop));
+    if (!best || distanceMeters < best.distanceMeters)
+      best = { inspectionId: stop.inspectionId, distanceMeters };
+  }
+
+  return best;
 }
 
 @Injectable()
@@ -265,6 +288,7 @@ export class RouteService {
       unroutable,
       geometry: [],
       originOutsideServiceArea: false,
+      airTravel: null,
       estimated: true,
     };
 
@@ -295,7 +319,15 @@ export class RouteService {
       // The origin first, because a route without a starting point is not a
       // shorter route -- it is a different question. Starting from the first
       // stop instead would silently answer that different question.
-      if (!reachable[0]) return { ...empty, originOutsideServiceArea: true };
+      if (!reachable[0])
+        return {
+          ...empty,
+          originOutsideServiceArea: true,
+          // The nearest stop, so the console can draw one line and give one
+          // number rather than a fan of them. Nearest by great-circle because
+          // there is no road distance to sort by -- that is the whole problem.
+          airTravel: nearestByAir(origin, stops),
+        };
 
       const kept: RouteStop[] = [];
       stops.forEach((stop, index) => {
@@ -344,6 +376,7 @@ export class RouteService {
       geometry: toLatLngPath(drive.geometry),
       // False by construction: getting here means the origin snapped to a road.
       originOutsideServiceArea: false,
+      airTravel: null,
       estimated: true,
     };
   }

@@ -56,8 +56,23 @@ export function TechnicianRouteCard({
             {route.originOutsideServiceArea ? (
               <Note>
                 {displayName}&rsquo;s last position is not near any road we can route on, so there
-                is no start point to drive from. Their stops are listed below, in no particular
-                order.
+                is no start point to drive from.
+                {route.airTravel ? (
+                  <>
+                    {' '}
+                    Their nearest stop is{' '}
+                    <span className="text-foreground font-medium">
+                      {formatDistance(route.airTravel.distanceMeters)}
+                    </span>{' '}
+                    away in a straight line, so this is a journey by air rather than by road.
+                    {/* No duration, on purpose. Flight time needs airports,
+                        schedules and connections we do not have, and a number
+                        derived from distance would be wrong by hours while
+                        looking exact. */}{' '}
+                    How long that takes is not something this system can answer.
+                  </>
+                ) : null}{' '}
+                Their stops are listed below, in no particular order.
               </Note>
             ) : null}
 
