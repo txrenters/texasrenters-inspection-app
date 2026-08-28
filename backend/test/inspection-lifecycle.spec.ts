@@ -1,6 +1,7 @@
 import { InspectionStatus } from '@prisma/client';
 import { UserRole } from '@texasrenters/shared';
 
+import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { TechnicianService } from '../src/technician/technician.service';
@@ -99,7 +100,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(service.finalizeInspection(admin, 'insp-1', {})).rejects.toMatchObject({
       status: 409,
@@ -142,7 +143,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.finalizeInspection(admin, 'insp-1', { overrideReason: 'Owner approved closure' }),
@@ -181,7 +182,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       inspectionMedia: { count: jest.fn() },
       $transaction: jest.fn(),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(service.finalizeInspection(admin, 'insp-1', {})).rejects.toMatchObject({
       status: 409,
@@ -204,7 +205,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.markInspectionTbd(admin, 'insp-1', { reason: 'Awaiting owner response' });
     expect(tx.inspection.update).toHaveBeenCalledWith(
@@ -236,7 +237,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.requireInspectionFollowUp(admin, 'insp-1', {
       dueAt: '2026-08-01T00:00:00.000Z',
@@ -291,7 +292,7 @@ describe('inspection status lifecycle (spec §11)', () => {
      */
     const { prisma } = reopenPrisma(InspectionStatus.TECHNICIAN_SUBMITTED, 2);
     const technicianEvents = { publish: jest.fn() };
-    const service = new AdminService(prisma as never, technicianEvents as never);
+    const service = new AdminService(prisma as never, new PresenceService(), technicianEvents as never);
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
 
@@ -304,7 +305,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     // It used to live only in the audit metadata, which no technician endpoint
     // reads — so the office had to phone them.
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reopenInspection(admin, 'insp-1', { reason: '  Garage was never captured  ' });
 
@@ -314,7 +315,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('reopens a finalized inspection back to IN_PROGRESS', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
 
@@ -342,7 +343,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('scopes the lookup to the caller’s organization', async () => {
     const { prisma } = reopenPrisma(InspectionStatus.COMPLETED);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'Another area' });
 
@@ -355,7 +356,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('records the reason against the actor, which is the point of requiring it', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'Garage was never captured' });
 
@@ -376,7 +377,7 @@ describe('inspection status lifecycle (spec §11)', () => {
   it('refuses, and writes no audit row, when the status changed mid-transaction', async () => {
     // updateMany matching nothing means a concurrent transition won the race.
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED, 1, 0);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.reopenInspection(admin, 'insp-1', { reason: 'One more room' }),
@@ -386,7 +387,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('reopens from a mid-review state without clearing the administrator determination', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.FOLLOW_UP_REQUIRED);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'Re-shoot the roof' });
 
@@ -402,7 +403,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     'refuses to reopen a %s inspection, which was never submitted',
     async (status) => {
       const { tx, prisma } = reopenPrisma(status);
-      const service = new AdminService(prisma as never);
+      const service = new AdminService(prisma as never, new PresenceService());
 
       await expect(
         service.reopenInspection(admin, 'insp-1', { reason: 'nothing to reopen' }),
@@ -413,7 +414,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('refuses to reopen a cancelled inspection', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.CANCELLED);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.reopenInspection(admin, 'insp-1', { reason: 'changed our mind' }),
@@ -423,7 +424,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('records that a reopened inspection has nobody assigned', async () => {
     const { tx, prisma } = reopenPrisma(InspectionStatus.COMPLETED, 0);
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reopenInspection(admin, 'insp-1', { reason: 'One more room' });
 
@@ -528,7 +529,7 @@ describe('duplicate area merge (spec §16)', () => {
       inspectionArea: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.mergeInspectionAreas(admin, 'insp-1', {
@@ -574,7 +575,7 @@ describe('duplicate area merge (spec §16)', () => {
 
   it('refuses to merge an area into itself', async () => {
     const prisma = { inspection: { findFirst: jest.fn() }, $transaction: jest.fn() };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     await expect(
       service.mergeInspectionAreas(admin, 'insp-1', {
         sourceAreaId: 'area-1',

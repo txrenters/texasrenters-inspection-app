@@ -8,6 +8,7 @@ import { ListToolbar, SelectFilter } from '@/components/list-toolbar';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
+import { PresenceIndicator } from '@/components/presence-indicator';
 import { StatusBadge } from '@/components/status-badge';
 import { UserCreateDialog } from '@/components/user-create-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +53,11 @@ const COLUMNS: Array<Column<UserRow>> = [
         )}
       </div>
     ),
+  },
+  {
+    key: 'presence',
+    header: 'Console',
+    cell: (row) => <PresenceIndicator isOnline={row.isOnline} lastSeenAt={row.lastSeenAt} />,
   },
   {
     key: 'status',

@@ -1,6 +1,7 @@
 ﻿import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
+import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import { TechnicianProvisioningService } from '../src/admin/technician-provisioning.service';
 
@@ -26,7 +27,7 @@ describe('administrator catalog operations', () => {
       },
       $transaction: jest.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.portfolios(user, { page: 2, pageSize: 10, search: 'Austin' }),
@@ -73,7 +74,7 @@ describe('administrator catalog operations', () => {
       },
       inspectionAssignment: { groupBy },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     const result = await service.technicians(user, { page: 1, pageSize: 20 });
 
@@ -104,7 +105,7 @@ describe('administrator inspection operations', () => {
         count: jest.fn().mockResolvedValue(21),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.inspectionAudit(user, 'inspection-1', { page: 2, pageSize: 20 }),
@@ -155,7 +156,7 @@ describe('administrator inspection operations', () => {
       inspection: { findFirst: jest.fn().mockResolvedValue({ ...created, assignments: [] }) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.createInspection(user, {
       propertyId: property.id,
@@ -208,7 +209,7 @@ describe('administrator inspection operations', () => {
       inspection: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
     };
     const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.createInspection(user, {
@@ -252,7 +253,7 @@ describe('administrator inspection operations', () => {
       },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.createInspection(user, {
       propertyId: property.id,
@@ -302,7 +303,7 @@ describe('administrator inspection operations', () => {
         },
       };
       const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-      const service = new AdminService(prisma as never);
+      const service = new AdminService(prisma as never, new PresenceService());
 
       await expect(
         service.createInspection(user, {
@@ -328,7 +329,7 @@ describe('administrator inspection operations', () => {
       inspectionAssignment: { findFirst: jest.fn(), create: jest.fn() },
     };
     const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.assign(user, 'inspection-1', { technicianId: 'technician-1' }),
@@ -358,7 +359,7 @@ describe('administrator inspection operations', () => {
       inspection: { findFirst: jest.fn().mockResolvedValue(existing) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.updateInspection(user, existing.id, {
       status: 'CANCELLED',
@@ -391,7 +392,7 @@ describe('administrator inspection operations', () => {
       inspectionAssignment: { findFirst: jest.fn(), update: jest.fn() },
     };
     const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.unassign(user, 'inspection-1', { reason: 'Schedule changed' }),
@@ -409,7 +410,7 @@ describe('administrator assignment operations', () => {
       },
       inspection: { findMany: jest.fn(), count: jest.fn() },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.assignments(user, {
@@ -453,7 +454,7 @@ describe('administrator assignment operations', () => {
       },
       inspectionAssignment: { findMany: jest.fn(), count: jest.fn() },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.assignments(user, {
@@ -500,7 +501,7 @@ describe('administrator assignment operations', () => {
     };
     const events = { publish: jest.fn() };
     const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-    const service = new AdminService(prisma as never, events as never);
+    const service = new AdminService(prisma as never, new PresenceService(), events as never);
 
     await expect(
       service.assign(user, 'inspection-1', { technicianId: 'technician-1' }),
@@ -538,7 +539,7 @@ describe('administrator assignment operations', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reassign(user, 'inspection-1', {
       technicianId: 'technician-new',
@@ -585,7 +586,7 @@ describe('administrator assignment operations', () => {
     };
     const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
     const events = { publish: jest.fn() };
-    const service = new AdminService(prisma as never, events as never);
+    const service = new AdminService(prisma as never, new PresenceService(), events as never);
 
     await expect(
       service.assign(user, assignment.inspectionId, {
@@ -606,7 +607,7 @@ describe('administrator assignment operations', () => {
       },
       inspectionAssignment: { count: jest.fn().mockResolvedValue(2) },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
       service.updateTechnicianStatus(user, 'technician-1', { isActive: false }),
@@ -627,7 +628,7 @@ describe('administrator assignment operations', () => {
         }),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
 
     const result = await service.technician(user, 'technician-1');
 
@@ -825,7 +826,7 @@ describe('which assignments a work list shows', () => {
         count: jest.fn().mockResolvedValue(0),
       },
     };
-    return { prisma, service: new AdminService(prisma as never) };
+    return { prisma, service: new AdminService(prisma as never, new PresenceService()) };
   }
   const whereOf = (prisma: { inspectionAssignment: { findMany: jest.Mock } }) =>
     prisma.inspectionAssignment.findMany.mock.calls[0][0].where as Record<string, unknown>;

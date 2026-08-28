@@ -1,5 +1,6 @@
 import { UserRole } from '@texasrenters/shared';
 
+import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 
@@ -61,7 +62,7 @@ function buildService(overrides: Overrides = {}) {
   };
 
   const gateway = { publish: jest.fn() };
-  const service = new AdminService(prisma as never, gateway as never);
+  const service = new AdminService(prisma as never, new PresenceService(), gateway as never);
   // The method returns the refreshed detail, which is a much larger read and not
   // what any of this is asserting.
   jest.spyOn(service, 'inspection').mockResolvedValue({ id: INSPECTION_ID } as never);

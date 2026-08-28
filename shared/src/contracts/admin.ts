@@ -38,6 +38,19 @@ export interface AdminUserRoleRef {
   name: string;
 }
 
+/**
+ * Whether an account currently has the application open.
+ *
+ * Derived from a live websocket, so it means "listening right now" — not "on
+ * shift". A technician whose phone has backgrounded the app reads as offline
+ * while still working, which is why `lastSeenAt` travels with it: offline with
+ * a recent time is a different fact from offline with none.
+ */
+export interface AccountPresence {
+  isOnline: boolean;
+  lastSeenAt: string | null;
+}
+
 export interface AdminUser {
   id: string;
   email: string;
@@ -46,6 +59,8 @@ export interface AdminUser {
   isSystemAdmin: boolean;
   createdAt: string;
   customRoles: AdminUserRoleRef[];
+  isOnline?: boolean;
+  lastSeenAt?: string | null;
 }
 
 export interface AdminUserDetail extends AdminUser {
@@ -884,6 +899,8 @@ export interface AdminTechnician {
   createdAt: string;
   workload?: { current: number; inProgress: number; completed: number };
   assignments?: AdminAssignment[];
+  isOnline?: boolean;
+  lastSeenAt?: string | null;
 }
 
 export interface CreatedTechnicianAccount extends AdminTechnician {

@@ -1,6 +1,7 @@
 ﻿import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
+import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import { TechnicianService } from '../src/technician/technician.service';
 
@@ -69,7 +70,7 @@ function buildService(tx: ReturnType<typeof buildTx>) {
     },
     $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
   };
-  return new AdminService(prisma as never);
+  return new AdminService(prisma as never, new PresenceService());
 }
 
 describe('multi-unit inspection creation', () => {

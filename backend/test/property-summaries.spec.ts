@@ -1,6 +1,7 @@
 import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
+import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 
 const user: AuthenticatedUser = {
@@ -67,7 +68,7 @@ describe('property total-area resolution', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
     expect(result.items[0].totalArea).toEqual({
       value: 1662,
@@ -88,7 +89,7 @@ describe('property total-area resolution', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
     expect(result.items[0].totalArea.source).toBe('MANUAL');
     expect(result.items[0].totalArea.label).toBe('1,200 sq ft');
@@ -101,7 +102,7 @@ describe('property total-area resolution', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
     expect(result.items[0].totalArea).toMatchObject({
       value: null,
@@ -132,7 +133,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
     expect(result.items[0].leaseSummary).toEqual({
       activeLeaseCount: 2,
@@ -156,7 +157,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const summary = (await service.properties(user, { page: 1, pageSize: 20 } as never)).items[0]
       .leaseSummary;
 
@@ -182,7 +183,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
 
     expect(result.items[0].leaseSummary.expiringSoonCount).toBe(1);
@@ -205,7 +206,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
 
     expect(result.items[0].leaseSummary.nextLeaseEndDate).toBeNull();
@@ -233,7 +234,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const summary = (await service.properties(user, { page: 1, pageSize: 20 } as never)).items[0]
       .leaseSummary;
 
@@ -250,7 +251,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
     expect(result.items[0].leaseSummary.summary).toBe('1 vacant unit');
     expect(result.items[0].leaseSummary.vacantUnitCount).toBe(1);
@@ -267,7 +268,7 @@ describe('property lease summary', () => {
         count: jest.fn().mockResolvedValue(1),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const result = await service.properties(user, { page: 1, pageSize: 20 } as never);
     expect(result.items[0].leaseSummary.leaseDataAvailable).toBe(true);
     expect(result.items[0].leaseSummary.summary).toBe('1 vacant unit');
@@ -332,7 +333,7 @@ describe('property detail per-unit lease status', () => {
         }),
       },
     };
-    const service = new AdminService(prisma as never);
+    const service = new AdminService(prisma as never, new PresenceService());
     const detail = (await service.property(user, 'b1')) as {
       totalArea: { source: string };
       units: Array<{

@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState } from '@/components/states';
+import { PresenceIndicator } from '@/components/presence-indicator';
 import { StatusBadge } from '@/components/status-badge';
 import { TechnicianCreateDialog } from '@/components/technician-create-dialog';
 import { Button } from '@/components/ui/button';
@@ -46,6 +47,11 @@ const COLUMNS: Array<Column<TechnicianRow>> = [
     numeric: true,
     hideBelow: 'sm',
     cell: (row) => row.workload?.completed ?? 0,
+  },
+  {
+    key: 'presence',
+    header: 'App',
+    cell: (row) => <PresenceIndicator isOnline={row.isOnline} lastSeenAt={row.lastSeenAt} />,
   },
   {
     key: 'status',

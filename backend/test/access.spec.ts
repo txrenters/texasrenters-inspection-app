@@ -3,6 +3,7 @@ import { resolveEffectivePermissions } from '@texasrenters/shared';
 
 import type { AuthenticatedRequest, AuthenticatedUser } from '../src/common/auth';
 import { PermissionsGuard } from '../src/common/auth';
+import { PresenceService } from '../src/realtime/presence.service';
 import { AccessService } from '../src/admin/access.service';
 
 const admin: AuthenticatedUser = {
@@ -106,7 +107,7 @@ describe('AccessService role management', () => {
       },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
-    const service = new AccessService(prisma as never, {} as never);
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
 
     await service.createRole(admin, {
       name: 'Reviewer',
@@ -128,7 +129,7 @@ describe('AccessService role management', () => {
 
   it('returns 404 for a role owned by another organization', async () => {
     const prisma = { role: { findFirst: jest.fn().mockResolvedValue(null) } };
-    const service = new AccessService(prisma as never, {} as never);
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
 
     await expect(service.role(admin, 'foreign-role')).rejects.toMatchObject({
       status: 404,
@@ -145,7 +146,7 @@ describe('AccessService role management', () => {
 describe('AccessService user role assignment', () => {
   it('requires at least one custom role when creating a web user', async () => {
     const identities = { createWebUserIdentity: jest.fn() };
-    const service = new AccessService({} as never, identities as never);
+    const service = new AccessService({} as never, identities as never, new PresenceService());
 
     await expect(
       service.createUser(admin, {
@@ -158,7 +159,7 @@ describe('AccessService user role assignment', () => {
   });
 
   it('refuses to let an admin change their own roles (self-lockout guard)', async () => {
-    const service = new AccessService({} as never, {} as never);
+    const service = new AccessService({} as never, {} as never, new PresenceService());
     await expect(service.setUserRoles(admin, admin.id, { roleIds: [] })).rejects.toMatchObject({
       status: 409,
       code: 'CANNOT_MODIFY_SELF',
@@ -181,7 +182,7 @@ describe('AccessService user role assignment', () => {
       // Only one of the two requested roles exists in this org.
       role: { findMany: jest.fn().mockResolvedValue([{ id: 'role-in-org' }]) },
     };
-    const service = new AccessService(prisma as never, {} as never);
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
 
     await expect(
       service.setUserRoles(admin, 'user-2', { roleIds: ['role-in-org', 'role-elsewhere'] }),
@@ -215,7 +216,7 @@ describe('AccessService user role assignment', () => {
       role: { findMany: jest.fn().mockResolvedValue([{ id: 'role-1' }]) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
-    const service = new AccessService(prisma as never, {} as never);
+    const service = new AccessService(prisma as never, {} as never, new PresenceService());
 
     const result = await service.setUserRoles(admin, 'user-2', {
       roleIds: ['role-1'],
