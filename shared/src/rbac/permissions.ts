@@ -20,6 +20,7 @@ export const PERMISSION_KEYS = [
   'inspections:finalize',
   'inspections:delete',
   'technicians:read',
+  'technicians:locate',
   'technicians:manage',
   'technicians:provision',
   'findings:read',
@@ -154,6 +155,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'technicians:read',
         label: 'View technicians',
         description: 'See technician accounts, availability, and assigned workloads.',
+      },
+      {
+        key: 'technicians:locate',
+        label: 'View technician locations',
+        description:
+          'See where technicians are now and the route history their handsets have reported. Separate from viewing the directory: this is live tracking of a named person, and granting it should be a decision of its own.',
       },
       {
         key: 'technicians:manage',

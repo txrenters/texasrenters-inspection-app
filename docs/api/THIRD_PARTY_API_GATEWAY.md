@@ -84,12 +84,13 @@ Every route on it is a `GET`, and tests enforce that:
 | `GET /gateway/inspections` | `inspections:read` |
 | `GET /gateway/inspections/{inspectionId}` | `inspections:read` |
 | `GET /gateway/technicians` | `technicians:read` |
-| `GET /gateway/technician-locations` | `technicians:read` |
+| `GET /gateway/technician-locations` | `technicians:locate` |
 
 `technician-locations` is the most sensitive of these: it says where a named
-employee was at a given minute. It sits behind `technicians:read` rather than
-`inspections:read` for that reason — the same boundary the console draws — and
-it is read-only. Handsets report their own positions; nothing outside this
+employee was at a given minute. It sits behind `technicians:locate`, a grant of
+its own — deliberately *not* `technicians:read`, so that scoping an integration
+to the technician directory does not silently scope it to live tracking. It is
+read-only. Handsets report their own positions; nothing outside this
 system may write one.
 
 ### Why a separate `/gateway` prefix

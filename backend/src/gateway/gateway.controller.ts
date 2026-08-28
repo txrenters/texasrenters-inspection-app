@@ -90,13 +90,14 @@ export class GatewayController {
    *
    * The feed a dispatching integration actually needs, and the most sensitive
    * thing on this surface: it says where a named employee was at a given
-   * minute. Behind `technicians:read` rather than `inspections:read` for that
-   * reason — the same boundary the console draws — and read-only. Positions are
-   * reported by the handsets themselves; nothing outside may write one.
+   * minute. Behind `technicians:locate` — its own grant, separate from reading
+   * the directory, so an integration is scoped to tracking deliberately rather
+   * than as a side effect — and read-only. Positions are reported by the
+   * handsets themselves; nothing outside may write one.
    */
   @Get('technician-locations')
   @MachineAccessible()
-  @RequirePermissions('technicians:read')
+  @RequirePermissions('technicians:locate')
   technicianLocations(@Req() request: AuthenticatedRequest) {
     return this.locations.latestPositions(request.user);
   }
