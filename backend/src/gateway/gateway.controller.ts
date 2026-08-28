@@ -7,9 +7,12 @@ import { PermissionsGuard, RequirePermissions, type AuthenticatedRequest } from 
 import {
   InspectionListQueryDto,
   PropertyListQueryDto,
+  TechnicianListQueryDto,
   UnitListQueryDto,
 } from '../admin/admin.dto';
 import { AdminService } from '../admin/admin.service';
+import { PropertyGeocodingService } from '../admin/property-geocoding.service';
+import { TechnicianLocationService } from '../technician/technician-location.service';
 import { API_KEY_SECURITY_SCHEME } from '../openapi/openapi.document';
 import { GatewayAuthGuard } from './gateway-auth.guard';
 import { MachineAccessible } from './machine-accessible.decorator';
@@ -40,7 +43,11 @@ import { ApiRateLimitGuard } from './rate-limit.guard';
 @UseGuards(GatewayAuthGuard, PermissionsGuard, ApiRateLimitGuard)
 @Controller('gateway')
 export class GatewayController {
-  constructor(@Inject(AdminService) private readonly service: AdminService) {}
+  constructor(
+    @Inject(AdminService) private readonly service: AdminService,
+    @Inject(TechnicianLocationService) private readonly locations: TechnicianLocationService,
+    @Inject(PropertyGeocodingService) private readonly propertyGeocoding: PropertyGeocodingService,
+  ) {}
 
   /** Properties in the calling client's organization. */
   @Get('properties')
@@ -76,6 +83,47 @@ export class GatewayController {
   @RequirePermissions('inspections:read')
   inspections(@Req() request: AuthenticatedRequest, @Query() query: InspectionListQueryDto) {
     return this.service.inspections(request.user, query);
+  }
+
+  /**
+   * Every technician's most recent position.
+   *
+   * The feed a dispatching integration actually needs, and the most sensitive
+   * thing on this surface: it says where a named employee was at a given
+   * minute. Behind `technicians:read` rather than `inspections:read` for that
+   * reason — the same boundary the console draws — and read-only. Positions are
+   * reported by the handsets themselves; nothing outside may write one.
+   */
+  @Get('technician-locations')
+  @MachineAccessible()
+  @RequirePermissions('technicians:read')
+  technicianLocations(@Req() request: AuthenticatedRequest) {
+    return this.locations.latestPositions(request.user);
+  }
+
+  /**
+   * Every property that has been placed on the map.
+   *
+   * Pairs with the positions above: a nearest-technician rule needs both ends of
+   * the distance. Behind `properties:read`, the same grant that lists properties
+   * anywhere else.
+   */
+  @Get('property-locations')
+  @MachineAccessible()
+  @RequirePermissions('properties:read')
+  propertyLocations(@Req() request: AuthenticatedRequest) {
+    return this.propertyGeocoding.positions(request.user);
+  }
+
+  /**
+   * The technician directory, for resolving the ids the position feed returns
+   * into people a scheduler can actually assign work to.
+   */
+  @Get('technicians')
+  @MachineAccessible()
+  @RequirePermissions('technicians:read')
+  technicians(@Req() request: AuthenticatedRequest, @Query() query: TechnicianListQueryDto) {
+    return this.service.technicians(request.user, query);
   }
 
   /**

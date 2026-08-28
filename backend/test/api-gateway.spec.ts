@@ -9,6 +9,7 @@ import {
 } from '@texasrenters/shared';
 
 import type { PrismaService } from '../src/common/prisma.service';
+import { GatewayController } from '../src/gateway/gateway.controller';
 import { ApiClientService } from '../src/gateway/api-client.service';
 import {
   apiKeySecretMatches,
@@ -621,5 +622,43 @@ describe('HttpException surface', () => {
 
     expect(error).toBeInstanceOf(HttpException);
     expect((error as HttpException).getStatus()).toBe(429);
+  });
+});
+
+describe('the third-party gateway surface', () => {
+  const prototype = GatewayController.prototype as unknown as Record<string, unknown>;
+  const handlers = Object.getOwnPropertyNames(prototype).filter(
+    (name) => name !== 'constructor' && typeof prototype[name] === 'function',
+  );
+
+  it('exposes only routes that were deliberately opened to machines', () => {
+    expect(handlers.length).toBeGreaterThan(0);
+    for (const name of handlers)
+      expect(
+        Reflect.getMetadata(MACHINE_ACCESSIBLE_METADATA_KEY, prototype[name] as object),
+      ).toBe(true);
+  });
+
+  it('is read-only, so nothing outside this system can write through it', () => {
+    // The property worth defending as this surface grows: a key can be granted
+    // write permissions and still reach nothing that writes here, because the
+    // gateway offers nothing that does. A POST added without thinking would
+    // fail this rather than quietly becoming a public contract.
+    for (const name of handlers)
+      expect({
+        route: name,
+        // RequestMethod.GET is 0.
+        method: Reflect.getMetadata('method', prototype[name] as object),
+      }).toEqual({ route: name, method: 0 });
+  });
+
+  it('never grants itself a permission a machine may not hold', () => {
+    for (const name of handlers) {
+      const required =
+        (Reflect.getMetadata('permissions', prototype[name] as object) as string[] | undefined) ??
+        [];
+      for (const permission of required)
+        expect(MACHINE_FORBIDDEN_PERMISSIONS).not.toContain(permission);
+    }
   });
 });

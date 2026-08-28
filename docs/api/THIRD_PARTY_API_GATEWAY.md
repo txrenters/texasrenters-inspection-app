@@ -72,8 +72,25 @@ Two independent gates, and both must open:
 The reference page shows both per endpoint: `x-required-permissions`,
 `x-authentication`, and an "Open to integrations" badge.
 
-The opened surface today is `/api/v1/gateway/*` — a curated, read-only slice:
-properties, one property, its units, inspections, one inspection.
+The opened surface today is `/api/v1/gateway/*` — a curated, read-only slice.
+Every route on it is a `GET`, and tests enforce that:
+
+| Route | Permission |
+| --- | --- |
+| `GET /gateway/properties` | `properties:read` |
+| `GET /gateway/properties/{propertyId}` | `properties:read` |
+| `GET /gateway/properties/{propertyId}/units` | `properties:read` |
+| `GET /gateway/property-locations` | `properties:read` |
+| `GET /gateway/inspections` | `inspections:read` |
+| `GET /gateway/inspections/{inspectionId}` | `inspections:read` |
+| `GET /gateway/technicians` | `technicians:read` |
+| `GET /gateway/technician-locations` | `technicians:read` |
+
+`technician-locations` is the most sensitive of these: it says where a named
+employee was at a given minute. It sits behind `technicians:read` rather than
+`inspections:read` for that reason — the same boundary the console draws — and
+it is read-only. Handsets report their own positions; nothing outside this
+system may write one.
 
 ### Why a separate `/gateway` prefix
 
