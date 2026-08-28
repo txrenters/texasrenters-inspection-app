@@ -1,7 +1,7 @@
 'use client';
 
 import type { PropertyPosition } from '@texasrenters/shared';
-import { memo, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Input } from '@/components/ui/input';
 
@@ -18,15 +18,24 @@ import { Input } from '@/components/ui/input';
  */
 
 /**
- * Rendered at most this many at once.
+ * Rows added each time the end of the list comes into view.
  *
- * Five hundred and forty-six rows is roughly sixteen hundred DOM nodes in a
- * panel that re-renders whenever a position arrives over the socket, which is
- * every few seconds. The cap keeps that cheap without a virtualiser, and the
- * count below says plainly how many were not drawn — a truncated list that does
- * not admit it is the thing that makes people distrust a search box.
+ * The list used to stop dead at 120 with a line explaining that it had. That is
+ * honest but useless: the remaining four hundred properties existed, were
+ * searchable, and could not be reached by scrolling. Now the end of the list
+ * pulls the next page in, and the only way to run out is to reach the actual
+ * end.
  */
-const RENDER_LIMIT = 120;
+const PAGE = 60;
+
+/**
+ * How far ahead of the bottom to start loading.
+ *
+ * Far enough that the next rows are already there by the time the reader gets
+ * to them, which is the whole difference between a feed and a list with a
+ * "more" button in it.
+ */
+const LOOKAHEAD_PX = 300;
 
 function matches(property: PropertyPosition, needle: string) {
   if (!needle) return true;
@@ -45,17 +54,60 @@ export const PropertyList = memo(function PropertyList({
   selectedId: string | null;
 }) {
   const [query, setQuery] = useState('');
+  const [visible, setVisible] = useState(PAGE);
+
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const sentinel = useRef<HTMLLIElement | null>(null);
 
   const found = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const all = properties.filter((property) => matches(property, needle));
     // Sorted by name so the same search always returns the same order. An
-    // unsorted list reshuffles as the API paginates and makes a row people were
-    // reaching for move under the cursor.
+    // unsorted list reshuffles as the API refetches and makes a row somebody
+    // was reaching for move under the cursor.
     return [...all].sort((left, right) => left.name.localeCompare(right.name));
   }, [properties, query]);
 
-  const shown = found.slice(0, RENDER_LIMIT);
+  // Back to the first page whenever the search changes. Keeping a deep scroll
+  // position across a new search would open the results part-way down, on rows
+  // the reader has never seen.
+  useEffect(() => {
+    setVisible(PAGE);
+    // `scrollTop` rather than `scrollTo`: the latter is absent in jsdom and in
+    // a few older browsers, and this is not worth throwing over.
+    if (scroller.current) scroller.current.scrollTop = 0;
+  }, [query]);
+
+  const shown = found.slice(0, visible);
+  const more = found.length > shown.length;
+
+  useEffect(() => {
+    if (!more) return;
+
+    const target = sentinel.current;
+    const root = scroller.current;
+    if (!target || !root) return;
+
+    // Guarded: jsdom has no IntersectionObserver, and neither do a few older
+    // browsers. Without it the list simply shows everything it has rather than
+    // throwing — a longer list is a far smaller problem than a blank panel.
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(found.length);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // `min` so the last page is exact rather than a slice past the end.
+        if (entries.some((entry) => entry.isIntersecting))
+          setVisible((count) => Math.min(count + PAGE, found.length));
+      },
+      { root, rootMargin: `0px 0px ${LOOKAHEAD_PX}px 0px` },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [found.length, more, shown.length]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -82,7 +134,7 @@ export const PropertyList = memo(function PropertyList({
           Nothing matches &ldquo;{query.trim()}&rdquo;.
         </p>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto" ref={scroller}>
           <ul className="divide-border divide-y">
             {shown.map((property) => {
               const selected = property.id === selectedId;
@@ -107,15 +159,28 @@ export const PropertyList = memo(function PropertyList({
                 </li>
               );
             })}
-          </ul>
 
-          {/* Said, never silent. A list that quietly stops at a hundred and
-              twenty looks like a search that found nothing further. */}
-          {found.length > shown.length ? (
-            <p className="text-muted-foreground border-t px-4 py-2 text-xs">
-              Showing {shown.length} of {found.length}. Keep typing to narrow it.
-            </p>
-          ) : null}
+            {/* The thing the observer watches. Inside the list rather than
+                after it, so it scrolls with the rows and sits a page ahead of
+                the reader instead of at a fixed point in the panel. */}
+            {more ? (
+              <li
+                className="text-muted-foreground px-4 py-3 text-xs"
+                ref={sentinel}
+                // Announced rather than silent: somebody on a screen reader
+                // has no way to see rows appearing beneath them.
+                aria-live="polite"
+              >
+                Loading more&hellip; {shown.length} of {found.length}
+              </li>
+            ) : (
+              <li className="text-muted-foreground px-4 py-3 text-xs">
+                {found.length === properties.length
+                  ? `All ${found.length} properties`
+                  : `${found.length} of ${properties.length} properties`}
+              </li>
+            )}
+          </ul>
         </div>
       )}
     </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import { PageHeader } from '@/components/page-header';
 import { EmptyState } from '@/components/states';
@@ -105,15 +105,20 @@ export default function TechnicianMapPage() {
   // two different things in one panel.
   const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
 
-  const selectTechnician = (technicianId: string | null) => {
+  // Both wrapped, because `PropertyList` is memoised and a handler rebuilt on
+  // every render defeats that entirely -- and this page re-renders whenever a
+  // position arrives over the socket, which is every few seconds. With the list
+  // now able to grow to every property, re-rendering all of them on that
+  // cadence is a cost with no reader.
+  const selectTechnician = useCallback((technicianId: string | null) => {
     setSelectedId(technicianId);
     if (technicianId) setSelectedPropertyId(null);
-  };
+  }, []);
 
-  const selectProperty = (propertyId: string | null) => {
+  const selectProperty = useCallback((propertyId: string | null) => {
     setSelectedPropertyId(propertyId);
     if (propertyId) setSelectedId(null);
-  };
+  }, []);
 
   // Only for the selected technician. Planning a route calls OSRM once per
   // person, so doing it for the whole roster to draw one line would be paying
