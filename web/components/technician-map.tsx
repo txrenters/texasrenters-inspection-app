@@ -440,6 +440,45 @@ function stopPin(order: number) {
 }
 
 /**
+ * Takes the map to a property picked from the list.
+ *
+ * A separate component from `FocusSelected` rather than a branch inside it,
+ * because the two are driven by different selections and must not race: the
+ * page clears one when the other is set, so at most one of these ever has
+ * something to do.
+ *
+ * Keyed on the id alone. Properties do not move, but the array they arrive in
+ * is rebuilt whenever the query refetches, and depending on the object would
+ * fly the map back to the same place every couple of minutes.
+ */
+function FocusProperty({
+  properties,
+  selectedPropertyId,
+}: {
+  properties: readonly PropertyPosition[];
+  selectedPropertyId: string | null;
+}) {
+  const map = useMap();
+
+  const latest = useRef(properties);
+  latest.current = properties;
+
+  useEffect(() => {
+    if (!selectedPropertyId) return;
+    const property = latest.current.find((entry) => entry.id === selectedPropertyId);
+    if (!property) return;
+
+    const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    map.flyTo([property.latitude, property.longitude], SELECTED_ZOOM, {
+      animate,
+      duration: 0.6,
+    });
+  }, [map, selectedPropertyId]);
+
+  return null;
+}
+
+/**
  * Lets the map zoom out far enough to actually show the whole world.
  *
  * The floor used to be a fixed `minZoom={3}`, which on a console-sized pane
@@ -547,6 +586,7 @@ export function TechnicianMap({
   positions,
   properties = [],
   route = null,
+  selectedPropertyId = null,
   selectedTechnicianId = null,
 }: {
   highlightedBuildingIds?: ReadonlySet<string> | null;
@@ -554,6 +594,8 @@ export function TechnicianMap({
   properties?: readonly PropertyPosition[];
   /** The selected technician's drive, when one has been worked out. */
   route?: TechnicianRoute | null;
+  /** A property picked from the list, which the map flies to. */
+  selectedPropertyId?: string | null;
   selectedTechnicianId?: string | null;
 }) {
   // Fit to everything, technicians and properties alike, rather than centring
@@ -615,7 +657,12 @@ export function TechnicianMap({
       scrollWheelZoom
     >
       <WorldMinZoom />
-      <FitToData fitKey={fitKey} points={points} suspended={Boolean(selectedTechnicianId)} />
+      <FitToData
+        fitKey={fitKey}
+        points={points}
+        suspended={Boolean(selectedTechnicianId) || Boolean(selectedPropertyId)}
+      />
+      <FocusProperty properties={properties} selectedPropertyId={selectedPropertyId} />
       <FocusSelected
         fallback={selectedStops}
         position={selectedPosition}
