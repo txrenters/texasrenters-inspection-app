@@ -2,8 +2,6 @@
 
 import type { ApiClientSummary, IssuedApiKey } from '@texasrenters/shared';
 import {
-  CheckIcon,
-  CopyIcon,
   KeyRoundIcon,
   PencilIcon,
   PlusIcon,
@@ -58,28 +56,18 @@ const PAGE_SIZE = 20;
 /**
  * The one screen where a secret is visible.
  *
- * Modal and blocking, because the value cannot be recovered: only a keyed hash
- * is stored, so a dialog dismissed before the key was copied has destroyed it.
- * That is stated here rather than left to be discovered.
+ * Modal, because the value cannot be recovered: only a keyed hash is stored, so
+ * a dialog dismissed before the secret was copied has destroyed it. That is
+ * stated plainly rather than enforced — dismissal used to be gated on having
+ * pressed Copy, which is defeated by pressing Copy and pasting nowhere, and cost
+ * a disabled button with no obvious way to enable it. Re-issuing is one click.
  */
 function IssuedKeyDialog({ issued, onClose }: { issued: IssuedApiKey; onClose: () => void }) {
-  const [copied, setCopied] = useState(false);
   // The credential is `<key id>.<secret>`. Split rather than reconstructed from
   // `prefix`, so the parts shown are exactly the parts of the string issued.
   const separator = issued.key.indexOf('.');
   const keyIdPart = issued.key.slice(0, separator);
   const secretPart = issued.key.slice(separator + 1);
-
-  const copy = async () => {
-    try {
-      // The secret, not the whole credential: it is the only part that
-      // cannot be recovered from the table afterwards.
-      await navigator.clipboard.writeText(secretPart);
-      setCopied(true);
-    } catch {
-      // Clipboard permission can be refused; the value is selectable either way.
-    }
-  };
 
   return (
     <Dialog onOpenChange={(open) => (open ? undefined : onClose())} open>
@@ -136,13 +124,13 @@ function IssuedKeyDialog({ issued, onClose }: { issued: IssuedApiKey; onClose: (
           </AlertDescription>
         </Alert>
         <DialogFooter>
-          <Button onClick={() => void copy()} variant={copied ? 'ghost' : 'default'}>
-            {copied ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />}
-            {copied ? 'Copied' : 'Copy secret'}
-          </Button>
-          <Button disabled={!copied} onClick={onClose} variant="outline">
-            I have stored it
-          </Button>
+          {/* One Copy per value, beside the value it copies. A second Copy in
+              the footer duplicated the secret's own button, and gating dismissal
+              on it left a disabled control with no obvious way to enable it —
+              protection weak enough to defeat by clicking Copy and pasting
+              nowhere, at the cost of a dead button. Re-issuing a key is one
+              click, so the stakes never justified the gate. */}
+          <Button onClick={onClose}>I have stored it</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
