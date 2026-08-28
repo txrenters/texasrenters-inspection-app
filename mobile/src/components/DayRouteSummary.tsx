@@ -30,7 +30,12 @@ export function DayRouteSummary({ route }: { route?: TechnicianDayRoute }) {
   // Nothing to say yet, or nothing to plan. Silence is right for both: this
   // sits above a screen that already tells them what work they have, and an
   // empty box explaining why there is no route would be noise on a phone.
-  if (!route || !route.origin || route.stops.length < 2) return null;
+  // `legs`, not `stops`. The planner returns the day's stops whether or not it
+  // managed to route them, so reading `stops` here showed a drive for a route
+  // that had been refused -- a zero total, which `drive()` renders as a minute.
+  // Two legs means at least two stops, so the "not worth showing for one stop"
+  // rule is kept by the same check.
+  if (!route || !route.origin || route.legs.length < 2) return null;
 
   return (
     <View className="mt-6">

@@ -101,6 +101,10 @@ const STATUS: Record<string, { label: string; tone: Tone; glyph: Glyph }> = {
   ACTIVE: { label: 'Active', tone: 'success', glyph: 'success' },
   INACTIVE: { label: 'Inactive', tone: 'muted', glyph: 'idle' },
   CURRENT: { label: 'Current', tone: 'success', glyph: 'success' },
+  // Warning rather than destructive: work that is late is not work that has
+  // failed, and it must not outrank FOLLOW_UP_REQUIRED, which is a defect
+  // somebody has to act on rather than a date that slipped.
+  OVERDUE: { label: 'Overdue', tone: 'warning', glyph: 'warning' },
   RUNNING: { label: 'Running', tone: 'default', glyph: 'processing' },
   COMPLETED_WITH_ERRORS: { label: 'Completed with errors', tone: 'warning', glyph: 'warning' },
   QUEUED: { label: 'Queued', tone: 'muted', glyph: 'pending' },

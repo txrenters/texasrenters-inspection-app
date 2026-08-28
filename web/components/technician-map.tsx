@@ -107,21 +107,62 @@ function propertyPin(dim = false) {
  * where somebody was, not a marked spot — and the accuracy circle it sits
  * inside is drawn from the same centre.
  */
+/**
+ * Built once per appearance, then reused.
+ *
+ * Leaflet replaces a marker's DOM whenever the `icon` prop is a new object, and
+ * positions arrive over the socket every few seconds -- so a freshly built icon
+ * on every render restarts the pulse animation from zero each time, which reads
+ * as a stutter rather than a heartbeat. There are three possible appearances,
+ * so caching them is both cheap and the only way the animation survives.
+ *
+ * Sharing one icon instance across several markers is fine: `divIcon` is a
+ * template, and Leaflet builds separate DOM for each marker from it.
+ */
+const TECHNICIAN_PINS = new Map<string, ReturnType<typeof divIcon>>();
+
+/**
+ * A round badge with a person in it, anchored at its centre.
+ *
+ * The canvas is 44px while the badge is still 22px across: the extra room is
+ * for the pulse, which expands past the badge and would otherwise be clipped by
+ * the SVG viewport. The badge geometry is unchanged -- it is drawn at its
+ * original coordinates inside a translate -- so nothing about the marker's
+ * apparent size or anchoring moved.
+ */
 function technicianPin(stale: boolean, dim = false) {
+  const key = `${stale}|${dim}`;
+  const cached = TECHNICIAN_PINS.get(key);
+  if (cached) return cached;
+
   const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
-  return divIcon({
+  // Only for someone reporting now, and only when they are not dimmed. A stale
+  // position is the opposite of live, so animating it would say the wrong
+  // thing; a dimmed marker belongs to somebody who was not selected, and a
+  // pulse is the loudest thing on the map.
+  const live = !stale && !dim;
+
+  const icon = divIcon({
     className: '',
-    html: `<svg width="28" height="28" viewBox="0 0 28 28" opacity="${dim ? 0.3 : 1}" xmlns="http://www.w3.org/2000/svg">
+    html: `<svg width="44" height="44" viewBox="0 0 44 44" opacity="${dim ? 0.3 : 1}" xmlns="http://www.w3.org/2000/svg">
       <defs>${MARKER_SHADOW}</defs>
-      <circle filter="url(#pin-shadow)" cx="14" cy="14" r="11"
-        class="${fill}" stroke="#fff" stroke-width="2.5"/>
-      <circle cx="14" cy="11.1" r="2.9" fill="#fff"/>
-      <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff"/>
+      ${live ? '<circle class="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11"/>' : ''}
+      <g transform="translate(8,8)">
+        <circle filter="url(#pin-shadow)" cx="14" cy="14" r="11"
+          class="${fill}" stroke="#fff" stroke-width="2.5"/>
+        <circle cx="14" cy="11.1" r="2.9" fill="#fff"/>
+        <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff"/>
+      </g>
     </svg>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+    // Unchanged from the 28px icon: the badge is the same size in the same
+    // place, so the popup should sit exactly where it did.
     popupAnchor: [0, -14],
   });
+
+  TECHNICIAN_PINS.set(key, icon);
+  return icon;
 }
 
 /**

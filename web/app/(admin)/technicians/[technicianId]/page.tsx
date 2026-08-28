@@ -32,6 +32,7 @@ import {
   useTechnician,
   useTechnicianRoute,
 } from '@/lib/queries';
+import { isOverdue, localToday, scheduledDay } from '@/lib/overdue';
 import { useUrlState } from '@/lib/url-state';
 
 type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
@@ -43,7 +44,45 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
     primary: true,
     cell: (row) => row.inspection?.propertywareBuilding?.name ?? 'Open inspection',
   },
-  { key: 'assigned', header: 'Assigned', cell: (row) => formatDateTime(row.assignedAt) },
+  /**
+   * When the work is due -- which is not what "Assigned" says.
+   *
+   * `assignedAt` is when somebody handed the job out; `scheduledAt` is the day
+   * it has to happen. Without both, a page showing four assignments all dated
+   * the twenty-fifth beside a route for the twenty-eighth cannot be
+   * reconciled, and three of those four were work nothing on this screen
+   * accounted for.
+   *
+   * The date is rendered from its own `yyyy-MM-dd`, never through a `Date`:
+   * `scheduledAt` is a Postgres `date` serialised at midnight UTC, and
+   * localising it moves it to the previous day anywhere west of Greenwich.
+   */
+  {
+    key: 'scheduled',
+    header: 'Scheduled',
+    cell: (row) => {
+      const day = scheduledDay(row.inspection?.scheduledAt);
+      if (!day) return EMPTY;
+
+      const overdue = isOverdue({
+        isCurrent: row.isCurrent,
+        scheduledAt: row.inspection?.scheduledAt,
+        status: row.inspection?.status,
+        today: localToday(),
+      });
+
+      return (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span className="tabular-nums">{day}</span>
+          {/* Words, not just a colour: this is the one cell on the page that
+              reports a problem, and it has to survive greyscale and a screen
+              reader. */}
+          {overdue ? <StatusBadge value="OVERDUE" /> : null}
+        </span>
+      );
+    },
+  },
+  { key: 'assigned', header: 'Assigned', hideBelow: 'md', cell: (row) => formatDateTime(row.assignedAt) },
   { key: 'ended', header: 'Ended', hideBelow: 'md', cell: (row) => formatDateTime(row.endedAt) },
   {
     key: 'status',
