@@ -79,6 +79,7 @@ const REFUSED: TechnicianRoute = {
   unroutable: [],
   geometry: [],
   originOutsideServiceArea: true,
+  airTravel: null,
   estimated: true,
 };
 
@@ -179,6 +180,7 @@ describe('a route the planner produced', () => {
     unroutable: [],
     geometry: [[29.75, -95.37]],
     originOutsideServiceArea: false,
+    airTravel: null,
     estimated: true,
   };
 

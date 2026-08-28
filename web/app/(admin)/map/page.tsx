@@ -14,8 +14,10 @@ import {
   useTechnicianLocations,
   useTechnicianRoute,
 } from '@/lib/queries';
+import { PropertyList } from '@/components/property-list';
 import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
 import { DatePicker } from '@/components/ui/date-picker';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /**
  * `ssr: false` is not optional. Leaflet reads `window` at import time and
@@ -98,6 +100,21 @@ export default function TechnicianMapPage() {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // One focus at a time. Both selections fly the map somewhere, so holding both
+  // would leave two effects fighting over the view -- and "selected" would mean
+  // two different things in one panel.
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
+
+  const selectTechnician = (technicianId: string | null) => {
+    setSelectedId(technicianId);
+    if (technicianId) setSelectedPropertyId(null);
+  };
+
+  const selectProperty = (propertyId: string | null) => {
+    setSelectedPropertyId(propertyId);
+    if (propertyId) setSelectedId(null);
+  };
+
   // Only for the selected technician. Planning a route calls OSRM once per
   // person, so doing it for the whole roster to draw one line would be paying
   // for five answers to use one.
@@ -157,7 +174,24 @@ export default function TechnicianMapPage() {
               faster answer to "who is out", and a map you have to scroll past
               to reach it is the wrong way round. */}
           <div className="grid gap-3 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="bg-card flex h-[70vh] flex-col rounded-lg border">
+            <div className="bg-card flex h-[70vh] flex-col overflow-hidden rounded-lg border">
+              <Tabs className="flex min-h-0 flex-1 flex-col" defaultValue="technicians">
+                <TabsList className="m-2 grid shrink-0 grid-cols-2">
+                  <TabsTrigger value="technicians">Technicians</TabsTrigger>
+                  <TabsTrigger value="properties">
+                    Properties
+                    {properties.data?.length ? (
+                      <span className="text-muted-foreground ml-1.5 tabular-nums">
+                        {properties.data.length}
+                      </span>
+                    ) : null}
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent
+                  className="mt-0 flex min-h-0 flex-1 flex-col"
+                  value="technicians"
+                >
               {/* The date sits above the list rather than beside the map,
                   because it governs the list: positions are always live, and
                   only the assignments below answer to it. Putting it over the
@@ -188,11 +222,24 @@ export default function TechnicianMapPage() {
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <TechnicianRoster
                   entries={roster}
-                  onSelect={setSelectedId}
+                  onSelect={selectTechnician}
                   route={selectedId ? (route.data ?? null) : null}
                   selectedId={selectedId}
                 />
               </div>
+                </TabsContent>
+
+                {/* Selecting one takes the map to it, exactly as the roster
+                    does for a technician -- the panel behaves the same way
+                    whichever tab is open. */}
+                <TabsContent className="mt-0 min-h-0 flex-1" value="properties">
+                  <PropertyList
+                    onSelect={selectProperty}
+                    properties={properties.data ?? []}
+                    selectedId={selectedPropertyId}
+                  />
+                </TabsContent>
+              </Tabs>
             </div>
 
             {/* `isolate` is load-bearing, not decoration. Leaflet gives its own
@@ -208,6 +255,7 @@ export default function TechnicianMapPage() {
                 positions={positions.data ?? []}
                 properties={properties.data ?? []}
                 route={selectedId ? (route.data ?? null) : null}
+                selectedPropertyId={selectedPropertyId}
                 selectedTechnicianId={selectedId}
               />
 

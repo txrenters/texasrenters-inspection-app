@@ -140,6 +140,40 @@ export function shortestRouteOrder(matrix: DurationMatrix): number[] {
   return twoOpt(matrix, nearestNeighbour(matrix, stops));
 }
 
+/** Mean Earth radius, in metres. */
+const EARTH_RADIUS_M = 6_371_008.8;
+
+/**
+ * Straight-line distance over the Earth's surface, in metres.
+ *
+ * A real, exact quantity -- unlike a flight time, which needs airports,
+ * schedules and connections we do not have. When a technician cannot be routed
+ * to a property by road, this is the most that can honestly be said about how
+ * far away they are, and it is what the console shows rather than an invented
+ * duration.
+ *
+ * Haversine rather than the spherical law of cosines: the latter loses
+ * precision for short distances through floating point, and short distances are
+ * the common case everywhere else this might get reused.
+ */
+export function haversineMeters(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number },
+): number {
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+
+  const lat1 = toRadians(from.latitude);
+  const lat2 = toRadians(to.latitude);
+  const deltaLat = lat2 - lat1;
+  const deltaLon = toRadians(to.longitude - from.longitude);
+
+  const a =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 export interface RouteStop {
   inspectionId: string;
   propertyId: string;
@@ -198,6 +232,19 @@ export interface TechnicianRoute {
    * Houston -- a route that looked entirely plausible and was wholly invented.
    */
   originOutsideServiceArea: boolean;
+  /**
+   * The straight line to the nearest stop, when no road route is possible.
+   *
+   * Present only alongside `originOutsideServiceArea`, and deliberately holds
+   * **no duration**. A flight time needs airports, schedules and connections
+   * none of which this system has; deriving one from distance would be off by
+   * hours and would hide every layover. Distance over the ground is a fact.
+   * "How long will it take" is not one we can answer yet.
+   */
+  airTravel: {
+    inspectionId: string;
+    distanceMeters: number;
+  } | null;
   /**
    * The drive itself, as `[latitude, longitude]` along the road.
    *
