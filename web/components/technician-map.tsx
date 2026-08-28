@@ -427,10 +427,22 @@ function PropertyLayer({
           >
             <Popup>
               <span className="font-medium">{cluster.members.length} properties here</span>
-              <br />
-              <span className="text-muted-foreground text-xs">
-                Click the cluster to zoom in.
-              </span>
+              {/* Named, not counted. A badge saying "3" with no way to learn
+                  which three is the thing that sent somebody hunting; and
+                  telling them to zoom was advice that did not work once the
+                  properties were closer together than the grid. */}
+              <ul className="mt-1 mb-0 list-none space-y-0.5 pl-0">
+                {cluster.members.slice(0, 8).map((member) => (
+                  <li key={member.id} className="text-xs">
+                    {member.name}
+                  </li>
+                ))}
+              </ul>
+              {cluster.members.length > 8 ? (
+                <span className="text-muted-foreground text-xs">
+                  and {cluster.members.length - 8} more
+                </span>
+              ) : null}
             </Popup>
           </Marker>
         );
@@ -808,7 +820,20 @@ export function TechnicianMap({
           container's `maxBounds` are needed: one bounds the view, the other
           bounds what is painted, and without the pair the copies come back at
           the edges. */}
-      <TileLayer attribution={ATTRIBUTION} noWrap url={TILE_URL} />
+      {/* `maxZoom` above `maxNativeZoom` on purpose. OpenStreetMap serves
+          tiles to 19; past that Leaflet upscales the last real tile rather
+          than requesting one that does not exist. The image softens, and in
+          exchange the map keeps zooming — which is the only way to separate
+          properties a few metres apart, because the cluster grid is a fixed
+          number of pixels. At 18 that grid was about thirty metres wide, so a
+          cul-de-sac could never be opened at all. */}
+      <TileLayer
+        attribution={ATTRIBUTION}
+        maxNativeZoom={19}
+        maxZoom={21}
+        noWrap
+        url={TILE_URL}
+      />
 
       {/* Under the markers and over the properties: the route is context for
           the pins, not a thing to be read on its own. */}

@@ -22,6 +22,21 @@ import type { Map as LeafletMap } from 'leaflet';
  */
 export const CLUSTER_GRID_PX = 56;
 
+/**
+ * Past this zoom, nothing is grouped.
+ *
+ * Grouping exists so that pins at city scale do not pile into an unreadable
+ * smear. Once somebody has zoomed to a single street it has stopped helping and
+ * started hiding: a cul-de-sac of houses within thirty metres of each other
+ * grouped into a badge reading "3" that no amount of zooming would open,
+ * because the grid is a fixed number of *pixels* and those houses are closer
+ * than the grid however far in you go.
+ *
+ * Above this, every property is its own marker. Two pins may overlap slightly.
+ * That is a far smaller problem than a property you cannot reach at all.
+ */
+export const CLUSTER_MAX_ZOOM = 19;
+
 export interface Clusterable {
   id: string;
   latitude: number;
@@ -89,6 +104,16 @@ export function clusterByGrid<T extends Clusterable>(
   zoom: number,
   gridPx: number = CLUSTER_GRID_PX,
 ): Cluster<T>[] {
+  // Above the ceiling every point stands alone, so a property is always
+  // reachable by zooming. Below it, the pixel grid does the grouping.
+  if (zoom > CLUSTER_MAX_ZOOM)
+    return points.map((point) => ({
+      key: point.id,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      members: [point],
+    }));
+
   const cells = new Map<string, T[]>();
 
   for (const point of points) {

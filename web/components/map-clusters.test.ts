@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLUSTER_GRID_PX,
+  CLUSTER_MAX_ZOOM,
   clusterByGrid,
   type Clusterable,
   zoomToIsolate,
@@ -145,5 +146,64 @@ describe('zoomToIsolate', () => {
 
   it('never returns below the ceiling it was given', () => {
     expect(zoomToIsolate(map, HOUSTON_77044, 'copper-hollow', 21, 19)).toBe(19);
+  });
+});
+
+/**
+ * The cul-de-sac that could not be opened.
+ *
+ * Three properties on one close, reported as a badge reading "3" that no amount
+ * of zooming would separate. The cluster grid is a fixed number of *pixels*, so
+ * below the old ceiling of 18 it was about thirty metres wide on the ground —
+ * wider than the close itself. Zooming could never win, and the popup told
+ * people to zoom.
+ */
+describe('properties closer together than the grid', () => {
+  // Three houses around a cul-de-sac, roughly ten metres apart.
+  const CUL_DE_SAC: Clusterable[] = [
+    { id: 'merrill-1', latitude: 30.1401, longitude: -95.4602 },
+    { id: 'merrill-2', latitude: 30.14019, longitude: -95.46011 },
+    { id: 'merrill-3', latitude: 30.14011, longitude: -95.46029 },
+  ];
+
+  it('are still grouped at street zoom, which is the reported symptom', () => {
+    // Fewer clusters than properties, not an exact count: whether three points
+    // land in one cell or two depends on where the grid boundaries happen to
+    // fall, which is the same straddling that makes distance a bad proxy for
+    // grouping. The claim worth pinning is that zooming to 18 does not show
+    // them all.
+    expect(clusterByGrid(map, CUL_DE_SAC, 18).length).toBeLessThan(CUL_DE_SAC.length);
+  });
+
+  it('each stand alone once past the clustering ceiling', () => {
+    // The fix. Above CLUSTER_MAX_ZOOM nothing is grouped, so every property is
+    // reachable — overlapping pins being a far smaller problem than a property
+    // that cannot be got at.
+    const clusters = clusterByGrid(map, CUL_DE_SAC, CLUSTER_MAX_ZOOM + 1);
+    expect(clusters).toHaveLength(3);
+    for (const cluster of clusters) expect(cluster.members).toHaveLength(1);
+  });
+
+  it('can be isolated within the map ceiling', () => {
+    // The tile layer now allows 21, so `zoomToIsolate` has room to succeed
+    // rather than giving up and handing back a badge.
+    const zoom = zoomToIsolate(map, CUL_DE_SAC, 'merrill-1', 15, 21);
+    expect(zoom).toBeLessThanOrEqual(21);
+
+    const own = clusterByGrid(map, CUL_DE_SAC, zoom).find((cluster) =>
+      cluster.members.some((member) => member.id === 'merrill-1'),
+    );
+    expect(own?.members).toHaveLength(1);
+  });
+
+  it('separates even two records on the very same spot', () => {
+    // Two units at one address. Previously unresolvable at any zoom; now they
+    // are separate markers that happen to overlap, so the selected one's popup
+    // can open.
+    const twins: Clusterable[] = [
+      { id: 'unit-a', latitude: 30.1401, longitude: -95.4602 },
+      { id: 'unit-b', latitude: 30.1401, longitude: -95.4602 },
+    ];
+    expect(clusterByGrid(map, twins, CLUSTER_MAX_ZOOM + 1)).toHaveLength(2);
   });
 });
