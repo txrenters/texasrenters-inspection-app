@@ -67,12 +67,10 @@ const environmentSchema = z
     AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(86400).default(3600),
     AUTH_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
     AUTH_PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(1440).default(60),
-    // Third-party API access. The pepper keys the hash every API client secret
-    // is stored under; without it no key can be issued and none can authenticate,
-    // which is the intended state for a deployment that has no integrations.
-    // Optional here rather than required, deliberately: making it mandatory
-    // would stop every existing deployment from booting to enable a feature it
-    // may never use. It is checked where it is used, and refuses there.
+    // Third-party API access. Optional, and genuinely optional: the hashing key
+    // is derived from AUTH_JWT_SECRET when this is unset, so key issuance works
+    // on any deployment that boots. Set it only to rotate API keys independently
+    // of the token-signing secret — see apiKeyPepper() for the reasoning.
     API_KEY_PEPPER: z.string().min(32).optional(),
     // How many reverse proxies sit in front of this process. Zero — the default —
     // means Express reports the socket address, which is correct for a directly

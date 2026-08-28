@@ -129,7 +129,7 @@ the column carries no foreign key.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `API_KEY_PEPPER` | to use the feature | ≥32 chars. Keys the hash every secret is stored under. Without it no key can be issued and none can authenticate — the intended state for a deployment with no integrations. Not `AI_CREDENTIALS_ENCRYPTION_KEY`: giving that key a second job means rotating it for one reason silently invalidates the other |
+| `API_KEY_PEPPER` | no | ≥32 chars. Keys the hash every secret is stored under. **Derived from `AUTH_JWT_SECRET` when unset**, so key issuance works on any deployment that boots. Set it only to rotate API keys independently of the token-signing secret; rotating `AUTH_JWT_SECRET` otherwise invalidates every issued key (that rotation already signs every user out, so it is not a quiet consequence) |
 | `TRUST_PROXY_HOPS` | behind a proxy | Default 0. Must match the real topology for a client's IP allowlist to mean anything — set too low and every request looks like it came from nginx, set too high and the allowlist can be talked around by the caller |
 
 ## Server-to-server only

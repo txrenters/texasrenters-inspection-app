@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { UnauthorizedException } from '@nestjs/common';
 
@@ -27,20 +27,52 @@ export interface ParsedApiKey {
 }
 
 /**
+ * Domain separation for the derived pepper, so the value below is a key for
+ * *this* purpose and never equal to the secret it comes from.
+ */
+const DERIVED_PEPPER_INFO = 'texasrenters:api-key-pepper:v1';
+
+let derived: { source: string; pepper: string } | undefined;
+
+/**
  * The server-side hashing key.
  *
- * Required, with no fallback and no default. This follows the same rule the
- * access-token verifier settled on: unconfigured means refuse, not guess. A
- * derived or defaulted pepper would mean two deployments that never shared a
- * secret could nonetheless validate each other's keys.
+ * This used to demand its own `API_KEY_PEPPER` and refuse to issue a key
+ * without one — which meant the feature shipped switched off, and an
+ * administrator pressing "Issue key" on a correctly deployed system got a 503.
+ * That was the wrong trade, for a reason worth writing down.
  *
- * Deliberately not `AI_CREDENTIALS_ENCRYPTION_KEY`. That key protects provider
- * credentials; giving it a second, unrelated job means rotating it for one
- * reason silently invalidates the other.
+ * The classic argument for a pepper is that it slows an attacker who has the
+ * hashes and wants to guess the secrets. **That argument does not apply here.**
+ * The secret is 32 bytes from `randomBytes`; there is nothing to guess, with or
+ * without a pepper, and no amount of hardware changes that.
+ *
+ * What a *keyed* hash still buys is narrower and real: someone with write
+ * access to the database cannot forge a working key row, because they cannot
+ * compute a valid hash for a secret they choose. That is worth keeping — and it
+ * needs a server-side key, not a *separately configured* one.
+ *
+ * So the key is derived, by HKDF, from the one secret every deployment is
+ * already required to have. Domain-separated, so it is not the signing secret
+ * wearing a hat. The trade is stated plainly: rotating `AUTH_JWT_SECRET`
+ * invalidates every issued API key. That rotation already signs every user out,
+ * so it is not a quiet consequence — and a deployment that wants the two to
+ * rotate independently sets `API_KEY_PEPPER` and gets exactly the old behaviour.
  */
 export function apiKeyPepper() {
-  const pepper = process.env.API_KEY_PEPPER?.trim();
-  if (!pepper || pepper.length < 32) return undefined;
+  const explicit = process.env.API_KEY_PEPPER?.trim();
+  if (explicit && explicit.length >= 32) return explicit;
+
+  const root = process.env.AUTH_JWT_SECRET?.trim();
+  // Unreachable in a booted application — the environment schema refuses to
+  // start without it — but this function is called from tests and scripts too.
+  if (!root) return undefined;
+
+  // Cached against its own input rather than in a bare module variable, so a
+  // test that changes the environment between cases gets the right answer.
+  if (derived?.source === root) return derived.pepper;
+  const pepper = Buffer.from(hkdfSync('sha256', root, '', DERIVED_PEPPER_INFO, 32)).toString('hex');
+  derived = { source: root, pepper };
   return pepper;
 }
 
