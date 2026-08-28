@@ -46,6 +46,43 @@ export interface Cluster<T extends Clusterable> {
  * The centre of a cluster is the mean of its members, so the badge sits among
  * the pins it represents rather than in the corner of an arbitrary grid cell.
  */
+/**
+ * The closest zoom-out at which a point still stands on its own.
+ *
+ * Selecting a property from the list used to fly to a fixed zoom and stop
+ * there. Two houses on the same street stayed folded into a badge reading "2",
+ * so the thing that had just been chosen was not on the map -- and the only way
+ * to see it was to zoom in by hand, which is the work the list was supposed to
+ * save.
+ *
+ * The clustering is asked directly rather than derived from a distance. Grid
+ * membership is not a function of separation alone: two points a pixel apart
+ * land in different cells when they straddle a boundary, and two points nearly
+ * a full cell apart share one when they do not. Only the real grouping knows.
+ *
+ * Returns `max` when no zoom separates them, which happens when two records
+ * carry the same coordinates -- two units at one address, say. That is not a
+ * zoom problem and no amount of zooming solves it, so the caller shows the
+ * group instead.
+ */
+export function zoomToIsolate<T extends Clusterable>(
+  map: Parameters<typeof clusterByGrid>[0],
+  items: readonly T[],
+  id: string,
+  from: number,
+  max: number,
+  gridPx: number = CLUSTER_GRID_PX,
+): number {
+  for (let zoom = Math.min(from, max); zoom <= max; zoom += 1) {
+    const own = clusterByGrid(map, items, zoom, gridPx).find((cluster) =>
+      cluster.members.some((member) => member.id === id),
+    );
+    if (own && own.members.length === 1) return zoom;
+  }
+
+  return max;
+}
+
 export function clusterByGrid<T extends Clusterable>(
   map: Pick<LeafletMap, 'project'>,
   points: readonly T[],

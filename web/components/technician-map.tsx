@@ -26,7 +26,7 @@ import {
 
 import { pointsToFit } from '@/components/map-bounds';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
-import { clusterByGrid } from '@/components/map-clusters';
+import { clusterByGrid, zoomToIsolate } from '@/components/map-clusters';
 import { formatRelative } from '@/lib/format';
 
 /**
@@ -313,6 +313,15 @@ function PropertyLayer({
    */
   const markers = useRef(new Map<string, LeafletMarker>());
 
+  /**
+   * The badge a property is hiding inside, by that property's id.
+   *
+   * Only reached when no zoom separates it -- two records at identical
+   * coordinates. Opening the group's popup at least answers "it is here, with
+   * another", where opening nothing looks like the click was lost.
+   */
+  const groups = useRef(new Map<string, LeafletMarker>());
+
   // Grouping is computed in projected pixels at the current zoom, so it changes
   // when the zoom does and never when panning — a clustering that reshuffled as
   // you dragged would read as the data itself moving.
@@ -338,7 +347,8 @@ function PropertyLayer({
    */
   useEffect(() => {
     if (!selectedPropertyId) return;
-    markers.current.get(selectedPropertyId)?.openPopup();
+    const own = markers.current.get(selectedPropertyId);
+    (own ?? groups.current.get(selectedPropertyId))?.openPopup();
   }, [clusters, selectedPropertyId]);
 
   return (
@@ -395,6 +405,12 @@ function PropertyLayer({
             key={cluster.key}
             icon={clusterPin(cluster.members.length, dim)}
             position={[cluster.latitude, cluster.longitude]}
+            ref={(instance) => {
+              for (const member of cluster.members) {
+                if (instance) groups.current.set(member.id, instance);
+                else groups.current.delete(member.id);
+              }
+            }}
             zIndexOffset={-500}
             eventHandlers={{
               // Zoom to the members rather than stepping in by a fixed amount:
@@ -576,8 +592,20 @@ function FocusProperty({
     const property = latest.current.find((entry) => entry.id === selectedPropertyId);
     if (!property) return;
 
+    // Far enough in that this property is drawn on its own, rather than a
+    // fixed zoom that leaves close neighbours folded into a badge. Starts at
+    // the usual zoom and only goes further when the grouping says it must, so
+    // a property with nothing near it is not slammed into the rooftops.
+    const zoom = zoomToIsolate(
+      map,
+      latest.current,
+      selectedPropertyId,
+      SELECTED_ZOOM,
+      map.getMaxZoom(),
+    );
+
     const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    map.flyTo([property.latitude, property.longitude], SELECTED_ZOOM, {
+    map.flyTo([property.latitude, property.longitude], zoom, {
       animate,
       duration: 0.6,
     });

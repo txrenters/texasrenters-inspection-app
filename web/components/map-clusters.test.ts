@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { CLUSTER_GRID_PX, clusterByGrid, type Clusterable } from './map-clusters';
+import {
+  CLUSTER_GRID_PX,
+  clusterByGrid,
+  type Clusterable,
+  zoomToIsolate,
+} from './map-clusters';
 
 /**
  * A stand-in for Leaflet's projection.
@@ -90,5 +95,55 @@ describe('clusterByGrid', () => {
     // Guards the constant itself: a grid smaller than a marker would cluster
     // nothing and quietly restore the original problem.
     expect(CLUSTER_GRID_PX).toBeGreaterThan(24);
+  });
+});
+
+/**
+ * Zooming until the chosen property is actually on the map.
+ *
+ * The reported case: selecting from the list flew to a fixed zoom and left two
+ * neighbours drawn as a badge reading "2". The thing just chosen was not
+ * visible, and only manual zooming revealed it.
+ */
+describe('zoomToIsolate', () => {
+  // Two houses on the same street, about thirty metres apart -- roughly seven
+  // pixels at zoom 15, so well inside one grid cell. This is the reported case;
+  // the 77044 properties above are 200m apart and already separate at 15.
+  const SAME_STREET: Clusterable[] = [
+    { id: 'western-ridge-8', latitude: 30.1502, longitude: -95.4721 },
+    { id: 'western-ridge-10', latitude: 30.1504, longitude: -95.4723 },
+  ];
+
+  it('goes past the default zoom when a neighbour is too close', () => {
+    const zoom = zoomToIsolate(map, SAME_STREET, 'western-ridge-8', 15, 19);
+    expect(zoom).toBeGreaterThan(15);
+    expect(zoom).toBeLessThanOrEqual(19);
+
+    // The point of the exercise: at the zoom it chose, the property really is
+    // drawn on its own rather than inside a badge.
+    const own = clusterByGrid(map, SAME_STREET, zoom).find((cluster) =>
+      cluster.members.some((member) => member.id === 'western-ridge-8'),
+    );
+    expect(own?.members).toHaveLength(1);
+  });
+
+  it('does not zoom past what is needed', () => {
+    // Nothing near it, so the ordinary zoom already shows it alone. Going
+    // further would drop somebody onto the rooftops for no reason.
+    expect(zoomToIsolate(map, [...HOUSTON_77044, FAR_AWAY], 'woodlands', 15, 19)).toBe(15);
+  });
+
+  it('gives up at the ceiling for two records on the same spot', () => {
+    // Two units at one address. No zoom separates them, and pretending
+    // otherwise would loop or overshoot.
+    const twins: Clusterable[] = [
+      { id: 'unit-a', latitude: 29.8657, longitude: -95.2028 },
+      { id: 'unit-b', latitude: 29.8657, longitude: -95.2028 },
+    ];
+    expect(zoomToIsolate(map, twins, 'unit-a', 15, 19)).toBe(19);
+  });
+
+  it('never returns below the ceiling it was given', () => {
+    expect(zoomToIsolate(map, HOUSTON_77044, 'copper-hollow', 21, 19)).toBe(19);
   });
 });
