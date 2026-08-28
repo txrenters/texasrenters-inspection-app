@@ -449,10 +449,26 @@ export default function ApiClientsPage() {
         <ApiClientDialog
           client={editing}
           onClose={() => setDialogOpen(false)}
+          error={editing ? updateClient.error : createClient.error}
           onSubmit={(input) => {
             const done = { onSuccess: () => setDialogOpen(false) };
-            if (editing) updateClient.mutate({ id: editing.id, ...input }, done);
-            else createClient.mutate(input, done);
+            if (editing) {
+              // `environment` is deliberately not sent: it is fixed at creation
+              // because every issued key encodes it. The update DTO rejects it
+              // outright, which is what turned an edit into a bare 400.
+              updateClient.mutate(
+                {
+                  id: editing.id,
+                  name: input.name,
+                  description: input.description,
+                  permissions: input.permissions,
+                  rateLimitPerMinute: input.rateLimitPerMinute,
+                  requireSignature: input.requireSignature,
+                  allowedIps: input.allowedIps,
+                },
+                done,
+              );
+            } else createClient.mutate(input, done);
           }}
           open
           pending={createClient.isPending || updateClient.isPending}

@@ -47,12 +47,15 @@ const isWrite = (permission: string) => !permission.endsWith(':read');
  */
 export function ApiClientDialog({
   client,
+  error,
   onClose,
   onSubmit,
   open,
   pending,
 }: {
   client?: ApiClientSummary | null;
+  /** A failed save. Rendered here because the dialog stays open on failure. */
+  error?: unknown;
   onClose: () => void;
   onSubmit: (input: ApiClientInput) => void;
   open: boolean;
@@ -113,22 +116,45 @@ export function ApiClientDialog({
             </Field>
             <Field>
               <FieldLabel htmlFor="client-environment">Environment</FieldLabel>
-              <Select
-                onValueChange={(value) => setEnvironment(value as 'LIVE' | 'TEST')}
-                value={environment}
-              >
-                <SelectTrigger id="client-environment">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="LIVE">Live</SelectItem>
-                  <SelectItem value="TEST">Test</SelectItem>
-                </SelectContent>
-              </Select>
-              <FieldDescription>
-                Carried in the key itself, so a key pasted into the wrong environment fails rather
-                than writing.
-              </FieldDescription>
+              {/* Fixed once the client exists.
+                  
+                  The environment is encoded in every key the client holds —
+                  `trk_test_…` — and the guard refuses a key whose environment
+                  disagrees with its client. Changing it here would invalidate
+                  every issued key at once, without revoking one, which is the
+                  worst version of that: the keys still exist, still look right,
+                  and simply stop working. */}
+              {client ? (
+                <>
+                  <p className="text-sm" id="client-environment">
+                    {client.environment === 'LIVE' ? 'Live' : 'Test'}
+                  </p>
+                  <FieldDescription>
+                    Fixed at creation. It is encoded in every key this client holds, so changing it
+                    would stop all of them working. Register a separate client for the other
+                    environment.
+                  </FieldDescription>
+                </>
+              ) : (
+                <>
+                  <Select
+                    onValueChange={(value) => setEnvironment(value as 'LIVE' | 'TEST')}
+                    value={environment}
+                  >
+                    <SelectTrigger id="client-environment">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="LIVE">Live</SelectItem>
+                      <SelectItem value="TEST">Test</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    Carried in the key itself, so a key pasted into the wrong environment fails
+                    rather than writing. It cannot be changed afterwards.
+                  </FieldDescription>
+                </>
+              )}
             </Field>
           </div>
 
@@ -225,6 +251,18 @@ export function ApiClientDialog({
               </p>
             </AlertDescription>
           </Alert>
+
+          {/* A rejected save used to close nothing and say nothing: the request
+              failed, the dialog sat there, and the only trace was a 400 in the
+              network tab. */}
+          {error ? (
+            <Alert variant="destructive">
+              <ShieldAlertIcon aria-hidden />
+              <AlertDescription>
+                {error instanceof Error ? error.message : 'The client could not be saved.'}
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {blocked ? (
             <Alert variant="warning">
