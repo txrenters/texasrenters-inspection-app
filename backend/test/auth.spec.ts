@@ -1,6 +1,5 @@
 import { createHmac } from 'node:crypto';
 
-import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { UserRole } from '@texasrenters/shared';
 
 import {
@@ -50,7 +49,7 @@ describe('access-token validation', () => {
             exp: Math.floor(Date.now() / 1000) + 60,
           }),
         ),
-      ).toThrow(UnauthorizedException);
+      ).toThrow(expect.objectContaining({ code: expect.stringMatching(/^AUTH_/) }));
     });
 
     it('accepts a token from our own issuer, audience and signing key', () => {
@@ -84,7 +83,7 @@ describe('access-token validation', () => {
             exp: Math.floor(Date.now() / 1000) + 60,
           }),
         ),
-      ).toThrow(UnauthorizedException);
+      ).toThrow(expect.objectContaining({ code: expect.stringMatching(/^AUTH_/) }));
     });
 
     it('tolerates a trailing slash on the configured issuer', () => {
@@ -155,7 +154,7 @@ describe('access-token validation', () => {
           secret as string,
         ),
       ),
-    ).toThrow(UnauthorizedException);
+    ).toThrow(expect.objectContaining({ code: expect.stringMatching(/^AUTH_/) }));
   });
 
   it('rejects a token issued by an unrelated issuer', () => {
@@ -168,7 +167,7 @@ describe('access-token validation', () => {
           exp: Math.floor(Date.now() / 1000) + 60,
         }),
       ),
-    ).toThrow(UnauthorizedException);
+    ).toThrow(expect.objectContaining({ code: expect.stringMatching(/^AUTH_/) }));
   });
 });
 
@@ -222,6 +221,8 @@ describe('temporary-password authorization boundary', () => {
       getClass: () => undefined,
     } as never;
 
-    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(context)).toThrow(
+      expect.objectContaining({ code: 'AUTH_PASSWORD_CHANGE_REQUIRED' }),
+    );
   });
 });

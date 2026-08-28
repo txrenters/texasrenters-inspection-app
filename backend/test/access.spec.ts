@@ -1,4 +1,3 @@
-import { ForbiddenException } from '@nestjs/common';
 import { UserRole } from '@texasrenters/shared';
 import { resolveEffectivePermissions } from '@texasrenters/shared';
 
@@ -66,12 +65,18 @@ describe('PermissionsGuard', () => {
 
   it('denies a user missing the required permission', () => {
     const reviewer = { ...admin, roles: [], permissions: ['findings:review' as const] };
-    expect(() => guard.canActivate(contextFor(reviewer))).toThrow(ForbiddenException);
+    // Asserted on the code rather than the exception class: the code is what a
+    // client branches on, and it is now a documented part of the contract.
+    expect(() => guard.canActivate(contextFor(reviewer))).toThrow(
+      expect.objectContaining({ code: 'PERMISSION_DENIED' }),
+    );
   });
 
   it('blocks a user who must change their password even with the permission', () => {
     const stale = { ...admin, mustChangePassword: true };
-    expect(() => guard.canActivate(contextFor(stale))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(contextFor(stale))).toThrow(
+      expect.objectContaining({ code: 'AUTH_PASSWORD_CHANGE_REQUIRED' }),
+    );
   });
 
   it('requires every listed permission (AND semantics)', () => {
@@ -79,7 +84,9 @@ describe('PermissionsGuard', () => {
       getAllAndOverride: () => ['users:manage', 'roles:manage'],
     } as never);
     const partial = { ...admin, permissions: ['users:manage' as const] };
-    expect(() => bothRequired.canActivate(contextFor(partial))).toThrow(ForbiddenException);
+    expect(() => bothRequired.canActivate(contextFor(partial))).toThrow(
+      expect.objectContaining({ code: 'PERMISSION_DENIED' }),
+    );
   });
 });
 
