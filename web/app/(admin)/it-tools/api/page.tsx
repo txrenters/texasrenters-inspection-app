@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 
+import { CopyButton } from '@/components/api-reference/copy-button';
 import { EndpointConsole } from '@/components/api-reference/endpoint-console';
 import { JsonView } from '@/components/api-reference/json-view';
 import { SchemaTable, resolveSchema } from '@/components/api-reference/schema-view';
@@ -230,6 +231,10 @@ function EndpointDetail({
             {method}
           </span>
           <span className="font-mono text-sm break-all">{path}</span>
+          {/* The path alone, not the method with it: what gets pasted into a
+              client is the URL, and a copied "GET /api/v1/..." has to be edited
+              before it is usable. */}
+          <CopyButton label="Copy path" value={path} />
         </div>
         {operation.summary || operation.description ? (
           <p className="text-muted-foreground text-sm text-pretty">
@@ -420,11 +425,17 @@ export default function ApiReferencePage() {
         title="API reference"
       />
 
+      {/* The old wording said requests ran on the reader's own session. They no
+          longer do — Try it authenticates as the integration whose key you
+          paste, which is the whole point: you see what that integration sees,
+          including the 403 on a route no key may reach. */}
       <Alert variant="warning">
-        <AlertTitle>This console talks to the live API</AlertTitle>
+        <AlertTitle>Try it sends real requests, as the integration you name</AlertTitle>
         <AlertDescription>
-          Requests sent from here use your own session and your own permissions, and are recorded in
-          the audit trail under your name. There is no separate sandbox.
+          Requests carry the API key you supply, not your session — so they do exactly what that
+          integration can do, against live data. Keys reach only the endpoints marked “Open to
+          integrations”; everywhere else the API answers{' '}
+          <code className="text-xs">API_ROUTE_NOT_OPEN_TO_KEYS</code>.
         </AlertDescription>
       </Alert>
 

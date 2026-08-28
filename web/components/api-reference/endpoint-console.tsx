@@ -4,6 +4,12 @@ import type { ApiDocument, ApiOperation } from '@texasrenters/shared';
 import { AlertTriangleIcon, PlayIcon, RotateCcwIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import {
+  CredentialFields,
+  apiKeyHeaderValue,
+  credentialProblem,
+  type Credential,
+} from '@/components/api-reference/credential-fields';
 import { JsonView } from '@/components/api-reference/json-view';
 import { resolveSchema, schemaSkeleton, schemaTypeLabel } from '@/components/api-reference/schema-view';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -79,6 +85,8 @@ export function EndpointConsole({
   );
   const bodySchema = operation.requestBody?.content?.['application/json']?.schema;
 
+  const [credential, setCredential] = useState<Credential>({ keyId: '', secret: '' });
+  const [attempted, setAttempted] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [body, setBody] = useState('');
   const [armed, setArmed] = useState(false);
@@ -87,11 +95,15 @@ export function EndpointConsole({
   const [result, setResult] = useState<RawApiResponse | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  // Everything resets when the reader moves to another endpoint. Carrying a
-  // half-filled body or — far worse — an armed write across that switch is how
-  // someone sends the previous endpoint's payload to this one.
+  // Everything except the credential resets when the reader moves to another
+  // endpoint. Carrying a half-filled body or — far worse — an armed write across
+  // that switch is how someone sends the previous endpoint's payload to this
+  // one. The key is deliberately kept: it identifies the integration being
+  // tested, and re-pasting a secret for every endpoint invites storing it
+  // somewhere worse.
   useEffect(() => {
     setValues({});
+    setAttempted(false);
     setArmed(false);
     setConfirmation('');
     setResult(null);
@@ -100,6 +112,7 @@ export function EndpointConsole({
   }, [bodySchema, document, method, path]);
 
   const missingPathParameter = pathParameters.find((parameter) => !values[parameter.name]?.trim());
+  const credentialFault = credentialProblem(credential);
 
   const resolvedPath = () => {
     let target = path;
@@ -117,19 +130,36 @@ export function EndpointConsole({
     return query ? `${target}?${query}` : target;
   };
 
+  // A credential fault deliberately does NOT disable the button. Disabling it
+  // leaves someone with a dead control and no reason given — pressing Send is
+  // how you find out which half is missing, so Send has to stay pressable.
   const canSend =
     !running &&
     !missingPathParameter &&
     (!mutates || armed) &&
     (!isDelete || confirmation.trim().toUpperCase() === 'DELETE');
 
+  /** The headers the request will carry, shown before it is sent. */
+  const requestHeaders = () => ({
+    'x-api-key': credentialFault
+      ? `${credential.keyId.trim() || '<key id>'}.${credential.secret.trim() ? '…' : '<secret>'}`
+      : apiKeyHeaderValue(credential),
+    'content-type': 'application/json',
+  });
+
   const send = async () => {
+    setAttempted(true);
+    // Refused here rather than sent to earn a 401: the API would answer
+    // API_KEY_MISSING or API_KEY_INVALID, which is a slower way of learning
+    // something this page already knows.
+    if (credentialFault) return;
     setRunning(true);
     setFailure(null);
     try {
       setResult(
         await apiRawRequest(resolvedPath(), {
           method: method.toUpperCase(),
+          headers: { 'x-api-key': apiKeyHeaderValue(credential) },
           ...(mutates && body.trim() ? { body } : {}),
         }),
       );
@@ -146,6 +176,13 @@ export function EndpointConsole({
 
   return (
     <div className="space-y-4">
+      <CredentialFields
+        credential={credential}
+        onChange={setCredential}
+        problem={credentialFault}
+        showProblem={attempted}
+      />
+
       {pathParameters.length > 0 || queryParameters.length > 0 ? (
         <div className="grid gap-3 sm:grid-cols-2">
           {[...pathParameters, ...queryParameters].map((parameter) => {
@@ -198,12 +235,20 @@ export function EndpointConsole({
         </Field>
       ) : null}
 
-      <div className="bg-muted/40 rounded-md border p-3">
-        <p className="text-muted-foreground mb-2 text-xs">Request</p>
+      {/* The request as it will actually be sent, headers included. An
+          integrator's first question is "what do I send", and a path alone does
+          not answer it. */}
+      <div className="bg-muted/40 space-y-1 rounded-md border p-3">
+        <p className="text-muted-foreground mb-1 text-xs">Request</p>
         <p className="font-mono text-xs break-all">
           <span className="text-foreground font-semibold uppercase">{method}</span>{' '}
           {resolvedPath()}
         </p>
+        {Object.entries(requestHeaders()).map(([name, value]) => (
+          <p className="font-mono text-xs break-all" key={name}>
+            <span className="text-muted-foreground">{name}:</span> {value}
+          </p>
+        ))}
       </div>
 
       {mutates ? (
@@ -245,6 +290,12 @@ export function EndpointConsole({
             <RotateCcwIcon aria-hidden />
             Clear
           </Button>
+        ) : null}
+        {/* A pointer, not a repeat. The specific fault is stated beside the
+            field it belongs to; saying the same sentence twice is noise, and
+            leaves the reader unsure whether it is one problem or two. */}
+        {attempted && credentialFault ? (
+          <p className="text-destructive text-sm">Check the credentials above.</p>
         ) : null}
         {missingPathParameter ? (
           <p className="text-muted-foreground text-sm">

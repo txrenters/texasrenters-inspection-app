@@ -114,10 +114,9 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
  * console to read — and a 404 is a legitimate, informative answer there rather
  * than a failure.
  *
- * Uses the caller's own session, deliberately. The console mints no credential
- * and holds none: a request sent from it can do exactly what the person sending
- * it could already do through the rest of the application, and their permissions
- * are enforced by the same guards.
+ * The credential is supplied by the caller rather than taken from the session.
+ * The API reference sends an integration's own API key, so what you see is what
+ * that integration would get — including the 403 on a route no key may reach.
  */
 export interface RawApiResponse {
   status: number;
@@ -131,13 +130,11 @@ export interface RawApiResponse {
 
 export async function apiRawRequest(
   path: string,
-  options: { method: string; body?: string; signal?: AbortSignal },
+  options: { method: string; body?: string; headers: Record<string, string>; signal?: AbortSignal },
 ): Promise<RawApiResponse> {
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
   if (!baseUrl)
     throw new ApiError(0, 'API_NOT_CONFIGURED', 'The administrator API is not configured.');
-  const session = await getSession();
-  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
 
   const startedAt = performance.now();
   let response: Response;
@@ -149,7 +146,10 @@ export async function apiRawRequest(
       headers: {
         'content-type': 'application/json',
         ...NGROK_SKIP_INTERSTITIAL,
-        authorization: `Bearer ${session.accessToken}`,
+        // Whatever credential the caller chose. No session token is added here:
+        // the API reference authenticates as the integration being documented,
+        // not as the person reading the page.
+        ...options.headers,
       },
     });
   } catch {

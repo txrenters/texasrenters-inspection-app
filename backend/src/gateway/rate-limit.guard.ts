@@ -1,9 +1,10 @@
 /* Injection tokens are runtime imports required by Nest metadata. */
-import { HttpException, HttpStatus, Inject, Injectable, Optional } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import type { Response } from 'express';
 
 import { RedisCacheConnection } from '../cache/redis-cache.connection';
+import { ApplicationError } from '../common/errors';
 import type { ApiKeyRequest } from './api-key.guard';
 
 const WINDOW_SECONDS = 60;
@@ -60,9 +61,10 @@ export class ApiRateLimitGuard implements CanActivate {
 
     if (count > limit) {
       response.setHeader('retry-after', String(resetSeconds));
-      throw new HttpException(
+      throw new ApplicationError(
+        429,
+        'API_RATE_LIMIT_EXCEEDED',
         'Rate limit exceeded for this API client.',
-        HttpStatus.TOO_MANY_REQUESTS,
       );
     }
     return true;

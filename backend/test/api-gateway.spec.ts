@@ -1,5 +1,5 @@
 import type { ExecutionContext } from '@nestjs/common';
-import { ForbiddenException, HttpException, UnauthorizedException } from '@nestjs/common';
+import { HttpException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
 import {
@@ -9,6 +9,7 @@ import {
 } from '@texasrenters/shared';
 
 import type { PrismaService } from '../src/common/prisma.service';
+import type { ApplicationError } from '../src/common/errors';
 import { GatewayController } from '../src/gateway/gateway.controller';
 import { ApiClientService } from '../src/gateway/api-client.service';
 import {
@@ -330,7 +331,7 @@ describe('ApiKeyGuard', () => {
     // every route third-party reachable on the same day.
     await expect(
       guard.canActivate(contextFor(fakeRequest({ key: generated.key }), closedRoute)),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    ).rejects.toMatchObject({ code: 'API_ROUTE_NOT_OPEN_TO_KEYS' });
   });
 
   it('refuses a test key against a live client, and the reverse', async () => {
@@ -339,7 +340,7 @@ describe('ApiKeyGuard', () => {
 
     await expect(
       guard.canActivate(contextFor(fakeRequest({ key: generated.key }), openRoute())),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
+    ).rejects.toMatchObject({ code: 'API_KEY_INVALID' });
   });
 
   it.each([
@@ -352,7 +353,7 @@ describe('ApiKeyGuard', () => {
 
     await expect(
       guard.canActivate(contextFor(fakeRequest({ key: generated.key }), openRoute())),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
+    ).rejects.toMatchObject({ code: 'API_KEY_INVALID' });
   });
 
   it('enforces the source address allowlist when one is configured', async () => {
@@ -363,7 +364,7 @@ describe('ApiKeyGuard', () => {
       guard.canActivate(
         contextFor(fakeRequest({ key: generated.key, ip: '203.0.113.10' }), openRoute()),
       ),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    ).rejects.toMatchObject({ code: 'API_KEY_ADDRESS_NOT_ALLOWED' });
     await expect(
       guard.canActivate(
         contextFor(fakeRequest({ key: generated.key, ip: '198.51.100.4' }), openRoute()),
@@ -383,7 +384,7 @@ describe('ApiKeyGuard', () => {
       guard.canActivate(
         contextFor(fakeRequest({ key: generated.key, method: 'POST' }), openRoute()),
       ),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    ).rejects.toMatchObject({ code: 'API_CLIENT_WRITE_NOT_ENABLED' });
   });
 
   it('accepts a correctly signed write for a signature-enabled client', async () => {
@@ -673,5 +674,88 @@ describe('the third-party gateway surface', () => {
       for (const permission of required)
         expect(MACHINE_FORBIDDEN_PERMISSIONS).not.toContain(permission);
     }
+  });
+});
+
+describe('gateway error codes', () => {
+  beforeEach(() => {
+    process.env.API_KEY_PEPPER = PEPPER;
+  });
+  afterEach(() => {
+    delete process.env.API_KEY_PEPPER;
+  });
+
+  it('gives every rejection a stable code an integration can branch on', async () => {
+    const generated = generateApiKey('LIVE');
+
+    const codeFor = async (guard: ApiKeyGuard, request: unknown, handler: () => void) =>
+      guard
+        .canActivate(contextFor(request, handler))
+        .then(() => 'no-error')
+        .catch((error: ApplicationError) => error.code);
+
+    // Absent is distinguishable from rejected: "you sent nothing" tells an
+    // attacker nothing and tells an integrator exactly what to fix.
+    expect(await codeFor(guardFor(generated).guard, fakeRequest(), openRoute())).toBe(
+      'API_KEY_MISSING',
+    );
+
+    // Every way a key can be rejected collapses to one code, on purpose.
+    expect(
+      await codeFor(
+        guardFor(generated, { revokedAt: new Date() }).guard,
+        fakeRequest({ key: generated.key }),
+        openRoute(),
+      ),
+    ).toBe('API_KEY_INVALID');
+    expect(
+      await codeFor(
+        guardFor(generateApiKey('TEST'), { client: { environment: 'LIVE' } }).guard,
+        fakeRequest({ key: generateApiKey('TEST').key }),
+        openRoute(),
+      ),
+    ).toBe('API_KEY_INVALID');
+
+    expect(
+      await codeFor(guardFor(generated).guard, fakeRequest({ key: generated.key }), closedRoute),
+    ).toBe('API_ROUTE_NOT_OPEN_TO_KEYS');
+
+    expect(
+      await codeFor(
+        guardFor(generated, { client: { allowedIps: ['198.51.100.4'] } }).guard,
+        fakeRequest({ key: generated.key, ip: '203.0.113.10' }),
+        openRoute(),
+      ),
+    ).toBe('API_KEY_ADDRESS_NOT_ALLOWED');
+
+    expect(
+      await codeFor(
+        guardFor(generated, { client: { requireSignature: false } }).guard,
+        fakeRequest({ key: generated.key, method: 'POST' }),
+        openRoute(),
+      ),
+    ).toBe('API_CLIENT_WRITE_NOT_ENABLED');
+
+    expect(
+      await codeFor(
+        guardFor(generated, { client: { requireSignature: true } }).guard,
+        fakeRequest({ key: generated.key, method: 'POST' }),
+        openRoute(),
+      ),
+    ).toBe('API_SIGNATURE_INVALID');
+  });
+
+  it('rate limiting reports 429 with its own code', async () => {
+    const guard = new ApiRateLimitGuard();
+    const request = { user: { apiClientId: 'client-codes' }, apiClientRateLimit: 1 };
+    const response = { setHeader: () => undefined };
+
+    await guard.canActivate(contextFor(request, () => undefined, response));
+    const error = await guard
+      .canActivate(contextFor(request, () => undefined, response))
+      .catch((thrown: unknown) => thrown);
+
+    expect((error as HttpException).getStatus()).toBe(429);
+    expect(error).toMatchObject({ code: 'API_RATE_LIMIT_EXCEEDED' });
   });
 });
