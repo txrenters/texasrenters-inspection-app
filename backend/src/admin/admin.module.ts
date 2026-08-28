@@ -65,6 +65,6 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
   ],
   // For the third-party gateway controller, which serves a curated read-only
   // slice of the same data rather than reimplementing the queries behind it.
-  exports: [AdminService],
+  exports: [AdminService, PropertyGeocodingService],
 })
 export class AdminModule {}
