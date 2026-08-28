@@ -1,10 +1,5 @@
 /* Injection tokens are runtime imports required by Nest metadata. */
-import {
-  ForbiddenException,
-  Inject,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
@@ -12,6 +7,7 @@ import type { Request } from 'express';
 import { isPermissionKey, type PermissionKey } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
+import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
 import { API_KEY_HEADER } from '../openapi/openapi.document';
@@ -75,7 +71,14 @@ export class ApiKeyGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<ApiKeyRequest>();
     const parsed = parseApiKey(request.header(API_KEY_HEADER));
-    if (!parsed) throw new UnauthorizedException('A valid API key is required.');
+    // Distinguishable from a rejected key on purpose: "you sent nothing" tells
+    // an attacker nothing, and tells an integrator exactly what to fix.
+    if (!parsed)
+      throw new ApplicationError(
+        401,
+        'API_KEY_MISSING',
+        `A valid ${API_KEY_HEADER} header is required.`,
+      );
 
     // Before the tenant exists, because this lookup is what produces it — the
     // same exception the user-profile lookup needs, and the reason the policy on
@@ -87,7 +90,15 @@ export class ApiKeyGuard implements CanActivate {
       }),
     );
 
-    const invalid = new UnauthorizedException('The API key is not valid.');
+    /**
+     * One code and one message for every way a key can be rejected.
+     *
+     * Unknown prefix, wrong secret, revoked, expired, wrong environment, dead
+     * client — all identical from outside. Splitting them would hand an attacker
+     * a probe for which prefixes exist and which are still live, and the
+     * integrator's next step is the same in every case: check the key.
+     */
+    const invalid = new ApplicationError(401, 'API_KEY_INVALID', 'The API key is not valid.');
     if (!record) throw invalid;
     if (!apiKeySecretMatches(parsed.prefix, parsed.secret, record.secretHash)) throw invalid;
     if (record.revokedAt) throw invalid;
@@ -100,7 +111,11 @@ export class ApiKeyGuard implements CanActivate {
     if (client.environment !== parsed.environment) throw invalid;
 
     if (client.allowedIps.length > 0 && !client.allowedIps.includes(clientIp(request)))
-      throw new ForbiddenException('This API key is not permitted from this address.');
+      throw new ApplicationError(
+        403,
+        'API_KEY_ADDRESS_NOT_ALLOWED',
+        'This API key is not permitted from this address.',
+      );
 
     // Authenticated first, so an unauthenticated caller cannot map which routes
     // are open to integrations by reading the difference between 401 and 403.
@@ -109,14 +124,20 @@ export class ApiKeyGuard implements CanActivate {
       [context.getHandler(), context.getClass()],
     );
     if (!machineAccessible)
-      throw new ForbiddenException('This endpoint is not available to API key clients.');
+      throw new ApplicationError(
+        403,
+        'API_ROUTE_NOT_OPEN_TO_KEYS',
+        'This endpoint is not available to API key clients.',
+      );
 
     const method = request.method.toUpperCase();
     if (WRITE_METHODS.has(method)) {
       // Enforced here and not only where the client was created, so relaxing the
       // flag afterwards cannot quietly open unsigned writes.
       if (!client.requireSignature)
-        throw new ForbiddenException(
+        throw new ApplicationError(
+          403,
+          'API_CLIENT_WRITE_NOT_ENABLED',
           'This client is not configured for write access. Request signing is required to write.',
         );
       const failure = verifySignature(
@@ -127,9 +148,15 @@ export class ApiKeyGuard implements CanActivate {
         request.header(SIGNATURE_HEADER),
         request.rawBody,
       );
+      // Distinguished from API_KEY_INVALID, and safely so: this is only
+      // reachable once the key has already been accepted, so the caller learns
+      // nothing they did not already hold.
       if (failure)
-        throw new UnauthorizedException(
+        throw new ApplicationError(
+          401,
+          'API_SIGNATURE_INVALID',
           `The request signature could not be verified (${failure}).`,
+          [failure],
         );
     }
 

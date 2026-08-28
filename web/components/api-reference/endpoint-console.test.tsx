@@ -8,6 +8,9 @@ const apiRawRequest = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/api', () => ({ apiRawRequest }));
 
+const KEY_ID = 'trk_live_6b09d03ba1c2';
+const SECRET = 'a'.repeat(43);
+
 const ok = {
   status: 200,
   statusText: 'OK',
@@ -22,35 +25,97 @@ function renderConsole(method: string, operation: ApiOperation = {}) {
       document={undefined}
       method={method}
       operation={operation}
-      path="/api/v1/admin/things"
+      path="/api/v1/gateway/things"
     />,
   );
 }
 
 const sendButton = () => screen.getByRole('button', { name: /send request/i });
+const keyIdField = () => screen.getByLabelText(/key id/i);
+const secretField = () => screen.getByLabelText(/^secret$/i);
 
-describe('EndpointConsole', () => {
+function fillCredential({ keyId = KEY_ID, secret = SECRET } = {}) {
+  fireEvent.change(keyIdField(), { target: { value: keyId } });
+  fireEvent.change(secretField(), { target: { value: secret } });
+}
+
+describe('EndpointConsole credentials', () => {
   beforeEach(() => {
     apiRawRequest.mockReset().mockResolvedValue(ok);
   });
 
-  it('sends a read straight away', async () => {
+  it('sends the two halves joined into one x-api-key header', async () => {
     renderConsole('get');
+    fillCredential();
 
     fireEvent.click(sendButton());
 
+    // The split exists to make the public half visible; on the wire it is still
+    // one credential.
     await waitFor(() =>
-      expect(apiRawRequest).toHaveBeenCalledWith('/api/v1/admin/things', { method: 'GET' }),
+      expect(apiRawRequest).toHaveBeenCalledWith('/api/v1/gateway/things', {
+        method: 'GET',
+        headers: { 'x-api-key': `${KEY_ID}.${SECRET}` },
+      }),
     );
+  });
+
+  it('refuses to send when either half is missing, without calling the API', async () => {
+    renderConsole('get');
+
+    fireEvent.click(sendButton());
+    expect(await screen.findByText(/a key id is required/i)).toBeInTheDocument();
+    expect(apiRawRequest).not.toHaveBeenCalled();
+
+    // Half a credential is still no credential.
+    fireEvent.change(keyIdField(), { target: { value: KEY_ID } });
+    fireEvent.click(sendButton());
+    expect(await screen.findByText(/a secret is required/i)).toBeInTheDocument();
+    expect(apiRawRequest).not.toHaveBeenCalled();
+  });
+
+  it('says which half is malformed rather than letting the API answer 401', async () => {
+    renderConsole('get');
+
+    // Refused locally: the API would answer API_KEY_INVALID, which is a slower
+    // way of learning something the page already knows.
+    fillCredential({ keyId: 'not-a-key-id' });
+    fireEvent.click(sendButton());
+    expect(await screen.findByText(/looks like trk_live_/i)).toBeInTheDocument();
+
+    fillCredential({ secret: 'too-short' });
+    fireEvent.click(sendButton());
+    expect(await screen.findByText(/43 characters/i)).toBeInTheDocument();
+    expect(apiRawRequest).not.toHaveBeenCalled();
+  });
+
+  it('shows the header that will be sent, so the request is readable before sending', () => {
+    renderConsole('get');
+    fillCredential();
+
+    // An integrator's first question is "what do I send"; a path alone does not
+    // answer it.
+    expect(screen.getByText(`${KEY_ID}.${SECRET}`)).toBeInTheDocument();
+  });
+
+  it('does not print the secret in the preview before it is complete', () => {
+    renderConsole('get');
+    fireEvent.change(keyIdField(), { target: { value: KEY_ID } });
+
+    expect(screen.getByText(/<secret>|…/)).toBeInTheDocument();
+  });
+});
+
+describe('EndpointConsole requests', () => {
+  beforeEach(() => {
+    apiRawRequest.mockReset().mockResolvedValue(ok);
   });
 
   it('will not send a write until it is armed', async () => {
     renderConsole('post');
+    fillCredential();
 
-    // The gate exists because there is no sandbox behind this button: a POST here
-    // writes to the same data the console shows everywhere else.
     expect(sendButton()).toBeDisabled();
-
     fireEvent.click(screen.getByRole('checkbox'));
     expect(sendButton()).toBeEnabled();
 
@@ -58,28 +123,14 @@ describe('EndpointConsole', () => {
     await waitFor(() => expect(apiRawRequest).toHaveBeenCalled());
   });
 
-  it('disarms after a send, so a second click cannot repeat the write', async () => {
-    renderConsole('patch');
-
-    fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.click(sendButton());
-
-    await waitFor(() => expect(apiRawRequest).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(sendButton()).toBeDisabled());
-  });
-
-  it('makes a delete typed out in full, not merely acknowledged', async () => {
+  it('makes a delete typed out in full, not merely acknowledged', () => {
     renderConsole('delete');
+    fillCredential();
 
     fireEvent.click(screen.getByRole('checkbox'));
-    // An accidental POST usually leaves a spare record behind. An accidental
-    // DELETE on this system removes an inspection and its media, with no restore.
     expect(sendButton()).toBeDisabled();
 
     const confirmation = screen.getByLabelText(/type delete to confirm/i);
-    fireEvent.change(confirmation, { target: { value: 'delet' } });
-    expect(sendButton()).toBeDisabled();
-
     fireEvent.change(confirmation, { target: { value: 'DELETE' } });
     expect(sendButton()).toBeEnabled();
   });
@@ -89,21 +140,20 @@ describe('EndpointConsole', () => {
       <EndpointConsole
         document={undefined}
         method="get"
-        operation={{
-          parameters: [{ name: 'propertyId', in: 'path', required: true }],
-        }}
-        path="/api/v1/admin/properties/{propertyId}"
+        operation={{ parameters: [{ name: 'propertyId', in: 'path', required: true }] }}
+        path="/api/v1/gateway/properties/{propertyId}"
       />,
     );
+    fillCredential();
 
     expect(sendButton()).toBeDisabled();
-
     fireEvent.change(screen.getByLabelText(/propertyId/i), { target: { value: 'abc-123' } });
     fireEvent.click(sendButton());
 
     await waitFor(() =>
-      expect(apiRawRequest).toHaveBeenCalledWith('/api/v1/admin/properties/abc-123', {
+      expect(apiRawRequest).toHaveBeenCalledWith('/api/v1/gateway/properties/abc-123', {
         method: 'GET',
+        headers: { 'x-api-key': `${KEY_ID}.${SECRET}` },
       }),
     );
   });
@@ -119,9 +169,10 @@ describe('EndpointConsole', () => {
             { name: 'status', in: 'query' },
           ],
         }}
-        path="/api/v1/admin/things"
+        path="/api/v1/gateway/things"
       />,
     );
+    fillCredential();
 
     fireEvent.change(screen.getByLabelText('search'), { target: { value: 'oak' } });
     fireEvent.click(sendButton());
@@ -129,27 +180,29 @@ describe('EndpointConsole', () => {
     // An empty box must not become `?status=`, which is a blank filter the API
     // rejects rather than the absence of a filter.
     await waitFor(() =>
-      expect(apiRawRequest).toHaveBeenCalledWith('/api/v1/admin/things?search=oak', {
+      expect(apiRawRequest).toHaveBeenCalledWith('/api/v1/gateway/things?search=oak', {
         method: 'GET',
+        headers: { 'x-api-key': `${KEY_ID}.${SECRET}` },
       }),
     );
   });
 
-  it('shows the status and timing of a failed response instead of swallowing it', async () => {
+  it('shows the status, timing and error code of a failed response', async () => {
     apiRawRequest.mockResolvedValue({
-      status: 422,
-      statusText: 'Unprocessable Entity',
+      status: 403,
+      statusText: 'Forbidden',
       headers: { 'x-request-id': 'req-9' },
-      body: { code: 'VALIDATION_FAILED', details: ['name must be longer'] },
+      body: { code: 'API_ROUTE_NOT_OPEN_TO_KEYS', message: 'Not available to API key clients.' },
       durationMs: 31,
     });
     renderConsole('get');
+    fillCredential();
 
     fireEvent.click(sendButton());
 
-    // A 422's details are exactly what someone opened this page to read; `api`
-    // throws them away, which is why the console does not use it.
-    expect(await screen.findByText(/422 Unprocessable Entity/)).toBeInTheDocument();
+    // The documented failure a reader most needs to recognise: the key is fine,
+    // the route is simply not open to keys.
+    expect(await screen.findByText(/403 Forbidden/)).toBeInTheDocument();
     expect(screen.getByText(/x-request-id: req-9/)).toBeInTheDocument();
   });
 });

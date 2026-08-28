@@ -160,11 +160,54 @@ delegated tokens — not this one.
 
 ## Errors
 
-| Status | When |
-| --- | --- |
-| 401 | Missing, malformed, unknown, revoked or expired key; wrong secret; environment mismatch; bad or stale signature |
-| 403 | Route not open to integrations; permission not held; source address not allowlisted; unsigned write |
-| 429 | Client's per-minute allowance spent |
+Every failure carries a stable `code`, so an integration can branch on the cause
+rather than parse a message. The body is always the same shape:
 
-401 says the same thing for every cause. Distinguishing "unknown key" from "wrong
-secret" from "revoked" hands an attacker a probe for which prefixes exist.
+```json
+{
+  "statusCode": 403,
+  "code": "API_ROUTE_NOT_OPEN_TO_KEYS",
+  "message": "This endpoint is not available to API key clients.",
+  "details": [],
+  "requestId": "62cdc2d4-163f-4cc6-88e5-7472b80e2ac8"
+}
+```
+
+Quote `requestId` when reporting a problem: it is in the server logs for that
+exact request.
+
+| Status | `code` | Cause | What to do |
+| --- | --- | --- | --- |
+| 401 | `API_KEY_MISSING` | No `x-api-key` header, or it does not parse | Send the key as `trk_<env>_<prefix>.<secret>` |
+| 401 | `API_KEY_INVALID` | Unknown prefix, wrong secret, revoked, expired, wrong environment, or a deactivated client | Check the key; issue a replacement if unsure |
+| 401 | `API_SIGNATURE_INVALID` | Signature absent, malformed, outside the five-minute window, or not matching | Recompute per **Signing**. `details[0]` names which |
+| 403 | `API_ROUTE_NOT_OPEN_TO_KEYS` | The key is valid; the route is not open to integrations | Nothing — this route is not part of the contract |
+| 403 | `API_KEY_ADDRESS_NOT_ALLOWED` | Source address is outside the client's allowlist | Add the address, or clear the allowlist |
+| 403 | `API_CLIENT_WRITE_NOT_ENABLED` | A write was attempted by a client that does not require signing | Turn on request signing for the client |
+| 403 | `REQUEST_FAILED` | Authenticated, but the client lacks the permission the route enforces | Add the scope to the client |
+| 429 | `API_RATE_LIMIT_EXCEEDED` | The client's per-minute allowance is spent | Back off until `retry-after`; raise the limit if it is genuinely too low |
+
+### Why 401 does not tell you which
+
+`API_KEY_INVALID` is deliberately one code with one message for unknown prefix,
+wrong secret, revoked, expired and environment mismatch. Splitting them would
+hand an attacker a probe for which prefixes exist and which are still live, and
+the integrator's next step is identical in every case: check the key.
+
+`API_SIGNATURE_INVALID` *is* distinguished, and safely so — it is only reachable
+once the key has already been accepted, so the caller learns nothing they did not
+already hold.
+
+## Issuing and managing keys
+
+These are console operations behind `system:manage`, not gateway routes, but
+their codes are worth stating since they are what an administrator meets:
+
+| Status | `code` | Cause |
+| --- | --- | --- |
+| 409 | `API_CLIENT_NAME_EXISTS` | Another client in this organization already has that name |
+| 409 | `API_CLIENT_REVOKED` | Keys cannot be issued for a revoked client |
+| 404 | `API_CLIENT_NOT_FOUND` / `API_KEY_NOT_FOUND` | No such client or key in this organization |
+| 422 | `API_CLIENT_SIGNATURE_REQUIRED` | Write scopes were granted without request signing. `details` lists them |
+| 422 | `API_KEY_EXPIRY_IN_PAST` | The expiry given is not in the future |
+| 503 | `API_KEY_SIGNING_NOT_CONFIGURED` | The deployment has no signing secret, so no key can be hashed |
