@@ -165,11 +165,15 @@ export class ApiClientService {
         'API_CLIENT_REVOKED',
         'Keys cannot be issued for a revoked client.',
       );
+    // Now only reachable on an application that booted without AUTH_JWT_SECRET,
+    // which the environment schema forbids — kept because issuing a key whose
+    // hash could not be computed would produce a credential that can never
+    // authenticate, and failing here says so.
     if (!apiKeyPepper())
       throw new ApplicationError(
         503,
         'API_KEY_SIGNING_NOT_CONFIGURED',
-        'API_KEY_PEPPER is not configured on this deployment, so keys cannot be issued.',
+        'This deployment has no signing secret, so keys cannot be issued.',
       );
     const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
     if (expiresAt && expiresAt.getTime() <= Date.now())

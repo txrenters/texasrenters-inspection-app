@@ -66,14 +66,57 @@ describe('API key credentials', () => {
     });
   });
 
-  it('refuses to match anything when no pepper is configured', () => {
+  it('derives a hashing key from the signing secret when none is configured', () => {
+    delete process.env.API_KEY_PEPPER;
+    process.env.AUTH_JWT_SECRET = 'a-signing-secret-that-every-deployment-has';
+
+    // The feature used to ship switched off: without its own API_KEY_PEPPER,
+    // issuing a key returned 503 on a perfectly healthy deployment. A 256-bit
+    // random secret cannot be guessed whether or not the hash is peppered, so
+    // demanding separate configuration bought nothing and cost the feature.
+    const generated = generateApiKey('LIVE');
+    const parsed = parseApiKey(generated.key)!;
+    expect(apiKeySecretMatches(parsed.prefix, parsed.secret, generated.secretHash)).toBe(true);
+
+    delete process.env.AUTH_JWT_SECRET;
+  });
+
+  it('derives a different key per signing secret, so deployments never validate each other', () => {
+    delete process.env.API_KEY_PEPPER;
+    process.env.AUTH_JWT_SECRET = 'deployment-one-signing-secret-value';
+    const generated = generateApiKey('LIVE');
+    const parsed = parseApiKey(generated.key)!;
+
+    // The property the old hard requirement was protecting, kept.
+    process.env.AUTH_JWT_SECRET = 'deployment-two-signing-secret-value';
+    expect(apiKeySecretMatches(parsed.prefix, parsed.secret, generated.secretHash)).toBe(false);
+
+    delete process.env.AUTH_JWT_SECRET;
+  });
+
+  it('lets an explicit pepper override the derived one, for independent rotation', () => {
+    process.env.AUTH_JWT_SECRET = 'a-signing-secret-that-every-deployment-has';
     const generated = withPepper(() => generateApiKey('LIVE'));
     const parsed = parseApiKey(generated.key)!;
 
-    // Unconfigured means refuse, not guess — the same rule the access-token
-    // verifier settled on. Degrading to an unkeyed hash would mean two
-    // deployments that never shared a secret could validate each other's keys.
+    // Hashed under the explicit pepper, so the derived key must not match it.
+    expect(apiKeySecretMatches(parsed.prefix, parsed.secret, generated.secretHash)).toBe(false);
+    process.env.API_KEY_PEPPER = PEPPER;
+    expect(apiKeySecretMatches(parsed.prefix, parsed.secret, generated.secretHash)).toBe(true);
+
     delete process.env.API_KEY_PEPPER;
+    delete process.env.AUTH_JWT_SECRET;
+  });
+
+  it('refuses to match when the deployment has no secret of any kind', () => {
+    const generated = withPepper(() => generateApiKey('LIVE'));
+    const parsed = parseApiKey(generated.key)!;
+
+    // Unreachable in a booted application — the environment schema refuses to
+    // start without AUTH_JWT_SECRET — but it must still fail closed rather than
+    // degrade to an unkeyed hash.
+    delete process.env.API_KEY_PEPPER;
+    delete process.env.AUTH_JWT_SECRET;
     expect(apiKeySecretMatches(parsed.prefix, parsed.secret, generated.secretHash)).toBe(false);
   });
 
@@ -527,8 +570,9 @@ describe('ApiClientService safeguards', () => {
     expect(created.permissions).toEqual(['properties:read']);
   });
 
-  it('will not issue a key while no pepper is configured', async () => {
+  it('will not issue a key on a deployment with no secret at all', async () => {
     delete process.env.API_KEY_PEPPER;
+    delete process.env.AUTH_JWT_SECRET;
     const { service } = serviceWith({
       id: 'client-1',
       organizationId: 'org-1',
