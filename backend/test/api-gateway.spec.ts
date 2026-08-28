@@ -652,6 +652,19 @@ describe('the third-party gateway surface', () => {
       }).toEqual({ route: name, method: 0 });
   });
 
+  it('keeps tracking behind its own grant, not the directory grant', () => {
+    const permissionsFor = (name: string) =>
+      (Reflect.getMetadata('permissions', prototype[name] as object) as string[] | undefined) ?? [];
+
+    // The whole point of splitting `technicians:locate` out: "see the technician
+    // directory" and "watch where a named employee is right now" are different
+    // decisions. If the position feed ever falls back to `technicians:read`,
+    // granting the directory silently grants live tracking again — which is
+    // exactly the state this replaced, and it is invisible from the console.
+    expect(permissionsFor('technicianLocations')).toEqual(['technicians:locate']);
+    expect(permissionsFor('technicians')).toEqual(['technicians:read']);
+  });
+
   it('never grants itself a permission a machine may not hold', () => {
     for (const name of handlers) {
       const required =

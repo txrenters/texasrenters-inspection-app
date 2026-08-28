@@ -121,7 +121,10 @@ export const adminNavigation: AdminNavigationGroup[] = [
         title: 'Technician map',
         href: '/map',
         icon: MapPin,
-        permission: 'technicians:read',
+        // The map is the location surface, so it follows the location grant.
+        // Someone who may see the directory but not track people should not be
+        // shown a map that will refuse to load for them.
+        permission: 'technicians:locate',
       },
     ],
   },

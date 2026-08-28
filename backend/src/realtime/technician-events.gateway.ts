@@ -114,12 +114,12 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
       // Live positions are a **separate** room on a **separate** permission,
       // and the distinction is the whole point. The organization room is joined
       // on `inspections:read`; the map endpoint that serves these same
-      // positions is gated on `technicians:read`, because where a named person
+      // positions is gated on `technicians:locate`, because where a named person
       // was at a given minute is a fact about them rather than about an
       // inspection. Broadcasting positions to the organization room would hand
       // them to every account holding `inspections:read` and quietly undo that
       // boundary — so it gets its own room, joined on its own grant.
-      const watchesLocations = user.permissions.includes('technicians:read');
+      const watchesLocations = user.permissions.includes('technicians:locate');
       if (!isTechnician && !watchesOrganization && !watchesLocations)
         throw new Error('No realtime audience.');
 
@@ -198,7 +198,7 @@ export class TechnicianEventsGateway implements OnGatewayConnection {
     return `technician:${technicianId}`;
   }
 
-  /** Positions only, and only for `technicians:read`. See `handleConnection`. */
+  /** Positions only, and only for `technicians:locate`. See `handleConnection`. */
   private locationRoom(organizationId: string) {
     return `organization:${organizationId}:locations`;
   }

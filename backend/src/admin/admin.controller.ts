@@ -781,14 +781,15 @@ export class AdminController {
   /**
    * Every technician's most recent position, for the map.
    *
-   * Behind `technicians:read` rather than `inspections:read`: this says where a
-   * named employee was at a given minute, which is a fact about a person
-   * rather than about an inspection, and the two should not be reachable with
-   * the same grant.
+   * Behind `technicians:locate`, not `technicians:read`. The same argument that
+   * separated this from `inspections:read` applies one step further in: "see the
+   * technician directory" and "watch where a named employee is right now" are
+   * different decisions, and bundling them meant granting the first silently
+   * granted the second.
    */
   @Get('technician-locations')
   @ApiTags(CONSOLE_MAP_TAG)
-  @RequirePermissions('technicians:read')
+  @RequirePermissions('technicians:locate')
   technicianLocations(@Req() request: AuthenticatedRequest) {
     return this.locations.latestPositions(request.user);
   }
@@ -842,7 +843,7 @@ export class AdminController {
   /**
    * A technician's day, ordered from where they are now.
    *
-   * `technicians:read`, the same key as the map: this reads a named person's
+   * `technicians:locate`, the same key as the map: this reads a named person's
    * live position to decide where the route starts.
    *
    * `date` defaults to today. The schema stores a calendar day and no clock
@@ -865,7 +866,7 @@ export class AdminController {
   }
 
   @Get('technicians/:technicianId/route')
-  @RequirePermissions('technicians:read')
+  @RequirePermissions('technicians:locate')
   technicianRoute(
     @Req() request: AuthenticatedRequest,
     @Param('technicianId') id: string,

@@ -76,11 +76,11 @@ function LegendKey({ children, swatch }: { children: React.ReactNode; swatch: Re
 }
 
 export default function TechnicianMapPage() {
-  // `technicians:read` rather than `inspections:read`: where a named person was
+  // `technicians:locate` rather than `technicians:read`: where a named person was
   // at a given minute is a fact about them, not about an inspection, and the
   // two should not open with the same key.
   const permissions = usePermissions();
-  const canView = permissions.has('technicians:read');
+  const canView = permissions.has('technicians:locate');
   const positions = useTechnicianLocations(canView);
 
   // Properties are a separate grant, and someone may hold one without the

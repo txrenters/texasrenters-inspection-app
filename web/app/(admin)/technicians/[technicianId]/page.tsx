@@ -112,7 +112,10 @@ export default function TechnicianDetailPage() {
   // Today, in the technician's own calendar day. The schema stores a date with
   // no clock value, so there is no narrower window to ask for.
   const today = new Date().toISOString().slice(0, 10);
-  const route = useTechnicianRoute(id, today, permissions.has('technicians:read'));
+  // The route is built from the technician's live position, so it needs the
+  // location grant rather than the directory one — the rest of this page does
+  // not.
+  const route = useTechnicianRoute(id, today, permissions.has('technicians:locate'));
   const {
     updateTechnician: mutation,
     deleteTechnician: remove,
