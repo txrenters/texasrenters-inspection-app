@@ -323,3 +323,43 @@
 .map-route-line {
   stroke: var(--map-route);
 }
+
+/* A technician who is reporting right now.
+ *
+ * Scaled rather than animating the SVG `r` attribute: `transform` is the widely
+ * supported and compositor-friendly one, and `transform-box: fill-box` is what
+ * makes `transform-origin: center` mean the circle's own centre rather than the
+ * origin of the whole SVG.
+ *
+ * Slow and faint on purpose. This sits on a map a dispatcher watches for long
+ * stretches, and anything sharp enough to notice once is exhausting by the
+ * tenth minute. */
+@keyframes map-technician-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  70% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.map-technician-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-technician-pulse 2.4s ease-out infinite;
+}
+
+/* A repeating animation is the clearest case for honouring this: it never
+   stops on its own, so somebody who asked for less motion would get this one
+   forever. The marker itself still reads correctly without it. */
+@media (prefers-reduced-motion: reduce) {
+  .map-technician-pulse {
+    animation: none;
+    opacity: 0;
+  }
+}

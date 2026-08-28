@@ -8,6 +8,7 @@ import type {
 } from '@texasrenters/shared';
 
 import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/format';
+import { isPlanned, offRoadNetwork } from '@/lib/route-plan';
 
 /**
  * Who is out, where they were last, and how much work is theirs.
@@ -76,26 +77,6 @@ export function buildRoster(
 }
 
 /**
- * Whether this route actually is one.
- *
- * **Legs, not stops.** `stops` is the day's work and is present whether or not
- * anything was routed -- the planner returns it even when it refuses to plan,
- * because the inspections still exist. Reading it as "a route exists" is what
- * made the panel say *no suggested order* and then print *1 min driving, 0.0 mi,
- * suggested order* directly underneath, over a route that had been correctly
- * refused. The zero read as a minute only because `formatDuration` floors at
- * one, so a total of nothing looked like a short drive.
- *
- * A leg is produced only when OSRM returned a drive, so this is true exactly
- * when there is an order and a time worth showing -- and it is false whenever
- * `originOutsideServiceArea` is set, which is what keeps the two messages from
- * ever appearing together.
- */
-function isPlanned(route: TechnicianRoute | null | undefined): route is TechnicianRoute {
-  return Boolean(route?.legs.length);
-}
-
-/**
  * The stops in the order they should be driven, when that is known.
  *
  * The route only carries stops it could place, so anything it dropped is
@@ -116,21 +97,6 @@ function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undef
 
   const seen = new Set(ordered.map((stop) => stop.inspectionId));
   return [...ordered, ...stops.filter((stop) => !seen.has(stop.inspectionId))];
-}
-
-/**
- * Stops the router had to refuse because nothing drivable is near them.
- *
- * Separate from a stop with no coordinate at all, which the panel already marks
- * as "not on the map" -- this one has a coordinate and it is wrong, which is
- * worth saying differently because the fix is different.
- */
-function offRoadNetwork(route: TechnicianRoute | null | undefined): Set<string> {
-  return new Set(
-    (route?.unroutable ?? [])
-      .filter((entry) => entry.reason === 'OUTSIDE_SERVICE_AREA')
-      .map((entry) => entry.inspectionId),
-  );
 }
 
 function Dot({ position }: { position: TechnicianPosition | null }) {
