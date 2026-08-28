@@ -7,7 +7,11 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
-import { divIcon, type LatLngBoundsExpression } from 'leaflet';
+import {
+  divIcon,
+  type LatLngBoundsExpression,
+  type Marker as LeafletMarker,
+} from 'leaflet';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Circle,
@@ -282,6 +286,7 @@ function FitToData({
 function PropertyLayer({
   highlighted,
   properties,
+  selectedPropertyId,
 }: {
   /**
    * The selected technician's buildings, or null when nobody is selected.
@@ -293,9 +298,20 @@ function PropertyLayer({
    */
   highlighted: ReadonlySet<string> | null;
   properties: readonly PropertyPosition[];
+  /** Picked from the list, so its own popup opens without a second click. */
+  selectedPropertyId: string | null;
 }) {
   const map = useMap();
   const [zoom, setZoom] = useState(() => map.getZoom());
+
+  /**
+   * Every property drawn on its own, by id.
+   *
+   * Held rather than looked up through the map, because Leaflet has no index
+   * from our ids to its markers -- and a marker only exists while its property
+   * is not folded into a cluster, so the entry has to come and go with it.
+   */
+  const markers = useRef(new Map<string, LeafletMarker>());
 
   // Grouping is computed in projected pixels at the current zoom, so it changes
   // when the zoom does and never when panning — a clustering that reshuffled as
@@ -306,6 +322,24 @@ function PropertyLayer({
     () => clusterByGrid(map, properties, zoom),
     [map, properties, zoom],
   );
+
+  /**
+   * Opens the selected property's popup once it is actually drawn.
+   *
+   * Depends on `clusters` as well as the selection, and that is the whole
+   * trick: selecting flies the map in, the zoom change regroups the clusters,
+   * and only then does the property stop being folded into a badge and get a
+   * marker of its own. Running on the selection alone would fire while it was
+   * still inside a cluster and find nothing to open.
+   *
+   * Silent when it is still clustered -- two properties within a stone's throw
+   * stay grouped even at this zoom, and forcing them apart would move the map
+   * somewhere the reader did not ask to go.
+   */
+  useEffect(() => {
+    if (!selectedPropertyId) return;
+    markers.current.get(selectedPropertyId)?.openPopup();
+  }, [clusters, selectedPropertyId]);
 
   return (
     <>
@@ -322,12 +356,29 @@ function PropertyLayer({
             key={cluster.key}
             icon={propertyPin(dim)}
             position={[cluster.latitude, cluster.longitude]}
+            ref={(instance) => {
+              const id = cluster.members[0]?.id;
+              if (!id) return;
+              // Removed on unmount, not left behind: a stale marker whose
+              // property has since been folded into a cluster would be asked
+              // to open a popup that is no longer on the map.
+              if (instance) markers.current.set(id, instance);
+              else markers.current.delete(id);
+            }}
             zIndexOffset={-500}
           >
             <Popup>
               <span className="font-medium">{cluster.members[0]?.name}</span>
-              <br />
-              {cluster.members[0]?.addressLine1}
+              {/* Only when it says something the name did not. A synced
+                  building is usually named by its own street address, so
+                  printing both put the same line on screen twice. */}
+              {cluster.members[0]?.addressLine1 &&
+              cluster.members[0]?.addressLine1 !== cluster.members[0]?.name ? (
+                <>
+                  <br />
+                  {cluster.members[0]?.addressLine1}
+                </>
+              ) : null}
               <br />
               {cluster.members[0]?.city}, {cluster.members[0]?.state}{' '}
               {cluster.members[0]?.postalCode}
@@ -739,7 +790,11 @@ export function TechnicianMap({
       {/* Properties first so they paint underneath, and pinned below the
           technicians by z-index as well — marker order alone does not decide
           it once Leaflet starts sorting by latitude. */}
-      <PropertyLayer highlighted={highlightedBuildingIds} properties={properties} />
+      <PropertyLayer
+        highlighted={highlightedBuildingIds}
+        properties={properties}
+        selectedPropertyId={selectedPropertyId}
+      />
 
       {positions.map((position) => {
         const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
