@@ -11,6 +11,8 @@ import {
 import type { PrismaService } from '../src/common/prisma.service';
 import type { ApplicationError } from '../src/common/errors';
 import { GatewayController } from '../src/gateway/gateway.controller';
+import { GatewayAuthGuard } from '../src/gateway/gateway-auth.guard';
+import type { ApiAuthGuard } from '../src/common/auth';
 import { ApiClientService } from '../src/gateway/api-client.service';
 import {
   apiKeySecretMatches,
@@ -674,6 +676,57 @@ describe('the third-party gateway surface', () => {
       for (const permission of required)
         expect(MACHINE_FORBIDDEN_PERMISSIONS).not.toContain(permission);
     }
+  });
+});
+
+describe('GatewayAuthGuard credential routing', () => {
+  const guardWith = () => {
+    const bearer = { canActivate: jest.fn().mockResolvedValue(true) };
+    const apiKey = { canActivate: jest.fn().mockResolvedValue(true) };
+    return {
+      bearer,
+      apiKey,
+      guard: new GatewayAuthGuard(
+        bearer as unknown as ApiAuthGuard,
+        apiKey as unknown as ApiKeyGuard,
+      ),
+    };
+  };
+
+  it('picks the guard matching the credential that was sent', async () => {
+    const withKey = guardWith();
+    await withKey.guard.canActivate(contextFor(fakeRequest({ key: 'anything' }), openRoute()));
+    expect(withKey.apiKey.canActivate).toHaveBeenCalled();
+    expect(withKey.bearer.canActivate).not.toHaveBeenCalled();
+
+    const withBearer = guardWith();
+    await withBearer.guard.canActivate(
+      contextFor(fakeRequest({ headers: { authorization: 'Bearer x' } }), openRoute()),
+    );
+    expect(withBearer.bearer.canActivate).toHaveBeenCalled();
+    expect(withBearer.apiKey.canActivate).not.toHaveBeenCalled();
+  });
+
+  it('names both credentials when neither was sent, rather than only the token', async () => {
+    const { guard, bearer, apiKey } = guardWith();
+
+    // Falling through to the bearer guard made a route built for integrations
+    // reply "a bearer access token is required" — sending an integrator who
+    // forgot the header after a login token they will never be issued.
+    // Thrown synchronously — before any promise exists — which Nest handles the
+    // same as a rejection, but a `.catch` here would sail straight past.
+    let error: unknown;
+    try {
+      await guard.canActivate(contextFor(fakeRequest(), openRoute()));
+    } catch (thrown) {
+      error = thrown;
+    }
+
+    expect(error).toMatchObject({ code: 'CREDENTIAL_MISSING' });
+    expect((error as ApplicationError).message).toMatch(/x-api-key/);
+    expect((error as ApplicationError).message).toMatch(/bearer/i);
+    expect(bearer.canActivate).not.toHaveBeenCalled();
+    expect(apiKey.canActivate).not.toHaveBeenCalled();
   });
 });
 

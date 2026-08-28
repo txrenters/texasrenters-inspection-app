@@ -1,7 +1,7 @@
 'use client';
 
 import type { ApiDocument, ApiOperation } from '@texasrenters/shared';
-import { AlertTriangleIcon, PlayIcon, RotateCcwIcon } from 'lucide-react';
+import { AlertTriangleIcon, LockIcon, PlayIcon, RotateCcwIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import {
@@ -71,6 +71,15 @@ export function EndpointConsole({
   operation: ApiOperation;
   path: string;
 }) {
+  /**
+   * Whether an API key can reach this route at all.
+   *
+   * Most of this API is bearer-only: the guard never looks at `x-api-key`, so a
+   * key produces `AUTH_TOKEN_MISSING` — a message about bearer tokens, on a page
+   * that just asked for a key. Asking for a credential that cannot work is worse
+   * than not offering to send at all.
+   */
+  const acceptsKeys = operation['x-machine-accessible'] === true;
   const isWrite = WRITE_METHODS.has(method);
   const isDelete = method === 'delete';
   const mutates = isWrite || isDelete;
@@ -134,6 +143,7 @@ export function EndpointConsole({
   // leaves someone with a dead control and no reason given — pressing Send is
   // how you find out which half is missing, so Send has to stay pressable.
   const canSend =
+    acceptsKeys &&
     !running &&
     !missingPathParameter &&
     (!mutates || armed) &&
@@ -176,12 +186,24 @@ export function EndpointConsole({
 
   return (
     <div className="space-y-4">
-      <CredentialFields
-        credential={credential}
-        onChange={setCredential}
-        problem={credentialFault}
-        showProblem={attempted}
-      />
+      {acceptsKeys ? (
+        <CredentialFields
+          credential={credential}
+          onChange={setCredential}
+          problem={credentialFault}
+          showProblem={attempted}
+        />
+      ) : (
+        <Alert>
+          <LockIcon aria-hidden />
+          <AlertTitle>This endpoint does not accept API keys</AlertTitle>
+          <AlertDescription>
+            It authenticates with a bearer token issued to a person, so there is nothing an
+            integration can send here. Only endpoints marked{' '}
+            <span className="font-medium">Open to integrations</span> can be tried from this page.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {pathParameters.length > 0 || queryParameters.length > 0 ? (
         <div className="grid gap-3 sm:grid-cols-2">

@@ -2,11 +2,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import {
-  ForbiddenException,
   Inject,
   Injectable,
   SetMetadata,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
@@ -14,6 +12,7 @@ import type { Request } from 'express';
 import type { UserRole } from '@texasrenters/shared';
 import { type PermissionKey, resolveEffectivePermissions } from '@texasrenters/shared';
 
+import { ApplicationError } from './errors';
 import { PrismaService } from './prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
 
@@ -101,12 +100,13 @@ export async function authenticateApplicationUser(
       },
     }),
   );
-  if (!profile?.isActive) throw new UnauthorizedException('No active application profile.');
+  if (!profile?.isActive)
+    throw new ApplicationError(401, 'AUTH_PROFILE_INACTIVE', 'No active application profile.');
   const memberships = profile.memberships.filter(
     (membership) => !requestedOrganization || membership.organizationId === requestedOrganization,
   );
   if (memberships.length === 0)
-    throw new UnauthorizedException('No active organization membership.');
+    throw new ApplicationError(401, 'AUTH_NO_ORGANIZATION', 'No active organization membership.');
   const organizationId = requestedOrganization ?? memberships[0]!.organizationId;
   const roles = memberships
     .filter((membership) => membership.organizationId === organizationId)
@@ -168,7 +168,8 @@ interface AccessTokenClaims {
 
 function bearerToken(header?: string) {
   const match = header?.match(/^Bearer\s+(.+)$/i);
-  if (!match?.[1]) throw new UnauthorizedException('A bearer access token is required.');
+  if (!match?.[1])
+    throw new ApplicationError(401, 'AUTH_TOKEN_MISSING', 'A bearer access token is required.');
   return match[1];
 }
 
@@ -197,9 +198,10 @@ export function verifyAccessTokenSignature(token: string): AccessTokenClaims {
   const secret = process.env.AUTH_JWT_SECRET?.trim();
   const issuer = expectedTokenIssuer();
   if (!secret || !issuer)
-    throw new UnauthorizedException('Authentication is not configured.');
+    throw new ApplicationError(401, 'AUTH_NOT_CONFIGURED', 'Authentication is not configured.');
   const parts = token.split('.');
-  if (parts.length !== 3) throw new UnauthorizedException('Invalid access token.');
+  if (parts.length !== 3)
+    throw new ApplicationError(401, 'AUTH_TOKEN_INVALID', 'Invalid access token.');
   try {
     const header = JSON.parse(Buffer.from(parts[0]!, 'base64url').toString()) as { alg?: string };
     if (header.alg !== 'HS256') throw new Error('Unsupported signing algorithm.');
@@ -217,7 +219,7 @@ export function verifyAccessTokenSignature(token: string): AccessTokenClaims {
     if (!audiences.includes(expectedTokenAudience())) throw new Error('Invalid audience.');
     return claims;
   } catch {
-    throw new UnauthorizedException('Invalid or expired access token.');
+    throw new ApplicationError(401, 'AUTH_TOKEN_INVALID', 'Invalid or expired access token.');
   }
 }
 
@@ -235,7 +237,7 @@ export function verifyAccessTokenSignature(token: string): AccessTokenClaims {
  */
 export async function verifyAccessToken(token: string): Promise<AccessTokenClaims> {
   if (tokenAlgorithm(token) !== 'HS256')
-    throw new UnauthorizedException('Invalid or expired access token.');
+    throw new ApplicationError(401, 'AUTH_TOKEN_INVALID', 'Invalid or expired access token.');
   return verifyAccessTokenSignature(token);
 }
 
@@ -247,7 +249,7 @@ function tokenAlgorithm(token: string) {
       (JSON.parse(Buffer.from(encodedHeader, 'base64url').toString()) as { alg?: string }).alg ?? ''
     );
   } catch {
-    throw new UnauthorizedException('Invalid or expired access token.');
+    throw new ApplicationError(401, 'AUTH_TOKEN_INVALID', 'Invalid or expired access token.');
   }
 }
 
@@ -258,7 +260,11 @@ export class RequiredPasswordAuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<RequiredPasswordRequest>();
     const claims = await verifyAccessToken(bearerToken(request.header('authorization')));
     if (claims.app_metadata?.must_change_password !== true)
-      throw new ForbiddenException('This account does not require a password replacement.');
+      throw new ApplicationError(
+        403,
+        'AUTH_NO_PASSWORD_CHANGE_PENDING',
+        'This account does not require a password replacement.',
+      );
     request.auth = { authUserId: claims.sub, mustChangePassword: true };
     return true;
   }
@@ -276,7 +282,11 @@ export class RolesGuard implements CanActivate {
     if (!required?.length) return true;
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (request.user.mustChangePassword)
-      throw new ForbiddenException('A password change is required before using the application.');
+      throw new ApplicationError(
+        403,
+        'AUTH_PASSWORD_CHANGE_REQUIRED',
+        'A password change is required before using the application.',
+      );
     return required.some((role) => request.user.roles.includes(role));
   }
 }
@@ -298,9 +308,17 @@ export class PermissionsGuard implements CanActivate {
     if (!required?.length) return true;
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     if (request.user.mustChangePassword)
-      throw new ForbiddenException('A password change is required before using the application.');
+      throw new ApplicationError(
+        403,
+        'AUTH_PASSWORD_CHANGE_REQUIRED',
+        'A password change is required before using the application.',
+      );
     const held = new Set(request.user.permissions);
     if (required.every((permission) => held.has(permission))) return true;
-    throw new ForbiddenException('You do not have permission to perform this action.');
+    throw new ApplicationError(
+      403,
+      'PERMISSION_DENIED',
+      'You do not have permission to perform this action.',
+    );
   }
 }
