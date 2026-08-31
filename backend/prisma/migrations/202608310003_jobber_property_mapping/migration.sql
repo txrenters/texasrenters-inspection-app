@@ -71,11 +71,11 @@ CREATE INDEX "JobberVisitImport_linkId_status_idx"
 ALTER TABLE "JobberPropertyLink" ADD CONSTRAINT "JobberPropertyLink_organizationId_fkey"
     FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "JobberPropertyLink" ADD CONSTRAINT "JobberPropertyLink_propertywareBuildingId_fkey"
-    FOREIGN KEY ("propertywareBuildingId") REFERENCES "PropertywareBuilding"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+    FOREIGN KEY ("propertywareBuildingId") REFERENCES "propertyware_buildings"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "JobberPropertyLink" ADD CONSTRAINT "JobberPropertyLink_propertywareUnitId_fkey"
-    FOREIGN KEY ("propertywareUnitId") REFERENCES "PropertywareUnit"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+    FOREIGN KEY ("propertywareUnitId") REFERENCES "propertyware_units"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "JobberPropertyLink" ADD CONSTRAINT "JobberPropertyLink_propertywareLeaseId_fkey"
-    FOREIGN KEY ("propertywareLeaseId") REFERENCES "PropertywareLease"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+    FOREIGN KEY ("propertywareLeaseId") REFERENCES "propertyware_leases"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 ALTER TABLE "JobberVisitImport" ADD CONSTRAINT "JobberVisitImport_organizationId_fkey"
     FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
