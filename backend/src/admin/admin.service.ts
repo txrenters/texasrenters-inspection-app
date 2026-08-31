@@ -1,6 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
-  AreaCategory,
   EvidenceRequestStatus,
   FindingReviewStatus,
   InspectionStatus,
@@ -13,10 +12,7 @@ import {
 } from '@prisma/client';
 
 import {
-  AreaScope,
   LEASE_EXPIRING_SOON_DAYS,
-  areaScopeFor,
-  inspectionRequiresLifecycleBaseline,
   daysUntilLeaseEnd,
   leaseExpiryStatus,
 } from '@texasrenters/shared';
@@ -28,6 +24,12 @@ import { ApplicationError } from '../common/errors';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
+import {
+  PORTFOLIO_VISIBLE,
+  insertInspection,
+  resolveInspectionPlan,
+} from './inspection-creation';
+import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
 // A pure function, not the service: the panel needs Stream's definition of
@@ -209,20 +211,6 @@ const ADMIN_TRANSACTION_OPTIONS = {
  * request that would look hung.
  */
 const MAX_BULK_DELETE = 50;
-
-/**
- * Restricts properties to those whose portfolio is active, without hiding the
- * ones that have no portfolio at all.
- *
- * Propertyware genuinely returns buildings with no portfolio assigned. Filtering
- * on the relation alone would drop every one of them, because an absent
- * relation cannot satisfy `isActive` — so an unassigned property would vanish
- * from the app entirely rather than merely lack an ownership grouping. Nested
- * in `AND` so it composes with a search `OR` on the same query.
- */
-const PORTFOLIO_VISIBLE = {
-  AND: [{ OR: [{ portfolioId: null }, { portfolio: { isActive: true } }] }],
-} satisfies Prisma.PropertywareBuildingWhereInput;
 
 /**
  * Readiness of the object storage that inspection **photos** are written to.
@@ -1073,316 +1061,37 @@ export class AdminService {
 
   async createInspection(user: AuthenticatedUser, input: CreateAdminInspectionDto) {
     const inspection = await this.prisma.$transaction(async (tx) => {
-      const property = await this.requireBuilding(user.organizationId, input.propertyId, true, tx);
-      const unit = input.unitId
-        ? await tx.propertywareUnit.findFirst({
-            where: {
-              id: input.unitId,
-              organizationId: user.organizationId,
-              buildingId: property.id,
-              isActive: true,
-            },
-            select: {
-              id: true,
-              externalId: true,
-              name: true,
-              addressLine1: true,
-              addressLine2: true,
-              city: true,
-              state: true,
-              postalCode: true,
-            },
-          })
-        : null;
-      if (input.unitId && !unit)
-        throw new ApplicationError(
-          422,
-          'INVALID_ACTIVE_UNIT',
-          'Select an active unit belonging to this property.',
-        );
-      if (!unit) {
-        // Multi-unit buildings must inspect a specific unit; "entire property"
-        // is only valid for buildings without active units.
-        const activeUnits = await tx.propertywareUnit.count({
-          where: { buildingId: property.id, organizationId: user.organizationId, isActive: true },
-        });
-        if (activeUnits > 0)
-          throw new ApplicationError(
-            422,
-            'UNIT_REQUIRED',
-            'This property has units. Select which unit this inspection covers.',
-          );
-      }
-      if (input.leaseId && !unit)
-        throw new ApplicationError(
-          422,
-          'LEASE_REQUIRES_UNIT',
-          'Select the lease unit before selecting a lease.',
-        );
-      const lease = input.leaseId
-        ? await tx.propertywareLease.findFirst({
-            where: {
-              id: input.leaseId,
-              organizationId: user.organizationId,
-              unitId: unit!.id,
-              isActive: true,
-            },
-            select: {
-              id: true,
-              externalId: true,
-              leaseName: true,
-              sourceStatus: true,
-              startDate: true,
-              endDate: true,
-              scheduledMoveOutDate: true,
-            },
-          })
-        : null;
-      if (input.leaseId && !lease)
-        throw new ApplicationError(
-          422,
-          'INVALID_LEASE_RELATIONSHIP',
-          'The selected lease is not valid for this unit.',
-        );
-      const scheduledAt = new Date(input.scheduledAt);
-      const baselineInspectionId = await this.resolveLifecycleBaseline(tx, {
+      // Every rule about what an inspection may be lives in inspection-creation.ts,
+      // so a Jobber-scheduled visit is held to the same ones — including the area
+      // snapshot the whole technician workflow reads. What stays here is what only
+      // an administrator's request can answer: who to attribute the creation to,
+      // and who to assign it to.
+      const plan = await resolveInspectionPlan(tx, {
         organizationId: user.organizationId,
-        propertyId: property.id,
-        unitId: unit?.id ?? null,
-        leaseId: lease?.id ?? null,
+        buildingId: input.propertyId,
+        unitId: input.unitId,
+        leaseId: input.leaseId,
         inspectionType: input.inspectionType,
-        scheduledAt,
+        scheduledAt: new Date(input.scheduledAt),
+        areaIds: input.areaIds,
+        allowTechnicianAreaCapture: input.allowTechnicianAreaCapture,
       });
-      // Prefer the unit's own approved layout; fall back to the building-level
-      // layout when the unit has none (identical-layout buildings share one
-      // building-level plan instead of duplicating it per unit).
-      const unitAreas = unit
-        ? await tx.propertyArea.findMany({
-            where: {
-              propertyId: property.id,
-              unitId: unit.id,
-              status: PropertyAreaStatus.APPROVED,
-            },
-            orderBy: { inspectionOrder: 'asc' },
-            // `hasAirConditioning` and `category` for the equipment scopes
-            // below, which pick areas by what the property records rather than
-            // by anything the caller sent.
-            select: { id: true, hasAirConditioning: true, category: true },
-          })
-        : [];
-      const approvedAreas = unitAreas.length
-        ? unitAreas
-        : await tx.propertyArea.findMany({
-            where: {
-              propertyId: property.id,
-              unitId: null,
-              status: PropertyAreaStatus.APPROVED,
-            },
-            orderBy: { inspectionOrder: 'asc' },
-            // `hasAirConditioning` and `category` for the equipment scopes
-            // below, which pick areas by what the property records rather than
-            // by anything the caller sent.
-            select: { id: true, hasAirConditioning: true, category: true },
-          });
-      // An inspection normally starts from an approved layout. The exception is
-      // a property nobody has surveyed yet: rather than block it, or flatten it
-      // to a single "Entire property" area and lose the per-area structure the
-      // whole review is organised around, the technician builds the list on
-      // site. What they add is still DRAFT on the property, so an administrator
-      // approves the permanent layout — this delegates the survey, not the
-      // approval.
-      /**
-       * The areas this inspection actually covers, decided three different ways.
-       *
-       * ALL — move-in and move-out take the whole approved layout. They are
-       * compared to each other area by area, and a subset on either end leaves
-       * the other with counterparts that never resolve.
-       *
-       * CHOSEN — occupied and back-to-market take what the office picked.
-       *
-       * AIR_CONDITIONED — an HVAC visit covers every area recorded as holding a
-       * unit. Not a selection: the equipment decides, so nobody can forget a
-       * room, and nobody can send a technician looking for an air conditioner
-       * that was never in the bathroom.
-       *
-       * A caller who sends `areaIds` for a type that does not offer a choice is
-       * refused rather than quietly widened or narrowed. They asked for
-       * something the type cannot honour, and silently doing otherwise is how a
-       * move-out ends up scoped differently from the move-in it will be judged
-       * against.
-       *
-       * Every id is checked against the approved set, so a stale or foreign id
-       * fails here rather than producing an inspection missing an area nobody
-       * notices until a technician is standing in the property.
-       */
-      const areaScope = areaScopeFor(input.inspectionType);
-      const requestedAreaIds = input.areaIds?.length ? [...new Set(input.areaIds)] : null;
-      if (requestedAreaIds && areaScope !== AreaScope.CHOSEN)
-        throw new ApplicationError(
-          422,
-          'AREA_SELECTION_NOT_ALLOWED',
-          areaScope === AreaScope.AIR_CONDITIONED
-            ? 'This visit covers every area that has air conditioning, so it cannot be limited to a selection.'
-            : areaScope === AreaScope.ROOF_AREAS
-              ? 'A roof inspection covers every area recorded as a roof, so it cannot be limited to a selection.'
-              : 'A move-in or move-out covers every area, so it cannot be limited to a selection.',
-        );
-      if (requestedAreaIds) {
-        const approvedIds = new Set(approvedAreas.map((area) => area.id));
-        const unknown = requestedAreaIds.filter((id) => !approvedIds.has(id));
-        if (unknown.length)
-          throw new ApplicationError(
-            422,
-            'INVALID_AREA_SELECTION',
-            'Select only approved areas belonging to this property.',
-          );
-      }
-      const scopedAreas =
-        areaScope === AreaScope.AIR_CONDITIONED
-          ? approvedAreas.filter((area) => area.hasAirConditioning)
-          : areaScope === AreaScope.ROOF_AREAS
-            ? approvedAreas.filter((area) => area.category === AreaCategory.ROOF)
-            : requestedAreaIds
-              ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
-              : approvedAreas;
-
-      /**
-       * The property has a layout, but nothing in it is marked as having a unit.
-       *
-       * Distinct from NO_APPROVED_AREAS below, and deliberately so: that one
-       * means "survey this property", this one means "say which of these rooms
-       * has an air conditioner". Creating the inspection anyway would produce an
-       * HVAC visit covering nothing, which looks like a scheduling success and
-       * reaches the technician as an empty job.
-       */
-      if (areaScope === AreaScope.AIR_CONDITIONED && approvedAreas.length && !scopedAreas.length)
-        throw new ApplicationError(
-          409,
-          'NO_AIR_CONDITIONED_AREAS',
-          'No approved area of this property is marked as having air conditioning. Mark the areas that have a unit before scheduling this visit.',
-        );
-
-      /**
-       * The same refusal, for the same reason, against a different marker.
-       *
-       * A property whose layout records no roof would produce a roof inspection
-       * covering nothing — a scheduling success that reaches the technician as
-       * an empty job. Saying so names the fix: categorise the roof area.
-       */
-      if (areaScope === AreaScope.ROOF_AREAS && approvedAreas.length && !scopedAreas.length)
-        throw new ApplicationError(
-          409,
-          'NO_ROOF_AREAS',
-          'No approved area of this property is recorded as a roof. Set an area’s category to Roof before scheduling a roof inspection.',
-        );
-
-      const technicianWillCapture = input.allowTechnicianAreaCapture === true;
-      if (!approvedAreas.length && !technicianWillCapture)
-        throw new ApplicationError(
-          409,
-          'NO_APPROVED_AREAS',
-          unit
-            ? 'Approve a floor plan for this unit (or a building-level plan) before creating an inspection.'
-            : 'Upload or define the property floor plan and approve its areas before creating an inspection.',
-        );
-      /**
-       * A duplicate is the same *work* booked twice, so the type is part of what
-       * makes two inspections the same thing.
-       *
-       * The type was missing from this check, which made every kind of visit
-       * mutually exclusive on a date. HVAC is the case that exposed it: the
-       * schema calls it "equipment maintenance, outside the tenancy lifecycle
-       * chain", and an air-conditioning service has nothing to do with a move-in
-       * that happens to fall on the same day. The office could not book one
-       * behind the other.
-       *
-       * Terminal work does not block either. A completed or cancelled
-       * inspection is a record, not a booking — a move-in finished this morning
-       * is the evidence the unit is ready for the next visit, so treating it as
-       * a clash left that unit unbookable for the rest of the day. Only a live
-       * booking of the same type at the same time is genuinely a second copy of
-       * the same job.
-       */
-      const duplicate = await tx.inspection.findFirst({
-        where: {
-          organizationId: user.organizationId,
-          propertywareBuildingId: property.id,
-          propertywareUnitId: unit?.id ?? null,
-          inspectionType: input.inspectionType,
-          scheduledAt,
-          status: { notIn: [InspectionStatus.COMPLETED, InspectionStatus.CANCELLED] },
-        },
-        select: { id: true },
+      const inspection = await insertInspection(tx, plan, {
+        priority: input.priority,
+        internalNotes: input.internalNotes,
+        createdById: user.id,
       });
-      if (duplicate)
-        throw new ApplicationError(
-          409,
-          'DUPLICATE_INSPECTION',
-          'An inspection of this type is already scheduled for this unit at that time.',
-        );
-      let inspection;
-      try {
-        inspection = await tx.inspection.create({
-          data: {
-            organizationId: user.organizationId,
-            propertywareBuildingId: property.id,
-            propertywareUnitId: unit?.id,
-            propertywareLeaseId: lease?.id,
-            inspectionType: input.inspectionType,
-            baselineInspectionId,
-            priority: input.priority,
-            internalNotes: input.internalNotes,
-            createdById: user.id,
-            scheduledAt,
-            // Recorded even when the property turned out to have areas after
-            // all: it is the administrator's instruction to the technician, not
-            // a description of what the property had at the time.
-            allowTechnicianAreaCapture: technicianWillCapture,
-            propertySnapshot: this.propertySnapshot(property, unit),
-            leaseSnapshot: lease ? this.leaseSnapshot(lease) : Prisma.JsonNull,
-            areas: {
-              create: scopedAreas.map((area) => ({ propertyAreaId: area.id })),
-            },
-          },
-        });
-      } catch (error) {
-        /**
-         * There is NO unique index behind the check above. This comment used to
-         * claim a "partial unique index on (org, building, unit, scheduledAt)"
-         * was the race-proof backstop; `pg_indexes` on this table lists only the
-         * primary key, and no migration has ever created one. So the findFirst
-         * is the only gate, and two concurrent creates can both pass it.
-         *
-         * That race is left open deliberately rather than papered over: the
-         * matching index would have to be partial (`WHERE status NOT IN
-         * ('COMPLETED','CANCELLED')`) to agree with the rule above, existing
-         * rows would need checking against it first, and adding it silently
-         * here would be a schema change nobody asked for. Booking the same
-         * visit twice in the same second is also not a thing the office does by
-         * hand.
-         *
-         * The mapping is kept because P2002 can still arrive from the nested
-         * area creates, and a 409 is the honest answer to either.
-         */
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
-          throw new ApplicationError(
-            409,
-            'DUPLICATE_INSPECTION',
-            'An inspection of this type is already scheduled for this unit at that time.',
-          );
-        throw error;
-      }
       await this.audit(tx, user, 'INSPECTION_CREATED', inspection.id, {
         priority: input.priority,
         inspectionType: input.inspectionType,
-        baselineInspectionId,
+        baselineInspectionId: plan.baselineInspectionId,
         // Worth an audit entry: it is the decision to inspect a property whose
         // layout nobody has approved, and it explains an inspection that begins
         // with no areas at all.
-        allowTechnicianAreaCapture: technicianWillCapture,
-        areasFromApprovedPlan: approvedAreas.length,
+        allowTechnicianAreaCapture: plan.technicianWillCapture,
+        areasFromApprovedPlan: plan.approvedAreas.length,
         // What the inspection actually covers, which differs when scoped.
-        areasInspected: scopedAreas.length,
+        areasInspected: plan.scopedAreas.length,
       });
       if (input.technicianId)
         await this.createAssignment(
@@ -1589,6 +1298,15 @@ export class AdminService {
         unfinishedMedia: unfinishedMedia.length,
         override: pendingFindings.length + unfinishedMedia.length > 0,
         overrideReason: input.overrideReason ?? null,
+      });
+      // Inside the transaction on purpose: "finalized" and "Jobber will be
+      // told" commit together. Calling Jobber here instead would let a network
+      // error roll back a sign-off that has already frozen the evidence.
+      // A no-op for inspections this app scheduled itself.
+      await enqueueJobberCompletion(tx, {
+        organizationId: user.organizationId,
+        inspectionId: id,
+        finalizedById: user.id,
       });
     }, ADMIN_TRANSACTION_OPTIONS);
     await this.cacheInvalidation?.publish({
@@ -2961,39 +2679,6 @@ export class AdminService {
     return technician;
   }
 
-  private async requireBuilding(
-    organizationId: string,
-    id: string,
-    active: boolean,
-    tx: Prisma.TransactionClient | PrismaService = this.prisma,
-  ) {
-    const property = await tx.propertywareBuilding.findFirst({
-      where: {
-        id,
-        organizationId,
-        ...(active ? { isActive: true, ...PORTFOLIO_VISIBLE } : {}),
-      },
-      select: {
-        id: true,
-        externalId: true,
-        name: true,
-        addressLine1: true,
-        addressLine2: true,
-        city: true,
-        state: true,
-        postalCode: true,
-        portfolio: { select: { name: true } },
-      },
-    });
-    if (!property)
-      throw new ApplicationError(
-        422,
-        'INVALID_ACTIVE_PROPERTY',
-        'Select an active synchronized property.',
-      );
-    return property;
-  }
-
   async inspectionMedia(user: AuthenticatedUser, inspectionId: string) {
     await this.requireInspection(user.organizationId, inspectionId);
     const records = await this.prisma.inspectionMedia.findMany({
@@ -3608,116 +3293,6 @@ export class AdminService {
     return inspection;
   }
 
-  private async resolveLifecycleBaseline(
-    tx: Prisma.TransactionClient,
-    input: {
-      organizationId: string;
-      propertyId: string;
-      unitId: string | null;
-      leaseId: string | null;
-      inspectionType: InspectionType;
-      scheduledAt: Date;
-    },
-  ) {
-    // Only the three visits read against a move-in need one. The taxonomy
-    // lives in the shared contract rather than as literals here, because this
-    // is where it kept being got wrong: every type added since has had to be
-    // remembered in this function, and forgetting means the new type is
-    // refused on every property that has never been through a move-in — with
-    // an error blaming the missing move-in rather than the missing exemption.
-    //
-    // A move-in establishes the baseline rather than comparing to one, and the
-    // off-cycle visits — HVAC, roof, filter delivery, both lockbox calls — sit
-    // outside the tenancy chain entirely and are scheduled against tenanted
-    // and vacant properties alike.
-    if (!inspectionRequiresLifecycleBaseline(input.inspectionType)) return null;
-
-    const lifecycleScope = {
-      organizationId: input.organizationId,
-      propertywareBuildingId: input.propertyId,
-      propertywareUnitId: input.unitId,
-      propertywareLeaseId: input.leaseId,
-      scheduledAt: { lt: input.scheduledAt },
-      completedAt: { not: null },
-      status: {
-        in: [
-          InspectionStatus.PROCESSING,
-          InspectionStatus.REVIEW_REQUIRED,
-          InspectionStatus.COMPLETED,
-        ],
-      },
-    } satisfies Prisma.InspectionWhereInput;
-    const baseline = await tx.inspection.findFirst({
-      where: { ...lifecycleScope, inspectionType: InspectionType.MOVE_IN },
-      orderBy: { scheduledAt: 'desc' },
-      select: { id: true },
-    });
-    if (!baseline)
-      throw new ApplicationError(
-        409,
-        'MOVE_IN_BASELINE_REQUIRED',
-        'Complete the move-in inspection for this property, unit, and lease before scheduling a later lifecycle inspection.',
-      );
-
-    /**
-     * Partial by nature: only the two visits that follow another one in the
-     * chain have a predecessor at all.
-     *
-     * Typed as partial rather than leaning on the early returns above to narrow
-     * the union — that narrowing was doing real work and vanished the moment
-     * the exemption became a shared rule, and a map that has to be widened for
-     * every new inspection type is a map that will eventually be forgotten.
-     */
-    const predecessors: Partial<Record<InspectionType, InspectionType>> = {
-      [InspectionType.BACK_TO_MARKET]: InspectionType.OCCUPIED,
-      [InspectionType.MOVE_OUT]: InspectionType.BACK_TO_MARKET,
-    };
-    const requiredPredecessor = predecessors[input.inspectionType];
-    if (requiredPredecessor) {
-      const predecessor = await tx.inspection.findFirst({
-        where: { ...lifecycleScope, inspectionType: requiredPredecessor },
-        orderBy: { scheduledAt: 'desc' },
-        select: { id: true },
-      });
-      if (!predecessor)
-        throw new ApplicationError(
-          409,
-          'INSPECTION_SEQUENCE_REQUIRED',
-          `Complete the ${requiredPredecessor.toLowerCase().replaceAll('_', ' ')} inspection before scheduling this inspection.`,
-        );
-    }
-    return baseline.id;
-  }
-
-  private propertySnapshot(
-    property: Awaited<ReturnType<AdminService['requireBuilding']>>,
-    unit: {
-      id: string;
-      externalId: string;
-      name: string;
-      addressLine1: string | null;
-      addressLine2: string | null;
-      city: string | null;
-      state: string | null;
-      postalCode: string | null;
-    } | null,
-  ) {
-    return {
-      property: {
-        id: property.id,
-        externalId: property.externalId,
-        name: property.name,
-        addressLine1: property.addressLine1,
-        addressLine2: property.addressLine2,
-        city: property.city,
-        state: property.state,
-        postalCode: property.postalCode,
-        portfolio: property.portfolio?.name ?? 'Unassigned',
-      },
-      unit,
-    };
-  }
-
   private requireAssignableInspection(status: InspectionStatus) {
     if (!ACTIVE_INSPECTION_STATUSES.includes(status))
       throw new ApplicationError(
@@ -3725,26 +3300,6 @@ export class AdminService {
         'INSPECTION_NOT_ASSIGNABLE',
         'A completed or cancelled inspection cannot be assigned.',
       );
-  }
-
-  private leaseSnapshot(lease: {
-    id: string;
-    externalId: string;
-    leaseName: string | null;
-    sourceStatus: string | null;
-    startDate: Date | null;
-    endDate: Date | null;
-    scheduledMoveOutDate: Date | null;
-  }) {
-    return {
-      id: lease.id,
-      externalId: lease.externalId,
-      leaseName: lease.leaseName,
-      sourceStatus: lease.sourceStatus,
-      startDate: lease.startDate,
-      endDate: lease.endDate,
-      scheduledMoveOutDate: lease.scheduledMoveOutDate,
-    };
   }
 
   private audit(

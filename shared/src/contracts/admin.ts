@@ -990,3 +990,72 @@ export interface PropertywareSyncError {
   createdAt: string;
   resolvedAt?: string | null;
 }
+
+/**
+ * The Jobber connection as the console sees it. Never carries tokens — the
+ * backend selects these columns explicitly so a credential column added later
+ * cannot start being served by accident.
+ */
+export interface JobberConnection {
+  status: 'CONNECTED' | 'DISCONNECTED' | 'REAUTHORIZATION_REQUIRED';
+  jobberAccountId?: string | null;
+  jobberAccountName?: string | null;
+  apiVersion?: string | null;
+  connectedAt?: string | null;
+  disconnectedAt?: string | null;
+  lastRefreshedAt?: string | null;
+  lastRefreshError?: string | null;
+  lastSyncStartedAt?: string | null;
+  lastSyncCompletedAt?: string | null;
+  lastSyncError?: string | null;
+  lastSyncVisitCount?: number | null;
+}
+
+/**
+ * A Jobber property waiting to be tied to one of ours.
+ *
+ * `visitImports` is the count of visits held behind this row — the number that
+ * says how much work is blocked, which is what makes the queue worth ordering.
+ */
+export interface JobberPropertyLink {
+  id: string;
+  jobberPropertyId: string;
+  jobberClientName?: string | null;
+  jobberAddress?: string | null;
+  status: 'LINKED' | 'UNMATCHED' | 'AMBIGUOUS' | 'IGNORED';
+  unresolvedReason?: string | null;
+  propertywareBuildingId?: string | null;
+  propertywareBuilding?: { id: string; name: string } | null;
+  updatedAt: string;
+  _count?: { visitImports: number };
+}
+
+/** A Jobber visit that did not become an inspection, and why. */
+export interface JobberVisitImport {
+  id: string;
+  jobberVisitId: string;
+  jobberJobId?: string | null;
+  status: 'PENDING' | 'IMPORTED' | 'UNMATCHED_PROPERTY' | 'REJECTED' | 'IGNORED';
+  failureCode?: string | null;
+  failureMessage?: string | null;
+  attempts: number;
+  lastAttemptAt?: string | null;
+  inspectionId?: string | null;
+  link?: {
+    id: string;
+    jobberAddress?: string | null;
+    jobberClientName?: string | null;
+    status: string;
+  } | null;
+}
+
+/** Counts returned by a manual sync run, shown back to whoever pressed it. */
+export interface JobberSyncResult {
+  correlationId: string;
+  visitsSeen: number;
+  imported: number;
+  rescheduled: number;
+  unmatched: number;
+  rejected: number;
+  skipped: number;
+}

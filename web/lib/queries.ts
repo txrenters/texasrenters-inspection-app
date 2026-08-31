@@ -56,6 +56,10 @@ import type {
   PropertywareSyncError,
   PropertywareSyncRun,
   ProviderReadiness,
+  JobberConnection,
+  JobberPropertyLink,
+  JobberSyncResult,
+  JobberVisitImport,
 } from '@texasrenters/shared';
 import { allPropertywareEntities } from '@texasrenters/shared';
 import {
@@ -148,6 +152,9 @@ export const keys = {
   syncErrors: (runId: string, page: number) =>
     ['admin', 'propertyware', 'runs', runId, 'errors', page] as const,
   providers: ['admin', 'providers'] as const,
+  jobber: ['admin', 'jobber'] as const,
+  jobberQueue: ['admin', 'jobber', 'queue'] as const,
+  jobberVisitImports: ['admin', 'jobber', 'visit-imports'] as const,
   aiSettings: ['admin', 'ai-settings'] as const,
   openApiDocument: ['admin', 'system', 'openapi'] as const,
   apiClientsRoot: ['admin', 'api-clients'] as const,
@@ -665,6 +672,92 @@ export const useSyncErrors = (runId: string, page: number) =>
     enabled: Boolean(runId),
     placeholderData: keepPreviousData,
   });
+const JOBBER = '/api/v1/admin/integrations/jobber';
+
+export const useJobberConnection = () =>
+  useQuery({
+    queryKey: keys.jobber,
+    queryFn: ({ signal }) => api<JobberConnection>(`${JOBBER}/connection`, { signal }),
+  });
+
+/**
+ * Jobber properties waiting on a person.
+ *
+ * Polled while the page is open: the sync runs on its own schedule, so a queue
+ * left open would otherwise show a snapshot from whenever it was loaded and
+ * quietly hide work that arrived since.
+ */
+export const useJobberQueue = () =>
+  useQuery({
+    queryKey: keys.jobberQueue,
+    queryFn: ({ signal }) =>
+      api<JobberPropertyLink[]>(`${JOBBER}/property-links/queue?limit=100`, { signal }),
+    refetchInterval: 60_000,
+  });
+
+export const useJobberVisitImports = () =>
+  useQuery({
+    queryKey: keys.jobberVisitImports,
+    queryFn: ({ signal }) =>
+      api<JobberVisitImport[]>(`${JOBBER}/visit-imports?limit=100`, { signal }),
+    refetchInterval: 60_000,
+  });
+
+export function useJobberMutations() {
+  const client = useQueryClient();
+  // Linking a property releases the visits held behind it, so the visit list is
+  // as stale as the queue after every one of these.
+  const refresh = () =>
+    void verifyAffectedQueries(client, [
+      keys.jobber,
+      keys.jobberQueue,
+      keys.jobberVisitImports,
+      keys.inspectionsRoot,
+    ]);
+  return {
+    authorize: useMutation({
+      mutationFn: () =>
+        api<{ authorizationUrl: string }>(`${JOBBER}/oauth/authorize`, { method: 'POST' }),
+    }),
+    disconnect: useMutation({
+      mutationFn: () => api<unknown>(`${JOBBER}/disconnect`, { method: 'POST' }),
+      onSuccess: refresh,
+    }),
+    sync: useMutation({
+      mutationFn: () => api<JobberSyncResult>(`${JOBBER}/sync`, { method: 'POST' }),
+      onSuccess: refresh,
+    }),
+    link: useMutation({
+      mutationFn: (input: {
+        linkId: string;
+        buildingId: string;
+        unitId?: string;
+        leaseId?: string;
+      }) =>
+        api<{ id: string; releasedVisits: number }>(
+          `${JOBBER}/property-links/${input.linkId}/link`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              buildingId: input.buildingId,
+              unitId: input.unitId,
+              leaseId: input.leaseId,
+            }),
+          },
+        ),
+      onSuccess: refresh,
+    }),
+    ignore: useMutation({
+      mutationFn: (input: { linkId: string; reason?: string }) =>
+        api<unknown>(`${JOBBER}/property-links/${input.linkId}/ignore`, {
+          method: 'POST',
+          body: JSON.stringify({ reason: input.reason }),
+        }),
+      onSuccess: refresh,
+    }),
+  };
+}
+
 export const useProviders = () =>
   useQuery({
     queryKey: keys.providers,

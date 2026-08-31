@@ -155,6 +155,35 @@ const environmentSchema = z
     PROPERTYWARE_CURSOR_OVERLAP_SECONDS: z.coerce.number().int().positive().default(120),
     PROPERTYWARE_DATABASE_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
     PROPERTYWARE_DATABASE_BATCH_SIZE: z.coerce.number().int().min(10).max(250).default(50),
+    // Jobber. `client_id`/`secret_key` are an OAuth app registration, not an
+    // API key: they can only mint tokens through an admin's browser consent, so
+    // they are optional here and required at the point sync is switched on.
+    JOBBER_CLIENT_ID: z.string().optional(),
+    JOBBER_CLIENT_SECRET: z.string().optional(),
+    // Optional here, required before any request goes out. Jobber resolves a
+    // missing version header to whatever is current, so an unset pin would
+    // silently follow their breaking changes — but a deployment that does not
+    // use Jobber at all must not be forced to name a schema date.
+    JOBBER_API_VERSION: z.string().min(1).optional(),
+    JOBBER_GRAPHQL_URL: z.string().url().optional(),
+    JOBBER_OAUTH_AUTHORIZE_URL: z.string().url().optional(),
+    JOBBER_OAUTH_TOKEN_URL: z.string().url().optional(),
+    JOBBER_OAUTH_REDIRECT_URI: z.string().url().optional(),
+    /** 32 bytes, hex or base64. Without it no Jobber token can be stored. */
+    JOBBER_TOKEN_ENCRYPTION_KEY: z.string().optional(),
+    JOBBER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+    JOBBER_MAX_RETRIES: z.coerce.number().int().min(1).max(8).default(4),
+    JOBBER_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
+    JOBBER_LOCAL_ORGANIZATION_ID: z.string().uuid().optional(),
+    JOBBER_INCREMENTAL_SYNC_CRON: z.string().optional(),
+    JOBBER_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().max(365).default(7),
+    JOBBER_SYNC_HORIZON_DAYS: z.coerce.number().int().positive().max(365).default(60),
+    /** Attaches the report share link to the Jobber job on completion. Off by
+     * default: a share token is a bearer link to photos of somebody's home. */
+    JOBBER_PUSH_REPORT_LINK: z.enum(['true', 'false']).default('false'),
+    /** JSON object mapping InspectionType to title keywords. Malformed values
+     * fall back to the defaults rather than stopping the sync. */
+    JOBBER_VISIT_TYPE_RULES: z.string().optional(),
   })
   .superRefine((config, context) => {
     if (config.NODE_ENV !== 'test' && !config.DATABASE_URL)
@@ -213,6 +242,37 @@ const environmentSchema = z
         code: 'custom',
         message: 'Propertyware live mode requires all three backend credentials.',
         path: ['PROPERTYWARE_PROVIDER'],
+      });
+    // Checked here rather than only in getJobberConfig so a deployment with the
+    // sync switched on and no credentials fails at boot, not at the first cron
+    // tick hours later.
+    if (
+      config.JOBBER_SYNC_ENABLED === 'true' &&
+      (!config.JOBBER_CLIENT_ID || !config.JOBBER_CLIENT_SECRET || !config.JOBBER_OAUTH_REDIRECT_URI)
+    )
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Jobber sync requires JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET, and JOBBER_OAUTH_REDIRECT_URI.',
+        path: ['JOBBER_SYNC_ENABLED'],
+      });
+    if (
+      config.JOBBER_TOKEN_ENCRYPTION_KEY &&
+      !isValidAiCredentialsEncryptionKey(config.JOBBER_TOKEN_ENCRYPTION_KEY)
+    )
+      context.addIssue({
+        code: 'custom',
+        message: 'JOBBER_TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes.',
+        path: ['JOBBER_TOKEN_ENCRYPTION_KEY'],
+      });
+    // A connection cannot be stored without somewhere safe to put the refresh
+    // token, so switching sync on without the key would authorize and then
+    // immediately fail at the exchange.
+    if (config.JOBBER_SYNC_ENABLED === 'true' && !config.JOBBER_TOKEN_ENCRYPTION_KEY)
+      context.addIssue({
+        code: 'custom',
+        message: 'JOBBER_TOKEN_ENCRYPTION_KEY is required when Jobber sync is enabled.',
+        path: ['JOBBER_TOKEN_ENCRYPTION_KEY'],
       });
   });
 
