@@ -335,6 +335,10 @@ model Organization {
   areaEvidenceRequests AreaEvidenceRequest[]
   apiClients           ApiClient[]
   apiClientKeys        ApiClientKey[]
+  jobberConnection     JobberConnection?
+  jobberPropertyLinks  JobberPropertyLink[]
+  jobberVisitImports   JobberVisitImport[]
+  jobberOutboundTasks  JobberOutboundTask[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -943,7 +947,24 @@ model Inspection {
   propertywareBuildingId     String?                 @db.Uuid
   propertywareUnitId         String?                 @db.Uuid
   propertywareLeaseId        String?                 @db.Uuid
+  /// The Jobber visit this inspection was created from, and the job it belongs
+  /// to. Null for anything booked here.
+  jobberVisitId              String?
+  jobberJobId                String?
+  /// Jobber's own last-modified stamp for the visit.
+  ///
+  /// The sync compares against this rather than our `updatedAt`, which moves
+  /// every time a technician touches the inspection. Without it, ordinary local
+  /// progress would look newer than a real reschedule and suppress it.
+  jobberUpdatedAt            DateTime?
   inspectionType             InspectionType
+  /// Which system booked this visit.
+  ///
+  /// Defaults to MANUAL so every existing row keeps meaning what it meant, and
+  /// so an inspection created by a path that has not thought about Jobber is
+  /// never mistaken for a synced one. It gates writes: the sync may only
+  /// overwrite rows it owns.
+  source                     InspectionSource        @default(MANUAL)
   baselineInspectionId       String?                 @db.Uuid
   priority                   String                  @default("STANDARD")
   internalNotes              String?
@@ -966,9 +987,22 @@ model Inspection {
   generalComments            String?
   createdById                String?                 @db.Uuid
   status                     InspectionStatus        @default(SCHEDULED)
-  /// Date only. Inspections are scheduled to a day, never a time — the column
-  /// is DATE so no clock value can be stored or implied.
+  /// The day the visit is booked for. Still DATE, and still the unit of
+  /// booking: the duplicate rule, every index and the technician's list all
+  /// work in whole days, and nothing below changes that.
+  ///
+  /// It stays date-only even though Jobber sends a clock time, because a
+  /// widened column would silently give every historical inspection a
+  /// midnight that nobody scheduled.
   scheduledAt                DateTime                @db.Date
+  /// Jobber's clock time for the visit, when there is one.
+  ///
+  /// Null for anything scheduled here, and null is not "no time" — it is "this
+  /// visit was never given one". The technician's app therefore falls back to
+  /// showing the day rather than inventing an hour. Plain DateTime, following
+  /// every other instant in this schema; values are UTC.
+  scheduledStartAt           DateTime?
+  scheduledEndAt             DateTime?
   /// Lets the technician build the area list on site.
   ///
   /// Set when a property has no approved floor plan, which is otherwise a hard
@@ -1013,6 +1047,10 @@ model Inspection {
   reportShares               InspectionReportShare[]
   areaEvidenceRequests       AreaEvidenceRequest[]
 
+  /// One inspection per Jobber visit. Postgres allows many NULLs in a unique
+  /// index, so every manually booked inspection is unaffected — but a visit
+  /// that syncs twice cannot become two inspections.
+  @@unique([organizationId, jobberVisitId])
   @@index([organizationId, status, scheduledAt])
   @@index([organizationId, scheduledAt(sort: Desc)])
   @@index([propertywareBuildingId, scheduledAt])
@@ -1020,6 +1058,7 @@ model Inspection {
   @@index([baselineInspectionId])
   @@index([parentInspectionId])
   @@index([organizationId, propertywareBuildingId, propertywareUnitId, propertywareLeaseId, inspectionType, scheduledAt])
+  jobberOutboundTasks        JobberOutboundTask[]
 }
 
 model PropertywarePortfolio {
@@ -1153,6 +1192,7 @@ model PropertywareBuilding {
   @@unique([organizationId, sourceSystem, externalId])
   @@index([organizationId, isActive, name])
   @@map("propertyware_buildings")
+  jobberPropertyLinks    JobberPropertyLink[]
 }
 
 model PropertywareUnit {
@@ -1200,6 +1240,7 @@ model PropertywareUnit {
   @@unique([organizationId, sourceSystem, externalId])
   @@index([organizationId, buildingId, isActive])
   @@map("propertyware_units")
+  jobberPropertyLinks  JobberPropertyLink[]
 }
 
 model PropertywareLease {
@@ -1247,6 +1288,7 @@ model PropertywareLease {
   @@unique([organizationId, sourceSystem, externalId])
   @@index([organizationId, unitId, isActive, scheduledMoveOutDate])
   @@map("propertyware_leases")
+  jobberPropertyLinks  JobberPropertyLink[]
 }
 
 model PropertywareSyncCursor {
@@ -1990,4 +2032,252 @@ model ApiClientKey {
   organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([apiClientId, revokedAt])
+}
+
+
+/// Whether this organization's Jobber account is currently usable.
+///
+/// Distinct from "has tokens": a refresh token can be revoked by Jobber without
+/// us being told (plan downgrade, admin deactivation, secret regeneration), so
+/// the sync needs a state it can set when a refresh is rejected. Nulling the
+/// tokens instead would lose the account identity and make the console unable
+/// Which system booked an inspection.
+enum InspectionSource {
+  MANUAL
+  JOBBER
+}
+
+/// to say *which* connection needs attention.
+enum JobberConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  /// Tokens exist but Jobber refused them. Only a fresh admin consent fixes it.
+  REAUTHORIZATION_REQUIRED
+}
+
+/// One Jobber account authorized against one of our organizations.
+///
+/// `organizationId` is unique: Jobber's authorization is per-account and the
+/// scheduling source of record cannot be ambiguous. A second Jobber account
+/// would mean two systems claiming to own the same inspection calendar.
+model JobberConnection {
+  id                     String                 @id @default(uuid()) @db.Uuid
+  organizationId         String                 @unique @db.Uuid
+  /// Jobber's own account id, read via `query { account { id name } }` right
+  /// after the exchange. Stored so a re-authorization that lands on a different
+  /// Jobber account is detected instead of silently swapping the calendar.
+  jobberAccountId        String?
+  jobberAccountName      String?
+  status                 JobberConnectionStatus @default(DISCONNECTED)
+  /// AES-256-GCM envelopes, never the raw tokens. See common/secret-envelope.ts.
+  accessTokenCiphertext  String?
+  /// From the token response's `expires_in` (60 minutes today). Persisted so a
+  /// restarted process refreshes on schedule rather than after a first 401.
+  accessTokenExpiresAt   DateTime?
+  refreshTokenCiphertext String?
+  /// Jobber rotates refresh tokens; this records when we last stored a new one,
+  /// which is the only signal that rotation is working before a token dies.
+  lastRefreshedAt        DateTime?
+  /// Sanitized reason the last refresh failed. Never the provider body — that
+  /// echoes the request, which carries the client secret.
+  lastRefreshError       String?
+  scopes                 String[]               @default([])
+  /// The schema date in force when consent was granted, kept so a later pin
+  /// change is visible as a change rather than inferred from deploy history.
+  apiVersion             String?
+  /// Plain column, no FK — matches ApiClient.createdByUserId. The person who
+  /// consented may be deprovisioned later without invalidating the connection.
+  connectedByUserId      String?                @db.Uuid
+  connectedAt            DateTime?
+  disconnectedAt         DateTime?
+  /// Sync state, kept on the connection rather than in its own table: there is
+  /// exactly one Jobber calendar per organization, so a run history would be a
+  /// table with one meaningful row. What a person needs to see is "is it
+  /// running, did the last one work", and that is these four columns.
+  lastSyncStartedAt      DateTime?
+  lastSyncCompletedAt    DateTime?
+  /// Sanitized. Never the provider body, which echoes the request.
+  lastSyncError          String?
+  lastSyncVisitCount     Int?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  organization           Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+
+/// How confidently a Jobber property was tied to one of ours.
+enum JobberLinkStatus {
+  /// Resolved to exactly one building (and unit, where the building has them).
+  LINKED
+  /// Nothing matched. Nothing is imported for this property until a human says
+  /// what it is.
+  UNMATCHED
+  /// More than one candidate matched. Deliberately NOT auto-resolved: picking
+  /// one would send a technician to a door nobody chose.
+  AMBIGUOUS
+  /// A human decided this Jobber property is not ours to inspect. Kept as a row
+  /// so the queue does not re-offer it on every sync.
+  IGNORED
+}
+
+/// How the link was arrived at, kept because "a person chose this" and "the
+/// addresses happened to be spelled the same" are very different claims when
+/// the link later turns out to be wrong.
+enum JobberLinkMethod {
+  /// Exactly one building matched on normalized address. Automatic.
+  ADDRESS_EXACT
+  /// An administrator picked the building.
+  MANUAL
+}
+
+/// One Jobber property, tied to the Propertyware records an inspection needs.
+///
+/// This table exists because Jobber and Propertyware share no key. An
+/// `Inspection` cannot be created without a `propertywareBuildingId`, and
+/// nothing in a Jobber visit supplies one — so every visit has to pass through
+/// a mapping somebody can inspect and correct. Unmatched rows are the queue:
+/// they are created on the first sync that sees the property, so the work is
+/// visible before anyone is waiting on it.
+model JobberPropertyLink {
+  id                     String                @id @default(uuid()) @db.Uuid
+  organizationId         String                @db.Uuid
+  /// Jobber's own identifiers. The property id is the one that matters; the
+  /// client is kept so the console can group a landlord's properties together.
+  jobberPropertyId       String
+  jobberClientId         String?
+  jobberClientName       String?
+  /// The address exactly as Jobber holds it, so the console can show what it is
+  /// being asked to match without another API call — and so a queue built
+  /// months ago still reads correctly if Jobber's record later changes.
+  jobberAddress          String?
+  /// Lowercased, punctuation-stripped street + postal code. Stored rather than
+  /// computed per query so matching is one indexed lookup, and so the exact
+  /// string a match was made on survives any later change to normalization.
+  normalizedAddressKey   String?
+  status                 JobberLinkStatus      @default(UNMATCHED)
+  method                 JobberLinkMethod?
+  propertywareBuildingId String?               @db.Uuid
+  propertywareUnitId     String?               @db.Uuid
+  propertywareLeaseId    String?               @db.Uuid
+  /// Why this row is still in the queue, in words the console can show.
+  unresolvedReason       String?
+  linkedByUserId         String?               @db.Uuid
+  linkedAt               DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  organization           Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  propertywareBuilding   PropertywareBuilding? @relation(fields: [propertywareBuildingId], references: [id])
+  propertywareUnit       PropertywareUnit?     @relation(fields: [propertywareUnitId], references: [id])
+  propertywareLease      PropertywareLease?    @relation(fields: [propertywareLeaseId], references: [id])
+  visitImports           JobberVisitImport[]
+
+  /// One link per Jobber property. Two would mean two answers to "which
+  /// building is this", and the sync would pick whichever it read first.
+  @@unique([organizationId, jobberPropertyId])
+  @@index([organizationId, status])
+  @@index([organizationId, normalizedAddressKey])
+}
+
+/// What happened to one Jobber visit.
+enum JobberVisitImportStatus {
+  /// Seen, not yet turned into an inspection.
+  PENDING
+  IMPORTED
+  /// Its property has no link yet. Resolves itself once the link is made.
+  UNMATCHED_PROPERTY
+  /// A scheduling rule refused it — no approved areas, no baseline, a clash.
+  /// Needs a person, not a retry.
+  REJECTED
+  /// A human decided this visit is not an inspection.
+  IGNORED
+}
+
+/// One Jobber visit and the inspection it did or did not become.
+///
+/// Gives the sync idempotency that does not depend on the inspection existing:
+/// a visit refused by a scheduling rule has no `Inspection` row to record the
+/// refusal on, and without this the next sync would retry it forever and the
+/// office would never learn it was dropped.
+model JobberVisitImport {
+  id             String                  @id @default(uuid()) @db.Uuid
+  organizationId String                  @db.Uuid
+  jobberVisitId  String
+  jobberJobId    String?
+  linkId         String?                 @db.Uuid
+  status         JobberVisitImportStatus @default(PENDING)
+  /// The stable application error code, so the console can group failures
+  /// rather than string-matching prose.
+  failureCode    String?
+  failureMessage String?
+  /// The visit as Jobber sent it, kept for the console and for re-running a
+  /// decision without another API call.
+  payload        Json?
+  inspectionId   String?                 @db.Uuid
+  attempts       Int                     @default(0)
+  lastAttemptAt  DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  link           JobberPropertyLink?     @relation(fields: [linkId], references: [id])
+
+  /// One import record per visit, which is what makes a replayed webhook or an
+  /// overlapping sync window harmless.
+  @@unique([organizationId, jobberVisitId])
+  @@index([organizationId, status])
+  @@index([linkId, status])
+}
+
+
+/// What we send back to Jobber. One value today, as an enum because the second
+/// one is foreseeable and a boolean column would have to be migrated away.
+enum JobberOutboundKind {
+  VISIT_COMPLETED
+}
+
+enum JobberOutboundStatus {
+  PENDING
+  SENT
+  /// Failed, will be retried after `nextAttemptAt`.
+  FAILED
+  /// Out of attempts. Needs a person; never retried automatically.
+  ABANDONED
+}
+
+/// Work owed to Jobber, written in the same transaction as the thing that owes
+/// it.
+///
+/// An outbox rather than a call at the point of finalization. Finalization is
+/// the moment an administrator signs off on evidence, and it must not fail
+/// because Jobber is unreachable — nor should it be rolled back by a network
+/// error after `finalizedAt` has frozen the evidence. Enqueuing inside the same
+/// transaction is what makes "finalized" and "Jobber will be told" a single
+/// atomic fact.
+model JobberOutboundTask {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  inspectionId   String               @db.Uuid
+  jobberVisitId  String
+  jobberJobId    String?
+  kind           JobberOutboundKind
+  status         JobberOutboundStatus @default(PENDING)
+  attempts       Int                  @default(0)
+  /// When this becomes eligible again. Exponential backoff on failure, so a
+  /// Jobber outage does not turn into a retry storm against a rate limiter.
+  nextAttemptAt  DateTime             @default(now())
+  /// Sanitized. Never the provider body.
+  lastError      String?
+  sentAt         DateTime?
+  /// Who finalized the inspection. The report share this task publishes is
+  /// created in their name, because a share link needs an owner and this is the
+  /// person whose sign-off produced it.
+  createdById    String?              @db.Uuid
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inspection     Inspection           @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  /// One completion push per inspection. A re-finalize must not tell Jobber
+  /// twice, and the enqueue relies on this rather than on reading first.
+  @@unique([organizationId, inspectionId, kind])
+  @@index([organizationId, status, nextAttemptAt])
 }

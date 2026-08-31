@@ -159,7 +159,17 @@ export interface Inspection {
   type: InspectionType;
   baselineInspectionId?: string | null;
   baselineScheduledAt?: string;
+  /** The day the visit is booked for. Always present. */
   scheduledAt: string;
+  /**
+   * The clock window, when the office scheduled one in Jobber.
+   *
+   * Absent — not midnight — for anything booked without a time. The distinction
+   * matters on screen: a technician told "12:00 AM" would go looking for a
+   * booking nobody made, so a visit with no time shows only its day.
+   */
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
   assignedUserId: string;
   status: InspectionStatus;
   priority: Priority;

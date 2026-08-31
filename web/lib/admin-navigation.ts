@@ -1,5 +1,6 @@
 import {
   Building2,
+  CalendarClock,
   ClipboardCheck,
   Gauge,
   KeyRound,
@@ -175,6 +176,12 @@ export const adminNavigation: AdminNavigationGroup[] = [
         title: 'Propertyware',
         href: '/integrations/propertyware',
         icon: RefreshCw,
+        permission: 'integrations:read',
+      },
+      {
+        title: 'Jobber',
+        href: '/integrations/jobber',
+        icon: CalendarClock,
         permission: 'integrations:read',
       },
       {

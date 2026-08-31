@@ -124,8 +124,17 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('finalizes with a documented override, recording the finalizer and audit trail', async () => {
     const tx = {
-      inspection: { update: jest.fn().mockResolvedValue({}) },
+      inspection: {
+        update: jest.fn().mockResolvedValue({}),
+        // Read by the Jobber completion enqueue, which runs inside this
+        // transaction so that "finalized" and "Jobber will be told" commit
+        // together. MANUAL means there is no Jobber visit and it does nothing.
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ source: 'MANUAL', jobberVisitId: null, jobberJobId: null }),
+      },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      jobberOutboundTask: { create: jest.fn().mockResolvedValue({}) },
     };
     const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
     const prisma = {
@@ -168,6 +177,48 @@ describe('inspection status lifecycle (spec §11)', () => {
             override: true,
             overrideReason: 'Owner approved closure',
           }),
+        }),
+      }),
+    );
+  });
+
+  it('queues the Jobber completion in the same transaction as the sign-off', async () => {
+    // The two must commit together: calling Jobber at this point instead would
+    // let a network error roll back a sign-off that has already frozen the
+    // evidence, and finalizing without queueing would strand Jobber for ever.
+    const tx = {
+      inspection: {
+        update: jest.fn().mockResolvedValue({}),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue({ source: 'JOBBER', jobberVisitId: 'visit-1', jobberJobId: 'job-1' }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      jobberOutboundTask: { create: jest.fn().mockResolvedValue({ id: 'task-1' }) },
+    };
+    const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
+    const prisma = {
+      inspection: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce(reviewableInspection())
+          .mockResolvedValueOnce(detail),
+      },
+      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+    };
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    await service.finalizeInspection(admin, 'insp-1', {});
+
+    expect(tx.jobberOutboundTask.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          inspectionId: 'insp-1',
+          jobberVisitId: 'visit-1',
+          kind: 'VISIT_COMPLETED',
+          createdById: admin.id,
         }),
       }),
     );

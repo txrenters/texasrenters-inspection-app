@@ -209,6 +209,10 @@ const technicianInspectionSummarySelect = {
   baselineInspectionId: true,
   baselineInspection: { select: { scheduledAt: true, completedAt: true } },
   scheduledAt: true,
+  // The clock window, when the visit came from Jobber. Null for anything
+  // scheduled here, which the app renders as a day rather than as midnight.
+  scheduledStartAt: true,
+  scheduledEndAt: true,
   status: true,
   priority: true,
   internalNotes: true,
@@ -2225,6 +2229,11 @@ export class TechnicianService {
       baselineInspectionId: record.baselineInspectionId,
       baselineScheduledAt: record.baselineInspection?.scheduledAt.toISOString(),
       scheduledAt: record.scheduledAt.toISOString(),
+      // Undefined rather than null when absent, matching the other optional
+      // fields here: the app tests for presence to decide whether a visit has a
+      // time at all, and "no time" must not read as midnight.
+      scheduledStartAt: record.scheduledStartAt?.toISOString(),
+      scheduledEndAt: record.scheduledEndAt?.toISOString(),
       assignedUserId: technicianId,
       status: this.mapInspectionStatus(record.status),
       priority: record.priority,

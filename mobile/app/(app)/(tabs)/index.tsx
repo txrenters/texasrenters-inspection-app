@@ -22,6 +22,7 @@ import { DayRouteSummary } from '@/src/components/DayRouteSummary';
 import { hasNeverBeenAssigned } from '@/src/utils/home-state';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
+import { formatVisitDateAndWindow } from '@/src/utils/visit-window';
 import { greetingFor } from '@/src/utils/greeting';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -29,14 +30,21 @@ import { PRESS_ROW, ScreenHeader, SectionHeader } from '@/src/components/ui';
 
 registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon, Settings2Icon);
 
+/**
+ * The day, and the visit window when the office booked one.
+ *
+ * The time no longer comes from `scheduledAt`. That column is a date, so
+ * formatting an hour out of it rendered the midnight its storage implies —
+ * every assignment read "12:00 AM", a time nobody scheduled. A real window is
+ * shown when Jobber supplied one, and otherwise the row says only the day.
+ */
 function inspectionDate(inspection: Inspection, includeTime = false) {
-  return new Date(inspection.scheduledAt).toLocaleDateString('en-US', {
+  const date = new Date(inspection.scheduledAt).toLocaleDateString('en-US', {
     weekday: includeTime ? 'short' : undefined,
     month: 'short',
     day: 'numeric',
-    hour: includeTime ? 'numeric' : undefined,
-    minute: includeTime ? '2-digit' : undefined,
   });
+  return includeTime ? formatVisitDateAndWindow(inspection, date) : date;
 }
 
 /**
