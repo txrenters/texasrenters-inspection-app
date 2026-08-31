@@ -4,6 +4,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   InspectionSource,
   InspectionStatus,
+  Prisma,
   JobberConnectionStatus,
   JobberLinkStatus,
   JobberVisitImportStatus,
@@ -380,27 +381,55 @@ export class JobberSyncWorker {
       result.skipped += 1;
       return;
     }
-    await this.prisma.$transaction(async (tx) => {
-      await tx.inspection.update({
-        where: { id: inspectionId },
-        data: {
-          scheduledAt: dayOf(visit.startAt!),
-          scheduledStartAt: new Date(visit.startAt!),
-          scheduledEndAt: visit.endAt ? new Date(visit.endAt) : null,
-          jobberUpdatedAt: updatedAt,
-        },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.inspection.update({
+          where: { id: inspectionId },
+          data: {
+            scheduledAt: dayOf(visit.startAt!),
+            scheduledStartAt: new Date(visit.startAt!),
+            scheduledEndAt: visit.endAt ? new Date(visit.endAt) : null,
+            jobberUpdatedAt: updatedAt,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            action: 'INSPECTION_RESCHEDULED_FROM_JOBBER',
+            entityType: 'Inspection',
+            entityId: inspectionId,
+            metadata: { jobberVisitId: visit.id, scheduledAt: visit.startAt },
+          },
+        });
       });
-      await tx.auditLog.create({
-        data: {
-          organizationId,
-          action: 'INSPECTION_RESCHEDULED_FROM_JOBBER',
-          entityType: 'Inspection',
-          entityId: inspectionId,
-          metadata: { jobberVisitId: visit.id, scheduledAt: visit.startAt },
-        },
-      });
-    });
-    result.rescheduled += 1;
+      result.rescheduled += 1;
+    } catch (error) {
+      /**
+       * Jobber moved this visit onto a day that already holds the same booking.
+       *
+       * `Inspection_scheduled_booking_key` refuses it, and rightly — but a
+       * clash on one visit must not end the run and strand every visit after
+       * it, so this is recorded against that visit and the sync moves on. It
+       * needs a person either way: the office has two bookings for the same
+       * work and only they can say which survives.
+       */
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        await this.prisma.jobberVisitImport.updateMany({
+          where: { organizationId, jobberVisitId: visit.id },
+          data: {
+            failureCode: 'JOBBER_RESCHEDULE_CLASHES',
+            failureMessage:
+              'Jobber moved this visit onto a day that already has the same inspection booked.',
+          },
+        });
+        result.skipped += 1;
+        return;
+      }
+      throw error;
+    }
   }
 
   private async reject(

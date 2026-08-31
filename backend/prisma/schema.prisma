@@ -1051,6 +1051,13 @@ model Inspection {
   /// index, so every manually booked inspection is unaffected — but a visit
   /// that syncs twice cannot become two inspections.
   @@unique([organizationId, jobberVisitId])
+  /// NOT DECLARED HERE: `Inspection_scheduled_booking_key`, a partial unique
+  /// index on (organization, building, unit, type, scheduledAt) WHERE status =
+  /// 'SCHEDULED', with NULLS NOT DISTINCT. Prisma cannot express either a
+  /// partial index or NULLS NOT DISTINCT, so it lives only in migration
+  /// 202608310006_inspection_booking_unique — which explains at length why it is
+  /// scoped to SCHEDULED rather than to every non-terminal status. Do not
+  /// "restore" it as an @@unique here: the unscoped version breaks reopening.
   @@index([organizationId, status, scheduledAt])
   @@index([organizationId, scheduledAt(sort: Desc)])
   @@index([propertywareBuildingId, scheduledAt])
