@@ -1,5 +1,3 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
-
 import { Inject, Injectable } from '@nestjs/common';
 import { AiCredentialStatus, AiProvider } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
@@ -7,6 +5,7 @@ import type { Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { openSecret, readEnvelopeKey, sealSecret } from '../common/secret-envelope';
 import type { UpdateAiProviderDto } from './admin.dto';
 
 // Ordered economical → most capable. The TexasRenters AI workload (transcript
@@ -353,9 +352,21 @@ export class AiProviderSettingsService {
     );
   }
 
+  /**
+   * Wraps the shared key reader in this service's own contract.
+   *
+   * The two messages are kept apart on purpose: "not configured" and "not
+   * configured correctly" send an administrator to different places, and both
+   * are `keyStorageAvailable: false` to the panel rather than an error, because
+   * the question that view asks is whether a credential can be stored at all.
+   */
   private encryptionKey(required = true) {
-    const value = process.env.AI_CREDENTIALS_ENCRYPTION_KEY?.trim();
-    if (!value) {
+    try {
+      const key = readEnvelopeKey(
+        process.env.AI_CREDENTIALS_ENCRYPTION_KEY,
+        'AI_CREDENTIALS_ENCRYPTION_KEY',
+      );
+      if (key) return key;
       if (required)
         throw new ApplicationError(
           503,
@@ -363,9 +374,9 @@ export class AiProviderSettingsService {
           'Secure AI key storage is not configured on the backend.',
         );
       return null;
-    }
-    const key = /^[a-f\d]{64}$/i.test(value) ? Buffer.from(value, 'hex') : Buffer.from(value, 'base64');
-    if (key.length !== 32) {
+    } catch (error) {
+      if (error instanceof ApplicationError) throw error;
+      // Set, but not a 32-byte key. readEnvelopeKey refuses rather than padding.
       if (required)
         throw new ApplicationError(
           503,
@@ -374,38 +385,30 @@ export class AiProviderSettingsService {
         );
       return null;
     }
-    return key;
   }
 
   private encrypt(value: string) {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.encryptionKey()!, iv);
-    const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
-    return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), ciphertext.toString('base64url')].join('.');
+    return sealSecret(value, this.encryptionKey()!);
   }
 
+  /**
+   * Reads a stored credential, or refuses to guess.
+   *
+   * `openSecret` returns null for anything it cannot authenticate — a rotated
+   * key, a truncated column, a tampered value — and all of those mean the same
+   * thing here: the credential has to be replaced, not repaired. A missing key
+   * is a different failure and is allowed to surface as itself from
+   * `encryptionKey`.
+   */
   private decrypt(value: string) {
-    try {
-      const [version, iv, tag, ciphertext] = value.split('.');
-      if (version !== 'v1' || !iv || !tag || !ciphertext) throw new Error('invalid envelope');
-      const decipher = createDecipheriv(
-        'aes-256-gcm',
-        this.encryptionKey()!,
-        Buffer.from(iv, 'base64url'),
-      );
-      decipher.setAuthTag(Buffer.from(tag, 'base64url'));
-      return Buffer.concat([
-        decipher.update(Buffer.from(ciphertext, 'base64url')),
-        decipher.final(),
-      ]).toString('utf8');
-    } catch (error) {
-      if (error instanceof ApplicationError) throw error;
+    const opened = openSecret(value, this.encryptionKey()!);
+    if (opened === null)
       throw new ApplicationError(
         503,
         'AI_CREDENTIAL_DECRYPTION_FAILED',
         'The stored AI credential could not be read safely. Replace it in Settings.',
       );
-    }
+    return opened;
   }
 
   private monthEnd() {
