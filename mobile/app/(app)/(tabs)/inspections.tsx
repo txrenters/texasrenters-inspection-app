@@ -41,6 +41,7 @@ import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import { ScreenHeader } from '@/src/components/ui';
+import { formatVisitDateAndWindow, formatVisitWindow } from '@/src/utils/visit-window';
 
 registerIcons(
   AlertTriangleIcon,
@@ -105,6 +106,7 @@ const TONE_ICON: Record<InspectionStatusTone, typeof ClipboardListIcon> = {
 
 function InspectionRow({ item }: { item: Inspection }) {
   const urgency = useInspectionUrgency(item);
+  const visitWindow = formatVisitWindow(item);
   const presentation = inspectionStatusPresentation(item.status);
   const config = {
     ...INSPECTION_STATUS_TONE_CLASS[presentation.tone],
@@ -126,7 +128,7 @@ function InspectionRow({ item }: { item: Inspection }) {
         // Carried in the row's own label: the badge below sits inside a hidden
         // subtree, so this is the only way it reaches a screen reader.
         urgency?.spoken ?? '',
-        new Date(item.scheduledAt).toLocaleString(),
+        formatVisitDateAndWindow(item, new Date(item.scheduledAt).toLocaleDateString()),
         item.progress.hasFailedUpload ? 'Has a failed upload' : '',
       ]
         .filter(Boolean)
@@ -161,14 +163,18 @@ function InspectionRow({ item }: { item: Inspection }) {
               <Text className={`text-xs font-semibold ${config.text}`}>{config.label}</Text>
             </View>
             <InspectionUrgencyBadge inspection={item} />
+            {/* Date and window as separate chips: the window is absent for
+                anything not booked in Jobber, and the hour used to be formatted
+                out of the date column — so every row claimed 12:00 AM. */}
             <Text className="text-xs text-muted-foreground">
               {new Date(item.scheduledAt).toLocaleDateString('en-US', {
                 month: 'short',
                 day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
               })}
             </Text>
+            {visitWindow ? (
+              <Text className="text-xs font-medium text-foreground">{visitWindow}</Text>
+            ) : null}
           </View>
         </View>
         <ChevronRightIcon size={18} className="mt-3 text-muted-foreground" />

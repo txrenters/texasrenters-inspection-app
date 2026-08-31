@@ -51,7 +51,12 @@ type StoredCache = {
 // warm start to a blocked submit button and a prompt to re-read summaries they
 // had read. One tap resolves it (the server keeps the original timestamp), but
 // a gate that looks stuck is the exact failure this cache buster exists for.
-const CACHE_SCHEMA_VERSION = 4;
+// 5: inspections carry `scheduledStartAt` / `scheduledEndAt`. Both optional, so
+// a restored v4 inspection still parses — but it parses as having no visit
+// window, and the screens would show only a day for a visit the office booked
+// to the hour. A technician comparing that against Jobber would be reading a
+// stale answer with nothing on screen to say so.
+const CACHE_SCHEMA_VERSION = 5;
 
 /**
  * Invalidates the whole stored cache when either the shipped version or the

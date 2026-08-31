@@ -91,6 +91,10 @@ const inspectionSchema = z.object({
   baselineInspectionId: z.string().nullable().optional(),
   baselineScheduledAt: nullableString,
   scheduledAt: z.string(),
+  // Optional: only visits that came from Jobber carry a clock time, and an
+  // older backend does not send these fields at all.
+  scheduledStartAt: nullableString,
+  scheduledEndAt: nullableString,
   assignedUserId: z.string(),
   // Permissive for the same reason as captureType, and it had already broken:
   // this enum listed six statuses while the server has ten. TECHNICIAN_SUBMITTED,

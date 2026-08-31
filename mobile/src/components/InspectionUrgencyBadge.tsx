@@ -5,6 +5,7 @@ import { Text, View } from 'react-native';
 import type { Inspection } from '../domain/models';
 import { registerIcons } from '../lib/icons';
 import { inspectionUrgency } from '../utils/inspection-alerts';
+import { visitStartInstant } from '../utils/visit-window';
 
 registerIcons(AlertTriangleIcon, ClockIcon);
 
@@ -60,14 +61,24 @@ export function formatDueIn(scheduledAt: string, now: number): string {
  * screen reader unless the row's own label carries it. Sharing the hook keeps
  * the spoken text and the visible badge from disagreeing.
  */
-export function useInspectionUrgency(inspection: Pick<Inspection, 'status' | 'scheduledAt'>) {
+export function useInspectionUrgency(
+  inspection: Pick<Inspection, 'status' | 'scheduledAt' | 'scheduledStartAt' | 'scheduledEndAt'>,
+) {
   const now = useMinuteTick();
   const urgency = inspectionUrgency(inspection, now);
   if (urgency !== 'overdue' && urgency !== 'due_soon') return null;
   const overdue = urgency === 'overdue';
-  const detail = overdue
-    ? formatOverdueFor(inspection.scheduledAt, now)
-    : formatDueIn(inspection.scheduledAt, now);
+  /**
+   * Counted from the visit's own start time when it has one.
+   *
+   * Whether something is overdue is still decided by whole days — see
+   * `inspectionUrgency`, where treating midnight as a deadline once marked
+   * every one of today's inspections late by breakfast. This is only the
+   * wording, and counting to midnight made a visit booked for 2pm say
+   * "Due in 0m" from one minute past twelve.
+   */
+  const start = visitStartInstant(inspection);
+  const detail = overdue ? formatOverdueFor(start, now) : formatDueIn(start, now);
   return {
     overdue,
     detail,

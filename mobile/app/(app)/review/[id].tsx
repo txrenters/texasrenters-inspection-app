@@ -24,6 +24,7 @@ import { AI_REVIEW_DISCLAIMER } from '@/src/utils/ai-review';
 import { FINISHED_STATUSES, evaluateSubmissionGate } from '@/src/utils/submission-gate';
 import { HomeButton } from '@/src/components/HomeButton';
 import { registerIcons } from '@/src/lib/icons';
+import { formatVisitWindow } from '@/src/utils/visit-window';
 
 registerIcons(
   AlertTriangleIcon,
@@ -282,6 +283,7 @@ export default function InspectionReviewScreen() {
                 day: 'numeric',
                 year: 'numeric',
               })}
+              {formatVisitWindow(inspection) ? ` · ${formatVisitWindow(inspection)}` : ''}
             </Text>
           </View>
         </View>

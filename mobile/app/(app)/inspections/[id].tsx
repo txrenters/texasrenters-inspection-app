@@ -21,6 +21,7 @@ import { goBack } from '@/src/lib/navigation';
 import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
+import { formatVisitWindow } from '@/src/utils/visit-window';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
@@ -272,13 +273,15 @@ export default function InspectionOverviewScreen() {
           <View className="flex-row flex-wrap gap-4">
             <View className="flex-row items-center gap-1.5">
               <ClockIcon size={14} className="text-muted-foreground" />
+              {/* The hour used to be formatted out of `scheduledAt`, which is a
+                  date — so this line read "12:00 AM" on every inspection. The
+                  window is shown only when the office actually booked one. */}
               <Text className="text-xs text-muted-foreground">
                 {new Date(item.scheduledAt).toLocaleDateString('en-US', {
                   month: 'short',
                   day: 'numeric',
-                  hour: 'numeric',
-                  minute: '2-digit',
                 })}
+                {formatVisitWindow(item) ? ` · ${formatVisitWindow(item)}` : ''}
               </Text>
             </View>
             <Text className="text-xs capitalize text-muted-foreground">
