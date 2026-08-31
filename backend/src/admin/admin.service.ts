@@ -1163,7 +1163,16 @@ export class AdminService {
             'An inspection of this type is already scheduled for this unit at that time.',
           );
       }
-      const updated = await tx.inspection.update({
+      /**
+       * The same 409 the check above raises, for the case the check cannot see.
+       *
+       * `Inspection_scheduled_booking_key` now backs that findFirst, so a
+       * reschedule that races another one loses at the database instead of
+       * writing a second booking. Without this mapping that race surfaced as an
+       * unhandled Prisma error — a 500 on an action the API already has a
+       * precise answer for.
+       */
+      const updated = await this.mapDuplicateBooking(() => tx.inspection.update({
         where: { id },
         data: {
           scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : undefined,
@@ -1184,7 +1193,7 @@ export class AdminService {
           cancelledAt: input.status === 'CANCELLED' ? new Date() : undefined,
           cancellationReason: input.cancellationReason,
         },
-      });
+      }));
       const current =
         input.status === 'CANCELLED'
           ? await tx.inspectionAssignment.findFirst({
@@ -3291,6 +3300,32 @@ export class AdminService {
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
     return inspection;
+  }
+
+  /**
+   * Turns a booking-index collision into the 409 the caller expects.
+   *
+   * Scoped to that one index by name: any other P2002 is a different constraint
+   * and must not be reported as a duplicate booking.
+   */
+  private async mapDuplicateBooking<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        String((error.meta as { target?: unknown })?.target ?? '').includes(
+          'Inspection_scheduled_booking_key',
+        )
+      )
+        throw new ApplicationError(
+          409,
+          'DUPLICATE_INSPECTION',
+          'An inspection of this type is already scheduled for this unit at that time.',
+        );
+      throw error;
+    }
   }
 
   private requireAssignableInspection(status: InspectionStatus) {
