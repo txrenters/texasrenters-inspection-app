@@ -4,6 +4,7 @@ import {
   FindingReviewStatus,
   InspectionStatus,
   InspectionType,
+  JobberOutboundStatus,
   MediaProcessingStatus,
   Prisma,
   PropertyAreaStatus,
@@ -1315,7 +1316,7 @@ export class AdminService {
       await enqueueJobberCompletion(tx, {
         organizationId: user.organizationId,
         inspectionId: id,
-        finalizedById: user.id,
+        reportOwnerId: user.id,
       });
     }, ADMIN_TRANSACTION_OPTIONS);
     await this.cacheInvalidation?.publish({
@@ -1464,11 +1465,31 @@ export class AdminService {
           'INSPECTION_NOT_REOPENABLE',
           'The inspection changed while it was being reopened. Reload and try again.',
         );
+      /**
+       * Withdraw a completion push that has not gone to Jobber yet.
+       *
+       * Submission enqueues it, and the outbox drains on a five-minute cron —
+       * so an inspection reopened within that window would still tell Jobber
+       * the visit was finished, minutes after the office decided it was not.
+       *
+       * Only unsent tasks. One already delivered is left alone: the visit did
+       * physically happen, which is what Jobber's completion records, and the
+       * unique constraint keeps the next submission from sending it twice.
+       */
+      const withdrawn = await tx.jobberOutboundTask.deleteMany({
+        where: {
+          inspectionId: id,
+          organizationId: user.organizationId,
+          status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
+        },
+      });
       await this.audit(tx, user, 'INSPECTION_REOPENED', id, {
         fromStatus: existing.status,
         reason: input.reason,
         wasFinalized: existing.status === InspectionStatus.COMPLETED,
         hadCurrentAssignment: currentAssignments > 0,
+        // Recorded because it changes what Jobber will say about this visit.
+        jobberPushWithdrawn: withdrawn.count > 0,
       });
     }, ADMIN_TRANSACTION_OPTIONS);
     await this.cacheInvalidation?.publish({
