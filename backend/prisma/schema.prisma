@@ -2290,9 +2290,13 @@ model JobberOutboundTask {
   /// Sanitized. Never the provider body.
   lastError      String?
   sentAt         DateTime?
-  /// Who finalized the inspection. The report share this task publishes is
+  /// Who signed the inspection off. The report share this task publishes is
   /// created in their name, because a share link needs an owner and this is the
   /// person whose sign-off produced it.
+  ///
+  /// Null when the technician's submission enqueued the task and no
+  /// administrator has finalized yet: a technician is not the owner of a report
+  /// share. A later finalize claims it while the task is still unsent.
   createdById    String?              @db.Uuid
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
