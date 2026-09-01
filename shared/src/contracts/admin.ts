@@ -1061,5 +1061,7 @@ export interface JobberSyncResult {
   alreadyComplete: number;
   /** Typed, but a type this integration does not import (filter delivery). */
   notSynced: number;
+  /** Technicians copied across from Jobber this run. */
+  assigned: number;
   skipped: number;
 }

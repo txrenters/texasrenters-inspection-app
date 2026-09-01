@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { CronJob } from 'cron';
 
+import { withTenant } from '../../database/tenant-context';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberOutboundWorker } from './jobber-outbound.worker';
 import { JobberSyncWorker } from './jobber-sync.worker';
@@ -63,12 +64,26 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     // Both swallow: an unhandled rejection out of a cron callback takes the
     // process down, and each failure is already recorded — the pull's on the
     // connection, the push's on the task it belongs to.
+    /**
+     * Every tick runs inside a tenant context, and without one this whole
+     * scheduler is inert.
+     *
+     * Row-level security is on for `Inspection`, `OrganizationMember` and
+     * `InspectionAssignment`. A request gets its context from the interceptor;
+     * a cron has no request, so an unwrapped background run reads an empty
+     * database and reports a clean, busy-looking result — 215 seen, nothing
+     * done. It cost a while to find precisely because nothing errors: the reads
+     * simply return nothing and every branch takes the "no change" path.
+     *
+     * The Propertyware coordinator has always done this. This one did not.
+     */
     try {
-      const result = await this.worker.run(organizationId);
+      const result = await withTenant(organizationId, () => this.worker.run(organizationId));
       this.logger.log(
         `Jobber sync ${result.correlationId}: ${result.visitsSeen} seen, ${result.imported} imported, ` +
           `${result.rescheduled} rescheduled, ${result.unmatched} unmatched, ${result.rejected} rejected, ` +
-          `${result.alreadyComplete} already complete, ${result.notSynced} not synced.`,
+          `${result.alreadyComplete} already complete, ${result.notSynced} not synced, ` +
+          `${result.assigned} assigned.`,
       );
     } catch (error) {
       this.logger.error(
@@ -78,7 +93,7 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     try {
       // Drained on the same tick rather than its own schedule: the outbox is
       // small, and one cadence means one place to look when Jobber is quiet.
-      const pushed = await this.outbound.run(organizationId);
+      const pushed = await withTenant(organizationId, () => this.outbound.run(organizationId));
       if (pushed.processed)
         this.logger.log(
           `Jobber push: ${pushed.sent} sent, ${pushed.failed} retrying, ${pushed.abandoned} abandoned.`,

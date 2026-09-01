@@ -1399,7 +1399,10 @@ model InspectionAssignment {
   id             String                @id @default(uuid()) @db.Uuid
   inspectionId   String                @db.Uuid
   technicianId   String                @db.Uuid
-  assignedById   String                @db.Uuid
+  /// Who assigned it. Null when the Jobber sync copied a coordinator's
+  /// assignment across — there is no person here who made that call, and naming
+  /// one would be a lie. Mirrors AuditLog.actorUserId.
+  assignedById   String?               @db.Uuid
   endedById      String?               @db.Uuid
   supersedesId   String?               @unique @db.Uuid
   status         String                @default("ASSIGNED")
@@ -1412,7 +1415,7 @@ model InspectionAssignment {
   updatedAt      DateTime              @updatedAt
   inspection     Inspection            @relation(fields: [inspectionId], references: [id])
   technician     UserProfile           @relation("AssignedTechnician", fields: [technicianId], references: [id])
-  assignedBy     UserProfile           @relation("AssignmentActor", fields: [assignedById], references: [id])
+  assignedBy     UserProfile?          @relation("AssignmentActor", fields: [assignedById], references: [id])
   endedBy        UserProfile?          @relation("AssignmentEndActor", fields: [endedById], references: [id])
   supersedes     InspectionAssignment? @relation("AssignmentSupersession", fields: [supersedesId], references: [id])
   supersededBy   InspectionAssignment? @relation("AssignmentSupersession")
