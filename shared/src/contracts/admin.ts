@@ -1063,5 +1063,7 @@ export interface JobberSyncResult {
   notSynced: number;
   /** Technicians copied across from Jobber this run. */
   assigned: number;
+  /** Inspections closed here because Jobber says the visit is finished. */
+  completedFromJobber: number;
   skipped: number;
 }

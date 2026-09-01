@@ -61,6 +61,14 @@ export interface JobberSyncResult {
   notSynced: number;
   /** Technicians copied across from Jobber this run. */
   assigned: number;
+  /**
+   * Inspections closed because Jobber says the visit is finished.
+   *
+   * Distinct from `alreadyComplete`, which counts visits that were finished
+   * before we ever imported them. This counts inspections that existed here,
+   * were never worked in this app, and have now been closed to match Jobber.
+   */
+  completedFromJobber: number;
   skipped: number;
 }
 
@@ -115,6 +123,7 @@ export class JobberSyncWorker {
       alreadyComplete: 0,
       notSynced: 0,
       assigned: 0,
+      completedFromJobber: 0,
       skipped: 0,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
@@ -212,6 +221,7 @@ export class JobberSyncWorker {
       alreadyComplete: 0,
       notSynced: 0,
       assigned: 0,
+      completedFromJobber: 0,
       skipped: 0,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
@@ -538,6 +548,19 @@ export class JobberSyncWorker {
      * creation would leave every one of those inspections unassigned for good.
      */
     await this.applyAssignment(organizationId, visit, inspectionId, result);
+
+    /**
+     * Jobber says the visit is finished.
+     *
+     * Checked before the reschedule comparison: a completed visit is not a
+     * move, and comparing its window would either do nothing or mistake the
+     * completion for a change of plan.
+     */
+    if (visit.completedAt || visit.visitStatus === 'COMPLETED') {
+      await this.completeFromJobber(organizationId, visit, inspection, result);
+      return;
+    }
+
     if (!visit.startAt) {
       result.skipped += 1;
       return;
@@ -634,6 +657,73 @@ export class JobberSyncWorker {
    * Work in progress is left alone: once a technician has started, reassigning
    * underneath them would move evidence they are actively collecting.
    */
+  /**
+   * Closes an inspection because Jobber says its visit is finished.
+   *
+   * Technicians are still working in Jobber while this app is rolled out, so
+   * the common case is a visit completed there that was never opened here.
+   * Without this the inspection sits SCHEDULED for ever: the sync window only
+   * reaches seven days back, so once the visit falls out of it nothing will
+   * ever look at that inspection again.
+   *
+   * COMPLETED, but deliberately **not** finalized. `finalizedAt` is an
+   * administrator's sign-off on a report, it freezes the evidence permanently,
+   * and spec §11 reserves it for a human — none of which a webhook may claim,
+   * least of all for an inspection that holds no evidence at all. Everything
+   * that governs frozen evidence keys on `finalizedAt` rather than the status,
+   * so leaving it null keeps all of it correct. `completedAt` carries Jobber's
+   * own timestamp, because that is when the work actually finished.
+   *
+   * Work under way here is never touched. Once a technician has started, this
+   * app holds evidence and its own lifecycle owns the outcome — an
+   * administrator finalizes it. That guard is also what stops a loop: our own
+   * completion push makes Jobber fire VISIT_COMPLETE straight back at us, and
+   * by then the inspection is submitted or finalized, so it is left alone.
+   */
+  private async completeFromJobber(
+    organizationId: string,
+    visit: JobberVisit,
+    inspection: { id: string; status: InspectionStatus; startedAt: Date | null },
+    result: JobberSyncResult,
+  ) {
+    if (inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED) {
+      result.skipped += 1;
+      return;
+    }
+
+    const completedAt = visit.completedAt ? new Date(visit.completedAt) : new Date();
+    await this.prisma.$transaction(async (tx) => {
+      /**
+       * The status is re-asserted in the WHERE clause.
+       *
+       * The read above ran outside this transaction, so a technician who
+       * started the inspection in between would otherwise have their work
+       * closed underneath them by a webhook.
+       */
+      const { count } = await tx.inspection.updateMany({
+        where: { id: inspection.id, organizationId, status: InspectionStatus.SCHEDULED, startedAt: null },
+        data: { status: InspectionStatus.COMPLETED, completedAt },
+      });
+      if (count === 0) return;
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          action: 'INSPECTION_COMPLETED_FROM_JOBBER',
+          entityType: 'Inspection',
+          entityId: inspection.id,
+          metadata: {
+            jobberVisitId: visit.id,
+            completedAt: visit.completedAt ?? null,
+            // Recorded because it is the whole point: no inspection was carried
+            // out in this app, so there is no report behind this completion.
+            capturedInApp: false,
+          },
+        },
+      });
+      result.completedFromJobber += 1;
+    });
+  }
+
   private async applyAssignment(
     organizationId: string,
     visit: JobberVisit,

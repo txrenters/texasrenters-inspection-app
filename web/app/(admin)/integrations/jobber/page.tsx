@@ -264,6 +264,12 @@ export default function JobberIntegrationPage() {
             {formatCount(mutations.sync.data.imported)} imported,{' '}
             {formatCount(mutations.sync.data.unmatched)} waiting on a property,{' '}
             {formatCount(mutations.sync.data.rejected)} held.
+            {/* Only when it happened. This one takes inspections out of the
+                scheduled list, so a reader needs to see it — but printing
+                "0 closed" on every ordinary sync is noise. */}
+            {mutations.sync.data.completedFromJobber > 0
+              ? ` ${formatCount(mutations.sync.data.completedFromJobber)} closed because Jobber finished the visit.`
+              : null}
           </AlertDescription>
         </Alert>
       ) : null}
