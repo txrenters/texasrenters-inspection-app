@@ -42,6 +42,20 @@ const formatAddress = (property: JobberPropertyDescriptor) =>
  * first visit is *seen*, not when a technician is due at a door nobody can
  * name.
  */
+/**
+ * The visit states that are actually waiting on somebody mapping a property.
+ *
+ * PENDING is unscheduled in Jobber and becomes importable the moment it gets a
+ * date; UNMATCHED_PROPERTY is blocked on the mapping itself. Every other state
+ * is finished with: IMPORTED succeeded, SKIPPED_COMPLETE happened before we saw
+ * it, SKIPPED_NOT_SYNCED is not an inspection, REJECTED and IGNORED were
+ * decided.
+ */
+const AWAITING_MAPPING = [
+  JobberVisitImportStatus.PENDING,
+  JobberVisitImportStatus.UNMATCHED_PROPERTY,
+];
+
 @Injectable()
 export class JobberMappingService {
   private readonly logger = new Logger(JobberMappingService.name);
@@ -176,12 +190,24 @@ export class JobberMappingService {
     };
   }
 
-  /** Links waiting on a person, newest first, with what is blocked behind each. */
+  /**
+   * Links waiting on a person, newest first, with what is blocked behind each.
+   *
+   * Only links with a visit still waiting on them. A queue is a list of work,
+   * and this one was counting rows nothing would ever act on: 20 of its 26
+   * entries were behind visits already completed in Jobber, which `processVisit`
+   * skips before it ever re-resolves a property — so no amount of mapping would
+   * have changed anything. It read as 26 blocked jobs when 1 was blocked.
+   *
+   * Nothing is lost by hiding them. The link rows stay, and one reappears the
+   * moment a visit arrives that actually needs it.
+   */
   async queue(user: AuthenticatedUser, limit = 50) {
     return this.prisma.jobberPropertyLink.findMany({
       where: {
         organizationId: user.organizationId,
         status: { in: [JobberLinkStatus.UNMATCHED, JobberLinkStatus.AMBIGUOUS] },
+        visitImports: { some: { status: { in: AWAITING_MAPPING } } },
       },
       orderBy: { updatedAt: 'desc' },
       take: Math.min(limit, 200),
@@ -195,7 +221,14 @@ export class JobberMappingService {
         propertywareBuildingId: true,
         propertywareBuilding: { select: { id: true, name: true } },
         updatedAt: true,
-        _count: { select: { visitImports: true } },
+        /**
+         * Counted the same way the queue is filtered.
+         *
+         * An unfiltered count says "12 visits held" about a property whose
+         * twelve visits all happened months ago, which is the same overstatement
+         * one level down.
+         */
+        _count: { select: { visitImports: { where: { status: { in: AWAITING_MAPPING } } } } },
       },
     });
   }

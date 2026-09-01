@@ -384,6 +384,45 @@ export class JobberSyncWorker {
       return;
     }
 
+    const type = resolveVisitType(visit.title, rules);
+    /**
+     * Typed, but a type this integration does not import.
+     *
+     * Checked before the outcome branch below so it reads as a decision rather
+     * than a failure: filter delivery resolves perfectly well, it simply is not
+     * an inspection.
+     *
+     * And checked before the property is resolved, which is the ordering that
+     * matters. Resolving the property first meant a filter delivery at an
+     * unmapped address created a mapping-queue entry — so the console listed
+     * properties to map on behalf of work it was never going to import. Five of
+     * six live entries were exactly that.
+     */
+    if (type.outcome === 'RESOLVED' && !isSyncedType(type.inspectionType)) {
+      await this.prisma.jobberVisitImport.update({
+        where: { id: record.id },
+        data: {
+          status: JobberVisitImportStatus.SKIPPED_NOT_SYNCED,
+          failureCode: null,
+          failureMessage: notSyncedReason(type.inspectionType),
+        },
+      });
+      result.notSynced += 1;
+      return;
+    }
+    if (type.outcome !== 'RESOLVED') {
+      await this.reject(
+        record.id,
+        type.outcome === 'AMBIGUOUS' ? 'JOBBER_VISIT_TYPE_AMBIGUOUS' : 'JOBBER_VISIT_TYPE_UNKNOWN',
+        type.outcome === 'AMBIGUOUS'
+          ? `This visit's title matches ${type.matches.length} inspection types. Rename it or set the type by hand.`
+          : 'No inspection type matches this visit title.',
+        result,
+      );
+      return;
+    }
+
+
     const link = await this.mapping.resolveProperty(
       organizationId,
       {
@@ -411,42 +450,6 @@ export class JobberSyncWorker {
       result.unmatched += 1;
       return;
     }
-
-    const type = resolveVisitType(visit.title, rules);
-    /**
-     * Typed, but a type this integration does not import.
-     *
-     * Checked before the outcome branch below so it reads as a decision rather
-     * than a failure: filter delivery resolves perfectly well, it simply is not
-     * an inspection. Recording it keeps ~100 rows per sync out of the console's
-     * work queue, where they would look like something to fix.
-     */
-    if (type.outcome === 'RESOLVED' && !isSyncedType(type.inspectionType)) {
-      await this.prisma.jobberVisitImport.update({
-        where: { id: record.id },
-        data: {
-          linkId: link.id,
-          status: JobberVisitImportStatus.SKIPPED_NOT_SYNCED,
-          failureCode: null,
-          failureMessage: notSyncedReason(type.inspectionType),
-        },
-      });
-      result.notSynced += 1;
-      return;
-    }
-    if (type.outcome !== 'RESOLVED') {
-      await this.reject(
-        record.id,
-        type.outcome === 'AMBIGUOUS' ? 'JOBBER_VISIT_TYPE_AMBIGUOUS' : 'JOBBER_VISIT_TYPE_UNKNOWN',
-        type.outcome === 'AMBIGUOUS'
-          ? `This visit's title matches ${type.matches.length} inspection types. Rename it or set the type by hand.`
-          : 'No inspection type matches this visit title.',
-        result,
-        link.id,
-      );
-      return;
-    }
-
     try {
       const inspectionId = await this.prisma.$transaction(async (tx) => {
         const plan = await resolveInspectionPlan(tx, {
