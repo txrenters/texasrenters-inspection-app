@@ -30,6 +30,10 @@ import {
   resolveVisitType,
   visitTypeRules,
 } from '../../integrations/jobber/jobber.visit-type';
+import {
+  resolveAssignment,
+  unknownAssigneeReason,
+} from '../../integrations/jobber/jobber.assignment';
 
 /**
  * Page size.
@@ -55,6 +59,8 @@ export interface JobberSyncResult {
   alreadyComplete: number;
   /** Typed, but a type this integration does not import. Also not a problem. */
   notSynced: number;
+  /** Technicians copied across from Jobber this run. */
+  assigned: number;
   skipped: number;
 }
 
@@ -108,6 +114,7 @@ export class JobberSyncWorker {
       rejected: 0,
       alreadyComplete: 0,
       notSynced: 0,
+      assigned: 0,
       skipped: 0,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
@@ -204,6 +211,7 @@ export class JobberSyncWorker {
       rejected: 0,
       alreadyComplete: 0,
       notSynced: 0,
+      assigned: 0,
       skipped: 0,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
@@ -481,6 +489,7 @@ export class JobberSyncWorker {
         },
       });
       result.imported += 1;
+      await this.applyAssignment(organizationId, visit, inspectionId, result);
     } catch (error) {
       // A scheduling rule refusing this visit is information, not a crash: the
       // office needs to see "no approved areas" against the visit that hit it.
@@ -519,6 +528,16 @@ export class JobberSyncWorker {
       result.skipped += 1;
       return;
     }
+
+    /**
+     * Assignment is reconciled on every pass, not only at import.
+     *
+     * This is the case that actually matters here. Coordinators schedule 15 to
+     * 30 days ahead and attach a technician afterwards, so the visit almost
+     * always arrives before its assignee does. Copying assignment only at
+     * creation would leave every one of those inspections unassigned for good.
+     */
+    await this.applyAssignment(organizationId, visit, inspectionId, result);
     if (!visit.startAt) {
       result.skipped += 1;
       return;
@@ -601,6 +620,84 @@ export class JobberSyncWorker {
       }
       throw error;
     }
+  }
+
+  /**
+   * Puts Jobber's technician on our inspection, when we recognise them.
+   *
+   * Never guesses. About half the assignees on a live calendar are Jobber users
+   * this app does not know, and putting the wrong technician on an inspection
+   * sends the wrong person to somebody's home. An unrecognised assignee is
+   * recorded by name against the visit and the inspection stays unassigned,
+   * which the console already surfaces on its own.
+   *
+   * Work in progress is left alone: once a technician has started, reassigning
+   * underneath them would move evidence they are actively collecting.
+   */
+  private async applyAssignment(
+    organizationId: string,
+    visit: JobberVisit,
+    inspectionId: string,
+    result: JobberSyncResult,
+  ) {
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { id: inspectionId, organizationId },
+      select: { startedAt: true, status: true },
+    });
+    if (!inspection || inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED)
+      return;
+
+    const resolution = await resolveAssignment(this.prisma, organizationId, visit);
+    if (resolution.outcome === 'NO_ASSIGNEE') return;
+    if (resolution.outcome === 'UNKNOWN_ASSIGNEE') {
+      await this.prisma.jobberVisitImport.updateMany({
+        where: { organizationId, jobberVisitId: visit.id },
+        data: { failureMessage: unknownAssigneeReason(resolution.misses) },
+      });
+      return;
+    }
+
+    const current = await this.prisma.inspectionAssignment.findFirst({
+      where: { inspectionId, isCurrent: true },
+      select: { id: true, technicianId: true },
+    });
+    if (current?.technicianId === resolution.match.technicianId) return;
+
+    await this.prisma.$transaction(async (tx) => {
+      if (current)
+        await tx.inspectionAssignment.update({
+          where: { id: current.id },
+          data: {
+            isCurrent: false,
+            status: 'UNASSIGNED',
+            endedAt: new Date(),
+            reason: 'Reassigned in Jobber.',
+          },
+        });
+      await tx.inspectionAssignment.create({
+        data: {
+          inspectionId,
+          technicianId: resolution.match.technicianId,
+          // Null on purpose: no person here made this call. See the migration.
+          assignedById: null,
+          reason: `Assigned in Jobber to ${resolution.match.email}.`,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          organizationId,
+          action: current ? 'INSPECTION_REASSIGNED_FROM_JOBBER' : 'INSPECTION_ASSIGNED_FROM_JOBBER',
+          entityType: 'Inspection',
+          entityId: inspectionId,
+          metadata: {
+            jobberVisitId: visit.id,
+            technicianId: resolution.match.technicianId,
+            matchedOn: resolution.match.email,
+          },
+        },
+      });
+    });
+    result.assigned += 1;
   }
 
   private async reject(

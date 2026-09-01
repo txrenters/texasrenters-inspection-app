@@ -68,7 +68,8 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Jobber sync ${result.correlationId}: ${result.visitsSeen} seen, ${result.imported} imported, ` +
           `${result.rescheduled} rescheduled, ${result.unmatched} unmatched, ${result.rejected} rejected, ` +
-          `${result.alreadyComplete} already complete, ${result.notSynced} not synced.`,
+          `${result.alreadyComplete} already complete, ${result.notSynced} not synced, ` +
+          `${result.assigned} assigned.`,
       );
     } catch (error) {
       this.logger.error(

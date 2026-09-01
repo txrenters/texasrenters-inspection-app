@@ -34,6 +34,24 @@ export const jobberVisitSchema = z.object({
   allDay: z.boolean().nullish(),
   job: z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish() }).nullish(),
   client: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
+  /**
+   * Who the coordinator put on the visit.
+   *
+   * Invisible without the Users scope — Jobber returns an empty list rather
+   * than an error — so an absent assignee proves nothing about the schedule,
+   * only about the app's permissions.
+   */
+  assignedUsers: z
+    .object({
+      nodes: z.array(
+        z.object({
+          id: z.string(),
+          email: z.object({ raw: z.string().nullish() }).nullish(),
+          name: z.object({ full: z.string().nullish() }).nullish(),
+        }),
+      ),
+    })
+    .nullish(),
   // The property is what the whole mapping layer keys on. A visit without one
   // can never become an inspection, so it is nullable here and rejected with a
   // named reason rather than silently skipped.
