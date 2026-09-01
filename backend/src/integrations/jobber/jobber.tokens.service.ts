@@ -143,7 +143,9 @@ export class JobberTokenService {
       // A rejected refresh token is terminal: Jobber revoked it, and retrying on
       // a schedule would only keep failing. Anything else — a 500, a timeout —
       // leaves the connection CONNECTED so the next sync can try again.
-      if (error instanceof JobberError && error.status === 401)
+      // What Jobber said, not what we report: the caller-facing status of a
+      // provider 401 is 502, precisely so it cannot be mistaken for our own.
+      if (error instanceof JobberError && error.providerStatus === 401)
         await this.requireReauthorization(organizationId, error.message);
       throw error;
     }
