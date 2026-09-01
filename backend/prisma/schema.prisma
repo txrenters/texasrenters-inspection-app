@@ -2201,6 +2201,10 @@ enum JobberVisitImportStatus {
   REJECTED
   /// A human decided this visit is not an inspection.
   IGNORED
+  /// The visit's type is one this integration deliberately does not import —
+  /// filter delivery, which is a delivery rather than an inspection. A decision
+  /// already made, not a problem to solve, so it is kept out of the work queue.
+  SKIPPED_NOT_SYNCED
   /// Already finished in Jobber when we first saw it. Not a failure: the window
   /// reaches into the past, and work that has happened must not become an
   /// inspection somebody is asked to perform. Retained rather than dropped so

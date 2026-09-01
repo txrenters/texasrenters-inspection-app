@@ -80,13 +80,17 @@ export const ACCOUNT_QUERY = 'query GetAccount { account { id name } }';
 /**
  * Marks a Jobber visit complete.
  *
+ * `input.completedAt` carries our own finalization time. It is optional to
+ * Jobber, but omitting it lets Jobber stamp the moment the outbox happened to
+ * drain — which can be hours after sign-off, and is not when the work finished.
+ *
  * `userErrors` is selected because Jobber reports business-rule rejections
  * there, inside an otherwise successful response — a mutation that returns no
  * top-level error has still not necessarily done anything.
  */
 export const VISIT_COMPLETE_MUTATION = `
-  mutation CompleteVisit($visitId: EncodedId!) {
-    visitComplete(visitId: $visitId) {
+  mutation CompleteVisit($visitId: EncodedId!, $input: VisitCompleteInput) {
+    visitComplete(visitId: $visitId, input: $input) {
       visit {
         id
         completedAt
@@ -102,14 +106,18 @@ export const VISIT_COMPLETE_MUTATION = `
 /**
  * Attaches a note to the job the visit belongs to.
  *
+ * `jobCreateNote`, not `jobNoteCreate`. The latter was a guess and does not
+ * exist; every report-link push would have failed on it. Verified against the
+ * live schema.
+ *
  * The note carries the report link, so the office sees the finished inspection
  * from the job they scheduled. Whether such a note is visible in Jobber's
  * client hub is account configuration we cannot read from here, which is why
  * sending the link at all is behind JOBBER_PUSH_REPORT_LINK.
  */
 export const JOB_NOTE_CREATE_MUTATION = `
-  mutation CreateJobNote($jobId: EncodedId!, $message: String!) {
-    jobNoteCreate(jobId: $jobId, input: { message: $message }) {
+  mutation CreateJobNote($jobId: EncodedId!, $input: JobCreateNoteInput!) {
+    jobCreateNote(jobId: $jobId, input: $input) {
       userErrors {
         message
         path

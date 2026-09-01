@@ -107,11 +107,13 @@ export function resolveVisitType(
  * what they add lands on the property as DRAFT, so an administrator still
  * approves the permanent layout. It delegates the survey, not the approval.
  *
- * Both entries are off-cycle equipment work. A filter delivery or an HVAC
- * service is a visit to a property, and capturing what is actually there is a
- * free and accurate survey — without it, every one of these is refused for a
- * layout nobody has drawn yet. Neither is compared against another inspection,
- * so an on-site area list harms nothing downstream.
+ * HVAC is off-cycle equipment work: a visit to a property where recording what
+ * is actually there is a free and accurate survey, and it is never compared
+ * against another inspection, so an on-site area list harms nothing downstream.
+ * Without this it is refused for a layout nobody has drawn yet.
+ *
+ * Filter delivery used to be here too. It is no longer imported at all — see
+ * TYPES_NOT_SYNCED — so an entry for it would be unreachable.
  *
  * The tenancy lifecycle is excluded on purpose. A move-in *establishes* the
  * baseline that every later inspection is judged against, and a move-out is
@@ -124,10 +126,40 @@ export function resolveVisitType(
  * justify later than a capture nobody chose.
  */
 const TYPES_ALLOWING_TECHNICIAN_CAPTURE: ReadonlySet<InspectionType> = new Set([
-  InspectionType.AC_FILTER_DELIVERY,
   InspectionType.HVAC,
 ]);
 
 export function allowsTechnicianCapture(inspectionType: InspectionType): boolean {
   return TYPES_ALLOWING_TECHNICIAN_CAPTURE.has(inspectionType);
+}
+
+/**
+ * Types this integration will not turn into inspections.
+ *
+ * `AC_FILTER_DELIVERY` exists in the app's own model — added with the roof and
+ * lockbox visits long before Jobber — but it is a *delivery*: somebody drops off
+ * filters, and nobody inspects anything. Importing it put ~100 jobs in front of
+ * technicians under the word "inspection".
+ *
+ * A visit typed this way is recorded and skipped rather than refused. The
+ * distinction matters in the console: a refusal is work waiting for someone,
+ * and this is a decision already made that would otherwise reappear on every
+ * sync as noise nobody can clear.
+ *
+ * This does not remove the type from the app. Anything created by hand still
+ * works exactly as before; only the Jobber importer declines to produce them.
+ */
+const TYPES_NOT_SYNCED: ReadonlySet<InspectionType> = new Set([
+  InspectionType.AC_FILTER_DELIVERY,
+]);
+
+export function isSyncedType(inspectionType: InspectionType): boolean {
+  return !TYPES_NOT_SYNCED.has(inspectionType);
+}
+
+/** Why a type is skipped, in words the console can show. */
+export function notSyncedReason(inspectionType: InspectionType): string {
+  return inspectionType === InspectionType.AC_FILTER_DELIVERY
+    ? 'Filter delivery is a delivery, not an inspection, so it is not imported.'
+    : 'This visit type is not imported as an inspection.';
 }

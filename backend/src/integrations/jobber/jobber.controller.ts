@@ -32,6 +32,7 @@ import { JobberError } from './jobber.errors';
 import { JobberMappingService } from './jobber.mapping.service';
 import { JobberOAuthService } from './jobber.oauth.service';
 import { JobberService } from './jobber.service';
+import { JobberOutboundWorker } from '../../workers/jobber-sync/jobber-outbound.worker';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
 
 @ApiTags('Jobber integration')
@@ -45,6 +46,7 @@ export class JobberIntegrationController {
     private readonly client: JobberClient,
     private readonly mapping: JobberMappingService,
     private readonly sync: JobberSyncWorker,
+    private readonly outbound: JobberOutboundWorker,
   ) {}
 
   /** What the console shows on the integrations page. Never returns tokens. */
@@ -89,8 +91,23 @@ export class JobberIntegrationController {
   @Post('sync')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
-  runSync(@Req() request: AuthenticatedRequest) {
-    return this.sync.run(request.user.organizationId);
+  async runSync(@Req() request: AuthenticatedRequest) {
+    const pulled = await this.sync.run(request.user.organizationId);
+    /**
+     * Drains the outbox too, and the reason is not convenience.
+     *
+     * The outbound worker otherwise runs only on the scheduler tick, and the
+     * scheduler is off until JOBBER_SYNC_ENABLED is set. That left completions
+     * enqueued at sign-off with nothing on any path that would ever send them.
+     *
+     * Failures here do not fail the pull: each is already recorded on its own
+     * task, with backoff, and reporting a successful read as a failed sync
+     * would be the wrong answer to the question the button asked.
+     */
+    const pushed = await this.outbound
+      .run(request.user.organizationId)
+      .catch(() => ({ processed: 0, sent: 0, failed: 0, abandoned: 0 }));
+    return { ...pulled, pushed };
   }
 
   /**

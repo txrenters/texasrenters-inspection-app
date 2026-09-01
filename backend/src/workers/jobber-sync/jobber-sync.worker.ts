@@ -25,6 +25,8 @@ import { VISITS_QUERY } from '../../integrations/jobber/jobber.queries';
 import { jobberVisitsPageSchema, type JobberVisit } from '../../integrations/jobber/jobber.schemas';
 import {
   allowsTechnicianCapture,
+  isSyncedType,
+  notSyncedReason,
   resolveVisitType,
   visitTypeRules,
 } from '../../integrations/jobber/jobber.visit-type';
@@ -51,6 +53,8 @@ export interface JobberSyncResult {
   /** Already finished in Jobber. Counted separately because it is the largest
    * group by far and is not a problem — 90 of the first 211 visits. */
   alreadyComplete: number;
+  /** Typed, but a type this integration does not import. Also not a problem. */
+  notSynced: number;
   skipped: number;
 }
 
@@ -103,6 +107,7 @@ export class JobberSyncWorker {
       unmatched: 0,
       rejected: 0,
       alreadyComplete: 0,
+      notSynced: 0,
       skipped: 0,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
@@ -320,6 +325,27 @@ export class JobberSyncWorker {
     }
 
     const type = resolveVisitType(visit.title, rules);
+    /**
+     * Typed, but a type this integration does not import.
+     *
+     * Checked before the outcome branch below so it reads as a decision rather
+     * than a failure: filter delivery resolves perfectly well, it simply is not
+     * an inspection. Recording it keeps ~100 rows per sync out of the console's
+     * work queue, where they would look like something to fix.
+     */
+    if (type.outcome === 'RESOLVED' && !isSyncedType(type.inspectionType)) {
+      await this.prisma.jobberVisitImport.update({
+        where: { id: record.id },
+        data: {
+          linkId: link.id,
+          status: JobberVisitImportStatus.SKIPPED_NOT_SYNCED,
+          failureCode: null,
+          failureMessage: notSyncedReason(type.inspectionType),
+        },
+      });
+      result.notSynced += 1;
+      return;
+    }
     if (type.outcome !== 'RESOLVED') {
       await this.reject(
         record.id,

@@ -105,22 +105,35 @@ export class JobberOutboundWorker {
     organizationId: string,
     task: { id: string; inspectionId: string; jobberVisitId: string; jobberJobId: string | null; createdById: string | null },
   ) {
+    /**
+     * Jobber is told when the work was signed off, not when the outbox drained.
+     *
+     * The two differ by however long the queue waited — minutes normally, hours
+     * after an outage — and the second is not a fact about the inspection.
+     */
+    const finalizedAt = await this.prisma.inspection.findUnique({
+      where: { id: task.inspectionId },
+      select: { finalizedAt: true },
+    });
     const completion = await this.client.request<{ visitComplete: JobberUserErrors }>(
       organizationId,
       VISIT_COMPLETE_MUTATION,
-      { visitId: task.jobberVisitId },
+      {
+        visitId: task.jobberVisitId,
+        input: { completedAt: (finalizedAt?.finalizedAt ?? new Date()).toISOString() },
+      },
     );
     this.assertNoUserErrors(completion.visitComplete);
 
     if (!this.config.pushReportLink || !task.jobberJobId) return;
     const url = await this.reportLink(organizationId, task.inspectionId, task.createdById);
     if (!url) return;
-    const note = await this.client.request<{ jobNoteCreate: JobberUserErrors }>(
+    const note = await this.client.request<{ jobCreateNote: JobberUserErrors }>(
       organizationId,
       JOB_NOTE_CREATE_MUTATION,
-      { jobId: task.jobberJobId, message: `Inspection report: ${url}` },
+      { jobId: task.jobberJobId, input: { message: `Inspection report: ${url}` } },
     );
-    this.assertNoUserErrors(note.jobNoteCreate);
+    this.assertNoUserErrors(note.jobCreateNote);
   }
 
   /**
