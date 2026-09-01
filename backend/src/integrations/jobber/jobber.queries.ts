@@ -125,3 +125,53 @@ export const JOB_NOTE_CREATE_MUTATION = `
     }
   }
 `;
+
+/**
+ * One visit, by Jobber id.
+ *
+ * Used by the webhook path, which is told *that* a visit changed and must then
+ * fetch it — the payload carries only an id.
+ *
+ * Filtered by `ids` rather than a `visit(id:)` root field, because `ids` is a
+ * confirmed member of `VisitFilterAttributes` and this reuses the node
+ * selection the paged query already proved against the live schema. Inventing a
+ * second shape here is how the last three defects got in.
+ */
+export const VISIT_BY_ID_QUERY = `
+  query InspectionVisitById($ids: [EncodedId!]) {
+    visits(first: 1, filter: { ids: $ids }) {
+      nodes {
+        id
+        title
+        startAt
+        endAt
+        completedAt
+        createdAt
+        visitStatus
+        allDay
+        job {
+          id
+          jobNumber
+        }
+        client {
+          id
+          name
+        }
+        property {
+          id
+          address {
+            street1
+            street2
+            city
+            province
+            postalCode
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;

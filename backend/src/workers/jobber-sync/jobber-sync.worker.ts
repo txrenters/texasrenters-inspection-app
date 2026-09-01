@@ -21,7 +21,7 @@ import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { JobberMappingService } from '../../integrations/jobber/jobber.mapping.service';
-import { VISITS_QUERY } from '../../integrations/jobber/jobber.queries';
+import { VISITS_QUERY, VISIT_BY_ID_QUERY } from '../../integrations/jobber/jobber.queries';
 import { jobberVisitsPageSchema, type JobberVisit } from '../../integrations/jobber/jobber.schemas';
 import {
   allowsTechnicianCapture,
@@ -178,6 +178,76 @@ export class JobberSyncWorker {
       });
       throw error;
     }
+  }
+
+  /**
+   * Processes exactly one visit, for the webhook path.
+   *
+   * Deliberately the same `processVisit` the paged sync uses. A webhook tells
+   * us *that* a visit changed and nothing more — the payload carries only an
+   * id — so this fetches it and hands it to the one place that knows what a
+   * visit is allowed to become. A second writer here would drift from the
+   * sync's rules the first time either changed.
+   *
+   * The building index is rebuilt for a single visit, which is wasteful and
+   * fine: it is one query over ~145 rows, against a webhook that must return
+   * inside a second and is therefore already running off the request thread.
+   */
+  async syncVisit(organizationId: string, jobberVisitId: string): Promise<JobberSyncResult> {
+    const correlationId = randomUUID();
+    const result: JobberSyncResult = {
+      correlationId,
+      visitsSeen: 0,
+      imported: 0,
+      rescheduled: 0,
+      unmatched: 0,
+      rejected: 0,
+      alreadyComplete: 0,
+      notSynced: 0,
+      skipped: 0,
+    };
+    const connection = await this.prisma.jobberConnection.findUnique({
+      where: { organizationId },
+      select: { status: true },
+    });
+    if (connection?.status !== JobberConnectionStatus.CONNECTED)
+      throw new JobberError(
+        'This organization has not authorized Jobber.',
+        'JOBBER_NOT_CONNECTED',
+        409,
+      );
+
+    const data = await this.client.request(
+      organizationId,
+      VISIT_BY_ID_QUERY,
+      { ids: [jobberVisitId] },
+      correlationId,
+    );
+    const parsed = jobberVisitsPageSchema.safeParse(data);
+    if (!parsed.success)
+      throw new JobberError(
+        'Jobber returned a visit in an unexpected shape.',
+        'JOBBER_VISIT_SCHEMA_MISMATCH',
+        502,
+      );
+    const visit = parsed.data.visits.nodes[0];
+    // Deleted in Jobber between the webhook firing and this fetch, or never
+    // visible to us. Not an error: the periodic sweep is what reconciles
+    // anything this path cannot see.
+    if (!visit) {
+      result.skipped += 1;
+      return result;
+    }
+
+    result.visitsSeen = 1;
+    await this.processVisit(
+      organizationId,
+      visit,
+      await this.mapping.buildingIndex(organizationId),
+      visitTypeRules(),
+      result,
+    );
+    return result;
   }
 
   /**
