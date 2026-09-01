@@ -11,11 +11,14 @@ import { useAdminMutations } from './queries';
  * These mutations build their request body field by field rather than
  * forwarding the caller's object, so a field the editor collects and the body
  * does not name is dropped in silence — no type error, no console error, no
- * failed request. `hasAirConditioning` was missing exactly that way: the box
- * ticked, the PATCH went out without it, the server answered 200 having
- * changed nothing, and the box was clear again after the next refetch. It is
- * the field that decides which areas an HVAC inspection covers, so the visible
- * consequence was an inspection type that could not be scheduled at all.
+ * failed request. The box ticked, the PATCH going out without it, the server
+ * answering 200 having changed nothing, and the box clear again after the next
+ * refetch.
+ *
+ * That happened to `hasAirConditioning`, which is gone now — HVAC no longer
+ * scopes by area. These assertions moved to `isRequired`, which carries exactly
+ * the same risk: it is a boolean the editor collects, and `false` and "absent"
+ * are different instructions to the server.
  */
 
 const calls: Array<{ path: string; method?: string; body: Record<string, unknown> }> = [];
@@ -57,7 +60,6 @@ describe('editing a property area', () => {
       name: 'Hall',
       inspectionOrder: 1,
       isRequired: true,
-      hasAirConditioning: true,
       expectedUpdatedAt: '2026-08-14T00:00:00.000Z',
     });
 
@@ -69,11 +71,10 @@ describe('editing a property area', () => {
       name: 'Hall',
       inspectionOrder: 1,
       isRequired: true,
-      hasAirConditioning: true,
     });
   });
 
-  it('sends the tick being cleared, not just being set', async () => {
+  it('sends a box being cleared, not just being set', async () => {
     // `false` and "absent" are different instructions to the server, and a
     // truthy check in the body would make the box impossible to untick.
     const result = mutations();
@@ -81,14 +82,14 @@ describe('editing a property area', () => {
     result.current.updatePropertyArea.mutate({
       propertyId: 'property-1',
       areaId: 'area-1',
-      hasAirConditioning: false,
+      isRequired: false,
     });
 
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]!.body.hasAirConditioning).toBe(false);
+    expect(calls[0]!.body.isRequired).toBe(false);
   });
 
-  it('carries the tick when an area is created', async () => {
+  it('carries the flags when an area is created', async () => {
     const result = mutations();
 
     result.current.createPropertyArea.mutate({
@@ -97,11 +98,10 @@ describe('editing a property area', () => {
       name: 'Utility room',
       inspectionOrder: 3,
       isRequired: true,
-      hasAirConditioning: true,
     });
 
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.method).toBe('POST');
-    expect(calls[0]!.body).toMatchObject({ name: 'Utility room', hasAirConditioning: true });
+    expect(calls[0]!.body).toMatchObject({ name: 'Utility room', isRequired: true });
   });
 });

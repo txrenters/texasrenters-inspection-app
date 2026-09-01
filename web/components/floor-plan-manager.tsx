@@ -39,7 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field';
+import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
@@ -224,15 +224,7 @@ export function FloorPlanManager({
           expectedUpdatedAt: area.updatedAt,
           ...input,
         });
-        const airConditioningChanged =
-          input.hasAirConditioning !== Boolean(area.hasAirConditioning);
-        toast.success(`${name} updated`, {
-          description: airConditioningChanged
-            ? input.hasAirConditioning
-              ? 'Now included in HVAC inspections.'
-              : 'No longer included in HVAC inspections.'
-            : undefined,
-        });
+        toast.success(`${name} updated`);
         return saved;
       } catch (error) {
         toast.error(`Could not update ${area.name}`, {
@@ -906,22 +898,13 @@ export function FloorPlanManager({
                             #{area.inspectionOrder} · {area.isRequired ? 'Required' : 'Optional'}
                             {area.source === 'TECHNICIAN' ? ' · Technician-added' : ''}
                           </p>
-                          {/* Stated here, not only inside the editor. It decides
-                              which areas an HVAC visit covers, and after ticking
-                              the box this is the only place that confirms it
-                              took. */}
-                          {area.hasAirConditioning ? (
-                            <Badge variant="secondary">Air conditioning</Badge>
-                          ) : null}
                           {/* Offered for every approved area, not just
-                              technician-added ones. `hasAirConditioning` is
-                              exempt from the layout freeze precisely so it can
-                              be recorded on approved areas — gating the only
-                              button that reaches it by source made it
-                              unsettable on every AI-extracted property, which
-                              is most of them. A genuine rename of a frozen area
-                              is still refused by the server, with a message
-                              that says so. */}
+                              technician-added ones: gating the only button that
+                              reaches the editor by source made approved areas
+                              uneditable on every AI-extracted property, which is
+                              most of them. A genuine rename of a frozen area is
+                              still refused by the server, with a message that
+                              says so. */}
                           {canManage ? (
                             <Button
                               onClick={() => setCorrectingAreaId(area.id)}
@@ -1444,20 +1427,13 @@ function ManualAreaForm({
   const [floorName, setFloorName] = useState('Ground Floor');
   const [name, setName] = useState('');
   const [isRequired, setIsRequired] = useState(true);
-  const [hasAirConditioning, setHasAirConditioning] = useState(false);
   return (
     <form
       className="bg-muted/40 flex flex-wrap items-end gap-3 rounded-lg border p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        void onCreate({ floorName, name, inspectionOrder: nextOrder, isRequired, hasAirConditioning })
-          .then(() => {
-            setName('');
-            // Cleared with the name: the next area is a different room, and
-            // carrying the tick over is how a whole floor silently ends up
-            // marked as having units.
-            setHasAirConditioning(false);
-          })
+        void onCreate({ floorName, name, inspectionOrder: nextOrder, isRequired })
+          .then(() => setName(''))
           .catch(() => undefined);
       }}
     >
@@ -1487,13 +1463,6 @@ function ManualAreaForm({
         />
         Required
       </label>
-      <label className="flex h-9 cursor-pointer items-center gap-2 text-sm font-medium">
-        <Checkbox
-          checked={hasAirConditioning}
-          onCheckedChange={(checked) => setHasAirConditioning(checked === true)}
-        />
-        Has air conditioning
-      </label>
       <Button disabled={!floorName.trim() || !name.trim() || submitting} variant="outline">
         {submitting ? <Spinner /> : null}
         Add draft area
@@ -1507,14 +1476,6 @@ interface AreaInput {
   name: string;
   inspectionOrder: number;
   isRequired: boolean;
-  /**
-   * Whether this area holds an air conditioner.
-   *
-   * Scheduling scope rather than a condition observation: an HVAC inspection
-   * covers every area where this is true, so it is the office recording where
-   * the units are. Until somebody ticks these, an HVAC visit scopes to nothing.
-   */
-  hasAirConditioning: boolean;
 }
 
 function AreaReviewRow({
@@ -1595,7 +1556,6 @@ function AreaReviewRow({
           units are, and it is what an HVAC visit is scoped by. */}
       <div className="flex shrink-0 flex-wrap items-center gap-1.5">
         {area.isRequired ? <Badge variant="secondary">Required</Badge> : null}
-        {area.hasAirConditioning ? <Badge variant="secondary">Air conditioning</Badge> : null}
       </div>
 
       {!readOnly ? (
@@ -1700,7 +1660,6 @@ function AreaEditForm({
   const [name, setName] = useState(area.name);
   const [inspectionOrder, setInspectionOrder] = useState(area.inspectionOrder);
   const [isRequired, setIsRequired] = useState(area.isRequired);
-  const [hasAirConditioning, setHasAirConditioning] = useState(area.hasAirConditioning ?? false);
   // Captured at open. If the row updates underneath while this is on screen,
   // saving would overwrite whatever the other edit did.
   const loadedRevision = useRef(area.updatedAt);
@@ -1755,17 +1714,6 @@ function AreaEditForm({
           />
           Required
         </label>
-
-        <label className="hover:bg-accent flex min-h-11 cursor-pointer items-center gap-2.5 rounded-md border px-3 text-sm font-medium">
-          <Checkbox
-            checked={hasAirConditioning}
-            onCheckedChange={(checked) => setHasAirConditioning(checked === true)}
-          />
-          <span className="min-w-0">
-            Has air conditioning
-            <FieldDescription>Scopes HVAC inspections. Not a condition finding.</FieldDescription>
-          </span>
-        </label>
       </div>
 
       <DialogFooter>
@@ -1783,7 +1731,7 @@ function AreaEditForm({
             inspectionOrder < 1
           }
           onClick={() => {
-            void onSave({ floorName, name, inspectionOrder, isRequired, hasAirConditioning })
+            void onSave({ floorName, name, inspectionOrder, isRequired })
               .then(onSaved)
               .catch(() => undefined);
           }}

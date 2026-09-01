@@ -266,7 +266,6 @@ export interface AdminPropertyArea {
    * built against an older server will not receive it, and `false` is the right
    * reading of its absence.
    */
-  hasAirConditioning?: boolean;
   status: 'DRAFT' | 'APPROVED' | 'REJECTED';
   source: string;
   environment?: AreaEnvironment;

@@ -413,7 +413,6 @@ export class CreatePropertyAreaDto {
   @Type(() => Number) @IsInt() @Min(1) @Max(500) inspectionOrder!: number;
   @IsBoolean() isRequired!: boolean;
   /** Optional here, unlike `isRequired`: absent means no, which is the default. */
-  @IsOptional() @IsBoolean() hasAirConditioning?: boolean;
   @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
   @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
@@ -467,7 +466,6 @@ export class UpdatePropertyAreaDto {
    * every area where this is true, so it is the office saying where the units
    * are rather than a technician reporting what they found.
    */
-  @IsOptional() @IsBoolean() hasAirConditioning?: boolean;
   @IsOptional() @IsEnum(AreaEnvironment) environment?: AreaEnvironment;
   @IsOptional() @IsEnum(AreaCategory) category?: AreaCategory;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;

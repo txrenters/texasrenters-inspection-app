@@ -939,7 +939,17 @@ export class TechnicianService {
         // checklist written for the move-in, so the job read "Floor and
         // coverings" while they were standing at a condenser.
         where: {
-          propertyAreaId: room.propertyAreaId,
+          /**
+           * The HVAC list belongs to the organization, not to an area.
+           *
+           * An HVAC visit inspects the property's system as one subject and
+           * asks the same questions everywhere, so its items are stored once
+           * per organization rather than copied onto every property. Every
+           * other visit asks about the specific room it is standing in.
+           */
+          ...(checklistKindFor(room.inspection.inspectionType) === 'AIR_CONDITIONING'
+            ? { organizationId: user.organizationId, propertyAreaId: null }
+            : { propertyAreaId: room.propertyAreaId }),
           archivedAt: null,
           // A visit whose evidence is the answer asks nothing, and an empty
           // `in` matches no rows — the same result as skipping the query,
