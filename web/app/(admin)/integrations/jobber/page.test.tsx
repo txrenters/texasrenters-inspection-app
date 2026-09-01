@@ -38,6 +38,8 @@ function connected(status = 'CONNECTED') {
       connectedAt: '2026-09-01T13:25:48.000Z',
       lastSyncCompletedAt: '2026-09-01T14:31:56.000Z',
       lastSyncVisitCount: 212,
+      syncInProgress: false,
+      schedule: { enabled: true, cron: '*/5 * * * *', nextRunAt: null, running: false },
     },
   });
   hooks.useJobberQueue.mockReturnValue({ isLoading: false, data: [] });
@@ -76,6 +78,23 @@ describe('Jobber integration page', () => {
     connected();
     render(<JobberIntegrationPage />);
     expect(screen.getByText(/scope change invalidates the stored credentials/)).toBeTruthy();
+  });
+
+  it('reports that background syncing is alive, which "Connected" does not', () => {
+    // The two are independent: the scheduler is off unless three environment
+    // variables agree, so a healthy connection can be importing nothing.
+    connected();
+    render(<JobberIntegrationPage />);
+    expect(screen.getByText(/Background sync is running every 5 minutes/)).toBeTruthy();
+  });
+
+  it('reads the visit count the worker recorded', () => {
+    // `describeConnection` selects columns explicitly and had never selected any
+    // of the lastSync ones, so this read "Visits last read 0" against a
+    // connection that had just read 223.
+    connected();
+    render(<JobberIntegrationPage />);
+    expect(screen.getByText('212')).toBeTruthy();
   });
 
   it('shows Connect and no Reconnect while disconnected', () => {

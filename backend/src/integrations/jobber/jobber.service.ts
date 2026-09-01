@@ -6,6 +6,7 @@ import { JobberClient } from './jobber.client';
 import { JobberError } from './jobber.errors';
 import { JobberOAuthService } from './jobber.oauth.service';
 import { JobberTokenService } from './jobber.tokens.service';
+import { JobberSyncScheduler } from '../../workers/jobber-sync/jobber-sync.scheduler';
 
 @Injectable()
 export class JobberService {
@@ -16,10 +17,19 @@ export class JobberService {
     @Inject(JobberTokenService) private readonly tokens: JobberTokenService,
     @Inject(JobberOAuthService) private readonly oauth: JobberOAuthService,
     @Inject(JobberClient) private readonly client: JobberClient,
+    @Inject(JobberSyncScheduler) private readonly scheduler: JobberSyncScheduler,
   ) {}
 
-  /** Connection state for the console. Selected explicitly so no ciphertext
-   * column can be added later and quietly start being served. */
+  /**
+   * Connection state for the console.
+   *
+   * Selected explicitly so no ciphertext column can be added later and quietly
+   * start being served. The cost of that is this list has to be kept in step
+   * with what the page shows: every `lastSync*` column below was written by the
+   * worker and never selected here, so the console reported "Last sync —" and
+   * "Visits last read 0" against a connection that had just read 223 visits,
+   * and the last-sync-failed alert could not appear at all.
+   */
   async describeConnection(organizationId: string) {
     const connection = await this.prisma.jobberConnection.findUnique({
       where: { organizationId },
@@ -32,11 +42,41 @@ export class JobberService {
         disconnectedAt: true,
         lastRefreshedAt: true,
         lastRefreshError: true,
+        lastSyncStartedAt: true,
+        lastSyncCompletedAt: true,
+        lastSyncVisitCount: true,
+        lastSyncError: true,
       },
     });
     if (!connection)
-      return { status: JobberConnectionStatus.DISCONNECTED, jobberAccountName: null } as const;
-    return connection;
+      return {
+        status: JobberConnectionStatus.DISCONNECTED,
+        jobberAccountName: null,
+        schedule: this.scheduler.describeSchedule(),
+      } as const;
+    return {
+      ...connection,
+      /**
+       * Reported alongside the connection because they answer one question.
+       *
+       * "Connected" and "syncing" are independent: the scheduler is off unless
+       * three environment variables agree, so a healthy connection that imports
+       * nothing is a real and previously invisible state.
+       */
+      schedule: this.scheduler.describeSchedule(),
+      /**
+       * A run in flight, from whichever side started it.
+       *
+       * The scheduler's own flag only covers its ticks; a sync somebody
+       * launched from the console runs outside it. Comparing the timestamps
+       * catches both, and is what lets the page show progress rather than a
+       * stale "last sync" for the seconds a run takes.
+       */
+      syncInProgress:
+        connection.lastSyncStartedAt !== null &&
+        (connection.lastSyncCompletedAt === null ||
+          connection.lastSyncStartedAt > connection.lastSyncCompletedAt),
+    };
   }
 
   /**
