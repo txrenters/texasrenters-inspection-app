@@ -75,7 +75,17 @@ export class JobberService {
       syncInProgress:
         connection.lastSyncStartedAt !== null &&
         (connection.lastSyncCompletedAt === null ||
-          connection.lastSyncStartedAt > connection.lastSyncCompletedAt),
+          connection.lastSyncStartedAt > connection.lastSyncCompletedAt) &&
+        /**
+         * A failed run is finished, not running.
+         *
+         * `lastSyncCompletedAt` is only written on success, so without this a
+         * sync that threw left the console saying "Syncing now…" for ever — and
+         * polling every two seconds to keep saying it. The error is cleared at
+         * the start of every run, so its presence means the *last* run failed
+         * rather than that some older one did.
+         */
+        connection.lastSyncError === null,
     };
   }
 

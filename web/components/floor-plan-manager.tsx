@@ -870,10 +870,14 @@ export function FloorPlanManager({
                         <div className="col-span-full space-y-2" key={area.id}>
                           <AreaReviewRow
                             area={area}
-                            // Archived areas are read-only here; nothing is
-                            // offered to delete, so the permission is moot.
-                            canDeleteAreas={false}
-                            deleting={false}
+                            // This is the *approved* editor, not an archived
+                            // one. Hardcoding false here is what removed the
+                            // control from the only list it is reached from.
+                            canDeleteAreas={canDeleteAreas}
+                            deleting={
+                              actions.deletePropertyArea.isPending &&
+                              actions.deletePropertyArea.variables?.areaId === area.id
+                            }
                             floorNames={floorNames}
                             onArchive={() =>
                               actions.archivePropertyArea.mutateAsync({
@@ -883,7 +887,13 @@ export function FloorPlanManager({
                             }
                             // Approving and rejecting belong to the draft queue;
                             // an approved area has already been through that.
-                            onDelete={() => Promise.resolve()}
+                            // Deleting does not: this is the only list an
+                            // approved area is reachable from, and the control
+                            // was wired to a resolved promise — it rendered,
+                            // it confirmed, and it did nothing.
+                            onDelete={() =>
+                              actions.deletePropertyArea.mutateAsync({ propertyId, areaId: area.id })
+                            }
                             onReject={() => Promise.resolve()}
                             onSave={async (input) => {
                               const saved = await saveArea(area, input);
