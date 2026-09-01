@@ -316,8 +316,18 @@ export class AdminController {
   ) {
     return this.floorPlans.updateAreaMarker(request.user, id, body);
   }
+  /**
+   * `properties:delete-areas` rather than `properties:manage`.
+   *
+   * Managing a layout means correcting it; this erases part of it, and there is
+   * no restore. An area any inspection has used is refused outright, so what
+   * this reaches is the plan future inspections are copied from — which is
+   * exactly what somebody clearing mock areas needs and exactly what nobody
+   * else should hold. Archive stays on `properties:manage`: it hides an area
+   * without destroying it.
+   */
   @Delete('property-areas/:areaId')
-  @RequirePermissions('properties:manage')
+  @RequirePermissions('properties:delete-areas')
   deletePropertyArea(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.deleteArea(request.user, id);
   }
@@ -335,8 +345,9 @@ export class AdminController {
   archivePropertyArea(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.archiveArea(request.user, id);
   }
+  /** Same permission as the single delete, and for the same reason. */
   @Post('properties/:propertyId/areas/delete')
-  @RequirePermissions('properties:manage')
+  @RequirePermissions('properties:delete-areas')
   deletePropertyAreas(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,

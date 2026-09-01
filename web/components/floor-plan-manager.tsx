@@ -67,9 +67,19 @@ const STAGE_SECONDS = 8;
 export function FloorPlanManager({
   propertyId,
   canManage = false,
+  canDeleteAreas = false,
 }: {
   propertyId: string;
   canManage?: boolean;
+  /**
+   * Separate from `canManage` on purpose.
+   *
+   * Managing a layout means correcting it; deleting erases part of it with no
+   * restore, so it is its own permission and nobody holds it by default. The
+   * server refuses either way — this only stops offering a control that would
+   * come back 403.
+   */
+  canDeleteAreas?: boolean;
 }) {
   const plans = useFloorPlans(propertyId);
   const areas = usePropertyAreas(propertyId);
@@ -725,7 +735,7 @@ export function FloorPlanManager({
                   ? `${selectedCount} of ${draftIds.length} selected`
                   : `${draftIds.length} draft area${draftIds.length === 1 ? '' : 's'}`}
               </span>
-              {selectedCount ? (
+              {selectedCount && canDeleteAreas ? (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button
@@ -791,6 +801,7 @@ export function FloorPlanManager({
                     {group.areas.map((area) => (
                       <AreaReviewRow
                         area={area}
+                        canDeleteAreas={canDeleteAreas}
                         deleting={
                           actions.deletePropertyArea.isPending &&
                           actions.deletePropertyArea.variables?.areaId === area.id
@@ -859,6 +870,9 @@ export function FloorPlanManager({
                         <div className="col-span-full space-y-2" key={area.id}>
                           <AreaReviewRow
                             area={area}
+                            // Archived areas are read-only here; nothing is
+                            // offered to delete, so the permission is moot.
+                            canDeleteAreas={false}
                             deleting={false}
                             floorNames={floorNames}
                             onArchive={() =>
@@ -1484,6 +1498,7 @@ function AreaReviewRow({
   saving,
   deleting,
   readOnly,
+  canDeleteAreas,
   selected,
   onToggleSelected,
   onSave,
@@ -1496,6 +1511,8 @@ function AreaReviewRow({
   saving: boolean;
   deleting: boolean;
   readOnly: boolean;
+  /** Its own permission — see the prop of the same name on the manager. */
+  canDeleteAreas: boolean;
   selected?: boolean;
   onToggleSelected?: (selected: boolean) => void;
   onSave: (input: AreaInput) => Promise<unknown>;
@@ -1606,6 +1623,7 @@ function AreaReviewRow({
           </Button>
           {/* Confirmed, like every other destructive control here. Removing an
               area takes its evidence with it and there is no undo. */}
+          {canDeleteAreas ? (
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -1637,6 +1655,7 @@ function AreaReviewRow({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          ) : null}
         </div>
       ) : null}
     </article>

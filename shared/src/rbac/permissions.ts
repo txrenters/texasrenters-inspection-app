@@ -14,6 +14,7 @@ export const PERMISSION_KEYS = [
   'roles:manage',
   'properties:read',
   'properties:manage',
+  'properties:delete-areas',
   'inspections:read',
   'inspections:manage',
   'inspections:assign',
@@ -110,6 +111,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'properties:manage',
         label: 'Manage properties',
         description: 'Create and edit properties, units, and floor plans.',
+      },
+      {
+        key: 'properties:delete-areas',
+        label: 'Delete property areas',
+        description:
+          'Permanently erase an approved area from a property layout, singly or in bulk. Separate from managing properties because it is irreversible and it is layout, not a record: an area an inspection has already used is refused outright, so what this reaches is the plan future inspections are copied from. Grant it to accounts that are meant to clear test or mock layouts.',
       },
     ],
   },
@@ -291,6 +298,7 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'system:manage',
   'ai:configure',
   'inspections:delete',
+  'properties:delete-areas',
   'inspections:finalize',
   'charges:review',
 ] as const satisfies readonly PermissionKey[];

@@ -267,7 +267,11 @@ export default function PropertyDetailPage() {
       </Card>
 
       <div className="mt-6">
-        <FloorPlanManager canManage={permissions.has('properties:manage')} propertyId={item.id} />
+        <FloorPlanManager
+          canDeleteAreas={permissions.has('properties:delete-areas')}
+          canManage={permissions.has('properties:manage')}
+          propertyId={item.id}
+        />
       </div>
     </>
   );
