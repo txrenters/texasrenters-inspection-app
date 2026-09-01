@@ -48,6 +48,39 @@ export function normalizePostalCode(value: string | null | undefined): string {
 }
 
 /**
+ * Strips what is written in an address line but is not part of the address.
+ *
+ * Two things, both observed in live data rather than imagined:
+ *
+ * **Parenthetical notes.** The office marks retired Jobber properties
+ * "(Do not use)", so `3002 Thicket Path Way (Do not use)` never matched the
+ * `3002 Thicket Path Way` Propertyware holds. A parenthetical never
+ * distinguishes two real addresses, so removing it cannot merge two places.
+ *
+ * **A city/state/ZIP tail.** Many Propertyware rows carry the whole address in
+ * line 1 — `1508B Creekside Ln, Nacogdoches, Texas 75964` — while Jobber sends
+ * only the street. Cutting at the first comma leaves the street line, because a
+ * US street line does not contain one before the city. Eleven Nacogdoches
+ * properties were unmatchable for this reason alone.
+ */
+function streetPart(value: string | null | undefined): string {
+  return (value ?? '').replace(/\([^)]*\)/g, ' ').split(',')[0] ?? '';
+}
+
+function normalizeWords(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[.,#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => STREET_SUFFIXES[word] ?? word)
+    .join(' ')
+    .trim();
+}
+
+/**
  * The key two addresses must share to be considered the same place.
  *
  * Street line plus five-digit ZIP, lowercased, punctuation removed and common
@@ -64,17 +97,35 @@ export function normalizeAddressKey(
   postalCode: string | null | undefined,
 ): string {
   const postal = normalizePostalCode(postalCode);
-  const street = (addressLine1 ?? '')
-    .toLowerCase()
-    .replace(/[.,#]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(' ')
-    .map((word) => STREET_SUFFIXES[word] ?? word)
-    .join(' ')
-    .trim();
+  const street = normalizeWords(streetPart(addressLine1));
   if (!street || !postal) return '';
   return `${street}|${postal}`;
+}
+
+/**
+ * The keys an address could legitimately be filed under, most specific first.
+ *
+ * Jobber splits a unit onto its own line — `5200 Weslayan Street` +
+ * `unit a201` — while Propertyware writes it inline:
+ * `5200 Weslayan Street Unit #A201`. Neither is wrong, and neither matches the
+ * other unless the two lines are folded together.
+ *
+ * Both forms are returned because both are real answers. The unit-bearing key
+ * identifies one home and is tried first; the street-only key identifies the
+ * building, which is the right answer when Propertyware holds the building and
+ * models its units separately. Trying them in that order is what keeps a
+ * specific match from being lost to a broader one — never the reverse.
+ */
+export function addressKeyCandidates(
+  addressLine1: string | null | undefined,
+  addressLine2: string | null | undefined,
+  postalCode: string | null | undefined,
+): string[] {
+  const postal = normalizePostalCode(postalCode);
+  const street = normalizeWords(streetPart(addressLine1));
+  if (!street || !postal) return [];
+  const unit = normalizeWords(streetPart(addressLine2));
+  return unit ? [`${street} ${unit}|${postal}`, `${street}|${postal}`] : [`${street}|${postal}`];
 }
 
 export interface AddressCandidate {
@@ -114,10 +165,25 @@ export type AddressMatch =
  * entered twice, a complex whose units carry the street address — and there is
  * no tiebreak available here that would not be a guess.
  */
-export function matchBuilding(index: Map<string, string[]>, key: string): AddressMatch {
-  if (!key) return { outcome: 'NONE' };
-  const candidates = index.get(key);
-  if (!candidates?.length) return { outcome: 'NONE' };
-  if (candidates.length > 1) return { outcome: 'AMBIGUOUS', buildingIds: candidates };
-  return { outcome: 'MATCHED', buildingId: candidates[0] };
+export function matchBuilding(
+  index: Map<string, string[]>,
+  keys: string | readonly string[],
+): AddressMatch {
+  /**
+   * The first key that hits anything decides, including when what it hits is
+   * ambiguous.
+   *
+   * Falling past an ambiguous specific key to a broader one would answer a
+   * question nobody asked: if two homes share `5200 weslayan st unit a201`,
+   * quietly linking the building instead hides a real conflict behind a match
+   * that looks clean.
+   */
+  for (const key of typeof keys === 'string' ? [keys] : keys) {
+    if (!key) continue;
+    const candidates = index.get(key);
+    if (!candidates?.length) continue;
+    if (candidates.length > 1) return { outcome: 'AMBIGUOUS', buildingIds: candidates };
+    return { outcome: 'MATCHED', buildingId: candidates[0] };
+  }
+  return { outcome: 'NONE' };
 }
