@@ -27,6 +27,7 @@ import type { FindingReviewStatus, Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { AreaChecklistAiService } from '../admin/area-checklist-ai.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
@@ -547,19 +548,46 @@ export class TechnicianService {
         'Complete or provide an authorized skip reason for every required room.',
       );
     // Technician submission is NOT completion (spec §11): only a human
-    // administrator finalizes. Record the submission and let the AI pipeline
-    // advance it to REVIEW_REQUIRED once processing finishes.
-    const updated = await this.prisma.inspection.update({
-      where: { id },
-      data: {
-        status: InspectionStatus.TECHNICIAN_SUBMITTED,
-        submittedAt: new Date(),
-        // Cleared on submission: by now the technician has acted on it, and a
-        // reason left standing would reappear as an instruction on work they
-        // have already redone.
-        reopenReason: null,
-      },
-      select: technicianInspectionSummarySelect,
+    // administrator finalizes *this inspection*. Record the submission and let
+    // the AI pipeline advance it to REVIEW_REQUIRED once processing finishes.
+    // The Jobber push below is a separate claim — see the comment on it.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.inspection.update({
+        where: { id },
+        data: {
+          status: InspectionStatus.TECHNICIAN_SUBMITTED,
+          submittedAt: new Date(),
+          // Cleared on submission: by now the technician has acted on it, and a
+          // reason left standing would reappear as an instruction on work they
+          // have already redone.
+          reopenReason: null,
+        },
+        select: technicianInspectionSummarySelect,
+      });
+      /**
+       * Jobber is told the visit happened, here rather than only at sign-off.
+       *
+       * This is the moment the work physically finished. Waiting for an
+       * administrator to finalize left the visit open in Jobber for as long as
+       * review took, which is exactly when somebody would go and set it by hand
+       * — the manual step this integration exists to remove. Jobber's own
+       * VISIT_COMPLETE means "this visit occurred", not "the report was
+       * approved", so this is also the truer reading of it.
+       *
+       * `reportOwnerId` is null: a share link needs a person, and a technician
+       * submitting is not the one signing the report off. The finalizer claims
+       * that later if the push has not gone yet.
+       *
+       * In the same transaction as the submission, for the same reason
+       * finalization is: submitted and "Jobber will be told" commit together.
+       * A no-op for anything this app scheduled itself.
+       */
+      await enqueueJobberCompletion(tx, {
+        organizationId: user.organizationId,
+        inspectionId: id,
+        reportOwnerId: null,
+      });
+      return row;
     });
     // If every recording finished processing before submission, the
     // inspection is immediately ready for human review.

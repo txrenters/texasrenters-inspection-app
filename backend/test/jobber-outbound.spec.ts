@@ -35,7 +35,7 @@ const task = (overrides: Partial<Record<string, unknown>> = {}) => ({
 describe('enqueueJobberCompletion', () => {
   const tx = () => ({
     inspection: { findFirst: jest.fn() },
-    jobberOutboundTask: { create: jest.fn() },
+    jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
   });
 
   it('does nothing for an inspection this app scheduled itself', async () => {
@@ -50,7 +50,7 @@ describe('enqueueJobberCompletion', () => {
       enqueueJobberCompletion(client as never, {
         organizationId: 'org-1',
         inspectionId: 'inspection-1',
-        finalizedById: 'user-1',
+        reportOwnerId: 'user-1',
       }),
     ).resolves.toBeNull();
     expect(client.jobberOutboundTask.create).not.toHaveBeenCalled();
@@ -68,7 +68,7 @@ describe('enqueueJobberCompletion', () => {
     await enqueueJobberCompletion(client as never, {
       organizationId: 'org-1',
       inspectionId: 'inspection-1',
-      finalizedById: 'user-1',
+      reportOwnerId: 'user-1',
     });
     expect(client.jobberOutboundTask.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -91,11 +91,12 @@ describe('enqueueJobberCompletion', () => {
       }),
     );
 
+
     await expect(
       enqueueJobberCompletion(client as never, {
         organizationId: 'org-1',
         inspectionId: 'inspection-1',
-        finalizedById: 'user-1',
+        reportOwnerId: 'user-1',
       }),
     ).resolves.toBeNull();
   });
@@ -230,5 +231,57 @@ describe('what the completion tells Jobber', () => {
         input: { completedAt: finalizedAt.toISOString() },
       });
     });
+  });
+});
+
+describe('enqueueing twice for one inspection', () => {
+  const tx = (createFails: boolean) => ({
+    inspection: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue({ source: 'JOBBER', jobberVisitId: 'visit-1', jobberJobId: 'job-1' }),
+    },
+    jobberOutboundTask: {
+      create: createFails
+        ? jest
+            .fn()
+            .mockRejectedValue(
+              new Prisma.PrismaClientKnownRequestError('duplicate', {
+                code: 'P2002',
+                clientVersion: 'test',
+              }),
+            )
+        : jest.fn().mockResolvedValue({ id: 'task-1' }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+  });
+
+  it('lets a later finalize claim report ownership of a push not yet sent', async () => {
+    // The technician submits first with no owner; a share link needs a person,
+    // and the technician is not the one signing the report off.
+    const client = tx(true);
+    await enqueueJobberCompletion(client as never, {
+      organizationId: 'org-1',
+      inspectionId: 'inspection-1',
+      reportOwnerId: 'admin-1',
+    });
+    const call = jest.mocked(client.jobberOutboundTask.updateMany).mock.calls[0][0] as {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    };
+    expect(call.data).toEqual({ createdById: 'admin-1' });
+    // Only while unsent, and only if nobody has claimed it already.
+    expect(call.where.createdById).toBeNull();
+    expect(JSON.stringify(call.where.status)).toContain('PENDING');
+  });
+
+  it('does not try to claim ownership when there is no owner to record', async () => {
+    const client = tx(true);
+    await enqueueJobberCompletion(client as never, {
+      organizationId: 'org-1',
+      inspectionId: 'inspection-1',
+      reportOwnerId: null,
+    });
+    expect(client.jobberOutboundTask.updateMany).not.toHaveBeenCalled();
   });
 });

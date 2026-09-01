@@ -52,7 +52,13 @@ describe('inspection status lifecycle (spec §11)', () => {
       areas: [],
     };
     const advanceInspection = jest.fn().mockResolvedValue(undefined);
-    const prisma = {
+    // Annotated because $transaction refers to `prisma` itself.
+    const prisma: {
+      inspection: { findFirst: jest.Mock; update: jest.Mock };
+      jobberOutboundTask: { create: jest.Mock; updateMany: jest.Mock };
+      inspectionArea: { count: jest.Mock };
+      $transaction: jest.Mock;
+    } = {
       inspection: {
         findFirst: jest.fn().mockResolvedValue(record),
         update: jest
@@ -60,6 +66,10 @@ describe('inspection status lifecycle (spec §11)', () => {
           .mockResolvedValue({ ...record, status: InspectionStatus.TECHNICIAN_SUBMITTED }),
       },
       inspectionArea: { count: jest.fn().mockResolvedValue(0) },
+      jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
+      // Submission now enqueues the Jobber completion in the same transaction,
+      // so submitted and "Jobber will be told" commit together.
+      $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
     };
     const service = new TechnicianService(
       prisma as never,
@@ -86,6 +96,9 @@ describe('inspection status lifecycle (spec §11)', () => {
       }),
     );
     expect(advanceInspection).toHaveBeenCalledWith('insp-1');
+    // Nothing is pushed for an inspection this app scheduled itself: the
+    // record carries no Jobber source, so there is no visit to complete.
+    expect(prisma.jobberOutboundTask.create).not.toHaveBeenCalled();
   });
 
   it('blocks finalization while findings await review unless an override is documented', async () => {
@@ -311,6 +324,8 @@ describe('inspection status lifecycle (spec §11)', () => {
     const tx = {
       inspection: { updateMany: jest.fn().mockResolvedValue({ count: updated }) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
+      // Reopening withdraws a Jobber completion push that has not gone yet.
+      jobberOutboundTask: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const prisma = {
       inspection: {
@@ -332,6 +347,32 @@ describe('inspection status lifecycle (spec §11)', () => {
     };
     return { tx, prisma };
   }
+
+  it('withdraws a Jobber completion push that has not gone out yet', async () => {
+    // Submission enqueues the push and the outbox drains on a five-minute
+    // cron. Without this, an inspection reopened inside that window still tells
+    // Jobber the visit finished, minutes after the office decided it had not.
+    const { tx, prisma } = reopenPrisma(InspectionStatus.TECHNICIAN_SUBMITTED);
+    const service = new AdminService(prisma as never, new PresenceService());
+
+    await service.reopenInspection(admin, 'insp-1', { reason: 'Kitchen video is unusable' });
+
+    const call = tx.jobberOutboundTask.deleteMany.mock.calls[0][0] as {
+      where: Record<string, unknown>;
+    };
+    expect(call.where.inspectionId).toBe('insp-1');
+    // Only unsent work. A push already delivered is left alone: the visit did
+    // physically happen, which is what Jobber's completion records, and the
+    // unique constraint stops the next submission sending it twice.
+    expect(JSON.stringify(call.where.status)).not.toContain('SENT');
+    expect(tx.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({ jobberPushWithdrawn: true }),
+        }),
+      }),
+    );
+  });
 
   it('tells every assigned technician, in real time', async () => {
     /**
