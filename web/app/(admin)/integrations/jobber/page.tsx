@@ -178,6 +178,19 @@ export default function JobberIntegrationPage() {
     window.open(authorizationUrl, '_blank', 'noopener,noreferrer');
   };
 
+  /**
+   * Why a connected account still needs this.
+   *
+   * Widening the app's scopes in Jobber invalidates its refresh token, so a
+   * connection that looks healthy stops working at the next refresh. Consenting
+   * again is the fix, and it is the same flow as the first connection — the
+   * backend upserts onto the existing row and keeps the account identity.
+   */
+  const reconnectHint =
+    connected && jobber?.status === 'CONNECTED'
+      ? 'Reconnect after changing the app’s scopes in Jobber — a scope change invalidates the stored credentials.'
+      : null;
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -195,6 +208,18 @@ export default function JobberIntegrationPage() {
                     onClick={() => mutations.sync.mutate()}
                   >
                     {mutations.sync.isPending ? 'Syncing…' : 'Sync now'}
+                  </Button>
+                  {/* Re-authorizing is a normal thing to need: Jobber
+                      invalidates the refresh token whenever the app's scopes
+                      change, and the only route was previously Disconnect then
+                      Connect — unobvious, and it revokes a working connection
+                      to fix one that merely needs widening. */}
+                  <Button
+                    variant="outline"
+                    disabled={mutations.authorize.isPending}
+                    onClick={() => void connect()}
+                  >
+                    Reconnect
                   </Button>
                   <Button
                     variant="ghost"
@@ -252,7 +277,10 @@ export default function JobberIntegrationPage() {
               : 'Not connected. Nothing is being imported.'}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          {reconnectHint ? (
+            <p className="text-muted-foreground text-xs">{reconnectHint}</p>
+          ) : null}
           <StatGroup columns="grid-cols-1 sm:grid-cols-3 lg:grid-cols-5">
             <Stat label="Account" value={jobber?.jobberAccountName ?? EMPTY} />
             <Stat label="Schema version" value={jobber?.apiVersion ?? EMPTY} />
