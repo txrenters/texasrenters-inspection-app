@@ -546,6 +546,31 @@ export const HVAC_SYSTEM_AREA_NAME = 'HVAC System';
  * submission on a step the app never shows them.
  */
 async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan) {
+  /**
+   * The `Property` row has to exist before an area can point at it.
+   *
+   * `PropertyArea.propertyId` carries a *building* id but its foreign key
+   * references `Property`, a separate table that is populated lazily — the
+   * floor-plan admin calls the same upsert before every area it creates. Most
+   * buildings have never had one, so creating the area first violates
+   * `PropertyArea_propertyId_fkey` and takes the whole sync down with it.
+   */
+  await tx.property.upsert({
+    where: { id: plan.property.id },
+    update: {},
+    create: {
+      id: plan.property.id,
+      organizationId: plan.organizationId,
+      name: plan.property.name,
+      // The same fallbacks the floor-plan admin uses. These columns are
+      // required and a Propertyware building is not guaranteed to have them.
+      addressLine1: plan.property.addressLine1 || 'Address not provided',
+      city: plan.property.city || 'Not provided',
+      state: plan.property.state || 'TX',
+      postalCode: plan.property.postalCode || 'Not provided',
+    },
+  });
+
   const where = {
     propertyId: plan.property.id,
     unitId: plan.unit?.id ?? null,

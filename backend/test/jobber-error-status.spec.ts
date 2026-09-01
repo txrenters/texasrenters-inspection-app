@@ -59,3 +59,65 @@ describe('what a Jobber failure tells the caller', () => {
     expect(new JobberError('down', 'X', 503).retryable).toBe(false);
   });
 });
+
+/**
+ * The console polls this every two seconds while a run is in flight, so
+ * "in progress" has to become false on its own. `lastSyncCompletedAt` is only
+ * written on success, and a failed run therefore satisfied started > completed
+ * for ever — the page said "Syncing now…" indefinitely and kept polling to say
+ * it. `lastSyncError` is cleared at the start of every run, so its presence
+ * means the *last* run failed rather than some older one.
+ */
+describe('whether a sync is still running', () => {
+  const at = (iso: string) => new Date(iso);
+  const inProgress = (c: {
+    lastSyncStartedAt: Date | null;
+    lastSyncCompletedAt: Date | null;
+    lastSyncError: string | null;
+  }) =>
+    c.lastSyncStartedAt !== null &&
+    (c.lastSyncCompletedAt === null || c.lastSyncStartedAt > c.lastSyncCompletedAt) &&
+    c.lastSyncError === null;
+
+  it('is running while a started run has not finished', () => {
+    expect(
+      inProgress({
+        lastSyncStartedAt: at('2026-09-01T21:15:00Z'),
+        lastSyncCompletedAt: null,
+        lastSyncError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('is not running once a run has failed', () => {
+    expect(
+      inProgress({
+        lastSyncStartedAt: at('2026-09-01T21:15:00Z'),
+        lastSyncCompletedAt: null,
+        lastSyncError: 'Foreign key constraint violated',
+      }),
+    ).toBe(false);
+  });
+
+  it('is not running after a successful run', () => {
+    expect(
+      inProgress({
+        lastSyncStartedAt: at('2026-09-01T21:15:00Z'),
+        lastSyncCompletedAt: at('2026-09-01T21:15:06Z'),
+        lastSyncError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('is running again when a new run starts after an older failure', () => {
+    // The error is nulled at the start of a run, which is what makes the flag
+    // recover rather than latch.
+    expect(
+      inProgress({
+        lastSyncStartedAt: at('2026-09-01T21:20:00Z'),
+        lastSyncCompletedAt: at('2026-09-01T21:15:06Z'),
+        lastSyncError: null,
+      }),
+    ).toBe(true);
+  });
+});

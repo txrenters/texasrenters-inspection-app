@@ -59,6 +59,9 @@ function buildTx(overrides: Record<string, unknown> = {}) {
       create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
     },
     areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 9 }) },
+    // PropertyArea.propertyId carries a building id but its foreign key points
+    // at Property, a separate table populated lazily.
+    property: { upsert: jest.fn().mockResolvedValue({ id: 'building-1' }) },
     inspection: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
@@ -211,6 +214,60 @@ describe('multi-unit inspection creation', () => {
     expect(area.floorId).toBeNull();
     expect(area.source).toBe('SYSTEM');
     expect(area.status).toBe('APPROVED');
+  });
+
+  it("creates the Property row the area foreign key points at", async () => {
+    // PropertyArea.propertyId carries a *building* id, but its foreign key
+    // references Property — a separate table populated lazily. Most buildings
+    // have never had a row, so creating the area first violates
+    // PropertyArea_propertyId_fkey and takes the whole Jobber sync down.
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    expect(tx.property.upsert).toHaveBeenCalled();
+    const call = tx.property.upsert.mock.calls[0][0] as {
+      where: { id: string };
+      create: Record<string, unknown>;
+    };
+    expect(call.where.id).toBe('building-1');
+    // Same id as the building, which is what makes the area's column valid.
+    expect(call.create.id).toBe('building-1');
+    // Required columns a Propertyware building may not have.
+    expect(call.create.addressLine1).toBeTruthy();
+    expect(call.create.state).toBeTruthy();
+  });
+
+  it('creates the Property row before the area, not after', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+      },
+    });
+    const service = buildService(tx);
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+    expect(tx.property.upsert.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.propertyArea.create.mock.invocationCallOrder[0],
+    );
   });
 
   it("reuses the same system area on the next HVAC visit for that property", async () => {
