@@ -56,6 +56,17 @@ export const VISITS_QUERY = `
           id
           name
         }
+        assignedUsers(first: 3) {
+          nodes {
+            id
+            email {
+              raw
+            }
+            name {
+              full
+            }
+          }
+        }
         property {
           id
           address {
@@ -156,6 +167,17 @@ export const VISIT_BY_ID_QUERY = `
         client {
           id
           name
+        }
+        assignedUsers(first: 3) {
+          nodes {
+            id
+            email {
+              raw
+            }
+            name {
+              full
+            }
+          }
         }
         property {
           id
