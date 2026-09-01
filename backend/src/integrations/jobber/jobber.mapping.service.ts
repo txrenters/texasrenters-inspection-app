@@ -6,7 +6,12 @@ import type { AuthenticatedUser } from '../../common/auth';
 import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { PORTFOLIO_VISIBLE } from '../../admin/inspection-creation';
-import { buildAddressIndex, matchBuilding, normalizeAddressKey } from './jobber.address';
+import {
+  addressKeyCandidates,
+  buildAddressIndex,
+  matchBuilding,
+  normalizeAddressKey,
+} from './jobber.address';
 
 export interface JobberPropertyDescriptor {
   jobberPropertyId: string;
@@ -85,8 +90,19 @@ export class JobberMappingService {
     )
       return existing;
 
+    /**
+     * Two keys are tried, not one: Jobber puts a unit on its own line and
+     * Propertyware writes it inline, so the folded form is the only one that
+     * can match a unit-bearing address. The street-only key is recorded as the
+     * link's own, because that is the address a person reads in the queue.
+     */
+    const candidates = addressKeyCandidates(
+      property.addressLine1,
+      property.addressLine2,
+      property.postalCode,
+    );
     const normalizedAddressKey = normalizeAddressKey(property.addressLine1, property.postalCode);
-    const match = matchBuilding(index, normalizedAddressKey);
+    const match = matchBuilding(index, candidates);
     const resolution = await this.resolutionFor(organizationId, match, normalizedAddressKey);
 
     const data = {
