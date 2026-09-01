@@ -1,4 +1,6 @@
 import { createHmac } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { ExecutionContext } from '@nestjs/common';
 
@@ -117,5 +119,33 @@ describe('Jobber webhook payload', () => {
   it('rejects a payload with no item to act on', () => {
     const missing = { data: { webHookEvent: { topic: 'VISIT_UPDATE', accountId: 'MQ==' } } };
     expect(jobberWebhookSchema.safeParse(missing).success).toBe(false);
+  });
+});
+
+describe('the topics the handler acts on', () => {
+  const SERVICE = readFileSync(
+    join(__dirname, '..', 'src', 'integrations', 'jobber', 'jobber.webhook.service.ts'),
+    'utf8',
+  );
+
+  it('uses the exact topic names Jobber offers', () => {
+    // Confirmed against the Developer Center dropdown, not inferred from the
+    // OBJECT_ACTION convention. A near-miss here is silent: the delivery is
+    // verified and recorded, then acted on by nothing.
+    for (const topic of ['VISIT_CREATE', 'VISIT_UPDATE', 'VISIT_COMPLETE', 'VISIT_DESTROY', 'APP_DISCONNECT'])
+      expect(SERVICE).toContain(`'${topic}'`);
+  });
+
+  it('handles VISIT_DESTROY separately from the fetch-and-process topics', () => {
+    // A deleted visit and a visit we cannot see both return nothing, so only
+    // the topic distinguishes them. Routing destroy through syncVisit would
+    // leave the inspection scheduled for work that no longer exists.
+    expect(SERVICE).toMatch(/VISIT_TOPICS = new Set\(\['VISIT_CREATE', 'VISIT_UPDATE', 'VISIT_COMPLETE'\]\)/);
+    expect(SERVICE).toMatch(/topic === 'VISIT_DESTROY'/);
+  });
+
+  it('never cancels work a technician has already started', () => {
+    expect(SERVICE).toMatch(/inspection\.startedAt \|\| inspection\.status !== InspectionStatus\.SCHEDULED/);
+    expect(SERVICE).toContain('JOBBER_VISIT_DELETED_NEEDS_REVIEW');
   });
 });
