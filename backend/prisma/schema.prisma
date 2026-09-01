@@ -2201,6 +2201,11 @@ enum JobberVisitImportStatus {
   REJECTED
   /// A human decided this visit is not an inspection.
   IGNORED
+  /// Already finished in Jobber when we first saw it. Not a failure: the window
+  /// reaches into the past, and work that has happened must not become an
+  /// inspection somebody is asked to perform. Retained rather than dropped so
+  /// the console can show what the calendar held.
+  SKIPPED_COMPLETE
 }
 
 /// One Jobber visit and the inspection it did or did not become.

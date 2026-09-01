@@ -101,10 +101,12 @@ describe('Jobber visit type resolution', () => {
 });
 
 describe('technician area capture policy', () => {
-  it('lets a filter delivery survey a property nobody has drawn yet', () => {
+  it('lets the off-cycle equipment visits survey a property nobody has drawn yet', () => {
     // Without this every one of these is refused for a missing layout, which is
-    // currently every property in the portfolio.
+    // currently every property in the portfolio. Neither type is compared
+    // against another inspection, so an on-site list harms nothing downstream.
     expect(allowsTechnicianCapture(InspectionType.AC_FILTER_DELIVERY)).toBe(true);
+    expect(allowsTechnicianCapture(InspectionType.HVAC)).toBe(true);
   });
 
   it('never lets the tenancy lifecycle establish its own baseline', () => {
@@ -121,7 +123,7 @@ describe('technician area capture policy', () => {
   });
 
   it('leaves every other type opted out, so a new one is not silently included', () => {
-    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture);
-    expect(allowed).toEqual([InspectionType.AC_FILTER_DELIVERY]);
+    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture).sort();
+    expect(allowed).toEqual([InspectionType.AC_FILTER_DELIVERY, InspectionType.HVAC].sort());
   });
 });
