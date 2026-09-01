@@ -1059,5 +1059,7 @@ export interface JobberSyncResult {
   rejected: number;
   /** Already finished in Jobber, so deliberately not imported. */
   alreadyComplete: number;
+  /** Typed, but a type this integration does not import (filter delivery). */
+  notSynced: number;
   skipped: number;
 }

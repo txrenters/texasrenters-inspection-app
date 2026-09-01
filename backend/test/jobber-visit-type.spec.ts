@@ -3,6 +3,7 @@ import { InspectionType } from '@prisma/client';
 import {
   DEFAULT_VISIT_TYPE_RULES,
   allowsTechnicianCapture,
+  isSyncedType,
   resolveVisitType,
   visitTypeRules,
 } from '../src/integrations/jobber/jobber.visit-type';
@@ -101,11 +102,10 @@ describe('Jobber visit type resolution', () => {
 });
 
 describe('technician area capture policy', () => {
-  it('lets the off-cycle equipment visits survey a property nobody has drawn yet', () => {
-    // Without this every one of these is refused for a missing layout, which is
-    // currently every property in the portfolio. Neither type is compared
-    // against another inspection, so an on-site list harms nothing downstream.
-    expect(allowsTechnicianCapture(InspectionType.AC_FILTER_DELIVERY)).toBe(true);
+  it('lets HVAC survey a property nobody has drawn yet', () => {
+    // Without this it is refused for a missing layout, which is currently every
+    // property in the portfolio. HVAC is never compared against another
+    // inspection, so an on-site list harms nothing downstream.
     expect(allowsTechnicianCapture(InspectionType.HVAC)).toBe(true);
   });
 
@@ -123,7 +123,35 @@ describe('technician area capture policy', () => {
   });
 
   it('leaves every other type opted out, so a new one is not silently included', () => {
-    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture).sort();
-    expect(allowed).toEqual([InspectionType.AC_FILTER_DELIVERY, InspectionType.HVAC].sort());
+    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture);
+    expect(allowed).toEqual([InspectionType.HVAC]);
+  });
+});
+
+describe('types the sync does not import', () => {
+  it('still types a filter delivery, then declines to import it', () => {
+    // Typing it is what lets the console say *why* it was skipped. Removing the
+    // keywords instead would make ~100 visits per sync look like unrecognised
+    // titles needing attention.
+    expect(resolveVisitType('16918 Wedgeside Park - Zone 1 - Q3 2026 Tenant Benefit Package')).toEqual(
+      { outcome: 'RESOLVED', inspectionType: InspectionType.AC_FILTER_DELIVERY },
+    );
+    expect(isSyncedType(InspectionType.AC_FILTER_DELIVERY)).toBe(false);
+  });
+
+  it('imports every type that is actually an inspection', () => {
+    const notSynced = Object.values(InspectionType).filter((t) => !isSyncedType(t));
+    expect(notSynced).toEqual([InspectionType.AC_FILTER_DELIVERY]);
+  });
+
+  it('leaves the five the office works from importable', () => {
+    for (const type of [
+      InspectionType.MOVE_IN,
+      InspectionType.OCCUPIED,
+      InspectionType.BACK_TO_MARKET,
+      InspectionType.MOVE_OUT,
+      InspectionType.HVAC,
+    ])
+      expect(isSyncedType(type)).toBe(true);
   });
 });
