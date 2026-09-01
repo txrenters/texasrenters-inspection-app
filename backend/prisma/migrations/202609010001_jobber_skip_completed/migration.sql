@@ -1,0 +1,11 @@
+-- Record a Jobber visit that was already finished when we first saw it.
+--
+-- The sync reads a window that reaches seven days into the past, and 90 of the
+-- first 211 visits it saw were already COMPLETED in Jobber. Those are work that
+-- has happened; importing them creates inspections nobody is going to perform.
+--
+-- A distinct status rather than REJECTED, because nothing is wrong with these —
+-- and rather than IGNORED, which means a person made a decision and is
+-- deliberately never re-evaluated. Keeping them as their own state is also what
+-- makes a history view possible: the payload is already stored.
+ALTER TYPE "JobberVisitImportStatus" ADD VALUE IF NOT EXISTS 'SKIPPED_COMPLETE';

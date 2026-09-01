@@ -1057,5 +1057,7 @@ export interface JobberSyncResult {
   rescheduled: number;
   unmatched: number;
   rejected: number;
+  /** Already finished in Jobber, so deliberately not imported. */
+  alreadyComplete: number;
   skipped: number;
 }

@@ -48,6 +48,9 @@ export interface JobberSyncResult {
   rescheduled: number;
   unmatched: number;
   rejected: number;
+  /** Already finished in Jobber. Counted separately because it is the largest
+   * group by far and is not a problem — 90 of the first 211 visits. */
+  alreadyComplete: number;
   skipped: number;
 }
 
@@ -99,6 +102,7 @@ export class JobberSyncWorker {
       rescheduled: 0,
       unmatched: 0,
       rejected: 0,
+      alreadyComplete: 0,
       skipped: 0,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
@@ -245,6 +249,34 @@ export class JobberSyncWorker {
 
     if (existing?.status === JobberVisitImportStatus.IMPORTED && existing.inspectionId) {
       await this.applyChanges(organizationId, visit, existing.inspectionId, result);
+      return;
+    }
+
+    /**
+     * Work that had already happened before we ever saw it.
+     *
+     * The window reaches seven days into the past, so a normal run sees plenty
+     * of finished visits — 90 of the first 211. Turning those into inspections
+     * would put jobs on a technician's phone that somebody already did.
+     *
+     * Checked after the imported branch on purpose: a visit completed *since*
+     * we created its inspection keeps that inspection and its link, because the
+     * work it represents is real and may still be under review here.
+     *
+     * Jobber cannot express "not completed" in its filter — `status` takes a
+     * single enum value and `ACTIVE` returns everything — so this is the only
+     * place the distinction can be made.
+     */
+    if (visit.completedAt || visit.visitStatus === 'COMPLETED') {
+      await this.prisma.jobberVisitImport.update({
+        where: { id: record.id },
+        data: {
+          status: JobberVisitImportStatus.SKIPPED_COMPLETE,
+          failureCode: null,
+          failureMessage: null,
+        },
+      });
+      result.alreadyComplete += 1;
       return;
     }
 
