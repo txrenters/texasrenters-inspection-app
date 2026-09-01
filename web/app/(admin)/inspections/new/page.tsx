@@ -259,14 +259,12 @@ function CreateInspectionForm() {
    * This asked `!inspectionRequiresEveryArea(...)`, which is the wrong
    * question: that returns true for ALL, so anything else — including HVAC —
    * looked choosable. The picker was then rendered for an HVAC visit, and
-   * clearing a single area sent `areaIds` the backend refuses outright with
-   * "an HVAC inspection covers every area that has air conditioning". An HVAC
-   * visit is scoped by the equipment, not by an operator, so there is nothing
+   * clearing a single area sent `areaIds` the backend refuses outright. An HVAC
+   * visit inspects the property's system as one subject, so there is nothing
    * here to decide.
    */
   const scopeIsChoosable = areaScopeFor(inspectionType) === AreaScope.CHOSEN && hasApprovedAreas;
-  const airConditionedScope = areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED;
-  const airConditionedAreas = approvedAreas.filter((area) => area.hasAirConditioning);
+  const hvacScope = areaScopeFor(inspectionType) === AreaScope.HVAC_SYSTEM;
   const roofScope = areaScopeFor(inspectionType) === AreaScope.ROOF_AREAS;
   const roofAreas = approvedAreas.filter((area) => area.category === 'ROOF');
   const selectedAreas = approvedAreas.filter((area) => !excludedAreaIds.has(area.id));
@@ -736,46 +734,18 @@ function CreateInspectionForm() {
           </Card>
         ) : null}
 
-        {/* An HVAC visit is scoped by the equipment, so there is no picker —
-            but "no picker" on its own says nothing, and the office cannot see
-            from here which rooms have a unit in them. This states the coverage
-            and, when it is empty, names the fix. Without it the first sign of a
-            problem is a 409 on submit for something recorded on another screen
-            entirely. */}
-        {airConditionedScope && hasApprovedAreas ? (
+        {/* An HVAC visit has nothing to pick and nothing to warn about, but
+            "no picker" on its own reads as a missing control. This says what
+            the visit covers so the absence is an answer rather than a gap. */}
+        {hvacScope ? (
           <Card>
             <CardHeader>
               <CardTitle>Which areas</CardTitle>
               <CardDescription>
-                This visit covers every area recorded as having an air conditioner, so it is not
-                chosen here — the floor plan decides it.
+                None. An HVAC visit inspects the property&apos;s system against a standard
+                checklist, so it needs no floor plan and covers no rooms.
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              {airConditionedAreas.length ? (
-                <p className="text-sm">
-                  {airConditionedAreas.length} of {approvedAreas.length} areas:{' '}
-                  <span className="font-medium">
-                    {airConditionedAreas.map((area) => area.name).join(', ')}
-                  </span>
-                </p>
-              ) : (
-                <Alert variant="destructive">
-                  <TriangleAlertIcon />
-                  <AlertDescription>
-                    No area of this property is marked as having an air conditioner, so this visit
-                    would cover nothing.{' '}
-                    <Link
-                      className="underline underline-offset-4"
-                      href={`/properties/${propertyId}#floor-plan`}
-                    >
-                      Mark the areas that have a unit
-                    </Link>{' '}
-                    first.
-                  </AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
           </Card>
         ) : null}
 

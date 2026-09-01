@@ -1065,10 +1065,6 @@ export function useAdminMutations() {
         name: string;
         inspectionOrder: number;
         isRequired: boolean;
-        // Declared rather than merely spread. The body below forwards the whole
-        // rest object, so this already reached the server untyped — which is
-        // how the sibling update mutation came to omit it entirely.
-        hasAirConditioning?: boolean;
         unitId?: string;
       }) =>
         api<AdminPropertyArea>(`/api/v1/admin/properties/${propertyId}/areas`, {
@@ -1088,7 +1084,6 @@ export function useAdminMutations() {
           name: variables.name.trim(),
           inspectionOrder: variables.inspectionOrder,
           isRequired: variables.isRequired,
-          hasAirConditioning: variables.hasAirConditioning ?? false,
           status: 'DRAFT' as const,
           source: 'MANUAL',
           updatedAt: new Date().toISOString(),
@@ -1155,7 +1150,6 @@ export function useAdminMutations() {
         name?: string;
         inspectionOrder?: number;
         isRequired?: boolean;
-        hasAirConditioning?: boolean;
         expectedUpdatedAt?: string;
       }) => {
         return api<AdminPropertyArea>(`/api/v1/admin/property-areas/${variables.areaId}`, {
@@ -1164,18 +1158,18 @@ export function useAdminMutations() {
            * Listed field by field, so anything the editor sends that is not
            * named here is dropped in silence.
            *
-           * `hasAirConditioning` was missing, and the failure had no symptom to
-           * follow: the form ticked, the request went out without the field,
-           * the server answered 200 having changed nothing, and the box was
-           * clear again on the next refetch. No console error, no failed
-           * request — the one shape of bug this style of body invites.
+           * `hasAirConditioning` was missing exactly that way, and the failure
+           * had no symptom to follow: the form ticked, the request went out
+           * without the field, the server answered 200 having changed nothing,
+           * and the box was clear again on the next refetch. No console error,
+           * no failed request — the one shape of bug this style of body
+           * invites. That field is gone, the hazard is not.
            */
           body: JSON.stringify({
             floorName: variables.floorName,
             name: variables.name,
             inspectionOrder: variables.inspectionOrder,
             isRequired: variables.isRequired,
-            hasAirConditioning: variables.hasAirConditioning,
             expectedUpdatedAt: variables.expectedUpdatedAt,
           }),
         });
@@ -1198,13 +1192,10 @@ export function useAdminMutations() {
             : {}),
           ...(variables.name ? { name: variables.name } : {}),
           ...(variables.inspectionOrder ? { inspectionOrder: variables.inspectionOrder } : {}),
+          // `=== undefined` rather than a truthy check like the ones above:
+          // false is a meaningful value, and a truthy test would make unticking
+          // the box invisible until the refetch landed.
           ...(variables.isRequired === undefined ? {} : { isRequired: variables.isRequired }),
-          // `=== undefined`, like isRequired and unlike the truthy checks
-          // above: false is a meaningful value here, and a truthy test would
-          // make unticking the box invisible until the refetch landed.
-          ...(variables.hasAirConditioning === undefined
-            ? {}
-            : { hasAirConditioning: variables.hasAirConditioning }),
         };
         const operationId = beginEntityOperation(variables.areaId, 'UPDATING', patch);
         patchEntityById(client, queryKey, variables.areaId, patch, {

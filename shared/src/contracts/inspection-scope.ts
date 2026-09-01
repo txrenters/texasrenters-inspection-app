@@ -8,11 +8,10 @@ import { InspectionType } from '../enums/index.js';
  *
  *   move-in, move-out      every approved area, no choice offered
  *   occupied, back-to-market   whichever areas the office picked
- *   HVAC                   every area recorded as having an air conditioner
+ *   HVAC                   the property's system, as a single subject
  *
  * That third one is the reason this exists. HVAC was being treated as a chosen
- * subset, so scheduling one meant an operator ticking areas by hand and hoping
- * they remembered which rooms have units in them.
+ * subset, so scheduling one meant an operator ticking areas by hand.
  */
 export const AreaScope = {
   /**
@@ -30,20 +29,35 @@ export const AreaScope = {
    */
   CHOSEN: 'CHOSEN',
   /**
-   * Every approved area with `hasAirConditioning`. Not a selection: the
-   * equipment decides, so the office cannot forget a room and cannot send a
-   * technician to look for a unit that was never there.
+   * The property's heating and cooling system, treated as one subject.
+   *
+   * Not a set of rooms. An HVAC visit is a general inspection of the equipment
+   * against a standard checklist — it has no floor plan and no per-room walk,
+   * so the technician is never asked to pick or complete areas.
+   *
+   * This replaced `AIR_CONDITIONED`, which covered every approved area flagged
+   * `hasAirConditioning`. That model required an approved floor plan *and*
+   * somebody to tick the right rooms on every property, and the flag was set on
+   * one area in the entire database — so every HVAC inspection ever created
+   * covered nothing and reached the technician empty. A rule that depends on
+   * upkeep nobody performs is not a safe default, it is a silent failure.
+   *
+   * Creation attaches exactly one system-managed area per property, so the
+   * evidence, checklist and finding tables keep the area they all require while
+   * nothing about it is shown to anybody.
    */
-  AIR_CONDITIONED: 'AIR_CONDITIONED',
+  HVAC_SYSTEM: 'HVAC_SYSTEM',
   /**
-   * Every approved area recorded as a roof. The same idea as
-   * `AIR_CONDITIONED`, against `PropertyArea.category` rather than a boolean:
-   * the property says where its roof is, so scheduling a roof inspection is
-   * not an operator remembering to tick something.
+   * Every approved area recorded as a roof, against `PropertyArea.category`.
    *
    * A property with no roof area recorded inspects nothing, and creation
-   * refuses rather than producing an empty visit — the same safe direction
-   * `hasAirConditioning` takes by defaulting to false.
+   * refuses rather than producing an empty visit.
+   *
+   * Worth knowing: this is the same shape as the `AIR_CONDITIONED` rule that
+   * HVAC just moved off, and it carries the same risk — it depends on somebody
+   * classifying areas on every property. Roof inspections are not in use yet,
+   * so nothing is broken today, but if they are ever scheduled in volume this
+   * will need the same treatment.
    */
   ROOF_AREAS: 'ROOF_AREAS',
 } as const;
@@ -63,8 +77,10 @@ export function areaScopeFor(inspectionType: string | null | undefined): AreaSco
     case InspectionType.MOVE_IN:
     case InspectionType.MOVE_OUT:
       return AreaScope.ALL;
-    // A filter is fitted to the unit, so a delivery covers exactly the areas an
-    // HVAC inspection would — no separate rule to keep in step.
+    // A filter is fitted to the system, so a delivery is scoped exactly as an
+    // HVAC inspection is — no separate rule to keep in step. This type is being
+    // retired (it is a delivery, not an inspection); until it goes, it rides
+    // along rather than growing a rule of its own.
     //
     // The comment sits above both labels rather than between them. `no-fallthrough`
     // permits an empty case but not one whose body is a comment, so the original
@@ -72,7 +88,7 @@ export function areaScopeFor(inspectionType: string | null | undefined): AreaSco
     // it reached typecheck or the tests.
     case InspectionType.HVAC:
     case InspectionType.AC_FILTER_DELIVERY:
-      return AreaScope.AIR_CONDITIONED;
+      return AreaScope.HVAC_SYSTEM;
     case InspectionType.ROOF:
       return AreaScope.ROOF_AREAS;
     default:
@@ -133,7 +149,7 @@ export function checklistKindFor(
     case InspectionType.ROOF:
       return 'NONE';
     default:
-      return areaScopeFor(inspectionType) === AreaScope.AIR_CONDITIONED
+      return areaScopeFor(inspectionType) === AreaScope.HVAC_SYSTEM
         ? 'AIR_CONDITIONING'
         : 'ROOM';
   }

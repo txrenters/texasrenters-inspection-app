@@ -399,18 +399,19 @@ describe('editing a technician-added area', () => {
 });
 
 /**
- * The freeze protects the *layout*, and `hasAirConditioning` is not part of it:
- * it records where the equipment is and only decides which future HVAC visits
- * include the area.
+ * The freeze asks whether a layout field *changed*, not whether one was
+ * mentioned.
  *
- * Reaching that exemption from a form is the part that was broken. Every editor
- * submits all of an area's fields, so ticking the box also resubmitted the
- * area's own name — and a freeze that asked "was a layout field mentioned?"
- * rather than "did one change?" refused it as a rename. That made the flag
- * unsettable on precisely the areas it matters for, since inspections scope
- * from APPROVED areas.
+ * Every editor submits all of an area's fields, so any edit also resubmits the
+ * area's own name at its current value. A freeze that keyed on "was a layout
+ * field present in the payload?" refused those as renames, which made approved
+ * areas uneditable from the only UI that edits them.
+ *
+ * This was originally reached through `hasAirConditioning`, the one field
+ * exempt from the freeze. That field is gone — HVAC no longer scopes by area —
+ * but the rule it exposed is still the thing worth protecting.
  */
-describe('recording where the air conditioners are', () => {
+describe('resubmitting an approved area without changing the layout', () => {
   const prismaFor = (area: Record<string, unknown>) => ({
     propertyArea: {
       findFirst: jest.fn().mockResolvedValueOnce(areaRow(area)).mockResolvedValue(null),
@@ -430,16 +431,16 @@ describe('recording where the air conditioners are', () => {
     ),
   });
 
-  // The exact payload the console sends: the whole form, with only the tick
-  // actually different from what is stored.
+  // The exact payload the console sends: the whole form, every field at the
+  // value already stored. Nothing here differs from `areaRow`, which is the
+  // point — the editor resubmits the lot on any edit.
   const wholeForm = {
     name: 'Kitchen',
     inspectionOrder: 1,
     isRequired: true,
-    hasAirConditioning: true,
   };
 
-  it('accepts the tick on an approved area when nothing else changed', async () => {
+  it('accepts a form whose layout fields all match what is stored', async () => {
     const prisma = prismaFor({ source: 'AI_FLOOR_PLAN', status: 'APPROVED' });
 
     await expect(
@@ -453,33 +454,6 @@ describe('recording where the air conditioners are', () => {
     await expect(
       service(prisma).updateArea(admin, 'area-1', wholeForm as never),
     ).resolves.toBeDefined();
-  });
-
-  it('generates the air-conditioning checklist so the tick means something', async () => {
-    // Without the items an HVAC visit reaches the technician as an area with
-    // no questions on it.
-    let seeded: { data: { kind: string; label: string }[] } | undefined;
-    const prisma = prismaFor({ source: 'AI_FLOOR_PLAN', status: 'APPROVED' });
-    prisma.$transaction = jest.fn(async (run: (tx: unknown) => unknown) =>
-      run({
-        propertyArea: {
-          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-          findUniqueOrThrow: jest.fn().mockResolvedValue(areaRow({ source: 'AI_FLOOR_PLAN' })),
-        },
-        areaChecklistItem: {
-          createMany: jest.fn((call: typeof seeded) => {
-            seeded = call;
-            return Promise.resolve({ count: call?.data.length ?? 0 });
-          }),
-        },
-        auditLog: { create: jest.fn().mockResolvedValue({}) },
-      }),
-    ) as never;
-
-    await service(prisma).updateArea(admin, 'area-1', wholeForm as never);
-
-    expect(seeded?.data.length).toBeGreaterThan(0);
-    expect(seeded?.data.every((item) => item.kind === 'AIR_CONDITIONING')).toBe(true);
   });
 
   it('still refuses a genuine rename of a frozen area', async () => {

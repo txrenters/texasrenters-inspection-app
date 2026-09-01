@@ -52,7 +52,13 @@ function buildTx(overrides: Record<string, unknown> = {}) {
       count: jest.fn().mockResolvedValue(0),
     },
     propertywareLease: { findFirst: jest.fn().mockResolvedValue(null) },
-    propertyArea: { findMany: jest.fn().mockResolvedValue([]) },
+    propertyArea: {
+      findMany: jest.fn().mockResolvedValue([]),
+      // An HVAC visit resolves its one system-managed area here.
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+    },
+    areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 9 }) },
     inspection: {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
@@ -172,21 +178,21 @@ describe('multi-unit inspection creation', () => {
   });
 
   /**
-   * HVAC is scoped by equipment, not by an operator ticking areas.
+   * HVAC inspects the property's system, not a set of rooms.
    *
-   * The office's rule: an HVAC visit covers every area that has an air
-   * conditioner. It was previously lumped in with occupied and back-to-market
-   * as a chosen subset, which meant somebody had to remember which rooms have
-   * units in them and tick them by hand.
+   * It used to cover every approved area flagged `hasAirConditioning`, which
+   * needed an approved floor plan AND somebody ticking the right rooms on every
+   * property. The flag was set on one area in the entire database, so every HVAC
+   * inspection ever created covered nothing and reached the technician empty.
    */
-  it('attaches only the areas that have air conditioning', async () => {
+  it('attaches exactly one system-managed area, whatever the layout holds', async () => {
     const tx = buildTx({
       propertyArea: {
-        findMany: jest.fn().mockResolvedValue([
-          { id: 'hall', hasAirConditioning: true },
-          { id: 'bathroom', hasAirConditioning: false },
-          { id: 'bedroom', hasAirConditioning: true },
-        ]),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'hall' }, { id: 'bathroom' }, { id: 'bedroom' }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
       },
     });
     const service = buildService(tx);
@@ -199,34 +205,90 @@ describe('multi-unit inspection creation', () => {
     } as never);
 
     const createData = tx.inspection.create.mock.calls[0][0].data;
-    expect(createData.areas.create).toEqual([
-      { propertyAreaId: 'hall' },
-      { propertyAreaId: 'bedroom' },
-    ]);
+    expect(createData.areas.create).toEqual([{ propertyAreaId: 'hvac-system-area' }]);
+    // Not part of the floor plan: no floor, and never shown in a room walk.
+    const area = tx.propertyArea.create.mock.calls[0][0].data;
+    expect(area.floorId).toBeNull();
+    expect(area.source).toBe('SYSTEM');
+    expect(area.status).toBe('APPROVED');
   });
 
-  it('refuses an HVAC visit when the property has a layout but no unit is marked', async () => {
+  it("reuses the same system area on the next HVAC visit for that property", async () => {
+    // Successive visits have to hang off one subject, or each one starts a new
+    // history and the checklist answers of the last visit become unreachable.
     const tx = buildTx({
       propertyArea: {
-        findMany: jest.fn().mockResolvedValue([
-          { id: 'hall', hasAirConditioning: false },
-          { id: 'bathroom', hasAirConditioning: false },
-        ]),
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue({ id: 'existing-system-area' }),
+        create: jest.fn(),
       },
     });
     const service = buildService(tx);
 
-    await expect(
-      service.createInspection(admin, {
-        propertyId: 'building-1',
-        scheduledAt: '2026-08-01T15:00:00.000Z',
-        inspectionType: 'HVAC',
-        priority: 'STANDARD',
-      } as never),
-    ).rejects.toMatchObject({ status: 409, code: 'NO_AIR_CONDITIONED_AREAS' });
-    // Creating it anyway would look like a scheduling success and reach the
-    // technician as an empty job.
-    expect(tx.inspection.create).not.toHaveBeenCalled();
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    expect(tx.propertyArea.create).not.toHaveBeenCalled();
+    const createData = tx.inspection.create.mock.calls[0][0].data;
+    expect(createData.areas.create).toEqual([{ propertyAreaId: 'existing-system-area' }]);
+  });
+
+  it('books an HVAC visit on a property with no floor plan at all', async () => {
+    // The floor-plan gate is what made HVAC unschedulable across the portfolio.
+    // An HVAC visit inspects equipment; there is nothing on a plan it needs.
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    expect(tx.inspection.create).toHaveBeenCalled();
+  });
+
+  it('seeds the checklist against the organization, not the area', async () => {
+    // One list for the whole portfolio. Copying it onto every property would
+    // mean keeping ~570 copies in step every time a line is reworded.
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    const seeded = tx.areaChecklistItem.createMany.mock.calls[0][0];
+    expect(seeded.data.length).toBeGreaterThan(0);
+    expect(seeded.data.every((item: { propertyAreaId: null }) => item.propertyAreaId === null)).toBe(
+      true,
+    );
+    expect(
+      seeded.data.every((item: { kind: string }) => item.kind === 'AIR_CONDITIONING'),
+    ).toBe(true);
+    // Re-running must be free: two inspections created at once cannot produce
+    // two sets, and answers already recorded against an item survive.
+    expect(seeded.skipDuplicates).toBe(true);
   });
 
   /**
@@ -295,9 +357,10 @@ describe('multi-unit inspection creation', () => {
     ]) {
       const tx = buildTx({
         propertyArea: {
-          findMany: jest
-            .fn()
-            .mockResolvedValue([{ id: 'roof', hasAirConditioning: true, category: 'ROOF' }]),
+          findMany: jest.fn().mockResolvedValue([{ id: 'roof', category: 'ROOF' }]),
+          // HVAC is in this list and resolves its own system-managed area.
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
         },
       });
       const service = buildService(tx);
@@ -349,7 +412,9 @@ describe('multi-unit inspection creation', () => {
   it('books an HVAC visit on a day a completed move-in already used', async () => {
     const tx = buildTx({
       propertyArea: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'area-1', hasAirConditioning: true }]),
+        findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
       },
     });
     const service = buildService(tx);
@@ -372,7 +437,9 @@ describe('multi-unit inspection creation', () => {
   it('still refuses a second live inspection of the same type at the same time', async () => {
     const tx = buildTx({
       propertyArea: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'area-1', hasAirConditioning: true }]),
+        findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
       },
       inspection: {
         findFirst: jest.fn().mockResolvedValue({ id: 'already-booked' }),

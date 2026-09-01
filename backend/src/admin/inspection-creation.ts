@@ -1,5 +1,7 @@
 import {
   AreaCategory,
+  AreaChecklistItemKind,
+  AreaEnvironment,
   InspectionSource,
   InspectionStatus,
   InspectionType,
@@ -7,7 +9,13 @@ import {
   PropertyAreaStatus,
 } from '@prisma/client';
 
-import { AreaScope, areaScopeFor, inspectionRequiresLifecycleBaseline } from '@texasrenters/shared';
+import {
+  AreaScope,
+  airConditioningChecklistTemplate,
+  areaScopeFor,
+  inspectionRequiresLifecycleBaseline,
+  keywordsFromLabel,
+} from '@texasrenters/shared';
 
 import { ApplicationError } from '../common/errors';
 import type { PrismaService } from '../common/prisma.service';
@@ -354,10 +362,9 @@ export async function resolveInspectionPlan(
           status: PropertyAreaStatus.APPROVED,
         },
         orderBy: { inspectionOrder: 'asc' },
-        // `hasAirConditioning` and `category` for the equipment scopes
-        // below, which pick areas by what the property records rather than
-        // by anything the caller sent.
-        select: { id: true, hasAirConditioning: true, category: true },
+        // `category` for the roof scope, which picks areas by what the
+        // property records rather than by anything the caller sent.
+        select: { id: true, category: true },
       })
     : [];
   const approvedAreas = unitAreas.length
@@ -369,7 +376,7 @@ export async function resolveInspectionPlan(
           status: PropertyAreaStatus.APPROVED,
         },
         orderBy: { inspectionOrder: 'asc' },
-        select: { id: true, hasAirConditioning: true, category: true },
+        select: { id: true, category: true },
       });
 
   /**
@@ -381,10 +388,10 @@ export async function resolveInspectionPlan(
    *
    * CHOSEN — occupied and back-to-market take what the office picked.
    *
-   * AIR_CONDITIONED — an HVAC visit covers every area recorded as holding a
-   * unit. Not a selection: the equipment decides, so nobody can forget a
-   * room, and nobody can send a technician looking for an air conditioner
-   * that was never in the bathroom.
+   * HVAC_SYSTEM — an HVAC visit inspects the property's system as one
+   * subject, against a standard checklist. It has no floor plan and no room
+   * walk, so it is given a single system-managed area purely because the
+   * evidence, checklist and finding tables all require one.
    *
    * A caller who sends `areaIds` for a type that does not offer a choice is
    * refused rather than quietly widened or narrowed. They asked for
@@ -402,8 +409,8 @@ export async function resolveInspectionPlan(
     throw new ApplicationError(
       422,
       'AREA_SELECTION_NOT_ALLOWED',
-      areaScope === AreaScope.AIR_CONDITIONED
-        ? 'This visit covers every area that has air conditioning, so it cannot be limited to a selection.'
+      areaScope === AreaScope.HVAC_SYSTEM
+        ? 'An HVAC visit inspects the property system as a whole, so it cannot be limited to a selection.'
         : areaScope === AreaScope.ROOF_AREAS
           ? 'A roof inspection covers every area recorded as a roof, so it cannot be limited to a selection.'
           : 'A move-in or move-out covers every area, so it cannot be limited to a selection.',
@@ -419,29 +426,15 @@ export async function resolveInspectionPlan(
       );
   }
   const scopedAreas =
-    areaScope === AreaScope.AIR_CONDITIONED
-      ? approvedAreas.filter((area) => area.hasAirConditioning)
+    areaScope === AreaScope.HVAC_SYSTEM
+      ? // Resolved separately below: this one is not a subset of the approved
+        // layout, and a property with no layout at all still gets an HVAC visit.
+        []
       : areaScope === AreaScope.ROOF_AREAS
         ? approvedAreas.filter((area) => area.category === AreaCategory.ROOF)
         : requestedAreaIds
           ? approvedAreas.filter((area) => requestedAreaIds.includes(area.id))
           : approvedAreas;
-
-  /**
-   * The property has a layout, but nothing in it is marked as having a unit.
-   *
-   * Distinct from NO_APPROVED_AREAS below, and deliberately so: that one
-   * means "survey this property", this one means "say which of these rooms
-   * has an air conditioner". Creating the inspection anyway would produce an
-   * HVAC visit covering nothing, which looks like a scheduling success and
-   * reaches the technician as an empty job.
-   */
-  if (areaScope === AreaScope.AIR_CONDITIONED && approvedAreas.length && !scopedAreas.length)
-    throw new ApplicationError(
-      409,
-      'NO_AIR_CONDITIONED_AREAS',
-      'No approved area of this property is marked as having air conditioning. Mark the areas that have a unit before scheduling this visit.',
-    );
 
   /**
    * The same refusal, for the same reason, against a different marker.
@@ -458,7 +451,14 @@ export async function resolveInspectionPlan(
     );
 
   const technicianWillCapture = input.allowTechnicianAreaCapture === true;
-  if (!approvedAreas.length && !technicianWillCapture)
+  /**
+   * The floor-plan gate does not apply to an HVAC visit.
+   *
+   * It inspects equipment, not rooms — there is nothing on a floor plan it
+   * needs. Requiring one is what made HVAC unschedulable on every property in
+   * the portfolio.
+   */
+  if (areaScope !== AreaScope.HVAC_SYSTEM && !approvedAreas.length && !technicianWillCapture)
     throw new ApplicationError(
       409,
       'NO_APPROVED_AREAS',
@@ -519,6 +519,92 @@ export async function resolveInspectionPlan(
 }
 
 /**
+ * The name every HVAC inspection's single area carries.
+ *
+ * Stable rather than generated, because it is the lookup key: one area per
+ * property, reused by every HVAC visit that property ever has, so the checklist
+ * responses and photos of successive visits stay attached to the same subject.
+ */
+export const HVAC_SYSTEM_AREA_NAME = 'HVAC System';
+
+/**
+ * Finds or creates the one area an HVAC inspection hangs off.
+ *
+ * An HVAC visit inspects equipment, not rooms. It has no floor plan and the
+ * technician is never shown an area — but `InspectionArea`, `InspectionPhoto`,
+ * `InspectionAreaChecklistResponse` and `InspectionFinding` all require one, so
+ * there has to be exactly one to point at.
+ *
+ * APPROVED on creation, and `source` records that nobody drew it. It is
+ * deliberately NOT part of any floor plan: it has no marker, no floor, and it
+ * must never appear in a room walk, which is why it is created here rather than
+ * through the floor-plan admin path.
+ *
+ * `isRequired` is false. The completion gate counts required areas that are
+ * neither complete nor skipped, and an HVAC technician answers a checklist
+ * rather than marking an area complete — a required area would block every
+ * submission on a step the app never shows them.
+ */
+async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan) {
+  const where = {
+    propertyId: plan.property.id,
+    unitId: plan.unit?.id ?? null,
+    floorId: null,
+    name: HVAC_SYSTEM_AREA_NAME,
+  };
+  const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
+  if (existing) return existing.id;
+  const created = await tx.propertyArea.create({
+    data: {
+      ...where,
+      inspectionOrder: 0,
+      isRequired: false,
+      status: PropertyAreaStatus.APPROVED,
+      source: 'SYSTEM',
+      environment: AreaEnvironment.INDOOR,
+      category: AreaCategory.UTILITY,
+      notes: 'Created automatically for HVAC inspections. Not part of the floor plan.',
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
+
+/**
+ * Makes sure the organization's HVAC checklist exists.
+ *
+ * One list for the whole organization, not one per property. The HVAC checklist
+ * asks the same nine questions about every system in the portfolio, so copying
+ * it onto ~570 properties would mean keeping ~570 copies in step every time a
+ * line is reworded.
+ *
+ * `skipDuplicates` rather than a count-then-insert: the partial unique index on
+ * (organization, kind, label) where the area is null makes a re-run free, and
+ * two inspections created at the same moment cannot produce two sets. Answers
+ * already recorded against an item survive, because the row is reused rather
+ * than replaced.
+ *
+ * Worth knowing: adding a line to the template reaches every organization at the
+ * next HVAC inspection, but *removing* one does not — a row already inserted
+ * stays until somebody archives it. That is the safe direction, since a live
+ * item may already hold a technician's answers.
+ */
+async function ensureHvacChecklist(tx: InspectionCreationClient, organizationId: string) {
+  const labels = airConditioningChecklistTemplate();
+  await tx.areaChecklistItem.createMany({
+    data: labels.map((label, index) => ({
+      organizationId,
+      propertyAreaId: null,
+      kind: AreaChecklistItemKind.AIR_CONDITIONING,
+      label,
+      keywords: keywordsFromLabel(label),
+      sortOrder: index,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+/**
  * Writes the inspection a resolved plan describes.
  *
  * Split from the resolution above so the area snapshot — the thing the whole
@@ -530,6 +616,20 @@ export async function insertInspection(
   plan: InspectionPlan,
   details: InspectionRecordDetails,
 ) {
+  /**
+   * HVAC resolves its area here rather than in the plan.
+   *
+   * `resolveInspectionPlan` is deliberately read-only — the Jobber sync calls it
+   * to validate a visit without writing anything — and this one has to create a
+   * row the first time a property is inspected.
+   */
+  let areaIds: string[];
+  if (areaScopeFor(plan.inspectionType) === AreaScope.HVAC_SYSTEM) {
+    await ensureHvacChecklist(tx, plan.organizationId);
+    areaIds = [await hvacSystemArea(tx, plan)];
+  } else {
+    areaIds = plan.scopedAreas.map((area) => area.id);
+  }
   try {
     return await tx.inspection.create({
       data: {
@@ -556,7 +656,7 @@ export async function insertInspection(
         propertySnapshot: propertySnapshot(plan.property, plan.unit),
         leaseSnapshot: plan.lease ? leaseSnapshot(plan.lease) : Prisma.JsonNull,
         areas: {
-          create: plan.scopedAreas.map((area) => ({ propertyAreaId: area.id })),
+          create: areaIds.map((propertyAreaId) => ({ propertyAreaId })),
         },
       },
     });

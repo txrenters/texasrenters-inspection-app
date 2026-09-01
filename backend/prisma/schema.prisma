@@ -706,15 +706,6 @@ model PropertyArea {
   name               String
   inspectionOrder    Int
   isRequired         Boolean                 @default(true)
-  /// Whether this area contains air-conditioning equipment.
-  ///
-  /// An HVAC inspection is scoped by equipment rather than by the operator
-  /// picking areas: it covers every approved area of the property where this is
-  /// true. Defaults false so an existing property inspects nothing until
-  /// somebody says where the units actually are, which is the safe direction —
-  /// the alternative sends a technician to look for an air conditioner in a
-  /// bathroom.
-  hasAirConditioning Boolean                 @default(false)
   status             PropertyAreaStatus      @default(DRAFT)
   // Provenance: AI_FLOOR_PLAN | MANUAL | MANUAL_FALLBACK (admin) | TECHNICIAN.
   source             String                  @default("MANUAL")
@@ -855,7 +846,14 @@ model InspectionAreaChecklistResponse {
 model AreaChecklistItem {
   id               String                            @id @default(uuid()) @db.Uuid
   organizationId   String                            @db.Uuid
-  propertyAreaId   String                            @db.Uuid
+  /// The area these items belong to, or null for an organization-wide list.
+  ///
+  /// Room checklists are written per area, because the question depends on the
+  /// room. The HVAC checklist is not: it is one standard list about the
+  /// property's system, identical everywhere, and storing it per area would
+  /// mean copying the same rows onto every property in the portfolio and
+  /// keeping ~570 copies in step whenever a line changes.
+  propertyAreaId   String?                           @db.Uuid
   label            String
   /// What kind of inspection this item belongs to.
   ///
@@ -874,7 +872,7 @@ model AreaChecklistItem {
   createdAt        DateTime                          @default(now())
   updatedAt        DateTime                          @updatedAt
   organization     Organization                      @relation(fields: [organizationId], references: [id])
-  propertyArea     PropertyArea                      @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
+  propertyArea     PropertyArea?                     @relation(fields: [propertyAreaId], references: [id], onDelete: Cascade)
   createdBy        UserProfile?                      @relation("ChecklistItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   responses        InspectionAreaChecklistResponse[]
   inspectionPhotos InspectionPhoto[]
@@ -884,8 +882,9 @@ model AreaChecklistItem {
   /// reasonably be asked about its vents as part of the room and again as part
   /// of the air conditioner.
   ///
-  /// Widening this cannot fail on existing data — every row is ROOM, so
-  /// (area, ROOM, label) is unique exactly when (area, label) was.
+  /// This covers per-area rows only. Postgres treats NULLs as distinct, so it
+  /// does not constrain the organization-wide rows at all — those are covered
+  /// by a partial unique index created in raw SQL, which Prisma cannot express.
   @@unique([propertyAreaId, kind, label])
   @@index([propertyAreaId, sortOrder])
   @@index([organizationId])
