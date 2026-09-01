@@ -36,7 +36,18 @@ export const DEFAULT_VISIT_TYPE_RULES: Record<InspectionType, string[]> = {
   [InspectionType.ROOF]: ['roof'],
   [InspectionType.SUPRA_LOCKBOX_PLACEMENT]: ['lockbox placement', 'place lockbox', 'supra place'],
   [InspectionType.SUPRA_LOCKBOX_REMOVAL]: ['lockbox removal', 'remove lockbox', 'supra remove'],
-  [InspectionType.AC_FILTER_DELIVERY]: ['filter delivery', 'ac filter', 'air filter'],
+  // "Tenant Benefit Package" is what this office calls the filter-delivery
+  // programme, and it is by far the most scheduled visit in their calendar —
+  // 101 of 211 on the first live sync. "tbp" catches the abbreviated form
+  // ("Q3 TBP Filter Change + Pest Control"). Confirmed against real titles
+  // rather than guessed.
+  [InspectionType.AC_FILTER_DELIVERY]: [
+    'tenant benefit package',
+    'tbp',
+    'filter delivery',
+    'ac filter',
+    'air filter',
+  ],
 };
 
 /**
@@ -87,4 +98,29 @@ export function resolveVisitType(
   if (!matches.length) return { outcome: 'UNKNOWN' };
   if (matches.length > 1) return { outcome: 'AMBIGUOUS', matches };
   return { outcome: 'RESOLVED', inspectionType: matches[0] };
+}
+
+/**
+ * Inspection types the sync may book against a property nobody has surveyed.
+ *
+ * `allowTechnicianAreaCapture` lets the technician build the area list on site;
+ * what they add lands on the property as DRAFT, so an administrator still
+ * approves the permanent layout. It delegates the survey, not the approval.
+ *
+ * Deliberately one type. A filter delivery is a visit to a property, and
+ * capturing what is actually there is a free and accurate survey — without it,
+ * every one of these is refused for a layout nobody has drawn yet.
+ *
+ * The tenancy lifecycle is excluded on purpose. A move-in *establishes* the
+ * baseline that every later inspection is judged against, and a move-out is
+ * compared to it area by area. Letting an unreviewed on-site list become that
+ * baseline would bake one technician's reading of a property into every
+ * comparison that follows. Those need an approved plan first.
+ */
+const TYPES_ALLOWING_TECHNICIAN_CAPTURE: ReadonlySet<InspectionType> = new Set([
+  InspectionType.AC_FILTER_DELIVERY,
+]);
+
+export function allowsTechnicianCapture(inspectionType: InspectionType): boolean {
+  return TYPES_ALLOWING_TECHNICIAN_CAPTURE.has(inspectionType);
 }

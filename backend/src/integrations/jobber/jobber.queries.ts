@@ -18,6 +18,12 @@
 /**
  * Visits in a date window, newest page first.
  *
+ * There is deliberately no `updatedAt`: it does not exist on Jobber's `Visit`
+ * type, which is what the first live run of this query proved. A reschedule is
+ * therefore detected by comparing `startAt`/`endAt` against what we stored,
+ * which is a better signal anyway — it notices the change we actually care
+ * about rather than any edit to any field.
+ *
  * A window rather than an "updated since" cursor: what this sync cares about is
  * the *schedule*, and a visit moved from next week to next month has to be seen
  * in both windows for the move to be noticed. `first` is always supplied — an
@@ -37,8 +43,11 @@ export const VISITS_QUERY = `
         endAt
         completedAt
         createdAt
-        updatedAt
         visitStatus
+        # True when the visit was booked to a day with no time. Jobber still
+        # returns a startAt for these, so without it an all-day visit would
+        # render as whatever midnight is in the reader's timezone.
+        allDay
         job {
           id
           jobNumber

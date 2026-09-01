@@ -2,6 +2,7 @@ import { InspectionType } from '@prisma/client';
 
 import {
   DEFAULT_VISIT_TYPE_RULES,
+  allowsTechnicianCapture,
   resolveVisitType,
   visitTypeRules,
 } from '../src/integrations/jobber/jobber.visit-type';
@@ -24,6 +25,30 @@ describe('Jobber visit type resolution', () => {
         outcome: 'RESOLVED',
         inspectionType: InspectionType.MOVE_OUT,
       });
+  });
+
+  it("types this office's real filter-delivery titles", () => {
+    // Both forms appear verbatim in their Jobber calendar; the first accounted
+    // for nearly half of every visit on the first live sync.
+    for (const title of [
+      '16918 Wedgeside Park - Zone 1 - Q3 2026 Tenant Benefit Package',
+      '10414 Hondo Hill Rd - Zone 2 - Q3 TBP Filter Change + Pest Control',
+    ])
+      expect(resolveVisitType(title)).toEqual({
+        outcome: 'RESOLVED',
+        inspectionType: InspectionType.AC_FILTER_DELIVERY,
+      });
+  });
+
+  it('still refuses the maintenance work that shares their title format', () => {
+    // These are real titles too, and none of them is an inspection.
+    for (const title of [
+      '1526A Creekside Ln - 1526A - Zone 5 - Door - #43929',
+      '3113A Everwood Trl - Zone 5 - General Maintenance - #43866',
+      '11203 Doric Ct - Zone 2 - Home Cleaning',
+      '4207 Hardy St - Zone 2 - Drywall Repair',
+    ])
+      expect(resolveVisitType(title).outcome).toBe('UNKNOWN');
   });
 
   it('refuses a title that names two kinds of visit', () => {
@@ -72,5 +97,31 @@ describe('Jobber visit type resolution', () => {
   it('covers every inspection type, so a new one cannot be silently untypeable', () => {
     for (const type of Object.values(InspectionType))
       expect(DEFAULT_VISIT_TYPE_RULES[type]?.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe('technician area capture policy', () => {
+  it('lets a filter delivery survey a property nobody has drawn yet', () => {
+    // Without this every one of these is refused for a missing layout, which is
+    // currently every property in the portfolio.
+    expect(allowsTechnicianCapture(InspectionType.AC_FILTER_DELIVERY)).toBe(true);
+  });
+
+  it('never lets the tenancy lifecycle establish its own baseline', () => {
+    // A move-in defines what every later inspection is compared against, and a
+    // move-out is read against it area by area. An unreviewed on-site list must
+    // not become that reference.
+    for (const type of [
+      InspectionType.MOVE_IN,
+      InspectionType.MOVE_OUT,
+      InspectionType.OCCUPIED,
+      InspectionType.BACK_TO_MARKET,
+    ])
+      expect(allowsTechnicianCapture(type)).toBe(false);
+  });
+
+  it('leaves every other type opted out, so a new one is not silently included', () => {
+    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture);
+    expect(allowed).toEqual([InspectionType.AC_FILTER_DELIVERY]);
   });
 });

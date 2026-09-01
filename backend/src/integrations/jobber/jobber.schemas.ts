@@ -28,8 +28,10 @@ export const jobberVisitSchema = z.object({
   endAt: z.string().datetime({ offset: true }).nullish(),
   completedAt: z.string().datetime({ offset: true }).nullish(),
   createdAt: z.string().datetime({ offset: true }).nullish(),
-  updatedAt: z.string().datetime({ offset: true }).nullish(),
   visitStatus: z.string().nullish(),
+  // Jobber returns a startAt even for all-day visits, so this is the only
+  // reliable way to know the visit has no real clock time.
+  allDay: z.boolean().nullish(),
   job: z.object({ id: z.string(), jobNumber: z.union([z.string(), z.number()]).nullish() }).nullish(),
   client: z.object({ id: z.string(), name: z.string().nullish() }).nullish(),
   // The property is what the whole mapping layer keys on. A visit without one
