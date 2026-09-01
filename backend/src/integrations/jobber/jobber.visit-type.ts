@@ -107,18 +107,25 @@ export function resolveVisitType(
  * what they add lands on the property as DRAFT, so an administrator still
  * approves the permanent layout. It delegates the survey, not the approval.
  *
- * Deliberately one type. A filter delivery is a visit to a property, and
- * capturing what is actually there is a free and accurate survey — without it,
- * every one of these is refused for a layout nobody has drawn yet.
+ * Both entries are off-cycle equipment work. A filter delivery or an HVAC
+ * service is a visit to a property, and capturing what is actually there is a
+ * free and accurate survey — without it, every one of these is refused for a
+ * layout nobody has drawn yet. Neither is compared against another inspection,
+ * so an on-site area list harms nothing downstream.
  *
  * The tenancy lifecycle is excluded on purpose. A move-in *establishes* the
  * baseline that every later inspection is judged against, and a move-out is
  * compared to it area by area. Letting an unreviewed on-site list become that
  * baseline would bake one technician's reading of a property into every
  * comparison that follows. Those need an approved plan first.
+ *
+ * Roof and the two lockbox visits are left out for now rather than on
+ * principle: nobody has asked for them, and an empty set entry is easier to
+ * justify later than a capture nobody chose.
  */
 const TYPES_ALLOWING_TECHNICIAN_CAPTURE: ReadonlySet<InspectionType> = new Set([
   InspectionType.AC_FILTER_DELIVERY,
+  InspectionType.HVAC,
 ]);
 
 export function allowsTechnicianCapture(inspectionType: InspectionType): boolean {
