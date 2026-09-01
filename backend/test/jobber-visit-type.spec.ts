@@ -102,19 +102,25 @@ describe('Jobber visit type resolution', () => {
 });
 
 describe('technician area capture policy', () => {
-  it('lets HVAC survey a property nobody has drawn yet', () => {
-    // Without this it is refused for a missing layout, which is currently every
-    // property in the portfolio. HVAC is never compared against another
-    // inspection, so an on-site list harms nothing downstream.
+  it('lets HVAC and MOVE_IN survey a property nobody has drawn yet', () => {
+    // Every property in this portfolio lacks an approved layout, so without
+    // this both are refused for a plan nobody was going to draw first. What the
+    // technician captures is DRAFT; an administrator still approves it.
     expect(allowsTechnicianCapture(InspectionType.HVAC)).toBe(true);
+    expect(allowsTechnicianCapture(InspectionType.MOVE_IN)).toBe(true);
   });
 
-  it('never lets the tenancy lifecycle establish its own baseline', () => {
-    // A move-in defines what every later inspection is compared against, and a
-    // move-out is read against it area by area. An unreviewed on-site list must
-    // not become that reference.
+  it('never lets a move-out capture the layout it is compared against', () => {
+    // Sharper than "the lifecycle chain is excluded": a move-out is read
+    // against its move-in area by area, so a layout captured on the move-out
+    // visit itself would be a comparison against nothing.
+    expect(allowsTechnicianCapture(InspectionType.MOVE_OUT)).toBe(false);
+  });
+
+  it('keeps the comparison inspections on an approved plan', () => {
+    // These are read against a baseline that already exists, so there is no
+    // survey to delegate — only a layout to follow.
     for (const type of [
-      InspectionType.MOVE_IN,
       InspectionType.MOVE_OUT,
       InspectionType.OCCUPIED,
       InspectionType.BACK_TO_MARKET,
@@ -123,8 +129,8 @@ describe('technician area capture policy', () => {
   });
 
   it('leaves every other type opted out, so a new one is not silently included', () => {
-    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture);
-    expect(allowed).toEqual([InspectionType.HVAC]);
+    const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture).sort();
+    expect(allowed).toEqual([InspectionType.HVAC, InspectionType.MOVE_IN].sort());
   });
 });
 
