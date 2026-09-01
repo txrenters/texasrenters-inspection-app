@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
+import { JobberSyncStatus } from '@/components/jobber-sync-status';
 import { PageHeader } from '@/components/page-header';
 import { Stat, StatGroup } from '@/components/stat-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
@@ -11,6 +12,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Spinner } from '@/components/ui/spinner';
 import {
   Dialog,
   DialogContent,
@@ -164,6 +166,15 @@ export default function JobberIntegrationPage() {
 
   const jobber = connection.data;
   const connected = jobber?.status === 'CONNECTED';
+  /**
+   * A run in flight, from either side.
+   *
+   * `mutations.sync.isPending` only knows about a sync this tab started. The
+   * cron fires every few minutes and another administrator may press the button
+   * at any time, and neither showed here at all — the page looked idle while
+   * the server was mid-run.
+   */
+  const syncing = mutations.sync.isPending || (jobber?.syncInProgress ?? false);
 
   /**
    * Consent happens in Jobber, in a browser, as a Jobber admin.
@@ -202,12 +213,16 @@ export default function JobberIntegrationPage() {
             {canManage ? (
               connected ? (
                 <>
+                  {/* Disabled while *any* run is in flight, not just one this
+                      tab started. A second sync launched over a running one
+                      races it for the same visits and wins nothing. */}
                   <Button
                     variant="outline"
-                    disabled={mutations.sync.isPending}
+                    disabled={syncing}
                     onClick={() => mutations.sync.mutate()}
                   >
-                    {mutations.sync.isPending ? 'Syncing…' : 'Sync now'}
+                    {syncing ? <Spinner className="size-4" /> : null}
+                    {syncing ? 'Syncing…' : 'Sync now'}
                   </Button>
                   {/* Re-authorizing is a normal thing to need: Jobber
                       invalidates the refresh token whenever the app's scopes
@@ -287,11 +302,32 @@ export default function JobberIntegrationPage() {
           {reconnectHint ? (
             <p className="text-muted-foreground text-xs">{reconnectHint}</p>
           ) : null}
+          {/* Only while connected. A disconnected account is not "waiting to
+              sync", and a countdown against it would be a promise nothing
+              intends to keep. */}
+          {connected ? (
+            <JobberSyncStatus
+              cron={jobber?.schedule?.cron}
+              enabled={jobber?.schedule?.enabled ?? false}
+              nextRunAt={jobber?.schedule?.nextRunAt}
+              syncing={syncing}
+            />
+          ) : null}
           <StatGroup columns="grid-cols-1 sm:grid-cols-3 lg:grid-cols-5">
             <Stat label="Account" value={jobber?.jobberAccountName ?? EMPTY} />
             <Stat label="Schema version" value={jobber?.apiVersion ?? EMPTY} />
             <Stat label="Last sync" value={formatRelative(jobber?.lastSyncCompletedAt)} />
-            <Stat label="Visits last read" value={formatCount(jobber?.lastSyncVisitCount ?? 0)} />
+            {/* `?? EMPTY`, not `?? 0`. A connection that has never synced read
+                "0 visits", which is a claim about a run that never happened —
+                and it was the symptom that hid the missing select behind it. */}
+            <Stat
+              label="Visits last read"
+              value={
+                jobber?.lastSyncVisitCount === null || jobber?.lastSyncVisitCount === undefined
+                  ? EMPTY
+                  : formatCount(jobber.lastSyncVisitCount)
+              }
+            />
             <Stat label="Connected" value={formatDateTime(jobber?.connectedAt)} />
           </StatGroup>
         </CardContent>

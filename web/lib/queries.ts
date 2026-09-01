@@ -674,10 +674,19 @@ export const useSyncErrors = (runId: string, page: number) =>
   });
 const JOBBER = '/api/v1/admin/integrations/jobber';
 
+/**
+ * Jobber connection and background-schedule state.
+ *
+ * Polled on two different clocks. While a run is in flight the page is showing
+ * live progress, so it follows closely; the rest of the time it only has to
+ * notice that a scheduled run happened, and the schedule itself is a countdown
+ * the client can tick on its own without asking the server.
+ */
 export const useJobberConnection = () =>
   useQuery({
     queryKey: keys.jobber,
     queryFn: ({ signal }) => api<JobberConnection>(`${JOBBER}/connection`, { signal }),
+    refetchInterval: (query) => (query.state.data?.syncInProgress ? 2_000 : 30_000),
   });
 
 /**

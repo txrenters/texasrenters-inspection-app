@@ -46,6 +46,30 @@ export class JobberSyncScheduler implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`Jobber sync scheduled (${incrementalSyncCron}).`);
   }
 
+  /**
+   * What the console needs to say whether background syncing is alive.
+   *
+   * Without this the page can only report the *last* run, which is
+   * indistinguishable from a scheduler that died three hours ago — and this one
+   * is off unless three environment variables agree, so "nothing has synced
+   * lately" is a state somebody has to be able to see.
+   *
+   * `nextRunAt` comes from the CronJob rather than from lastRun + interval: the
+   * expression fires on wall-clock boundaries, so adding the period to the last
+   * run drifts away from the truth as soon as a run is slow or skipped.
+   */
+  describeSchedule() {
+    if (!this.job) return { enabled: false, cron: null, nextRunAt: null, running: false };
+    return {
+      enabled: true,
+      cron: this.config.incrementalSyncCron ?? null,
+      nextRunAt: this.job.nextDate().toJSDate(),
+      // A run that outlives its interval is why this flag exists at all; the
+      // console showing "syncing now" is the same fact from the other side.
+      running: this.running,
+    };
+  }
+
   onModuleDestroy() {
     this.job?.stop();
     this.job = null;

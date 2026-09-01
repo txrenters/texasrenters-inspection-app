@@ -1008,6 +1008,28 @@ export interface JobberConnection {
   lastSyncCompletedAt?: string | null;
   lastSyncError?: string | null;
   lastSyncVisitCount?: number | null;
+  /**
+   * Whether a run is in flight right now, from either side.
+   *
+   * The scheduler's own guard only covers its ticks; a sync launched from the
+   * console runs outside it. This is derived from the two timestamps, so it
+   * catches both.
+   */
+  syncInProgress?: boolean;
+  /**
+   * The background schedule, which is independent of the connection.
+   *
+   * Being connected does not mean anything is being imported — the scheduler is
+   * off unless three environment variables agree. `nextRunAt` comes from the
+   * cron expression itself rather than last-run plus interval, which drifts as
+   * soon as a run is slow or skipped.
+   */
+  schedule?: {
+    enabled: boolean;
+    cron?: string | null;
+    nextRunAt?: string | null;
+    running: boolean;
+  } | null;
 }
 
 /**
