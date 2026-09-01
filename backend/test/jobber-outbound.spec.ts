@@ -108,6 +108,7 @@ describe('Jobber outbound worker', () => {
     request: jest.Mock,
   ) => {
     const prisma = {
+      inspection: { findUnique: jest.fn().mockResolvedValue({ finalizedAt: new Date('2026-09-01T10:00:00Z') }) },
       jobberOutboundTask: {
         findMany: jest.fn().mockResolvedValue(rows),
         update: jest.fn().mockResolvedValue({}),
@@ -146,13 +147,13 @@ describe('Jobber outbound worker', () => {
     const request = jest
       .fn()
       .mockResolvedValueOnce({ visitComplete: { userErrors: [] } })
-      .mockResolvedValueOnce({ jobNoteCreate: { userErrors: [] } });
+      .mockResolvedValueOnce({ jobCreateNote: { userErrors: [] } });
     const { worker, prisma } = build({ JOBBER_PUSH_REPORT_LINK: 'true' }, [task()], request);
 
     await expect(worker.run('org-1')).resolves.toMatchObject({ sent: 1 });
     expect(prisma.inspectionReportShare.create).toHaveBeenCalled();
     expect(request.mock.calls[1][2]).toMatchObject({
-      message: expect.stringContaining('/report/'),
+      input: { message: expect.stringContaining('/report/') },
     });
   });
 
@@ -160,14 +161,14 @@ describe('Jobber outbound worker', () => {
     const request = jest
       .fn()
       .mockResolvedValueOnce({ visitComplete: { userErrors: [] } })
-      .mockResolvedValueOnce({ jobNoteCreate: { userErrors: [] } });
+      .mockResolvedValueOnce({ jobCreateNote: { userErrors: [] } });
     const { worker, prisma } = build({ JOBBER_PUSH_REPORT_LINK: 'true' }, [task()], request);
     prisma.inspectionReportShare.findFirst.mockResolvedValue({ token: 'existing-token' });
 
     await worker.run('org-1');
     expect(prisma.inspectionReportShare.create).not.toHaveBeenCalled();
     expect(request.mock.calls[1][2]).toMatchObject({
-      message: expect.stringContaining('existing-token'),
+      input: { message: expect.stringContaining('existing-token') },
     });
   });
 
@@ -201,5 +202,33 @@ describe('Jobber outbound worker', () => {
         data: expect.objectContaining({ status: JobberOutboundStatus.ABANDONED }),
       }),
     );
+  });
+});
+
+describe('what the completion tells Jobber', () => {
+  it('sends our sign-off time, not the moment the outbox happened to drain', () => {
+    // The two differ by however long the queue waited -- minutes normally,
+    // hours after an outage -- and only the first is a fact about the work.
+    const finalizedAt = new Date('2026-09-01T10:00:00Z');
+    const request = jest.fn().mockResolvedValue({ visitComplete: { userErrors: [] } });
+    const prisma = {
+      inspection: { findUnique: jest.fn().mockResolvedValue({ finalizedAt }) },
+      jobberOutboundTask: {
+        findMany: jest.fn().mockResolvedValue([task()]),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      inspectionReportShare: { findFirst: jest.fn(), create: jest.fn() },
+    };
+    const worker = withEnvironment(
+      { JOBBER_PUSH_REPORT_LINK: 'false' },
+      () => new JobberOutboundWorker(prisma as unknown as PrismaService, { request } as unknown as JobberClient),
+    );
+
+    return worker.run('org-1').then(() => {
+      expect(request.mock.calls[0][2]).toMatchObject({
+        visitId: 'visit-1',
+        input: { completedAt: finalizedAt.toISOString() },
+      });
+    });
   });
 });
