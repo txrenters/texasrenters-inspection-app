@@ -1,0 +1,15 @@
+-- Allow an assignment with no human behind it.
+--
+-- `assignedById` records *who did the assigning*. When the Jobber sync copies a
+-- coordinator's assignment across, there is no person here who made that call,
+-- and naming one would be a lie in the audit trail.
+--
+-- Follows AuditLog.actorUserId, which is nullable for the same reason: null
+-- means "not a person", not "unknown". The read contract already tolerates it
+-- (AdminAssignmentListItem.assignedById is optional), and every existing row
+-- keeps its actor.
+--
+-- The alternative was a synthetic "Jobber Sync" user profile. Rejected: it
+-- would appear in user administration, could be picked as a technician, and
+-- would count as a person everywhere the app counts people.
+ALTER TABLE "InspectionAssignment" ALTER COLUMN "assignedById" DROP NOT NULL;

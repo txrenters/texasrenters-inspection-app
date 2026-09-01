@@ -6,6 +6,7 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../../common/prisma.service';
+import { withTenant } from '../../database/tenant-context';
 import { JobberSyncWorker } from '../../workers/jobber-sync/jobber-sync.worker';
 import { JobberTokenService } from './jobber.tokens.service';
 import { JOBBER_SOURCE_SYSTEM } from './jobber.constants';
@@ -94,7 +95,13 @@ export class JobberWebhookService {
       return;
     }
 
+    /**
+     * Also inside a tenant context: the processing runs after the response, so
+     * there is no request to inherit one from and row-level security would
+     * quietly filter every read to nothing. Same trap as the cron.
+     */
     try {
+      await withTenant(connection.organizationId, async () => {
       if (event.topic === 'VISIT_DESTROY') {
         await this.withdrawDeletedVisit(connection.organizationId, event.itemId);
       } else if (event.topic === 'APP_DISCONNECT') {
@@ -109,6 +116,7 @@ export class JobberWebhookService {
         await this.finish(providerEventId, WebhookProcessingStatus.IGNORED_DUPLICATE);
         return;
       }
+      });
       await this.finish(providerEventId, WebhookProcessingStatus.COMPLETED);
     } catch (error) {
       await this.finish(providerEventId, WebhookProcessingStatus.FAILED);
