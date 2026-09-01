@@ -49,3 +49,29 @@ export const jobberVisitsPageSchema = z.object({
 
 export type JobberVisit = z.infer<typeof jobberVisitSchema>;
 export type JobberVisitsPage = z.infer<typeof jobberVisitsPageSchema>;
+
+/**
+ * The webhook body Jobber posts.
+ *
+ * It carries no object data — only which topic fired, on which account, for
+ * which id. Everything else has to be fetched, which is why a webhook replaces
+ * the polling rather than the sync itself.
+ *
+ * `occurredAt` is spelled correctly only for apps created after 8 December
+ * 2023; older ones receive `occuredAt`. Ours is new, but both are accepted
+ * because the cost is one optional field and the failure is a silent one.
+ */
+export const jobberWebhookSchema = z.object({
+  data: z.object({
+    webHookEvent: z.object({
+      topic: z.string().min(1),
+      appId: z.string().nullish(),
+      accountId: z.string().min(1),
+      itemId: z.string().min(1),
+      occurredAt: z.string().nullish(),
+      occuredAt: z.string().nullish(),
+    }),
+  }),
+});
+
+export type JobberWebhookEvent = z.infer<typeof jobberWebhookSchema>['data']['webHookEvent'];
