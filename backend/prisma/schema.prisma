@@ -951,11 +951,15 @@ model Inspection {
   /// to. Null for anything booked here.
   jobberVisitId              String?
   jobberJobId                String?
-  /// Jobber's own last-modified stamp for the visit.
+  /// UNUSED, and never written. Kept only because dropping a column is a
+  /// migration production also has to run.
   ///
-  /// The sync compares against this rather than our `updatedAt`, which moves
-  /// every time a technician touches the inspection. Without it, ordinary local
-  /// progress would look newer than a real reschedule and suppress it.
+  /// It was meant to hold Jobber's last-modified stamp for the visit, but
+  /// `Visit` has no `updatedAt` field — the first live query proved that. The
+  /// sync detects a reschedule by comparing `startAt`/`endAt` against
+  /// `scheduledStartAt`/`scheduledEndAt` instead, which is a better signal: it
+  /// fires on the change this integration exists to propagate rather than on
+  /// any edit. Drop this column when there is a reason to migrate anyway.
   jobberUpdatedAt            DateTime?
   inspectionType             InspectionType
   /// Which system booked this visit.

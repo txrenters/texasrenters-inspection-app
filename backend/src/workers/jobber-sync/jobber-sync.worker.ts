@@ -23,7 +23,11 @@ import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { JobberMappingService } from '../../integrations/jobber/jobber.mapping.service';
 import { VISITS_QUERY } from '../../integrations/jobber/jobber.queries';
 import { jobberVisitsPageSchema, type JobberVisit } from '../../integrations/jobber/jobber.schemas';
-import { resolveVisitType, visitTypeRules } from '../../integrations/jobber/jobber.visit-type';
+import {
+  allowsTechnicianCapture,
+  resolveVisitType,
+  visitTypeRules,
+} from '../../integrations/jobber/jobber.visit-type';
 
 /**
  * Page size.
@@ -46,6 +50,24 @@ export interface JobberSyncResult {
   rejected: number;
   skipped: number;
 }
+
+/**
+ * The clock window a visit carries, or nulls when it has none.
+ *
+ * Jobber returns a `startAt` even for an all-day visit, so `allDay` is the only
+ * honest signal that there is no time. Storing that midnight instead would put
+ * "12:00 AM" in front of a technician for a visit nobody timed.
+ */
+function visitWindow(visit: JobberVisit) {
+  if (visit.allDay || !visit.startAt) return { start: null, end: null };
+  return {
+    start: new Date(visit.startAt),
+    end: visit.endAt ? new Date(visit.endAt) : null,
+  };
+}
+
+const sameInstant = (a: Date | null, b: Date | null) =>
+  (a?.getTime() ?? null) === (b?.getTime() ?? null);
 
 /** The day a timestamp falls on, as the DATE column stores it. */
 const dayOf = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
@@ -287,9 +309,13 @@ export class JobberSyncWorker {
           unitId: link.propertywareUnitId,
           leaseId: link.propertywareLeaseId,
           inspectionType: type.inspectionType,
+          // Only for the off-cycle types — see allowsTechnicianCapture. Without
+          // it these are refused outright on a property with no approved plan,
+          // which is currently every property in this portfolio.
+          allowTechnicianAreaCapture: allowsTechnicianCapture(type.inspectionType),
           scheduledAt: dayOf(visit.startAt!),
-          scheduledStartAt: new Date(visit.startAt!),
-          scheduledEndAt: visit.endAt ? new Date(visit.endAt) : null,
+          scheduledStartAt: visitWindow(visit).start,
+          scheduledEndAt: visitWindow(visit).end,
         });
         const inspection = await insertInspection(tx, plan, {
           priority: 'STANDARD',
@@ -299,7 +325,6 @@ export class JobberSyncWorker {
           source: InspectionSource.JOBBER,
           jobberVisitId: visit.id,
           jobberJobId: visit.job?.id ?? null,
-          jobberUpdatedAt: visit.updatedAt ? new Date(visit.updatedAt) : null,
         });
         await tx.auditLog.create({
           data: {
@@ -353,19 +378,38 @@ export class JobberSyncWorker {
   ) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId },
-      select: { id: true, status: true, startedAt: true, jobberUpdatedAt: true },
+      select: {
+        id: true,
+        status: true,
+        startedAt: true,
+        scheduledAt: true,
+        scheduledStartAt: true,
+        scheduledEndAt: true,
+      },
     });
     if (!inspection) {
       result.skipped += 1;
       return;
     }
-    const updatedAt = visit.updatedAt ? new Date(visit.updatedAt) : null;
-    // Compared against Jobber's own stamp, never our `updatedAt`, which moves
-    // every time a technician touches the inspection and would make ordinary
-    // local progress look newer than a real reschedule.
+    if (!visit.startAt) {
+      result.skipped += 1;
+      return;
+    }
+    /**
+     * The schedule itself is the comparison, because `Visit` has no `updatedAt`.
+     *
+     * That turned out to be the better signal regardless: it detects the change
+     * this sync exists to propagate, rather than firing on any edit to any
+     * field. Our own `updatedAt` is unusable here — it moves every time a
+     * technician touches the inspection, so ordinary local progress would read
+     * as a reschedule.
+     */
+    const window = visitWindow(visit);
     const changed =
-      updatedAt && (!inspection.jobberUpdatedAt || updatedAt > inspection.jobberUpdatedAt);
-    if (!changed || !visit.startAt) {
+      inspection.scheduledAt.getTime() !== dayOf(visit.startAt).getTime() ||
+      !sameInstant(inspection.scheduledStartAt, window.start) ||
+      !sameInstant(inspection.scheduledEndAt, window.end);
+    if (!changed) {
       result.skipped += 1;
       return;
     }
@@ -387,9 +431,8 @@ export class JobberSyncWorker {
           where: { id: inspectionId },
           data: {
             scheduledAt: dayOf(visit.startAt!),
-            scheduledStartAt: new Date(visit.startAt!),
-            scheduledEndAt: visit.endAt ? new Date(visit.endAt) : null,
-            jobberUpdatedAt: updatedAt,
+            scheduledStartAt: window.start,
+            scheduledEndAt: window.end,
           },
         });
         await tx.auditLog.create({
