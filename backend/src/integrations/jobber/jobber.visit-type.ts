@@ -110,23 +110,28 @@ export function resolveVisitType(
  * HVAC is off-cycle equipment work: a visit to a property where recording what
  * is actually there is a free and accurate survey, and it is never compared
  * against another inspection, so an on-site area list harms nothing downstream.
- * Without this it is refused for a layout nobody has drawn yet.
  *
- * Filter delivery used to be here too. It is no longer imported at all — see
+ * MOVE_IN is here for a different reason, and the earlier argument against it
+ * was wrong. A move-in does establish the baseline every later inspection is
+ * judged against — but what the technician captures is written to the property
+ * as DRAFT, and an administrator still approves what becomes the permanent
+ * layout. The survey is delegated; the approval is not. And a move-in is
+ * precisely when a property is first walked, so refusing it left ten of them
+ * unimportable for a plan nobody had drawn and nobody was going to draw first.
+ *
+ * MOVE_OUT is still excluded, and now for a sharper reason than "the lifecycle
+ * chain": it is compared to its move-in area by area. A layout captured on the
+ * move-out visit itself would be a comparison against nothing.
+ *
+ * Filter delivery used to be here. It is no longer imported at all — see
  * TYPES_NOT_SYNCED — so an entry for it would be unreachable.
  *
- * The tenancy lifecycle is excluded on purpose. A move-in *establishes* the
- * baseline that every later inspection is judged against, and a move-out is
- * compared to it area by area. Letting an unreviewed on-site list become that
- * baseline would bake one technician's reading of a property into every
- * comparison that follows. Those need an approved plan first.
- *
  * Roof and the two lockbox visits are left out for now rather than on
- * principle: nobody has asked for them, and an empty set entry is easier to
- * justify later than a capture nobody chose.
+ * principle: nobody has asked for them.
  */
 const TYPES_ALLOWING_TECHNICIAN_CAPTURE: ReadonlySet<InspectionType> = new Set([
   InspectionType.HVAC,
+  InspectionType.MOVE_IN,
 ]);
 
 export function allowsTechnicianCapture(inspectionType: InspectionType): boolean {
