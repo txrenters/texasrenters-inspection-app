@@ -37,6 +37,7 @@ import type { AuthenticatedUser } from '../../common/auth';
 import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { InspectionMediaStorageService } from '../../technician/inspection-media-storage.service';
+import { InspectCloudAiService } from './inspect-cloud-ai.service';
 import { CONFIDENT_MATCH, parseReport, reportFingerprint } from './inspect-cloud-report';
 import type { ImportedArea, ImportedReport } from './inspect-cloud-report';
 import { countPhotosPerPage, extractPhotos, readPages } from './inspect-cloud-pdf';
@@ -53,28 +54,74 @@ export interface UploadedReport {
 /** What a report has to contain before it is worth importing at all. */
 const MINIMUM_AREAS = 1;
 
-export interface ImportPreview {
-  fingerprint: string;
-  inspector: string | null;
-  template: string | null;
-  reportDate: string | null;
-  alreadyImported: { inspectionId: string; importedAt: Date } | null;
-  areas: Array<{
-    name: string;
-    matchesExistingArea: boolean;
-    items: number;
-    assessed: number;
-    photos: number;
-    defects: Array<{ item: string; comment: string | null; failed: string[] }>;
-  }>;
-  totals: { areas: number; items: number; photos: number; defects: number };
-  /** Everything a person should look at before committing. */
-  needsReview: {
-    lowConfidenceLabels: Array<{ area: string; sourceLabel: string; matched: string | null; score: number }>;
-    unrecognisedRows: ImportedReport['unrecognised'];
-    photosWithoutSubject: number;
+/**
+ * A reading that has not moved in this long lost its process.
+ *
+ * The work is fire-and-forget in the API process, so a restart mid-read leaves
+ * a row that says RUNNING and never will again. Reported as failed rather than
+ * left spinning, which is the difference between "try again" and a page that
+ * never resolves.
+ */
+const IMPORT_STALE_AFTER_MS = 10 * 60 * 1000;
+/**
+ * What a person should look at before any of this is written.
+ *
+ * The parser refuses to guess, so what it could not resolve is surfaced rather
+ * than smoothed over: a label no template carries, a row the inspector typed by
+ * hand, a photograph whose caption did not match anything. These are the whole
+ * reason the import is two steps instead of one.
+ */
+export function summarise(report: ImportedReport) {
+  return {
+    inspector: report.inspector,
+    template: report.template,
+    reportDate: report.reportDate,
+    areas: report.areas.map((area) => ({
+      name: area.name,
+      items: area.items.length,
+      assessed: area.items.filter((item) => item.assessed).length,
+      photos: area.photos.length,
+      defects: defectsIn(area).map((item) => ({
+        item: item.matchedLabel ?? item.sourceLabel,
+        comment: item.comment,
+        failed: failedAxes(item),
+      })),
+    })),
+    totals: {
+      areas: report.areas.length,
+      items: report.areas.reduce((count, area) => count + area.items.length, 0),
+      photos: report.areas.reduce((count, area) => count + area.photos.length, 0),
+      defects: report.areas.reduce((count, area) => count + defectsIn(area).length, 0),
+    },
+    needsReview: {
+      lowConfidenceLabels: report.areas.flatMap((area) =>
+        area.items
+          .filter((item) => item.matchScore < CONFIDENT_MATCH)
+          .map((item) => ({
+            area: area.name,
+            sourceLabel: item.sourceLabel,
+            matched: item.matchedLabel,
+            score: item.matchScore,
+          })),
+      ),
+      unrecognisedRows: report.unrecognised,
+      photosWithoutSubject: report.areas.reduce(
+        (count, area) => count + area.photos.filter((photo) => !photo.matchedLabel).length,
+        0,
+      ),
+    },
   };
 }
+
+/** Where the uploaded report itself is kept, keyed by its own content. */
+const sourceKey = (organizationId: string, fingerprint: string) =>
+  `${organizationId}/imported/${fingerprint.slice(0, 16)}/source.pdf`;
+
+const isStale = (updatedAt: Date) => Date.now() - updatedAt.getTime() > IMPORT_STALE_AFTER_MS;
+
+/** Why a model could not read a report, in terms the console can show. */
+const aiFailureCode = (reason: 'NO_CREDENTIAL' | 'REFUSED' | 'INVALID_OUTPUT' | 'OK') =>
+  reason === 'NO_CREDENTIAL' ? 'REPORT_NOT_RECOGNISED_NO_AI' : 'REPORT_NOT_READABLE';
 
 @Injectable()
 export class InspectionImportService {
@@ -83,74 +130,153 @@ export class InspectionImportService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(InspectionMediaStorageService) private readonly storage: InspectionMediaStorageService,
+    @Inject(InspectCloudAiService) private readonly ai: InspectCloudAiService,
   ) {}
 
   /**
-   * Read the file and say what importing it would do. Writes nothing.
+   * Begin reading a report, and answer before it has been read.
    *
-   * Separate from the commit because the parser cannot be certain about
-   * everything: a label the templates do not carry, a row the inspector typed
-   * by hand, a photograph whose caption did not resolve. An administrator
-   * seeing those before anything is written is the difference between an
-   * import and a guess.
+   * A 48-page report with 376 photographs takes longer than a browser will
+   * wait, and killing the work when the connection drops is how floor-plan
+   * extraction used to fail: the handler ran to completion and logged success
+   * while the caller saw an empty response. The job row is the answer instead —
+   * the console polls it, and closing the tab costs nothing.
    */
-  async preview(user: AuthenticatedUser, propertyId: string, file?: { buffer: Buffer }) {
-    const { bytes, report } = await this.read(file);
-    const property = await this.requireProperty(user, propertyId);
-    const fingerprint = reportFingerprint(bytes);
-    const existing = await this.findPreviousImport(user.organizationId, fingerprint);
-    const photos = extractPhotos(bytes);
+  async start(user: AuthenticatedUser, buildingId: string, file?: UploadedReport) {
+    if (!file?.buffer?.length)
+      throw new ApplicationError(400, 'REPORT_FILE_REQUIRED', 'Attach the report PDF to import.');
+    if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-')
+      throw new ApplicationError(400, 'REPORT_NOT_A_PDF', 'That file is not a PDF.');
 
-    const existingAreas = await this.prisma.propertyArea.findMany({
-      where: { propertyId: property.id, archivedAt: null },
-      select: { name: true },
+    const property = await this.requireProperty(user, buildingId);
+    const fingerprint = reportFingerprint(file.buffer);
+
+    const previous = await this.findPreviousImport(user.organizationId, fingerprint);
+    if (previous)
+      throw new ApplicationError(
+        409,
+        'REPORT_ALREADY_IMPORTED',
+        'This report has already been imported.',
+        [previous],
+      );
+
+    // One reading of a file at a time. Two would race over the same import and
+    // could both commit, and a second baseline for one walkthrough silently
+    // becomes the one every future move-out is judged against.
+    const running = await this.prisma.inspectionImportJob.findFirst({
+      where: { organizationId: user.organizationId, fingerprint, status: 'RUNNING' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, updatedAt: true },
     });
-    const known = new Set(existingAreas.map((area) => normalise(area.name)));
+    if (running && !isStale(running.updatedAt))
+      return { jobId: running.id, status: 'RUNNING' as const };
 
+    const job = await this.prisma.inspectionImportJob.create({
+      data: {
+        organizationId: user.organizationId,
+        buildingId: property.id,
+        fingerprint,
+        status: 'RUNNING',
+        startedById: user.id,
+      },
+      select: { id: true },
+    });
+
+    // Kept, not just read. The commit needs the photographs out of it, and an
+    // imported inspection is argued from somebody else's record -- so the
+    // record itself is retained rather than discarded once parsed.
+    await this.storage.putBytes(sourceKey(user.organizationId, fingerprint), file.buffer, 'application/pdf');
+
+    // Deliberately not awaited, exactly as floor-plan extraction does it:
+    // `runExtraction` records its own outcome and never rejects.
+    void this.runExtraction(user, job.id, file.buffer);
+    return { jobId: job.id, status: 'RUNNING' as const };
+  }
+
+  /** What the console polls while the page is open, or after coming back to it. */
+  async job(user: AuthenticatedUser, jobId: string) {
+    const job = await this.prisma.inspectionImportJob.findFirst({
+      where: { id: jobId, organizationId: user.organizationId },
+    });
+    if (!job) throw new ApplicationError(404, 'IMPORT_JOB_NOT_FOUND', 'Import job was not found.');
+    // A job whose process died mid-read is reported as failed rather than left
+    // running forever, which is what a spinner with no end looks like.
+    if (job.status === 'RUNNING' && isStale(job.updatedAt))
+      return { ...job, status: 'FAILED' as const, errorCode: 'IMPORT_ABANDONED', summary: null };
+    // The summary travels with the job rather than behind a second call: it is
+    // the whole point of showing somebody the read before it is written, and a
+    // console that had to ask twice would show the raw parse in between.
     return {
-      fingerprint,
-      inspector: report.inspector,
-      template: report.template,
-      reportDate: report.reportDate,
-      alreadyImported: existing,
-      areas: report.areas.map((area) => ({
-        name: area.name,
-        matchesExistingArea: known.has(normalise(area.name)),
-        items: area.items.length,
-        assessed: area.items.filter((item) => item.assessed).length,
-        photos: area.photos.length,
-        defects: defectsIn(area).map((item) => ({
-          item: item.matchedLabel ?? item.sourceLabel,
-          comment: item.comment,
-          failed: failedAxes(item),
-        })),
-      })),
-      totals: {
-        areas: report.areas.length,
-        items: report.areas.reduce((count, area) => count + area.items.length, 0),
-        // The count from the file itself, not from the captions: a mismatch
-        // between the two is the signal that attribution has gone wrong.
-        photos: photos.length,
-        defects: report.areas.reduce((count, area) => count + defectsIn(area).length, 0),
-      },
-      needsReview: {
-        lowConfidenceLabels: report.areas.flatMap((area) =>
-          area.items
-            .filter((item) => item.matchScore < CONFIDENT_MATCH)
-            .map((item) => ({
-              area: area.name,
-              sourceLabel: item.sourceLabel,
-              matched: item.matchedLabel,
-              score: item.matchScore,
-            })),
-        ),
-        unrecognisedRows: report.unrecognised,
-        photosWithoutSubject: report.areas.reduce(
-          (count, area) => count + area.photos.filter((photo) => !photo.matchedLabel).length,
-          0,
-        ),
-      },
-    } satisfies ImportPreview;
+      ...job,
+      summary: job.output ? summarise(job.output as unknown as ImportedReport) : null,
+    };
+  }
+
+  /**
+   * Read the file, deterministically if the layout is one we know.
+   *
+   * The parser is tried first and the model only sees what it could not read.
+   * Paying to re-read a table we can measure exactly would be slower, cost per
+   * page, and answer differently on a rerun -- for evidence that ends up
+   * justifying a charge.
+   */
+  private async runExtraction(user: AuthenticatedUser, jobId: string, bytes: Buffer) {
+    try {
+      const pages = await readPages(bytes);
+      let report: ImportedReport | null = null;
+      let method = 'DETERMINISTIC';
+      let provider: string | null = null;
+      let modelId: string | null = null;
+
+      try {
+        const parsed = parseReport(pages);
+        if (parsed.areas.length >= MINIMUM_AREAS) report = parsed;
+      } catch {
+        // Falls through to the model: a layout the parser throws on is exactly
+        // the case it exists for.
+      }
+
+      if (!report) {
+        const read = await this.ai.read(
+          user.organizationId,
+          pages.map((page) => ({
+            number: page.number,
+            text: page.cells.map((cell) => cell.text).join(' '),
+          })),
+        );
+        if (!read.report) {
+          await this.fail(jobId, aiFailureCode(read.reason));
+          return;
+        }
+        report = read.report;
+        method = 'AI';
+        provider = read.provider;
+        modelId = read.modelId;
+      }
+
+      await this.prisma.inspectionImportJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'COMPLETED',
+          method,
+          provider,
+          modelId,
+          output: JSON.parse(JSON.stringify(report)) as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error) {
+      this.logger.error({
+        event: 'inspection_import_read_failed',
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+      await this.fail(jobId, 'REPORT_NOT_READABLE');
+    }
+  }
+
+  private async fail(jobId: string, errorCode: string) {
+    await this.prisma.inspectionImportJob
+      .update({ where: { id: jobId }, data: { status: 'FAILED', errorCode } })
+      .catch(() => undefined);
   }
 
   /**
@@ -161,10 +287,25 @@ export class InspectionImportService {
    * lands in review, where an administrator finalizes it the same way they
    * would an inspection the app captured.
    */
-  async commit(user: AuthenticatedUser, propertyId: string, file?: { buffer: Buffer }) {
-    const { bytes, report } = await this.read(file);
-    const property = await this.requireProperty(user, propertyId);
-    const fingerprint = reportFingerprint(bytes);
+  async commit(user: AuthenticatedUser, jobId: string) {
+    const job = await this.prisma.inspectionImportJob.findFirst({
+      where: { id: jobId, organizationId: user.organizationId },
+    });
+    if (!job) throw new ApplicationError(404, 'IMPORT_JOB_NOT_FOUND', 'Import job was not found.');
+    if (job.status !== 'COMPLETED')
+      throw new ApplicationError(
+        409,
+        'IMPORT_NOT_READY',
+        'This report has not finished being read yet.',
+      );
+    if (job.inspectionId)
+      throw new ApplicationError(409, 'REPORT_ALREADY_IMPORTED', 'This report was already imported.', [
+        { inspectionId: job.inspectionId },
+      ]);
+
+    const report = job.output as unknown as ImportedReport;
+    const fingerprint = job.fingerprint;
+    const property = await this.requireProperty(user, job.buildingId);
 
     // The same file twice is almost always somebody clicking again, and a
     // second baseline for one walkthrough is worse than a refusal: the
@@ -179,6 +320,7 @@ export class InspectionImportService {
         [previous],
       );
 
+    const bytes = await this.storage.get(sourceKey(user.organizationId, fingerprint));
     const photos = extractPhotos(bytes);
     const perPage = await countPhotosPerPage(bytes);
     const stored = await this.storePhotos(user.organizationId, fingerprint, photos);
@@ -307,6 +449,10 @@ export class InspectionImportService {
       return inspection.id;
     });
 
+    await this.prisma.inspectionImportJob.update({
+      where: { id: job.id },
+      data: { inspectionId },
+    });
     this.logger.log({ event: 'inspection_report_imported', inspectionId });
     return { inspectionId, areas: report.areas.length, photos: stored.length };
   }

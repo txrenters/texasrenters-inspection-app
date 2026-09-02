@@ -218,10 +218,10 @@ export class AdminController {
   /**
    * Read an inspection done outside this app, from the PDF it produced.
    *
-   * Two steps, because the parser cannot be certain about everything it reads:
-   * the preview writes nothing and reports what a person should look at — a
-   * label the templates do not carry, a row the inspector typed by hand, a
-   * photograph whose caption did not resolve. The import then writes it.
+   * Two steps, because the parser will not guess: the read reports what a
+   * person should look at -- a label the templates do not carry, a row the
+   * inspector typed by hand, a photograph whose caption did not resolve -- and
+   * a separate call writes it.
    *
    * Behind `inspections:manage`, the key for creating and editing an
    * inspection, because that is exactly what this does. Not `properties:manage`
@@ -232,28 +232,41 @@ export class AdminController {
    * photograph of every wall -- the one this was built against is 73 MB across
    * 376 of them -- and refusing at 20 MB would refuse nearly all of them.
    */
-  @Post('properties/:propertyId/inspection-imports/preview')
-  @ApiTags(INSPECTION_IMPORT_TAG)
-  @RequirePermissions('inspections:manage')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 150_000_000, files: 1 } }))
-  previewInspectionImport(
-    @Req() request: AuthenticatedRequest,
-    @Param('propertyId') id: string,
-    @UploadedFile() file?: UploadedReport,
-  ) {
-    return this.inspectionImports.preview(request.user, id, file);
-  }
-
+  /**
+   * Start reading one, and answer before it has been read.
+   *
+   * The response is a job id. A 48-page report with 376 photographs takes
+   * longer than a browser will wait, and holding the request open is how
+   * floor-plan extraction used to fail -- the handler finished and logged
+   * success while the caller saw an empty response. Closing the tab now costs
+   * nothing; the reading continues and the job is still there afterwards.
+   */
   @Post('properties/:propertyId/inspection-imports')
   @ApiTags(INSPECTION_IMPORT_TAG)
   @RequirePermissions('inspections:manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 150_000_000, files: 1 } }))
-  importInspection(
+  startInspectionImport(
     @Req() request: AuthenticatedRequest,
     @Param('propertyId') id: string,
     @UploadedFile() file?: UploadedReport,
   ) {
-    return this.inspectionImports.commit(request.user, id, file);
+    return this.inspectionImports.start(request.user, id, file);
+  }
+
+  /** Progress, and the parsed report once there is one. Polled by the console. */
+  @Get('inspection-imports/:jobId')
+  @ApiTags(INSPECTION_IMPORT_TAG)
+  @RequirePermissions('inspections:manage')
+  inspectionImportJob(@Req() request: AuthenticatedRequest, @Param('jobId') id: string) {
+    return this.inspectionImports.job(request.user, id);
+  }
+
+  /** Write the read report in, once somebody has looked at what it found. */
+  @Post('inspection-imports/:jobId/commit')
+  @ApiTags(INSPECTION_IMPORT_TAG)
+  @RequirePermissions('inspections:manage')
+  commitInspectionImport(@Req() request: AuthenticatedRequest, @Param('jobId') id: string) {
+    return this.inspectionImports.commit(request.user, id);
   }
 
   @Get('floor-plans/:floorPlanId/content')

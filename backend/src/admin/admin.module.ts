@@ -19,6 +19,7 @@ import { FloorPlanAdminService } from './floor-plan-admin.service';
 import { AreaChecklistAiService } from './area-checklist-ai.service';
 import { FloorPlanExtractionService } from './floor-plan-extraction.service';
 import { FloorPlanStorageService } from './floor-plan-storage.service';
+import { InspectCloudAiService } from './inspection-import/inspect-cloud-ai.service';
 import { InspectionImportService } from './inspection-import/inspection-import.service';
 import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
@@ -54,6 +55,7 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
     AreaChecklistAiService,
     FloorPlanExtractionService,
     FloorPlanStorageService,
+    InspectCloudAiService,
     InspectionImportService,
     InspectionMediaStorageService,
     ProfileDeletionService,

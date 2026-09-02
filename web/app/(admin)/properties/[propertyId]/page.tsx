@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 
 import { DataTable, type Column } from '@/components/data-table';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
+import { InspectionReportImport } from '@/components/inspection-report-import';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
@@ -273,6 +274,14 @@ export default function PropertyDetailPage() {
           propertyId={item.id}
         />
       </div>
+
+      {/* Behind `inspections:manage`, not `properties:manage`: this creates an
+          inspection, and the property is only where it lands. */}
+      {permissions.has('inspections:manage') ? (
+        <div className="mt-6">
+          <InspectionReportImport propertyId={item.id} />
+        </div>
+      ) : null}
     </>
   );
 }

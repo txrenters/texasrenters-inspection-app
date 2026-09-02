@@ -339,6 +339,7 @@ model Organization {
   jobberPropertyLinks  JobberPropertyLink[]
   jobberVisitImports   JobberVisitImport[]
   jobberOutboundTasks  JobberOutboundTask[]
+  inspectionImportJobs InspectionImportJob[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -663,6 +664,44 @@ model PropertyFloorPlan {
   markedAreas    PropertyArea[]           @relation("AreaSourceFloorPlan")
 
   @@index([propertyId, unitId])
+}
+
+/// Reading an inspection report PDF, which outlives the request that asked for it.
+///
+/// A 48-page report with 376 photographs takes longer than a browser will wait,
+/// and the work must not die with the connection — the same reason floor-plan
+/// extraction was moved out of its request. The row is what the console polls,
+/// and what lets somebody close the tab and come back to the answer.
+model InspectionImportJob {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  /// The Propertyware building the report describes.
+  buildingId     String              @db.Uuid
+  /// Content hash of the uploaded PDF. Two jobs for one file is a double
+  /// import, which would silently become the baseline every move-out is
+  /// judged against.
+  fingerprint    String
+  status         ExtractionJobStatus @default(PENDING)
+  /// Where the parsed report came from: DETERMINISTIC when the layout was
+  /// recognised, AI when it was not, so a reader can tell which answers were
+  /// measured and which were inferred.
+  method         String              @default("DETERMINISTIC")
+  provider       String?
+  modelId        String?
+  /// The parsed report, for the preview the console shows before committing.
+  output         Json?
+  errorCode      String?
+  /// Set only once the import has been written, so a completed extraction and
+  /// a committed import are never confused for each other.
+  inspectionId   String?             @db.Uuid
+  startedById    String              @db.Uuid
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([organizationId, fingerprint])
 }
 
 model FloorPlanExtractionJob {
