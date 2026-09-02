@@ -35,6 +35,10 @@ const ROOM = {
   completionStatus: 'COMPLETED',
   skipReason: null,
   completedAt: '2026-07-23T17:00:00.000Z',
+  // Required on the room, and empty here on purpose: these cases are about how
+  // findings and photos group under a room, not about how a scored row prints.
+  // The checklist has its own describe block below, which supplies its own rows.
+  checklist: [],
 };
 
 const FINDING = {
