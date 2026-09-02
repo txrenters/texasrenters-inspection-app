@@ -100,6 +100,7 @@ export const keys = {
   properties: (query: object) => ['admin', 'properties', query] as const,
   property: (id: string) => ['admin', 'property', id] as const,
   floorPlans: (id: string) => ['admin', 'property', id, 'floor-plans'] as const,
+  inspectionImport: (jobId: string) => ['admin', 'inspection-import', jobId] as const,
   propertyAreas: (id: string) => ['admin', 'property', id, 'areas'] as const,
   units: (id: string) => ['admin', 'units', id] as const,
   leases: (id: string) => ['admin', 'leases', id] as const,
@@ -644,6 +645,63 @@ export const usePropertywareStatus = () =>
       return status === 'RUNNING' || status === 'PENDING' ? 5_000 : false;
     },
   });
+/** One area's worth of what the report said, as the console shows it. */
+export interface ImportSummaryArea {
+  name: string;
+  items: number;
+  assessed: number;
+  photos: number;
+  defects: Array<{ item: string; comment: string | null; failed: string[] }>;
+}
+
+export interface ImportJob {
+  id: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  method: string;
+  provider: string | null;
+  errorCode: string | null;
+  inspectionId: string | null;
+  summary: {
+    inspector: string | null;
+    template: string | null;
+    reportDate: string | null;
+    areas: ImportSummaryArea[];
+    totals: { areas: number; items: number; photos: number; defects: number };
+    needsReview: {
+      lowConfidenceLabels: Array<{
+        area: string;
+        sourceLabel: string;
+        matched: string | null;
+        score: number;
+      }>;
+      unrecognisedRows: Array<{ area: string; page: number; text: string }>;
+      photosWithoutSubject: number;
+    };
+  } | null;
+}
+
+/**
+ * A report being read, followed until it is.
+ *
+ * Polled rather than pushed, and only while the answer can still change: a
+ * finished job stops the interval, so a preview left open overnight is not
+ * asking the API about it every two seconds until morning.
+ *
+ * The reading happens on the server, so this survives the page. Somebody who
+ * closes the tab can open it again on the same job and see the result.
+ */
+export const useInspectionImportJob = (jobId: string | null) =>
+  useQuery({
+    queryKey: keys.inspectionImport(jobId ?? 'none'),
+    enabled: Boolean(jobId),
+    queryFn: ({ signal }) =>
+      api<ImportJob>(`/api/v1/admin/inspection-imports/${jobId}`, { signal }),
+    refetchInterval: (query) =>
+      query.state.data?.status === 'RUNNING' || query.state.data?.status === 'PENDING'
+        ? 2_000
+        : false,
+  });
+
 export const useSyncRuns = () =>
   useQuery({
     queryKey: keys.syncRuns,
@@ -1477,6 +1535,38 @@ export function useAdminMutations() {
         void verifyAffectedQueries(client, [keys.usersRoot]);
       },
     }),
+    /**
+     * Send a report up to be read.
+     *
+     * Resolves as soon as the file has landed, not when the reading is done —
+     * the answer is a job id, and `useInspectionImportJob` follows it from
+     * there. The upload is the only part of this the page can lose by closing.
+     */
+    startInspectionImport: useMutation({
+      mutationFn: ({ propertyId, file }: { propertyId: string; file: File }) => {
+        const form = new FormData();
+        form.set('file', file);
+        return api<{ jobId: string; status: string }>(
+          `/api/v1/admin/properties/${propertyId}/inspection-imports`,
+          { method: 'POST', body: form },
+        );
+      },
+    }),
+
+    /** Write the read report in, once somebody has looked at what it found. */
+    commitInspectionImport: useMutation({
+      mutationFn: (jobId: string) =>
+        api<{ inspectionId: string; areas: number; photos: number }>(
+          `/api/v1/admin/inspection-imports/${jobId}/commit`,
+          { method: 'POST' },
+        ),
+      onSuccess: () => {
+        // The property now has an inspection it did not have, and may have
+        // gained areas the report described.
+        void verifyAffectedQueries(client, [keys.all, keys.dashboard]);
+      },
+    }),
+
     createInspection: useMutation({
       mutationFn: (input: object) =>
         api<AdminInspection>('/api/v1/admin/inspections', {
