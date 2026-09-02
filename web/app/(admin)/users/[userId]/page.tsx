@@ -40,10 +40,16 @@ import { useAccessMutations, useRoles, useUser } from '@/lib/queries';
 export default function UserDetailPage() {
   const id = useParams<{ userId: string }>().userId;
   const router = useRouter();
-  const canManage = usePermissions().has('users:manage');
+  const permissions = usePermissions();
+  const canManage = permissions.has('users:manage');
+  // Provisioning a technician, done from the user page. The permission follows
+  // the act rather than the screen, so this is the same grant that guards
+  // creating one from scratch.
+  const canProvisionTechnician = permissions.has('technicians:provision');
   const user = useUser(id);
   const roles = useRoles({ page: 1, pageSize: 100 });
-  const { setUserRoles, updateUserStatus, deleteUser } = useAccessMutations();
+  const { setUserRoles, updateUserStatus, deleteUser, grantTechnicianAccess } =
+    useAccessMutations();
 
   const [roleIds, setRoleIds] = useState<Set<string>>(new Set());
 
@@ -101,12 +107,48 @@ export default function UserDetailPage() {
     }
   }
 
+  async function grantHandsetAccess() {
+    try {
+      await grantTechnicianAccess.mutateAsync(id);
+    } catch {
+      // Rendered inline below, alongside the other mutation errors.
+    }
+  }
+
   return (
     <>
       <PageHeader
         actions={
-          canManage && !item.isSystemAdmin ? (
+          (canManage || canProvisionTechnician) && !item.isSystemAdmin ? (
             <>
+              {canProvisionTechnician ? (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button disabled={grantTechnicianAccess.isPending} variant="outline">
+                      {grantTechnicianAccess.isPending ? 'Granting…' : 'Grant mobile access'}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        Let {item.displayName} use the inspection app?
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        They keep this one account and their current password — no temporary
+                        password is issued, and nothing about their console access changes. They
+                        will appear on the Technicians page and can be assigned inspections.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void grantHandsetAccess()}>
+                        Grant access
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : null}
+              {canManage ? (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
@@ -140,14 +182,17 @@ export default function UserDetailPage() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
-              <DeleteAccountDialog
-                displayName={item.displayName}
-                error={deleteUser.error}
-                id={id}
-                isPending={deleteUser.isPending}
-                onDelete={remove}
-                scope="CONSOLE"
-              />
+              ) : null}
+              {canManage ? (
+                <DeleteAccountDialog
+                  displayName={item.displayName}
+                  error={deleteUser.error}
+                  id={id}
+                  isPending={deleteUser.isPending}
+                  onDelete={remove}
+                  scope="CONSOLE"
+                />
+              ) : null}
             </>
           ) : undefined
         }
@@ -155,6 +200,20 @@ export default function UserDetailPage() {
         title={item.displayName}
       />
 
+      {grantTechnicianAccess.error ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertDescription>{grantTechnicianAccess.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {grantTechnicianAccess.data ? (
+        <Alert className="mb-4">
+          <AlertDescription>
+            {grantTechnicianAccess.data.granted
+              ? `${item.displayName} can now sign in to the inspection app with their existing password.`
+              : `${item.displayName} already had mobile access.`}
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {updateUserStatus.error ? (
         <Alert className="mb-4" variant="destructive">
           <AlertDescription>{updateUserStatus.error.message}</AlertDescription>

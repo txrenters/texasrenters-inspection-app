@@ -22,6 +22,90 @@ export class TechnicianProvisioningService {
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
   ) {}
 
+  /**
+   * Give somebody who already has an account access to the mobile app.
+   *
+   * The mirror of `AccessService.grantConsoleAccess`, and it exists for the
+   * same reason: `create` refuses the address with `TECHNICIAN_EMAIL_EXISTS`,
+   * because one email is one account. Roles are what separate the console from
+   * the handset, so the fix is a second membership rather than a second row.
+   *
+   * Only the membership is written. The account already has a credential, and
+   * minting another temporary password here would lock them out of the console
+   * they are currently using — which is why this shares nothing with `create`
+   * beyond the membership upsert and the audit row.
+   */
+  async grantTechnicianAccess(user: AuthenticatedUser, userProfileId: string) {
+    const target = await this.prisma.userProfile.findFirst({
+      // Any membership in the caller's own organization. Someone with none is
+      // another tenant's person or nobody at all, and `technicians:provision`
+      // must not reach either.
+      where: { id: userProfileId, memberships: { some: { organizationId: user.organizationId } } },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        isActive: true,
+        createdAt: true,
+        memberships: {
+          where: {
+            organizationId: user.organizationId,
+            role: UserRole.INSPECTION_TECHNICIAN,
+          },
+          select: { id: true },
+        },
+      },
+    });
+    if (!target) throw new ApplicationError(404, 'USER_NOT_FOUND', 'User was not found.');
+    if (!target.isActive)
+      throw new ApplicationError(
+        409,
+        'USER_INACTIVE',
+        'This account is deactivated. Reactivate it before granting mobile access.',
+      );
+
+    const alreadyHadAccess = target.memberships.length > 0;
+    if (!alreadyHadAccess) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.organizationMember.create({
+          data: {
+            organizationId: user.organizationId,
+            userProfileId: target.id,
+            role: UserRole.INSPECTION_TECHNICIAN,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId: user.organizationId,
+            actorUserId: user.id,
+            action: 'TECHNICIAN_ACCESS_GRANTED',
+            entityType: 'UserProfile',
+            entityId: target.id,
+            // No temporary password, unlike TECHNICIAN_ACCOUNT_CREATED. Whoever
+            // reads this later needs to know the existing credential was left
+            // alone, or they will go looking for an invitation that never went.
+            metadata: { role: UserRole.INSPECTION_TECHNICIAN, temporaryPasswordRequired: false },
+          },
+        });
+      });
+      // The roster is cached, and this person has just joined it.
+      await this.cacheInvalidation?.publish({
+        type: 'technician.changed',
+        organizationId: user.organizationId,
+        technicianId: target.id,
+      });
+    }
+
+    return {
+      id: target.id,
+      email: target.email,
+      displayName: target.displayName,
+      isActive: target.isActive,
+      createdAt: target.createdAt,
+      granted: !alreadyHadAccess,
+    };
+  }
+
   async create(user: AuthenticatedUser, input: CreateTechnicianDto) {
     const email = input.email.trim().toLowerCase();
     const displayName = input.displayName.trim();
