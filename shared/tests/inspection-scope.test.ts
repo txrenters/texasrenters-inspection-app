@@ -7,7 +7,6 @@ import {
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
   inspectionRequiresEveryArea,
-  inspectionRequiresLifecycleBaseline,
 } from '../src/contracts/inspection-scope.js';
 import { InspectionType } from '../src/enums/index.js';
 
@@ -18,12 +17,12 @@ import { InspectionType } from '../src/enums/index.js';
  *   move-out         every area, compared against the move-in
  *   occupied         selected areas
  *   back to market   selected areas
- *   HVAC             every area that has an air conditioner
+ *   HVAC             the property’s system, as one subject
  *
  * And the off-cycle work added later, none of it a tenancy stage:
  *
  *   roof             every area recorded as a roof
- *   AC filter        every area that has an air conditioner, same as HVAC
+ *   AC filter        the same system as HVAC — a filter is fitted to it
  *   lockbox in/out   selected areas — the box has no fixed subject
  *
  * These assertions are the rules. If one changes, it changes here first.
@@ -34,8 +33,8 @@ describe('how an inspection decides which areas it covers', () => {
     [InspectionType.MOVE_OUT, AreaScope.ALL],
     [InspectionType.OCCUPIED, AreaScope.CHOSEN],
     [InspectionType.BACK_TO_MARKET, AreaScope.CHOSEN],
-    [InspectionType.HVAC, AreaScope.AIR_CONDITIONED],
-    [InspectionType.AC_FILTER_DELIVERY, AreaScope.AIR_CONDITIONED],
+    [InspectionType.HVAC, AreaScope.HVAC_SYSTEM],
+    [InspectionType.AC_FILTER_DELIVERY, AreaScope.HVAC_SYSTEM],
     [InspectionType.ROOF, AreaScope.ROOF_AREAS],
     [InspectionType.SUPRA_LOCKBOX_PLACEMENT, AreaScope.CHOSEN],
     [InspectionType.SUPRA_LOCKBOX_REMOVAL, AreaScope.CHOSEN],
@@ -119,12 +118,24 @@ describe('which inspections deal in a move-in baseline', () => {
   });
 
   /**
-   * The trap every new type falls into. The scheduler refuses to book a visit
-   * that compares to a baseline when the property has never had a move-in — so
-   * a type not exempted here is refused outright on most of the portfolio, and
-   * the error blames a missing move-in rather than the missing exemption.
+   * `inspectionRequiresLifecycleBaseline` used to be asserted here, and was
+   * deleted from the source in 246bec8: refusing to schedule a visit for want
+   * of a move-in did not stop the visit happening, it only stopped a technician
+   * being told about it. A missing move-in belongs in the report, not the
+   * scheduler.
+   *
+   * What that test was really protecting survives on `inspectionComparesToBaseline`,
+   * so it is asserted here instead. Off-cycle work sits outside the
+   * MOVE_IN -> OCCUPIED -> BACK_TO_MARKET -> MOVE_OUT chain, and a type that
+   * leaks into the compared set is handed "No move-in baseline is available" on
+   * every area — which reads as a fault in the record rather than a question
+   * that does not apply. HVAC is the case that already happened; the rest are
+   * the same shape.
+   *
+   * The companion assertion, that the three tenancy visits do compare, is made
+   * above and is not repeated.
    */
-  it('is not required by any off-cycle visit', () => {
+  it('is not compared against by any off-cycle visit', () => {
     for (const type of [
       InspectionType.HVAC,
       InspectionType.ROOF,
@@ -132,14 +143,8 @@ describe('which inspections deal in a move-in baseline', () => {
       InspectionType.SUPRA_LOCKBOX_PLACEMENT,
       InspectionType.SUPRA_LOCKBOX_REMOVAL,
     ]) {
-      expect(inspectionRequiresLifecycleBaseline(type)).toBe(false);
+      expect(inspectionComparesToBaseline(type)).toBe(false);
     }
-  });
-
-  it('is required by the three visits read against a move-in', () => {
-    expect(inspectionRequiresLifecycleBaseline(InspectionType.OCCUPIED)).toBe(true);
-    expect(inspectionRequiresLifecycleBaseline(InspectionType.BACK_TO_MARKET)).toBe(true);
-    expect(inspectionRequiresLifecycleBaseline(InspectionType.MOVE_OUT)).toBe(true);
   });
 });
 
