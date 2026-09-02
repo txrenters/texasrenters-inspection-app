@@ -110,27 +110,37 @@ describe('technician area capture policy', () => {
     expect(allowsTechnicianCapture(InspectionType.MOVE_IN)).toBe(true);
   });
 
-  it('never lets a move-out capture the layout it is compared against', () => {
-    // Sharper than "the lifecycle chain is excluded": a move-out is read
-    // against its move-in area by area, so a layout captured on the move-out
-    // visit itself would be a comparison against nothing.
-    expect(allowsTechnicianCapture(InspectionType.MOVE_OUT)).toBe(false);
-  });
-
-  it('keeps the comparison inspections on an approved plan', () => {
-    // These are read against a baseline that already exists, so there is no
-    // survey to delegate — only a layout to follow.
+  it('lets the comparison types survey a property that has no plan either', () => {
+    /**
+     * These were excluded on the argument that all three are read against a
+     * move-in area by area, so a layout captured on the visit itself compares
+     * against nothing. Sound argument, wrong situation: on the live calendar
+     * these were ten move-outs at properties with no approved area *and* no
+     * move-in on record, so the comparison had nothing either way. The choice
+     * was a surveyed inspection or none at all, and the visits were happening
+     * regardless — two of them that day.
+     */
     for (const type of [
       InspectionType.MOVE_OUT,
       InspectionType.OCCUPIED,
       InspectionType.BACK_TO_MARKET,
     ])
-      expect(allowsTechnicianCapture(type)).toBe(false);
+      expect(allowsTechnicianCapture(type)).toBe(true);
   });
 
   it('leaves every other type opted out, so a new one is not silently included', () => {
     const allowed = Object.values(InspectionType).filter(allowsTechnicianCapture).sort();
-    expect(allowed).toEqual([InspectionType.HVAC, InspectionType.MOVE_IN].sort());
+    // Roof and the two lockbox visits stay out — nobody has asked for them,
+    // and a new type must be added here deliberately rather than inherited.
+    expect(allowed).toEqual(
+      [
+        InspectionType.HVAC,
+        InspectionType.MOVE_IN,
+        InspectionType.MOVE_OUT,
+        InspectionType.OCCUPIED,
+        InspectionType.BACK_TO_MARKET,
+      ].sort(),
+    );
   });
 });
 
