@@ -32,6 +32,8 @@ import {
 } from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { PasswordResetService } from '../auth/password-reset.service';
+import { InspectionImportService } from './inspection-import/inspection-import.service';
+import type { UploadedReport } from './inspection-import/inspection-import.service';
 import { AccessService } from './access.service';
 import { RouteService } from '../routing/route.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
@@ -121,6 +123,7 @@ export const CONSOLE_MAP_TAG = 'Console map';
 export const FLOOR_PLAN_TAG = 'Floor plans';
 export const AREA_EVIDENCE_TAG = 'Area evidence';
 export const CHARGES_TAG = 'Charges';
+export const INSPECTION_IMPORT_TAG = 'Inspection imports';
 
 @ApiTags('Administrator application')
 @ApiBearerAuth()
@@ -137,6 +140,7 @@ export class AdminController {
     private readonly locations: TechnicianLocationService,
     private readonly propertyGeocoding: PropertyGeocodingService,
     private readonly passwordResets: PasswordResetService,
+    private readonly inspectionImports: InspectionImportService,
     private readonly routes: RouteService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
@@ -211,6 +215,47 @@ export class AdminController {
   ) {
     return this.floorPlans.upload(request.user, id, file, body.unitId);
   }
+  /**
+   * Read an inspection done outside this app, from the PDF it produced.
+   *
+   * Two steps, because the parser cannot be certain about everything it reads:
+   * the preview writes nothing and reports what a person should look at — a
+   * label the templates do not carry, a row the inspector typed by hand, a
+   * photograph whose caption did not resolve. The import then writes it.
+   *
+   * Behind `inspections:manage`, the key for creating and editing an
+   * inspection, because that is exactly what this does. Not `properties:manage`
+   * despite the address in the path: the property is the destination, the
+   * inspection is the thing being made.
+   *
+   * The size limit is well above the floor-plan route's. These reports carry a
+   * photograph of every wall -- the one this was built against is 73 MB across
+   * 376 of them -- and refusing at 20 MB would refuse nearly all of them.
+   */
+  @Post('properties/:propertyId/inspection-imports/preview')
+  @ApiTags(INSPECTION_IMPORT_TAG)
+  @RequirePermissions('inspections:manage')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 150_000_000, files: 1 } }))
+  previewInspectionImport(
+    @Req() request: AuthenticatedRequest,
+    @Param('propertyId') id: string,
+    @UploadedFile() file?: UploadedReport,
+  ) {
+    return this.inspectionImports.preview(request.user, id, file);
+  }
+
+  @Post('properties/:propertyId/inspection-imports')
+  @ApiTags(INSPECTION_IMPORT_TAG)
+  @RequirePermissions('inspections:manage')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 150_000_000, files: 1 } }))
+  importInspection(
+    @Req() request: AuthenticatedRequest,
+    @Param('propertyId') id: string,
+    @UploadedFile() file?: UploadedReport,
+  ) {
+    return this.inspectionImports.commit(request.user, id, file);
+  }
+
   @Get('floor-plans/:floorPlanId/content')
   @ApiTags(FLOOR_PLAN_TAG)
   @RequirePermissions('properties:read')

@@ -2058,6 +2058,10 @@ model ApiClientKey {
 enum InspectionSource {
   MANUAL
   JOBBER
+  /// A report from another system, read in from its PDF. Distinct from MANUAL
+  /// because the evidence was not captured here: nobody on this system walked
+  /// the property, and a charge argued from it rests on somebody else's record.
+  IMPORTED_REPORT
 }
 
 /// to say *which* connection needs attention.
