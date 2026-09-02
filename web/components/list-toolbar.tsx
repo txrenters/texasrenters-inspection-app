@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
+import { useSearchText } from '@/lib/use-search-text';
 import { cn } from '@/lib/utils';
 
 /**
@@ -60,6 +61,7 @@ export function ListToolbar({
   onClear?: () => void;
   children?: ReactNode;
 }) {
+  const [text, setText] = useSearchText(search, onSearch);
   const hasActive = Boolean(activeFilters?.length);
   return (
     <div className="space-y-3 pb-4">
@@ -72,10 +74,10 @@ export function ListToolbar({
           <Input
             aria-label={searchLabel}
             className="pl-9"
-            onChange={(event) => onSearch(event.target.value)}
+            onChange={(event) => setText(event.target.value)}
             placeholder={searchPlaceholder}
             type="search"
-            value={search}
+            value={text}
           />
           {pending ? (
             <Spinner className="text-muted-foreground absolute top-1/2 right-3 size-4 -translate-y-1/2" />

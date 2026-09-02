@@ -49,6 +49,8 @@ import {
 import { formatPermission } from '@/lib/access';
 import { formatRelative } from '@/lib/format';
 import { useApiClientMutations, useApiClients } from '@/lib/queries';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
+import { useSearchText } from '@/lib/use-search-text';
 import { useUrlState } from '@/lib/url-state';
 
 const PAGE_SIZE = 20;
@@ -218,7 +220,16 @@ function KeyRow({
  */
 export default function ApiClientsPage() {
   const [state, setState] = useUrlState({ page: 1, search: '' });
-  const clients = useApiClients({ page: state.page, pageSize: PAGE_SIZE, search: state.search });
+  // This page drew its own field rather than using ListToolbar, so it missed
+  // both of the things every other list does: the input read straight back out
+  // of the URL, which drops characters when you type faster than
+  // `router.replace` commits, and the query was never debounced, so each
+  // keystroke was a request.
+  const [searchText, setSearchText] = useSearchText(state.search, (search) =>
+    setState({ search, page: 1 }),
+  );
+  const debouncedSearch = useDebouncedValue(state.search);
+  const clients = useApiClients({ page: state.page, pageSize: PAGE_SIZE, search: debouncedSearch });
   const { createClient, issueKey, revokeClient, revokeKey, updateClient } = useApiClientMutations();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -271,9 +282,10 @@ export default function ApiClientsPage() {
       <Input
         aria-label="Search API clients"
         className="mb-4 max-w-sm"
-        onChange={(event) => setState({ search: event.target.value, page: 1 })}
+        onChange={(event) => setSearchText(event.target.value)}
         placeholder="Search by name"
-        value={state.search}
+        type="search"
+        value={searchText}
       />
 
       {records.length === 0 ? (
