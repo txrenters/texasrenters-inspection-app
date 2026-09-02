@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { EMPTY, formatDate, humanize } from '@/lib/format';
+import { EMPTY, formatDate, formatScheduledDate, humanize } from '@/lib/format';
 import { useChargeReport } from '@/lib/queries';
 
 function money(amount: number | null | undefined, currency = 'USD') {
@@ -155,7 +155,7 @@ export default function ChargeReportPage() {
         <p className="text-muted-foreground text-sm">
           {data.property.name}
           {data.property.unit ? ` · ${data.property.unit}` : ''} · {humanize(data.inspection.type)}{' '}
-          · {formatDate(data.inspection.scheduledAt)}
+          · {formatScheduledDate(data.inspection.scheduledAt)}
         </p>
         <p className="text-muted-foreground text-xs text-pretty">
           Sources are labelled: <em>system</em> / <em>ai suggested</em> are recommendations only;{' '}

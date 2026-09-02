@@ -41,7 +41,11 @@ import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import { ScreenHeader } from '@/src/components/ui';
-import { formatVisitDateAndWindow, formatVisitWindow } from '@/src/utils/visit-window';
+import {
+  formatVisitDateAndWindow,
+  formatVisitDay,
+  formatVisitWindow,
+} from '@/src/utils/visit-window';
 
 registerIcons(
   AlertTriangleIcon,
@@ -128,7 +132,7 @@ function InspectionRow({ item }: { item: Inspection }) {
         // Carried in the row's own label: the badge below sits inside a hidden
         // subtree, so this is the only way it reaches a screen reader.
         urgency?.spoken ?? '',
-        formatVisitDateAndWindow(item, new Date(item.scheduledAt).toLocaleDateString()),
+        formatVisitDateAndWindow(item, formatVisitDay(item.scheduledAt)),
         item.progress.hasFailedUpload ? 'Has a failed upload' : '',
       ]
         .filter(Boolean)

@@ -1,8 +1,4 @@
-import {
-  formatVisitDateAndWindow,
-  formatVisitWindow,
-  visitStartInstant,
-} from '../src/utils/visit-window';
+import { formatVisitDateAndWindow, formatVisitDay, formatVisitWindow, visitStartInstant } from '../src/utils/visit-window';
 
 const scheduled = (overrides: Partial<Parameters<typeof formatVisitWindow>[0]> = {}) => ({
   scheduledAt: '2026-09-01T00:00:00.000Z',
@@ -89,5 +85,44 @@ describe('formatVisitDateAndWindow', () => {
 
   it('says only the date when there is no window', () => {
     expect(formatVisitDateAndWindow(scheduled(), 'Tue, Sep 1')).toBe('Tue, Sep 1');
+  });
+});
+
+/**
+ * A visit booked in Jobber for the 3rd showed as the 2nd in the app. The cause
+ * is not Jobber: `scheduledAt` is a Postgres `date` serialised as midnight UTC,
+ * and `toLocaleDateString` renders that instant in the reader's zone — which
+ * lands on the previous evening anywhere west of Greenwich. Every office and
+ * every technician this app serves is west of Greenwich.
+ */
+describe('the day a visit is booked for', () => {
+  const original = process.env.TZ;
+  afterEach(() => {
+    process.env.TZ = original;
+  });
+
+  it('reads as the stored day in Texas, where localising moved it back one', () => {
+    // The exact reported case: Jobber says September 3rd, the app said the 2nd.
+    expect(formatVisitDay('2026-09-03T00:00:00.000Z')).toBe('Sep 3');
+  });
+
+  it('reads as the same day either side of the world', () => {
+    // Manila is +8 and happened to render correctly, which is why this went
+    // unnoticed by whoever was looking at the console.
+    const day = '2026-09-03T00:00:00.000Z';
+    expect(formatVisitDay(day)).toBe('Sep 3');
+    expect(formatVisitDay(day, { month: 'long', day: 'numeric' })).toBe('September 3');
+  });
+
+  it("keeps the caller option shape, adding only the zone", () => {
+    expect(formatVisitDay('2026-09-03T00:00:00.000Z', { weekday: 'short', month: 'short', day: 'numeric' })).toBe(
+      'Thu, Sep 3',
+    );
+  });
+
+  it('still shows no time, because the column holds none', () => {
+    // The midnight is storage, not a booking. A real window comes from
+    // scheduledStartAt and is formatted separately.
+    expect(formatVisitDay('2026-09-03T00:00:00.000Z')).not.toMatch(/\d:\d\d/);
   });
 });
