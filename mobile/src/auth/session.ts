@@ -251,17 +251,49 @@ export async function signIn(
  * account" would give away precisely what the endpoint withholds.
  */
 export async function requestPasswordReset(email: string) {
-  const response = await fetch(endpoint('/api/v1/auth/request-password-reset'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: email.trim() }),
-  });
+  const url = endpoint('/api/v1/auth/request-password-reset');
 
-  // A refusal is worth reporting -- the address was malformed, or the service
-  // is down -- but not a 404, which this endpoint does not distinguish anyway.
-  if (!response.ok && response.status !== 404) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? 'Could not send the reset link. Try again in a moment.');
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: email.trim() }),
+    });
+  } catch {
+    // Named, because this is the failure a locked-out technician actually hits
+    // and "try again in a moment" is the wrong advice for it: an app pointed at
+    // a server it cannot reach will fail this way forever, and only somebody
+    // who can read the host has any chance of saying why.
+    throw new Error(
+      `Could not reach the TexasRenters server${apiHost(url)}. Check your signal, then ask the office to send you a reset link.`,
+    );
+  }
+
+  if (response.ok) return;
+
+  // A 404 used to be swallowed as success. This endpoint never returns one --
+  // it answers 204 for every address, real or not -- so a 404 means the request
+  // never reached the handler at all: a stale API address in the build, or a
+  // tunnel that is no longer up. Treating it as sent put "a reset link is on
+  // its way" in front of the one person who could not afford to keep waiting.
+  const body = (await response.json().catch(() => null)) as { message?: string } | null;
+  if (body?.message) throw new Error(body.message);
+
+  // No JSON body means the answer did not come from the API -- a proxy or
+  // tunnel error page. The status is the only thing worth carrying, and it is
+  // the first thing anyone diagnosing this will ask for.
+  throw new Error(
+    `The TexasRenters server did not accept the request (HTTP ${response.status}). Ask the office to send you a reset link.`,
+  );
+}
+
+/** ` at api.example.com`, or nothing if the URL will not parse. */
+function apiHost(url: string) {
+  try {
+    return ` at ${new URL(url).host}`;
+  } catch {
+    return '';
   }
 }
 

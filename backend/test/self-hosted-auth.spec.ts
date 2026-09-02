@@ -655,6 +655,34 @@ describe('password reset', () => {
     expect(mail.sendPasswordReset).not.toHaveBeenCalled();
   });
 
+  it('refuses identically for a real and an invented address when no origin is configured', async () => {
+    // The refusal has to land before the credential lookup. Checking it only
+    // once an account is found would answer 503 for a real address and 204 for
+    // an invented one -- handing an anonymous caller the account-enumeration
+    // oracle that the uniform 204 exists to deny them.
+    delete process.env.WEB_APP_ORIGIN;
+
+    for (const credential of [
+      { authUserId: AUTH_USER_ID, profile: { displayName: 'Ada', isActive: true } },
+      null,
+    ]) {
+      const prisma = resetPrisma(null, credential);
+      const mail = mailer();
+      const service = new PasswordResetService(
+        prisma as never,
+        identities() as never,
+        mail as never,
+      );
+
+      await expect(service.request('ada@example.com')).rejects.toMatchObject({
+        status: 503,
+        code: 'PASSWORD_RESET_UNAVAILABLE',
+      });
+      expect(prisma.authCredential.findUnique).not.toHaveBeenCalled();
+      expect(mail.sendPasswordReset).not.toHaveBeenCalled();
+    }
+  });
+
   it('sends nothing to a deactivated account', async () => {
     // Mailing a working reset link to someone whose access was revoked would
     // undo the revocation.

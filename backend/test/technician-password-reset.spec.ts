@@ -21,6 +21,16 @@ describe('admin-initiated technician password reset', () => {
 
   const TECHNICIAN_ID = '00000000-0000-4000-8000-000000000003';
 
+  // The link is built from this. It was never set here, and every test in the
+  // file still passed while the service mailed `/reset-password?token=...` --
+  // a relative path in an email, which no mail client can open.
+  beforeEach(() => {
+    process.env.WEB_APP_ORIGIN = 'https://admin.example.com';
+  });
+  afterEach(() => {
+    delete process.env.WEB_APP_ORIGIN;
+  });
+
   function prismaMock() {
     const tx = {
       authPasswordResetToken: {
@@ -188,5 +198,41 @@ describe('admin-initiated technician password reset', () => {
     const token = decodeURIComponent(mailedUrl.split('token=')[1] ?? '');
     expect(token.length).toBeGreaterThan(20);
     expect(JSON.stringify(prisma.auditLog.create.mock.calls)).not.toContain(token);
+  });
+
+  it('mails a link the recipient can actually open', async () => {
+    const prisma = prismaMock();
+    prisma.userProfile.findFirst.mockResolvedValue(activeTechnician);
+    prisma.authCredential.findUnique.mockResolvedValue({ id: 'cred-1' });
+    const { service, mailer } = build(prisma);
+
+    await service.sendForTechnician(user, TECHNICIAN_ID);
+
+    const mailedUrl = mailer.sendPasswordReset.mock.calls[0][0].resetUrl as string;
+    expect(mailedUrl.startsWith('https://admin.example.com/reset-password?token=')).toBe(true);
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['not a URL', 'admin.example.com'],
+  ])('refuses rather than mailing a dead link when the origin is %s', async (_label, origin) => {
+    // Refusing loses nothing: the administrator is told, instead of being shown
+    // a delivery they cannot act on, and the technician's existing link is left
+    // alone rather than retired for a replacement that opens nowhere.
+    if (origin === undefined) delete process.env.WEB_APP_ORIGIN;
+    else process.env.WEB_APP_ORIGIN = origin;
+
+    const prisma = prismaMock();
+    prisma.userProfile.findFirst.mockResolvedValue(activeTechnician);
+    prisma.authCredential.findUnique.mockResolvedValue({ id: 'cred-1' });
+    const { service, mailer } = build(prisma);
+
+    await expect(service.sendForTechnician(user, TECHNICIAN_ID)).rejects.toMatchObject({
+      code: 'PASSWORD_RESET_UNAVAILABLE',
+    });
+    expect(mailer.sendPasswordReset).not.toHaveBeenCalled();
+    expect(prisma.tx.authPasswordResetToken.create).not.toHaveBeenCalled();
+    // The outstanding link the technician may still be holding survives.
+    expect(prisma.tx.authPasswordResetToken.updateMany).not.toHaveBeenCalled();
   });
 });
