@@ -96,9 +96,41 @@ export default function ResetPasswordPage() {
             <CheckCircle2Icon />
             <AlertTitle>Your password was updated</AlertTitle>
           </Alert>
-          <Button asChild className="w-full">
-            <Link href="/login">Continue to sign in</Link>
-          </Button>
+          {/*
+            Most people who reach this page arrived from the *mobile* app: they
+            tapped "Forgot password?" on the handset, and the emailed link can
+            only open in a browser because the app registers no handler for it.
+            The single "Continue to sign in" button then sent them to the
+            administrator console, which refuses a technician outright —
+            "Administrator access unavailable" — so the reset flow ended by
+            telling the person who had just fixed their password that their
+            account was not allowed. Both destinations are offered now, and the
+            app is named first because it is where most of them are going.
+
+            `required` is the other path: an administrator replacing a temporary
+            password, which exists to unlock the console. That one still has a
+            single destination.
+          */}
+          {required ? (
+            <Button asChild className="w-full">
+              <Link href="/login">Continue to sign in</Link>
+            </Button>
+          ) : (
+            <>
+              {/* A plain anchor, not Link: the router would try to resolve a
+                  custom scheme as an internal route. */}
+              <Button asChild className="w-full">
+                <a href="texasrenters-inspection://">Open the TexasRenters app</a>
+              </Button>
+              <Button asChild className="w-full" variant="outline">
+                <Link href="/login">Sign in to the console</Link>
+              </Button>
+              <p className="text-muted-foreground text-center text-sm">
+                Technicians sign in on the app. The console is for office staff. If the app does
+                not open, sign in from your phone.
+              </p>
+            </>
+          )}
         </div>
       </AuthLayout>
     );

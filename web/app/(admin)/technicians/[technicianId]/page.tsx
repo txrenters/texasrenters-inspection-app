@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
@@ -187,9 +188,9 @@ export default function TechnicianDetailPage() {
                       <AlertDialogTitle>Give {item.displayName} console access?</AlertDialogTitle>
                       <AlertDialogDescription>
                         They keep this one account and the password they already sign into the app
-                        with — {item.email} cannot hold two. This only lets them reach the console;
-                        it grants no permissions, so assign roles afterwards or they will see
-                        nothing.
+                        with — {item.email} cannot hold two. This adds console membership only, and
+                        that carries no permissions, so they still cannot sign in until you assign
+                        them a role under Users afterwards.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
@@ -292,9 +293,23 @@ export default function TechnicianDetailPage() {
       {grantConsole.data ? (
         <Alert className="mb-4">
           <AlertDescription>
-            {grantConsole.data.granted
-              ? `${item.displayName} can now sign in to the console. Assign roles below — until then they have no permissions.`
-              : `${item.displayName} already had console access.`}
+            {grantConsole.data.granted ? (
+              <>
+                {/* Deliberately not "assign roles below". There is no role
+                    editor on this page — it lives on their user record, which
+                    this grant is what made reachable. Saying "below" sent
+                    administrators looking for a control that is not here, and
+                    left the account unable to sign in at all. */}
+                {item.displayName} now appears under Users. They cannot sign in until a role is
+                assigned — a console membership carries no permissions on its own.{' '}
+                <Link className="font-medium underline" href={`/users/${id}`}>
+                  Assign their roles
+                </Link>
+                .
+              </>
+            ) : (
+              `${item.displayName} already had console access.`
+            )}
           </AlertDescription>
         </Alert>
       ) : null}
