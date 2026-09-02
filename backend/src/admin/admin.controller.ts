@@ -32,6 +32,7 @@ import {
 } from '../common/auth';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { PasswordResetService } from '../auth/password-reset.service';
+import { AccessService } from './access.service';
 import { RouteService } from '../routing/route.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
@@ -141,6 +142,7 @@ export class AdminController {
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
     private readonly profileDeletion: ProfileDeletionService,
+    private readonly access: AccessService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -842,6 +844,27 @@ export class AdminController {
    * same act performed again, so it belongs with that rather than with
    * `technicians:manage`, which is about activating and deactivating people.
    */
+  /**
+   * Let this technician into the console as well.
+   *
+   * Behind `users:manage`, not `technicians:provision`. The button lives on the
+   * technician page, but the act is creating console access for somebody — the
+   * same decision `POST /admin/access/users` makes, and it must not be reachable
+   * by a permission that only covers issuing handset credentials.
+   *
+   * Grants the membership and no roles, so the person can sign in and do
+   * nothing until an administrator assigns some. That second step is what
+   * `users:manage` normally guards, and it stays guarded.
+   */
+  @Post('technicians/:technicianId/console-access')
+  @RequirePermissions('users:manage')
+  grantTechnicianConsoleAccess(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+  ) {
+    return this.access.grantConsoleAccess(request.user, id);
+  }
+
   @Post('technicians/:technicianId/password-reset')
   @RequirePermissions('technicians:provision')
   sendTechnicianPasswordReset(

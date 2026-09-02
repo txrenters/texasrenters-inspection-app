@@ -33,6 +33,7 @@ import {
 } from './access.dto';
 import { AccessService } from './access.service';
 import { ProfileDeletionService } from './profile-deletion.service';
+import { TechnicianProvisioningService } from './technician-provisioning.service';
 
 /**
  * User management and fully-customizable RBAC. Every route is permission-gated
@@ -47,6 +48,8 @@ export class AccessController {
   constructor(
     @Inject(AccessService) private readonly service: AccessService,
     @Inject(ProfileDeletionService) private readonly deletion: ProfileDeletionService,
+    @Inject(TechnicianProvisioningService)
+    private readonly technicians: TechnicianProvisioningService,
   ) {}
 
   @Get('permissions')
@@ -135,6 +138,23 @@ export class AccessController {
     @Body() body: SetUserRolesDto,
   ) {
     return this.service.setUserRoles(request.user, id, body);
+  }
+
+  /**
+   * Let this console user onto the handset as well.
+   *
+   * Behind `technicians:provision` rather than `users:manage`, for the mirror
+   * of the reason the console grant is behind `users:manage`: the button lives
+   * on the user page, but the act is provisioning a technician, and the
+   * permission has to follow the act rather than the screen.
+   *
+   * Adds the membership only. The account already has a password, and issuing a
+   * temporary one here would lock them out of the console they are using.
+   */
+  @Post('users/:id/technician-access')
+  @RequirePermissions('technicians:provision')
+  grantTechnicianAccess(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.technicians.grantTechnicianAccess(request.user, id);
   }
 
   /**

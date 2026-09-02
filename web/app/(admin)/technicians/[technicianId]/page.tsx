@@ -116,10 +116,16 @@ export default function TechnicianDetailPage() {
   // location grant rather than the directory one — the rest of this page does
   // not.
   const route = useTechnicianRoute(id, today, permissions.has('technicians:locate'));
+  // Granting console access creates a console user, so it is gated on the
+  // permission that governs console users -- not on `technicians:provision`,
+  // which only covers issuing handset credentials. The button lives here; the
+  // authority it needs follows the act, not the screen.
+  const canManageUsers = permissions.has('users:manage');
   const {
     updateTechnician: mutation,
     deleteTechnician: remove,
     sendTechnicianPasswordReset: sendReset,
+    grantTechnicianConsoleAccess: grantConsole,
   } = useAdminMutations();
 
   // isError first: a failed fetch has no data either.
@@ -144,6 +150,14 @@ export default function TechnicianDetailPage() {
     }
   }
 
+  async function grantConsoleAccess() {
+    try {
+      await grantConsole.mutateAsync(id);
+    } catch {
+      // Rendered inline below, alongside the other mutation errors.
+    }
+  }
+
   async function deleteTechnician() {
     try {
       await remove.mutateAsync(id);
@@ -159,8 +173,34 @@ export default function TechnicianDetailPage() {
     <>
       <PageHeader
         actions={
-          canManage || canProvision ? (
+          canManage || canProvision || canManageUsers ? (
             <>
+              {canManageUsers ? (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button disabled={grantConsole.isPending} variant="outline">
+                      {grantConsole.isPending ? 'Granting…' : 'Grant console access'}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Give {item.displayName} console access?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        They keep this one account and the password they already sign into the app
+                        with — {item.email} cannot hold two. This only lets them reach the console;
+                        it grants no permissions, so assign roles afterwards or they will see
+                        nothing.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void grantConsoleAccess()}>
+                        Grant access
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : null}
               {canProvision ? (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
@@ -244,6 +284,20 @@ export default function TechnicianDetailPage() {
         </Alert>
       ) : null}
 
+      {grantConsole.error ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertDescription>{grantConsole.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+      {grantConsole.data ? (
+        <Alert className="mb-4">
+          <AlertDescription>
+            {grantConsole.data.granted
+              ? `${item.displayName} can now sign in to the console. Assign roles below — until then they have no permissions.`
+              : `${item.displayName} already had console access.`}
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {sendReset.error ? (
         <Alert className="mb-4" variant="destructive">
           <AlertDescription>{sendReset.error.message}</AlertDescription>

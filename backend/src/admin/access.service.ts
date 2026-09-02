@@ -378,6 +378,97 @@ export class AccessService {
     return this.mapUserDetail(await this.requireUser(user, id));
   }
 
+  /**
+   * Give a technician who already exists access to the console.
+   *
+   * The same person, not a second account. `UserProfile.email` and
+   * `AuthCredential.email` are both unique and sign-in resolves an account by
+   * address alone, so two rows sharing one address would leave the system
+   * unable to say which is signing in, and the person holding two passwords
+   * and two audit trails. Roles are what separate the two surfaces, and
+   * `OrganizationMember` is a list — one account can hold
+   * `INSPECTION_TECHNICIAN` and a console membership at once.
+   *
+   * Until this existed there was no path at all: `createUser` refuses the
+   * address with `USER_EMAIL_EXISTS`, and `setUserRoles` could not reach them
+   * either, because `requireUser` only matches profiles that already hold a
+   * console membership or a role assignment. A pure technician was invisible to
+   * the entire user-management surface.
+   *
+   * Membership only, and deliberately no roles. `resolveEffectivePermissions`
+   * grants nothing for a membership label — "legacy membership labels never
+   * imply operational permissions" — so this opens the door and hands over no
+   * authority whatsoever. What it does change is visibility: the role editor
+   * can now see this person, which is how they get permissions afterwards, as a
+   * separate and separately audited decision.
+   *
+   * Nothing touches the credential. They keep the password they already sign
+   * into the handset with.
+   */
+  async grantConsoleAccess(user: AuthenticatedUser, technicianId: string) {
+    const target = await this.prisma.userProfile.findFirst({
+      // Scoped through a technician membership in the caller's OWN
+      // organization. `users:manage` must not become a way to reach an address
+      // belonging to another tenant, and a technician who is not theirs has to
+      // be indistinguishable from one who does not exist.
+      where: {
+        id: technicianId,
+        memberships: {
+          some: { organizationId: user.organizationId, role: UserRole.INSPECTION_TECHNICIAN },
+        },
+      },
+      select: {
+        id: true,
+        isActive: true,
+        memberships: {
+          where: { organizationId: user.organizationId, role: { in: CONSOLE_ROLES } },
+          select: { id: true },
+        },
+      },
+    });
+    if (!target) throw new ApplicationError(404, 'TECHNICIAN_NOT_FOUND', 'Technician not found.');
+    // The same rule the reset link applies. Handing console access to somebody
+    // whose access was just revoked would undo the revocation.
+    if (!target.isActive)
+      throw new ApplicationError(
+        409,
+        'TECHNICIAN_INACTIVE',
+        'This technician is deactivated. Reactivate the account before granting console access.',
+      );
+
+    // Idempotent rather than a conflict: two administrators clicking the same
+    // button is not an error, and the second one should still be told the
+    // access exists rather than shown a failure.
+    const alreadyHadAccess = target.memberships.length > 0;
+    if (!alreadyHadAccess)
+      await this.prisma.$transaction(async (tx) => {
+        await tx.organizationMember.create({
+          data: {
+            organizationId: user.organizationId,
+            userProfileId: target.id,
+            role: CONSOLE_MEMBERSHIP_ROLE,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId: user.organizationId,
+            actorUserId: user.id,
+            action: 'CONSOLE_ACCESS_GRANTED',
+            entityType: 'UserProfile',
+            entityId: target.id,
+            // Recorded so the trail cannot later be read as "they were given
+            // console permissions". They were given a door and nothing behind it.
+            metadata: { role: CONSOLE_MEMBERSHIP_ROLE, rolesAssigned: 0 },
+          },
+        });
+      });
+
+    return {
+      ...this.mapUserDetail(await this.requireUser(user, technicianId)),
+      granted: !alreadyHadAccess,
+    };
+  }
+
   async setUserRoles(user: AuthenticatedUser, id: string, input: SetUserRolesDto) {
     if (id === user.id)
       throw new ApplicationError(

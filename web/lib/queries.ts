@@ -843,6 +843,23 @@ export function useAccessMutations() {
     void verifyAffectedQueries(client, [keys.rolesRoot, ...(id ? [keys.role(id)] : [])]);
   };
   return {
+    /**
+     * Let this console user onto the handset as well.
+     *
+     * The mirror of `grantTechnicianConsoleAccess`. Refreshes the technician
+     * roster too, because that is the list they have just joined.
+     */
+    grantTechnicianAccess: useMutation({
+      mutationFn: (userId: string) =>
+        api<{ id: string; email: string; granted: boolean }>(
+          `/api/v1/admin/access/users/${userId}/technician-access`,
+          { method: 'POST' },
+        ),
+      onSuccess: (_data, userId) => {
+        refreshUsers(userId);
+        void verifyAffectedQueries(client, [keys.techniciansRoot]);
+      },
+    }),
     createUser: useMutation({
       mutationFn: (input: { email: string; displayName: string; roleIds: string[] }) =>
         api<CreatedUserAccount>('/api/v1/admin/access/users', {
@@ -1441,6 +1458,24 @@ export function useAdminMutations() {
           `/api/v1/admin/technicians/${technicianId}/password-reset`,
           { method: 'POST' },
         ),
+    }),
+    /**
+     * Let this technician into the console as well.
+     *
+     * One account, a second membership -- `UserProfile.email` is unique, so the
+     * same person cannot hold two rows. Invalidates the user directory rather
+     * than the technician one: nothing about them as a technician changed, but
+     * they now appear on a list they were invisible to.
+     */
+    grantTechnicianConsoleAccess: useMutation({
+      mutationFn: (technicianId: string) =>
+        api<{ id: string; email: string; granted: boolean }>(
+          `/api/v1/admin/technicians/${technicianId}/console-access`,
+          { method: 'POST' },
+        ),
+      onSuccess: () => {
+        void verifyAffectedQueries(client, [keys.usersRoot]);
+      },
     }),
     createInspection: useMutation({
       mutationFn: (input: object) =>
