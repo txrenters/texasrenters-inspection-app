@@ -593,13 +593,29 @@ describe('password reset', () => {
         findUnique: jest.fn().mockResolvedValue(tokenRow),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
       __tx: tx,
     };
   }
 
+  /** A findable account: the shape `request` selects, not just the fields it mails. */
+  const account = (overrides: Record<string, unknown> = {}) => ({
+    authUserId: AUTH_USER_ID,
+    profile: {
+      id: 'profile-1',
+      displayName: 'Ada',
+      isActive: true,
+      memberships: [{ organizationId: 'org-1' }],
+      ...overrides,
+    },
+  });
+
   const identities = () => ({ setPassword: jest.fn().mockResolvedValue(undefined) });
-  const mailer = () => ({ sendPasswordReset: jest.fn().mockResolvedValue({ status: 'SENT' }) });
+  const mailer = (status: 'CONFIGURED' | 'NOT_CONFIGURED' = 'CONFIGURED') => ({
+    readiness: () => ({ status }),
+    sendPasswordReset: jest.fn().mockResolvedValue({ status: 'SENT' }),
+  });
 
   const liveToken = (overrides: Record<string, unknown> = {}) => ({
     id: 'reset-1',
@@ -611,10 +627,7 @@ describe('password reset', () => {
   });
 
   it('mails a link carrying a token that is only stored hashed', async () => {
-    const prisma = resetPrisma(null, {
-      authUserId: AUTH_USER_ID,
-      profile: { displayName: 'Ada', isActive: true },
-    });
+    const prisma = resetPrisma(null, account());
     const mail = mailer();
     const service = new PasswordResetService(prisma as never, identities() as never, mail as never);
 
@@ -629,10 +642,7 @@ describe('password reset', () => {
 
   it('retires outstanding links before issuing another', async () => {
     // Otherwise asking twice leaves two live credentials in two mailboxes.
-    const prisma = resetPrisma(null, {
-      authUserId: AUTH_USER_ID,
-      profile: { displayName: 'Ada', isActive: true },
-    });
+    const prisma = resetPrisma(null, account());
     const service = new PasswordResetService(
       prisma as never,
       identities() as never,
@@ -663,7 +673,7 @@ describe('password reset', () => {
     delete process.env.WEB_APP_ORIGIN;
 
     for (const credential of [
-      { authUserId: AUTH_USER_ID, profile: { displayName: 'Ada', isActive: true } },
+      account(),
       null,
     ]) {
       const prisma = resetPrisma(null, credential);
@@ -683,13 +693,74 @@ describe('password reset', () => {
     }
   });
 
+  it('refuses identically for a real and an invented address when mail is not configured', async () => {
+    // The console tells an administrator the mail could not go. This path used
+    // to tell the technician "a reset link is on its way" and send nothing --
+    // the same claim-without-sending the handset was making. Safe to report
+    // because an unconfigured mailer is unconfigured for every address at once,
+    // so it separates no real account from an invented one.
+    for (const credential of [account(), null]) {
+      const prisma = resetPrisma(null, credential);
+      const mail = mailer('NOT_CONFIGURED');
+      const service = new PasswordResetService(
+        prisma as never,
+        identities() as never,
+        mail as never,
+      );
+
+      await expect(service.request('ada@example.com')).rejects.toMatchObject({
+        status: 503,
+        code: 'PASSWORD_RESET_UNAVAILABLE',
+      });
+      expect(prisma.authCredential.findUnique).not.toHaveBeenCalled();
+      expect(mail.sendPasswordReset).not.toHaveBeenCalled();
+    }
+  });
+
+  it('audits a self-service reset the way the console audits an admin-sent one', async () => {
+    // Issuing the token is the sensitive act -- a live credential now exists in
+    // a mailbox -- and it happens on both paths. Only the administrator's was
+    // recorded, so the trail showed the resets the office sent and none of the
+    // ones technicians asked for themselves.
+    const prisma = resetPrisma(null, account());
+    const service = new PasswordResetService(
+      prisma as never,
+      identities() as never,
+      mailer() as never,
+    );
+
+    await service.request('ada@example.com');
+
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org-1',
+        // Nobody was signed in, which is the whole point of this route.
+        actorUserId: null,
+        action: 'PASSWORD_RESET_SENT',
+        entityType: 'UserProfile',
+        entityId: 'profile-1',
+        metadata: { delivered: true, selfService: true },
+      },
+    });
+  });
+
+  it('answers 204 even when the audit row cannot be written', async () => {
+    // A throw here would 500 after the mail had gone, and only ever for an
+    // address that has an account -- handing back the enumeration oracle the
+    // uniform 204 exists to deny.
+    const prisma = resetPrisma(null, account());
+    prisma.auditLog.create.mockRejectedValue(new Error('audit table unavailable'));
+    const mail = mailer();
+    const service = new PasswordResetService(prisma as never, identities() as never, mail as never);
+
+    await expect(service.request('ada@example.com')).resolves.toBeUndefined();
+    expect(mail.sendPasswordReset).toHaveBeenCalled();
+  });
+
   it('sends nothing to a deactivated account', async () => {
     // Mailing a working reset link to someone whose access was revoked would
     // undo the revocation.
-    const prisma = resetPrisma(null, {
-      authUserId: AUTH_USER_ID,
-      profile: { displayName: 'Ada', isActive: false },
-    });
+    const prisma = resetPrisma(null, account({ isActive: false }));
     const mail = mailer();
     const service = new PasswordResetService(prisma as never, identities() as never, mail as never);
 

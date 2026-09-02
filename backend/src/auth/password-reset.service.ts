@@ -29,6 +29,17 @@ import { LocalIdentityProvider } from './local-identity.provider';
  */
 const DEFAULT_TTL_MINUTES = 60;
 
+/**
+ * One message for every reason the flow cannot run at all.
+ *
+ * Deliberately says nothing about which piece is misconfigured. The anonymous
+ * form is reachable by anybody, and "the mail server is not set up" is a
+ * description of our deployment, not something the person locked out of their
+ * account can act on. The specific cause goes to the log instead.
+ */
+const UNAVAILABLE_MESSAGE =
+  'Password reset is unavailable right now. Ask the office to set your password for you.';
+
 @Injectable()
 export class PasswordResetService {
   private readonly logger = new Logger(PasswordResetService.name);
@@ -85,11 +96,27 @@ export class PasswordResetService {
     const origin = this.resetOrigin();
     if (origin) return origin;
     this.logger.error({ event: 'password_reset_origin_not_configured' });
-    throw new ApplicationError(
-      503,
-      'PASSWORD_RESET_UNAVAILABLE',
-      'Password reset is unavailable right now. Ask the office to set your password for you.',
-    );
+    throw new ApplicationError(503, 'PASSWORD_RESET_UNAVAILABLE', UNAVAILABLE_MESSAGE);
+  }
+
+  /**
+   * The mailer, refusing when it could not send to anybody at all.
+   *
+   * Only the global case — no transport, or credentials missing. That is true
+   * for every address at once, so refusing on it tells an anonymous caller
+   * nothing about which accounts exist, exactly like the origin check above.
+   *
+   * A *delivery* failure for one recipient is the opposite and is deliberately
+   * not handled here: it can only happen for an address that has an account, so
+   * reporting it would answer differently for a real address than an invented
+   * one. It stays silent on the anonymous path and is shown to the
+   * administrator, who already read the technician out of their own roster.
+   */
+  private requireMailer() {
+    const mailer = this.mailer;
+    if (mailer && mailer.readiness().status === 'CONFIGURED') return mailer;
+    this.logger.error({ event: 'password_reset_mailer_not_configured' });
+    throw new ApplicationError(503, 'PASSWORD_RESET_UNAVAILABLE', UNAVAILABLE_MESSAGE);
   }
 
   /**
@@ -106,11 +133,26 @@ export class PasswordResetService {
     // an invented one — turning a misconfigured deployment into exactly the
     // account-enumeration oracle the uniform 204 exists to prevent.
     this.requireResetOrigin();
+    this.requireMailer();
 
     const normalized = email.trim().toLowerCase();
     const credential = await this.prisma.authCredential.findUnique({
       where: { email: normalized },
-      select: { authUserId: true, profile: { select: { displayName: true, isActive: true } } },
+      select: {
+        authUserId: true,
+        profile: {
+          select: {
+            id: true,
+            displayName: true,
+            isActive: true,
+            // For the audit row below. One membership is taken because the
+            // record answers "which tenant's log does this belong in", and an
+            // account reachable from several is an edge case this app does not
+            // create -- a technician is provisioned into one organization.
+            memberships: { select: { organizationId: true }, take: 1 },
+          },
+        },
+      },
     });
 
     // A deactivated account is treated exactly like an absent one. Mailing a
@@ -121,11 +163,62 @@ export class PasswordResetService {
       return;
     }
 
-    await this.issueAndDeliver({
+    const delivered = await this.issueAndDeliver({
       authUserId: credential.authUserId,
       email: normalized,
       displayName: credential.profile.displayName,
     });
+
+    // Recorded like the administrator's button, and for the same reason it
+    // gives: issuing the token is the sensitive act, because a live credential
+    // now exists in a mailbox. A self-service reset created exactly the same
+    // credential and left no trace of it anywhere, so the audit trail showed
+    // only the resets an administrator happened to send.
+    //
+    // `actorUserId` is null -- nobody was signed in, which is the whole point
+    // of this route, and the column is nullable for actors that are not a
+    // person in session.
+    await this.auditSelfServiceSend(credential.profile, delivered);
+  }
+
+  /**
+   * Never lets the audit write change the answer.
+   *
+   * A throw here would 500 *after* the mail had gone, and only ever for an
+   * address that has an account -- which would hand back the enumeration
+   * oracle the rest of this method is built to deny. The row is worth having
+   * and is not worth that, so a failure is logged and the caller still gets
+   * the uniform 204.
+   */
+  private async auditSelfServiceSend(
+    profile: { id: string; memberships: Array<{ organizationId: string }> },
+    delivered: boolean,
+  ) {
+    const organizationId = profile.memberships[0]?.organizationId;
+    if (!organizationId) {
+      // `AuditLog.organizationId` is required and there is no honest value to
+      // put in it. Logged rather than guessed at, because filing one tenant's
+      // event under another is worse than not filing it.
+      this.logger.warn({ event: 'password_reset_audit_skipped_no_membership' });
+      return;
+    }
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          organizationId,
+          actorUserId: null,
+          action: 'PASSWORD_RESET_SENT',
+          entityType: 'UserProfile',
+          entityId: profile.id,
+          // `selfService` is what separates this from the administrator's row,
+          // which carries an actor. Reading the action alone would otherwise
+          // suggest somebody in the office sent it.
+          metadata: { delivered, selfService: true },
+        },
+      });
+    } catch {
+      this.logger.error({ event: 'password_reset_audit_write_failed' });
+    }
   }
 
   /**
@@ -141,10 +234,12 @@ export class PasswordResetService {
     email: string;
     displayName: string;
   }) {
-    // Resolved before the token exists. There is nothing to do with a live
-    // credential whose link cannot be opened, and minting one anyway would
-    // retire the technician's previous, still-working link for nothing.
+    // Both resolved before the token exists. There is nothing to do with a live
+    // credential whose link cannot be opened or cannot be posted, and minting
+    // one anyway would retire the technician's previous, still-working link for
+    // nothing.
     const origin = this.requireResetOrigin();
+    const mailer = this.requireMailer();
 
     const token = randomBytes(32).toString('base64url');
     await this.prisma.$transaction(async (tx) => {
@@ -165,14 +260,14 @@ export class PasswordResetService {
     });
 
     const resetUrl = `${origin}/reset-password?token=${encodeURIComponent(token)}`;
-    const delivery = await this.mailer?.sendPasswordReset({
+    const delivery = await mailer.sendPasswordReset({
       to: account.email,
       displayName: account.displayName,
       resetUrl,
     });
-    if (delivery?.status !== 'SENT')
-      this.logger.warn({ event: 'password_reset_email_failed', status: delivery?.status });
-    return delivery?.status === 'SENT';
+    if (delivery.status !== 'SENT')
+      this.logger.warn({ event: 'password_reset_email_failed', status: delivery.status });
+    return delivery.status === 'SENT';
   }
 
   /**

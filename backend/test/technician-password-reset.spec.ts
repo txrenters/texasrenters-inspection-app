@@ -47,8 +47,15 @@ describe('admin-initiated technician password reset', () => {
     };
   }
 
-  function build(prisma: ReturnType<typeof prismaMock>, mailStatus = 'SENT') {
-    const mailer = { sendPasswordReset: jest.fn().mockResolvedValue({ status: mailStatus }) };
+  function build(
+    prisma: ReturnType<typeof prismaMock>,
+    mailStatus = 'SENT',
+    readiness: 'CONFIGURED' | 'NOT_CONFIGURED' = 'CONFIGURED',
+  ) {
+    const mailer = {
+      readiness: () => ({ status: readiness }),
+      sendPasswordReset: jest.fn().mockResolvedValue({ status: mailStatus }),
+    };
     const service = new PasswordResetService(
       prisma as unknown as PrismaService,
       {} as LocalIdentityProvider,
@@ -210,6 +217,41 @@ describe('admin-initiated technician password reset', () => {
 
     const mailedUrl = mailer.sendPasswordReset.mock.calls[0][0].resetUrl as string;
     expect(mailedUrl.startsWith('https://admin.example.com/reset-password?token=')).toBe(true);
+  });
+
+  it('refuses before minting when the mailer is not configured at all', async () => {
+    // Same shape as the missing-origin refusal, and the same reasoning: a token
+    // that cannot be posted is a live credential nobody asked for, and creating
+    // it retires the technician's previous, still-working link. This is the
+    // global case -- no transport, no credentials -- not a delivery failure for
+    // one recipient, which is still reported as `delivered: false`.
+    const prisma = prismaMock();
+    prisma.userProfile.findFirst.mockResolvedValue(activeTechnician);
+    prisma.authCredential.findUnique.mockResolvedValue({ id: 'cred-1' });
+    const { service, mailer } = build(prisma, 'SENT', 'NOT_CONFIGURED');
+
+    await expect(service.sendForTechnician(user, TECHNICIAN_ID)).rejects.toMatchObject({
+      code: 'PASSWORD_RESET_UNAVAILABLE',
+    });
+    expect(mailer.sendPasswordReset).not.toHaveBeenCalled();
+    expect(prisma.tx.authPasswordResetToken.create).not.toHaveBeenCalled();
+    expect(prisma.tx.authPasswordResetToken.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('still reports a per-recipient delivery failure rather than refusing', async () => {
+    // The distinction the guard above must not swallow. Mail is configured and
+    // this one send failed, so the token exists and the administrator is told
+    // -- exactly the case the console renders as "could not be sent".
+    const prisma = prismaMock();
+    prisma.userProfile.findFirst.mockResolvedValue(activeTechnician);
+    prisma.authCredential.findUnique.mockResolvedValue({ id: 'cred-1' });
+    const { service } = build(prisma, 'FAILED');
+
+    await expect(service.sendForTechnician(user, TECHNICIAN_ID)).resolves.toEqual({
+      email: activeTechnician.email,
+      delivered: false,
+    });
+    expect(prisma.tx.authPasswordResetToken.create).toHaveBeenCalled();
   });
 
   it.each([
