@@ -187,7 +187,13 @@ describe('administrator inspection operations', () => {
     );
   });
 
-  it('requires a completed move-in baseline before an occupied inspection', async () => {
+  it('creates a lifecycle inspection with no move-in on record, unlinked', async () => {
+    /**
+     * This used to refuse. Jobber is the scheduling source of record, and it
+     * books move-outs on properties this app has never seen a move-in for —
+     * ten of them on the live calendar, two happening that day. Refusing does
+     * not stop the visit; it only stops a technician being told about it.
+     */
     const property = {
       id: 'property-1',
       organizationId: user.organizationId,
@@ -205,10 +211,19 @@ describe('administrator inspection operations', () => {
       propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
       propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
-      propertyArea: { findMany: jest.fn() },
-      inspection: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn() },
+      propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
+      },
+      inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+      // Read back on `this.prisma` after the transaction commits.
+      inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', assignments: [] }) },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
     const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
@@ -218,8 +233,11 @@ describe('administrator inspection operations', () => {
         inspectionType: 'OCCUPIED',
         priority: 'STANDARD',
       }),
-    ).rejects.toMatchObject({ code: 'MOVE_IN_BASELINE_REQUIRED', status: 409 });
-    expect(tx.inspection.create).not.toHaveBeenCalled();
+    ).resolves.toBeDefined();
+    expect(tx.inspection.create).toHaveBeenCalled();
+    // Unlinked rather than wrongly linked. ComparisonService re-resolves the
+    // baseline when it runs, so one appearing later is still found.
+    expect(tx.inspection.create.mock.calls[0][0].data.baselineInspectionId).toBeNull();
   });
 
   it('links an occupied inspection to its completed move-in baseline', async () => {
@@ -270,12 +288,14 @@ describe('administrator inspection operations', () => {
     });
   });
 
-  it.each([
-    ['BACK_TO_MARKET', 'OCCUPIED'],
-    ['MOVE_OUT', 'BACK_TO_MARKET'],
-  ] as const)(
-    'requires a completed %s predecessor after the move-in baseline',
-    async (inspectionType, requiredPredecessor) => {
+  it.each(['BACK_TO_MARKET', 'MOVE_OUT'] as const)(
+    'creates a %s without demanding the inspection that precedes it in theory',
+    async (inspectionType) => {
+      /**
+       * Back-to-market used to demand a completed occupied, and move-out a
+       * completed back-to-market. Real calendars do not run in that order, and
+       * a property entering the system mid-tenancy could never satisfy it.
+       */
       const property = {
         id: 'property-1',
         organizationId: user.organizationId,
@@ -293,16 +313,21 @@ describe('administrator inspection operations', () => {
         propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
         propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
         propertywareLease: { findFirst: jest.fn() },
-        propertyArea: { findMany: jest.fn() },
+        propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
         inspection: {
-          findFirst: jest
-            .fn()
-            .mockResolvedValueOnce({ id: 'move-in-1' })
-            .mockResolvedValueOnce(null),
-          create: jest.fn(),
+          // A move-in exists; the predecessor in the chain does not.
+          findFirst: jest.fn().mockResolvedValueOnce({ id: 'move-in-1' }).mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
         },
+        inspectionAssignment: { findFirst: jest.fn().mockResolvedValue(null) },
+        auditLog: { create: jest.fn().mockResolvedValue({}) },
       };
-      const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+      const prisma = {
+        inspection: {
+          findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', assignments: [] }),
+        },
+        $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+      };
       const service = new AdminService(prisma as never, new PresenceService());
 
       await expect(
@@ -312,12 +337,9 @@ describe('administrator inspection operations', () => {
           inspectionType,
           priority: 'STANDARD',
         }),
-      ).rejects.toMatchObject({
-        code: 'INSPECTION_SEQUENCE_REQUIRED',
-        message: expect.stringContaining(requiredPredecessor.toLowerCase().replaceAll('_', ' ')),
-        status: 409,
-      });
-      expect(tx.inspection.create).not.toHaveBeenCalled();
+      ).resolves.toBeDefined();
+      // Still linked to the move-in it can compare against.
+      expect(tx.inspection.create.mock.calls[0][0].data.baselineInspectionId).toBe('move-in-1');
     },
   );
 
