@@ -46,6 +46,27 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
     cell: (row) => row.inspection?.propertywareBuilding?.name ?? 'Open inspection',
   },
   /**
+   * Which kind of visit this is.
+   *
+   * This page shares `useAssignments` with the assignments list, which has
+   * shown the type for a while — so it was already on the wire here and simply
+   * never rendered. Without it a technician's history reads as a list of
+   * addresses: the same property appearing twice could be a move-out and an
+   * HVAC visit, or a duplicate worth investigating, and the row gave no way to
+   * tell which.
+   *
+   * Not hidden at any width, unlike the assignments list, which hides it below
+   * `lg`. That list is filtered and read a page at a time; this table is one
+   * technician's whole history, where the type is what separates two rows for
+   * the same address, so it is the last thing that should drop on a narrow
+   * screen.
+   */
+  {
+    key: 'type',
+    header: 'Type',
+    cell: (row) => <StatusBadge value={row.inspection?.inspectionType ?? EMPTY} />,
+  },
+  /**
    * When the work is due -- which is not what "Assigned" says.
    *
    * `assignedAt` is when somebody handed the job out; `scheduledAt` is the day
