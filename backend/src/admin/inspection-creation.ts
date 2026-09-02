@@ -13,7 +13,7 @@ import {
   AreaScope,
   airConditioningChecklistTemplate,
   areaScopeFor,
-  inspectionRequiresLifecycleBaseline,
+  inspectionComparesToBaseline,
   keywordsFromLabel,
 } from '@texasrenters/shared';
 
@@ -130,74 +130,53 @@ export async function resolveLifecycleBaseline(
     scheduledAt: Date;
   },
 ) {
-  // Only the three visits read against a move-in need one. The taxonomy
-  // lives in the shared contract rather than as literals here, because this
-  // is where it kept being got wrong: every type added since has had to be
-  // remembered in this function, and forgetting means the new type is
-  // refused on every property that has never been through a move-in — with
-  // an error blaming the missing move-in rather than the missing exemption.
-  //
-  // A move-in establishes the baseline rather than comparing to one, and the
-  // off-cycle visits — HVAC, roof, filter delivery, both lockbox calls — sit
-  // outside the tenancy chain entirely and are scheduled against tenanted
-  // and vacant properties alike.
-  if (!inspectionRequiresLifecycleBaseline(input.inspectionType)) return null;
+  /**
+   * The baseline is linked when one exists, and its absence blocks nothing.
+   *
+   * This used to refuse: no completed move-in for the property, unit and lease
+   * meant no occupied, back-to-market or move-out inspection could be created
+   * at all. On the live calendar that rejected ten visits, every one of them a
+   * move-out and two of them happening that day.
+   *
+   * Jobber is the scheduling source of record. If the office booked the visit
+   * the visit is real, and refusing to represent it does not stop it happening
+   * — it only stops a technician being told about it, which is the worst of
+   * both outcomes.
+   *
+   * Nothing is lost by linking optimistically. `ComparisonService` re-resolves
+   * the baseline when it runs, preferring this link but falling back to a scope
+   * search, so a move-out created before its move-in still finds it later. And
+   * `baselineInspectionId` was already nullable and already handled: deleting a
+   * move-in nulls it on every inspection that pointed at it.
+   *
+   * The predecessor chain went with it — back-to-market demanding a completed
+   * occupied, move-out demanding a completed back-to-market. Real calendars do
+   * not run in that order, and a property entering the system mid-tenancy has
+   * no way to ever satisfy it.
+   */
+  if (!inspectionComparesToBaseline(input.inspectionType)) return null;
 
-  const lifecycleScope = {
-    organizationId: input.organizationId,
-    propertywareBuildingId: input.propertyId,
-    propertywareUnitId: input.unitId,
-    propertywareLeaseId: input.leaseId,
-    scheduledAt: { lt: input.scheduledAt },
-    completedAt: { not: null },
-    status: {
-      in: [
-        InspectionStatus.PROCESSING,
-        InspectionStatus.REVIEW_REQUIRED,
-        InspectionStatus.COMPLETED,
-      ],
-    },
-  } satisfies Prisma.InspectionWhereInput;
   const baseline = await tx.inspection.findFirst({
-    where: { ...lifecycleScope, inspectionType: InspectionType.MOVE_IN },
+    where: {
+      organizationId: input.organizationId,
+      propertywareBuildingId: input.propertyId,
+      propertywareUnitId: input.unitId,
+      propertywareLeaseId: input.leaseId,
+      scheduledAt: { lt: input.scheduledAt },
+      completedAt: { not: null },
+      status: {
+        in: [
+          InspectionStatus.PROCESSING,
+          InspectionStatus.REVIEW_REQUIRED,
+          InspectionStatus.COMPLETED,
+        ],
+      },
+      inspectionType: InspectionType.MOVE_IN,
+    },
     orderBy: { scheduledAt: 'desc' },
     select: { id: true },
   });
-  if (!baseline)
-    throw new ApplicationError(
-      409,
-      'MOVE_IN_BASELINE_REQUIRED',
-      'Complete the move-in inspection for this property, unit, and lease before scheduling a later lifecycle inspection.',
-    );
-
-  /**
-   * Partial by nature: only the two visits that follow another one in the
-   * chain have a predecessor at all.
-   *
-   * Typed as partial rather than leaning on the early returns above to narrow
-   * the union — that narrowing was doing real work and vanished the moment
-   * the exemption became a shared rule, and a map that has to be widened for
-   * every new inspection type is a map that will eventually be forgotten.
-   */
-  const predecessors: Partial<Record<InspectionType, InspectionType>> = {
-    [InspectionType.BACK_TO_MARKET]: InspectionType.OCCUPIED,
-    [InspectionType.MOVE_OUT]: InspectionType.BACK_TO_MARKET,
-  };
-  const requiredPredecessor = predecessors[input.inspectionType];
-  if (requiredPredecessor) {
-    const predecessor = await tx.inspection.findFirst({
-      where: { ...lifecycleScope, inspectionType: requiredPredecessor },
-      orderBy: { scheduledAt: 'desc' },
-      select: { id: true },
-    });
-    if (!predecessor)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_SEQUENCE_REQUIRED',
-        `Complete the ${requiredPredecessor.toLowerCase().replaceAll('_', ' ')} inspection before scheduling this inspection.`,
-      );
-  }
-  return baseline.id;
+  return baseline?.id ?? null;
 }
 
 export function propertySnapshot(

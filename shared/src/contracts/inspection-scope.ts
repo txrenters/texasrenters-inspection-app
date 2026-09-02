@@ -109,23 +109,24 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 }
 
 /**
- * Whether this visit has to be preceded by a completed move-in.
+ * Nothing requires a completed move-in any more.
  *
- * Occupied, back-to-market and move-out are all read against the condition the
- * move-in recorded, so scheduling one without that baseline produces a report
- * with nothing to compare to. Everything else stands on its own: a move-in is
- * the baseline, and the off-cycle visits never look at one.
+ * `inspectionRequiresLifecycleBaseline` used to live here and was the only
+ * caller of `inspectionComparesToBaseline`, which made "compares to a baseline"
+ * and "is refused without one" the same answer. They are not the same question,
+ * and conflating them meant Jobber scheduling a move-out on a property this app
+ * had never seen a move-in for produced no inspection at all — ten of them, two
+ * of which were happening that day.
  *
- * Named rather than left as a pair of literals in the scheduler, because that
- * is where it kept being got wrong — every type added since has had to be
- * remembered there, and forgetting means the new type is refused on any
- * property that has never had a move-in.
+ * Jobber is the scheduling source of record. If the office booked the visit,
+ * the visit is real, and refusing to represent it does not stop it happening —
+ * it only stops a technician being told about it.
+ *
+ * `inspectionComparesToBaseline` remains, and still decides which visits are
+ * read against a move-in. The comparison resolves its own baseline when it runs
+ * and reports its absence when there is none, which is where a missing move-in
+ * belongs: in the report, not in the scheduler.
  */
-export function inspectionRequiresLifecycleBaseline(
-  inspectionType: string | null | undefined,
-): boolean {
-  return inspectionComparesToBaseline(inspectionType);
-}
 
 /**
  * Which set of checklist items this visit asks about an area.
