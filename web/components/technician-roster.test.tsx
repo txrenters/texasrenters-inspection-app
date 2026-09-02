@@ -1,6 +1,6 @@
 import type { AssignedStop, TechnicianRoute } from '@texasrenters/shared';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { TechnicianRoster, type RosterEntry } from './technician-roster';
 
@@ -215,5 +215,77 @@ describe('a route the planner produced', () => {
 
     const text = container.textContent ?? '';
     expect(text.indexOf('Mariposa')).toBeLessThan(text.indexOf('Mist Ln'));
+  });
+});
+
+/**
+ * Taking the map to one stop.
+ *
+ * The panel listed the day as plain text, so a dispatcher reading "21538 Duke
+ * Alexander" had no way to find it among five hundred and forty-eight property
+ * pins. Selecting a stop moves the map to it -- while leaving the technician
+ * selected, which is what keeps their round highlighted and their route drawn.
+ */
+describe('choosing a stop', () => {
+  it('reports the building, so the map can move to it', () => {
+    const onSelectStop = vi.fn();
+    render(
+      <TechnicianRoster
+        entries={entries([STOP])}
+        onSelect={() => {}}
+        onSelectStop={onSelectStop}
+        selectedId="tech-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /10342 Mist Ln/ }));
+    expect(onSelectStop).toHaveBeenCalledWith('building-1');
+  });
+
+  it('clears the focus when the shown stop is chosen again', () => {
+    // The way out is the same control as the way in, matching how selecting a
+    // technician already works.
+    const onSelectStop = vi.fn();
+    render(
+      <TechnicianRoster
+        entries={entries([STOP])}
+        onSelect={() => {}}
+        onSelectStop={onSelectStop}
+        selectedId="tech-1"
+        selectedStopBuildingId="building-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /10342 Mist Ln/ }));
+    expect(onSelectStop).toHaveBeenCalledWith(null);
+  });
+
+  it('leaves a stop with no building unpressable', () => {
+    // It says "not on the map" already. Making it look like a control and then
+    // doing nothing is worse than leaving it plain.
+    const onSelectStop = vi.fn();
+    render(
+      <TechnicianRoster
+        entries={entries([{ ...STOP, buildingId: null }])}
+        onSelect={() => {}}
+        onSelectStop={onSelectStop}
+        selectedId="tech-1"
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /10342 Mist Ln/ })).toBeNull();
+    expect(screen.getByText(/not on the map/)).toBeTruthy();
+  });
+
+  it('still lists the stops when no handler is supplied', () => {
+    // The prop is optional; the panel is used without it in tests and could be
+    // elsewhere, and losing the day's work would be the worse failure.
+    render(<TechnicianRoster entries={entries([STOP])} onSelect={() => {}} selectedId="tech-1" />);
+    expect(screen.getByText('10342 Mist Ln')).toBeTruthy();
+  });
+
+  it('shows the inspection type for each stop', () => {
+    render(<TechnicianRoster entries={entries([STOP])} onSelect={() => {}} selectedId="tech-1" />);
+    expect(screen.getByText(/Move in/)).toBeTruthy();
   });
 });
