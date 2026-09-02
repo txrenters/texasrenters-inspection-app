@@ -119,9 +119,24 @@ export function resolveVisitType(
  * precisely when a property is first walked, so refusing it left ten of them
  * unimportable for a plan nobody had drawn and nobody was going to draw first.
  *
- * MOVE_OUT is still excluded, and now for a sharper reason than "the lifecycle
- * chain": it is compared to its move-in area by area. A layout captured on the
- * move-out visit itself would be a comparison against nothing.
+ * MOVE_OUT, OCCUPIED and BACK_TO_MARKET were excluded on the argument that all
+ * three are read against a move-in area by area, so a layout captured on the
+ * visit itself compares against nothing. That argument is sound and it is not
+ * what was happening.
+ *
+ * On the live calendar these were ten move-outs at properties with **no
+ * approved area at all** and **no move-in on record** — the comparison had
+ * nothing to compare against either way. The real choice was not "compared
+ * inspection versus surveyed inspection", it was "surveyed inspection versus
+ * no inspection", and the visits were happening regardless. Two of them that
+ * day.
+ *
+ * What the technician captures is DRAFT against the property, and an
+ * administrator still approves what becomes the permanent layout, so a
+ * surveyed move-out cannot silently rewrite a layout a real move-in
+ * established. Where a baseline does exist it is still linked and still
+ * compared; `ComparisonService` reports its absence rather than failing when
+ * it does not.
  *
  * Filter delivery used to be here. It is no longer imported at all — see
  * TYPES_NOT_SYNCED — so an entry for it would be unreachable.
@@ -132,6 +147,9 @@ export function resolveVisitType(
 const TYPES_ALLOWING_TECHNICIAN_CAPTURE: ReadonlySet<InspectionType> = new Set([
   InspectionType.HVAC,
   InspectionType.MOVE_IN,
+  InspectionType.MOVE_OUT,
+  InspectionType.OCCUPIED,
+  InspectionType.BACK_TO_MARKET,
 ]);
 
 export function allowsTechnicianCapture(inspectionType: InspectionType): boolean {
