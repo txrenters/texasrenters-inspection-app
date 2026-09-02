@@ -17,7 +17,7 @@ import { CenteredState } from '@/components/centered-state';
 import { Button } from '@/components/ui/button';
 
 import { api } from './api';
-import { adminGuardRedirect, sessionRequiresPasswordChange } from './auth-session';
+import { adminGuardRedirect, consoleAccessError, sessionRequiresPasswordChange } from './auth-session';
 import { getSession, onSessionChange, signOut as endSession, type AppSession } from './session';
 
 interface AuthState {
@@ -64,13 +64,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const profileData = await api<AdminProfile>('/api/v1/admin/profile');
       if (requestId !== refreshRequestId.current) return { profile: null, error: null };
       if (!profileData.isActive) throw new Error('Your administrator account is disabled.');
-      // SYSTEM_ADMIN is the bootstrap account. Every other web user needs at
-      // least one effective permission from an administrator-created role.
-      const authorized =
-        profileData.memberships.some(({ role }) => role === 'SYSTEM_ADMIN') ||
-        profileData.permissions.length > 0;
-      if (!authorized)
-        throw new Error('This account is not authorized for the administrator application.');
+      const refusal = consoleAccessError(profileData);
+      if (refusal) throw new Error(refusal);
       setProfile(profileData);
       return { profile: profileData, error: null };
     } catch (reason) {
