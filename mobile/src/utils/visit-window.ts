@@ -31,6 +31,26 @@ export function formatVisitWindow(inspection: Scheduled): string | null {
 }
 
 /**
+ * The day a visit is booked for, as the day it is.
+ *
+ * `scheduledAt` is a date column serialised as midnight UTC, so localising it
+ * moves the day backwards anywhere west of Greenwich — which is every property
+ * this app serves. A visit booked for the 3rd read as the 2nd on a technician's
+ * phone in Texas, which is the one reader who has to be somewhere on the right
+ * morning.
+ *
+ * `timeZone: 'UTC'` is the whole fix: it makes the day displayed the day
+ * stored. Deliberately not `toLocaleDateString` without options, which is what
+ * both call sites used.
+ */
+export function formatVisitDay(
+  scheduledAt: string,
+  options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' },
+): string {
+  return new Date(scheduledAt).toLocaleDateString('en-US', { ...options, timeZone: 'UTC' });
+}
+
+/**
  * When the visit actually starts, for counting down to.
  *
  * Falls back to `scheduledAt` so a day-booked inspection keeps behaving exactly

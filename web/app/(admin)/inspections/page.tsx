@@ -22,7 +22,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { dayEnd, dayStart, rangeLabel } from '@/lib/date-range';
-import { formatDateTime, humanize } from '@/lib/format';
+import { formatScheduledDate, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
 import { useInspections } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -108,7 +108,7 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     key: 'scheduled',
     header: 'Scheduled',
     hideBelow: 'sm',
-    cell: (row) => formatDateTime(row.scheduledAt),
+    cell: (row) => formatScheduledDate(row.scheduledAt),
   },
   {
     key: 'priority',

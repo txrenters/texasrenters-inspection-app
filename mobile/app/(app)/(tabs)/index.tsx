@@ -22,7 +22,7 @@ import { DayRouteSummary } from '@/src/components/DayRouteSummary';
 import { hasNeverBeenAssigned } from '@/src/utils/home-state';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
-import { formatVisitDateAndWindow } from '@/src/utils/visit-window';
+import { formatVisitDateAndWindow, formatVisitDay } from '@/src/utils/visit-window';
 import { greetingFor } from '@/src/utils/greeting';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -39,7 +39,7 @@ registerIcons(CheckCircle2Icon, ChevronRightIcon, ClipboardListIcon, MapPinIcon,
  * shown when Jobber supplied one, and otherwise the row says only the day.
  */
 function inspectionDate(inspection: Inspection, includeTime = false) {
-  const date = new Date(inspection.scheduledAt).toLocaleDateString('en-US', {
+  const date = formatVisitDay(inspection.scheduledAt, {
     weekday: includeTime ? 'short' : undefined,
     month: 'short',
     day: 'numeric',

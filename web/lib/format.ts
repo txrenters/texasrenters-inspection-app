@@ -8,6 +8,16 @@
 
 const DATE_TIME = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 const DATE_ONLY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' });
+/**
+ * For a value that is a *day*, not an instant.
+ *
+ * `Inspection.scheduledAt` is a Postgres `date`, serialised as midnight UTC.
+ * Rendering it through the reader's time zone moves it: `2026-09-03T00:00:00Z`
+ * reads as September 3rd in Manila and **September 2nd in Texas**, which is
+ * every office this system serves. Pinning the formatter to UTC makes the day
+ * displayed the day stored, for everyone.
+ */
+const SCHEDULED_DAY = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' });
 const CURRENCY = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
 /** The em dash, used everywhere a value is genuinely absent. */
@@ -23,6 +33,21 @@ export function formatDate(value?: string | Date | null) {
   if (!value) return EMPTY;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? EMPTY : DATE_ONLY.format(date);
+}
+
+/**
+ * A scheduled day, shown as the day it is.
+ *
+ * Use this for `scheduledAt` and never `formatDate` or `formatDateTime`. Those
+ * localise, which is correct for an instant and wrong for a date — and
+ * `formatDateTime` additionally printed a time that does not exist, so every
+ * inspection in the list claimed to be at 8:00 AM because that is what midnight
+ * UTC looks like from Manila.
+ */
+export function formatScheduledDate(value?: string | Date | null) {
+  if (!value) return EMPTY;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? EMPTY : SCHEDULED_DAY.format(date);
 }
 
 export function formatCurrency(value?: number | string | null) {

@@ -41,7 +41,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { usePermissions } from '@/lib/auth';
-import { EMPTY, formatDate, formatDateTime, humanize } from '@/lib/format';
+import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
 import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 import {
   useAssignments,
@@ -153,7 +153,7 @@ function InspectionDetail() {
     item.inspectionType === 'MOVE_IN'
       ? 'This inspection establishes the property baseline'
       : item.baselineInspection
-        ? `Move-in inspection · ${formatDate(item.baselineInspection.scheduledAt)}`
+        ? `Move-in inspection · ${formatScheduledDate(item.baselineInspection.scheduledAt)}`
         : 'No move-in baseline is linked';
   /**
    * Deletion is deliberately *not* gated on `finalized`, unlike everything else
@@ -250,7 +250,7 @@ function InspectionDetail() {
             <StatusBadge value={item.priority} />
           </>
         }
-        description={`${item.propertywareUnit?.name ?? 'Entire property'} · ${formatDate(item.scheduledAt)}`}
+        description={`${item.propertywareUnit?.name ?? 'Entire property'} · ${formatScheduledDate(item.scheduledAt)}`}
         title={item.propertywareBuilding?.name ?? 'Inspection'}
       />
 
@@ -328,7 +328,7 @@ function InspectionDetail() {
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">Scheduled</dt>
-            <dd className="mt-0.5 text-sm font-medium">{formatDate(item.scheduledAt)}</dd>
+            <dd className="mt-0.5 text-sm font-medium">{formatScheduledDate(item.scheduledAt)}</dd>
           </div>
           <div>
             <dt className="text-muted-foreground text-xs">Property scope</dt>
