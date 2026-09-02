@@ -392,3 +392,68 @@ describe('comparison review + override (spec §12)', () => {
     );
   });
 });
+
+/**
+ * A move-out report is compared against the **latest** move-in for the
+ * property, stated as a rule by the office on 2026-09-02.
+ *
+ * `resolveBaseline` used to prefer `baselineInspectionId` — the link written
+ * when the move-out was created, which records what was current *then*. A
+ * move-in that happened after the move-out was scheduled but before it was
+ * carried out therefore lost to an older one that was still in scope. A new
+ * tenancy usually hid it, because the lease is part of the scope and a stale
+ * link fails it — but a Jobber-created inspection often carries no lease, and
+ * nulls match nulls.
+ */
+describe('which move-in a move-out is compared against', () => {
+  const moveOut = {
+    organizationId: user.organizationId,
+    propertywareBuildingId: 'building-1',
+    propertywareUnitId: null,
+    propertywareLeaseId: null,
+    baselineInspectionId: 'older-move-in',
+    scheduledAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+
+  const resolve = (prisma: unknown) =>
+    (
+      new ComparisonService(prisma as never) as unknown as {
+        resolveBaseline: (m: typeof moveOut) => Promise<{ id: string } | null>;
+      }
+    ).resolveBaseline(moveOut);
+
+  it('takes the newest one, not the one linked when it was created', async () => {
+    const findFirst = jest.fn().mockResolvedValue({ id: 'newer-move-in' });
+    await expect(resolve({ inspection: { findFirst } })).resolves.toEqual({ id: 'newer-move-in' });
+    // One query, not two: the linked lookup is gone entirely.
+    expect(findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it('orders by scheduled date descending, which is what "latest" means here', async () => {
+    const findFirst = jest.fn().mockResolvedValue({ id: 'newer-move-in' });
+    await resolve({ inspection: { findFirst } });
+    const call = findFirst.mock.calls[0][0] as {
+      orderBy: { scheduledAt: string };
+      where: Record<string, unknown>;
+    };
+    expect(call.orderBy).toEqual({ scheduledAt: 'desc' });
+    // Never a move-in dated after the move-out. The old linked lookup applied
+    // no date filter at all and could return exactly that.
+    expect(call.where.scheduledAt).toEqual({ lt: moveOut.scheduledAt });
+  });
+
+  it('keeps the lease in scope, so a previous tenancy is never borrowed', async () => {
+    // Dropping it is how a new tenant gets charged for the last one's damage.
+    const findFirst = jest.fn().mockResolvedValue(null);
+    await resolve({ inspection: { findFirst } });
+    const where = findFirst.mock.calls[0][0].where as Record<string, unknown>;
+    expect(where.propertywareLeaseId).toBe(moveOut.propertywareLeaseId);
+    expect(where.propertywareBuildingId).toBe('building-1');
+    expect(where.propertywareUnitId).toBeNull();
+  });
+
+  it('answers nothing rather than reaching for an unrelated move-in', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    await expect(resolve({ inspection: { findFirst } })).resolves.toBeNull();
+  });
+});
