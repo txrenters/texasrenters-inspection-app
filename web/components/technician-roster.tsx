@@ -122,11 +122,22 @@ function Dot({ position }: { position: TechnicianPosition | null }) {
 export function TechnicianRoster({
   entries,
   onSelect,
+  onSelectStop,
   route,
   selectedId,
+  selectedStopBuildingId = null,
 }: {
   entries: RosterEntry[];
   onSelect: (technicianId: string | null) => void;
+  /**
+   * Take the map to one stop, without disturbing the technician selection.
+   *
+   * Separate from `onSelect` because the two mean different things: picking a
+   * person frames their whole round, picking a stop moves to one address
+   * inside it. The round stays selected either way, so the highlighting and
+   * the drawn route survive the click.
+   */
+  onSelectStop?: (buildingId: string | null) => void;
   /**
    * The selected technician's drive, once it has been worked out.
    *
@@ -137,6 +148,8 @@ export function TechnicianRoster({
    */
   route?: TechnicianRoute | null;
   selectedId: string | null;
+  /** The stop the map is currently showing, so the list can say which. */
+  selectedStopBuildingId?: string | null;
 }) {
   // Built once per render rather than per stop: the same answer for every row,
   // and rebuilding it inside the list would make it O(stops x refusals).
@@ -221,6 +234,18 @@ export function TechnicianRoster({
                       {orderStops(entry.stops, route).map((stop, index) => {
                         const leg = planned ? route?.legs[index] : undefined;
                         const offNetwork = refused.has(stop.inspectionId);
+                        // Only a stop with a building can be shown on a map, so
+                        // only that one becomes a control. The rest already say
+                        // "not on the map"; making them look pressable and then
+                        // doing nothing would be worse than leaving them plain.
+                        const mappable = Boolean(stop.buildingId && onSelectStop);
+                        const focused = Boolean(
+                          stop.buildingId && stop.buildingId === selectedStopBuildingId,
+                        );
+                        // One element either way. Swapping the tag rather than
+                        // nesting a button keeps the row's layout identical
+                        // between the two cases.
+                        const Row = mappable ? 'button' : 'span';
                         return (
                           <li className="flex gap-2 text-xs leading-snug" key={stop.inspectionId}>
                             {/* Numbered only when there is a route to number
@@ -231,10 +256,35 @@ export function TechnicianRoster({
                                 {index + 1}
                               </span>
                             ) : null}
-                            <span className="min-w-0 flex-1">
-                              <span className="block font-medium">{stop.propertyName}</span>
+                            <Row
+                              {...(mappable
+                                ? {
+                                    'aria-pressed': focused,
+                                    onClick: () =>
+                                      onSelectStop?.(focused ? null : (stop.buildingId ?? null)),
+                                    type: 'button' as const,
+                                  }
+                                : {})}
+                              className={`min-w-0 flex-1 text-left ${
+                                mappable
+                                  ? 'hover:text-foreground focus-visible:ring-ring cursor-pointer rounded-sm outline-none focus-visible:ring-2'
+                                  : ''
+                              }`}
+                            >
+                              <span
+                                className={`block font-medium ${focused ? 'text-map-technician' : ''}`}
+                              >
+                                {stop.propertyName}
+                              </span>
                               <span className="text-muted-foreground block">
-                                {humanize(stop.inspectionType)} · {humanize(stop.status)}
+                                {/* The type carries more weight than the status
+                                    it sits beside: it is what separates two
+                                    visits to the same address, and at the same
+                                    colour the pair read as one grey blob. */}
+                                <span className="text-foreground">
+                                  {humanize(stop.inspectionType)}
+                                </span>{' '}
+                                · {humanize(stop.status)}
                                 {/* Said rather than left as a pin that never
                                     highlights: the technician still has to go,
                                     the address simply is not on the map. */}
@@ -245,7 +295,7 @@ export function TechnicianRoster({
                                     means the address geocoded badly. */}
                                 {offNetwork ? ' · off the road network' : null}
                               </span>
-                            </span>
+                            </Row>
                             {leg ? (
                               <span className="text-muted-foreground shrink-0 tabular-nums">
                                 {formatDuration(leg.durationSeconds)}

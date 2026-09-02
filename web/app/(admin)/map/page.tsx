@@ -112,12 +112,32 @@ export default function TechnicianMapPage() {
   // cadence is a cost with no reader.
   const selectTechnician = useCallback((technicianId: string | null) => {
     setSelectedId(technicianId);
-    if (technicianId) setSelectedPropertyId(null);
+    // Cleared whichever way the selection went. Deselecting used to leave a
+    // focused stop behind, pointing at a property whose list had just
+    // collapsed.
+    setSelectedPropertyId(null);
   }, []);
 
   const selectProperty = useCallback((propertyId: string | null) => {
     setSelectedPropertyId(propertyId);
     if (propertyId) setSelectedId(null);
+  }, []);
+
+  /**
+   * A stop inside the selected technician's day.
+   *
+   * Deliberately *not* `selectProperty`, which clears the technician — that
+   * would collapse the very list the stop was clicked in. The technician stays
+   * selected, so their round stays highlighted and their route stays drawn
+   * while the map moves to one address on it.
+   *
+   * Safe because the two focus effects key on different things: `FocusSelected`
+   * depends on the technician id alone, so it does not re-run when only the
+   * property changes. Their flight already happened when the name was clicked.
+   * Nothing fights the map for the view.
+   */
+  const selectStop = useCallback((buildingId: string | null) => {
+    setSelectedPropertyId(buildingId);
   }, []);
 
   // Only for the selected technician. Planning a route calls OSRM once per
@@ -228,8 +248,10 @@ export default function TechnicianMapPage() {
                 <TechnicianRoster
                   entries={roster}
                   onSelect={selectTechnician}
+                  onSelectStop={selectStop}
                   route={selectedId ? (route.data ?? null) : null}
                   selectedId={selectedId}
+                  selectedStopBuildingId={selectedPropertyId}
                 />
               </div>
                 </TabsContent>
