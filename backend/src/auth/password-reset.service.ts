@@ -50,6 +50,49 @@ export class PasswordResetService {
   }
 
   /**
+   * The console origin the emailed link points at, or null if it is unusable.
+   *
+   * `WEB_APP_ORIGIN` used to be interpolated straight into the URL with
+   * `?? ''`, so an unset value produced `/reset-password?token=...` — a
+   * relative path, in an email, which no mail client can resolve. Nothing
+   * noticed: the token was minted, the mail reported `SENT`, the endpoint
+   * answered 204, and the only visible symptom was a technician who never got
+   * back in. Every other consumer of this variable in the codebase falls back
+   * to a concrete origin; this one silently fell back to nothing.
+   */
+  private resetOrigin() {
+    const configured = process.env.WEB_APP_ORIGIN?.trim();
+    if (!configured) return null;
+    try {
+      const url = new URL(configured);
+      // A `mailto:` or a bare hostname would parse or throw in ways that still
+      // produce an unopenable link, so the scheme is checked rather than assumed.
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+      return configured.replace(/\/$/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The same origin, refusing rather than minting a link nobody can open.
+   *
+   * A dead link is worse than an error: it sends somebody who is already locked
+   * out to go and wait for mail that will never help them, and it tells the
+   * administrator who clicked "send" that delivery succeeded.
+   */
+  private requireResetOrigin() {
+    const origin = this.resetOrigin();
+    if (origin) return origin;
+    this.logger.error({ event: 'password_reset_origin_not_configured' });
+    throw new ApplicationError(
+      503,
+      'PASSWORD_RESET_UNAVAILABLE',
+      'Password reset is unavailable right now. Ask the office to set your password for you.',
+    );
+  }
+
+  /**
    * Mint a reset link and mail it.
    *
    * Resolves the same way whatever the address turns out to be. Telling an
@@ -58,6 +101,12 @@ export class PasswordResetService {
    * answered identically to a hit.
    */
   async request(email: string) {
+    // Checked before the lookup, not inside `issueAndDeliver`. Refusing only
+    // once an account is found would answer 503 for a real address and 204 for
+    // an invented one — turning a misconfigured deployment into exactly the
+    // account-enumeration oracle the uniform 204 exists to prevent.
+    this.requireResetOrigin();
+
     const normalized = email.trim().toLowerCase();
     const credential = await this.prisma.authCredential.findUnique({
       where: { email: normalized },
@@ -92,6 +141,11 @@ export class PasswordResetService {
     email: string;
     displayName: string;
   }) {
+    // Resolved before the token exists. There is nothing to do with a live
+    // credential whose link cannot be opened, and minting one anyway would
+    // retire the technician's previous, still-working link for nothing.
+    const origin = this.requireResetOrigin();
+
     const token = randomBytes(32).toString('base64url');
     await this.prisma.$transaction(async (tx) => {
       // Outstanding links for this account are retired first. Otherwise every
@@ -110,7 +164,6 @@ export class PasswordResetService {
       });
     });
 
-    const origin = (process.env.WEB_APP_ORIGIN ?? '').replace(/\/$/, '');
     const resetUrl = `${origin}/reset-password?token=${encodeURIComponent(token)}`;
     const delivery = await this.mailer?.sendPasswordReset({
       to: account.email,

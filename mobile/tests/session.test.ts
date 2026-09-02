@@ -12,6 +12,7 @@ jest.mock('../src/config/environment', () => ({
 import {
   getSession,
   onSessionChange,
+  requestPasswordReset,
   resetSessionCache,
   signIn,
   signOut,
@@ -145,6 +146,53 @@ describe('mobile session', () => {
     await sessionStorage.setItem('texasrenters.session', '{not json');
     resetSessionCache();
     expect(await getSession()).toBeNull();
+  });
+
+  describe('reset link request', () => {
+    it('resolves for any address the API accepts', async () => {
+      // 204 whether or not the address has an account -- the API refuses to say,
+      // and a screen that reported "no such account" would give away what the
+      // endpoint withholds.
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 204, json: async () => ({}) });
+      await expect(requestPasswordReset('tech@example.com')).resolves.toBeUndefined();
+    });
+
+    it('reports a 404 instead of claiming the link was sent', async () => {
+      // This endpoint answers 204 for every address, so a 404 means the request
+      // never reached it: a stale API address in the build, or a tunnel that is
+      // down. It used to be swallowed as success, which put "a reset link is on
+      // its way" in front of the one person who could not afford to wait for it.
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => {
+          throw new Error('not json');
+        },
+      });
+
+      await expect(requestPasswordReset('tech@example.com')).rejects.toThrow('HTTP 404');
+    });
+
+    it('carries the API message when the server explains itself', async () => {
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ message: 'Password reset is unavailable right now.' }),
+      });
+
+      await expect(requestPasswordReset('tech@example.com')).rejects.toThrow(
+        'Password reset is unavailable right now.',
+      );
+    });
+
+    it('names the host it could not reach', async () => {
+      // "Try again in a moment" is the wrong advice for an app pointed at a
+      // server it will never reach; the host is the one detail that lets the
+      // office say why.
+      fetchMock.mockRejectedValueOnce(new TypeError('Network request failed'));
+
+      await expect(requestPasswordReset('tech@example.com')).rejects.toThrow('api.test.invalid');
+    });
   });
 
   it('carries the password-change flag off the token', async () => {
