@@ -310,8 +310,15 @@ export class ComparisonService {
     baselineInspectionId: string | null;
     scheduledAt: Date;
   }) {
-    // Same building/unit/lease + a MOVE_IN. Nulls match nulls, so unit-less
-    // inspections only match unit-less baselines — never unrelated ones.
+    /**
+     * Same building, unit and lease, and a MOVE_IN. Nulls match nulls, so a
+     * unit-less inspection only matches a unit-less baseline, never an
+     * unrelated one.
+     *
+     * The lease stays in scope deliberately. Dropping it would let a move-out
+     * be compared against the *previous* tenancy's move-in, which is how a new
+     * tenant gets charged for the last one's damage.
+     */
     const scope = {
       organizationId: moveOut.organizationId,
       propertywareBuildingId: moveOut.propertywareBuildingId,
@@ -320,15 +327,27 @@ export class ComparisonService {
       inspectionType: InspectionType.MOVE_IN,
     } satisfies Prisma.InspectionWhereInput;
 
-    // Prefer the baseline linked at creation, but only if it still matches scope.
-    if (moveOut.baselineInspectionId) {
-      const linked = await this.prisma.inspection.findFirst({
-        where: { id: moveOut.baselineInspectionId, ...scope },
-        select: { id: true },
-      });
-      if (linked) return linked;
-    }
-    // Otherwise the latest submitted MOVE_IN before this move-out in the scope.
+    /**
+     * Always the latest qualifying move-in, never the one linked at creation.
+     *
+     * `baselineInspectionId` is written when the move-out is created and
+     * records what was current *then*. It used to be preferred here, which
+     * quietly broke the rule this report follows: a move-in that happened after
+     * the move-out was scheduled but before it was carried out lost to an older
+     * one that was still technically in scope.
+     *
+     * A new tenancy usually hid that, because the lease is part of the scope
+     * and a stale link fails it — but a Jobber-created inspection often carries
+     * no lease at all, and nulls match nulls. On exactly those, the older
+     * move-in won.
+     *
+     * Preferring the link also skipped both filters below: that lookup checked
+     * neither `scheduledAt` nor status, so it could return a move-in dated
+     * after this move-out, or one that never reached a reviewable state.
+     *
+     * The link is still written and still useful as a record of intent. It is
+     * simply not what decides the comparison.
+     */
     return this.prisma.inspection.findFirst({
       where: {
         ...scope,
