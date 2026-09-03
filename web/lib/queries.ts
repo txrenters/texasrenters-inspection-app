@@ -661,6 +661,8 @@ export interface ImportJob {
   provider: string | null;
   errorCode: string | null;
   inspectionId: string | null;
+  /** Set once the evidence has actually been written, not merely read. */
+  committedAt: string | null;
   summary: {
     inspector: string | null;
     template: string | null;
@@ -696,10 +698,15 @@ export const useInspectionImportJob = (jobId: string | null) =>
     enabled: Boolean(jobId),
     queryFn: ({ signal }) =>
       api<ImportJob>(`/api/v1/admin/inspection-imports/${jobId}`, { signal }),
-    refetchInterval: (query) =>
-      query.state.data?.status === 'RUNNING' || query.state.data?.status === 'PENDING'
-        ? 2_000
-        : false,
+    refetchInterval: (query) => {
+      const job = query.state.data;
+      if (!job) return false;
+      // Still reading.
+      if (job.status === 'RUNNING' || job.status === 'PENDING') return 2_000;
+      // Read, and now writing: no `committedAt` yet and nothing has gone wrong.
+      if (job.status === 'COMPLETED' && !job.committedAt && !job.errorCode) return 2_000;
+      return false;
+    },
   });
 
 export const useSyncRuns = () =>
@@ -1554,9 +1561,17 @@ export function useAdminMutations() {
     }),
 
     /** Write the read report in, once somebody has looked at what it found. */
+    /**
+     * Ask for the read report to be written in.
+     *
+     * Resolves as soon as the work has *started*, not when it has finished:
+     * writing 376 photographs takes minutes and the server's socket timeout is
+     * thirty seconds. The job carries the outcome, and the same poll that
+     * followed the reading follows the writing.
+     */
     commitInspectionImport: useMutation({
       mutationFn: (jobId: string) =>
-        api<{ inspectionId: string; areas: number; photos: number }>(
+        api<{ jobId: string; committing: boolean }>(
           `/api/v1/admin/inspection-imports/${jobId}/commit`,
           { method: 'POST' },
         ),

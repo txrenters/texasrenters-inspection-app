@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { InspectionReportImport } from './inspection-report-import';
@@ -56,7 +56,7 @@ function choose(file: File) {
 
 beforeEach(() => {
   startImport.mockReset().mockResolvedValue({ jobId: 'job-1', status: 'RUNNING' });
-  commitImport.mockReset().mockResolvedValue({ inspectionId: 'inspection-1', areas: 12, photos: 376 });
+  commitImport.mockReset().mockResolvedValue({ jobId: 'job-1', committing: true });
   job = undefined;
 });
 
@@ -65,7 +65,7 @@ describe('importing an inspection report', () => {
     // The opposite of what people expect of an upload, so it is said plainly.
     // Warning about work that is not at risk is how people learn to ignore
     // warnings that matter.
-    job = { id: 'job-1', status: 'RUNNING', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, summary: null };
+    job = { id: 'job-1', status: 'RUNNING', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: null };
     render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
@@ -103,6 +103,7 @@ describe('importing an inspection report', () => {
       provider: null,
       errorCode: null,
       inspectionId: null,
+      committedAt: null,
       summary: summary({
         needsReview: {
           lowConfidenceLabels: [
@@ -128,7 +129,7 @@ describe('importing an inspection report', () => {
   it('says when a model did the reading rather than the parser', async () => {
     // An imported inspection is evidence, and whether it was measured or
     // inferred is part of it.
-    job = { id: 'job-1', status: 'COMPLETED', method: 'AI', provider: 'ANTHROPIC', errorCode: null, inspectionId: null, summary: summary() };
+    job = { id: 'job-1', status: 'COMPLETED', method: 'AI', provider: 'ANTHROPIC', errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
     render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
@@ -136,7 +137,7 @@ describe('importing an inspection report', () => {
   });
 
   it('does not import until somebody presses the button', async () => {
-    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, summary: summary() };
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
     render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
@@ -147,6 +148,39 @@ describe('importing an inspection report', () => {
     await waitFor(() => expect(commitImport).toHaveBeenCalledWith('job-1'));
   });
 
+  it('keeps showing progress while the server is still writing', async () => {
+    // The commit returns when the write *starts*: 376 photographs take longer
+    // than the thirty-second socket timeout, which is what produced a 502 the
+    // browser reported as a CORS failure. Resolving is not finishing, and the
+    // screen must not claim otherwise.
+    job = {
+      id: 'job-1',
+      status: 'COMPLETED',
+      method: 'DETERMINISTIC',
+      provider: null,
+      errorCode: null,
+      inspectionId: 'inspection-1',
+      committedAt: null,
+      summary: summary(),
+    };
+    render(<InspectionReportImport inspectionId="inspection-1" />);
+    choose(pdf());
+
+    const button = await screen.findByRole('button', { name: /import as a move-in inspection/i });
+    // Wrapped: `commit` sets its flag in an async continuation, which the click
+    // alone does not flush.
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(commitImport).toHaveBeenCalledWith('job-1');
+    // Still writing: the job has no committedAt yet, so the screen must not
+    // claim the import is done just because the request came back.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /importing/i })).toBeTruthy(),
+    );
+  });
+
   it('explains a failure in terms somebody can act on', async () => {
     job = {
       id: 'job-1',
@@ -155,6 +189,7 @@ describe('importing an inspection report', () => {
       provider: null,
       errorCode: 'REPORT_NOT_RECOGNISED_NO_AI',
       inspectionId: null,
+      committedAt: null,
       summary: null,
     };
     render(<InspectionReportImport inspectionId="inspection-1" />);
