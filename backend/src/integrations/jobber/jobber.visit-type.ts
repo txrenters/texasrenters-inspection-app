@@ -176,6 +176,41 @@ const TYPES_NOT_SYNCED: ReadonlySet<InspectionType> = new Set([
   InspectionType.AC_FILTER_DELIVERY,
 ]);
 
+/**
+ * Phrases that mean a filter delivery is also a walkthrough.
+ *
+ * This office books both as one visit: the title is "Q3 2026 Tenant Benefit
+ * Package" and the details read "Filter Change: 18x36x1 + Pest Control +
+ * Occupied Inspection". The title alone types it a delivery and it is dropped,
+ * so 73 real occupied inspections were never imported and none has ever
+ * existed in this system.
+ */
+const OCCUPIED_IN_DETAILS = ['occupied inspection', 'occupied insp'];
+
+/**
+ * A filter delivery that is also an occupied inspection.
+ *
+ * Deliberately narrow. It reads the details *only* when the title already
+ * resolved to a delivery, and can only ever produce `OCCUPIED` -- it never
+ * overrides a title that resolved to something else, and never rescues a title
+ * that resolved to nothing.
+ *
+ * That asymmetry is the point. A title is what the office deliberately names a
+ * job; details are free text where anything may appear, including the word
+ * "inspection" inside a sentence saying one is *not* needed. Letting free text
+ * override a chosen title would reclassify work on a phrase nobody was asked to
+ * be careful about, and the type decides area scope and what a move-out is
+ * later compared against.
+ *
+ * The delivery itself is not lost by this: it was never imported. It stays in
+ * Jobber, which is where the filters are actually tracked.
+ */
+export function occupiedInspectionInDetails(details: string | null | undefined): boolean {
+  if (!details) return false;
+  const haystack = details.toLowerCase();
+  return OCCUPIED_IN_DETAILS.some((phrase) => haystack.includes(phrase));
+}
+
 export function isSyncedType(inspectionType: InspectionType): boolean {
   return !TYPES_NOT_SYNCED.has(inspectionType);
 }

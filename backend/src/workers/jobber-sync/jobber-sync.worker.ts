@@ -9,7 +9,7 @@ import {
   JobberLinkStatus,
   JobberVisitImportStatus,
 } from '@prisma/client';
-import type { InspectionType } from '@prisma/client';
+import { InspectionType } from '@prisma/client';
 
 import {
   insertInspection,
@@ -21,7 +21,11 @@ import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { JobberMappingService } from '../../integrations/jobber/jobber.mapping.service';
-import { VISITS_QUERY, VISIT_BY_ID_QUERY } from '../../integrations/jobber/jobber.queries';
+import {
+  visitsQuery,
+  VISIT_BY_ID_QUERY,
+  VISIT_DETAILS_FIELD,
+} from '../../integrations/jobber/jobber.queries';
 import { jobberVisitsPageSchema, type JobberVisit } from '../../integrations/jobber/jobber.schemas';
 import {
   allowsTechnicianCapture,
@@ -29,6 +33,8 @@ import {
   notSyncedReason,
   resolveVisitType,
   visitTypeRules,
+  occupiedInspectionInDetails,
+  type VisitTypeResolution,
 } from '../../integrations/jobber/jobber.visit-type';
 import {
   resolveAssignment,
@@ -93,6 +99,25 @@ const sameInstant = (a: Date | null, b: Date | null) =>
 /** The day a timestamp falls on, as the DATE column stores it. */
 const dayOf = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
 
+/**
+ * Jobber saying the details field does not exist, rather than any other error.
+ *
+ * Matched on the field name as well as the phrasing so an unrelated validation
+ * failure is never mistaken for this one and silently swallowed -- that would
+ * turn a real schema mismatch into a sync that quietly drops data.
+ */
+function mentionsUnknownDetailsField(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const text = message.toLowerCase();
+  return (
+    text.includes(VISIT_DETAILS_FIELD) &&
+    (text.includes("doesn't exist") ||
+      text.includes('does not exist') ||
+      text.includes('undefined field') ||
+      text.includes('cannot query field'))
+  );
+}
+
 @Injectable()
 export class JobberSyncWorker {
   private readonly logger = new Logger(JobberSyncWorker.name);
@@ -151,9 +176,8 @@ export class JobberSyncWorker {
       let cursor: string | null = null;
 
       for (let page = 0; page < MAX_PAGES; page += 1) {
-        const { data, cost } = await this.client.requestDetailed(
+        const { data, cost } = await this.fetchVisitsPage(
           organizationId,
-          VISITS_QUERY,
           { first: PAGE_SIZE, after: cursor, ...window },
           correlationId,
         );
@@ -302,6 +326,52 @@ export class JobberSyncWorker {
     await new Promise((resolve) => setTimeout(resolve, Math.min(seconds, 30) * 1_000));
   }
 
+  /**
+   * One page of visits, dropping the details field if Jobber rejects it.
+   *
+   * `instructions` is the only field in that query whose name is not proven
+   * against this account pinned schema -- it was added to read
+   * "+ Occupied Inspection" out of a Tenant Benefit Package visit. An unknown
+   * field fails the *whole* query in GraphQL, so without this a wrong guess
+   * would stop every sync to gain one enrichment.
+   *
+   * Remembered for the life of the process rather than retried per page: the
+   * answer cannot change mid-run, and retrying each page would double every
+   * request for the whole run.
+   */
+  private detailsFieldRejected = false;
+
+  private async fetchVisitsPage(
+    organizationId: string,
+    variables: Record<string, unknown>,
+    correlationId?: string,
+  ) {
+    try {
+      return await this.client.requestDetailed(
+        organizationId,
+        visitsQuery(this.detailsFieldRejected ? null : VISIT_DETAILS_FIELD),
+        variables,
+        correlationId,
+      );
+    } catch (error) {
+      if (this.detailsFieldRejected || !mentionsUnknownDetailsField(error)) throw error;
+      this.detailsFieldRejected = true;
+      this.logger.warn({
+        event: 'jobber_visit_details_field_rejected',
+        field: VISIT_DETAILS_FIELD,
+        // Said explicitly because the consequence is silent otherwise: the sync
+        // keeps working and only the occupied-inspection rule stops firing.
+        consequence: 'Occupied inspections inside filter-delivery visits will not be detected.',
+      });
+      return this.client.requestDetailed(
+        organizationId,
+        visitsQuery(null),
+        variables,
+        correlationId,
+      );
+    }
+  }
+
   private async processVisit(
     organizationId: string,
     visit: JobberVisit,
@@ -384,7 +454,25 @@ export class JobberSyncWorker {
       return;
     }
 
-    const type = resolveVisitType(visit.title, rules);
+    const titled = resolveVisitType(visit.title, rules);
+    /**
+     * A filter delivery whose details say a walkthrough happens too.
+     *
+     * This office books both as one visit -- "Q3 2026 Tenant Benefit Package"
+     * with details reading "Filter Change ... + Occupied Inspection" -- so the
+     * title alone typed it a delivery and dropped it. Seventy-three of them,
+     * and not one occupied inspection had ever reached this system.
+     *
+     * Only ever upgrades a delivery, never anything else: see
+     * `occupiedInspectionInDetails` for why free text must not overrule a title
+     * somebody chose.
+     */
+    const type: VisitTypeResolution =
+      titled.outcome === 'RESOLVED' &&
+      titled.inspectionType === InspectionType.AC_FILTER_DELIVERY &&
+      occupiedInspectionInDetails(visit.instructions)
+        ? { outcome: 'RESOLVED', inspectionType: InspectionType.OCCUPIED }
+        : titled;
     /**
      * Typed, but a type this integration does not import.
      *

@@ -29,7 +29,23 @@
  * in both windows for the move to be noticed. `first` is always supplied — an
  * omitted one is priced as 100 nodes whatever the page actually returns.
  */
-export const VISITS_QUERY = `
+/**
+ * The line Jobber shows under "Details" on a visit.
+ *
+ * Optional because it is the one field here whose name is not proven against
+ * this account's pinned schema. Everything else has been returning data for
+ * months; this was added to read "+ Occupied Inspection" out of a Tenant
+ * Benefit Package visit, and an unknown field name fails the *entire* query --
+ * which would stop the whole sync to gain one enrichment.
+ *
+ * So it is spliced in, and `JobberSyncWorker.fetchVisitsPage` drops it and
+ * retries once if Jobber says it does not exist. The sync then runs exactly as
+ * it did before, with a log saying why the occupied-inspection rule cannot
+ * fire.
+ */
+export const VISIT_DETAILS_FIELD = 'instructions';
+
+export const visitsQuery = (detailsField: string | null = VISIT_DETAILS_FIELD) => `
   query InspectionVisits($first: Int!, $after: String, $startAfter: ISO8601DateTime, $startBefore: ISO8601DateTime) {
     visits(
       first: $first
@@ -39,6 +55,7 @@ export const VISITS_QUERY = `
       nodes {
         id
         title
+        ${detailsField ?? ''}
         startAt
         endAt
         completedAt
