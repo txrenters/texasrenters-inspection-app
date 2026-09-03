@@ -61,7 +61,10 @@ describe('when a visit type is decided', () => {
     // filter delivery at an unmapped address created a mapping-queue entry, so
     // the console listed properties to map on behalf of work it was never going
     // to import. Five of six live entries were exactly that.
-    const type = WORKER.indexOf('const type = resolveVisitType(visit.title, rules)');
+    // Matched on the call, not on the name it is assigned to: the variable was
+    // renamed when details-based typing arrived, and this failed for a rename
+    // rather than for the ordering it exists to protect.
+    const type = WORKER.indexOf('resolveVisitType(visit.title, rules)');
     const property = WORKER.indexOf('await this.mapping.resolveProperty(');
     expect(type).toBeGreaterThan(-1);
     expect(property).toBeGreaterThan(type);

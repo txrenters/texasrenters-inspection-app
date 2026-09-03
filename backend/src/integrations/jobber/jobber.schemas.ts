@@ -21,6 +21,13 @@ const address = z.object({
 export const jobberVisitSchema = z.object({
   id: z.string().min(1),
   title: z.string().nullish(),
+  /**
+   * The line Jobber shows under Details on a visit.
+   *
+   * Optional twice over: Jobber may not set it, and the query omits the field
+   * entirely if this account schema rejects the name.
+   */
+  instructions: z.string().nullish(),
   // Null for an unscheduled visit. Not an error and not a default: a visit
   // Jobber has not placed on a day cannot become an inspection, and the worker
   // holds it rather than inventing a date.

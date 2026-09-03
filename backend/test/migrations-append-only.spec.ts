@@ -24,9 +24,21 @@ import { join } from 'node:path';
 const MIGRATIONS = join(__dirname, '..', 'prisma', 'migrations');
 const MANIFEST = join(MIGRATIONS, 'applied.lock.json');
 
+/**
+ * Hashed with line endings normalised.
+ *
+ * Git rewrites them on checkout, so the same committed migration is CRLF on one
+ * machine and LF on another. Hashing raw bytes made this fail for a file nobody
+ * had touched — a guard that cries wolf gets its manifest "fixed" to match,
+ * which is exactly the habit it exists to prevent.
+ */
+/** Carriage returns only; stripping them makes CRLF and LF hash alike. */
+const CR = String.fromCharCode(13);
+const normalise = (sql: string) => sql.split(CR).join(String());
+
 const digest = (name: string) =>
   createHash('sha256')
-    .update(readFileSync(join(MIGRATIONS, name, 'migration.sql')))
+    .update(normalise(readFileSync(join(MIGRATIONS, name, 'migration.sql'), 'utf8')))
     .digest('hex')
     .slice(0, 16);
 
