@@ -63,6 +63,62 @@ describe('mobile session', () => {
     expect(await getSession()).toBeNull();
   });
 
+  /**
+   * A fault between the handset and the server is not a wrong password.
+   *
+   * Sign-in used to answer "that email address and password do not match" for
+   * every non-OK response, including ones the API never produced. A technician
+   * reading that goes and resets a password that was always right — which is
+   * exactly what happened: a reset was requested and completed, and sign-in
+   * still failed, because the credentials were never the problem.
+   *
+   * `requestPasswordReset` in the same file was fixed for this and sign-in was
+   * left behind. These hold the two apart.
+   */
+  it('does not blame the password when the answer did not come from the API', async () => {
+    // A proxy error page: not JSON, so there is no message to repeat.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new Error('not json');
+      },
+    });
+
+    const failure = signIn('tech@example.com', 'password');
+    await expect(failure).rejects.toThrow(/HTTP 502/);
+    // The claim that must not be made: nothing here checked the password.
+    await expect(failure).rejects.not.toThrow(/do not match/);
+  });
+
+  it('says the server is unreachable rather than reporting a bad password', async () => {
+    // What an app pointed at an address that no longer answers actually hits.
+    fetchMock.mockRejectedValue(new TypeError('Network request failed'));
+
+    const failure = signIn('tech@example.com', 'password');
+    await expect(failure).rejects.toThrow(/Could not reach the TexasRenters server/);
+    // Names the host, so whoever can read it knows where the build is pointed.
+    await expect(failure).rejects.toThrow(/api\.test\.invalid/);
+    await expect(failure).rejects.not.toThrow(/do not match/);
+  });
+
+  it('still offers a way forward when the account is signed in elsewhere', async () => {
+    // The 409 keeps its own handling: the screen needs the code to know it can
+    // offer to take the other device over.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        code: 'SESSION_ALREADY_ACTIVE',
+        message: 'Already signed in on an iPhone.',
+      }),
+    });
+
+    await expect(signIn('tech@example.com', 'password')).rejects.toThrow(
+      'Already signed in on an iPhone.',
+    );
+  });
+
   it('refreshes a token that is close to expiry before handing it out', async () => {
     // Ten seconds of life left is inside the renewal margin. Returning it would
     // hand the caller a token that dies mid-request.

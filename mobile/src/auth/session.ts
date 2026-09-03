@@ -196,31 +196,62 @@ export async function signIn(
   // colleague signing in, because uninstalling never reaches the server.
   const device = await deviceId();
 
-  const response = await fetch(endpoint('/api/v1/auth/login'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      // Omitted rather than sent false: a first attempt should never carry a
-      // flag that ends somebody else's session.
-      ...(options.takeOver ? { takeOverExistingSession: true } : {}),
-      // Omitted when secure storage refused, which the server reads as an
-      // unknown device and handles exactly as it did before this existed.
-      ...(device ? { deviceId: device } : {}),
-    }),
-  });
+  const url = endpoint('/api/v1/auth/login');
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password,
+        // Omitted rather than sent false: a first attempt should never carry a
+        // flag that ends somebody else's session.
+        ...(options.takeOver ? { takeOverExistingSession: true } : {}),
+        // Omitted when secure storage refused, which the server reads as an
+        // unknown device and handles exactly as it did before this existed.
+        ...(device ? { deviceId: device } : {}),
+      }),
+    });
+  } catch {
+    // An unreachable server is not a wrong password, and saying so sends the
+    // one person who cannot sign in to change a password that was always
+    // right. Names the host, because a build pointed at an address that no
+    // longer answers fails this way forever and only somebody who can read
+    // the host has any chance of saying why.
+    throw new Error(
+      `Could not reach the TexasRenters server${apiHost(url)}. Check your signal, then try again.`,
+    );
+  }
+
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as {
       message?: string;
       code?: string;
     } | null;
-    const message =
-      body?.message ?? 'That email address and password do not match an active account.';
+
     // The code, not the status: 409 alone would not tell the screen whether it
     // can offer a way forward.
-    if (body?.code === 'SESSION_ALREADY_ACTIVE') throw new SessionConflictError(message);
-    throw new Error(message);
+    if (body?.code === 'SESSION_ALREADY_ACTIVE')
+      throw new SessionConflictError(
+        body.message ?? 'This account is already signed in on another device.',
+      );
+
+    // The server's own words whenever it has any. A real rejection carries
+    // `INVALID_CREDENTIALS` and says so itself.
+    if (body?.message) throw new Error(body.message);
+
+    // No JSON body means the answer did not come from the API at all -- a
+    // proxy or tunnel error page, a 413, a 502. This used to report "that
+    // email address and password do not match", which is a claim about the
+    // credentials that nothing here has checked: the request never reached the
+    // password comparison. `requestPasswordReset` below was fixed for exactly
+    // this and sign-in was left behind, so the one screen that mattered kept
+    // blaming the password for every fault between the handset and the server.
+    throw new Error(
+      `The TexasRenters server did not accept the sign-in (HTTP ${response.status}). Your password was not checked -- ask the office whether the server is reachable.`,
+    );
   }
   const issued = (await response.json()) as { accessToken: string; refreshToken: string };
   const session = toSession(issued.accessToken, issued.refreshToken);
