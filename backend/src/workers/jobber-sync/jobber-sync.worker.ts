@@ -20,7 +20,10 @@ import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
-import { JobberMappingService } from '../../integrations/jobber/jobber.mapping.service';
+import {
+  JobberMappingService,
+  type BuildingIndex,
+} from '../../integrations/jobber/jobber.mapping.service';
 import {
   visitsQuery,
   VISIT_BY_ID_QUERY,
@@ -375,7 +378,7 @@ export class JobberSyncWorker {
   private async processVisit(
     organizationId: string,
     visit: JobberVisit,
-    index: Map<string, string[]>,
+    index: BuildingIndex,
     rules: Record<InspectionType, string[]>,
     result: JobberSyncResult,
   ) {

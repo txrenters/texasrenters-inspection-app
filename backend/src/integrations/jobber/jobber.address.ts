@@ -128,6 +128,83 @@ export function addressKeyCandidates(
   return unit ? [`${street} ${unit}|${postal}`, `${street}|${postal}`] : [`${street}|${postal}`];
 }
 
+/**
+ * Trailing words that may be dropped when two systems disagree about whether
+ * the street type was written at all.
+ *
+ * Listed explicitly rather than derived from `STREET_SUFFIXES`, and every entry
+ * is an abbreviation that is essentially never part of a street's *name*. That
+ * restraint is the whole safety property, and the queue supplies the
+ * counterexample: `2455 Morgan Ridge Ln`. Had `ridge` been droppable — it is a
+ * real USPS street type — then `morgan ridge ln` would lose `ln` while
+ * `morgan ridge` lost `ridge`, and the two would stop matching each other. The
+ * same argument rules out `way`, `path`, `run`, `creek`, `hollow` and every
+ * other type that reads naturally as part of a name.
+ *
+ * Directionals from `STREET_SUFFIXES` (`n`, `se`, …) are deliberately absent
+ * too: they are not types, and a street ending in one is naming a direction,
+ * not decorating itself with a droppable word.
+ */
+const DROPPABLE_STREET_TYPES: ReadonlySet<string> = new Set([
+  'st',
+  'ave',
+  'blvd',
+  'dr',
+  'rd',
+  'ln',
+  'ct',
+  'cir',
+  'pl',
+  'trl',
+  'pkwy',
+  'hwy',
+  'ter',
+]);
+
+/**
+ * The street with a trailing type removed — `2455 morgan ridge ln` → `2455 morgan ridge`.
+ *
+ * Only the last word, and only when at least a number and a name survive it. A
+ * street genuinely called `2455 Park` must not become `2455`, which would be a
+ * house number matching every other house number in the ZIP.
+ */
+function withoutStreetType(street: string): string {
+  const words = street.split(' ').filter(Boolean);
+  if (words.length < 3) return street;
+  return DROPPABLE_STREET_TYPES.has(words.at(-1)!) ? words.slice(0, -1).join(' ') : street;
+}
+
+/**
+ * The looser key, for addresses that disagree only about the street type.
+ *
+ * Jobber's property record says `2455 Morgan Ridge`; Propertyware says
+ * `2455 Morgan Ridge Ln`. Same house number, same street, same ZIP+4 — one
+ * system simply never recorded the type. `STREET_SUFFIXES` cannot bridge that:
+ * it collapses `lane` onto `ln`, and neither of those equals nothing at all.
+ * Half the properties sitting in the mapping queue were exactly this, and 76
+ * active buildings carry no street type, so it is a standing source of them
+ * rather than a one-off.
+ *
+ * Returned for *both* spellings, unchanged street included — that is what lets
+ * the side without a type find the side with one. The strict key is what keeps
+ * this honest: this tier is consulted only after that one has failed, and only
+ * when it names exactly one building.
+ *
+ * Dropping the type does lose information — `123 Oak St` and `123 Oak Ave`
+ * collapse together. The uniqueness requirement is what makes that safe: a ZIP
+ * holding both produces two candidates and therefore no match at all, which is
+ * the same answer a person would give.
+ */
+export function looseAddressKey(
+  addressLine1: string | null | undefined,
+  postalCode: string | null | undefined,
+): string {
+  const postal = normalizePostalCode(postalCode);
+  const street = normalizeWords(streetPart(addressLine1));
+  if (!street || !postal) return '';
+  return `${withoutStreetType(street)}|${postal}`;
+}
+
 export interface AddressCandidate {
   id: string;
   addressLine1: string | null;
@@ -145,6 +222,31 @@ export function buildAddressIndex(candidates: readonly AddressCandidate[]): Map<
   const index = new Map<string, string[]>();
   for (const candidate of candidates) {
     const key = normalizeAddressKey(candidate.addressLine1, candidate.postalCode);
+    if (!key) continue;
+    const existing = index.get(key);
+    if (existing) existing.push(candidate.id);
+    else index.set(key, [candidate.id]);
+  }
+  return index;
+}
+
+/**
+ * The same buildings, filed under their street-type-less key.
+ *
+ * A separate map rather than extra entries in the strict one, so the two tiers
+ * cannot be confused for each other: a hit here is a weaker claim and is only
+ * allowed to decide when the strict index had nothing to say.
+ *
+ * Collisions are the point of keeping the ids rather than the count. Every
+ * building in a ZIP whose address differs only by type lands on one key, and
+ * `matchBuilding` refuses anything with more than one candidate.
+ */
+export function buildLooseAddressIndex(
+  candidates: readonly AddressCandidate[],
+): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const key = looseAddressKey(candidate.addressLine1, candidate.postalCode);
     if (!key) continue;
     const existing = index.get(key);
     if (existing) existing.push(candidate.id);
@@ -186,4 +288,29 @@ export function matchBuilding(
     return { outcome: 'MATCHED', buildingId: candidates[0] };
   }
   return { outcome: 'NONE' };
+}
+
+/**
+ * The strict answer, falling back to the street-type-less one only if there was
+ * no strict answer at all.
+ *
+ * The order is the safety property, and it runs one way only. A strict
+ * `AMBIGUOUS` is returned as it stands rather than retried loosely: a looser
+ * key can only ever gather *more* candidates, so falling through could not
+ * resolve the conflict and would merely hide it behind a broader question.
+ *
+ * The fallback exists because two systems disagreeing about `Ln` is the single
+ * most common reason a real property sits in the mapping queue — and a
+ * coordinator resolving it by hand is doing nothing a computer could not, on an
+ * address whose house number, street name and ZIP already agree exactly.
+ */
+export function matchBuildingWithFallback(
+  index: Map<string, string[]>,
+  looseIndex: Map<string, string[]>,
+  keys: string | readonly string[],
+  looseKey: string,
+): AddressMatch {
+  const strict = matchBuilding(index, keys);
+  if (strict.outcome !== 'NONE' || !looseKey) return strict;
+  return matchBuilding(looseIndex, looseKey);
 }
