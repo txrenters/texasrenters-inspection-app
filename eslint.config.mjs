@@ -1,5 +1,6 @@
 import eslint from '@eslint/js';
 import nextPlugin from '@next/eslint-plugin-next';
+import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
@@ -25,8 +26,19 @@ export default tseslint.config(
   },
   {
     files: ['web/**/*.{ts,tsx}'],
-    plugins: { '@next/next': nextPlugin },
+    plugins: { '@next/next': nextPlugin, 'react-hooks': reactHooks },
     rules: {
+      /**
+       * The rule that would have caught the outage.
+       *
+       * `eslint-plugin-react-hooks` was installed all along, as a dependency of
+       * Next's own config, but nothing here ever enabled it -- so a hook added
+       * below an early return passed lint, passed typecheck, passed the tests,
+       * and took the inspection detail page down in production with React error
+       * #310. Nothing in the repo violates it today; it is on so that nothing
+       * does tomorrow.
+       */
+      'react-hooks/rules-of-hooks': 'error',
       ...nextPlugin.configs.recommended.rules,
       ...nextPlugin.configs['core-web-vitals'].rules,
     },
