@@ -2,8 +2,10 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import '@/global.css';
+import { getSession } from '@/src/auth/session';
 import { createErrorBoundary } from '@/src/components/AppErrorBoundary';
 import { installGlobalErrorHandlers } from '@/src/lib/error-log';
+import { startErrorReporting } from '@/src/lib/error-reporter';
 import { ThemeProvider } from '@/src/providers/ThemeProvider';
 import { TexasRentersProviders } from '@/src/providers/TexasRentersProviders';
 import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
@@ -11,6 +13,12 @@ import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
 // Installed at module scope so errors thrown during the very first render —
 // before any effect has run — are still captured.
 installGlobalErrorHandlers();
+
+// Ships the log those handlers write. Started here rather than inside `(app)`
+// for the same reason the update prompt is: a crash on the login screen is
+// exactly the report that was impossible to see, and it has no session to
+// report under. The token, when there is one, only decides attribution.
+startErrorReporting(async () => (await getSession())?.accessToken ?? null);
 
 /** expo-router renders this instead of a white screen when a route throws. */
 export const ErrorBoundary = createErrorBoundary('root');

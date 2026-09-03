@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 
+import { ErrorReporting } from '@/components/error-reporting';
 import { Providers } from '@/components/providers';
 import { Toaster } from '@/components/ui/sonner';
 
@@ -56,6 +57,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       */}
       <body className="font-sans antialiased [font-variant-numeric:tabular-nums]">
         <Providers>
+          {/* Catches uncaught errors and unhandled rejections everywhere,
+              including the login page. Renders nothing. */}
+          <ErrorReporting />
           {children}
           {/* Single notification surface for the whole application. */}
           <Toaster />

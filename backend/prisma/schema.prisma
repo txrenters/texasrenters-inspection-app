@@ -340,6 +340,7 @@ model Organization {
   jobberVisitImports   JobberVisitImport[]
   jobberOutboundTasks  JobberOutboundTask[]
   inspectionImportJobs InspectionImportJob[]
+  clientErrorReports   ClientErrorReport[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -2354,4 +2355,85 @@ model JobberOutboundTask {
   /// twice, and the enqueue relies on this rather than on reading first.
   @@unique([organizationId, inspectionId, kind])
   @@index([organizationId, status, nextAttemptAt])
+}
+
+/// An error that happened on somebody's phone or in their browser.
+///
+/// The handset has kept an error log since it was built and the console kept
+/// none at all — but neither ever reached anybody who could act on it. A
+/// technician's crash lived on their phone until they reinstalled, and the only
+/// way to learn of it was for them to describe it out loud.
+///
+/// Written by clients, so nothing in here is trusted: it is evidence *about* a
+/// client, not a statement *from* one. Rendered as text, never executed, and
+/// redacted on both sides before it is stored.
+model ClientErrorReport {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Null for an error raised before anybody signed in.
+  ///
+  /// Those are the ones most worth having. A failed sign-in, an API address
+  /// that no longer answers, a build that cannot reach anything — none of them
+  /// have a session, by definition, and a log that required one would be empty
+  /// exactly when it mattered. The cost is an endpoint anonymous callers can
+  /// write to, which is why it is capped and rate limited rather than open.
+  organizationId String? @db.Uuid
+
+  authUserId String?
+
+  /// The handset or the console.
+  source ClientErrorSource
+
+  /// The client's own id for the entry, so re-sending a log that was never
+  /// acknowledged cannot fill the table with copies of one crash.
+  clientEntryId String
+
+  /// Stable per install, and not a person. Pairs with `clientEntryId` as the
+  /// deduplicating key, and lets one handset's story be read end to end
+  /// without knowing who was holding it.
+  installId String
+
+  message String
+
+  /// Truncated by the client before sending: the stack of a minified bundle is
+  /// long and the useful part is the top.
+  stack String?
+
+  /// The client's own label for where it was raised — `update-fetch`, `root`,
+  /// `signIn`. A name somebody chose, not a stack frame.
+  context String?
+
+  /// A crash, as opposed to something caught and carried on from.
+  fatal Boolean @default(false)
+
+  platform   String?
+  appVersion String?
+  buildId    String?
+
+  /// The API address the client was actually talking to.
+  ///
+  /// Here because of the afternoon this was built: a handset answered HTTP 530
+  /// and the one fact nobody could get at was which host it had asked. It is
+  /// the first question of every report like it, and the client is the only
+  /// thing that knows.
+  apiBaseUrl String?
+
+  /// When the client says it happened, and when we heard. They differ by
+  /// however long the phone was offline, which is often the whole story.
+  occurredAt DateTime
+  receivedAt DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// One row per client entry. The flush is at-least-once and re-sends whatever
+  /// it has not had acknowledged, which this is what makes safe.
+  @@unique([installId, clientEntryId])
+  @@index([organizationId, receivedAt])
+  @@index([source, receivedAt])
+}
+
+/// Which client an error came from.
+enum ClientErrorSource {
+  MOBILE
+  CONSOLE
 }

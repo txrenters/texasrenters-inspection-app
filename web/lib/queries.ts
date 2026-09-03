@@ -92,6 +92,9 @@ import {
 export const keys = {
   all: ['admin'] as const,
   dashboard: ['admin', 'dashboard'] as const,
+  clientErrors: (query: Record<string, string | number | boolean | undefined>) =>
+    ['admin', 'client-errors', query] as const,
+  clientErrorSummary: ['admin', 'client-errors', 'summary'] as const,
   portfoliosRoot: ['admin', 'portfolios'] as const,
   portfolios: (search: string) => ['admin', 'portfolios', search] as const,
   propertiesRoot: ['admin', 'properties'] as const,
@@ -2305,3 +2308,57 @@ export function useApiClientMutations() {
     }),
   };
 }
+
+/**
+ * Errors reported by the handset and by this console.
+ *
+ * Not scoped to an organization: a report raised before anybody signed in has
+ * none, and those are the ones the log exists for. Gated on `system:manage`
+ * server-side, like the rest of IT tools.
+ */
+export type ClientErrorReport = {
+  id: string;
+  source: 'MOBILE' | 'CONSOLE';
+  message: string;
+  stack: string | null;
+  context: string | null;
+  fatal: boolean;
+  platform: string | null;
+  appVersion: string | null;
+  buildId: string | null;
+  apiBaseUrl: string | null;
+  installId: string;
+  authUserId: string | null;
+  occurredAt: string;
+  receivedAt: string;
+};
+
+export type ClientErrorPage = { items: ClientErrorReport[]; nextCursor: string | null };
+
+export type ClientErrorSummary = {
+  total: number;
+  lastDay: number;
+  fatalLastDay: number;
+  mobileLastDay: number;
+  consoleLastDay: number;
+};
+
+export const useClientErrors = (
+  query: Record<string, string | number | boolean | undefined>,
+) =>
+  useQuery({
+    queryKey: keys.clientErrors(query),
+    queryFn: ({ signal }) =>
+      api<ClientErrorPage>(`/api/v1/client-errors${queryString(query)}`, { signal }),
+    placeholderData: keepPreviousData,
+    // The page is read while something is actively going wrong, so it follows
+    // along rather than waiting to be reloaded by hand.
+    refetchInterval: 30_000,
+  });
+
+export const useClientErrorSummary = () =>
+  useQuery({
+    queryKey: keys.clientErrorSummary,
+    queryFn: ({ signal }) => api<ClientErrorSummary>('/api/v1/client-errors/summary', { signal }),
+    refetchInterval: 30_000,
+  });

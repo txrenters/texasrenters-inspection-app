@@ -33,7 +33,14 @@ describe('admin navigation', () => {
 
       const withSystem = getVisibleAdminNavigation((permission) => permission === 'system:manage');
       expect(withSystem.map((group) => group.title)).toEqual(['IT tools']);
-      expect(withSystem[0]!.items.map((item) => item.title)).toEqual(['API', 'API clients']);
+      // The error log sits here rather than under a support heading of its own:
+      // it is read by whoever is already holding the API and client registry,
+      // and it is gated on the same operator permission.
+      expect(withSystem[0]!.items.map((item) => item.title)).toEqual([
+        'API',
+        'API clients',
+        'Error log',
+      ]);
     });
 
     it('does not let the reference route swallow the client registry', () => {

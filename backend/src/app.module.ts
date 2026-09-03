@@ -10,6 +10,7 @@ import { ApiAuthGuard, RolesGuard } from './common/auth';
 import { RequestIdMiddleware } from './common/request-id.middleware';
 import { RequestPerformanceInterceptor } from './common/request-performance.interceptor';
 import { validateEnvironment } from './config/environment';
+import { ClientErrorsModule } from './client-errors/client-errors.module';
 import { DatabaseModule } from './database/database.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { TenantScopeInterceptor } from './database/tenant-scope.interceptor';
@@ -49,6 +50,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     RealtimeModule,
     OpenApiModule,
     GatewayModule,
+    ClientErrorsModule,
   ],
   controllers: [HealthController],
   providers: [
