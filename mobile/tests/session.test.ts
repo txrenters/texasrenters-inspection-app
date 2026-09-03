@@ -163,11 +163,41 @@ describe('mobile session', () => {
     fetchMock.mockResolvedValueOnce(ok({ accessToken: stale(), refreshToken: 'refresh-1' }));
     await signIn('tech@example.com', 'password');
 
-    // Refused means genuinely dead — expired, revoked, or already replayed.
-    fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+    // 401 is what the backend answers for a token that is expired, revoked or
+    // already replayed. That is the only refusal that means the session is
+    // genuinely dead.
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) });
     expect(await getSession()).toBeNull();
     resetSessionCache();
     expect(await getSession()).toBeNull();
+  });
+
+  /**
+   * A server fault is not a sign-out.
+   *
+   * Any non-OK response used to end the session, so a 502 while the backend
+   * restarted, or a 530 from a proxy whose origin was down, dumped a
+   * technician at the login screen mid-walkthrough — and took the on-device
+   * cache with it, since `cacheKey` throws without a session. The token was
+   * fine the whole time. Only the API saying so ends a session.
+   */
+  it.each([
+    [502, 'the backend is restarting'],
+    [530, 'a proxy whose origin is down'],
+    [404, 'a build pointed at an address that moved'],
+    [500, 'an unhandled server error'],
+  ])('keeps the session through HTTP %i (%s)', async (status) => {
+    fetchMock.mockResolvedValueOnce(ok({ accessToken: stale(), refreshToken: 'refresh-1' }));
+    await signIn('tech@example.com', 'password');
+
+    fetchMock.mockResolvedValueOnce({ ok: false, status, json: async () => ({}) });
+
+    expect((await getSession())?.refreshToken).toBe('refresh-1');
+    // And it survives a cold start, so the technician is still signed in after
+    // the app is reopened rather than merely until it closes.
+    resetSessionCache();
+    fetchMock.mockResolvedValueOnce({ ok: false, status, json: async () => ({}) });
+    expect((await getSession())?.refreshToken).toBe('refresh-1');
   });
 
   it('clears the device even when sign-out cannot reach the API', async () => {

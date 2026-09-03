@@ -9,7 +9,6 @@ import { useCurrentUser } from '@/src/features/queries';
 import { useQueryCacheHydration } from '@/src/features/useQueryCacheHydration';
 import { LocationShiftRunner } from '@/src/location/LocationShiftRunner';
 import { ShiftAutoStart } from '@/src/location/ShiftAutoStart';
-import { UpdatePrompt } from '@/src/updates/UpdatePrompt';
 
 // Scoped to the signed-in area so a crash inside an inspection recovers here,
 // keeping the session and the upload queue rather than resetting to the root.
@@ -41,11 +40,10 @@ export default function AppLayout() {
           remembered a switch. Inside the auth gate, so it can only ever run for
           a signed-in technician. */}
       <ShiftAutoStart />
-      {/* A sibling of the navigator, like the offline banner: which build is
-          running is not the concern of any one screen, and the prompt has to be
-          able to appear over all of them. It knows to stay quiet on the two
-          that would lose work. */}
-      <UpdatePrompt />
+      {/* `UpdatePrompt` used to live here. It is mounted at the root instead,
+          because an update is not the signed-in area's business: a technician
+          who cannot sign in is exactly who needs one, and gating it here meant
+          the fix could never reach them. */}
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="inspections/[id]" />

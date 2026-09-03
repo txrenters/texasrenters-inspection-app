@@ -161,7 +161,22 @@ async function refresh(refreshToken: string): Promise<MobileSession | null> {
   }
 
   if (!response.ok) {
-    // Refused means genuinely dead: expired, revoked, or already replayed.
+    // Only the API's own refusal ends a session.
+    //
+    // The backend answers 401 for a refresh token that is expired, revoked or
+    // replayed -- that, and only that, means the session is genuinely dead.
+    // Everything else is a fault between the handset and the server: a 502
+    // while the backend restarts, a 530 from a proxy whose origin is down, a
+    // 404 from a build pointed at an address that has moved. The token is very
+    // likely still good, and treating those as a dead session signs a
+    // technician out mid-walkthrough for something that was never about them.
+    //
+    // It also costs more than a sign-in: losing the session takes the
+    // on-device cache with it, which is the same reason the unreachable case
+    // above keeps it. A handset that cannot reach the server and a handset the
+    // server could not answer for are the same situation from here.
+    if (response.status !== 401 && response.status !== 403) return cached ?? null;
+
     await persist(null);
     return null;
   }
