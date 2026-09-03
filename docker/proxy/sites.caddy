@@ -30,14 +30,25 @@
 	@compressible not header Content-Type image/*
 	encode @compressible zstd gzip
 
-	# The backend caps a floor-plan upload at 20 MB. This sits just above it so
-	# an oversized file is refused by the application, with its own error, rather
-	# than by the proxy with a bare 413.
+	# Sized just above the largest upload the application itself accepts, so an
+	# oversized file is refused by the application with its own error rather
+	# than by the proxy with a bare 413. That distinction matters more than it
+	# sounds: Caddy rejects an oversized body *before* proxying, so the response
+	# carries none of the backend's CORS headers, and the browser reports the
+	# whole thing as "No 'Access-Control-Allow-Origin' header is present" — a
+	# message that sends you looking at CORS configuration that was never wrong.
+	#
+	# The ceiling is the inspection-report import, which accepts 150 MB: these
+	# reports carry a photograph of every wall, and the one this was built
+	# against is 73 MB across 376 of them. Floor plans cap at 20 MB and are
+	# unaffected. When either application limit changes, this has to move with
+	# it — it was left at 25 MB when the import route was added, which refused
+	# every real report at the proxy.
 	#
 	# Video is not covered by this and does not need to be: recordings upload
 	# from the phone straight to Cloudflare Stream and never traverse this proxy.
 	request_body {
-		max_size 25MB
+		max_size 160MB
 	}
 
 	# Upgrades pass through untouched — Caddy needs no directive for that, which
