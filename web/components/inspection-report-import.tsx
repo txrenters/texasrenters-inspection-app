@@ -80,6 +80,9 @@ export function InspectionReportImport({ inspectionId }: { inspectionId: string 
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
   const [jobId, setJobId] = useState<string | null>(null);
   const [rejected, setRejected] = useState<string | null>(null);
+  // Set when the write is asked for. The mutation resolving only means the
+  // server accepted the job, so it cannot stand in for "still working".
+  const [writing, setWriting] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const job = useInspectionImportJob(jobId);
 
@@ -121,12 +124,27 @@ export function InspectionReportImport({ inspectionId }: { inspectionId: string 
   async function commit() {
     if (!jobId) return;
     try {
-      const result = await commitInspectionImport.mutateAsync(jobId);
-      router.push(`/inspections/${result.inspectionId}`);
+      setWriting(true);
+      // Returns as soon as the write has started. Writing 376 photographs takes
+      // longer than the server will hold a socket open, so the job reports the
+      // outcome and the poll below follows it.
+      await commitInspectionImport.mutateAsync(jobId);
     } catch {
+      setWriting(false);
       // Rendered below from the mutation's own error.
     }
   }
+
+  /**
+   * The write finished, so show the filled-in inspection.
+   *
+   * Driven by the job rather than by the mutation resolving, because the
+   * mutation resolves when the work begins.
+   */
+  const committed = Boolean(job.data?.committedAt);
+  useEffect(() => {
+    if (committed) router.refresh();
+  }, [committed, router]);
 
   const error =
     rejected ??
@@ -170,7 +188,12 @@ export function InspectionReportImport({ inspectionId }: { inspectionId: string 
         </div>
       ) : (
         <ImportProgress
-          committing={commitInspectionImport.isPending}
+          committing={
+            // In flight in this tab, or accepted and still being written on the
+            // server. The mutation resolving only means the work started.
+            commitInspectionImport.isPending ||
+            (writing && !job.data?.committedAt && !job.data?.errorCode)
+          }
           job={job.data}
           onCommit={() => void commit()}
           onDiscard={() => setJobId(null)}

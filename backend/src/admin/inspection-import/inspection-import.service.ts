@@ -337,8 +337,8 @@ export class InspectionImportService {
     // Re-checked at commit, not trusted from the read. Minutes pass while a
     // report is parsed, and an inspection that gained evidence in between must
     // not have it written over.
+    // Only the check runs here; `runCommit` reads the building off `target`.
     const target = await this.requireSeedableInspection(user, job.inspectionId);
-    const property = target.building;
 
     // The same file twice is almost always somebody clicking again, and a
     // second baseline for one walkthrough is worse than a refusal: the
@@ -353,6 +353,46 @@ export class InspectionImportService {
         [previous],
       );
 
+    // Everything above is a check and answers in milliseconds. Everything below
+    // reads 73 MB back out of storage, pulls 376 photographs from it, writes
+    // each one as an object, and then opens a transaction -- minutes of work
+    // that must not sit inside an HTTP request.
+    //
+    // `main.ts` gives the server a 30-second socket timeout, so it did: Node
+    // destroyed the connection at exactly 30.002s, Caddy reported EOF as a 502,
+    // and the browser called it a CORS failure because a 502 carries none of
+    // the backend's headers. Nothing was written and nothing was logged, which
+    // is the worst shape a failure can take.
+    //
+    // `floor-plan-admin.service.ts` already says why raising the timeout is not
+    // the fix: "No timeout value fixes that for arbitrarily complex plans; the
+    // work has to leave the request." The reading was moved out and the writing
+    // was left behind. This moves the rest.
+    void this.runCommit(user, job.id, fingerprint, report, target).catch((error: unknown) => {
+      this.logger.error({
+        event: 'inspection_import_commit_crashed',
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    });
+    return { jobId: job.id, committing: true as const };
+  }
+
+  /**
+   * Write the read report in. Never rejects; records its outcome on the job.
+   *
+   * The console distinguishes the three states from the job alone:
+   * `committedAt` set is done, `errorCode` set with the read already COMPLETED
+   * is a failed write, and neither is still working.
+   */
+  private async runCommit(
+    user: AuthenticatedUser,
+    jobId: string,
+    fingerprint: string,
+    report: ImportedReport,
+    target: Awaited<ReturnType<InspectionImportService['requireSeedableInspection']>>,
+  ) {
+   try {
+    const property = target.building;
     const bytes = await this.storage.get(sourceKey(user.organizationId, fingerprint));
     const photos = extractPhotos(bytes);
     const perPage = await countPhotosPerPage(bytes);
@@ -476,11 +516,22 @@ export class InspectionImportService {
     });
 
     await this.prisma.inspectionImportJob.update({
-      where: { id: job.id },
-      data: { committedAt: new Date() },
+      where: { id: jobId },
+      data: { committedAt: new Date(), errorCode: null },
     });
     this.logger.log({ event: 'inspection_report_imported', inspectionId });
-    return { inspectionId, areas: report.areas.length, photos: stored.length };
+   } catch (error) {
+    this.logger.error({
+      event: 'inspection_import_commit_failed',
+      message: error instanceof Error ? error.message : 'unknown',
+    });
+    // Recorded on the job rather than thrown: nobody is waiting on this
+    // request any more, so an exception would go nowhere and the console would
+    // poll a job that never changes.
+    await this.prisma.inspectionImportJob
+      .update({ where: { id: jobId }, data: { errorCode: 'IMPORT_WRITE_FAILED' } })
+      .catch(() => undefined);
+   }
   }
 
   private async read(file?: { buffer: Buffer }) {
