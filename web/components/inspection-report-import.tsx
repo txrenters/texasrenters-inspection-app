@@ -7,7 +7,14 @@ import { AlertTriangleIcon, CheckCircle2Icon, FileTextIcon, UploadIcon } from 'l
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -17,11 +24,45 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { SearchableSelect } from '@/components/searchable-select';
 import {
   useAdminMutations,
   useInspectionImportJob,
+  usePropertyOptions,
   type ImportJob,
 } from '@/lib/queries';
+
+/**
+ * The way in from the move-in list.
+ *
+ * A dialog rather than a card on the page: this is an occasional action, and a
+ * permanent panel above a list people read every day would cost more attention
+ * than it earns. It sits with move-ins because an import *is* one -- it is the
+ * baseline a later move-out is compared against.
+ */
+export function ImportReportDialog() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogTrigger asChild>
+        <Button variant="outline">
+          <UploadIcon />
+          Import a report
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Import an inspection report</DialogTitle>
+          <DialogDescription>
+            For a walkthrough done outside this app. The report is read here and becomes a move-in
+            inspection, so a later move-out has a baseline to compare against.
+          </DialogDescription>
+        </DialogHeader>
+        <InspectionReportImport />
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /**
  * Bringing in an inspection that happened outside this app.
@@ -36,13 +77,22 @@ import {
  * from upload to import would make this a formality and put unreviewed
  * evidence behind a charge.
  */
-export function InspectionReportImport({ propertyId }: { propertyId: string }) {
+export function InspectionReportImport() {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
   const [jobId, setJobId] = useState<string | null>(null);
   const [rejected, setRejected] = useState<string | null>(null);
+  const [propertyId, setPropertyId] = useState('');
+  const [search, setSearch] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const job = useInspectionImportJob(jobId);
+  // Reached from the move-in list rather than from a property's own page, so
+  // the property has to be chosen here. Searched server-side and paged, like
+  // every other property picker -- there are hundreds of them.
+  const properties = usePropertyOptions('', search);
+  const options = (properties.data?.pages ?? []).flatMap((page) =>
+    page.items.map((item) => ({ value: item.id, label: item.name })),
+  );
 
   const uploading = startInspectionImport.isPending;
 
@@ -67,6 +117,13 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
 
   async function upload(file: File) {
     setRejected(null);
+    // Guarded here as well as on the button. The button is the way in, but a
+    // report sent without a property would be read and then have nowhere to
+    // land, and the failure would surface minutes later as a server error.
+    if (!propertyId) {
+      setRejected('Choose the property this report covers first.');
+      return;
+    }
     if (file.type !== 'application/pdf') {
       setRejected('That file is not a PDF.');
       return;
@@ -95,24 +152,31 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
     (commitInspectionImport.error instanceof Error ? commitInspectionImport.error.message : null);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Import an inspection report</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-muted-foreground text-sm">
-          For a walkthrough done outside this app. The report is read here and becomes a move-in
-          inspection, so a later move-out has a baseline to compare against.
-        </p>
+    <div className="space-y-4">
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        {error ? (
-          <Alert variant="destructive">
-            <AlertTriangleIcon />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-
-        {!jobId ? (
+      {!jobId ? (
+        <div className="space-y-3">
+          <SearchableSelect
+            disabled={properties.isLoading || properties.isError}
+            emptyMessage="No active property matches your search."
+            hasMore={properties.hasNextPage}
+            id="import-property"
+            loadingMore={properties.isFetchingNextPage}
+            onChange={setPropertyId}
+            onLoadMore={() => void properties.fetchNextPage()}
+            onSearch={setSearch}
+            options={options}
+            optionsLabel="Properties"
+            placeholder="Choose the property this report covers"
+            searchPlaceholder="Search properties…"
+            value={propertyId}
+          />
           <div className="flex flex-wrap items-center gap-3">
             <input
               accept="application/pdf"
@@ -126,7 +190,10 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
               ref={fileInput}
               type="file"
             />
-            <Button disabled={uploading} onClick={() => fileInput.current?.click()}>
+            {/* Nothing to attach a report to until a property is chosen, and a
+                file picker that opens and then fails is worse than one that
+                waits. */}
+            <Button disabled={uploading || !propertyId} onClick={() => fileInput.current?.click()}>
               {uploading ? <Spinner /> : <UploadIcon />}
               {uploading ? 'Uploading…' : 'Choose a report PDF'}
             </Button>
@@ -136,16 +203,16 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
               </span>
             ) : null}
           </div>
-        ) : (
-          <ImportProgress
-            committing={commitInspectionImport.isPending}
-            job={job.data}
-            onCommit={() => void commit()}
-            onDiscard={() => setJobId(null)}
-          />
-        )}
-      </CardContent>
-    </Card>
+        </div>
+      ) : (
+        <ImportProgress
+          committing={commitInspectionImport.isPending}
+          job={job.data}
+          onCommit={() => void commit()}
+          onDiscard={() => setJobId(null)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -176,8 +243,8 @@ function ImportProgress({
         {/* Said plainly, because the opposite is what people expect of an
             upload. The work is on the server; the page is only watching it. */}
         <p className="text-muted-foreground text-sm">
-          This keeps running if you close the page. A long report with hundreds of photographs
-          takes a few minutes.
+          This keeps running if you close the page. A long report with hundreds of photographs takes
+          a few minutes.
         </p>
       </div>
     );
