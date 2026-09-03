@@ -28,7 +28,6 @@ import {
   type AreaCategory,
   type AreaEnvironment,
   InspectionSource,
-  InspectionStatus,
   InspectionType
 } from '@prisma/client';
 import { classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
@@ -134,7 +133,13 @@ export class InspectionImportService {
   ) {}
 
   /**
-   * Begin reading a report, and answer before it has been read.
+   * Begin reading a report for an inspection that already exists.
+   *
+   * Jobber is the scheduling source of record, so a move-in walked in Inspect &
+   * Cloud arrives here as a *completed* inspection with nothing in it — no
+   * areas, no photographs, no findings. The walkthrough happened; the evidence
+   * went to another system. This is what puts the evidence back, so the record
+   * a later move-out is compared against is the one Jobber already created.
    *
    * A 48-page report with 376 photographs takes longer than a browser will
    * wait, and killing the work when the connection drops is how floor-plan
@@ -142,13 +147,13 @@ export class InspectionImportService {
    * while the caller saw an empty response. The job row is the answer instead —
    * the console polls it, and closing the tab costs nothing.
    */
-  async start(user: AuthenticatedUser, buildingId: string, file?: UploadedReport) {
+  async start(user: AuthenticatedUser, inspectionId: string, file?: UploadedReport) {
     if (!file?.buffer?.length)
       throw new ApplicationError(400, 'REPORT_FILE_REQUIRED', 'Attach the report PDF to import.');
     if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-')
       throw new ApplicationError(400, 'REPORT_NOT_A_PDF', 'That file is not a PDF.');
 
-    const property = await this.requireProperty(user, buildingId);
+    const inspection = await this.requireSeedableInspection(user, inspectionId);
     const fingerprint = reportFingerprint(file.buffer);
 
     const previous = await this.findPreviousImport(user.organizationId, fingerprint);
@@ -174,7 +179,8 @@ export class InspectionImportService {
     const job = await this.prisma.inspectionImportJob.create({
       data: {
         organizationId: user.organizationId,
-        buildingId: property.id,
+        buildingId: inspection.propertywareBuildingId ?? inspection.id,
+        inspectionId: inspection.id,
         fingerprint,
         status: 'RUNNING',
         startedById: user.id,
@@ -188,8 +194,16 @@ export class InspectionImportService {
     await this.storage.putBytes(sourceKey(user.organizationId, fingerprint), file.buffer, 'application/pdf');
 
     // Deliberately not awaited, exactly as floor-plan extraction does it:
-    // `runExtraction` records its own outcome and never rejects.
-    void this.runExtraction(user, job.id, file.buffer);
+    // `runExtraction` records its own outcome. The trailing catch is what makes
+    // "never rejects" true rather than intended -- an unhandled rejection from
+    // a floating promise takes the process down, and the one place that can
+    // still throw is the error handling itself.
+    void this.runExtraction(user, job.id, file.buffer).catch((error: unknown) => {
+      this.logger.error({
+        event: 'inspection_import_crashed',
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+    });
     return { jobId: job.id, status: 'RUNNING' as const };
   }
 
@@ -274,9 +288,18 @@ export class InspectionImportService {
   }
 
   private async fail(jobId: string, errorCode: string) {
-    await this.prisma.inspectionImportJob
-      .update({ where: { id: jobId }, data: { status: 'FAILED', errorCode } })
-      .catch(() => undefined);
+    // try/catch rather than `.catch()`: a throw *constructing* the call — a
+    // dead connection, a client that never initialised — happens before there
+    // is a promise to attach a handler to, so the chained form does not catch
+    // it and the rejection escapes to the floating caller.
+    try {
+      await this.prisma.inspectionImportJob.update({
+        where: { id: jobId },
+        data: { status: 'FAILED', errorCode },
+      });
+    } catch {
+      this.logger.error({ event: 'inspection_import_status_not_recorded', jobId });
+    }
   }
 
   /**
@@ -298,14 +321,24 @@ export class InspectionImportService {
         'IMPORT_NOT_READY',
         'This report has not finished being read yet.',
       );
-    if (job.inspectionId)
+    if (job.committedAt)
       throw new ApplicationError(409, 'REPORT_ALREADY_IMPORTED', 'This report was already imported.', [
         { inspectionId: job.inspectionId },
       ]);
+    if (!job.inspectionId)
+      throw new ApplicationError(
+        409,
+        'IMPORT_HAS_NO_INSPECTION',
+        'This job is not attached to an inspection.',
+      );
 
     const report = job.output as unknown as ImportedReport;
     const fingerprint = job.fingerprint;
-    const property = await this.requireProperty(user, job.buildingId);
+    // Re-checked at commit, not trusted from the read. Minutes pass while a
+    // report is parsed, and an inspection that gained evidence in between must
+    // not have it written over.
+    const target = await this.requireSeedableInspection(user, job.inspectionId);
+    const property = target.building;
 
     // The same file twice is almost always somebody clicking again, and a
     // second baseline for one walkthrough is worse than a refusal: the
@@ -342,24 +375,17 @@ export class InspectionImportService {
         },
       });
 
-      const inspection = await tx.inspection.create({
+      // The inspection already exists; this fills it in. Its identity, its
+      // schedule and its place in Jobber are not ours to change -- only the
+      // evidence it was always missing, plus a note saying where that came from.
+      await tx.inspection.update({
+        where: { id: target.id },
         data: {
-          organizationId: user.organizationId,
-          propertyId: property.id,
-          // Both, and both the building's id. `propertywareBuildingId` is what
-          // `ComparisonService.resolveBaseline` scopes on, so an import that
-          // left it null would be invisible to the move-out it exists to serve.
-          propertywareBuildingId: property.id,
-          inspectionType: InspectionType.MOVE_IN,
           source: InspectionSource.IMPORTED_REPORT,
-          status: InspectionStatus.UNDER_REVIEW,
-          scheduledAt: reportDay(report.reportDate),
-          completedAt: new Date(),
-          createdById: user.id,
           internalNotes: importNote(report, fingerprint),
         },
-        select: { id: true },
       });
+      const inspection = { id: target.id };
 
       let photoCursor = 0;
       for (const area of report.areas) {
@@ -451,7 +477,7 @@ export class InspectionImportService {
 
     await this.prisma.inspectionImportJob.update({
       where: { id: job.id },
-      data: { inspectionId },
+      data: { committedAt: new Date() },
     });
     this.logger.log({ event: 'inspection_report_imported', inspectionId });
     return { inspectionId, areas: report.areas.length, photos: stored.length };
@@ -488,30 +514,67 @@ export class InspectionImportService {
   }
 
   /**
-   * The Propertyware building this report describes.
+   * The inspection this report belongs to, and whether it may be seeded.
    *
-   * The id in the path is a *building* id, the same one every other inspection
-   * route takes. `PropertyArea.propertyId` also carries a building id, but its
-   * foreign key references `Property` — a separate, lazily populated table
-   * where most buildings have no row. So the row is upserted before any area
-   * points at it, exactly as the floor-plan admin and the HVAC path already do;
-   * creating the area first violates `PropertyArea_propertyId_fkey`.
+   * Only an **empty** one. A record with areas or photographs already has
+   * evidence, and replacing that is not importing — it is overwriting somebody
+   * else's walkthrough with a document. An empty record has nothing to
+   * overwrite, which is exactly why seeding it is safe and why the check is on
+   * emptiness rather than on status.
+   *
+   * Emptiness is also why `finalizedAt` is not an obstacle here. Finalizing
+   * freezes evidence, and there is none: the inspection was closed in Jobber
+   * because the walk happened, not because anything was recorded on this
+   * system. Refusing a finalized shell would refuse every record this feature
+   * exists for.
+   *
+   * Move-in only. The point is a baseline for a later move-out, and seeding a
+   * move-out with a move-in report would compare the property against itself.
    */
-  private async requireProperty(user: AuthenticatedUser, buildingId: string) {
-    const building = await this.prisma.propertywareBuilding.findFirst({
-      where: { id: buildingId, organizationId: user.organizationId },
+  private async requireSeedableInspection(user: AuthenticatedUser, inspectionId: string) {
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { id: inspectionId, organizationId: user.organizationId },
       select: {
         id: true,
-        name: true,
-        addressLine1: true,
-        city: true,
-        state: true,
-        postalCode: true,
+        inspectionType: true,
+        propertywareBuildingId: true,
+        propertywareBuilding: {
+          select: {
+            id: true,
+            name: true,
+            addressLine1: true,
+            city: true,
+            state: true,
+            postalCode: true,
+          },
+        },
+        // Areas alone are enough to mean "has evidence": a photograph's
+        // `inspectionAreaId` is required, so one cannot exist without an area
+        // to hang from.
+        _count: { select: { areas: true } },
       },
     });
-    if (!building)
-      throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'Property was not found.');
-    return building;
+    if (!inspection)
+      throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
+    if (inspection.inspectionType !== InspectionType.MOVE_IN)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_NOT_A_MOVE_IN',
+        'A report can only be imported into a move-in inspection.',
+      );
+    if (inspection._count.areas > 0)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_NOT_EMPTY',
+        'This inspection already has evidence. A report can only be imported into an empty one.',
+      );
+    if (!inspection.propertywareBuilding)
+      throw new ApplicationError(
+        409,
+        'INSPECTION_HAS_NO_PROPERTY',
+        'This inspection is not linked to a property, so its areas have nowhere to live.',
+      );
+    return { ...inspection, building: inspection.propertywareBuilding };
   }
 
   private findPreviousImport(organizationId: string, fingerprint: string) {
@@ -665,18 +728,14 @@ const defectsIn = (area: ImportedArea) =>
   area.items.filter((item) => item.comment !== null || failedAxes(item).length > 0);
 
 /**
- * The day the report covers.
+ * The report's own date is deliberately not written anywhere structural.
  *
- * `scheduledAt` is a `date` column and the comparison orders baselines by it,
- * so a wrong day here silently changes which move-in a move-out is judged
- * against. Parsed from the report's own header; today only when it has none.
+ * `scheduledAt` belongs to Jobber, which is the scheduling source of record,
+ * and the comparison orders baselines by it — so overwriting it with a date
+ * read out of a PDF would move which move-in a later move-out is judged
+ * against. The date is kept in the inspection's notes for provenance and
+ * nowhere else; `importNote` is where it lands.
  */
-function reportDay(reportDate: string | null) {
-  if (!reportDate) return new Date();
-  const [month, day, year] = reportDate.split('-');
-  const parsed = new Date(`${day}-${month}-${year}`);
-  return Number.isNaN(parsed.valueOf()) ? new Date() : parsed;
-}
 
 /** "Sep 02 2026 01:15:39 PM" as it was written, or null if it will not parse. */
 function captureTime(value: string | null) {

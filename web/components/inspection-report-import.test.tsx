@@ -66,18 +66,31 @@ describe('importing an inspection report', () => {
     // Warning about work that is not at risk is how people learn to ignore
     // warnings that matter.
     job = { id: 'job-1', status: 'RUNNING', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, summary: null };
-    render(<InspectionReportImport propertyId="property-1" />);
+    render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
     expect(await screen.findByText(/keeps running if you close the page/i)).toBeTruthy();
   });
 
   it('will not send a file that is not a PDF', async () => {
-    render(<InspectionReportImport propertyId="property-1" />);
+    render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(new File(['x'], 'notes.txt', { type: 'text/plain' }));
 
     expect(await screen.findByText(/not a PDF/i)).toBeTruthy();
     expect(startImport).not.toHaveBeenCalled();
+  });
+
+  it('sends the report against the inspection it is filling in', async () => {
+    // The destination is the empty move-in itself, not a property: Jobber
+    // already created the record and this is what puts its evidence back.
+    render(<InspectionReportImport inspectionId="inspection-1" />);
+    choose(pdf());
+
+    await waitFor(() =>
+      expect(startImport).toHaveBeenCalledWith(
+        expect.objectContaining({ inspectionId: 'inspection-1' }),
+      ),
+    );
   });
 
   it('shows what the reader could not resolve before anything is written', async () => {
@@ -100,7 +113,7 @@ describe('importing an inspection report', () => {
         },
       }),
     };
-    render(<InspectionReportImport propertyId="property-1" />);
+    render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
     // JSX splits "{n} things to check" into two text nodes, so the heading is
@@ -116,7 +129,7 @@ describe('importing an inspection report', () => {
     // An imported inspection is evidence, and whether it was measured or
     // inferred is part of it.
     job = { id: 'job-1', status: 'COMPLETED', method: 'AI', provider: 'ANTHROPIC', errorCode: null, inspectionId: null, summary: summary() };
-    render(<InspectionReportImport propertyId="property-1" />);
+    render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
     expect(await screen.findByText(/read by AI/i)).toBeTruthy();
@@ -124,7 +137,7 @@ describe('importing an inspection report', () => {
 
   it('does not import until somebody presses the button', async () => {
     job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, summary: summary() };
-    render(<InspectionReportImport propertyId="property-1" />);
+    render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
     await screen.findByRole('button', { name: /import as a move-in inspection/i });
@@ -144,7 +157,7 @@ describe('importing an inspection report', () => {
       inspectionId: null,
       summary: null,
     };
-    render(<InspectionReportImport propertyId="property-1" />);
+    render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
     expect(await screen.findByText(/no AI provider is configured/i)).toBeTruthy();

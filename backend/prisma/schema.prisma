@@ -691,9 +691,14 @@ model InspectionImportJob {
   /// The parsed report, for the preview the console shows before committing.
   output         Json?
   errorCode      String?
-  /// Set only once the import has been written, so a completed extraction and
-  /// a committed import are never confused for each other.
+  /// The inspection this report is being read for. Set when the job starts,
+  /// because a report is always imported *into* an existing record — Jobber
+  /// creates the move-in when the visit completes, and the walkthrough itself
+  /// happened in another system.
   inspectionId   String?             @db.Uuid
+  /// Set once the evidence has actually been written, so a finished reading and
+  /// a finished import are never confused for each other.
+  committedAt    DateTime?
   startedById    String              @db.Uuid
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt

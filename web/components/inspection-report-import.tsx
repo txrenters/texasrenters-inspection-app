@@ -7,7 +7,14 @@ import { AlertTriangleIcon, CheckCircle2Icon, FileTextIcon, UploadIcon } from 'l
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -17,11 +24,43 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  useAdminMutations,
-  useInspectionImportJob,
-  type ImportJob,
-} from '@/lib/queries';
+import { useAdminMutations, useInspectionImportJob, type ImportJob } from '@/lib/queries';
+
+/**
+ * The way in, from the inspection that needs filling.
+ *
+ * Shown on a move-in that Jobber closed but nothing was ever recorded
+ * against -- the walk happened in another system, so the record arrives here
+ * complete and empty. The import is what puts its evidence back.
+ *
+ * A dialog rather than a panel: this is done once per inspection, and a
+ * permanent block on a page people read repeatedly costs more attention than
+ * it earns.
+ */
+export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog onOpenChange={setOpen} open={open}>
+      <DialogTrigger asChild>
+        <Button variant="outline">
+          <UploadIcon />
+          Import a report
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Import an inspection report</DialogTitle>
+          <DialogDescription>
+            This move-in was closed in Jobber but has no evidence recorded against it. Reading the
+            Inspect &amp; Cloud report fills it in, so a later move-out has a baseline to compare
+            against.
+          </DialogDescription>
+        </DialogHeader>
+        <InspectionReportImport inspectionId={inspectionId} />
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /**
  * Bringing in an inspection that happened outside this app.
@@ -36,7 +75,7 @@ import {
  * from upload to import would make this a formality and put unreviewed
  * evidence behind a charge.
  */
-export function InspectionReportImport({ propertyId }: { propertyId: string }) {
+export function InspectionReportImport({ inspectionId }: { inspectionId: string }) {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -72,7 +111,7 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
       return;
     }
     try {
-      const started = await startInspectionImport.mutateAsync({ propertyId, file });
+      const started = await startInspectionImport.mutateAsync({ inspectionId, file });
       setJobId(started.jobId);
     } catch {
       // Rendered below from the mutation's own error.
@@ -95,24 +134,16 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
     (commitInspectionImport.error instanceof Error ? commitInspectionImport.error.message : null);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Import an inspection report</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-muted-foreground text-sm">
-          For a walkthrough done outside this app. The report is read here and becomes a move-in
-          inspection, so a later move-out has a baseline to compare against.
-        </p>
+    <div className="space-y-4">
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangleIcon />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        {error ? (
-          <Alert variant="destructive">
-            <AlertTriangleIcon />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-
-        {!jobId ? (
+      {!jobId ? (
+        <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <input
               accept="application/pdf"
@@ -136,16 +167,16 @@ export function InspectionReportImport({ propertyId }: { propertyId: string }) {
               </span>
             ) : null}
           </div>
-        ) : (
-          <ImportProgress
-            committing={commitInspectionImport.isPending}
-            job={job.data}
-            onCommit={() => void commit()}
-            onDiscard={() => setJobId(null)}
-          />
-        )}
-      </CardContent>
-    </Card>
+        </div>
+      ) : (
+        <ImportProgress
+          committing={commitInspectionImport.isPending}
+          job={job.data}
+          onCommit={() => void commit()}
+          onDiscard={() => setJobId(null)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -176,8 +207,8 @@ function ImportProgress({
         {/* Said plainly, because the opposite is what people expect of an
             upload. The work is on the server; the page is only watching it. */}
         <p className="text-muted-foreground text-sm">
-          This keeps running if you close the page. A long report with hundreds of photographs
-          takes a few minutes.
+          This keeps running if you close the page. A long report with hundreds of photographs takes
+          a few minutes.
         </p>
       </div>
     );
