@@ -108,6 +108,19 @@ function InspectionDetail() {
     pageSize: 20,
   });
   const audit = useInspectionAudit(id, state.auditPage);
+  /**
+   * Whether this inspection has any evidence yet, for the import prompt.
+   *
+   * Up here with the other hooks, not beside the markup that reads it. Two
+   * early returns sit below — an error state and a skeleton while the
+   * inspection loads — so a hook after them runs on some renders and not
+   * others, and React counts a different number each time. That is error #310,
+   * and it took the whole page down rather than just the prompt.
+   *
+   * Shared with AreaEvidenceWorkspace through the same query key, so asking
+   * here costs no extra request.
+   */
+  const areas = useInspectionAreas(id, permissions.has('inspections:read'));
   const [assigning, setAssigning] = useState(false);
   const [editing, setEditing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -163,9 +176,6 @@ function InspectionDetail() {
    * may already have been shared; deleting it removes the report outright,
    * which is a different act — and the permission is the gate on it.
    */
-  // Shared with AreaEvidenceWorkspace through the same query key, so asking
-  // here costs no extra request.
-  const areas = useInspectionAreas(id, permissions.has('inspections:read'));
   const canDelete = permissions.has('inspections:delete');
   const canEditOrAssign =
     !finalized &&
