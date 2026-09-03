@@ -24,23 +24,20 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { SearchableSelect } from '@/components/searchable-select';
-import {
-  useAdminMutations,
-  useInspectionImportJob,
-  usePropertyOptions,
-  type ImportJob,
-} from '@/lib/queries';
+import { useAdminMutations, useInspectionImportJob, type ImportJob } from '@/lib/queries';
 
 /**
- * The way in from the move-in list.
+ * The way in, from the inspection that needs filling.
  *
- * A dialog rather than a card on the page: this is an occasional action, and a
- * permanent panel above a list people read every day would cost more attention
- * than it earns. It sits with move-ins because an import *is* one -- it is the
- * baseline a later move-out is compared against.
+ * Shown on a move-in that Jobber closed but nothing was ever recorded
+ * against -- the walk happened in another system, so the record arrives here
+ * complete and empty. The import is what puts its evidence back.
+ *
+ * A dialog rather than a panel: this is done once per inspection, and a
+ * permanent block on a page people read repeatedly costs more attention than
+ * it earns.
  */
-export function ImportReportDialog() {
+export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
   const [open, setOpen] = useState(false);
   return (
     <Dialog onOpenChange={setOpen} open={open}>
@@ -54,11 +51,12 @@ export function ImportReportDialog() {
         <DialogHeader>
           <DialogTitle>Import an inspection report</DialogTitle>
           <DialogDescription>
-            For a walkthrough done outside this app. The report is read here and becomes a move-in
-            inspection, so a later move-out has a baseline to compare against.
+            This move-in was closed in Jobber but has no evidence recorded against it. Reading the
+            Inspect &amp; Cloud report fills it in, so a later move-out has a baseline to compare
+            against.
           </DialogDescription>
         </DialogHeader>
-        <InspectionReportImport />
+        <InspectionReportImport inspectionId={inspectionId} />
       </DialogContent>
     </Dialog>
   );
@@ -77,22 +75,13 @@ export function ImportReportDialog() {
  * from upload to import would make this a formality and put unreviewed
  * evidence behind a charge.
  */
-export function InspectionReportImport() {
+export function InspectionReportImport({ inspectionId }: { inspectionId: string }) {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
   const [jobId, setJobId] = useState<string | null>(null);
   const [rejected, setRejected] = useState<string | null>(null);
-  const [propertyId, setPropertyId] = useState('');
-  const [search, setSearch] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const job = useInspectionImportJob(jobId);
-  // Reached from the move-in list rather than from a property's own page, so
-  // the property has to be chosen here. Searched server-side and paged, like
-  // every other property picker -- there are hundreds of them.
-  const properties = usePropertyOptions('', search);
-  const options = (properties.data?.pages ?? []).flatMap((page) =>
-    page.items.map((item) => ({ value: item.id, label: item.name })),
-  );
 
   const uploading = startInspectionImport.isPending;
 
@@ -117,19 +106,12 @@ export function InspectionReportImport() {
 
   async function upload(file: File) {
     setRejected(null);
-    // Guarded here as well as on the button. The button is the way in, but a
-    // report sent without a property would be read and then have nowhere to
-    // land, and the failure would surface minutes later as a server error.
-    if (!propertyId) {
-      setRejected('Choose the property this report covers first.');
-      return;
-    }
     if (file.type !== 'application/pdf') {
       setRejected('That file is not a PDF.');
       return;
     }
     try {
-      const started = await startInspectionImport.mutateAsync({ propertyId, file });
+      const started = await startInspectionImport.mutateAsync({ inspectionId, file });
       setJobId(started.jobId);
     } catch {
       // Rendered below from the mutation's own error.
@@ -162,21 +144,6 @@ export function InspectionReportImport() {
 
       {!jobId ? (
         <div className="space-y-3">
-          <SearchableSelect
-            disabled={properties.isLoading || properties.isError}
-            emptyMessage="No active property matches your search."
-            hasMore={properties.hasNextPage}
-            id="import-property"
-            loadingMore={properties.isFetchingNextPage}
-            onChange={setPropertyId}
-            onLoadMore={() => void properties.fetchNextPage()}
-            onSearch={setSearch}
-            options={options}
-            optionsLabel="Properties"
-            placeholder="Choose the property this report covers"
-            searchPlaceholder="Search properties…"
-            value={propertyId}
-          />
           <div className="flex flex-wrap items-center gap-3">
             <input
               accept="application/pdf"
@@ -190,10 +157,7 @@ export function InspectionReportImport() {
               ref={fileInput}
               type="file"
             />
-            {/* Nothing to attach a report to until a property is chosen, and a
-                file picker that opens and then fails is worse than one that
-                waits. */}
-            <Button disabled={uploading || !propertyId} onClick={() => fileInput.current?.click()}>
+            <Button disabled={uploading} onClick={() => fileInput.current?.click()}>
               {uploading ? <Spinner /> : <UploadIcon />}
               {uploading ? 'Uploading…' : 'Choose a report PDF'}
             </Button>

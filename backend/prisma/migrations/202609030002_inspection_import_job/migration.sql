@@ -12,6 +12,7 @@ CREATE TABLE "InspectionImportJob" (
     "output" JSONB,
     "errorCode" TEXT,
     "inspectionId" UUID,
+    "committedAt" TIMESTAMP(3),
     "startedById" UUID NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,

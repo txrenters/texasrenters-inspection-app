@@ -6,7 +6,6 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InspectionBulkDeleteDialog } from '@/components/inspection-bulk-delete-dialog';
-import { ImportReportDialog } from '@/components/inspection-report-import';
 import {
   InspectionDeleteDialog,
   type DeletableInspection,
@@ -304,16 +303,9 @@ export default function InspectionsPage() {
       <PageHeader
         actions={
           canManage ? (
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Only on the move-in list. An import *is* a move-in -- it is
-                  the baseline a later move-out is compared against -- so
-                  offering it beside move-outs or HVAC visits would invite
-                  somebody to file one under a type it cannot be. */}
-              {state.type === 'MOVE_IN' ? <ImportReportDialog /> : null}
-              <Button asChild>
-                <Link href={createHref}>{createLabel}</Link>
-              </Button>
-            </div>
+            <Button asChild>
+              <Link href={createHref}>{createLabel}</Link>
+            </Button>
           ) : undefined
         }
         description={

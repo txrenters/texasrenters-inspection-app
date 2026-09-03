@@ -12,6 +12,7 @@ import { useParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 
 import { AreaEvidenceWorkspace } from '@/components/area-evidence/AreaEvidenceWorkspace';
+import { ImportReportDialog } from '@/components/inspection-report-import';
 import { AssignmentDialog } from '@/components/assignment-dialog';
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { InspectionChargesPanel } from '@/components/inspection-charges';
@@ -46,6 +47,7 @@ import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspec
 import {
   useAssignments,
   useInspection,
+  useInspectionAreas,
   useInspectionAudit,
   useInspectionFindings,
 } from '@/lib/queries';
@@ -161,6 +163,9 @@ function InspectionDetail() {
    * may already have been shared; deleting it removes the report outright,
    * which is a different act — and the permission is the gate on it.
    */
+  // Shared with AreaEvidenceWorkspace through the same query key, so asking
+  // here costs no extra request.
+  const areas = useInspectionAreas(id, permissions.has('inspections:read'));
   const canDelete = permissions.has('inspections:delete');
   const canEditOrAssign =
     !finalized &&
@@ -367,6 +372,26 @@ function InspectionDetail() {
           even while the technician was still capturing, which put an action
           nobody could take yet ahead of the work everybody came for. */}
       <div className="mt-4 space-y-4">
+        {/* A move-in Jobber closed with nothing recorded against it: the walk
+            happened in Inspect & Cloud, so the record arrived here complete and
+            empty. Offered only while it is still empty, because importing into
+            an inspection that already has evidence would overwrite somebody's
+            walkthrough with a document -- the API refuses that too, and a
+            button that only ever errors is worse than no button. */}
+        {item.inspectionType === 'MOVE_IN' &&
+        permissions.has('inspections:manage') &&
+        areas.data?.length === 0 ? (
+          <Alert>
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                This move-in has no evidence recorded against it. Import the report if the
+                walkthrough was done outside this app.
+              </span>
+              <ImportReportDialog inspectionId={id} />
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         <AreaEvidenceWorkspace inspectionId={id} />
 
         {/* The comparison moved to its own page. It was rendered here, below

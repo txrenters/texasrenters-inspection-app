@@ -223,10 +223,13 @@ export class AdminController {
    * inspector typed by hand, a photograph whose caption did not resolve -- and
    * a separate call writes it.
    *
-   * Behind `inspections:manage`, the key for creating and editing an
-   * inspection, because that is exactly what this does. Not `properties:manage`
-   * despite the address in the path: the property is the destination, the
-   * inspection is the thing being made.
+   * Imported *into* an inspection that already exists. Jobber creates the
+   * move-in when the visit completes, so the record is here with nothing in
+   * it — the walk happened, the evidence went to another system. This puts the
+   * evidence back, which is why there is no route that creates one.
+   *
+   * Behind `inspections:manage`, the key for editing an inspection, because
+   * that is exactly what this does.
    *
    * The size limit is well above the floor-plan route's. These reports carry a
    * photograph of every wall -- the one this was built against is 73 MB across
@@ -241,13 +244,13 @@ export class AdminController {
    * success while the caller saw an empty response. Closing the tab now costs
    * nothing; the reading continues and the job is still there afterwards.
    */
-  @Post('properties/:propertyId/inspection-imports')
+  @Post('inspections/:inspectionId/inspection-imports')
   @ApiTags(INSPECTION_IMPORT_TAG)
   @RequirePermissions('inspections:manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 150_000_000, files: 1 } }))
   startInspectionImport(
     @Req() request: AuthenticatedRequest,
-    @Param('propertyId') id: string,
+    @Param('inspectionId') id: string,
     @UploadedFile() file?: UploadedReport,
   ) {
     return this.inspectionImports.start(request.user, id, file);

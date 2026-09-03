@@ -1543,11 +1543,11 @@ export function useAdminMutations() {
      * there. The upload is the only part of this the page can lose by closing.
      */
     startInspectionImport: useMutation({
-      mutationFn: ({ propertyId, file }: { propertyId: string; file: File }) => {
+      mutationFn: ({ inspectionId, file }: { inspectionId: string; file: File }) => {
         const form = new FormData();
         form.set('file', file);
         return api<{ jobId: string; status: string }>(
-          `/api/v1/admin/properties/${propertyId}/inspection-imports`,
+          `/api/v1/admin/inspections/${inspectionId}/inspection-imports`,
           { method: 'POST', body: form },
         );
       },
@@ -1561,8 +1561,8 @@ export function useAdminMutations() {
           { method: 'POST' },
         ),
       onSuccess: () => {
-        // The property now has an inspection it did not have, and may have
-        // gained areas the report described.
+        // The inspection that was empty now has areas, photographs and
+        // condition against every item the report graded.
         void verifyAffectedQueries(client, [keys.all, keys.dashboard]);
       },
     }),
