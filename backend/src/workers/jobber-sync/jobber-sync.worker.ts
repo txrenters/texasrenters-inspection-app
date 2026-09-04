@@ -433,7 +433,56 @@ export class JobberSyncWorker {
      * single enum value and `ACTIVE` returns everything — so this is the only
      * place the distinction can be made.
      */
-    if (visit.completedAt || visit.visitStatus === 'COMPLETED') {
+    const titled = resolveVisitType(visit.title, rules);
+    /**
+     * A filter delivery whose details say a walkthrough happens too.
+     *
+     * This office books both as one visit -- "Q3 2026 Tenant Benefit Package"
+     * with details reading "Filter Change ... + Occupied Inspection" -- so the
+     * title alone typed it a delivery and dropped it. Seventy-three of them,
+     * and not one occupied inspection had ever reached this system.
+     *
+     * Only ever upgrades a delivery, never anything else: see
+     * `occupiedInspectionInDetails` for why free text must not overrule a title
+     * somebody chose.
+     */
+    const type: VisitTypeResolution =
+      titled.outcome === 'RESOLVED' &&
+      titled.inspectionType === InspectionType.AC_FILTER_DELIVERY &&
+      occupiedInspectionInDetails(visit.instructions)
+        ? { outcome: 'RESOLVED', inspectionType: InspectionType.OCCUPIED }
+        : titled;
+
+    const isComplete = Boolean(visit.completedAt || visit.visitStatus === 'COMPLETED');
+
+    /**
+     * A move-in that was walked before we ever saw it.
+     *
+     * Kept, where every other finished visit is skipped, because this one has a
+     * job left to do here: it is the baseline a later move-out is compared
+     * against. Jobber closes a move-in when the visit completes, and the
+     * walkthrough itself happened in Inspect & Cloud, so the record arrives
+     * finished and empty — which is exactly the shape the report import
+     * consumes. Without it there is nothing to seed, and the move-out has
+     * nothing to compare against.
+     *
+     * Recorded `COMPLETED`, never `SCHEDULED`. That is what answers the concern
+     * the skip was written for: the technician queue is `SCHEDULED` and
+     * `IN_PROGRESS` only, so a finished visit cannot reappear as work somebody
+     * already did.
+     *
+     * Deliberately move-ins alone. Of the 130 finished visits sitting here, 47
+     * are filter deliveries and 77 carry a job number for a title and no type
+     * at all; importing those would be inventing history rather than recovering
+     * it. Only a move-in is owed a baseline.
+     */
+    const isRecoverableMoveIn =
+      type.outcome === 'RESOLVED' &&
+      type.inspectionType === InspectionType.MOVE_IN &&
+      Boolean(visit.property?.id) &&
+      Boolean(visit.startAt);
+
+    if (isComplete && !isRecoverableMoveIn) {
       await this.prisma.jobberVisitImport.update({
         where: { id: record.id },
         data: {
@@ -457,25 +506,6 @@ export class JobberSyncWorker {
       return;
     }
 
-    const titled = resolveVisitType(visit.title, rules);
-    /**
-     * A filter delivery whose details say a walkthrough happens too.
-     *
-     * This office books both as one visit -- "Q3 2026 Tenant Benefit Package"
-     * with details reading "Filter Change ... + Occupied Inspection" -- so the
-     * title alone typed it a delivery and dropped it. Seventy-three of them,
-     * and not one occupied inspection had ever reached this system.
-     *
-     * Only ever upgrades a delivery, never anything else: see
-     * `occupiedInspectionInDetails` for why free text must not overrule a title
-     * somebody chose.
-     */
-    const type: VisitTypeResolution =
-      titled.outcome === 'RESOLVED' &&
-      titled.inspectionType === InspectionType.AC_FILTER_DELIVERY &&
-      occupiedInspectionInDetails(visit.instructions)
-        ? { outcome: 'RESOLVED', inspectionType: InspectionType.OCCUPIED }
-        : titled;
     /**
      * Typed, but a type this integration does not import.
      *
@@ -565,6 +595,14 @@ export class JobberSyncWorker {
           source: InspectionSource.JOBBER,
           jobberVisitId: visit.id,
           jobberJobId: visit.job?.id ?? null,
+          // Only ever set for the recovered move-ins above: work Jobber had
+          // already closed arrives finished, and must not read as scheduled.
+          ...(isComplete
+            ? {
+                status: InspectionStatus.COMPLETED,
+                completedAt: visit.completedAt ? new Date(visit.completedAt) : new Date(),
+              }
+            : {}),
         });
         await tx.auditLog.create({
           data: {
