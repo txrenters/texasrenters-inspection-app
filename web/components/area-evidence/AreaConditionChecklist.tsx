@@ -128,8 +128,17 @@ export function AreaConditionChecklist({
 }) {
   const record = useRecordChecklistItem(inspectionId, areaId);
   const pendingItemId = record.isPending ? record.variables?.itemId : undefined;
-  const assessed = checklist.filter(
-    (item) => item.isClean !== null || item.isUndamaged !== null || item.isWorking !== null,
+  /**
+   * Answered counts as assessed, whatever shape the answer takes.
+   *
+   * The HVAC checklist asks for eight measurements, two lines of text and three
+   * single choices alongside its forty-seven ticks. Counting only the three
+   * axes reported a fully completed HVAC inspection as nothing assessed.
+   */
+  const assessed = checklist.filter((item) =>
+    item.responseType && item.responseType !== 'STATUS'
+      ? item.numericValue != null || Boolean(item.textValue)
+      : item.isClean !== null || item.isUndamaged !== null || item.isWorking !== null,
   ).length;
 
   if (!checklist.length)
@@ -201,7 +210,27 @@ export function AreaConditionChecklist({
                       </span>
                     )}
                   </TableCell>
-                  {AXES.map((axis) => (
+                  {item.responseType && item.responseType !== 'STATUS' ? (
+                    /* A measurement or a chosen option is one answer, not three
+                       judgements, so it spans the columns the axes would have
+                       filled. Read-only here on purpose: these are recorded on
+                       site by the person holding the instrument, and the office
+                       reviewing a photograph is not in a position to correct a
+                       temperature. */
+                    <TableCell className="text-center" colSpan={AXES.length}>
+                      {item.numericValue != null ? (
+                        <span className="font-medium tabular-nums">
+                          {item.numericValue}
+                          {item.unit ? ` ${item.unit}` : ''}
+                        </span>
+                      ) : item.textValue ? (
+                        <span className="font-medium">{item.textValue}</span>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">Not recorded</span>
+                      )}
+                    </TableCell>
+                  ) : (
+                  AXES.map((axis) => (
                     <TableCell key={axis.key}>
                       <div className="flex justify-center">
                         <AxisControl
@@ -222,7 +251,8 @@ export function AreaConditionChecklist({
                         />
                       </div>
                     </TableCell>
-                  ))}
+                  ))
+                  )}
                 </TableRow>
               ))}
             </TableBody>

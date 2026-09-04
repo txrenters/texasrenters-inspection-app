@@ -70,6 +70,11 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
           isUndamaged: payload.isUndamaged ?? null,
           isWorking: payload.isWorking ?? null,
           comment: payload.comment ?? null,
+          // A queued HVAC reading is the same shape as any other assessment.
+          // Omitted here it would replay as an empty answer, quietly erasing a
+          // measurement the technician took while offline.
+          numericValue: payload.numericValue ?? null,
+          textValue: payload.textValue ?? null,
         },
       ),
     // Safe to replay: the server keeps the first confirmation's timestamp, so a

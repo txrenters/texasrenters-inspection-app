@@ -301,6 +301,17 @@ export class ChecklistAssessmentDto {
   @IsOptional() @IsBoolean() isUndamaged?: boolean | null;
   @IsOptional() @IsBoolean() isWorking?: boolean | null;
   @IsOptional() @IsString() @MaxLength(2000) comment?: string | null;
+  /**
+   * A measurement, for a READING item.
+   *
+   * Bounded because these are temperatures and pressures, not arbitrary
+   * numbers, and the column is DECIMAL(10,2). Negative is allowed on purpose:
+   * an outdoor temperature can be below zero, and a technician recording it
+   * should not have to argue with the form.
+   */
+  @IsOptional() @IsNumber() @Min(-1_000) @Max(100_000) numericValue?: number | null;
+  /** Free text for a TEXT item, or the chosen option for a CHOICE one. */
+  @IsOptional() @IsString() @MaxLength(500) textValue?: string | null;
 }
 
 export class TechnicianNoteDto {

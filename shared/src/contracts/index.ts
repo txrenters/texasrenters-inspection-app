@@ -64,6 +64,7 @@ export * from './api-gateway.js';
 export * from './area-evidence.js';
 export * from './password-policy.js';
 export * from './area-checklist-template.js';
+export * from './hvac-checklist.js';
 export * from './area-classification.js';
 export * from './inspection-scope.js';
 export * from './property-location.js';
