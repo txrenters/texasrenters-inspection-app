@@ -9,9 +9,23 @@ import { PORTFOLIO_VISIBLE } from '../../admin/inspection-creation';
 import {
   addressKeyCandidates,
   buildAddressIndex,
-  matchBuilding,
+  buildLooseAddressIndex,
+  type AddressMatch,
+  looseAddressKey,
+  matchBuildingWithFallback,
   normalizeAddressKey,
 } from './jobber.address';
+
+/**
+ * The two tiers, kept together so they cannot be passed separately.
+ *
+ * `strict` decides. `loose` is consulted only when `strict` had nothing at
+ * all, and only when it names exactly one building.
+ */
+export interface BuildingIndex {
+  strict: Map<string, string[]>;
+  loose: Map<string, string[]>;
+}
 
 export interface JobberPropertyDescriptor {
   jobberPropertyId: string;
@@ -74,7 +88,7 @@ export class JobberMappingService {
       where: { organizationId, isActive: true, ...PORTFOLIO_VISIBLE },
       select: { id: true, addressLine1: true, postalCode: true },
     });
-    return buildAddressIndex(buildings);
+    return { strict: buildAddressIndex(buildings), loose: buildLooseAddressIndex(buildings) };
   }
 
   /**
@@ -88,7 +102,7 @@ export class JobberMappingService {
   async resolveProperty(
     organizationId: string,
     property: JobberPropertyDescriptor,
-    index: Map<string, string[]>,
+    index: BuildingIndex,
   ) {
     const existing = await this.prisma.jobberPropertyLink.findUnique({
       where: {
@@ -116,7 +130,12 @@ export class JobberMappingService {
       property.postalCode,
     );
     const normalizedAddressKey = normalizeAddressKey(property.addressLine1, property.postalCode);
-    const match = matchBuilding(index, candidates);
+    const match = matchBuildingWithFallback(
+      index.strict,
+      index.loose,
+      candidates,
+      looseAddressKey(property.addressLine1, property.postalCode),
+    );
     const resolution = await this.resolutionFor(organizationId, match, normalizedAddressKey);
 
     const data = {
@@ -150,7 +169,7 @@ export class JobberMappingService {
    */
   private async resolutionFor(
     organizationId: string,
-    match: ReturnType<typeof matchBuilding>,
+    match: AddressMatch,
     normalizedAddressKey: string,
   ) {
     if (match.outcome === 'NONE')
