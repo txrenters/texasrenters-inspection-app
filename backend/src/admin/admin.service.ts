@@ -60,6 +60,7 @@ import type {
   PaginationDto,
   PortfolioListQueryDto,
   PropertyListQueryDto,
+  TenantListQueryDto,
   ReopenInspectionDto,
   TechnicianListQueryDto,
   TechnicianStatusDto,
@@ -426,6 +427,55 @@ export class AdminService {
         },
       }),
       this.prisma.propertywarePortfolio.count({ where }),
+    ]);
+    return this.page(items, total, query);
+  }
+
+  /**
+   * Tenancies from the office s own Propertyware report.
+   *
+   * Not the same rows as `propertyware_leases`: that comes from the REST
+   * endpoint, and this comes from the report the office maintains -- the only
+   * source that knows about the benefit package, and the only one carrying a
+   * building address.
+   */
+  async tenants(user: AuthenticatedUser, query: TenantListQueryDto) {
+    const active = query.active === undefined ? true : query.active === 'true';
+    const where: Prisma.PropertywareTenantWhereInput = {
+      organizationId: user.organizationId,
+      isActive: active,
+      // Matched case-insensitively: this is a hand-maintained picklist, not an
+      // enum we control, and an exact-casing equality would silently return
+      // nothing the day somebody types 'yes'.
+      ...(query.enrollment === 'TBP'
+        ? { tbpEnrollment: { equals: 'Yes', mode: 'insensitive' as const } }
+        : {}),
+      ...(query.enrollment === 'NOT_TBP'
+        ? { NOT: { tbpEnrollment: { equals: 'Yes', mode: 'insensitive' as const } } }
+        : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { leaseName: { contains: query.search, mode: 'insensitive' as const } },
+              { addressLine1: { contains: query.search, mode: 'insensitive' as const } },
+              { city: { contains: query.search, mode: 'insensitive' as const } },
+              { postalCode: { contains: query.search, mode: 'insensitive' as const } },
+              { zone: { contains: query.search, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.propertywareTenant.findMany({
+        where,
+        orderBy: { leaseName: 'asc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+        include: {
+          building: { select: { id: true, name: true, addressLine1: true } },
+        },
+      }),
+      this.prisma.propertywareTenant.count({ where }),
     ]);
     return this.page(items, total, query);
   }

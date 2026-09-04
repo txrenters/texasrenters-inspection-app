@@ -36,6 +36,7 @@ const config: PropertywareConfig = {
   cursorOverlapSeconds: 120,
   databaseConcurrency: 2,
   databaseBatchSize: 50,
+  tenantSyncCron: '0 3 * * *',
 };
 
 class FixtureProvider {

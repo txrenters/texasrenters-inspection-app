@@ -92,6 +92,8 @@ import {
 export const keys = {
   all: ['admin'] as const,
   dashboard: ['admin', 'dashboard'] as const,
+  tenants: (query: Record<string, string | number | boolean | undefined>) =>
+    ['admin', 'tenants', query] as const,
   clientErrors: (query: Record<string, string | number | boolean | undefined>) =>
     ['admin', 'client-errors', query] as const,
   clientErrorSummary: ['admin', 'client-errors', 'summary'] as const,
@@ -2361,4 +2363,38 @@ export const useClientErrorSummary = () =>
     queryKey: keys.clientErrorSummary,
     queryFn: ({ signal }) => api<ClientErrorSummary>('/api/v1/client-errors/summary', { signal }),
     refetchInterval: 30_000,
+  });
+
+/**
+ * A tenancy as the office s Propertyware report describes it.
+ *
+ * Distinct from a lease: this comes from the report the office maintains, and
+ * is the only source carrying benefit-package enrolment and a building address.
+ */
+export type AdminTenant = {
+  id: string;
+  leaseName: string;
+  sourceStatus: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  tbpEnrollment: string | null;
+  zone: string | null;
+  managementPlan: string | null;
+  hvacPlan: string | null;
+  hvacFilterSizes: string[];
+  lastFilterDelivery: string | null;
+  lastOccupiedInspection: string | null;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  building: { id: string; name: string; addressLine1: string | null } | null;
+};
+
+export const useTenants = (query: Record<string, string | number | boolean | undefined>) =>
+  useQuery({
+    queryKey: keys.tenants(query),
+    queryFn: ({ signal }) =>
+      api<Page<AdminTenant>>(`/api/v1/admin/tenants${queryString(query)}`, { signal }),
+    placeholderData: keepPreviousData,
   });

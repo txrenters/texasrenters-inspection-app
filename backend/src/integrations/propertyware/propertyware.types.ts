@@ -10,6 +10,11 @@ export interface PropertywareConfig {
   portfolioReportUrl?: string;
   /** Published lease report, used when REST /leases is not permitted. */
   leaseReportUrl?: string;
+
+  /** The office tenancy report: TBP enrolment, HVAC plan, building address. */
+
+  tenantReportUrl?: string;
+  tenantSyncCron: string;
   requestTimeoutMs: number;
   pageSize: number;
   maxRetries: number;

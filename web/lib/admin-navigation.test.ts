@@ -64,7 +64,12 @@ describe('admin navigation', () => {
     const titles = visible.flatMap((group) => group.items.map((item) => item.title));
 
     // Settings and Profile live in the account dropdown, not the nav tree.
-    expect(titles).toEqual(['Dashboard', 'Properties']);
+    //
+    // Tenants sits on `properties:read` deliberately: a tenancy is a fact about
+    // a property, and anyone who may see the property may see who is in it.
+    // Giving it a permission of its own would mean every existing
+    // property-reader silently losing a page they should have.
+    expect(titles).toEqual(['Dashboard', 'Properties', 'Tenants']);
     expect(visible.map((group) => group.title)).toEqual(['Overview', 'Property management']);
   });
 
