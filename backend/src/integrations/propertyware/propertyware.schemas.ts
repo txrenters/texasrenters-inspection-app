@@ -136,22 +136,74 @@ export const propertywareLeaseSchema = z
  * Columns are positional, so the indices below are the contract — see
  * PROPERTYWARE_LEASE_REPORT_COLUMNS for what each one holds.
  */
+/**
+ * A published Propertyware report, whose columns are addressed by label.
+ *
+ * The record keys used to be pinned here by index — `'9'` annotated "Building
+ * Entity ID", `'0'` annotated "Status", and so on. Propertyware reports carry
+ * their own column list, and this one was edited upstream: index 9 is now
+ * "Balance" and index 0 is "Lease Name". Nothing failed. The parser read
+ * `$0.00` as a building id and `Abuah - Abuah` as a status, the
+ * `/^active/i` filter matched **0 of 448 rows**, and the lease table sat empty
+ * for weeks behind a warning that reads the same as a quiet week.
+ *
+ * So the indices are no longer part of the contract. `columns` is, and
+ * `leaseReportColumns` below resolves the labels and refuses a report that is
+ * missing one rather than returning nothing and calling it success.
+ */
 export const propertywareLeaseReportSchema = z.object({
   totalCount: z.number().int().nonnegative(),
-  columns: z.array(z.object({ index: z.string(), dataType: z.string(), label: z.string() })),
-  records: z.array(
-    z
-      .object({
-        '0': z.string(), // Status
-        '4': z.string(), // Lease Name
-        '5': z.string(), // Start Date (MM/DD/YYYY)
-        '6': z.string(), // End Date
-        '7': z.string(), // Notice Given Date
-        '9': z.string(), // Building Entity ID
-      })
-      .passthrough(),
-  ),
+  columns: z
+    .array(z.object({ index: z.string(), dataType: z.string(), label: z.string() }))
+    .min(1),
+  records: z.array(z.record(z.string(), z.string()).and(z.object({}).passthrough())),
 });
+
+/** The labels a lease report must carry, and the field each one feeds. */
+export const LEASE_REPORT_COLUMNS = {
+  status: 'Status',
+  leaseName: 'Lease Name',
+  startDate: 'Start Date',
+  endDate: 'End Date',
+  noticeGivenDate: 'Notice Given Date',
+  /**
+   * The one the currently configured report does not have.
+   *
+   * A lease that cannot be tied to a building cannot become anything here, so
+   * this is required rather than optional — and naming it in the failure is the
+   * whole point: "the lease report has no Building Entity ID column" is a
+   * sentence somebody can act on, where 448 rows silently becoming 0 is not.
+   */
+  buildingId: 'Building Entity ID',
+} as const;
+
+export type LeaseReportColumnKey = keyof typeof LEASE_REPORT_COLUMNS;
+
+/** Compared without case or surrounding space; Propertyware edits both. */
+const columnKey = (label: string) => label.trim().toLowerCase();
+
+/**
+ * Maps each required field to the record key that holds it.
+ *
+ * Returns the missing labels rather than throwing, so the caller can name all
+ * of them at once instead of revealing them one failed sync at a time.
+ */
+export function leaseReportColumns(columns: ReadonlyArray<{ index: string; label: string }>): {
+  indexes: Record<LeaseReportColumnKey, string>;
+  missing: string[];
+} {
+  const byLabel = new Map(columns.map((column) => [columnKey(column.label), column.index]));
+  const indexes = {} as Record<LeaseReportColumnKey, string>;
+  const missing: string[] = [];
+  for (const [field, label] of Object.entries(LEASE_REPORT_COLUMNS) as Array<
+    [LeaseReportColumnKey, string]
+  >) {
+    const index = byLabel.get(columnKey(label));
+    if (index === undefined) missing.push(label);
+    else indexes[field] = index;
+  }
+  return { indexes, missing };
+}
 
 export const propertywareSchemas = {
   portfolios: propertywarePortfolioSchema,

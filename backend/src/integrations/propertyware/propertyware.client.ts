@@ -10,6 +10,7 @@ import {
 import { PropertywareError, sanitizedProviderMessage } from './propertyware.errors';
 import { getPropertywareConfig } from './propertyware.config';
 import {
+  leaseReportColumns,
   propertywareLeaseReportSchema,
   propertywarePortfolioReportSchema,
   propertywareSchemas,
@@ -163,23 +164,47 @@ export class PropertywareClient {
         'Propertyware returned an unexpected lease report shape.',
         'PROPERTYWARE_INVALID_LEASE_REPORT',
       );
+    /**
+     * Columns by label, and a loud failure when one is absent.
+     *
+     * These used to be fixed indices. The report was edited upstream, index 9
+     * became "Balance" and index 0 became "Lease Name", and the parser went on
+     * reading `$0.00` as a building id and `Abuah - Abuah` as a status. The
+     * `/^active/i` test then matched 0 of 448 rows, every sync logged
+     * ZERO_RECORDS_WARNING, and the lease table stayed empty — a warning that
+     * reads exactly like a quiet week.
+     *
+     * Throwing is the fix, not a side effect. A report that cannot be read must
+     * say so; returning nothing is indistinguishable from there being nothing.
+     */
+    const { indexes, missing } = leaseReportColumns(report.data.columns);
+    if (missing.length)
+      throw new PropertywareError(
+        `The Propertyware lease report is missing ${missing.length === 1 ? 'the column' : 'the columns'} ${missing.map((label) => `"${label}"`).join(', ')}. It has: ${report.data.columns.map((column) => column.label).join(', ')}. Point PROPERTYWARE_LEASE_REPORT_URL at a report that includes ${missing.length === 1 ? 'it' : 'them'}.`,
+        'PROPERTYWARE_LEASE_REPORT_MISSING_COLUMNS',
+      );
+
+    const cell = (record: Record<string, string>, field: keyof typeof indexes) =>
+      (record[indexes[field]] ?? '').trim();
+
     const sourceRecords = report.data.records
       .map((record) => {
-        const buildingId = record['9'].trim();
-        const leaseName = record['4'].trim();
-        const startDate = reportDate(record['5']);
-        const status = record['0'].trim();
+        const source = record as Record<string, string>;
+        const buildingId = cell(source, 'buildingId');
+        const leaseName = cell(source, 'leaseName');
+        const rawStart = cell(source, 'startDate');
+        const status = cell(source, 'status');
         return {
-          id: leaseReportExternalId(buildingId, leaseName, record['5'].trim()),
+          id: leaseReportExternalId(buildingId, leaseName, rawStart),
           buildingID: buildingId,
           leaseName,
           // Statuses read like "Active - Notice Given"; anything not starting
           // with "Active" is treated as inactive rather than guessed at.
           active: /^active/i.test(status),
           status,
-          startDate,
-          endDate: reportDate(record['6']),
-          noticeGivenDate: reportDate(record['7']),
+          startDate: reportDate(rawStart),
+          endDate: reportDate(cell(source, 'endDate')),
+          noticeGivenDate: reportDate(cell(source, 'noticeGivenDate')),
           contacts: [],
         };
       })
