@@ -430,8 +430,29 @@ export class InspectionImportService {
       let photoCursor = 0;
       for (const area of report.areas) {
         const propertyArea = await this.resolveArea(tx, property.id, area.name, user.id);
-        const inspectionArea = await tx.inspectionArea.create({
-          data: {
+        // Upserted rather than created, because the pair is unique and two
+        // report areas can resolve to one room. `resolveArea` matches on a
+        // normalised name, so a table continued onto a second page under a
+        // repeated title, or a model that split one room in two, both hand back
+        // the `propertyArea` the previous pass already used. A second `create`
+        // raises P2002, and it does so *inside* the transaction -- rolling the
+        // whole import back, so one repeated room costs every other area rather
+        // than merging into the one already open.
+        //
+        // The same write is what makes filling in a room that is already
+        // attached safe. `requireSeedableInspection` refuses an inspection
+        // holding evidence, but it is checked before `storePhotos` writes
+        // several hundred objects; an area that appears in that window would
+        // otherwise fail the commit outright instead of being filled in.
+        const inspectionArea = await tx.inspectionArea.upsert({
+          where: {
+            inspectionId_propertyAreaId: {
+              inspectionId: inspection.id,
+              propertyAreaId: propertyArea.id,
+            },
+          },
+          update: { completionStatus: 'COMPLETED', completedAt: new Date() },
+          create: {
             inspectionId: inspection.id,
             propertyAreaId: propertyArea.id,
             completionStatus: 'COMPLETED',
