@@ -322,11 +322,36 @@ export class PropertywareSyncWorker {
           retryable: false,
         });
       }
-      if (mode === 'reconciliation' && entity !== 'leases')
-        add(
-          'recordsDeactivated',
-          await this.store.deactivateUnseen(organizationId, entity, seen, cursorEnd),
-        );
+      if (mode === 'reconciliation' && entity !== 'leases') {
+        const sweep = await this.store.deactivateUnseen(organizationId, entity, seen, cursorEnd);
+        add('recordsDeactivated', sweep.deactivated);
+
+        // A refusal is the guard working, but it is still something nobody
+        // asked for and nobody would otherwise see: the run would report zero
+        // deactivations, which is exactly what a healthy run reports. Recorded
+        // as an error so it reaches the sync log rather than only the metrics.
+        if (sweep.refused) {
+          add('warnings');
+          await this.store.addError({
+            runId,
+            entity,
+            code: `DEACTIVATION_REFUSED_${sweep.refused}`,
+            message:
+              sweep.refused === 'NOTHING_SEEN'
+                ? `Propertyware returned no ${entity} at all, so every active record would have been deactivated. Refused; ${sweep.activeBefore ?? 0} left untouched. Check account scope, permissions and credentials.`
+                : `Reconciliation would have deactivated ${sweep.wouldHave ?? 0} of ${sweep.activeBefore ?? 0} active ${entity} in one sweep, which is more than a plausible amount of churn. Refused; nothing was changed. Re-run once the fetch is known to be complete.`,
+            retryable: false,
+          });
+          this.logger.warn({
+            event: 'propertyware_deactivation_refused',
+            runId,
+            entity,
+            reason: sweep.refused,
+            wouldHave: sweep.wouldHave,
+            activeBefore: sweep.activeBefore,
+          });
+        }
+      }
       await this.store.saveCursor(organizationId, entity, cursorEnd, mode === 'reconciliation');
       await this.store.updateEntityRun(runId, entity, 'COMPLETED', entityMetrics);
     } catch (error) {

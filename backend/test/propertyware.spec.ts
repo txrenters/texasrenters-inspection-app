@@ -425,17 +425,84 @@ describe('Propertyware synchronization worker', () => {
     expect(await store.getCursor(organizationId, 'buildings')).toEqual(priorCursor);
     expect(await store.listActive('buildings', organizationId)).toHaveLength(1);
     provider.failEntity = undefined;
-    provider.records.buildings = [];
+
+    /**
+     * A building that genuinely left management: the fetch still returns
+     * buildings, just not this one.
+     *
+     * This used to set `records.buildings = []` and expect the sweep to
+     * deactivate — which asserted the hazard as behaviour. An empty fetch is a
+     * broken fetch, and the sweep now refuses it; see the test below. Retiring
+     * a property has to be expressed as "the feed no longer lists it", because
+     * that is the only form of it the sync can tell apart from a failure.
+     */
+    const replacement = {
+      ...(mockPropertywareRecords.buildings[0] as Record<string, unknown>),
+      id: '93999',
+      name: '77 Replacement Way',
+    };
+    provider.records.buildings = [replacement];
     const reconciliation = { ...incremental, mode: 'reconciliation' as const };
     const complete = await worker.createRun(organizationId, reconciliation);
     await worker.execute(complete.id, organizationId, reconciliation);
     expect(
       provider.queries.slice(-2).every(({ query }) => query.includeDeactivated === false),
     ).toBe(true);
-    expect(await store.listActive('buildings', organizationId)).toHaveLength(0);
+    // The retired one is gone and the replacement stands in its place.
+    const active = (await store.listActive('buildings', organizationId)) as { name: string }[];
+    expect(active).toHaveLength(1);
+    expect(active[0]!.name).toBe('77 Replacement Way');
     expect(
       ((await store.getRun(complete.id)) as { recordsDeactivated: number }).recordsDeactivated,
     ).toBe(1);
+  });
+
+  it('refuses to deactivate everything when the fetch comes back empty', async () => {
+    /**
+     * The hazard this guard exists for.
+     *
+     * Propertyware has returned zero records for buildings three times in this
+     * account's history. All three landed on incremental runs, where the sweep
+     * does not run — nothing about that was by design. On a reconciliation run
+     * the same empty fetch would have deactivated every building in one pass,
+     * emptying the application, and no later run would bring them back: a row
+     * nobody fetches is a row nobody reactivates.
+     */
+    const provider = new FixtureProvider();
+    const store = new InMemoryPropertywareSyncStore();
+    const worker = new PropertywareSyncWorker(
+      config,
+      provider as unknown as PropertywareService,
+      store,
+    );
+    const initial = {
+      entities: ['portfolios', 'buildings'] as PropertywareEntity[],
+      mode: 'initial' as const,
+      requestedBy: 'admin',
+    };
+    const seed = await worker.createRun(organizationId, initial);
+    await worker.execute(seed.id, organizationId, initial);
+    const before = await store.listActive('buildings', organizationId);
+    expect(before.length).toBeGreaterThan(0);
+
+    provider.records.buildings = [];
+    const reconciliation = { ...initial, mode: 'reconciliation' as const };
+    const run = await worker.createRun(organizationId, reconciliation);
+    await worker.execute(run.id, organizationId, reconciliation);
+
+    // Nothing deactivated, and every building still standing.
+    expect(
+      ((await store.getRun(run.id)) as { recordsDeactivated: number }).recordsDeactivated,
+    ).toBe(0);
+    expect(await store.listActive('buildings', organizationId)).toHaveLength(before.length);
+
+    // And it is not silent: a run that refuses reports zero deactivations,
+    // which is exactly what a healthy run reports, so the reason has to be
+    // written down somewhere a person will find it.
+    const errors = await store.listErrorsPage(organizationId, run.id, { page: 1, pageSize: 50 });
+    expect(
+      errors.items.some((error) => error.errorCode.includes('DEACTIVATION_REFUSED')),
+    ).toBe(true);
   });
 
   it('requires an initial sync before incremental sync and leaves the cursor unset', async () => {
