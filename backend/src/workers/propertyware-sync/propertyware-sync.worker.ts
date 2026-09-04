@@ -19,6 +19,7 @@ import { propertywarePages } from '../../integrations/propertyware/propertyware.
 import { propertywareSchemas } from '../../integrations/propertyware/propertyware.schemas';
 import { normalizedPropertywareRecordSchema } from '../../integrations/propertyware/propertyware.schemas';
 import { PropertywareService } from '../../integrations/propertyware/propertyware.service';
+import { BuildingAddressResolver } from '../../integrations/propertyware/propertyware.building-address-resolver';
 import type {
   NormalizedPropertywareRecord,
   PropertywareDryRunResult,
@@ -63,6 +64,15 @@ export class PropertywareSyncWorker {
     @Optional()
     @Inject(CacheInvalidationService)
     private readonly cacheInvalidation?: CacheInvalidationService,
+    /**
+     * Optional so the existing tests, which construct this with three
+     * arguments and an in-memory store, keep working. Without it the lease
+     * report simply cannot resolve an address, which is the behaviour before
+     * this existed.
+     */
+    @Optional()
+    @Inject(BuildingAddressResolver)
+    private readonly buildingAddresses?: BuildingAddressResolver,
   ) {}
 
   async createRun(organizationId: string, request: SyncRequest) {
@@ -215,6 +225,15 @@ export class PropertywareSyncWorker {
       entityMetrics[key] += amount;
     };
     await this.store.updateEntityRun(runId, entity, 'RUNNING', entityMetrics);
+
+    /**
+     * Buildings by address, for the lease report that names no building id.
+     *
+     * Loaded once here rather than per row, and only for leases -- the other
+     * entities carry their own identifiers and need none of this.
+     */
+    if (entity === 'leases' && this.buildingAddresses)
+      this.provider.useBuildingAddresses(await this.buildingAddresses.load(organizationId));
     const previousCursor = await this.store.getCursor(organizationId, entity);
     if (mode === 'incremental' && !previousCursor)
       throw new PropertywareError(

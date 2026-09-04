@@ -5,6 +5,7 @@ import { PropertywareSyncCoordinator } from '../../workers/propertyware-sync/pro
 import { PropertywareSyncScheduler } from '../../workers/propertyware-sync/propertyware-sync.scheduler';
 import { PropertywareTenantScheduler } from '../../workers/propertyware-sync/propertyware-tenant.scheduler';
 import { PropertywareTenantSyncService } from './propertyware.tenant-sync.service';
+import { BuildingAddressResolver } from './propertyware.building-address-resolver';
 import {
   InMemoryPropertywareSyncStore,
   PrismaPropertywareSyncStore,
@@ -43,6 +44,7 @@ import { PropertywareService } from './propertyware.service';
     PropertywareSyncScheduler,
     PropertywareTenantScheduler,
     PropertywareTenantSyncService,
+    BuildingAddressResolver,
     ApiAuthGuard,
     PermissionsGuard,
   ],

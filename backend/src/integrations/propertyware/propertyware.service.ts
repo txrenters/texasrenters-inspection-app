@@ -26,6 +26,17 @@ export class PropertywareService implements PropertywareProvider {
     @Inject(PropertywareClient) private readonly client: PropertywareClient,
   ) {}
 
+  /**
+   * Hands the client a way to turn a building address into an external id.
+   *
+   * The lease report identifies its building by address, and the client has no
+   * database of its own. Loaded once per run by the caller and passed down,
+   * rather than queried per row.
+   */
+  useBuildingAddresses(index: { resolve(address: string, postalCode?: string): string | null }) {
+    this.client.useBuildingAddresses(index);
+  }
+
   async fetchPage(
     entity: PropertywareEntity,
     query: PropertywarePageQuery,
