@@ -19,6 +19,67 @@ import type {
 
 export type UpsertOutcome = 'created' | 'updated' | 'unchanged' | 'reactivated';
 
+/**
+ * What a reconciliation sweep did, or why it declined to.
+ *
+ * `deactivateUnseen` marks everything the fetch did not return as no longer
+ * managed. That is only sound when the fetch is known to be complete, and a
+ * sync is exactly the place where it might not be: Propertyware has returned
+ * zero records for buildings three times, and a run that fails halfway returns
+ * a partial page set that looks identical to "these properties are gone".
+ *
+ * Refusing is always the safe answer. A property left active for one more day
+ * shows up in a queue; a property wrongly deactivated disappears from the app,
+ * takes its inspections' scheduling with it, and nothing reports that it
+ * happened.
+ */
+export interface DeactivationOutcome {
+  deactivated: number;
+  /** Set when the sweep declined; `deactivated` is then always 0. */
+  refused?: 'NOTHING_SEEN' | 'TOO_MANY';
+  /** How many rows the sweep would have deactivated had it proceeded. */
+  wouldHave?: number;
+  /** How many were active before it ran, for the proportion in the message. */
+  activeBefore?: number;
+}
+
+/**
+ * The share of an entity's active rows that may be deactivated in one sweep.
+ *
+ * Real churn is a handful of properties a month — the live history shows one
+ * deactivation in three weeks. A sweep proposing to retire a fifth of the
+ * portfolio at once is describing a broken fetch, not a month of offboarding.
+ */
+export const MAX_DEACTIVATION_SHARE = 0.2;
+
+/**
+ * Below this many rows the share is meaningless and the guard steps aside.
+ *
+ * Two of five properties leaving is 40% and entirely believable; the proportion
+ * only carries information once there is a portfolio to take a proportion of.
+ */
+export const DEACTIVATION_SHARE_FLOOR = 5;
+
+/**
+ * Whether a sweep may proceed, given what it found.
+ *
+ * Pure and exported so both stores share one rule and the tests can state it
+ * without a database.
+ */
+export function deactivationRefusal(
+  seenCount: number,
+  wouldDeactivate: number,
+  activeBefore: number,
+): DeactivationOutcome['refused'] {
+  // The fetch returned nothing at all. Never a legitimate "everything left
+  // management" — it is an empty page, a scope change, an expired credential.
+  if (seenCount === 0) return 'NOTHING_SEEN';
+  if (wouldDeactivate <= DEACTIVATION_SHARE_FLOOR) return undefined;
+  return wouldDeactivate / Math.max(activeBefore, 1) > MAX_DEACTIVATION_SHARE
+    ? 'TOO_MANY'
+    : undefined;
+}
+
 export interface PropertywarePopulationVerification {
   organizationId: string;
   verifiedAt: string;
@@ -99,7 +160,7 @@ export interface PropertywareSyncStore {
     entity: PropertywareEntity,
     externalIds: Set<string>,
     seenAt: Date,
-  ): Promise<number>;
+  ): Promise<DeactivationOutcome>;
   addError(input: {
     runId: string;
     entity: PropertywareEntity;
@@ -334,15 +395,18 @@ export class InMemoryPropertywareSyncStore implements PropertywareSyncStore {
     entity: PropertywareEntity,
     externalIds: Set<string>,
     seenAt: Date,
-  ) {
-    let count = 0;
-    for (const [key, item] of this.records) {
-      if (
-        !key.startsWith(`${organizationId}:${entity}:`) ||
-        externalIds.has(item.record.externalId) ||
-        !item.record.isActive
-      )
-        continue;
+  ): Promise<DeactivationOutcome> {
+    const mine = [...this.records.entries()].filter(
+      ([key, item]) => key.startsWith(`${organizationId}:${entity}:`) && item.record.isActive,
+    );
+    const doomed = mine.filter(([, item]) => !externalIds.has(item.record.externalId));
+
+    // Decided before anything is written, so a refusal costs nothing.
+    const refused = deactivationRefusal(externalIds.size, doomed.length, mine.length);
+    if (refused)
+      return { deactivated: 0, refused, wouldHave: doomed.length, activeBefore: mine.length };
+
+    for (const [, item] of doomed) {
       item.record = {
         ...item.record,
         isActive: false,
@@ -351,9 +415,8 @@ export class InMemoryPropertywareSyncStore implements PropertywareSyncStore {
       item.sourceHash = stableSourceHash(item.record);
       item.deactivatedAt = seenAt;
       item.lastSyncedAt = seenAt;
-      count += 1;
     }
-    return count;
+    return { deactivated: doomed.length };
   }
   async addError(input: {
     runId: string;
@@ -1052,14 +1115,29 @@ export class PrismaPropertywareSyncStore implements PropertywareSyncStore {
     seenAt: Date,
   ) {
     const where = { organizationId, isActive: true, externalId: { notIn: [...externalIds] } };
+    const delegate = this.delegateFor(entity);
+
+    // Counted before writing, because the guard needs to know the size of what
+    // it is about to do. Two cheap counts are worth far more than the one
+    // `updateMany` they protect: this sweep is the only thing in the sync that
+    // can take a property out of the application, and it cannot be undone by
+    // the next run — a row nobody fetches is a row nobody reactivates.
+    const [wouldHave, activeBefore] = await Promise.all([
+      (delegate as any).count({ where }) as Promise<number>,
+      (delegate as any).count({ where: { organizationId, isActive: true } }) as Promise<number>,
+    ]);
+
+    const refused = deactivationRefusal(externalIds.size, wouldHave, activeBefore);
+    if (refused) return { deactivated: 0, refused, wouldHave, activeBefore };
+
     const data = {
       isActive: false,
       sourceStatus: 'Inactive',
       deactivatedAt: seenAt,
       lastSyncedAt: seenAt,
     };
-    const delegate = this.delegateFor(entity);
-    return ((await (delegate as any).updateMany({ where, data })) as { count: number }).count;
+    const { count } = (await (delegate as any).updateMany({ where, data })) as { count: number };
+    return { deactivated: count };
   }
   async addError(input: {
     runId: string;
