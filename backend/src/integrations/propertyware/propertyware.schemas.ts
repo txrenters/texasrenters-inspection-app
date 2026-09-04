@@ -188,6 +188,25 @@ export const LEASE_REPORT_BUILDING_COLUMNS = {
   buildingPostalCode: 'Building Zip',
 } as const;
 
+/**
+ * Read when present, absent without complaint.
+ *
+ * `Scheduled Move Out Date` is the one that matters: it is what
+ * `hasUpcomingMoveOut` filters on and what a move-out inspection is scheduled
+ * from. It was not read at all until the report gained the column — 432 leases
+ * synced with a building and not one with a move-out date, which looks like a
+ * quiet portfolio rather than a field nobody asked for.
+ *
+ * Optional rather than required so a report without it still yields leases;
+ * losing 432 tenancies to recover one date would be the wrong trade.
+ */
+export const LEASE_REPORT_OPTIONAL_COLUMNS = {
+  scheduledMoveOutDate: 'Scheduled Move Out Date',
+  moveInDate: 'Move-In Date',
+  moveOutDate: 'Move Out Date',
+  leaseExternalId: 'Lease Entity ID',
+} as const;
+
 export type LeaseReportColumnKey = keyof typeof LEASE_REPORT_COLUMNS;
 
 /** Compared without case or surrounding space; Propertyware edits both. */
@@ -227,10 +246,15 @@ export function reportColumnIndexes<Field extends string>(
 
 export function leaseReportColumns(columns: ReadonlyArray<{ index: string; label: string }>): {
   indexes: Record<LeaseReportColumnKey, string>;
+  optional: Record<string, string>;
   building: { id?: string; address?: string; postalCode?: string };
   missing: string[];
 } {
-  const { indexes, missing } = reportColumnIndexes(columns, LEASE_REPORT_COLUMNS);
+  const { indexes, missing, optionalIndexes: optional } = reportColumnIndexes(
+    columns,
+    LEASE_REPORT_COLUMNS,
+    LEASE_REPORT_OPTIONAL_COLUMNS,
+  );
   const { optionalIndexes } = reportColumnIndexes(columns, {}, LEASE_REPORT_BUILDING_COLUMNS);
 
   const building = {
@@ -243,7 +267,7 @@ export function leaseReportColumns(columns: ReadonlyArray<{ index: string; label
   if (building.id === undefined && building.address === undefined)
     missing.push(`${LEASE_REPORT_BUILDING_COLUMNS.buildingId} or ${LEASE_REPORT_BUILDING_COLUMNS.buildingAddress}`);
 
-  return { indexes, building, missing };
+  return { indexes, optional, building, missing };
 }
 
 /**

@@ -218,7 +218,7 @@ export class PropertywareClient {
      * Throwing is the fix, not a side effect. A report that cannot be read must
      * say so; returning nothing is indistinguishable from there being nothing.
      */
-    const { indexes, building, missing } = leaseReportColumns(report.data.columns);
+    const { indexes, optional, building, missing } = leaseReportColumns(report.data.columns);
     if (missing.length)
       throw new PropertywareError(
         `The Propertyware lease report is missing ${missing.length === 1 ? 'the column' : 'the columns'} ${missing.map((label) => `"${label}"`).join(', ')}. It has: ${report.data.columns.map((column) => column.label).join(', ')}. Point PROPERTYWARE_LEASE_REPORT_URL at a report that includes ${missing.length === 1 ? 'it' : 'them'}.`,
@@ -265,6 +265,12 @@ export class PropertywareClient {
           startDate: reportDate(rawStart),
           endDate: reportDate(cell(source, 'endDate')),
           noticeGivenDate: reportDate(cell(source, 'noticeGivenDate')),
+          // Read only when the report offers it. Absent for weeks, which is why
+          // 432 leases synced without a single move-out date and the upcoming
+          // move-out filter kept finding nothing.
+          scheduleMoveOutDate: reportDate(at(source, optional.scheduledMoveOutDate)),
+          moveInDate: reportDate(at(source, optional.moveInDate)),
+          moveOutDate: reportDate(at(source, optional.moveOutDate)),
           contacts: [],
         };
       })
