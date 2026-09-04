@@ -106,6 +106,8 @@ export const keys = {
   property: (id: string) => ['admin', 'property', id] as const,
   floorPlans: (id: string) => ['admin', 'property', id, 'floor-plans'] as const,
   inspectionImport: (jobId: string) => ['admin', 'inspection-import', jobId] as const,
+  activeInspectionImport: (inspectionId: string) =>
+    ['admin', 'inspection-import', 'active', inspectionId] as const,
   propertyAreas: (id: string) => ['admin', 'property', id, 'areas'] as const,
   units: (id: string) => ['admin', 'units', id] as const,
   leases: (id: string) => ['admin', 'leases', id] as const,
@@ -697,6 +699,38 @@ export interface ImportJob {
  * The reading happens on the server, so this survives the page. Somebody who
  * closes the tab can open it again on the same job and see the result.
  */
+/** Is an import running against this inspection, whoever started it? */
+const importIsBusy = (job: ImportJob | null | undefined) => {
+  if (!job || job.committedAt) return false;
+  if (job.status === 'RUNNING' || job.status === 'PENDING') return true;
+  // Read, and now writing: the read completed but nothing has been committed
+  // and nothing has gone wrong.
+  return job.status === 'COMPLETED' && !job.errorCode;
+};
+
+/**
+ * The import attached to this inspection, if any.
+ *
+ * Both halves of an import run detached on the server, so nobody has ever
+ * needed to watch one — but the job id used to live only inside the dialog
+ * that started it, which made closing the dialog *look* like giving up. This
+ * asks the inspection instead, so any page can show what is happening and a
+ * reopened dialog picks the job back up.
+ */
+export const useActiveInspectionImport = (inspectionId: string | null) =>
+  useQuery({
+    queryKey: keys.activeInspectionImport(inspectionId ?? 'none'),
+    enabled: Boolean(inspectionId),
+    queryFn: ({ signal }) =>
+      api<ImportJob | null>(`/api/v1/admin/inspections/${inspectionId}/inspection-import`, {
+        signal,
+      }),
+    // Slower than the dialog's own poll: this one runs while somebody is
+    // reading the page rather than watching a progress bar, and it exists to
+    // say "something is happening here", not to animate it.
+    refetchInterval: (query) => (importIsBusy(query.state.data) ? 5_000 : false),
+  });
+
 export const useInspectionImportJob = (jobId: string | null) =>
   useQuery({
     queryKey: keys.inspectionImport(jobId ?? 'none'),

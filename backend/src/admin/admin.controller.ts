@@ -264,6 +264,24 @@ export class AdminController {
     return this.inspectionImports.start(request.user, id, file);
   }
 
+  /**
+   * The import attached to this inspection, or null.
+   *
+   * Lets a page that did not start the import still show it. Without this the
+   * job id existed only inside the dialog that created it, so closing the
+   * dialog looked like abandoning the work even though both phases run
+   * detached and finish regardless.
+   */
+  @Get('inspections/:inspectionId/inspection-import')
+  @ApiTags(INSPECTION_IMPORT_TAG)
+  @RequirePermissions('inspections:manage')
+  activeInspectionImport(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.inspectionImports.activeJob(request.user, id);
+  }
+
   /** Progress, and the parsed report once there is one. Polled by the console. */
   @Get('inspection-imports/:jobId')
   @ApiTags(INSPECTION_IMPORT_TAG)
