@@ -166,15 +166,26 @@ export const LEASE_REPORT_COLUMNS = {
   startDate: 'Start Date',
   endDate: 'End Date',
   noticeGivenDate: 'Notice Given Date',
-  /**
-   * The one the currently configured report does not have.
-   *
-   * A lease that cannot be tied to a building cannot become anything here, so
-   * this is required rather than optional — and naming it in the failure is the
-   * whole point: "the lease report has no Building Entity ID column" is a
-   * sentence somebody can act on, where 448 rows silently becoming 0 is not.
-   */
+} as const;
+
+/**
+ * How the report says which building a lease belongs to. One of these is
+ * required; a lease that cannot be tied to a building cannot become anything.
+ *
+ * `Building Entity ID` is preferred and needs no matching. Propertyware's
+ * report builder does not offer it for this report, though — only
+ * `Building Address` — so an address is accepted and resolved against the
+ * building list with the same matcher the Jobber integration uses.
+ *
+ * `Building Zip` is optional but wanted: with it, matching is street plus ZIP.
+ * Without it, a street may only answer when exactly one building in the whole
+ * organization has it, so a shared street name goes unmatched rather than
+ * guessed. Adding the ZIP column upstream is the cheapest way to fix that.
+ */
+export const LEASE_REPORT_BUILDING_COLUMNS = {
   buildingId: 'Building Entity ID',
+  buildingAddress: 'Building Address',
+  buildingPostalCode: 'Building Zip',
 } as const;
 
 export type LeaseReportColumnKey = keyof typeof LEASE_REPORT_COLUMNS;
@@ -216,10 +227,23 @@ export function reportColumnIndexes<Field extends string>(
 
 export function leaseReportColumns(columns: ReadonlyArray<{ index: string; label: string }>): {
   indexes: Record<LeaseReportColumnKey, string>;
+  building: { id?: string; address?: string; postalCode?: string };
   missing: string[];
 } {
   const { indexes, missing } = reportColumnIndexes(columns, LEASE_REPORT_COLUMNS);
-  return { indexes, missing };
+  const { optionalIndexes } = reportColumnIndexes(columns, {}, LEASE_REPORT_BUILDING_COLUMNS);
+
+  const building = {
+    id: optionalIndexes.buildingId,
+    address: optionalIndexes.buildingAddress,
+    postalCode: optionalIndexes.buildingPostalCode,
+  };
+  // Either identifies the building; neither means the report cannot be used at
+  // all, and saying which columns would fix it is the point of naming them.
+  if (building.id === undefined && building.address === undefined)
+    missing.push(`${LEASE_REPORT_BUILDING_COLUMNS.buildingId} or ${LEASE_REPORT_BUILDING_COLUMNS.buildingAddress}`);
+
+  return { indexes, building, missing };
 }
 
 /**

@@ -47,6 +47,21 @@ export class PropertywareClient {
   private readonly logger = new Logger(PropertywareClient.name);
   private readonly config = getPropertywareConfig();
 
+  /**
+   * Buildings by address, when the caller has loaded them.
+   *
+   * Set for the duration of a sync run rather than injected, because this is a
+   * plain HTTP client with no database of its own and resolving an address
+   * needs one. Left undefined outside a run, in which case a report that
+   * identifies buildings only by address simply yields no leases -- the same
+   * answer it gave before this existed.
+   */
+  private buildingAddresses?: { resolve(address: string, postalCode?: string): string | null };
+
+  useBuildingAddresses(index: { resolve(address: string, postalCode?: string): string | null }) {
+    this.buildingAddresses = index;
+  }
+
   async fetchPage(entity: PropertywareEntity, query: PropertywarePageQuery, correlationId: string) {
     const offset = query.offset ?? 0;
     const limit = Math.min(query.limit ?? this.config.pageSize, this.config.pageSize);
@@ -177,7 +192,7 @@ export class PropertywareClient {
      * Throwing is the fix, not a side effect. A report that cannot be read must
      * say so; returning nothing is indistinguishable from there being nothing.
      */
-    const { indexes, missing } = leaseReportColumns(report.data.columns);
+    const { indexes, building, missing } = leaseReportColumns(report.data.columns);
     if (missing.length)
       throw new PropertywareError(
         `The Propertyware lease report is missing ${missing.length === 1 ? 'the column' : 'the columns'} ${missing.map((label) => `"${label}"`).join(', ')}. It has: ${report.data.columns.map((column) => column.label).join(', ')}. Point PROPERTYWARE_LEASE_REPORT_URL at a report that includes ${missing.length === 1 ? 'it' : 'them'}.`,
@@ -186,11 +201,30 @@ export class PropertywareClient {
 
     const cell = (record: Record<string, string>, field: keyof typeof indexes) =>
       (record[indexes[field]] ?? '').trim();
+    const at = (record: Record<string, string>, index: string | undefined) =>
+      index === undefined ? '' : (record[index] ?? '').trim();
+
+    /**
+     * The building, by id when the report gives one and by address otherwise.
+     *
+     * Propertyware's report builder offers no `Building Entity ID` for this
+     * report, so the address is the only handle. It is resolved against the
+     * building list with the same matcher the Jobber integration and the
+     * tenancy sync use, so all three place one property identically.
+     *
+     * An address that resolves to nothing yields an empty id, and the row is
+     * dropped by the filter below — the same outcome as a report row with no
+     * building at all, which is what it is.
+     */
+    const addresses = this.buildingAddresses;
 
     const sourceRecords = report.data.records
       .map((record) => {
         const source = record as Record<string, string>;
-        const buildingId = cell(source, 'buildingId');
+        const buildingId =
+          at(source, building.id) ||
+          addresses?.resolve(at(source, building.address), at(source, building.postalCode)) ||
+          '';
         const leaseName = cell(source, 'leaseName');
         const rawStart = cell(source, 'startDate');
         const status = cell(source, 'status');

@@ -48,9 +48,9 @@ const CURRENT = [
 
 describe('resolving lease report columns', () => {
   it('finds every column in the report it was written for', () => {
-    const { indexes, missing } = leaseReportColumns(ORIGINAL);
+    const { indexes, building, missing } = leaseReportColumns(ORIGINAL);
     expect(missing).toEqual([]);
-    expect(indexes.buildingId).toBe('9');
+    expect(building.id).toBe('9');
     expect(indexes.status).toBe('0');
   });
 
@@ -71,12 +71,39 @@ describe('resolving lease report columns', () => {
     // amount of correct parsing will make it produce leases. Saying so is the
     // point — 448 rows quietly becoming 0 told nobody anything.
     const { missing } = leaseReportColumns(CURRENT);
-    expect(missing).toEqual(['Building Entity ID']);
+    expect(missing).toEqual(['Building Entity ID or Building Address']);
+  });
+
+  it('accepts an address in place of an id', () => {
+    // Propertyware's report builder offers no `Building Entity ID` for this
+    // report — only `Building Address` — so an address has to be enough, and
+    // is resolved against the building list rather than used directly.
+    const withAddress = [...CURRENT, { index: '13', label: 'Building Address' }];
+    const { building, missing } = leaseReportColumns(withAddress);
+    expect(missing).toEqual([]);
+    expect(building.address).toBe('13');
+    expect(building.id).toBeUndefined();
+  });
+
+  it('picks up the ZIP when the report carries one', () => {
+    // Optional, but wanted: with a ZIP the match is street plus postal code.
+    // Without it a street may only answer when it is unique organization-wide.
+    const withBoth = [
+      ...CURRENT,
+      { index: '13', label: 'Building Address' },
+      { index: '14', label: 'Building Zip' },
+    ];
+    expect(leaseReportColumns(withBoth).building.postalCode).toBe('14');
+  });
+
+  it('still refuses a report with neither', () => {
+    const { missing } = leaseReportColumns(CURRENT);
+    expect(missing.length).toBe(1);
   });
 
   it('ignores case and surrounding space, which Propertyware edits freely', () => {
     const { missing } = leaseReportColumns(
-      Object.values(LEASE_REPORT_COLUMNS).map((label, index) => ({
+      [...Object.values(LEASE_REPORT_COLUMNS), 'Building Address'].map((label, index) => ({
         index: String(index),
         label: `  ${label.toUpperCase()} `,
       })),
@@ -88,14 +115,15 @@ describe('resolving lease report columns', () => {
     // One failed sync should reveal the whole problem, not the first of it.
     const { missing } = leaseReportColumns([{ index: '0', label: 'Lease Name' }]);
     expect(missing).toEqual(
-      expect.arrayContaining(['Status', 'Start Date', 'End Date', 'Building Entity ID']),
+      expect.arrayContaining(['Status', 'Start Date', 'End Date']),
     );
     expect(missing).not.toContain('Lease Name');
   });
 
   it('refuses an empty column list rather than treating it as nothing missing', () => {
+    // Every required label, plus the building pair that is neither present.
     expect(leaseReportColumns([]).missing.length).toBe(
-      Object.keys(LEASE_REPORT_COLUMNS).length,
+      Object.keys(LEASE_REPORT_COLUMNS).length + 1,
     );
   });
 });
