@@ -503,7 +503,18 @@ export class AreaEvidenceService {
       // exactly the items still needing attention.
       this.prisma.areaChecklistItem.findMany({
         where: {
-          propertyAreaId: area.propertyArea.id,
+          /**
+           * The HVAC checklist belongs to the organization, not to an area.
+           *
+           * It asks the same sixty questions of every system in the portfolio,
+           * so it is stored once with a null area. Matching on the area alone
+           * returned nothing for an HVAC inspection: the reviewer saw "this
+           * area has no checklist items yet" about a form the technician had
+           * just filled in.
+           */
+          ...(checklistKindFor(inspection.inspectionType) === 'AIR_CONDITIONING'
+            ? { organizationId: user.organizationId, propertyAreaId: null }
+            : { propertyAreaId: area.propertyArea.id }),
           archivedAt: null,
           // A visit whose evidence is the answer asks nothing, and an empty
           // `in` matches no rows — the same result as skipping the query,
@@ -514,6 +525,9 @@ export class AreaEvidenceService {
         select: {
           id: true,
           label: true,
+          section: true,
+          responseType: true,
+          unit: true,
           responses: {
             where: { inspectionAreaId: area.id },
             select: {
@@ -521,6 +535,8 @@ export class AreaEvidenceService {
               isUndamaged: true,
               isWorking: true,
               comment: true,
+              numericValue: true,
+              textValue: true,
               recordedAt: true,
               videoTimestampSeconds: true,
             },
@@ -649,6 +665,13 @@ export class AreaEvidenceService {
           isUndamaged: response?.isUndamaged ?? null,
           isWorking: response?.isWorking ?? null,
           comment: response?.comment ?? null,
+          section: item.section,
+          responseType: item.responseType,
+          unit: item.unit,
+          // Decimal over the wire is a string; the console prints a number
+          // beside a unit, and a quoted "18.50" reads as a mistake.
+          numericValue: response?.numericValue == null ? null : Number(response.numericValue),
+          textValue: response?.textValue ?? null,
           recordedAt: response?.recordedAt.toISOString() ?? null,
           videoTimestampSeconds: response?.videoTimestampSeconds ?? null,
         };

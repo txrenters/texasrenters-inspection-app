@@ -943,6 +943,29 @@ export default function RoomCameraScreen() {
           });
         }}
         onClose={() => setChecklistOpen(false)}
+        /**
+         * A measurement, a line of text, or a chosen option.
+         *
+         * The whole assessment goes every time, exactly as `onAssess` does:
+         * the API takes a complete record, so sending only the changed field
+         * would clear everything else already answered about the item.
+         */
+        onRecord={(itemId, patch) => {
+          const current = conditionAssessments.get(itemId);
+          recordCondition.mutate({
+            itemId,
+            assessment: {
+              isClean: current?.isClean ?? null,
+              isUndamaged: current?.isUndamaged ?? null,
+              isWorking: current?.isWorking ?? null,
+              comment: current?.comment ?? null,
+              numericValue: current?.numericValue ?? null,
+              textValue: current?.textValue ?? null,
+              ...patch,
+              videoTimestampSeconds: recording ? secondsRef.current : null,
+            },
+          });
+        }}
         onToggle={(id) => toggleChecklistItem(areaId, id)}
         recording={recording}
         visible={checklistOpen}

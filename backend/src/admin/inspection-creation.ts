@@ -11,7 +11,7 @@ import {
 
 import {
   AreaScope,
-  airConditioningChecklistTemplate,
+  HVAC_CHECKLIST,
   areaScopeFor,
   inspectionComparesToBaseline,
   keywordsFromLabel,
@@ -594,14 +594,25 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
  * item may already hold a technician's answers.
  */
 async function ensureHvacChecklist(tx: InspectionCreationClient, organizationId: string) {
-  const labels = airConditioningChecklistTemplate();
   await tx.areaChecklistItem.createMany({
-    data: labels.map((label, index) => ({
+    data: HVAC_CHECKLIST.map((item, index) => ({
       organizationId,
       propertyAreaId: null,
       kind: AreaChecklistItemKind.AIR_CONDITIONING,
-      label,
-      keywords: keywordsFromLabel(label),
+      label: item.label,
+      section: item.section,
+      responseType: item.responseType,
+      unit: item.unit ?? null,
+      choices: item.choices ?? [],
+      /**
+       * Keywords only for the items a spoken walkthrough can cover.
+       *
+       * A reading is a number the technician types; no phrasing in a transcript
+       * means "the split was 18 degrees", and pretending otherwise would tick a
+       * measurement nobody took.
+       */
+      keywords: item.responseType === 'STATUS' ? keywordsFromLabel(item.label) : [],
+      // The order of the printed form, which is the order it is walked.
       sortOrder: index,
     })),
     skipDuplicates: true,

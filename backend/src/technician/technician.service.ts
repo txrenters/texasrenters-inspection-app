@@ -957,7 +957,15 @@ export class TechnicianService {
           ...checklistKindWhere(checklistKindFor(room.inspection.inspectionType)),
         },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-        select: { id: true, label: true, keywords: true },
+        select: {
+          id: true,
+          label: true,
+          keywords: true,
+          section: true,
+          responseType: true,
+          unit: true,
+          choices: true,
+        },
       }),
       this.prisma.inspectionAreaChecklistResponse.findMany({
         where: { inspectionAreaId: roomId },
@@ -967,6 +975,8 @@ export class TechnicianService {
           isUndamaged: true,
           isWorking: true,
           comment: true,
+          numericValue: true,
+          textValue: true,
           recordedAt: true,
         },
       }),
@@ -982,6 +992,10 @@ export class TechnicianService {
         isUndamaged: response?.isUndamaged ?? null,
         isWorking: response?.isWorking ?? null,
         comment: response?.comment ?? null,
+        // Decimal over the wire is a string; a number is what a form field
+        // wants, and these are all small measurements.
+        numericValue: response?.numericValue == null ? null : Number(response.numericValue),
+        textValue: response?.textValue ?? null,
         recordedAt: response?.recordedAt?.toISOString() ?? null,
       };
     });
@@ -1008,6 +1022,8 @@ export class TechnicianService {
       isUndamaged?: boolean | null;
       isWorking?: boolean | null;
       comment?: string | null;
+      numericValue?: number | null;
+      textValue?: string | null;
       videoTimestampSeconds?: number | null;
     },
   ) {
@@ -1032,12 +1048,29 @@ export class TechnicianService {
         'The checklist cannot be changed after the inspection is finalized.',
       );
 
-    // The item has to belong to *this* area. Without this a technician could
-    // score an item from another property entirely, and the report would show
-    // an assessment against a room nobody inspected.
+    /**
+     * The item has to belong to *this* area, or to the organization.
+     *
+     * Without the first, a technician could score an item from another property
+     * entirely and the report would show an assessment against a room nobody
+     * inspected.
+     *
+     * The second half is not optional: the HVAC checklist is stored once per
+     * organization with a null area, because it asks the same questions of every
+     * system in the portfolio. `roomChecklist` was taught that and this was not,
+     * so an HVAC technician could see all sixty items and record none of them —
+     * every write answered 404.
+     */
+    const kind = checklistKindFor(room.inspection.inspectionType);
     const item = await this.prisma.areaChecklistItem.findFirst({
-      where: { id: itemId, propertyAreaId: room.propertyAreaId, archivedAt: null },
-      select: { id: true },
+      where: {
+        id: itemId,
+        archivedAt: null,
+        ...(kind === 'AIR_CONDITIONING'
+          ? { organizationId: user.organizationId, propertyAreaId: null }
+          : { propertyAreaId: room.propertyAreaId }),
+      },
+      select: { id: true, responseType: true, choices: true },
     });
     if (!item)
       throw new ApplicationError(
@@ -1046,12 +1079,33 @@ export class TechnicianService {
         'That checklist item does not belong to this area.',
       );
 
+    /**
+     * A choice has to be one of the offered ones.
+     *
+     * Cheap to check and expensive to skip: the value is printed on the report
+     * verbatim, so anything accepted here is something a reader will later
+     * believe. Every other field is free-form by design and is not policed.
+     */
+    const textValue = input.textValue?.trim() || null;
+    if (item.responseType === 'CHOICE' && textValue && !item.choices.includes(textValue))
+      throw new ApplicationError(
+        422,
+        'CHECKLIST_CHOICE_INVALID',
+        'That is not one of the options for this checklist item.',
+        [{ offered: item.choices }],
+      );
+
     const comment = input.comment?.trim() || null;
     const values = {
       isClean: input.isClean ?? null,
       isUndamaged: input.isUndamaged ?? null,
       isWorking: input.isWorking ?? null,
       comment,
+      // Undefined and null both mean "not answered" here, the same as the three
+      // flags above: sending null clears a reading rather than storing a zero,
+      // and a measured 0 degrees is still a number and survives.
+      numericValue: input.numericValue ?? null,
+      textValue,
       videoTimestampSeconds: input.videoTimestampSeconds ?? null,
     };
     const response = await this.prisma.inspectionAreaChecklistResponse.upsert({
@@ -1072,12 +1126,20 @@ export class TechnicianService {
         isUndamaged: true,
         isWorking: true,
         comment: true,
+        numericValue: true,
+        textValue: true,
         recordedAt: true,
         videoTimestampSeconds: true,
       },
     });
     this.notifyInspectionChanged(user, room.inspectionId);
-    return { ...response, recordedAt: response.recordedAt.toISOString() };
+    return {
+      ...response,
+      // Prisma hands back a Decimal, which serialises as a string. The client
+      // put a number in and gets a number back.
+      numericValue: response.numericValue == null ? null : Number(response.numericValue),
+      recordedAt: response.recordedAt.toISOString(),
+    };
   }
 
   /**

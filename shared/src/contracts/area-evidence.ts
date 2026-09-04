@@ -220,6 +220,22 @@ export interface AreaChecklistEntry {
    * outside a recording — on the web, or after the fact.
    */
   videoTimestampSeconds: number | null;
+  /**
+   * The printed section heading this item sits under, for grouping a long form
+   * on screen. Null on a room checklist, which is a flat list per area.
+   */
+  section?: string | null;
+  /**
+   * How the item is answered. Absent means STATUS — every room checklist, and
+   * anything recorded before the HVAC form arrived.
+   */
+  responseType?: 'STATUS' | 'READING' | 'TEXT' | 'CHOICE';
+  /** READING only: the unit the measurement was taken in. */
+  unit?: string | null;
+  /** READING only: what was measured. */
+  numericValue?: number | null;
+  /** TEXT and CHOICE: the line written, or the option chosen. */
+  textValue?: string | null;
 }
 
 /**

@@ -26,8 +26,19 @@ const PROPERTY_AREA_ID = '20000000-0000-4000-8000-000000000003';
 const ITEM_ID = '20000000-0000-4000-8000-000000000004';
 
 function build({
-  room = { id: ROOM_ID, inspectionId: INSPECTION_ID, propertyAreaId: PROPERTY_AREA_ID },
-  item = { id: ITEM_ID } as { id: string } | null,
+  room = {
+    id: ROOM_ID,
+    inspectionId: INSPECTION_ID,
+    propertyAreaId: PROPERTY_AREA_ID,
+    // The ownership check reads this: the HVAC checklist lives on the
+    // organization with a null area, every other kind lives on the area.
+    inspection: { inspectionType: 'MOVE_IN' },
+  },
+  item = { id: ITEM_ID, responseType: 'STATUS', choices: [] as string[] } as {
+    id: string;
+    responseType?: string;
+    choices?: string[];
+  } | null,
   inspection = { status: 'IN_PROGRESS', finalizedAt: null } as Record<string, unknown> | null,
 } = {}) {
   const prisma = {
@@ -43,6 +54,8 @@ function build({
           isUndamaged: values.isUndamaged ?? null,
           isWorking: values.isWorking ?? null,
           comment: values.comment ?? null,
+          numericValue: values.numericValue ?? null,
+          textValue: values.textValue ?? null,
           recordedAt: new Date('2026-08-11T09:00:00.000Z'),
         });
       }),
@@ -182,5 +195,99 @@ describe('technician checklist assessment', () => {
       const errors = await validate(dto);
       expect(errors.map((error) => error.property)).toContain('isClean');
     });
+  });
+});
+
+/**
+ * The HVAC checklist is stored once per organization with a null area, because
+ * it asks the same sixty questions of every system in the portfolio.
+ *
+ * `roomChecklist` was taught that when the checklist moved off the area.
+ * `recordRoomChecklistItem` was not: its ownership check demanded
+ * `propertyAreaId === room.propertyAreaId`, which an org-wide item can never
+ * satisfy. A technician could see all sixty items and record none of them —
+ * every write answered 404 with "that checklist item does not belong to this
+ * area", which is exactly the wrong explanation.
+ */
+describe('recording against an organization-wide HVAC item', () => {
+  it('looks the item up by organization, not by area', async () => {
+    const { service, prisma } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'STATUS', choices: [] },
+    });
+
+    await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { isWorking: true });
+
+    const [[lookup]] = prisma.areaChecklistItem.findFirst.mock.calls;
+    expect(lookup.where.propertyAreaId).toBeNull();
+    expect(lookup.where.organizationId).toBe(technician.organizationId);
+  });
+
+  it('still scopes a room checklist to its own area', async () => {
+    // The other half of the rule: without it a technician could score an item
+    // from another property entirely.
+    const { service, prisma } = build({
+      item: { id: ITEM_ID, responseType: 'STATUS', choices: [] },
+    });
+    await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { isWorking: true });
+    const [[lookup]] = prisma.areaChecklistItem.findFirst.mock.calls;
+    expect(lookup.where.propertyAreaId).toBe(PROPERTY_AREA_ID);
+  });
+
+  it('stores a measurement as a number, not as a comment', async () => {
+    const { service, prisma } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'READING', choices: [] },
+    });
+
+    await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { numericValue: 18.5 });
+
+    const [[write]] = prisma.inspectionAreaChecklistResponse.upsert.mock.calls;
+    expect(write.create.numericValue).toBe(18.5);
+  });
+
+  it('refuses a choice that is not on offer', async () => {
+    // Printed on the report verbatim, so anything accepted here is something a
+    // reader will later believe.
+    const { service } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'CHOICE', choices: ['Clean', 'Dirty'] },
+    });
+
+    await expect(
+      service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { textValue: 'Spotless' }),
+    ).rejects.toMatchObject({ status: 422, code: 'CHECKLIST_CHOICE_INVALID' });
+  });
+
+  it('accepts a choice that is', async () => {
+    const { service, prisma } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'CHOICE', choices: ['Clean', 'Dirty'] },
+    });
+
+    await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { textValue: 'Dirty' });
+
+    const [[write]] = prisma.inspectionAreaChecklistResponse.upsert.mock.calls;
+    expect(write.create.textValue).toBe('Dirty');
   });
 });

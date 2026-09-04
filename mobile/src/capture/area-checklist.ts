@@ -4,12 +4,23 @@ import {
   keywordsFromLabel,
 } from '@texasrenters/shared';
 
-import type { AreaEnvironment, InspectionRoom } from '../domain/models';
+import type { AreaEnvironment, ChecklistResponseType, InspectionRoom } from '../domain/models';
 
 export interface ChecklistItem {
   id: string;
   /** Shown to the technician. */
   label: string;
+  /** The printed section heading, for grouping. Absent on room checklists. */
+  section?: string | null;
+  /**
+   * How the item is answered. Absent means STATUS, which is what every room
+   * checklist is and what the generated fallback produces.
+   */
+  responseType?: ChecklistResponseType;
+  /** READING only. */
+  unit?: string | null;
+  /** CHOICE only. */
+  choices?: string[];
   /**
    * Words that count as having covered this item when spoken.
    *
@@ -32,7 +43,17 @@ export interface ChecklistItem {
  * themselves, and one of them never fetched the authored list at all.
  */
 export function resolveAreaChecklist(
-  authored: readonly { id: string; label: string; keywords: string[] }[] | undefined,
+  authored:
+    | readonly {
+        id: string;
+        label: string;
+        keywords: string[];
+        section?: string | null;
+        responseType?: ChecklistResponseType;
+        unit?: string | null;
+        choices?: string[];
+      }[]
+    | undefined,
   area: {
     name?: string | null;
     environment?: AreaEnvironment;
@@ -45,6 +66,10 @@ export function resolveAreaChecklist(
       id: item.id,
       label: item.label,
       keywords: item.keywords,
+      section: item.section ?? null,
+      responseType: item.responseType ?? 'STATUS',
+      unit: item.unit ?? null,
+      choices: item.choices ?? [],
     }));
   return checklistForArea({
     name: area.name ?? '',

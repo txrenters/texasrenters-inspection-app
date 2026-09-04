@@ -5,6 +5,7 @@ import { BottomSheet } from '../components/BottomSheet';
 import { registerIcons } from '../lib/icons';
 import type { ChecklistAssessment } from '../domain/models';
 import { checklistProgress, type ChecklistItem } from './area-checklist';
+import { ChoiceField, ReadingField, TextField, isAnswered } from './ChecklistAnswerFields';
 
 registerIcons(CheckIcon, CircleIcon, MicIcon);
 
@@ -95,12 +96,62 @@ function AxisRow({
   );
 }
 
+/**
+ * The control an item's answer needs.
+ *
+ * Kept beside the sheet rather than inside the map so the branch reads as one
+ * decision. An item whose type the app does not recognise falls back to the
+ * three axes, which is what every checklist was before the HVAC form.
+ */
+function renderAnswer(
+  item: ChecklistItem,
+  assessment: ChecklistAssessment | undefined,
+  onAssess: (itemId: string, axis: ChecklistAxisKey, next: boolean | null) => void,
+  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null }) => void,
+) {
+  switch (item.responseType ?? 'STATUS') {
+    case 'READING':
+      return onRecord ? (
+        <ReadingField
+          item={item}
+          onChange={(numericValue) => onRecord(item.id, { numericValue })}
+          value={assessment?.numericValue ?? null}
+        />
+      ) : null;
+    case 'TEXT':
+      return onRecord ? (
+        <TextField
+          item={item}
+          onChange={(textValue) => onRecord(item.id, { textValue })}
+          value={assessment?.textValue ?? null}
+        />
+      ) : null;
+    case 'CHOICE':
+      return onRecord ? (
+        <ChoiceField
+          item={item}
+          onChange={(textValue) => onRecord(item.id, { textValue })}
+          value={assessment?.textValue ?? null}
+        />
+      ) : null;
+    default:
+      return (
+        <AxisRow
+          assessment={assessment}
+          label={item.label}
+          onAnswer={(axis, next) => onAssess(item.id, axis, next)}
+        />
+      );
+  }
+}
+
 export function AreaChecklistSheet({
   areaName,
   assessments,
   items,
   checkedIds,
   onAssess,
+  onRecord,
   onToggle,
   visible,
   onClose,
@@ -112,6 +163,13 @@ export function AreaChecklistSheet({
   assessments?: Map<string, ChecklistAssessment>;
   /** Records one axis. Omitted when there is nothing to record against. */
   onAssess?: (itemId: string, axis: ChecklistAxisKey, next: boolean | null) => void;
+  /**
+   * Records an answer that is not one of the three axes — a measurement, a
+   * line of text, or a chosen option. Separate from `onAssess` because those
+   * carry a value rather than a yes/no, and collapsing the two would make every
+   * caller unpack a union to find out which it had.
+   */
+  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null }) => void;
   checkedIds: readonly string[];
   onToggle: (id: string) => void;
   visible: boolean;
@@ -132,9 +190,16 @@ export function AreaChecklistSheet({
    * having looked at it, so it counts. The union, not a replacement: spoken
    * coverage still ticks items nobody answered by hand.
    */
-  const assessedIds = [...(assessments?.entries() ?? [])]
-    .filter(([, value]) => value.isClean !== null || value.isUndamaged !== null || value.isWorking !== null)
-    .map(([id]) => id);
+  /**
+   * Answered counts as covered, for every shape of answer.
+   *
+   * This used to look only at the three yes/no axes, so on an HVAC checklist a
+   * technician could fill in all eight measurements and still be told nothing
+   * was covered.
+   */
+  const assessedIds = items
+    .filter((item) => isAnswered(item, assessments?.get(item.id)))
+    .map((item) => item.id);
   const { covered, total } = checklistProgress(items, [
     ...new Set([...checkedIds, ...assessedIds]),
   ]);
@@ -172,9 +237,20 @@ export function AreaChecklistSheet({
       ) : null}
 
       <ScrollView className="mt-4" showsVerticalScrollIndicator={false}>
-        {items.map((item) => {
+        {items.map((item, index) => {
           const isChecked = checked.has(item.id);
+          // Printed when it changes rather than by grouping into nested lists:
+          // the form has eleven sections and a technician scrolls straight
+          // through them in order.
+          const heading =
+            item.section && item.section !== items[index - 1]?.section ? item.section : null;
           return (
+            <View key={`group-${item.id}`}>
+            {heading ? (
+              <Text className="mb-1.5 mt-3 px-1 text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                {heading}
+              </Text>
+            ) : null}
             <View
               className={`mb-2 rounded-xl border px-4 py-3 ${
                 isChecked ? 'border-chart-3/40 bg-chart-3/10' : 'border-border bg-card'
@@ -206,13 +282,8 @@ export function AreaChecklistSheet({
                   are about. This is the checklist the technician already opens
                   from the camera; asking them to score somewhere else is the
                   extra step this workflow exists to remove. */}
-              {onAssess ? (
-                <AxisRow
-                  assessment={assessments?.get(item.id)}
-                  label={item.label}
-                  onAnswer={(axis, next) => onAssess(item.id, axis, next)}
-                />
-              ) : null}
+              {onAssess ? renderAnswer(item, assessments?.get(item.id), onAssess, onRecord) : null}
+            </View>
             </View>
           );
         })}

@@ -283,6 +283,15 @@ export const checklistSchema = z.array(
     isUndamaged: z.boolean().nullable().default(null),
     isWorking: z.boolean().nullable().default(null),
     comment: z.string().nullable().default(null),
+    // The HVAC form asks for measurements, free text and single choices, none
+    // of which a tick can express. Defaulted so a room checklist — which is all
+    // ticks — still parses unchanged, and so does a backend predating them.
+    section: z.string().nullable().default(null),
+    responseType: z.enum(['STATUS', 'READING', 'TEXT', 'CHOICE']).default('STATUS'),
+    unit: z.string().nullable().default(null),
+    choices: z.array(z.string()).default([]),
+    numericValue: z.number().nullable().default(null),
+    textValue: z.string().nullable().default(null),
     recordedAt: z.string().nullable().default(null),
   }),
 );
@@ -807,6 +816,8 @@ export class ApiInspectionRepository implements InspectionRepository {
       isUndamaged: assessment.isUndamaged ?? null,
       isWorking: assessment.isWorking ?? null,
       comment: assessment.comment ?? null,
+      numericValue: assessment.numericValue ?? null,
+      textValue: assessment.textValue ?? null,
       // Where in the recording it was answered. Built explicitly here, so a
       // field added to ChecklistAssessment and not to this object is silently
       // dropped before it ever leaves the phone.

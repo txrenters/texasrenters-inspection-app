@@ -56,6 +56,23 @@ enum AreaChecklistItemKind {
   AIR_CONDITIONING
 }
 
+/// How one checklist item is answered.
+///
+/// STATUS is the original behaviour and still the overwhelming majority: three
+/// condition flags plus a comment. The other three exist because the HVAC form
+/// asks for things a tick cannot express — a temperature split is a diagnosis,
+/// and "clean or dirty" is one answer rather than two booleans that can
+/// contradict each other.
+enum ChecklistResponseType {
+  STATUS
+  /// A number with a unit, held in `numericValue`.
+  READING
+  /// Free text where the form prints a blank line, held in `textValue`.
+  TEXT
+  /// Exactly one of the item's `choices`, held in `textValue`.
+  CHOICE
+}
+
 enum AreaCategory {
   INDOOR_ROOM
   HALLWAY
@@ -868,6 +885,12 @@ model InspectionAreaChecklistResponse {
   isUndamaged           Boolean?
   isWorking             Boolean?
   comment               String?
+  /// READING only. Decimal rather than float: these are compared between
+  /// visits and printed on a report, and 0.1 + 0.2 has no place in either.
+  numericValue          Decimal?          @db.Decimal(10, 2)
+  /// TEXT and CHOICE. For a CHOICE this holds the chosen option's own words,
+  /// not an index — reordering the choices must not rewrite recorded history.
+  textValue             String?
   /// Seconds into the area's recording when this was answered, so a reviewer can
   /// jump straight to the moment rather than scrubbing an hour of video. Null for
   /// an assessment made outside a recording — the web review screen, or a
@@ -908,6 +931,15 @@ model AreaChecklistItem {
   /// at a persisted item row, so the two sets have to coexist on the area rather
   /// than one being generated on the fly. This is what separates them.
   kind             AreaChecklistItemKind             @default(ROOM)
+  /// The printed section heading this item sits under, used to group the list
+  /// on screen. Null for the room checklists, which are a flat list per area.
+  section          String?
+  responseType     ChecklistResponseType             @default(STATUS)
+  /// READING only. Shown beside the field so nobody guesses Celsius.
+  unit             String?
+  /// CHOICE only. Stored on the item rather than as an enum because these are
+  /// the office's words, and the office rewords them.
+  choices          String[]                          @default([])
   /// Spoken words that count as covering this item, matched against the
   /// recording's transcript. Empty means the item can only be ticked by hand.
   keywords         String[]                          @default([])

@@ -448,13 +448,34 @@ export interface ChecklistAssessment {
    * the moment rather than scrubbing. Null when scored outside a recording.
    */
   videoTimestampSeconds?: number | null;
+  /**
+   * A measurement, for a READING item.
+   *
+   * The HVAC form asks for eight of them and a temperature split is the
+   * diagnosis, not a note. Recorded as a number so it can be compared between
+   * visits rather than read out of a comment.
+   */
+  numericValue?: number | null;
+  /** Free text for a TEXT item, or the chosen option for a CHOICE one. */
+  textValue?: string | null;
 }
 
 /** A checklist item together with this inspection's assessment of it. */
+/** How one checklist item is answered. Mirrors the server's enum. */
+export type ChecklistResponseType = 'STATUS' | 'READING' | 'TEXT' | 'CHOICE';
+
 export interface ChecklistItemWithAssessment extends ChecklistAssessment {
   id: string;
   label: string;
   keywords: string[];
+  /** The printed section heading, for grouping. Null on room checklists. */
+  section?: string | null;
+  /** Absent on anything the server has not upgraded yet; treated as STATUS. */
+  responseType?: ChecklistResponseType;
+  /** READING only, shown beside the field so nobody guesses Celsius. */
+  unit?: string | null;
+  /** CHOICE only. */
+  choices?: string[];
   /** When it was scored; null while unassessed. */
   recordedAt: string | null;
 }
