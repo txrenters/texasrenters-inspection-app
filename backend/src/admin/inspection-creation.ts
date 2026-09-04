@@ -11,7 +11,7 @@ import {
 
 import {
   AreaScope,
-  airConditioningChecklistTemplate,
+  HVAC_CHECKLIST,
   areaScopeFor,
   inspectionComparesToBaseline,
   keywordsFromLabel,
@@ -82,6 +82,21 @@ export interface InspectionRecordDetails {
   jobberVisitId?: string | null;
   jobberJobId?: string | null;
   jobberUpdatedAt?: Date | null;
+
+  /**
+   * For work that was already finished before this record existed.
+   *
+   * Jobber closes a move-in when the visit completes, and a walkthrough done
+   * elsewhere reaches us only as a finished visit. Recording it as `SCHEDULED`
+   * would put a job somebody already did on a technician's phone — the
+   * technician queue is `SCHEDULED` and `IN_PROGRESS` only, so `COMPLETED` is
+   * what keeps it off.
+   *
+   * Defaults to the column default, so a caller that does not pass this gets
+   * exactly the behaviour it had before.
+   */
+  status?: InspectionStatus;
+  completedAt?: Date | null;
 }
 
 export type InspectionPlan = Awaited<ReturnType<typeof resolveInspectionPlan>>;
@@ -594,14 +609,25 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
  * item may already hold a technician's answers.
  */
 async function ensureHvacChecklist(tx: InspectionCreationClient, organizationId: string) {
-  const labels = airConditioningChecklistTemplate();
   await tx.areaChecklistItem.createMany({
-    data: labels.map((label, index) => ({
+    data: HVAC_CHECKLIST.map((item, index) => ({
       organizationId,
       propertyAreaId: null,
       kind: AreaChecklistItemKind.AIR_CONDITIONING,
-      label,
-      keywords: keywordsFromLabel(label),
+      label: item.label,
+      section: item.section,
+      responseType: item.responseType,
+      unit: item.unit ?? null,
+      choices: item.choices ?? [],
+      /**
+       * Keywords only for the items a spoken walkthrough can cover.
+       *
+       * A reading is a number the technician types; no phrasing in a transcript
+       * means "the split was 18 degrees", and pretending otherwise would tick a
+       * measurement nobody took.
+       */
+      keywords: item.responseType === 'STATUS' ? keywordsFromLabel(item.label) : [],
+      // The order of the printed form, which is the order it is walked.
       sortOrder: index,
     })),
     skipDuplicates: true,
@@ -653,6 +679,10 @@ export async function insertInspection(
         jobberVisitId: details.jobberVisitId,
         jobberJobId: details.jobberJobId,
         jobberUpdatedAt: details.jobberUpdatedAt,
+        // Spread rather than assigned, so omitting them leaves the column
+        // defaults exactly as they were for every existing caller.
+        ...(details.status ? { status: details.status } : {}),
+        ...(details.completedAt ? { completedAt: details.completedAt } : {}),
         // Recorded even when the property turned out to have areas after
         // all: it is the administrator's instruction to the technician, not
         // a description of what the property had at the time.
