@@ -26,6 +26,32 @@ export function reportDate(value: string | undefined): string | undefined {
 }
 
 /**
+ * Statuses that mean somebody is still living there.
+ *
+ * `Active` and `Active - Notice Given` are the obvious ones. `Going MTM` and
+ * `Eviction` are the office's answer, given explicitly: a tenancy rolling to
+ * month-to-month is live, and so is one being evicted — the tenant is still in
+ * the property, and a property with somebody in it is exactly the one an
+ * occupied inspection is for.
+ *
+ * An unrecognised status is treated as *not* live, which is the conservative
+ * direction: a stale tenancy shown is visible and correctable, where a live one
+ * hidden is not. But it is also how the whole lease table came to be empty, so
+ * a new status here is a decision somebody should make deliberately rather than
+ * discover.
+ */
+const LIVE_LEASE_STATUSES: ReadonlySet<string> = new Set(['going mtm', 'eviction']);
+
+export function isActiveLeaseStatus(status: string | null | undefined): boolean {
+  const value = (status ?? '').trim().toLowerCase();
+  if (!value) return false;
+  // Covers "Active" and "Active - Notice Given" without listing every variant
+  // the office might append after the dash.
+  if (value.startsWith('active')) return true;
+  return LIVE_LEASE_STATUSES.has(value);
+}
+
+/**
  * Stable identity for a lease that the report does not identify. Derived from
  * values Propertyware owns, so it is reproducible across syncs; prefixed so it
  * can never be mistaken for — or collide with — a REST lease ID.
@@ -232,9 +258,9 @@ export class PropertywareClient {
           id: leaseReportExternalId(buildingId, leaseName, rawStart),
           buildingID: buildingId,
           leaseName,
-          // Statuses read like "Active - Notice Given"; anything not starting
-          // with "Active" is treated as inactive rather than guessed at.
-          active: /^active/i.test(status),
+          // "Active", "Active - Notice Given", "Going MTM" and "Eviction" all
+          // mean somebody is still in the property. See `isActiveLeaseStatus`.
+          active: isActiveLeaseStatus(status),
           status,
           startDate: reportDate(rawStart),
           endDate: reportDate(cell(source, 'endDate')),

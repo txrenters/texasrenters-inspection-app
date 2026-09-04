@@ -2,6 +2,7 @@ import {
   LEASE_REPORT_COLUMNS,
   leaseReportColumns,
 } from '../src/integrations/propertyware/propertyware.schemas';
+import { isActiveLeaseStatus } from '../src/integrations/propertyware/propertyware.client';
 
 /**
  * Reading a Propertyware report by label instead of by position.
@@ -125,5 +126,36 @@ describe('resolving lease report columns', () => {
     expect(leaseReportColumns([]).missing.length).toBe(
       Object.keys(LEASE_REPORT_COLUMNS).length + 1,
     );
+  });
+});
+
+describe('which lease statuses mean somebody is still in the property', () => {
+  it('counts the plain and the notice-given', () => {
+    expect(isActiveLeaseStatus('Active')).toBe(true);
+    expect(isActiveLeaseStatus('Active - Notice Given')).toBe(true);
+  });
+
+  it('counts month-to-month and eviction, on the office’s instruction', () => {
+    // Both were a judgement call rather than a guess: the tenant is still in
+    // the property in each case, and a property with somebody in it is exactly
+    // the one an occupied inspection is for.
+    expect(isActiveLeaseStatus('Going MTM')).toBe(true);
+    expect(isActiveLeaseStatus('Eviction')).toBe(true);
+    expect(isActiveLeaseStatus('going mtm')).toBe(true);
+  });
+
+  it('does not count an ended tenancy', () => {
+    expect(isActiveLeaseStatus('Closed')).toBe(false);
+    expect(isActiveLeaseStatus('Former')).toBe(false);
+    expect(isActiveLeaseStatus('')).toBe(false);
+    expect(isActiveLeaseStatus(null)).toBe(false);
+  });
+
+  it('treats an unrecognised status as not live', () => {
+    // The conservative direction, and stated so it is a decision rather than an
+    // accident: a stale tenancy shown is visible and correctable, a live one
+    // hidden is not — but this is also how the lease table came to be empty, so
+    // a new status belongs in the list deliberately.
+    expect(isActiveLeaseStatus('Pending Approval')).toBe(false);
   });
 });
