@@ -71,6 +71,92 @@ export async function api<T>(
   return response.json() as Promise<T>;
 }
 
+/**
+ * A file upload that can say how far along it is.
+ *
+ * `fetch` cannot report upload progress — a request body stream is write-only
+ * from the caller's side — so this is the one place that uses
+ * `XMLHttpRequest`, whose `upload.onprogress` can.
+ *
+ * It matters because of what the numbers actually are. A report PDF is tens of
+ * megabytes and a recent one spent **165 seconds** in transit; the server
+ * logged the request as slow having run no queries at all, because it was
+ * simply receiving bytes. Three minutes of a spinner that says "Uploading…"
+ * and never moves is indistinguishable from a hang, which is what it was
+ * reported as.
+ *
+ * This is also the only phase of an import that genuinely cannot be walked
+ * away from: nothing is stored until the file lands, so it is the phase that
+ * most needs to show progress and was the only one showing none.
+ *
+ * The error contract is deliberately the same `ApiError` the rest of the
+ * client throws, including the 401 sign-out, so callers cannot tell the two
+ * transports apart.
+ */
+export async function apiUpload<T>(
+  path: string,
+  body: FormData,
+  { onProgress, signal }: { onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<T> {
+  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
+  if (!baseUrl)
+    throw new ApiError(0, 'API_NOT_CONFIGURED', 'The administrator API is not configured.');
+  const session = await getSession();
+  if (!session) throw new ApiError(401, 'SESSION_EXPIRED', 'Your session has expired.');
+
+  const failure = (status: number, raw: string) => {
+    const error = (() => {
+      try {
+        return JSON.parse(raw) as ApiErrorContract;
+      } catch {
+        return null;
+      }
+    })();
+    return new ApiError(
+      status,
+      error?.code ?? 'REQUEST_FAILED',
+      error?.message ?? 'The request could not be completed.',
+      error?.requestId,
+    );
+  };
+
+  const status = await new Promise<{ code: number; body: string }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', resolveApiUrl(baseUrl, path));
+    // No content-type: the browser sets it with the multipart boundary, and
+    // overriding it produces a body the server cannot parse.
+    request.setRequestHeader('authorization', `Bearer ${session.accessToken}`);
+    for (const [header, value] of Object.entries(NGROK_SKIP_INTERSTITIAL))
+      request.setRequestHeader(header, value);
+
+    if (onProgress)
+      request.upload.onprogress = (event) => {
+        // `lengthComputable` is false when the size is unknown; reporting 0 for
+        // ever would be worse than the spinner this replaces, so it is left to
+        // the caller's indeterminate state.
+        if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
+      };
+
+    request.onload = () => resolve({ code: request.status, body: request.responseText });
+    // Network-level failure. XHR deliberately tells the page nothing about why,
+    // so neither do we — guessing would be inventing a cause.
+    request.onerror = () =>
+      reject(new ApiError(0, 'NETWORK_ERROR', 'The API could not be reached. Check your connection.'));
+    request.onabort = () => reject(new ApiError(0, 'UPLOAD_CANCELLED', 'The upload was cancelled.'));
+
+    signal?.addEventListener('abort', () => request.abort(), { once: true });
+    request.send(body);
+  });
+
+  if (status.code === 401) {
+    await signOut();
+    throw failure(401, status.body);
+  }
+  if (status.code < 200 || status.code >= 300) throw failure(status.code, status.body);
+  if (status.code === 204 || !status.body) return undefined as T;
+  return JSON.parse(status.body) as T;
+}
+
 export async function apiBlob(path: string, signal?: AbortSignal) {
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
   if (!baseUrl)
