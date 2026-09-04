@@ -70,7 +70,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 
-import { api, type Page, queryString } from './api';
+import { api, apiUpload, type Page, queryString } from './api';
 import {
   beginEntityOperation,
   cancelAffectedQueries,
@@ -1589,12 +1589,24 @@ export function useAdminMutations() {
      * there. The upload is the only part of this the page can lose by closing.
      */
     startInspectionImport: useMutation({
-      mutationFn: ({ inspectionId, file }: { inspectionId: string; file: File }) => {
+      mutationFn: ({
+        inspectionId,
+        file,
+        onProgress,
+      }: {
+        inspectionId: string;
+        file: File;
+        /** Fraction transferred, 0 to 1. A report is tens of megabytes and one
+         * recent upload took 165 seconds, so a caller that cannot show movement
+         * is indistinguishable from a hang. */
+        onProgress?: (fraction: number) => void;
+      }) => {
         const form = new FormData();
         form.set('file', file);
-        return api<{ jobId: string; status: string }>(
+        return apiUpload<{ jobId: string; status: string }>(
           `/api/v1/admin/inspections/${inspectionId}/inspection-imports`,
-          { method: 'POST', body: form },
+          form,
+          { onProgress },
         );
       },
     }),

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangleIcon, CheckCircle2Icon, FileTextIcon, UploadIcon } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -123,6 +125,16 @@ export function InspectionReportImport({
   const [dismissed, setDismissed] = useState(false);
   const jobId = dismissed ? null : (startedJobId ?? resumeJobId);
   const [rejected, setRejected] = useState<string | null>(null);
+  /**
+   * How much of the file has reached the server, 0 to 1.
+   *
+   * Null until the first progress event, and null again once the upload is
+   * done. A report is tens of megabytes — one recent upload took 165 seconds,
+   * during which the server ran no queries at all because it was purely
+   * receiving bytes — and a spinner that never moves for that long is
+   * indistinguishable from a hang. It was reported as one.
+   */
+  const [progress, setProgress] = useState<number | null>(null);
   // Set when the write is asked for. The mutation resolving only means the
   // server accepted the job, so it cannot stand in for "still working".
   const [writing, setWriting] = useState(false);
@@ -157,11 +169,20 @@ export function InspectionReportImport({
       return;
     }
     try {
-      const started = await startInspectionImport.mutateAsync({ inspectionId, file });
+      setProgress(0);
+      const started = await startInspectionImport.mutateAsync({
+        inspectionId,
+        file,
+        onProgress: setProgress,
+      });
       setDismissed(false);
       setStartedJobId(started.jobId);
     } catch {
       // Rendered below from the mutation's own error.
+    } finally {
+      // Cleared either way: the upload is over, and leaving a bar at 100% while
+      // the server reads the file would claim progress that is not being made.
+      setProgress(null);
     }
   }
 
@@ -186,9 +207,41 @@ export function InspectionReportImport({
    * mutation resolves when the work begins.
    */
   const committed = Boolean(job.data?.committedAt);
+  const totals = job.data?.summary?.totals;
+  /**
+   * Announced once, when the write finishes.
+   *
+   * The dialog can be closed while an import runs, so the person who started it
+   * is usually somewhere else by the time it lands — on another property,
+   * starting the next one. Without this the only signal is a page they are no
+   * longer looking at quietly gaining areas.
+   *
+   * Guarded by a ref rather than by the effect's dependencies: the job keeps
+   * being polled after it commits, and every answer would otherwise announce
+   * the same import again.
+   */
+  const announced = useRef(false);
   useEffect(() => {
-    if (committed) router.refresh();
-  }, [committed, router]);
+    if (!committed) return;
+    if (!announced.current) {
+      announced.current = true;
+      toast.success('Report imported', {
+        description: totals
+          ? `${totals.areas} areas, ${totals.photos} photographs. It is under review, not finalized.`
+          : 'It is under review, not finalized.',
+      });
+    }
+    router.refresh();
+  }, [committed, totals, router]);
+
+  /** A failure is worth the same interruption, for the same reason. */
+  const failureCode = job.data?.errorCode ?? null;
+  const announcedFailure = useRef(false);
+  useEffect(() => {
+    if (!failureCode || announcedFailure.current) return;
+    announcedFailure.current = true;
+    toast.error('The report could not be imported', { description: failureCode });
+  }, [failureCode]);
 
   const error =
     rejected ??
@@ -221,7 +274,11 @@ export function InspectionReportImport({
             />
             <Button disabled={uploading} onClick={() => fileInput.current?.click()}>
               {uploading ? <Spinner /> : <UploadIcon />}
-              {uploading ? 'Uploading…' : 'Choose a report PDF'}
+              {uploading
+                ? progress === null
+                  ? 'Uploading…'
+                  : `Uploading… ${Math.round(progress * 100)}%`
+                : 'Choose a report PDF'}
             </Button>
             {uploading ? (
               <span className="text-muted-foreground text-sm">
@@ -229,6 +286,13 @@ export function InspectionReportImport({
               </span>
             ) : null}
           </div>
+          {/* Only while bytes are actually moving. `progress` is null before the
+              first event and once the file has landed, and a bar sitting at
+              100% while the server reads the file would claim progress that is
+              not being made — which is the thing this exists to stop. */}
+          {uploading && progress !== null ? (
+            <Progress className="h-1.5" value={Math.round(progress * 100)} />
+          ) : null}
         </div>
       ) : (
         <ImportProgress
