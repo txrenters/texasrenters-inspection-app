@@ -68,10 +68,20 @@ export class PropertywareTenantSyncService {
   async apply(organizationId: string, rows: TenantReportRow[]): Promise<TenantSyncResult> {
     const buildings = await this.prisma.propertywareBuilding.findMany({
       where: { organizationId, isActive: true, ...PORTFOLIO_VISIBLE },
-      select: { id: true, addressLine1: true, postalCode: true },
+      select: { id: true, externalId: true, addressLine1: true, postalCode: true },
     });
     const strict = buildAddressIndex(buildings);
     const loose = buildLooseAddressIndex(buildings);
+    /**
+     * Propertyware's own building id, which the report now carries.
+     *
+     * Tried before the address, because it is exact: all 416 distinct ids in
+     * the live report match a building here, where address matching left nine
+     * unplaced — a missing street type, a truncated ZIP, and the three-unit
+     * property whose address is genuinely ambiguous. None of those can defeat
+     * an id.
+     */
+    const byExternalId = new Map(buildings.map((b) => [b.externalId, b.id]));
 
     const result: TenantSyncResult = {
       fetched: rows.length,
@@ -85,13 +95,21 @@ export class PropertywareTenantSyncService {
     const seen: string[] = [];
 
     for (const row of rows) {
-      const match = matchBuildingWithFallback(
-        strict,
-        loose,
-        [normalizeAddressKey(row.addressLine1, row.postalCode)],
-        looseAddressKey(row.addressLine1, row.postalCode),
-      );
-      const buildingId = match.outcome === 'MATCHED' ? match.buildingId : null;
+      // The id when there is one, the address when there is not. A row whose
+      // id names a building we do not hold falls through to the address rather
+      // than being dropped — the address may still place it.
+      const fromId = row.buildingExternalId
+        ? (byExternalId.get(row.buildingExternalId) ?? null)
+        : null;
+      const match = fromId
+        ? null
+        : matchBuildingWithFallback(
+            strict,
+            loose,
+            [normalizeAddressKey(row.addressLine1, row.postalCode)],
+            looseAddressKey(row.addressLine1, row.postalCode),
+          );
+      const buildingId = fromId ?? (match?.outcome === 'MATCHED' ? match.buildingId : null);
       if (buildingId) result.matchedToBuilding += 1;
       else result.unmatchedAddress += 1;
 

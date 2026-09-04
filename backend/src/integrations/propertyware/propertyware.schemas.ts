@@ -264,6 +264,19 @@ export const TENANT_REPORT_COLUMNS = {
 } as const;
 
 export const TENANT_REPORT_OPTIONAL_COLUMNS = {
+  /**
+   * Propertyware's own building id, when the report carries one.
+   *
+   * Preferred over the address by a wide margin: every one of the 416 distinct
+   * ids in the live report matches a `propertyware_buildings.externalId`
+   * exactly, where address matching left nine rows unplaced. An exact key
+   * cannot be ambiguous, and cannot be defeated by a missing street type or a
+   * truncated ZIP — both of which the unmatched nine turned out to be.
+   *
+   * Optional because the column was added after this sync shipped, and a
+   * report without it must still work.
+   */
+  buildingExternalId: 'Building Entity ID',
   startDate: 'Start Date',
   endDate: 'End Date',
   tbpEnrollment: 'Enrolled in Tenant Benefits Package',
