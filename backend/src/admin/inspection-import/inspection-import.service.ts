@@ -63,6 +63,20 @@ const MINIMUM_AREAS = 1;
  */
 const IMPORT_STALE_AFTER_MS = 10 * 60 * 1000;
 /**
+ * How many photographs are uploaded at once.
+ *
+ * A report carries a few hundred — 271 in one recent import, 376 in another —
+ * and each one is a separate round trip to object storage. Sending them one at
+ * a time spent almost the whole import waiting on the network, which is what
+ * made an import feel like something that had to be watched rather than
+ * started.
+ *
+ * Eight rather than "all of them": several hundred simultaneous uploads would
+ * trade a slow import for an exhausted socket pool and R2 rate limits, and the
+ * curve is flat well before that. It is a division of the wait, not a race.
+ */
+const PHOTO_UPLOAD_CONCURRENCY = 8;
+/**
  * What a person should look at before any of this is written.
  *
  * The parser refuses to guess, so what it could not resolve is surfaced rather
@@ -743,20 +757,55 @@ export class InspectionImportService {
     fingerprint: string,
     photos: readonly ExtractedPhoto[],
   ) {
-    const stored: Array<{ storageKey: string; width: number; height: number; sizeBytes: number }> = [];
-    for (const [index, photo] of photos.entries()) {
-      // Keyed by the content, so re-running a failed import overwrites its own
-      // objects rather than leaving a second copy of every photograph.
-      const digest = createHash('sha256').update(photo.bytes).digest('hex').slice(0, 32);
-      const storageKey = `${organizationId}/imported/${fingerprint.slice(0, 16)}/${String(index).padStart(4, '0')}-${digest}.jpg`;
-      await this.storage.putBytes(storageKey, photo.bytes, 'image/jpeg');
-      stored.push({
-        storageKey,
-        width: photo.width,
-        height: photo.height,
-        sizeBytes: photo.bytes.length,
-      });
-    }
+    /**
+     * Pre-sized and written by index, never appended.
+     *
+     * The commit walks areas in order and reads this positionally through a
+     * running `photoCursor`, so the result has to line up with `photos` exactly.
+     * Pushing as uploads finished would order it by *completion*, which is
+     * arbitrary once several are in flight — and the failure would not be an
+     * error, it would be every photograph filed against the wrong room.
+     */
+    const stored = new Array<{
+      storageKey: string;
+      width: number;
+      height: number;
+      sizeBytes: number;
+    }>(photos.length);
+
+    /**
+     * A fixed set of workers pulling from a shared cursor, rather than fixed
+     * slices per worker: photographs vary in size, and a slice that happened to
+     * hold the large ones would still be uploading long after the others had
+     * finished.
+     */
+    let next = 0;
+    const upload = async () => {
+      for (;;) {
+        const index = next;
+        next += 1;
+        if (index >= photos.length) return;
+        const photo = photos[index]!;
+        // Keyed by the content, so re-running a failed import overwrites its own
+        // objects rather than leaving a second copy of every photograph.
+        const digest = createHash('sha256').update(photo.bytes).digest('hex').slice(0, 32);
+        const storageKey = `${organizationId}/imported/${fingerprint.slice(0, 16)}/${String(index).padStart(4, '0')}-${digest}.jpg`;
+        await this.storage.putBytes(storageKey, photo.bytes, 'image/jpeg');
+        stored[index] = {
+          storageKey,
+          width: photo.width,
+          height: photo.height,
+          sizeBytes: photo.bytes.length,
+        };
+      }
+    };
+
+    // `all`, not `allSettled`: a photograph that cannot be stored is a report
+    // that cannot be imported, and the job records the failure. Swallowing it
+    // would commit an inspection with a hole in its evidence.
+    await Promise.all(
+      Array.from({ length: Math.min(PHOTO_UPLOAD_CONCURRENCY, photos.length) }, upload),
+    );
     return stored;
   }
 }
