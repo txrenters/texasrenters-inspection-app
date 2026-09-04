@@ -207,6 +207,35 @@ export class InspectionImportService {
     return { jobId: job.id, status: 'RUNNING' as const };
   }
 
+  /**
+   * The import currently attached to an inspection, if there is one.
+   *
+   * Both phases of an import are detached — the reading and the writing each
+   * return a job id and record their own outcome — so an import has never
+   * needed anybody to sit and watch it. The console could not say so, because
+   * the only way to ask after a job was to already hold its id, and that id
+   * lived in a dialog. Closing the dialog therefore *looked* like abandoning
+   * the import, and the office ran them one at a time.
+   *
+   * This is what lets any page ask "is something running here?" without having
+   * been the one that started it. Newest first, and only the last one: an
+   * inspection is seeded once, so an older job is history rather than state.
+   */
+  async activeJob(user: AuthenticatedUser, inspectionId: string) {
+    const job = await this.prisma.inspectionImportJob.findFirst({
+      where: { organizationId: user.organizationId, inspectionId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    // Deliberately null rather than a 404: "nothing is importing" is the
+    // ordinary answer for almost every inspection, and an error would make the
+    // console treat the common case as a failure.
+    if (!job) return null;
+    // Through `job` so the staleness rule and the summary are computed in one
+    // place. A second copy of either would drift the first time one changed.
+    return this.job(user, job.id);
+  }
+
   /** What the console polls while the page is open, or after coming back to it. */
   async job(user: AuthenticatedUser, jobId: string) {
     const job = await this.prisma.inspectionImportJob.findFirst({

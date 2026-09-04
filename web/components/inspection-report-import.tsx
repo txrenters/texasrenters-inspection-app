@@ -24,7 +24,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { useAdminMutations, useInspectionImportJob, type ImportJob } from '@/lib/queries';
+import {
+  useActiveInspectionImport,
+  useAdminMutations,
+  useInspectionImportJob,
+  type ImportJob,
+} from '@/lib/queries';
 
 /**
  * The way in, from the inspection that needs filling.
@@ -39,12 +44,24 @@ import { useAdminMutations, useInspectionImportJob, type ImportJob } from '@/lib
  */
 export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
   const [open, setOpen] = useState(false);
+  /**
+   * Asked of the inspection, not remembered from this dialog.
+   *
+   * Both halves of an import run detached on the server and finish whether or
+   * not anybody is looking. The job id used to live only in this component,
+   * though, so closing the dialog lost the handle and the import *looked*
+   * abandoned — which is why these were run one at a time. Now the dialog can
+   * be closed, another property started, and this one reopened where it was.
+   */
+  const active = useActiveInspectionImport(inspectionId);
+  const running = isRunning(active.data);
+
   return (
     <Dialog onOpenChange={setOpen} open={open}>
       <DialogTrigger asChild>
         <Button variant="outline">
-          <UploadIcon />
-          Import a report
+          {running ? <Spinner /> : <UploadIcon />}
+          {running ? 'Import in progress' : 'Import a report'}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-3xl">
@@ -56,10 +73,19 @@ export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
             against.
           </DialogDescription>
         </DialogHeader>
-        <InspectionReportImport inspectionId={inspectionId} />
+        <InspectionReportImport
+          inspectionId={inspectionId}
+          resumeJobId={active.data && !active.data.committedAt ? active.data.id : null}
+        />
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Working, as opposed to finished, failed, or waiting to be reviewed. */
+function isRunning(job: ImportJob | null | undefined) {
+  if (!job || job.committedAt || job.errorCode) return false;
+  return job.status === 'RUNNING' || job.status === 'PENDING';
 }
 
 /**
@@ -75,10 +101,27 @@ export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
  * from upload to import would make this a formality and put unreviewed
  * evidence behind a charge.
  */
-export function InspectionReportImport({ inspectionId }: { inspectionId: string }) {
+export function InspectionReportImport({
+  inspectionId,
+  resumeJobId = null,
+}: {
+  inspectionId: string;
+  /** An import already under way here, so reopening picks it up rather than
+   * offering to start a second one. */
+  resumeJobId?: string | null;
+}) {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [startedJobId, setStartedJobId] = useState<string | null>(null);
+  /**
+   * What this session started, else whatever the inspection says is running.
+   *
+   * In that order rather than the reverse: once somebody uploads here, that is
+   * the job they are looking at, and it must not be replaced by a slower poll
+   * answering about the same one.
+   */
+  const [dismissed, setDismissed] = useState(false);
+  const jobId = dismissed ? null : (startedJobId ?? resumeJobId);
   const [rejected, setRejected] = useState<string | null>(null);
   // Set when the write is asked for. The mutation resolving only means the
   // server accepted the job, so it cannot stand in for "still working".
@@ -115,7 +158,8 @@ export function InspectionReportImport({ inspectionId }: { inspectionId: string 
     }
     try {
       const started = await startInspectionImport.mutateAsync({ inspectionId, file });
-      setJobId(started.jobId);
+      setDismissed(false);
+      setStartedJobId(started.jobId);
     } catch {
       // Rendered below from the mutation's own error.
     }
@@ -196,7 +240,14 @@ export function InspectionReportImport({ inspectionId }: { inspectionId: string 
           }
           job={job.data}
           onCommit={() => void commit()}
-          onDiscard={() => setJobId(null)}
+          onDiscard={() => {
+            // Both, because the job may have come from the inspection rather
+            // than from this session. Clearing only what this session started
+            // would fall straight back to the resumed one and the panel would
+            // reappear.
+            setStartedJobId(null);
+            setDismissed(true);
+          }}
         />
       )}
     </div>
@@ -359,9 +410,15 @@ function ImportProgress({
           Cancel
         </Button>
         {/* Said before the button rather than after: it lands in review because
-            nobody has confirmed these matches yet. */}
+            nobody has confirmed these matches yet.
+
+            While it writes, the more useful thing to say is that nobody has to
+            wait. The work runs on the server; this only reports it. Not knowing
+            that is what had these run one at a time. */}
         <span className="text-muted-foreground text-sm">
-          It arrives under review, not finalized.
+          {committing
+            ? 'Writing on the server — you can close this and start another.'
+            : 'It arrives under review, not finalized.'}
         </span>
       </div>
     </div>
