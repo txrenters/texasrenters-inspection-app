@@ -3,6 +3,8 @@ import { Module } from '@nestjs/common';
 import { PropertywareReconciliationWorker } from '../../workers/propertyware-sync/propertyware-reconciliation.worker';
 import { PropertywareSyncCoordinator } from '../../workers/propertyware-sync/propertyware-sync.coordinator';
 import { PropertywareSyncScheduler } from '../../workers/propertyware-sync/propertyware-sync.scheduler';
+import { PropertywareTenantScheduler } from '../../workers/propertyware-sync/propertyware-tenant.scheduler';
+import { PropertywareTenantSyncService } from './propertyware.tenant-sync.service';
 import {
   InMemoryPropertywareSyncStore,
   PrismaPropertywareSyncStore,
@@ -39,6 +41,8 @@ import { PropertywareService } from './propertyware.service';
     PropertywareSyncCoordinator,
     PropertywareReconciliationWorker,
     PropertywareSyncScheduler,
+    PropertywareTenantScheduler,
+    PropertywareTenantSyncService,
     ApiAuthGuard,
     PermissionsGuard,
   ],

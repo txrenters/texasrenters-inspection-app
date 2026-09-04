@@ -34,6 +34,9 @@ export function getPropertywareConfig(env: NodeJS.ProcessEnv = process.env): Pro
     portfolioReportUrl: env.PROPERTYWARE_PORTFOLIO_REPORT_URL?.trim() || undefined,
     leaseReportUrl: env.PROPERTYWARE_LEASE_REPORT_URL?.trim() || undefined,
     tenantReportUrl: env.PROPERTYWARE_TENANT_REPORT_URL?.trim() || undefined,
+    // After the 02:00 reconciliation, so tenancies match the buildings that
+    // pass survived rather than the ones it was about to retire.
+    tenantSyncCron: env.PROPERTYWARE_TENANT_SYNC_CRON?.trim() || '0 3 * * *',
     requestTimeoutMs: integer(env.PROPERTYWARE_REQUEST_TIMEOUT_MS, 30_000),
     pageSize: Math.min(integer(env.PROPERTYWARE_PAGE_SIZE, 500), PROPERTYWARE_MAX_PAGE_SIZE),
     maxRetries: integer(env.PROPERTYWARE_MAX_RETRIES, 4),
