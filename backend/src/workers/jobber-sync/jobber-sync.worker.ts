@@ -866,8 +866,32 @@ export class JobberSyncWorker {
       where: { id: inspectionId, organizationId },
       select: { startedAt: true, status: true },
     });
-    if (!inspection || inspection.startedAt || inspection.status !== InspectionStatus.SCHEDULED)
-      return;
+    if (!inspection) return;
+
+    const current = await this.prisma.inspectionAssignment.findFirst({
+      where: { inspectionId, isCurrent: true },
+      select: { id: true, technicianId: true },
+    });
+
+    /**
+     * Work already under way here keeps the technician it has.
+     *
+     * Reassigning an inspection somebody has started or finished would rewrite
+     * who did it, which is exactly what this guard exists to prevent.
+     *
+     * But it used to refuse anything that was not SCHEDULED, and that was too
+     * broad. A move-in the sync recovers arrives *created* complete — Jobber
+     * closed it before we ever saw the visit — so it has never had an
+     * assignment for a later pass to overwrite. Recording the first one is not
+     * a rewrite; that assignee is the history, not a change to it. 144 recovered
+     * inspections read "Unassigned" for this reason while Jobber knew all along
+     * who had walked them.
+     *
+     * So the refusal now needs both halves: the work has begun *and* somebody is
+     * already named against it.
+     */
+    const worked = Boolean(inspection.startedAt) || inspection.status !== InspectionStatus.SCHEDULED;
+    if (worked && current) return;
 
     const resolution = await resolveAssignment(this.prisma, organizationId, visit);
     if (resolution.outcome === 'NO_ASSIGNEE') return;
@@ -879,10 +903,6 @@ export class JobberSyncWorker {
       return;
     }
 
-    const current = await this.prisma.inspectionAssignment.findFirst({
-      where: { inspectionId, isCurrent: true },
-      select: { id: true, technicianId: true },
-    });
     if (current?.technicianId === resolution.match.technicianId) return;
 
     await this.prisma.$transaction(async (tx) => {
