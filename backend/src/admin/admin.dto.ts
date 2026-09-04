@@ -37,6 +37,21 @@ export class PropertyListQueryDto extends PaginationDto {
   @IsOptional() @IsIn(['true', 'false']) active?: string;
   @IsOptional() @IsIn(['true', 'false']) hasUpcomingMoveOut?: string;
   @IsOptional() @IsIn(['true', 'false']) hasUnassignedInspection?: string;
+
+  /**
+   * Whether a tenant is in residence — **not** whether we still manage it.
+   *
+   * Those are two different Propertyware fields and conflating them would be a
+   * real error: `isActive` (the `active` flag) says the property is under
+   * management, while occupancy lives in `sourceStatus`. 132 of the 574 active
+   * properties are `Vacant`, and every one of them is still managed and still
+   * inspectable — a move-out inspection happens *because* a property became
+   * vacant.
+   *
+   * A string enum rather than a boolean because Propertyware writes the words,
+   * and a third value already exists in the data (`Inactive`) that is neither.
+   */
+  @IsOptional() @IsIn(['OCCUPIED', 'VACANT']) occupancy?: string;
 }
 
 export class PortfolioListQueryDto extends PaginationDto {}
