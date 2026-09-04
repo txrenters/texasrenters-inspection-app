@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ShieldCheck,
   UserRound,
+  Users,
   UsersRound,
   Workflow,
   Wrench,
@@ -91,6 +92,14 @@ export const adminNavigation: AdminNavigationGroup[] = [
         title: 'Properties',
         href: '/properties',
         icon: Building2,
+        permission: 'properties:read',
+      },
+      {
+        title: 'Tenants',
+        href: '/tenants',
+        icon: Users,
+        // Same permission as Properties: a tenancy is a fact about a property,
+        // and anyone who may see the property may see who is in it.
         permission: 'properties:read',
       },
     ],

@@ -74,6 +74,7 @@ import {
   PetCandidateReviewDto,
   PortfolioListQueryDto,
   PropertyListQueryDto,
+  TenantListQueryDto,
   RejectPropertyAreaDto,
   ReopenInspectionDto,
   TechnicianListQueryDto,
@@ -167,6 +168,13 @@ export class AdminController {
   portfolios(@Req() request: AuthenticatedRequest, @Query() query: PortfolioListQueryDto) {
     return this.service.portfolios(request.user, query);
   }
+  /** Tenancies from the office report, including benefit-package enrolment. */
+  @Get('tenants')
+  @RequirePermissions('properties:read')
+  tenants(@Req() request: AuthenticatedRequest, @Query() query: TenantListQueryDto) {
+    return this.service.tenants(request.user, query);
+  }
+
   @Get('properties')
   @RequirePermissions('properties:read')
   properties(@Req() request: AuthenticatedRequest, @Query() query: PropertyListQueryDto) {

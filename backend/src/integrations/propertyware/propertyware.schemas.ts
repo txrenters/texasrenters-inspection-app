@@ -183,26 +183,86 @@ export type LeaseReportColumnKey = keyof typeof LEASE_REPORT_COLUMNS;
 const columnKey = (label: string) => label.trim().toLowerCase();
 
 /**
- * Maps each required field to the record key that holds it.
+ * Maps each named field to the record key that holds it.
  *
- * Returns the missing labels rather than throwing, so the caller can name all
- * of them at once instead of revealing them one failed sync at a time.
+ * Returns the missing labels rather than throwing, so a caller can name all of
+ * them at once instead of revealing them one failed sync at a time.
+ *
+ * Generic because there is more than one report: the lease report and the
+ * office's tenancy report have entirely different columns and the same hazard.
+ * One resolver means the rule about labels-not-positions is stated once.
  */
-export function leaseReportColumns(columns: ReadonlyArray<{ index: string; label: string }>): {
-  indexes: Record<LeaseReportColumnKey, string>;
-  missing: string[];
-} {
+export function reportColumnIndexes<Field extends string>(
+  columns: ReadonlyArray<{ index: string; label: string }>,
+  required: Readonly<Record<Field, string>>,
+  optional: Readonly<Record<string, string>> = {},
+): { indexes: Record<Field, string>; optionalIndexes: Record<string, string>; missing: string[] } {
   const byLabel = new Map(columns.map((column) => [columnKey(column.label), column.index]));
-  const indexes = {} as Record<LeaseReportColumnKey, string>;
+  const indexes = {} as Record<Field, string>;
   const missing: string[] = [];
-  for (const [field, label] of Object.entries(LEASE_REPORT_COLUMNS) as Array<
-    [LeaseReportColumnKey, string]
-  >) {
+  for (const [field, label] of Object.entries(required) as Array<[Field, string]>) {
     const index = byLabel.get(columnKey(label));
     if (index === undefined) missing.push(label);
     else indexes[field] = index;
   }
+  // Absent optional columns are simply absent; the report is still readable.
+  const optionalIndexes: Record<string, string> = {};
+  for (const [field, label] of Object.entries(optional)) {
+    const index = byLabel.get(columnKey(label));
+    if (index !== undefined) optionalIndexes[field] = index;
+  }
+  return { indexes, optionalIndexes, missing };
+}
+
+export function leaseReportColumns(columns: ReadonlyArray<{ index: string; label: string }>): {
+  indexes: Record<LeaseReportColumnKey, string>;
+  missing: string[];
+} {
+  const { indexes, missing } = reportColumnIndexes(columns, LEASE_REPORT_COLUMNS);
   return { indexes, missing };
+}
+
+/**
+ * The office's tenancy report — the one that knows about the benefit package.
+ *
+ * Only the columns without which a row means nothing are required. The rest are
+ * optional: this report is maintained by the office and columns come and go, and
+ * refusing the whole thing because the HVAC filter size was renamed would lose
+ * 418 tenancies to recover one field.
+ *
+ * `Building Address` is the important one, and the reason this report can do
+ * what the lease report cannot: it is what ties a tenancy to a property.
+ */
+export const TENANT_REPORT_COLUMNS = {
+  leaseName: 'Lease Name',
+  status: 'Status',
+  buildingAddress: 'Building Address',
+} as const;
+
+export const TENANT_REPORT_OPTIONAL_COLUMNS = {
+  startDate: 'Start Date',
+  endDate: 'End Date',
+  tbpEnrollment: 'Enrolled in Tenant Benefits Package',
+  zone: 'Zone',
+  managementPlan: 'Management Plan',
+  hvacPlan: 'HVAC Plan',
+  hvacFilterLocation: 'HVAC Filter Location Information',
+  hvacFilterSize1: 'HVAC Filter Size 1',
+  hvacFilterSize2: 'HVAC Filter Size 2',
+  hvacFilterSize3: 'HVAC Filter Size 3',
+  hvacFilterSize4: 'HVAC Filter Size 4',
+  lastFilterDelivery: 'Last Filter Delivery',
+  lastHvacInspection: 'Last HVAC Inspection',
+  lastOccupiedInspection: 'Last Occupied Inspection',
+  city: 'Building City',
+  state: 'Building State',
+  postalCode: 'Building Zip',
+} as const;
+
+export type TenantReportColumnKey = keyof typeof TENANT_REPORT_COLUMNS;
+
+export function tenantReportColumns(columns: ReadonlyArray<{ index: string; label: string }>) {
+  return reportColumnIndexes(columns, TENANT_REPORT_COLUMNS, TENANT_REPORT_OPTIONAL_COLUMNS);
 }
 
 export const propertywareSchemas = {

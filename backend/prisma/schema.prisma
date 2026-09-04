@@ -358,6 +358,7 @@ model Organization {
   jobberOutboundTasks  JobberOutboundTask[]
   inspectionImportJobs InspectionImportJob[]
   clientErrorReports   ClientErrorReport[]
+  tenants              PropertywareTenant[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -1280,6 +1281,7 @@ model PropertywareBuilding {
   @@index([organizationId, isActive, name])
   @@map("propertyware_buildings")
   jobberPropertyLinks    JobberPropertyLink[]
+  tenants             PropertywareTenant[]
 }
 
 model PropertywareUnit {
@@ -2468,4 +2470,84 @@ model ClientErrorReport {
 enum ClientErrorSource {
   MOBILE
   CONSOLE
+}
+
+/// A tenancy as the office's own Propertyware report describes it.
+///
+/// Separate from `PropertywareLease`, which comes from the REST endpoint (and,
+/// when that is denied, a different published report). This one is the report
+/// the office actually maintains: it carries the Tenant Benefit Package
+/// enrolment, the HVAC plan and filter sizes, and the dates of the last filter
+/// delivery and the last occupied inspection — none of which the lease endpoint
+/// exposes at all.
+///
+/// It also carries a **building address**, which the lease report does not.
+/// That is what lets a row here be tied to a property: the address is matched
+/// with the same normalizer the Jobber integration uses, so a tenancy and a
+/// visit resolve to the same building or to neither.
+model PropertywareTenant {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+
+  /// Derived, because the report identifies no row.
+  ///
+  /// Hashed from lease name, start date and address — values Propertyware
+  /// owns — so re-running the sync produces the same key and rows update
+  /// rather than duplicate. A tenancy renamed or re-dated upstream keys
+  /// differently and arrives as a new row; the old one is then deactivated by
+  /// the unseen pass, which is the same bargain the lease report makes.
+  externalId String
+
+  leaseName    String
+  sourceStatus String?
+
+  startDate DateTime? @db.Date
+  endDate   DateTime? @db.Date
+
+  /// Propertyware's own words: `Yes`, `No`, `Not Verified`.
+  ///
+  /// Stored as written rather than coerced to a boolean. `Not Verified` is a
+  /// real answer the office uses — twelve tenancies carry it — and it means
+  /// "nobody has checked", which is neither yes nor no. Flattening it would
+  /// silently file those twelve under whichever side the coercion picked.
+  tbpEnrollment String?
+
+  zone           String?
+  managementPlan String?
+  hvacPlan       String?
+
+  hvacFilterLocation String?
+  /// Up to four, as the report publishes them. Kept as written — sizes are
+  /// text like `20x25x1` and arithmetic is never done on them.
+  hvacFilterSizes String[] @default([])
+
+  lastFilterDelivery    String?
+  lastHvacInspection    DateTime? @db.Date
+  lastOccupiedInspection String?
+
+  addressLine1 String?
+  city         String?
+  state        String?
+  postalCode   String?
+
+  /// Null when the address matched no building, which is not an error.
+  ///
+  /// A tenancy the office tracks for a property this system does not hold is
+  /// still worth showing — the alternative is dropping it, and a tenant list
+  /// missing rows for a reason nobody can see is worse than one that says so.
+  propertywareBuildingId String? @db.Uuid
+
+  isActive      Boolean   @default(true)
+  deactivatedAt DateTime?
+  firstSyncedAt DateTime  @default(now())
+  lastSyncedAt  DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  building     PropertywareBuilding? @relation(fields: [propertywareBuildingId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId, isActive])
+  @@index([organizationId, tbpEnrollment])
+  @@index([propertywareBuildingId])
 }

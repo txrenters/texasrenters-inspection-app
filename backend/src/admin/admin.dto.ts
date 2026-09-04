@@ -54,6 +54,18 @@ export class PropertyListQueryDto extends PaginationDto {
   @IsOptional() @IsIn(['OCCUPIED', 'VACANT']) occupancy?: string;
 }
 
+export class TenantListQueryDto extends PaginationDto {
+  /**
+   * `TBP` narrows to tenancies the office has confirmed are enrolled.
+   *
+   * Deliberately not a boolean. Propertyware writes `Yes`, `No` and
+   * `Not Verified`, and the third means nobody has checked — a boolean would
+   * file those twelve tenancies under whichever side the coercion picked.
+   */
+  @IsOptional() @IsIn(['TBP', 'NOT_TBP']) enrollment?: string;
+  @IsOptional() @IsIn(['true', 'false']) active?: string;
+}
+
 export class PortfolioListQueryDto extends PaginationDto {}
 
 export class UnitListQueryDto extends PaginationDto {
