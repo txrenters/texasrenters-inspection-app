@@ -27,6 +27,9 @@ import { reportDate } from './propertyware.client';
 
 export interface TenantReportRow {
   externalId: string;
+  /** Propertyware's building id, when the report carries one. Exact, so it is
+   * used in preference to matching the address. */
+  buildingExternalId: string | null;
   leaseName: string;
   sourceStatus: string | null;
   startDate: string | null;
@@ -112,6 +115,7 @@ export function parseTenantReport(payload: unknown): TenantReportRow[] {
     return [
       {
         externalId: tenantExternalId(leaseName, rawStart ?? '', address),
+        buildingExternalId: opt(record, 'buildingExternalId'),
         leaseName,
         sourceStatus: required(record, 'status'),
         startDate: reportDate(rawStart ?? undefined) ?? null,

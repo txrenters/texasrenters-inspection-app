@@ -127,6 +127,27 @@ describe('parsing the tenancy report', () => {
   it('skips a row that identifies nothing', () => {
     expect(parseTenantReport(report([row({ '0': '', '16': '' })]))).toEqual([]);
   });
+
+  it('carries the building id when the report has one', () => {
+    // Added to the report after this sync shipped. Exact, so the sync prefers
+    // it over matching the address: all 416 distinct ids in the live report
+    // resolve, where address matching left nine rows unplaced.
+    const withId = [...columns, { index: '21', dataType: 'text', label: 'Building Entity ID' }];
+    const [tenant] = parseTenantReport({
+      totalCount: 1,
+      columns: withId,
+      records: [{ ...row(), '21': '4652695552' }],
+    });
+    expect(tenant!.buildingExternalId).toBe('4652695552');
+  });
+
+  it('still parses a report without the id column', () => {
+    // The column is optional: a report predating it must keep working, and the
+    // address remains the fallback.
+    const [tenant] = parseTenantReport(report([row()]));
+    expect(tenant!.buildingExternalId).toBeNull();
+    expect(tenant!.addressLine1).toBe('6341 Del Monte Dr');
+  });
 });
 
 describe('the derived identity', () => {
