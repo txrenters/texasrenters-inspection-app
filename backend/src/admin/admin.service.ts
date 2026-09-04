@@ -460,6 +460,19 @@ export class AdminService {
             ],
           }
         : {}),
+      /**
+       * Occupancy, which is not the same question as `active`.
+       *
+       * `sourceStatus` carries Propertyware's own word — `Occupied` or
+       * `Vacant` — and is independent of `isActive`, which says whether the
+       * property is under management at all. Matched case-insensitively
+       * because it is free text from another system rather than an enum we
+       * control, and equality on an exact casing is the kind of filter that
+       * silently returns nothing the day somebody writes "occupied".
+       */
+      ...(query.occupancy
+        ? { sourceStatus: { equals: query.occupancy, mode: 'insensitive' as const } }
+        : {}),
       ...(query.hasUpcomingMoveOut === 'true'
         ? { leases: { some: { isActive: true, scheduledMoveOutDate: { gte: new Date() } } } }
         : {}),
