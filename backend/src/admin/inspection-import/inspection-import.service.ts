@@ -27,8 +27,7 @@ import type {
 import {
   type AreaCategory,
   type AreaEnvironment,
-  InspectionSource,
-  InspectionType
+  InspectionSource
 } from '@prisma/client';
 import { classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
 
