@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { FileTextIcon } from 'lucide-react';
+import { ChevronDownIcon, ChevronUpIcon, FileTextIcon } from 'lucide-react';
 
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
@@ -31,6 +31,9 @@ interface DockTarget {
 }
 
 const ImportDockContext = createContext<DockTarget | null>(null);
+
+/** Per-browser preference. Not worth a server round trip or a user row. */
+const COLLAPSED_KEY = 'import-dock-collapsed';
 
 /** Lets a dialog hand its own position over so the flight has somewhere to go. */
 export const useImportDock = () => useContext(ImportDockContext);
@@ -128,16 +131,81 @@ function Flight({ from, to, onDone }: { from: DOMRect; to: DOMRect; onDone: () =
 function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
   const running = useRunningImports();
   const imports = running.data ?? [];
+  /**
+   * Collapsed by choice, and the choice sticks.
+   *
+   * The expanded dock sits over the bottom-right corner, which is where this
+   * console puts the buttons on almost every form — so an import running in
+   * the background made those buttons unclickable. A progress indicator that
+   * blocks the work it is reporting on is worse than no indicator.
+   *
+   * Read lazily and wrapped, because storage throws outright in a private
+   * window and in some embedded contexts. A dock that cannot remember the
+   * preference is a much smaller problem than one that crashes the shell.
+   */
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(COLLAPSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggle = (next: boolean) => {
+    setCollapsed(next);
+    try {
+      window.localStorage.setItem(COLLAPSED_KEY, String(next));
+    } catch {
+      // Preference lost, dock still works. Nothing here is worth an error.
+    }
+  };
+
+  // Nothing running: render the anchor and no furniture at all. An empty dock
+  // is still a rectangle over the corner, and there is nothing to report.
+  if (!imports.length)
+    return <div className="pointer-events-none fixed right-4 bottom-4 z-50" ref={ref} />;
+
+  if (collapsed)
+    return (
+      <div className="fixed right-4 bottom-4 z-50" ref={ref}>
+        <button
+          aria-label={`Show ${imports.length} running import${imports.length === 1 ? '' : 's'}`}
+          className={cn(
+            'bg-card border-border text-muted-foreground flex items-center gap-1.5 rounded-full border py-1.5 pr-3 pl-2 shadow-lg',
+            'hover:text-foreground hover:bg-accent transition-colors',
+          )}
+          onClick={() => toggle(false)}
+          type="button"
+        >
+          <ChevronUpIcon className="size-3.5" />
+          {/* The count, not a spinner: collapsed is for getting out of the way,
+              and a spinner in the corner pulls the eye back to it. */}
+          <span className="text-xs font-medium tabular-nums">{imports.length}</span>
+        </button>
+      </div>
+    );
 
   return (
     <div
-      className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-72 flex-col gap-2"
+      className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-72 flex-col items-end gap-2"
       ref={ref}
     >
+      <button
+        aria-label="Hide running imports"
+        className={cn(
+          'bg-card border-border text-muted-foreground pointer-events-auto flex items-center gap-1.5 rounded-full border py-1 pr-2.5 pl-2 shadow-lg',
+          'hover:text-foreground hover:bg-accent transition-colors',
+        )}
+        onClick={() => toggle(true)}
+        type="button"
+      >
+        <ChevronDownIcon className="size-3.5" />
+        <span className="text-xs">Hide</span>
+      </button>
       {imports.map((job) => (
         <Link
           className={cn(
-            'bg-card border-border pointer-events-auto flex items-center gap-3 rounded-lg border p-3 shadow-lg',
+            'bg-card border-border pointer-events-auto flex w-full items-center gap-3 rounded-lg border p-3 shadow-lg',
             'hover:bg-accent transition-colors',
             'animate-in slide-in-from-right-4 fade-in duration-300',
           )}
