@@ -191,17 +191,13 @@ export default function InspectionOverviewScreen() {
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
 
-  if (inspection.isLoading || !inspection.data) {
-    return (
-      <SafeAreaView edges={['top']} className="flex-1 bg-background">
-        <DetailSkeleton sections={4} />
-      </SafeAreaView>
-    );
-  }
-
-  const item = inspection.data;
   /**
    * The technician's own sequence for this inspection, if they have set one.
+   *
+   * Up here with the other hooks, above the early returns below. A hook placed
+   * after one runs on some renders and not others, React counts a different
+   * number each time, and the whole screen goes down with error #310 — the
+   * same trap the import prompt fell into on the console's detail page.
    *
    * Applied by rewriting `order` rather than sorting here, because three
    * separate places sort by it — this list, "Up next", and the room the camera
@@ -231,6 +227,15 @@ export default function InspectionOverviewScreen() {
     [id],
   );
 
+  if (inspection.isLoading || !inspection.data) {
+    return (
+      <SafeAreaView edges={['top']} className="flex-1 bg-background">
+        <DetailSkeleton sections={4} />
+      </SafeAreaView>
+    );
+  }
+
+  const item = inspection.data;
   const roomList = applyAreaOrder(rooms.data ?? [], areaOrder);
   const findingList = findings.data ?? [];
   // pickUpNextArea outranks a plain "first unfinished": it surfaces failed
