@@ -282,6 +282,20 @@ export class AdminController {
     return this.inspectionImports.activeJob(request.user, id);
   }
 
+  /**
+   * Every import still working, anywhere in the organization.
+   *
+   * Declared before `:jobId` on purpose — Nest matches routes in order, and a
+   * parameter segment would otherwise swallow `running` and look it up as a
+   * job id.
+   */
+  @Get('inspection-imports/running')
+  @ApiTags(INSPECTION_IMPORT_TAG)
+  @RequirePermissions('inspections:manage')
+  runningInspectionImports(@Req() request: AuthenticatedRequest) {
+    return this.inspectionImports.runningJobs(request.user);
+  }
+
   /** Progress, and the parsed report once there is one. Polled by the console. */
   @Get('inspection-imports/:jobId')
   @ApiTags(INSPECTION_IMPORT_TAG)

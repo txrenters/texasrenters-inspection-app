@@ -110,7 +110,10 @@ describe('reporting how much of the file has gone', () => {
     // ever would be worse than the spinner it replaces.
     uploading = true;
     render(<InspectionReportImport inspectionId="inspection-1" />);
-    expect(screen.getByRole('button', { name: /uploading…$/i })).toBeTruthy();
+    const zone = screen.getByRole('button', { name: /uploading…/i });
+    // Saying "Uploading…" with no number, rather than "Uploading… 0%".
+    expect(zone.textContent).toContain('Uploading…');
+    expect(zone.textContent).not.toMatch(/\d+%/);
   });
 });
 
