@@ -61,6 +61,7 @@ import {
   CreateTechnicianDto,
   DeleteInspectionsDto,
   DeletePropertyAreasDto,
+  CompleteInspectionDto,
   FinalizeInspectionDto,
   FindingRejectDto,
   FindingReviewDto,
@@ -604,6 +605,22 @@ export class AdminController {
     @Body() body: UpdateAdminInspectionDto,
   ) {
     return this.service.updateInspection(request.user, id, body);
+  }
+  /**
+   * Close an inspection the technician never submitted.
+   *
+   * `inspections:finalize` rather than `:manage`, because this is the same
+   * class of decision as finalizing — it ends the work — even though it
+   * deliberately does not freeze the evidence.
+   */
+  @Post('inspections/:inspectionId/complete')
+  @RequirePermissions('inspections:finalize')
+  completeInspection(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: CompleteInspectionDto,
+  ) {
+    return this.service.completeInspection(request.user, id, body);
   }
   @Post('inspections/:inspectionId/finalize')
   @RequirePermissions('inspections:finalize')

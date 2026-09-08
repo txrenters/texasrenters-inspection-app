@@ -1,6 +1,6 @@
 'use client';
 
-import { ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
+import { CheckCircle2Icon, ClipboardCheckIcon, Trash2Icon, TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 
@@ -16,13 +16,14 @@ import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { dayEnd, dayStart, rangeLabel } from '@/lib/date-range';
-import { formatScheduledDate, humanize } from '@/lib/format';
+import { formatCount, formatScheduledDate, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
 import { useInspections } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -117,6 +118,30 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     cell: (row) => <StatusBadge value={row.priority} />,
   },
   { key: 'status', header: 'Status', cell: (row) => <StatusBadge value={row.status} /> },
+  {
+    key: 'evidence',
+    header: 'Evidence',
+    hideBelow: 'md',
+    /**
+     * Whether anything has actually been recorded against this inspection.
+     *
+     * Photographs, not areas. An inspection is created with its property's
+     * approved layout snapshotted onto it, so an area count says a plan existed
+     * — not that anybody walked the property. Two of the recovered move-ins
+     * carry exactly one area, the HVAC system, and no evidence whatsoever;
+     * counting areas would mark those as done and hide them from the very
+     * backlog they belong to.
+     */
+    cell: (row) =>
+      row.evidence && row.evidence.photos > 0 ? (
+        <Badge className="gap-1" variant="secondary">
+          <CheckCircle2Icon className="size-3" />
+          {formatCount(row.evidence.photos)}
+        </Badge>
+      ) : (
+        <span className="text-muted-foreground text-xs">Empty</span>
+      ),
+  },
   {
     key: 'technician',
     header: 'Technician',
