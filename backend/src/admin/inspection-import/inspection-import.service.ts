@@ -125,6 +125,28 @@ export function summarise(report: ImportedReport) {
   };
 }
 
+/**
+ * The worse of two gradings for one checklist item.
+ *
+ * `false` means the inspector marked a problem, `true` means they did not, and
+ * `null` means they did not look. A recorded problem outranks both: losing one
+ * to a later "fine" would delete a finding, and a move-out is compared against
+ * these. An unanswered row never overwrites an answered one.
+ */
+function worseOf(left: boolean | null, right: boolean | null): boolean | null {
+  if (left === false || right === false) return false;
+  if (left === true || right === true) return true;
+  return null;
+}
+
+/** Both inspectors' words, in the order the report gave them. */
+function joinComments(left: string | null, right: string | null): string | null {
+  const parts = [left, right].map((part) => part?.trim()).filter(Boolean) as string[];
+  if (!parts.length) return null;
+  // A row repeated verbatim is one comment, not the same sentence twice.
+  return [...new Set(parts)].join(' — ');
+}
+
 /** Where the uploaded report itself is kept, keyed by its own content. */
 const sourceKey = (organizationId: string, fingerprint: string) =>
   `${organizationId}/imported/${fingerprint.slice(0, 16)}/source.pdf`;
@@ -657,21 +679,60 @@ export class InspectionImportService {
             user.id,
           );
           items.set(label, checklistItem.id);
-          await tx.inspectionAreaChecklistResponse.create({
-            data: {
-              organizationId: user.organizationId,
-              inspectionAreaId: inspectionArea.id,
-              checklistItemId: checklistItem.id,
-              // Null where the report left the row blank. Storing false there
-              // would turn "the inspector did not look" into "it failed", and
-              // a move-out would be compared against a defect nobody recorded.
-              isClean: item.isClean,
-              isUndamaged: item.isUndamaged,
-              isWorking: item.isWorking,
-              comment: item.comment,
-              recordedById: user.id,
+          /**
+           * Two report rows can land on one checklist item.
+           *
+           * `resolveChecklistItem` matches on the label, so a report carrying
+           * two differently-worded lines that mean the same thing — and real
+           * ones do — resolves both to the same item. An unconditional create
+           * then violates `@@unique([inspectionAreaId, checklistItemId])`, and
+           * because this runs inside a transaction it took the *entire* import
+           * down with it. 1547 Revolution Way failed exactly this way: fifteen
+           * areas and 185 photographs rolled back over one duplicated row.
+           *
+           * The second row is merged rather than dropped or preferred
+           * wholesale. Where the two disagree, the **worse** condition wins: a
+           * recorded defect that loses to a later pass is a real finding
+           * deleted, while a pass that loses to a defect is only an
+           * over-report a reviewer can see and correct. Comments are joined so
+           * neither inspector's words are thrown away.
+           */
+          const existingResponse = await tx.inspectionAreaChecklistResponse.findUnique({
+            where: {
+              inspectionAreaId_checklistItemId: {
+                inspectionAreaId: inspectionArea.id,
+                checklistItemId: checklistItem.id,
+              },
             },
+            select: { id: true, isClean: true, isUndamaged: true, isWorking: true, comment: true },
           });
+
+          if (existingResponse)
+            await tx.inspectionAreaChecklistResponse.update({
+              where: { id: existingResponse.id },
+              data: {
+                isClean: worseOf(existingResponse.isClean, item.isClean),
+                isUndamaged: worseOf(existingResponse.isUndamaged, item.isUndamaged),
+                isWorking: worseOf(existingResponse.isWorking, item.isWorking),
+                comment: joinComments(existingResponse.comment, item.comment),
+              },
+            });
+          else
+            await tx.inspectionAreaChecklistResponse.create({
+              data: {
+                organizationId: user.organizationId,
+                inspectionAreaId: inspectionArea.id,
+                checklistItemId: checklistItem.id,
+                // Null where the report left the row blank. Storing false there
+                // would turn "the inspector did not look" into "it failed", and
+                // a move-out would be compared against a defect nobody recorded.
+                isClean: item.isClean,
+                isUndamaged: item.isUndamaged,
+                isWorking: item.isWorking,
+                comment: item.comment,
+                recordedById: user.id,
+              },
+            });
         }
 
         for (const photo of area.photos) {

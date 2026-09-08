@@ -196,6 +196,11 @@ function database(seed: { areas?: AreaRow[] } = {}) {
       }),
     },
     inspectionAreaChecklistResponse: {
+      // Two report rows can resolve to one checklist item, so the importer
+      // looks before it writes. Nothing is present in these fixtures, which is
+      // the ordinary path.
+      findUnique: jest.fn(() => Promise.resolve(null)),
+      update: jest.fn(() => Promise.resolve({})),
       create: jest.fn(({ data }: { data: ResponseRow }) => {
         rows.responses.push(data);
         return Promise.resolve({});
