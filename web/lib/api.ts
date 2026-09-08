@@ -68,7 +68,20 @@ export async function api<T>(
     );
   }
   if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  /**
+   * An empty body is `null`, not a parse error.
+   *
+   * A Nest handler that returns `null` — "no comparison for this move-out yet",
+   * "no import running here" — serialises as a **200 with no body**, not a 204.
+   * Calling `.json()` on that throws "Unexpected end of JSON input", and the
+   * console renders a data-loading failure over a page that is working
+   * perfectly: the answer really is nothing.
+   *
+   * Read as text first so the empty case is a value rather than an exception.
+   */
+  const body = await response.text();
+  if (!body) return null as T;
+  return JSON.parse(body) as T;
 }
 
 /**
@@ -153,7 +166,8 @@ export async function apiUpload<T>(
     throw failure(401, status.body);
   }
   if (status.code < 200 || status.code >= 300) throw failure(status.code, status.body);
-  if (status.code === 204 || !status.body) return undefined as T;
+  // Same reasoning as `api`: an empty body is an answer, not a failure.
+  if (status.code === 204 || !status.body) return null as T;
   return JSON.parse(status.body) as T;
 }
 
