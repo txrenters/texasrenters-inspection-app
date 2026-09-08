@@ -49,6 +49,7 @@ import type {
   AuditListQueryDto,
   CreateAdminInspectionDto,
   CreateEvidenceRequestDto,
+  CompleteInspectionDto,
   FinalizeInspectionDto,
   InspectionFollowUpDto,
   InspectionListQueryDto,
@@ -1021,6 +1022,18 @@ export class AdminService {
           },
         },
       },
+      /**
+       * Enough to say whether anything has been recorded here.
+       *
+       * Areas alone would overstate it: an inspection is created with its
+       * property's approved layout snapshotted onto it, so a record that has
+       * never been walked can still carry an area — two of the recovered
+       * move-ins have exactly one, the HVAC system, and nothing else. Findings
+       * and areas together still cannot distinguish a snapshot from a
+       * walkthrough, which is why the photograph count is fetched separately
+       * below.
+       */
+      _count: { select: { areas: true, findings: true } },
     } satisfies Prisma.InspectionSelect;
     const [items, total] = await Promise.all([
       this.prisma.inspection.findMany({
@@ -1033,7 +1046,40 @@ export class AdminService {
       }),
       this.prisma.inspection.count({ where }),
     ]);
-    return this.page(items, total, query);
+
+    /**
+     * How many photographs each row actually holds.
+     *
+     * `InspectionPhoto` has no reverse relation on `Inspection`, so this cannot
+     * be a `_count` in the select above — but it is the only honest answer to
+     * "has this been walked". An inspection is created with its property's
+     * approved layout snapshotted onto it, so an area count says a plan
+     * existed, not that anybody photographed anything.
+     *
+     * One grouped query over the page's own ids, so it costs the same whether
+     * the rows have one photograph or four hundred.
+     */
+    const photoCounts = await this.prisma.inspectionPhoto.groupBy({
+      by: ['inspectionId'],
+      where: { inspectionId: { in: items.map((item) => item.id) } },
+      _count: { _all: true },
+    });
+    const photosByInspection = new Map(
+      photoCounts.map((row) => [row.inspectionId, row._count._all]),
+    );
+
+    return this.page(
+      items.map((item) => ({
+        ...item,
+        evidence: {
+          areas: item._count.areas,
+          findings: item._count.findings,
+          photos: photosByInspection.get(item.id) ?? 0,
+        },
+      })),
+      total,
+      query,
+    );
   }
 
   async inspection(user: AuthenticatedUser, id: string) {
@@ -1298,6 +1344,71 @@ export class AdminService {
    * recorded in the audit trail. Only a principal with `inspections:finalize`
    * reaches this method (enforced by the controller guard).
    */
+  /**
+   * Close an inspection the technician never submitted.
+   *
+   * `finalizeInspection` is the end of the review workflow and only accepts an
+   * inspection that has *entered* it — submitted, under review, TBD or
+   * follow-up. That leaves no way to close a SCHEDULED one, and those exist in
+   * numbers: the walk happened in Inspect & Cloud, the evidence arrives by
+   * import, and no technician ever touched the record here. Before this the
+   * office could import a report into such an inspection and then watch it sit
+   * as "Scheduled" for ever.
+   *
+   * Every type, because nothing about this is type-specific.
+   *
+   * **Completed, deliberately not finalized.** `finalizedAt` freezes evidence
+   * permanently — photograph deletion and area renaming both key on it — and
+   * this is a scheduling correction, not a sign-off on evidence nobody has
+   * reviewed. Leaving it null keeps the ordinary review and finalize path
+   * available afterwards. The same reasoning the Jobber sync applies when it
+   * closes an inspection Jobber has already finished.
+   *
+   * A reason is required rather than optional: this bypasses the submit and
+   * review steps, so the audit row has to say why on behalf of somebody who
+   * will read it much later.
+   */
+  async completeInspection(user: AuthenticatedUser, id: string, input: CompleteInspectionDto) {
+    const existing = await this.requireInspection(user.organizationId, id);
+    if (FROZEN_INSPECTION_STATUSES.includes(existing.status))
+      throw new ApplicationError(
+        409,
+        'INSPECTION_ALREADY_CLOSED',
+        existing.status === InspectionStatus.CANCELLED
+          ? 'A cancelled inspection cannot be completed.'
+          : 'This inspection is already complete.',
+      );
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const inspection = await tx.inspection.update({
+        where: { id },
+        data: {
+          status: InspectionStatus.COMPLETED,
+          completedAt: new Date(),
+          // Whatever was holding it open no longer is — it has been closed by
+          // hand, and leaving these set would show a reason against a finished
+          // inspection.
+          completionBlockedReason: null,
+          tbdReason: null,
+        },
+      });
+      await this.audit(tx, user, 'INSPECTION_COMPLETED_BY_ADMIN', id, {
+        previousStatus: existing.status,
+        reason: input.reason,
+        // Says plainly that the review workflow was skipped, so a later reader
+        // does not mistake this for a finalized inspection.
+        finalized: false,
+      });
+      return inspection;
+    }, ADMIN_TRANSACTION_OPTIONS);
+
+    await this.cacheInvalidation?.publish({
+      type: 'inspection.changed',
+      organizationId: user.organizationId,
+    });
+    return updated;
+  }
+
   async finalizeInspection(user: AuthenticatedUser, id: string, input: FinalizeInspectionDto) {
     const existing = await this.requireInspection(user.organizationId, id);
     this.assertReviewable(existing.status);

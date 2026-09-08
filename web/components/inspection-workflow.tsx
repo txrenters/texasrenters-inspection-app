@@ -52,7 +52,7 @@ const REVIEWABLE: ReadonlyArray<AdminInspection['status']> = [
   'FOLLOW_UP_REQUIRED',
 ];
 
-type WorkflowAction = 'tbd' | 'follow-up' | 'under-review' | 'reopen';
+type WorkflowAction = 'tbd' | 'follow-up' | 'under-review' | 'reopen' | 'complete';
 
 // Radix Select rejects an empty string as an item value; the "nothing selected"
 // row uses a sentinel translated back to '' at the boundary.
@@ -169,11 +169,30 @@ export function InspectionWorkflowPanel({
             ) : null}
           </>
         ) : !reviewable ? (
-          <Alert>
-            <AlertDescription>
-              Review actions unlock once the technician submits the inspection.
-            </AlertDescription>
-          </Alert>
+          <div className="space-y-3">
+            <Alert>
+              <AlertDescription>
+                Review actions unlock once the technician submits the inspection.
+              </AlertDescription>
+            </Alert>
+            {/*
+              The way out for work that was never going to be submitted.
+
+              Every type, not only move-ins: an inspection walked in another
+              system arrives here scheduled and stays that way for ever, because
+              the review workflow only accepts something a technician handed
+              over. Importing its report fills in the evidence and still leaves
+              the record reading "Scheduled".
+
+              Deliberately not a finalization — see the dialog copy. It closes
+              the inspection without freezing evidence nobody here has reviewed.
+            */}
+            {canFinalize && !cancelled ? (
+              <Button onClick={() => setAction('complete')} type="button" variant="outline">
+                Mark complete
+              </Button>
+            ) : null}
+          </div>
         ) : (
           <div className="flex flex-wrap gap-2">
             {canFinalize ? (
@@ -250,6 +269,12 @@ const ACTION_COPY: Record<WorkflowAction, { title: string; description: string; 
         'Move the inspection into administrator review and note what evidence is needed.',
       confirm: 'Move to review',
     },
+    complete: {
+      title: 'Mark inspection complete',
+      description:
+        'Closes an inspection the technician never submitted — the walkthrough happened somewhere else, so there is nothing here to submit. The evidence is not frozen: it can still be reviewed and finalized in the ordinary way afterwards.',
+      confirm: 'Mark complete',
+    },
     reopen: {
       title: 'Reopen inspection',
       description:
@@ -258,10 +283,13 @@ const ACTION_COPY: Record<WorkflowAction, { title: string; description: string; 
     },
   };
 
-// Reopen is the one action whose reason the backend requires, because it can
-// reverse a finalization. Enforced here too so the block is a disabled button
-// with a visible rule rather than a 400 after the fact.
-const REASON_REQUIRED: ReadonlyArray<WorkflowAction> = ['reopen'];
+// Both of these change the outcome of the work rather than its label, so the
+// backend requires a reason. Enforced here too, so the block is a disabled
+// button with a visible rule rather than a 400 after the fact.
+//
+// Reopen can reverse a finalization. Complete skips the submit and review steps
+// entirely, so the audit row is the only record of why it was closed.
+const REASON_REQUIRED: ReadonlyArray<WorkflowAction> = ['reopen', 'complete'];
 
 /**
  * What the office is still waiting on from the field.
@@ -349,6 +377,8 @@ function WorkflowActionDialog({
     try {
       if (action === 'reopen') {
         await mutations.reopenInspection.mutateAsync({ id: inspectionId, reason: reason.trim() });
+      } else if (action === 'complete') {
+        await mutations.completeInspection.mutateAsync({ id: inspectionId, reason: reason.trim() });
       } else if (action === 'follow-up') {
         await mutations.requireInspectionFollowUp.mutateAsync({
           id: inspectionId,

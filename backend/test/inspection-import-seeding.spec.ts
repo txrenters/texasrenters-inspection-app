@@ -83,13 +83,28 @@ describe('reading a report into an inspection that already exists', () => {
     expect(storage.putBytes).not.toHaveBeenCalled();
   });
 
-  it('refuses anything that is not a move-in', async () => {
-    // The point is a baseline for a later move-out. Seeding a move-out with a
-    // move-in report would compare the property against itself.
-    const { service } = build(inspection({ inspectionType: InspectionType.MOVE_OUT }));
+  it('accepts an inspection that is not a move-in', async () => {
+    // This used to be refused, and the refusal was scope rather than safety.
+    // Move-ins were the reason it was built — a missing baseline is what breaks
+    // a later comparison — but an occupied inspection or a move-out walked in
+    // Inspect & Cloud arrives just as empty and is just as importable. Refusing
+    // it left the office holding a PDF with no way in.
+    const { service, prisma } = build(inspection({ inspectionType: InspectionType.MOVE_OUT }));
+    prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
 
-    await expect(service.start(user, INSPECTION_ID, report())).rejects.toMatchObject({
-      code: 'INSPECTION_NOT_A_MOVE_IN',
+    await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
+      status: 'RUNNING',
+    });
+  });
+
+  it('accepts an occupied inspection too', async () => {
+    // The type that prompted this: the office walks these in Inspect & Cloud
+    // routinely, and 122 of them can never be backfilled from Jobber.
+    const { service, prisma } = build(inspection({ inspectionType: InspectionType.OCCUPIED }));
+    prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
+
+    await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
+      status: 'RUNNING',
     });
   });
 

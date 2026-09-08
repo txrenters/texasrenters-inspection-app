@@ -488,6 +488,15 @@ export interface AdminInspection {
   propertywareUnit?: Pick<AdminUnit, 'id' | 'name'> | null;
   propertywareLease?: Pick<AdminLease, 'id' | 'leaseName' | 'scheduledMoveOutDate'> | null;
   assignments: AdminAssignment[];
+  /**
+   * What has actually been recorded against this inspection.
+   *
+   * Present on the list, so a queue can show at a glance which records still
+   * need their evidence. `photos` is the load-bearing one: an inspection is
+   * created with its property's approved layout snapshotted onto it, so an area
+   * count says a plan existed rather than that anybody walked the property.
+   */
+  evidence?: { areas: number; findings: number; photos: number };
   audit?: Array<{ id: string; action: string; metadata?: unknown; createdAt: string }>;
 }
 

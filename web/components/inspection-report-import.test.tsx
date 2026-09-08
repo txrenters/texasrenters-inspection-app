@@ -141,10 +141,10 @@ describe('importing an inspection report', () => {
     render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
-    await screen.findByRole('button', { name: /import as a move-in inspection/i });
+    await screen.findByRole('button', { name: /^import as .* inspection$/i });
     expect(commitImport).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: /import as a move-in inspection/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^import as .* inspection$/i }));
     await waitFor(() => expect(commitImport).toHaveBeenCalledWith('job-1'));
   });
 
@@ -166,7 +166,7 @@ describe('importing an inspection report', () => {
     render(<InspectionReportImport inspectionId="inspection-1" />);
     choose(pdf());
 
-    const button = await screen.findByRole('button', { name: /import as a move-in inspection/i });
+    const button = await screen.findByRole('button', { name: /^import as .* inspection$/i });
     // Wrapped: `commit` sets its flag in an async continuation, which the click
     // alone does not flush.
     await act(async () => {

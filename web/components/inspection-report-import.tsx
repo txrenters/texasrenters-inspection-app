@@ -27,6 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useImportDock } from '@/components/import-dock';
+import { humanize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import {
   useActiveInspectionImport,
@@ -46,8 +47,17 @@ import {
  * permanent block on a page people read repeatedly costs more attention than
  * it earns.
  */
-export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
+export function ImportReportDialog({
+  inspectionId,
+  inspectionType,
+}: {
+  inspectionId: string;
+  /** Only shapes the wording. Every type is importable; the rules that decide
+   * are emptiness and having a property, neither of which is about type. */
+  inspectionType?: string | null;
+}) {
   const [open, setOpen] = useState(false);
+  const kind = inspectionType ? humanize(inspectionType).toLowerCase() : 'inspection';
   /**
    * Asked of the inspection, not remembered from this dialog.
    *
@@ -91,13 +101,19 @@ export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
         <DialogHeader>
           <DialogTitle>Import an inspection report</DialogTitle>
           <DialogDescription>
-            This move-in was closed in Jobber but has no evidence recorded against it. Reading the
-            Inspect &amp; Cloud report fills it in, so a later move-out has a baseline to compare
-            against.
+            {/* The baseline argument is true of a move-in and only a move-in.
+                Saying it over a move-out would be explaining the wrong reason
+                for doing the right thing. */}
+            This {kind} was closed in Jobber but has no evidence recorded against it. Reading the
+            Inspect &amp; Cloud report fills it in
+            {inspectionType === 'MOVE_IN'
+              ? ', so a later move-out has a baseline to compare against.'
+              : ', so the walkthrough is on the record here.'}
           </DialogDescription>
         </DialogHeader>
         <InspectionReportImport
           inspectionId={inspectionId}
+          inspectionType={inspectionType}
           onUploaded={minimize}
           resumeJobId={active.data && !active.data.committedAt ? active.data.id : null}
         />
@@ -127,10 +143,14 @@ function isRunning(job: ImportJob | null | undefined) {
  */
 export function InspectionReportImport({
   inspectionId,
+  inspectionType,
   resumeJobId = null,
   onUploaded,
 }: {
   inspectionId: string;
+  /** Wording only. Emptiness and having a property decide importability, not
+   * the type. */
+  inspectionType?: string | null;
   /** An import already under way here, so reopening picks it up rather than
    * offering to start a second one. */
   resumeJobId?: string | null;
@@ -367,6 +387,7 @@ export function InspectionReportImport({
         </div>
       ) : (
         <ImportProgress
+          inspectionType={inspectionType}
           committing={
             // In flight in this tab, or accepted and still being written on the
             // server. The mutation resolving only means the work started.
@@ -390,12 +411,14 @@ export function InspectionReportImport({
 }
 
 function ImportProgress({
+  inspectionType,
   committing,
   job,
   onCommit,
   onDiscard,
 }: {
   committing: boolean;
+  inspectionType?: string | null;
   job: ImportJob | undefined;
   onCommit: () => void;
   onDiscard: () => void;
@@ -539,7 +562,9 @@ function ImportProgress({
       <div className="flex flex-wrap items-center gap-2">
         <Button disabled={committing} onClick={onCommit}>
           {committing ? <Spinner /> : <FileTextIcon />}
-          {committing ? 'Importing…' : 'Import as a move-in inspection'}
+          {committing
+            ? 'Importing…'
+            : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
         </Button>
         <Button disabled={committing} onClick={onDiscard} variant="outline">
           Cancel

@@ -732,12 +732,20 @@ export class InspectionImportService {
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
-    if (inspection.inspectionType !== InspectionType.MOVE_IN)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_NOT_A_MOVE_IN',
-        'A report can only be imported into a move-in inspection.',
-      );
+    /**
+     * Any type, not only a move-in.
+     *
+     * The restriction was scope, not safety: move-ins were the reason this was
+     * built, because a missing baseline is what breaks a later comparison. But
+     * an occupied inspection or a move-out walked in Inspect & Cloud arrives
+     * here exactly as empty and is exactly as importable, and refusing it left
+     * the office with a PDF and no way in.
+     *
+     * The two guards below are the ones that were ever load-bearing: the
+     * inspection must be empty, so an import cannot overwrite somebody's
+     * walkthrough, and it must have a property, so its areas have somewhere to
+     * live. Neither depends on the type.
+     */
     if (inspection._count.areas > 0)
       throw new ApplicationError(
         409,
