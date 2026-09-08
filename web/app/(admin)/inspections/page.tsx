@@ -23,7 +23,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { dayEnd, dayStart, rangeLabel } from '@/lib/date-range';
-import { formatCount, formatScheduledDate, humanize } from '@/lib/format';
+import { EMPTY, formatCount, formatScheduledDate, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
 import { useInspections } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
@@ -86,6 +86,14 @@ const DESCRIPTIONS: Record<string, { title: string; description: string }> = {
   },
 };
 
+/** The office's own words, not a shorter paraphrase of them. */
+const TBP_LABEL = {
+  ENROLLED: 'Enrolled',
+  NOT_ENROLLED: 'Not enrolled',
+  NOT_VERIFIED: 'Not verified',
+  MIXED: 'Mixed',
+} as const;
+
 const COLUMNS: Array<Column<InspectionRow>> = [
   {
     key: 'property',
@@ -103,7 +111,30 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     key: 'type',
     header: 'Type',
     hideBelow: 'md',
-    cell: (row) => <StatusBadge value={row.inspectionType} />,
+    /**
+     * A move-out with no move-in to compare against cannot produce the report
+     * it exists for — `generate` refuses it outright. Flagged beside the type
+     * rather than in a column of its own, because it is a fact *about* being a
+     * move-out and only a move-out can carry it.
+     */
+    cell: (row) => (
+      <span className="flex items-center gap-1.5">
+        <StatusBadge value={row.inspectionType} />
+        {row.baselineMissing ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <TriangleAlertIcon
+                aria-label="No move-in baseline"
+                className="text-destructive size-3.5 shrink-0"
+              />
+            </TooltipTrigger>
+            <TooltipContent>
+              No move-in to compare against. The comparison cannot be generated.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </span>
+    ),
   },
   {
     key: 'scheduled',
@@ -140,6 +171,36 @@ const COLUMNS: Array<Column<InspectionRow>> = [
         </Badge>
       ) : (
         <span className="text-muted-foreground text-xs">Empty</span>
+      ),
+  },
+  {
+    key: 'tbp',
+    header: 'TBP',
+    hideBelow: 'lg',
+    /**
+     * Benefit-package enrolment for the tenancy at this property.
+     *
+     * Three states, not a badge on the enrolled ones. 428 of 449 active
+     * tenancies are enrolled and 67 of 68 occupied inspections sit at one, so a
+     * badge that only marked enrolment would be present on almost every row and
+     * read as decoration — while the informative case, the exception, would be
+     * an *absence* of a badge and easy to miss.
+     *
+     * "Not verified" is the office's own third answer, carried through rather
+     * than folded into "no": seventeen tenancies have it and it means nobody
+     * has checked.
+     *
+     * A dash where there is no active tenancy at all — vacant, or a property
+     * the tenancy report does not cover. Saying "not enrolled" there would
+     * claim a fact about somebody who does not exist.
+     */
+    cell: (row) =>
+      row.tbp ? (
+        <Badge variant={row.tbp === 'ENROLLED' ? 'secondary' : 'outline'}>
+          {TBP_LABEL[row.tbp]}
+        </Badge>
+      ) : (
+        <span className="text-muted-foreground text-xs">{EMPTY}</span>
       ),
   },
   {

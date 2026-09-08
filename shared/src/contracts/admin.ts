@@ -497,6 +497,24 @@ export interface AdminInspection {
    * count says a plan existed rather than that anybody walked the property.
    */
   evidence?: { areas: number; findings: number; photos: number };
+  /**
+   * Benefit-package enrolment for the tenancy at this property.
+   *
+   * Null when there is no active tenancy — vacant, or a property the tenancy
+   * report does not cover. Deliberately not "not enrolled": there is nobody to
+   * enrol. `NOT_VERIFIED` is the office's own third answer, meaning nobody has
+   * checked. `MIXED` is a multi-unit building whose tenancies disagree.
+   */
+  tbp?: 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED' | 'MIXED' | null;
+  /**
+   * A move-out with no move-in to compare against.
+   *
+   * Only ever present on a MOVE_OUT — on any other type the question is
+   * meaningless, and a `false` would read as an assurance that something had
+   * been checked. Computed with the comparison's own baseline predicate, so it
+   * cannot claim a baseline that `generate` would then refuse.
+   */
+  baselineMissing?: boolean;
   audit?: Array<{ id: string; action: string; metadata?: unknown; createdAt: string }>;
 }
 

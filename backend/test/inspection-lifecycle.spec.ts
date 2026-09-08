@@ -167,9 +167,13 @@ describe('inspection status lifecycle (spec §11)', () => {
     };
     const service = new AdminService(prisma as never, new PresenceService());
 
+    // By value, not by reference. `inspection()` now returns a spread carrying
+    // `baselineMissing`, so identity no longer holds — but what this asserts is
+    // that finalizing hands back the inspection detail, which it still does.
+    // `toEqual` rather than `toMatchObject`, so the shape stays pinned.
     await expect(
       service.finalizeInspection(admin, 'insp-1', { overrideReason: 'Owner approved closure' }),
-    ).resolves.toBe(detail);
+    ).resolves.toEqual(detail);
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'insp-1' },

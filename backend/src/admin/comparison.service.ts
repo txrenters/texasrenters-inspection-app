@@ -23,6 +23,42 @@ const BASELINE_READY_STATUSES: InspectionStatus[] = [
   InspectionStatus.COMPLETED,
 ];
 
+/**
+ * The one definition of "a move-in that can be this move-out's baseline".
+ *
+ * Same building, unit and lease, a MOVE_IN, dated before the move-out, and far
+ * enough along to have evidence. Nulls match nulls, so a unit-less inspection
+ * only matches a unit-less baseline.
+ *
+ * The lease stays in scope deliberately. Dropping it would let a move-out be
+ * compared against the *previous* tenancy's move-in, which is how a new tenant
+ * gets charged for the last one's damage.
+ *
+ * Exported as a function rather than kept as a method so the console's
+ * missing-baseline warning can share it without injecting this service. A
+ * warning that disagreed with the comparison would be worse than no warning: a
+ * looser check — building and date only — reported 14 of 17 move-outs where
+ * this rule finds 15, telling one of them it had a baseline the comparison
+ * would then refuse.
+ */
+export function baselineWhere(moveOut: {
+  organizationId: string;
+  propertywareBuildingId: string | null;
+  propertywareUnitId: string | null;
+  propertywareLeaseId: string | null;
+  scheduledAt: Date;
+}) {
+  return {
+    organizationId: moveOut.organizationId,
+    propertywareBuildingId: moveOut.propertywareBuildingId,
+    propertywareUnitId: moveOut.propertywareUnitId,
+    propertywareLeaseId: moveOut.propertywareLeaseId,
+    inspectionType: InspectionType.MOVE_IN,
+    scheduledAt: { lt: moveOut.scheduledAt },
+    status: { in: BASELINE_READY_STATUSES },
+  } satisfies Prisma.InspectionWhereInput;
+}
+
 function normalizeName(name: string) {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -302,6 +338,40 @@ export class ComparisonService {
 
   // --- internals ---------------------------------------------------------
 
+  /**
+   * Which move-outs on a page have nothing to compare against.
+   *
+   * Shares `baselineWhere` with `resolveBaseline` rather than restating the
+   * rule, because a warning that disagreed with the comparison would be worse
+   * than no warning. A looser check — building and date only, ignoring unit,
+   * lease and status — reported 14 of 17 where the real rule finds 15: one
+   * move-out was told it had a baseline that the comparison would then refuse.
+   *
+   * One query per move-out, and a page holds twenty. The alternative is
+   * reimplementing the scope in SQL or in JavaScript, which is the drift this
+   * exists to avoid.
+   */
+  async missingBaselines(
+    moveOuts: ReadonlyArray<{
+      id: string;
+      organizationId: string;
+      propertywareBuildingId: string | null;
+      propertywareUnitId: string | null;
+      propertywareLeaseId: string | null;
+      scheduledAt: Date;
+    }>,
+  ): Promise<Set<string>> {
+    const missing = new Set<string>();
+    for (const moveOut of moveOuts) {
+      const baseline = await this.prisma.inspection.findFirst({
+        where: baselineWhere(moveOut),
+        select: { id: true },
+      });
+      if (!baseline) missing.add(moveOut.id);
+    }
+    return missing;
+  }
+
   private async resolveBaseline(moveOut: {
     organizationId: string;
     propertywareBuildingId: string | null;
@@ -310,23 +380,6 @@ export class ComparisonService {
     baselineInspectionId: string | null;
     scheduledAt: Date;
   }) {
-    /**
-     * Same building, unit and lease, and a MOVE_IN. Nulls match nulls, so a
-     * unit-less inspection only matches a unit-less baseline, never an
-     * unrelated one.
-     *
-     * The lease stays in scope deliberately. Dropping it would let a move-out
-     * be compared against the *previous* tenancy's move-in, which is how a new
-     * tenant gets charged for the last one's damage.
-     */
-    const scope = {
-      organizationId: moveOut.organizationId,
-      propertywareBuildingId: moveOut.propertywareBuildingId,
-      propertywareUnitId: moveOut.propertywareUnitId,
-      propertywareLeaseId: moveOut.propertywareLeaseId,
-      inspectionType: InspectionType.MOVE_IN,
-    } satisfies Prisma.InspectionWhereInput;
-
     /**
      * Always the latest qualifying move-in, never the one linked at creation.
      *
@@ -349,11 +402,9 @@ export class ComparisonService {
      * simply not what decides the comparison.
      */
     return this.prisma.inspection.findFirst({
-      where: {
-        ...scope,
-        scheduledAt: { lt: moveOut.scheduledAt },
-        status: { in: BASELINE_READY_STATUSES },
-      },
+      // The same predicate the missing-baseline warning uses, so the console
+      // can never claim a baseline exists that this would then refuse.
+      where: baselineWhere(moveOut),
       orderBy: { scheduledAt: 'desc' },
       select: { id: true },
     });
