@@ -42,6 +42,7 @@ import {
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { ROOM_SUMMARY_WHERE } from '../technician/media-processing.service';
+import { baselineWhere } from './comparison.service';
 import type {
   AdminFindingsQueryDto,
   AssignmentDto,
@@ -1123,9 +1124,46 @@ export class AdminService {
       enrolmentByBuilding.set(tenancy.propertywareBuildingId, held);
     }
 
+    /**
+     * Move-outs on this page with nothing to compare against.
+     *
+     * Uses `baselineWhere` — the comparison's own predicate — rather than a
+     * cheaper approximation. Building and date alone reported 14 of 17 where
+     * the real rule finds 15, so one move-out would have been told it had a
+     * baseline that `generate` then refuses with MOVE_IN_BASELINE_NOT_FOUND.
+     * A warning that disagrees with the thing it warns about is worse than
+     * none.
+     *
+     * One query per move-out. A page holds twenty and most are not move-outs;
+     * the alternative is restating the scope here, which is the drift this
+     * avoids.
+     */
+    const missingBaseline = new Set<string>();
+    for (const item of items) {
+      if (item.inspectionType !== InspectionType.MOVE_OUT) continue;
+      const baseline = await this.prisma.inspection.findFirst({
+        where: baselineWhere({
+          organizationId: user.organizationId,
+          propertywareBuildingId: item.propertywareBuilding?.id ?? null,
+          propertywareUnitId: item.propertywareUnit?.id ?? null,
+          propertywareLeaseId: item.propertywareLease?.id ?? null,
+          scheduledAt: item.scheduledAt,
+        }),
+        select: { id: true },
+      });
+      if (!baseline) missingBaseline.add(item.id);
+    }
+
     return this.page(
       items.map((item) => ({
         ...item,
+        /**
+         * Only ever set on a move-out. On any other type the question is not
+         * "missing", it is meaningless — and a false would read as an
+         * assurance that something had been checked.
+         */
+        baselineMissing:
+          item.inspectionType === InspectionType.MOVE_OUT ? missingBaseline.has(item.id) : undefined,
         evidence: {
           areas: item._count.areas,
           findings: item._count.findings,
@@ -1211,7 +1249,30 @@ export class AdminService {
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
-    return inspection;
+
+    /**
+     * Whether this move-out has anything to compare against.
+     *
+     * The same predicate the comparison uses, so the page cannot promise a
+     * baseline that `generate` then refuses. Undefined on every other type —
+     * the question is meaningless there, and a `false` would read as an
+     * assurance that something had been checked.
+     */
+    const baselineMissing =
+      inspection.inspectionType === InspectionType.MOVE_OUT
+        ? !(await this.prisma.inspection.findFirst({
+            where: baselineWhere({
+              organizationId: user.organizationId,
+              propertywareBuildingId: inspection.propertywareBuilding?.id ?? null,
+              propertywareUnitId: inspection.propertywareUnit?.id ?? null,
+              propertywareLeaseId: inspection.propertywareLease?.id ?? null,
+              scheduledAt: inspection.scheduledAt,
+            }),
+            select: { id: true },
+          }))
+        : undefined;
+
+    return { ...inspection, baselineMissing };
   }
 
   async inspectionAudit(user: AuthenticatedUser, id: string, query: AuditListQueryDto) {

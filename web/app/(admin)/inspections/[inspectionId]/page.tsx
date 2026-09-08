@@ -365,6 +365,31 @@ function InspectionDetail() {
           </Alert>
         ) : null}
 
+        {/*
+          A move-out with nothing to compare against.
+
+          `ComparisonService.generate` refuses this outright with
+          MOVE_IN_BASELINE_NOT_FOUND, so the report this inspection exists to
+          produce cannot be written — and the technician finds that out after
+          walking the property rather than before. Said here, on the record
+          somebody opens to work it.
+
+          Its own alert rather than folded into `attentionBanner`, which reads
+          only the status: this is true of a SCHEDULED move-out as much as a
+          completed one, and it is the scheduled ones that are still fixable.
+        */}
+        {item.baselineMissing ? (
+          <Alert variant="warning">
+            <TriangleAlertIcon />
+            <AlertTitle>No move-in to compare against</AlertTitle>
+            <AlertDescription>
+              This property has no move-in inspection before this date for the same unit and
+              lease, so the move-in comparison cannot be generated. Import the move-in report if
+              the walkthrough was done outside this app, or record the move-in first.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         {item.internalNotes ? (
           <div className="bg-muted rounded-lg p-3">
             <p className="text-muted-foreground text-xs">Internal notes</p>

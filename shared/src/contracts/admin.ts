@@ -506,6 +506,15 @@ export interface AdminInspection {
    * checked. `MIXED` is a multi-unit building whose tenancies disagree.
    */
   tbp?: 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED' | 'MIXED' | null;
+  /**
+   * A move-out with no move-in to compare against.
+   *
+   * Only ever present on a MOVE_OUT — on any other type the question is
+   * meaningless, and a `false` would read as an assurance that something had
+   * been checked. Computed with the comparison's own baseline predicate, so it
+   * cannot claim a baseline that `generate` would then refuse.
+   */
+  baselineMissing?: boolean;
   audit?: Array<{ id: string; action: string; metadata?: unknown; createdAt: string }>;
 }
 

@@ -111,7 +111,30 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     key: 'type',
     header: 'Type',
     hideBelow: 'md',
-    cell: (row) => <StatusBadge value={row.inspectionType} />,
+    /**
+     * A move-out with no move-in to compare against cannot produce the report
+     * it exists for — `generate` refuses it outright. Flagged beside the type
+     * rather than in a column of its own, because it is a fact *about* being a
+     * move-out and only a move-out can carry it.
+     */
+    cell: (row) => (
+      <span className="flex items-center gap-1.5">
+        <StatusBadge value={row.inspectionType} />
+        {row.baselineMissing ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <TriangleAlertIcon
+                aria-label="No move-in baseline"
+                className="text-destructive size-3.5 shrink-0"
+              />
+            </TooltipTrigger>
+            <TooltipContent>
+              No move-in to compare against. The comparison cannot be generated.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </span>
+    ),
   },
   {
     key: 'scheduled',
