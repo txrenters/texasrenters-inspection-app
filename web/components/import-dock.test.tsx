@@ -35,7 +35,7 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-describe('getting the dock out of the way', () => {
+describe('the import drawer', () => {
   it('renders nothing but an anchor when no import is running', () => {
     // An empty dock is still a rectangle over the corner. There is nothing to
     // report, so there should be nothing there.
@@ -44,7 +44,7 @@ describe('getting the dock out of the way', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  it('can be hidden, leaving only a way back', () => {
+  it('closes to a handle, leaving only a way back', () => {
     imports = [job()];
     render(<ImportDockProvider>page</ImportDockProvider>);
 
@@ -64,7 +64,7 @@ describe('getting the dock out of the way', () => {
     expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
   });
 
-  it('remembers being hidden across a reload', () => {
+  it('remembers being closed across a reload', () => {
     // The whole point. Re-collapsing it on every page would make the fix
     // useless to somebody working through a queue of imports.
     imports = [job()];

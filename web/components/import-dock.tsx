@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { ChevronDownIcon, ChevronUpIcon, FileTextIcon } from 'lucide-react';
+import { ChevronLeftIcon, ChevronRightIcon, FileTextIcon } from 'lucide-react';
 
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
@@ -33,7 +33,7 @@ interface DockTarget {
 const ImportDockContext = createContext<DockTarget | null>(null);
 
 /** Per-browser preference. Not worth a server round trip or a user row. */
-const COLLAPSED_KEY = 'import-dock-collapsed';
+const DRAWER_KEY = 'import-dock-drawer';
 
 /** Lets a dialog hand its own position over so the flight has somewhere to go. */
 export const useImportDock = () => useContext(ImportDockContext);
@@ -143,18 +143,19 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
    * window and in some embedded contexts. A dock that cannot remember the
    * preference is a much smaller problem than one that crashes the shell.
    */
-  const [collapsed, setCollapsed] = useState(() => {
+  const [open, setOpen] = useState(() => {
     try {
-      return window.localStorage.getItem(COLLAPSED_KEY) === 'true';
+      // Open unless deliberately closed: a first-time import should be seen.
+      return window.localStorage.getItem(DRAWER_KEY) !== 'closed';
     } catch {
-      return false;
+      return true;
     }
   });
 
   const toggle = (next: boolean) => {
-    setCollapsed(next);
+    setOpen(next);
     try {
-      window.localStorage.setItem(COLLAPSED_KEY, String(next));
+      window.localStorage.setItem(DRAWER_KEY, next ? 'open' : 'closed');
     } catch {
       // Preference lost, dock still works. Nothing here is worth an error.
     }
@@ -165,68 +166,93 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
   if (!imports.length)
     return <div className="pointer-events-none fixed right-4 bottom-4 z-50" ref={ref} />;
 
-  if (collapsed)
-    return (
-      <div className="fixed right-4 bottom-4 z-50" ref={ref}>
+  /**
+   * A drawer, not a panel that is simply gone.
+   *
+   * Closed, it is a slim handle against the right edge — clear of the corner
+   * where this console puts form buttons, but still visible, so an import
+   * running in the background is never a secret. Open, it slides the list back
+   * out over the page.
+   *
+   * The handle sits at the vertical middle rather than the bottom corner for
+   * the same reason the drawer closes at all: the corner is where the buttons
+   * are.
+   */
+  return (
+    <>
+      {/* The anchor the minimize animation flies into. Kept mounted and
+          independent of open state, so a dialog minimizing into a closed
+          drawer still has somewhere to land. */}
+      <div className="pointer-events-none fixed right-4 bottom-4 z-50" ref={ref} />
+
+      {!open ? (
         <button
           aria-label={`Show ${imports.length} running import${imports.length === 1 ? '' : 's'}`}
           className={cn(
-            'bg-card border-border text-muted-foreground flex items-center gap-1.5 rounded-full border py-1.5 pr-3 pl-2 shadow-lg',
-            'hover:text-foreground hover:bg-accent transition-colors',
+            'bg-card border-border fixed top-1/2 right-0 z-50 -translate-y-1/2 rounded-l-lg border border-r-0 py-3 pr-1 pl-1.5 shadow-lg',
+            'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
+            'animate-in slide-in-from-right-2 duration-200',
           )}
-          onClick={() => toggle(false)}
+          onClick={() => toggle(true)}
           type="button"
         >
-          <ChevronUpIcon className="size-3.5" />
-          {/* The count, not a spinner: collapsed is for getting out of the way,
-              and a spinner in the corner pulls the eye back to it. */}
-          <span className="text-xs font-medium tabular-nums">{imports.length}</span>
+          <span className="flex flex-col items-center gap-1">
+            <ChevronLeftIcon className="size-4" />
+            {/* The count, not a spinner: a closed drawer exists to stop pulling
+                the eye to the edge, and an animation there defeats that. */}
+            <span className="text-[11px] leading-none font-medium tabular-nums">
+              {imports.length}
+            </span>
+          </span>
         </button>
-      </div>
-    );
-
-  return (
-    <div
-      className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-72 flex-col items-end gap-2"
-      ref={ref}
-    >
-      <button
-        aria-label="Hide running imports"
-        className={cn(
-          'bg-card border-border text-muted-foreground pointer-events-auto flex items-center gap-1.5 rounded-full border py-1 pr-2.5 pl-2 shadow-lg',
-          'hover:text-foreground hover:bg-accent transition-colors',
-        )}
-        onClick={() => toggle(true)}
-        type="button"
-      >
-        <ChevronDownIcon className="size-3.5" />
-        <span className="text-xs">Hide</span>
-      </button>
-      {imports.map((job) => (
-        <Link
+      ) : (
+        <div
           className={cn(
-            'bg-card border-border pointer-events-auto flex w-full items-center gap-3 rounded-lg border p-3 shadow-lg',
-            'hover:bg-accent transition-colors',
-            'animate-in slide-in-from-right-4 fade-in duration-300',
+            'bg-card/95 border-border fixed top-1/2 right-0 z-50 flex w-80 max-w-[calc(100vw-2rem)] -translate-y-1/2 flex-col gap-2 rounded-l-xl border border-r-0 p-3 shadow-2xl backdrop-blur',
+            'animate-in slide-in-from-right duration-200',
           )}
-          href={job.inspectionId ? `/inspections/${job.inspectionId}` : '#'}
-          key={job.id}
         >
-          {job.awaitingReview ? (
-            <FileTextIcon className="text-muted-foreground size-4 shrink-0" />
-          ) : (
-            <Spinner className="size-4 shrink-0" />
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">{job.address ?? 'Importing a report'}</p>
-            <p className="text-muted-foreground text-xs">
-              {/* Two different waits, and the difference matters: one finishes
-                  on its own, the other needs somebody to look at it. */}
-              {job.awaitingReview ? 'Read — waiting for your review' : 'Reading the report…'}
+          <div className="flex items-center justify-between">
+            <p className="text-muted-foreground text-xs font-medium">
+              {imports.length} import{imports.length === 1 ? '' : 's'} running
             </p>
+            <button
+              aria-label="Hide running imports"
+              className="text-muted-foreground hover:text-foreground hover:bg-accent -mr-1 rounded p-1 transition-colors"
+              onClick={() => toggle(false)}
+              type="button"
+            >
+              <ChevronRightIcon className="size-4" />
+            </button>
           </div>
-        </Link>
-      ))}
-    </div>
+          {imports.map((job) => (
+            <Link
+              className={cn(
+                'bg-background border-border flex items-center gap-3 rounded-lg border p-3',
+                'hover:bg-accent transition-colors',
+              )}
+              href={job.inspectionId ? `/inspections/${job.inspectionId}` : '#'}
+              key={job.id}
+            >
+              {job.awaitingReview ? (
+                <FileTextIcon className="text-muted-foreground size-4 shrink-0" />
+              ) : (
+                <Spinner className="size-4 shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">
+                  {job.address ?? 'Importing a report'}
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  {/* Two different waits, and the difference matters: one
+                      finishes on its own, the other needs somebody to look. */}
+                  {job.awaitingReview ? 'Read — waiting for your review' : 'Reading the report…'}
+                </p>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
