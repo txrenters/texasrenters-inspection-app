@@ -1,3 +1,5 @@
+import { businessToday } from './clock';
+
 /**
  * Work that was due on a day that has passed.
  *
@@ -33,15 +35,18 @@ export function scheduledDay(scheduledAt: string | null | undefined): string | n
 }
 
 /**
- * Today where the reader is, as `yyyy-MM-dd`.
+ * Today in the business's own day, as `yyyy-MM-dd`.
  *
- * `en-CA` because it is the shortest way to get an ISO-shaped date out of the
- * browser's own locale machinery. `toISOString` would be UTC and would call a
- * Texas evening tomorrow.
+ * Deliberately not the reader's day. Work is scheduled and carried out in
+ * Texas, while the office reading this is often in Manila — thirteen or
+ * fourteen hours ahead — so the browser's calendar day is routinely tomorrow in
+ * the field. Comparing a Texas schedule against a Manila today marked a whole
+ * day of work overdue before anybody had started it.
+ *
+ * Re-exported from `clock.ts`, which is where the zone lives, so there is one
+ * definition of what day it is rather than two that can drift.
  */
-export function localToday(now: Date = new Date()): string {
-  return now.toLocaleDateString('en-CA');
-}
+export const localToday = businessToday;
 
 /**
  * Whether this assignment is work that should already have happened.

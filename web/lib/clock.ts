@@ -93,3 +93,30 @@ export function readClock(now: Date, zone: ClockZone): ClockReading {
 export function msUntilNextMinute(now: Date): number {
   return 60_000 - (now.getTime() % 60_000);
 }
+
+/**
+ * The zone the business actually runs on.
+ *
+ * Every inspection is scheduled, worked and reported in Texas. The office that
+ * *reads* the console is often in Manila, thirteen or fourteen hours ahead, so
+ * "today" in a browser is routinely tomorrow in the field — and a schedule
+ * shown a day early is not a cosmetic problem: it is a technician's roster and
+ * an overdue flag.
+ */
+export const BUSINESS_TIME_ZONE = 'America/Chicago';
+
+/**
+ * The current business day as `yyyy-MM-dd`.
+ *
+ * Not the reader's day. `new Date().toLocaleDateString('en-CA')` answers the
+ * calendar day of whoever is looking, which for a Manila evening is already
+ * tomorrow in Texas — the technician map opened at 1am Manila showed the next
+ * day's assignments and an empty roster.
+ *
+ * `en-CA` for the `yyyy-MM-dd` shape, with the zone pinned rather than left to
+ * the browser. `toISOString` would be UTC and would roll a Texas evening over
+ * early, which is the bug this replaced.
+ */
+export function businessToday(now: Date = new Date()): string {
+  return now.toLocaleDateString('en-CA', { timeZone: BUSINESS_TIME_ZONE });
+}

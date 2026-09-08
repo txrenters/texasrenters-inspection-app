@@ -17,6 +17,7 @@ import {
 import { PropertyList } from '@/components/property-list';
 import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
 import { DatePicker } from '@/components/ui/date-picker';
+import { businessToday } from '@/lib/clock';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /**
@@ -88,13 +89,15 @@ export default function TechnicianMapPage() {
   // it knows will be refused.
   const properties = usePropertyLocations(canView && permissions.has('properties:read'));
 
-  // Today, in the reader's own calendar day. The schema stores a date with no
-  // clock value, so there is no narrower window to ask for.
+  // Today in Texas, not today where the reader is. The schema stores a date
+  // with no clock value, so there is no narrower window to ask for.
   //
-  // `toISOString` would be UTC and would roll over an evening early for a Texas
-  // office, showing tomorrow's work as today's. `en-CA` is the shortest way to
-  // get `yyyy-MM-dd` out of the browser's own locale machinery.
-  const today = useMemo(() => new Date().toLocaleDateString('en-CA'), []);
+  // This used to read the browser's own calendar day, which is right only if
+  // the reader shares the field's. The office is often in Manila, thirteen or
+  // fourteen hours ahead, so the map opened in the evening there showed *the
+  // next day's* assignments — a roster for work nobody had started, and an
+  // empty map for the technicians who were actually out.
+  const today = useMemo(() => businessToday(), []);
   const [date, setDate] = useState(today);
   const assignments = useMapAssignments(date, canView);
 
