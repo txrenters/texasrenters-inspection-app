@@ -166,3 +166,15 @@ hostingermcp.json
 # Ignored so it stops reappearing in `git status`. Deleting it is still the fix;
 # ignoring only stops it being committed by mistake.
 /app.json
+
+# App Store Connect API keys.
+#
+# A .p8 authenticates as its App Store Connect role with no password and no
+# second factor, and it can be downloaded exactly once — so a leaked one cannot
+# be quietly rotated without somebody noticing the old one stop working.
+#
+# Keep the file outside the repository entirely and point EXPO_ASC_API_KEY_PATH
+# at it. This pattern is the second line of defence, for the day somebody drops
+# it next to eas.json because that is where it gets used.
+*.p8
+AuthKey_*.p8
