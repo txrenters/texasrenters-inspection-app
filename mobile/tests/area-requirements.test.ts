@@ -121,3 +121,98 @@ describe('areaCompletionGate', () => {
     expect(gate.reason?.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Occupied inspections do not owe a video for every area.
+ *
+ * They are periodic checks during a tenancy, walked room by room in somebody's
+ * home. Where a room is plainly fine a photograph records that as well as a
+ * walkthrough does, and requiring the video regardless is what had technicians
+ * filming empty hallways to get past a disabled button.
+ *
+ * A move-in and a move-out are not the same: those are the condition record a
+ * comparison is built from, and there the video *is* the evidence.
+ */
+describe('filming an occupied area', () => {
+  const occupied = (overrides = {}) =>
+    ({ ...room(), inspectionType: 'OCCUPIED', ...overrides }) as ReturnType<typeof room>;
+
+  it('accepts a photograph instead of a walkthrough', () => {
+    const gate = areaCompletionGate(
+      deriveAreaRequirements(occupied(), {
+        ...evidence(),
+        hasPrimaryRecording: false,
+        photoCount: 1,
+        uploadSettled: false,
+      }),
+    );
+    expect(gate.canComplete).toBe(true);
+  });
+
+  it('still refuses an area with no evidence at all', () => {
+    // "Not obliged to film" is not "may complete having recorded nothing". An
+    // area with neither is one nobody can show was inspected — skipping is the
+    // honest way to say there was nothing to capture.
+    const gate = areaCompletionGate(
+      deriveAreaRequirements(occupied(), {
+        ...evidence(),
+        hasPrimaryRecording: false,
+        photoCount: 0,
+        uploadSettled: false,
+      }),
+    );
+    expect(gate.canComplete).toBe(false);
+    expect(gate.reason).toMatch(/photograph/i);
+  });
+
+  it('does not hold a photo-only area behind an upload that will never happen', () => {
+    // `uploadSettled` is derived from a recording. Keeping it blocking with no
+    // recording present would leave a condition nothing the technician does can
+    // clear — the exact failure the submission gate was extracted to prevent.
+    const keys = deriveAreaRequirements(occupied(), {
+      ...evidence(),
+      hasPrimaryRecording: false,
+      photoCount: 2,
+      uploadSettled: false,
+    }).map((requirement) => requirement.key);
+    expect(keys).not.toContain('upload');
+  });
+
+  it('still waits for the upload when they did record one', () => {
+    const gate = areaCompletionGate(
+      deriveAreaRequirements(occupied(), {
+        ...evidence(),
+        hasPrimaryRecording: true,
+        photoCount: 0,
+        uploadSettled: false,
+      }),
+    );
+    expect(gate.canComplete).toBe(false);
+  });
+
+  it('leaves a move-out demanding the walkthrough', () => {
+    // The comparison is built from it. A photograph is not a substitute.
+    const gate = areaCompletionGate(
+      deriveAreaRequirements({ ...room(), inspectionType: 'MOVE_OUT' } as ReturnType<typeof room>, {
+        ...evidence(),
+        hasPrimaryRecording: false,
+        photoCount: 3,
+        uploadSettled: false,
+      }),
+    );
+    expect(gate.canComplete).toBe(false);
+    expect(gate.reason).toMatch(/record a walkthrough/i);
+  });
+
+  it('leaves a move-in demanding it too', () => {
+    const gate = areaCompletionGate(
+      deriveAreaRequirements({ ...room(), inspectionType: 'MOVE_IN' } as ReturnType<typeof room>, {
+        ...evidence(),
+        hasPrimaryRecording: false,
+        photoCount: 3,
+        uploadSettled: false,
+      }),
+    );
+    expect(gate.canComplete).toBe(false);
+  });
+});

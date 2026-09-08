@@ -29,22 +29,59 @@ export function deriveAreaRequirements(
   room: InspectionRoom,
   evidence: AreaEvidence,
 ): AreaRequirement[] {
-  const requirements: AreaRequirement[] = [
-    {
-      key: 'recording',
-      label: 'Primary recording saved',
-      met: evidence.hasPrimaryRecording,
-      blocking: true,
-      hint: 'Record a walkthrough of this area before completing it.',
-    },
-    {
+  /**
+   * An occupied inspection does not owe a video for every area.
+   *
+   * These are periodic checks during a tenancy, walked room by room in
+   * somebody's home. Where a room is plainly fine, a photograph records that as
+   * well as a walkthrough does and takes a fraction of the time — and requiring
+   * a video regardless is what had technicians filming empty hallways to get
+   * past a disabled button. A move-in and a move-out are different: those are
+   * the condition record a comparison is built from, and the video is the
+   * evidence.
+   *
+   * Evidence is still required. "Not obliged to film" is not "may complete an
+   * area having recorded nothing" — an area with neither a photograph nor a
+   * recording is one nobody can show was inspected. Skipping it remains the
+   * honest way to say there was nothing to capture, and it is unchanged.
+   */
+  const filmingOptional = room.inspectionType === 'OCCUPIED';
+
+  const requirements: AreaRequirement[] = filmingOptional
+    ? [
+        {
+          key: 'evidence',
+          label: 'Photograph or recording captured',
+          met: evidence.hasPrimaryRecording || evidence.photoCount > 0,
+          blocking: true,
+          hint: 'Photograph this area, or record a walkthrough. Skip it if there was nothing to capture.',
+        },
+      ]
+    : [
+        {
+          key: 'recording',
+          label: 'Primary recording saved',
+          met: evidence.hasPrimaryRecording,
+          blocking: true,
+          hint: 'Record a walkthrough of this area before completing it.',
+        },
+      ];
+
+  /**
+   * The upload only has to settle if there is a recording to send.
+   *
+   * On an occupied area finished with photographs alone there is no walkthrough
+   * in the queue, and `uploadSettled` is derived from one — keeping it blocking
+   * would leave the technician holding a condition nothing they do can clear.
+   */
+  if (!filmingOptional || evidence.hasPrimaryRecording)
+    requirements.push({
       key: 'upload',
       label: 'Upload queued or confirmed',
       met: evidence.uploadSettled,
       blocking: true,
       hint: 'The recording has not reached the upload queue yet.',
-    },
-  ];
+    });
 
   // A baseline only has to be acknowledged when one exists to review against.
   // Absent entirely on a visit outside the move-in chain, such as an HVAC job,
