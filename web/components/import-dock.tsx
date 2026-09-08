@@ -3,6 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { ChevronLeftIcon, ChevronRightIcon, FileTextIcon } from 'lucide-react';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -129,8 +131,51 @@ function Flight({ from, to, onDone }: { from: DOMRect; to: DOMRect; onDone: () =
  * starts or finishes.
  */
 function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
+  const router = useRouter();
   const running = useRunningImports();
   const imports = running.data ?? [];
+  /**
+   * Two different things, and calling both "running" was a lie that cost real
+   * work.
+   *
+   * A reading finishes on its own. A read report does not: it waits at the
+   * review step until somebody opens it and presses Import, and until they do
+   * the inspection has no areas, no photographs and nothing to compare
+   * against. Eleven sat like that — every one an upload somebody believed had
+   * landed, because the dialog minimised itself the moment the *file* finished
+   * and never asked them back.
+   */
+  const awaitingReview = imports.filter((job) => job.awaitingReview);
+  const stillReading = imports.filter((job) => !job.awaitingReview);
+
+  /**
+   * Ask the reader back when a report is ready for them.
+   *
+   * This is the half that was missing. The dialog minimises itself when the
+   * *upload* finishes, which is right — the file is safe and the reading takes
+   * minutes. But the reading then ends at a decision only a person can make,
+   * and nothing said so. Eleven reports sat parsed and uncommitted, each one an
+   * inspection still showing zero areas.
+   *
+   * Announced once per job, by id. The list is polled every few seconds, so
+   * without the ref every poll would re-announce everything already waiting.
+   */
+  const announced = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const job of awaitingReview) {
+      if (announced.current.has(job.id)) continue;
+      announced.current.add(job.id);
+      toast.info(job.address ? `${job.address} is ready to import` : 'A report is ready to import', {
+        description: 'It has been read but not written in yet. Open it and press Import to finish.',
+        // Longer than the default: this asks for an action, and a notice that
+        // vanishes before it is read is the problem it exists to solve.
+        duration: 10_000,
+        action: job.inspectionId
+          ? { label: 'Open', onClick: () => router.push(`/inspections/${job.inspectionId}`) }
+          : undefined,
+      });
+    }
+  }, [awaitingReview, router]);
   /**
    * Collapsed by choice, and the choice sticks.
    *
@@ -213,8 +258,18 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
           )}
         >
           <div className="flex items-center justify-between">
-            <p className="text-muted-foreground text-xs font-medium">
-              {imports.length} import{imports.length === 1 ? '' : 's'} running
+            <p className="text-xs font-medium">
+              {awaitingReview.length ? (
+                <span className="text-warning">
+                  {awaitingReview.length} need{awaitingReview.length === 1 ? 's' : ''} your review
+                </span>
+              ) : null}
+              {awaitingReview.length && stillReading.length ? (
+                <span className="text-muted-foreground"> · </span>
+              ) : null}
+              {stillReading.length ? (
+                <span className="text-muted-foreground">{stillReading.length} reading</span>
+              ) : null}
             </p>
             <button
               aria-label="Hide running imports"
@@ -225,7 +280,7 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
               <ChevronRightIcon className="size-4" />
             </button>
           </div>
-          {imports.map((job) => (
+          {[...awaitingReview, ...stillReading].map((job) => (
             <Link
               className={cn(
                 'bg-background border-border flex items-center gap-3 rounded-lg border p-3',
@@ -243,10 +298,12 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
                 <p className="truncate text-sm font-medium">
                   {job.address ?? 'Importing a report'}
                 </p>
-                <p className="text-muted-foreground text-xs">
-                  {/* Two different waits, and the difference matters: one
-                      finishes on its own, the other needs somebody to look. */}
-                  {job.awaitingReview ? 'Read — waiting for your review' : 'Reading the report…'}
+                <p className={job.awaitingReview ? 'text-warning text-xs' : 'text-muted-foreground text-xs'}>
+                  {/* An instruction, not a status. "Waiting for your review"
+                      described the row's state and left the reader to work out
+                      that nothing happens until they act — which nobody did,
+                      eleven times. */}
+                  {job.awaitingReview ? 'Open and press Import to finish' : 'Reading the report…'}
                 </p>
               </div>
             </Link>
