@@ -5,11 +5,12 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ChevronLeftIcon, ChevronRightIcon, FileTextIcon } from 'lucide-react';
+import { AlertTriangleIcon, ChevronLeftIcon, ChevronRightIcon, FileTextIcon } from 'lucide-react';
 
+import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import { useRunningImports } from '@/lib/queries';
+import { useAdminMutations, useRunningImports } from '@/lib/queries';
 
 /**
  * Where a minimized import goes.
@@ -25,11 +26,30 @@ import { useRunningImports } from '@/lib/queries';
  * dialog.
  */
 
+/** An upload the drawer is carrying on somebody's behalf. */
+interface DockUpload {
+  inspectionId: string;
+  address: string | null;
+  /** 0 to 1, or null before the first progress event. */
+  progress: number | null;
+  error?: string;
+}
+
 interface DockTarget {
   /** Where a minimizing dialog should fly to, in viewport coordinates. */
   rect: () => DOMRect | null;
   /** Play the flight, then leave the dock to render the real pill. */
   fly: (from: DOMRect) => void;
+  /**
+   * Take the file and carry it.
+   *
+   * The upload used to live inside the dialog, which is why the dialog could
+   * not be closed while it ran: closing it took the only progress display with
+   * it. Hoisting it here lets the dialog hand the file over and get out of the
+   * way immediately — the drawer reports the bytes, and the server takes over
+   * from there.
+   */
+  upload: (input: { inspectionId: string; address: string | null; file: File }) => void;
 }
 
 const ImportDockContext = createContext<DockTarget | null>(null);
@@ -43,8 +63,59 @@ export const useImportDock = () => useContext(ImportDockContext);
 export function ImportDockProvider({ children }: { children: ReactNode }) {
   const dock = useRef<HTMLDivElement>(null);
   const [flight, setFlight] = useState<{ from: DOMRect; to: DOMRect } | null>(null);
+  /**
+   * Uploads in flight, keyed by inspection.
+   *
+   * Held here rather than in the dialog so closing the dialog does not abandon
+   * the display. The request itself always survived — an XHR is not tied to
+   * the component that started it — but the progress had nowhere to go, which
+   * is why the dialog had to stay open and could not be dismissed.
+   */
+  const [uploads, setUploads] = useState<Record<string, DockUpload>>({});
+  const { startInspectionImport } = useAdminMutations();
 
   const rect = useCallback(() => dock.current?.getBoundingClientRect() ?? null, []);
+
+  const upload = useCallback(
+    ({ inspectionId, address, file }: { inspectionId: string; address: string | null; file: File }) => {
+      setUploads((held) => ({ ...held, [inspectionId]: { inspectionId, address, progress: 0 } }));
+      void startInspectionImport
+        .mutateAsync({
+          inspectionId,
+          file,
+          onProgress: (fraction) =>
+            setUploads((held) =>
+              // Only if this upload is still the one being tracked. A second
+              // attempt on the same inspection replaces the first, and a late
+              // progress event from the abandoned one must not resurrect it.
+              held[inspectionId] ? { ...held, [inspectionId]: { ...held[inspectionId], progress: fraction } } : held,
+            ),
+        })
+        .then(() => {
+          // Handed to the server. From here the polled job list is the truth,
+          // so the local record steps aside rather than duplicating a row.
+          setUploads((held) => {
+            const rest = { ...held };
+            delete rest[inspectionId];
+            return rest;
+          });
+        })
+        .catch((error: unknown) => {
+          // Kept visible. A failed upload is the one part of this nobody else
+          // will report — there is no job row for a file that never landed.
+          setUploads((held) => ({
+            ...held,
+            [inspectionId]: {
+              inspectionId,
+              address,
+              progress: null,
+              error: error instanceof Error ? error.message : 'The upload failed.',
+            },
+          }));
+        });
+    },
+    [startInspectionImport],
+  );
 
   const fly = useCallback((from: DOMRect) => {
     const to = dock.current?.getBoundingClientRect();
@@ -55,10 +126,10 @@ export function ImportDockProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <ImportDockContext.Provider value={{ rect, fly }}>
+    <ImportDockContext.Provider value={{ rect, fly, upload }}>
       {children}
       {flight ? <Flight {...flight} onDone={() => setFlight(null)} /> : null}
-      <ImportDock ref={dock} />
+      <ImportDock ref={dock} uploads={Object.values(uploads)} />
     </ImportDockContext.Provider>
   );
 }
@@ -130,52 +201,59 @@ function Flight({ from, to, onDone }: { from: DOMRect; to: DOMRect; onDone: () =
  * whatever route is mounted, and it must not push layout around when an import
  * starts or finishes.
  */
-function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
+function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads: DockUpload[] }) {
   const router = useRouter();
   const running = useRunningImports();
   const imports = running.data ?? [];
   /**
-   * Two different things, and calling both "running" was a lie that cost real
-   * work.
+   * Everything still in motion: files going up, then reports being read.
    *
-   * A reading finishes on its own. A read report does not: it waits at the
-   * review step until somebody opens it and presses Import, and until they do
-   * the inspection has no areas, no photographs and nothing to compare
-   * against. Eleven sat like that — every one an upload somebody believed had
-   * landed, because the dialog minimised itself the moment the *file* finished
-   * and never asked them back.
+   * There is no third state any more. A read report is written in immediately,
+   * so nothing sits waiting on a person — which is what left eleven
+   * inspections showing zero areas, each one an upload somebody believed had
+   * landed.
    */
-  const awaitingReview = imports.filter((job) => job.awaitingReview);
-  const stillReading = imports.filter((job) => !job.awaitingReview);
+  const reading = imports.filter((job) => job.state === 'READING');
+  const inFlight = uploads.length + reading.length;
 
   /**
-   * Ask the reader back when a report is ready for them.
+   * Says when an import has landed, and what landed.
    *
-   * This is the half that was missing. The dialog minimises itself when the
-   * *upload* finishes, which is right — the file is safe and the reading takes
-   * minutes. But the reading then ends at a decision only a person can make,
-   * and nothing said so. Eleven reports sat parsed and uncommitted, each one an
-   * inspection still showing zero areas.
+   * This replaces asking somebody to come back and press Import. A read report
+   * is written in as soon as it is read, so the only thing left to do is tell
+   * whoever started it — they are on the next property by then, and the
+   * inspection they left has quietly filled in behind them.
    *
-   * Announced once per job, by id. The list is polled every few seconds, so
-   * without the ref every poll would re-announce everything already waiting.
+   * Announced once per job. The list is polled every few seconds and a finished
+   * job stays in it for a short window, so without the ref every poll would
+   * repeat itself.
    */
   const announced = useRef<Set<string>>(new Set());
   useEffect(() => {
-    for (const job of awaitingReview) {
-      if (announced.current.has(job.id)) continue;
+    for (const job of imports) {
+      if (job.state === 'READING' || announced.current.has(job.id)) continue;
       announced.current.add(job.id);
-      toast.info(job.address ? `${job.address} is ready to import` : 'A report is ready to import', {
-        description: 'It has been read but not written in yet. Open it and press Import to finish.',
-        // Longer than the default: this asks for an action, and a notice that
-        // vanishes before it is read is the problem it exists to solve.
-        duration: 10_000,
-        action: job.inspectionId
-          ? { label: 'Open', onClick: () => router.push(`/inspections/${job.inspectionId}`) }
-          : undefined,
-      });
+      const open = job.inspectionId
+        ? { label: 'Open', onClick: () => router.push(`/inspections/${job.inspectionId}`) }
+        : undefined;
+
+      if (job.state === 'IMPORTED')
+        toast.success(job.address ? `${job.address} imported` : 'Report imported', {
+          description: 'The areas, photographs and condition are on the inspection now.',
+          duration: 10_000,
+          action: open,
+        });
+      // A failure is worth the same interruption. Silently dropping the row
+      // would leave somebody believing an import happened — which is the whole
+      // failure this feature has been fixing.
+      else
+        toast.error(job.address ? `${job.address} could not be imported` : 'Import failed', {
+          description: job.errorCode ?? 'The report could not be read.',
+          duration: 10_000,
+          action: open,
+        });
     }
-  }, [awaitingReview, router]);
+  }, [imports, router]);
   /**
    * Collapsed by choice, and the choice sticks.
    *
@@ -208,7 +286,7 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
 
   // Nothing running: render the anchor and no furniture at all. An empty dock
   // is still a rectangle over the corner, and there is nothing to report.
-  if (!imports.length)
+  if (!inFlight)
     return <div className="pointer-events-none fixed right-4 bottom-4 z-50" ref={ref} />;
 
   /**
@@ -232,7 +310,7 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
 
       {!open ? (
         <button
-          aria-label={`Show ${imports.length} running import${imports.length === 1 ? '' : 's'}`}
+          aria-label={`Show ${inFlight} import${inFlight === 1 ? '' : 's'} in progress`}
           className={cn(
             'bg-card border-border fixed top-1/2 right-0 z-50 -translate-y-1/2 rounded-l-lg border border-r-0 py-3 pr-1 pl-1.5 shadow-lg',
             'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
@@ -246,7 +324,7 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
             {/* The count, not a spinner: a closed drawer exists to stop pulling
                 the eye to the edge, and an animation there defeats that. */}
             <span className="text-[11px] leading-none font-medium tabular-nums">
-              {imports.length}
+              {inFlight}
             </span>
           </span>
         </button>
@@ -258,18 +336,8 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
           )}
         >
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium">
-              {awaitingReview.length ? (
-                <span className="text-warning">
-                  {awaitingReview.length} need{awaitingReview.length === 1 ? 's' : ''} your review
-                </span>
-              ) : null}
-              {awaitingReview.length && stillReading.length ? (
-                <span className="text-muted-foreground"> · </span>
-              ) : null}
-              {stillReading.length ? (
-                <span className="text-muted-foreground">{stillReading.length} reading</span>
-              ) : null}
+            <p className="text-muted-foreground text-xs font-medium">
+              {inFlight} import{inFlight === 1 ? '' : 's'} in progress
             </p>
             <button
               aria-label="Hide running imports"
@@ -280,7 +348,33 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
               <ChevronRightIcon className="size-4" />
             </button>
           </div>
-          {[...awaitingReview, ...stillReading].map((job) => (
+          {uploads.map((item) => (
+            <div
+              className="bg-background border-border flex items-center gap-3 rounded-lg border p-3"
+              key={item.inspectionId}
+            >
+              {item.error ? (
+                <AlertTriangleIcon className="text-destructive size-4 shrink-0" />
+              ) : (
+                <Spinner className="size-4 shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{item.address ?? 'Uploading a report'}</p>
+                <p className={item.error ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}>
+                  {item.error ??
+                    (item.progress === null
+                      ? 'Uploading…'
+                      : `Uploading… ${Math.round(item.progress * 100)}%`)}
+                </p>
+                {/* Only while bytes are moving. A full bar during the read
+                    would claim progress that is not being made. */}
+                {!item.error && item.progress !== null ? (
+                  <Progress className="mt-1.5 h-1" value={Math.round(item.progress * 100)} />
+                ) : null}
+              </div>
+            </div>
+          ))}
+          {reading.map((job) => (
             <Link
               className={cn(
                 'bg-background border-border flex items-center gap-3 rounded-lg border p-3',
@@ -298,12 +392,9 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
                 <p className="truncate text-sm font-medium">
                   {job.address ?? 'Importing a report'}
                 </p>
-                <p className={job.awaitingReview ? 'text-warning text-xs' : 'text-muted-foreground text-xs'}>
-                  {/* An instruction, not a status. "Waiting for your review"
-                      described the row's state and left the reader to work out
-                      that nothing happens until they act — which nobody did,
-                      eleven times. */}
-                  {job.awaitingReview ? 'Open and press Import to finish' : 'Reading the report…'}
+                <p className="text-muted-foreground text-xs">
+                  {/* Nothing to instruct any more: it applies itself. */}
+                  Reading the report…
                 </p>
               </div>
             </Link>

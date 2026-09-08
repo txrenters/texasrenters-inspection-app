@@ -16,7 +16,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -50,8 +49,11 @@ import {
 export function ImportReportDialog({
   inspectionId,
   inspectionType,
+  propertyLabel,
 }: {
   inspectionId: string;
+  /** Named in the drawer while it uploads, so a row is not just a spinner. */
+  propertyLabel?: string | null;
   /** Only shapes the wording. Every type is importable; the rules that decide
    * are emptiness and having a property, neither of which is about type. */
   inspectionType?: string | null;
@@ -83,11 +85,16 @@ export function ImportReportDialog({
    * The rect is read before the dialog closes, because a closed dialog has no
    * position to fly from.
    */
-  const minimize = useCallback(() => {
-    const from = content.current?.getBoundingClientRect();
-    if (from) dock?.fly(from);
-    setOpen(false);
-  }, [dock]);
+  const handOff = useCallback(
+    (file: File) => {
+      // Read before closing: a closed dialog has no position to fly from.
+      const from = content.current?.getBoundingClientRect();
+      dock?.upload({ inspectionId, address: propertyLabel ?? null, file });
+      if (from) dock?.fly(from);
+      setOpen(false);
+    },
+    [dock, inspectionId, propertyLabel],
+  );
 
   return (
     <Dialog onOpenChange={setOpen} open={open}>
@@ -112,9 +119,8 @@ export function ImportReportDialog({
           </DialogDescription>
         </DialogHeader>
         <InspectionReportImport
-          inspectionId={inspectionId}
           inspectionType={inspectionType}
-          onUploaded={minimize}
+          onHandOff={handOff}
           resumeJobId={active.data && !active.data.committedAt ? active.data.id : null}
         />
       </DialogContent>
@@ -142,21 +148,19 @@ function isRunning(job: ImportJob | null | undefined) {
  * evidence behind a charge.
  */
 export function InspectionReportImport({
-  inspectionId,
   inspectionType,
   resumeJobId = null,
-  onUploaded,
+  onHandOff,
 }: {
-  inspectionId: string;
   /** Wording only. Emptiness and having a property decide importability, not
    * the type. */
   inspectionType?: string | null;
   /** An import already under way here, so reopening picks it up rather than
    * offering to start a second one. */
   resumeJobId?: string | null;
-  /** The file has landed and the server has taken over, so the dialog has
-   * nothing left to say. Absent when this is rendered outside one. */
-  onUploaded?: () => void;
+  /** Takes the chosen file. The drawer uploads it and reports progress, so
+   * this dialog can close immediately. Absent when rendered outside one. */
+  onHandOff?: (file: File) => void;
 }) {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
@@ -171,16 +175,6 @@ export function InspectionReportImport({
   const [dismissed, setDismissed] = useState(false);
   const jobId = dismissed ? null : (startedJobId ?? resumeJobId);
   const [rejected, setRejected] = useState<string | null>(null);
-  /**
-   * How much of the file has reached the server, 0 to 1.
-   *
-   * Null until the first progress event, and null again once the upload is
-   * done. A report is tens of megabytes — one recent upload took 165 seconds,
-   * during which the server ran no queries at all because it was purely
-   * receiving bytes — and a spinner that never moves for that long is
-   * indistinguishable from a hang. It was reported as one.
-   */
-  const [progress, setProgress] = useState<number | null>(null);
   /** A file is over the drop zone. Purely visual, but without it there is no
    * signal that dropping will do anything. */
   const [dragging, setDragging] = useState(false);
@@ -190,7 +184,8 @@ export function InspectionReportImport({
   const fileInput = useRef<HTMLInputElement>(null);
   const job = useInspectionImportJob(jobId);
 
-  const uploading = startInspectionImport.isPending;
+  // The upload lives in the drawer now, so this panel is never in that state.
+  const uploading = false;
 
   /**
    * Only while the file is in the air.
@@ -211,31 +206,22 @@ export function InspectionReportImport({
     return () => window.removeEventListener('beforeunload', warn);
   }, [uploading]);
 
-  async function upload(file: File) {
+  /**
+   * Hands the file to the drawer and gets out of the way.
+   *
+   * The upload used to run inside this dialog, which is why the dialog could
+   * not be closed while it went: closing it took the only progress display with
+   * it. The drawer carries it now, so this closes the moment the file is
+   * accepted — and everything after, the reading and the writing-in, happens on
+   * the server with nothing to watch.
+   */
+  function upload(file: File) {
     setRejected(null);
     if (file.type !== 'application/pdf') {
       setRejected('That file is not a PDF.');
       return;
     }
-    try {
-      setProgress(0);
-      const started = await startInspectionImport.mutateAsync({
-        inspectionId,
-        file,
-        onProgress: setProgress,
-      });
-      setDismissed(false);
-      setStartedJobId(started.jobId);
-      // Only once the file is actually up. Minimizing while it uploads would
-      // hide the one phase that genuinely cannot be walked away from.
-      onUploaded?.();
-    } catch {
-      // Rendered below from the mutation's own error.
-    } finally {
-      // Cleared either way: the upload is over, and leaving a bar at 100% while
-      // the server reads the file would claim progress that is not being made.
-      setProgress(null);
-    }
+    onHandOff?.(file);
   }
 
   async function commit() {
@@ -363,11 +349,7 @@ export function InspectionReportImport({
           >
             {uploading ? <Spinner /> : <UploadIcon className="text-muted-foreground size-5" />}
             <span className="text-sm font-medium">
-              {uploading
-                ? progress === null
-                  ? 'Uploading…'
-                  : `Uploading… ${Math.round(progress * 100)}%`
-                : dragging
+              {dragging
                   ? 'Drop the report to start'
                   : 'Drop a report PDF here, or click to choose one'}
             </span>
@@ -381,9 +363,7 @@ export function InspectionReportImport({
               first event and once the file has landed, and a bar sitting at
               100% while the server reads the file would claim progress that is
               not being made — which is the thing this exists to stop. */}
-          {uploading && progress !== null ? (
-            <Progress className="h-1.5" value={Math.round(progress * 100)} />
-          ) : null}
+
         </div>
       ) : (
         <ImportProgress

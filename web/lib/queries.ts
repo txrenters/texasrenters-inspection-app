@@ -705,8 +705,17 @@ export interface RunningImport {
   id: string;
   inspectionId: string | null;
   status: ImportJob['status'];
-  /** Read, but nobody has asked for it to be written yet — waiting on a person
-   * rather than on the server, which the dock says out loud. */
+  /**
+   * What to say about this one.
+   *
+   * Three answers, not two: a row leaving the list means the report was written
+   * in, *or* that it failed. Naming the outcome is what lets the notification
+   * be true rather than cheerful.
+   */
+  state: 'READING' | 'IMPORTED' | 'FAILED';
+  errorCode: string | null;
+  /** Always false now that a read report is written in immediately. Kept so a
+   * console built against the older contract keeps working. */
   awaitingReview: boolean;
   address: string | null;
   inspectionType: string | null;
@@ -725,9 +734,11 @@ export const useRunningImports = () =>
     queryKey: keys.runningImports,
     queryFn: ({ signal }) =>
       api<RunningImport[]>('/api/v1/admin/inspection-imports/running', { signal }),
-    // Only while something is actually running. An idle console polls once and
-    // then stops until a mutation invalidates this.
-    refetchInterval: (query) => (query.state.data?.length ? 3_000 : false),
+    // Only while something is actually working. A list holding nothing but
+    // finished rows stops polling — they are there to be announced once, not
+    // watched.
+    refetchInterval: (query) =>
+      query.state.data?.some((job) => job.state === 'READING') ? 3_000 : false,
   });
 
 /** Is an import running against this inspection, whoever started it? */

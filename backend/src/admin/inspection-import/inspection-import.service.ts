@@ -248,20 +248,41 @@ export class InspectionImportService {
    * property finished.
    */
   async runningJobs(user: AuthenticatedUser) {
+    /**
+     * Long enough for somebody to have looked away and come back.
+     *
+     * A finished job is reported for a short while so the console can announce
+     * it. Without that window the only signal an import landed is its row
+     * vanishing, and a row can vanish because it *failed* just as easily —
+     * announcing "imported" on a disappearance would be a cheerful lie.
+     */
+    const ANNOUNCE_WINDOW_MS = 10 * 60 * 1000;
+    const since = new Date(Date.now() - ANNOUNCE_WINDOW_MS);
+
     const jobs = await this.prisma.inspectionImportJob.findMany({
       where: {
         organizationId: user.organizationId,
-        // Reading, or read and now writing. A committed or failed job is
-        // finished and belongs in neither a list of work nor a spinner.
-        status: { in: ['PENDING', 'RUNNING', 'COMPLETED'] },
-        committedAt: null,
-        errorCode: null,
+        OR: [
+          // Still working.
+          { status: { in: ['PENDING', 'RUNNING'] }, committedAt: null, errorCode: null },
+          // Just landed, either way.
+          { committedAt: { gte: since } },
+          { errorCode: { not: null }, updatedAt: { gte: since } },
+        ],
       },
       orderBy: { createdAt: 'desc' },
       // A guard, not a page: more than this many at once is not a longer list,
       // it is something wrong worth noticing.
       take: 50,
-      select: { id: true, inspectionId: true, status: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        inspectionId: true,
+        status: true,
+        errorCode: true,
+        committedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
 
     const inspections = await this.prisma.inspection.findMany({
@@ -277,15 +298,23 @@ export class InspectionImportService {
     return jobs
       // A job whose process died is not running, whatever the row says. Same
       // rule `job` applies, so the two cannot disagree about what is live.
-      .filter((job) => !(job.status === 'RUNNING' && isStale(job.updatedAt)))
+      .filter((job) => !(job.status === 'RUNNING' && !job.committedAt && !job.errorCode && isStale(job.updatedAt)))
       .map((job) => ({
         id: job.id,
         inspectionId: job.inspectionId,
         status: job.status,
-        // The read is done and the write has not been asked for yet: somebody
-        // has to look at it. Worth distinguishing in a dock, because it is
-        // waiting on a person rather than on the server.
-        awaitingReview: job.status === 'COMPLETED',
+        /**
+         * What the console should say about this one.
+         *
+         * Three answers, not two, because a row leaving the list is ambiguous:
+         * it means the report was written in, or it means the import failed.
+         * Naming the outcome is what lets the notification be true.
+         */
+        state: job.errorCode ? ('FAILED' as const) : job.committedAt ? ('IMPORTED' as const) : ('READING' as const),
+        errorCode: job.errorCode,
+        /** Kept, always false: nothing waits on a person now that a read report
+         * is written in as soon as it is read. */
+        awaitingReview: false,
         address: job.inspectionId
           ? (byInspection.get(job.inspectionId)?.propertywareBuilding?.addressLine1 ?? null)
           : null,
@@ -381,12 +410,65 @@ export class InspectionImportService {
           output: JSON.parse(JSON.stringify(report)) as Prisma.InputJsonValue,
         },
       });
+
+      /**
+       * Written in as soon as it is read.
+       *
+       * This used to stop here and wait for somebody to open the report,
+       * look at what it found and press Import. That step cost eleven
+       * inspections: every one uploaded, parsed, and left showing zero areas,
+       * because the person who started it had moved on to the next property
+       * and nothing brought them back.
+       *
+       * The check it performed is not lost, only unblocked. The parse is
+       * deterministic and reconciles exactly on a known layout; what it could
+       * not resolve — a label no template carries, a row typed by hand, a
+       * photograph whose caption matched nothing — is still recorded on the
+       * job and still shown on the inspection. It is now read after the fact
+       * rather than standing in front of the evidence.
+       *
+       * What this does *not* do is finalize. The inspection lands under review,
+       * so a human still signs off before anything reaches a charge — which is
+       * the guarantee the old gate was really there for.
+       */
+      await this.applyRead(user, jobId);
     } catch (error) {
       this.logger.error({
         event: 'inspection_import_read_failed',
         message: error instanceof Error ? error.message : 'unknown',
       });
       await this.fail(jobId, 'REPORT_NOT_READABLE');
+    }
+  }
+
+  /**
+   * Commits a read report without asking.
+   *
+   * Separate from `commit` rather than folded into it: `commit` is the console
+   * asking on a person's behalf and answers with an ApplicationError the
+   * console renders. This runs on a detached promise where nothing is
+   * listening, so a refusal has to become a recorded failure instead of a
+   * rejection nobody catches.
+   *
+   * The guards inside `commit` still run — the inspection must be empty and
+   * have a property, and the same report must not already be imported. Those
+   * are exactly the conditions where applying automatically would be wrong,
+   * and they now surface as a failed job with a reason rather than as a
+   * silently skipped import.
+   */
+  private async applyRead(user: AuthenticatedUser, jobId: string) {
+    try {
+      await this.commit(user, jobId);
+    } catch (error) {
+      const code =
+        error instanceof ApplicationError ? error.code : 'REPORT_NOT_APPLIED';
+      this.logger.error({
+        event: 'inspection_import_auto_apply_failed',
+        jobId,
+        code,
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+      await this.fail(jobId, code);
     }
   }
 
