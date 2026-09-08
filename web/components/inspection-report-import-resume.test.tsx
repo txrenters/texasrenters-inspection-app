@@ -95,12 +95,12 @@ describe('resuming the import the inspection already has', () => {
     // Without this the reopened dialog would offer a second upload of a report
     // that is already being read, and the file-level guard would reject it.
     job = importJob({ status: 'RUNNING' });
-    render(<InspectionReportImport inspectionId="inspection-1" resumeJobId="job-1" />);
+    render(<InspectionReportImport resumeJobId="job-1" />);
     expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
   it('offers the upload when there is nothing to resume', () => {
-    render(<InspectionReportImport inspectionId="inspection-1" resumeJobId={null} />);
+    render(<InspectionReportImport resumeJobId={null} />);
     expect(document.querySelector('input[type="file"]')).not.toBeNull();
   });
 
@@ -119,7 +119,7 @@ describe('resuming the import the inspection already has', () => {
         needsReview: { lowConfidenceLabels: [], unrecognisedRows: [], photosWithoutSubject: 0 },
       },
     } as Partial<ImportJob>);
-    render(<InspectionReportImport inspectionId="inspection-1" resumeJobId="job-1" />);
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
@@ -138,11 +138,19 @@ describe('resuming the import the inspection already has', () => {
         needsReview: { lowConfidenceLabels: [], unrecognisedRows: [], photosWithoutSubject: 0 },
       },
     } as Partial<ImportJob>);
-    render(<InspectionReportImport inspectionId="inspection-1" resumeJobId="job-1" />);
+    const onHandOff = vi.fn();
+    render(
+      <InspectionReportImport
+
+        onHandOff={onHandOff}
+        resumeJobId="job-1"
+      />,
+    );
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
 
     choose(pdf());
 
-    await vi.waitFor(() => expect(startImport).toHaveBeenCalled());
+    // Handed to the drawer, which owns the upload now.
+    await vi.waitFor(() => expect(onHandOff).toHaveBeenCalled());
   });
 });

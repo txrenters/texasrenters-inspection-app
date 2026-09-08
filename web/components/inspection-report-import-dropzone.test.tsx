@@ -51,23 +51,27 @@ beforeEach(() => {
 });
 
 describe('dropping a report onto the dialog', () => {
-  it('starts the import from a dropped file', async () => {
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+  it('hands a dropped file over to be uploaded', async () => {
+    // The dialog no longer uploads. It takes the file and passes it to the
+    // drawer, which is what lets it close immediately instead of holding the
+    // reader hostage to a progress bar.
+    const onHandOff = vi.fn();
+    render(<InspectionReportImport onHandOff={onHandOff} />);
 
     drop(zone(), [pdf()]);
 
-    await vi.waitFor(() => expect(startImport).toHaveBeenCalled());
-    expect(startImport.mock.calls[0][0].file.name).toBe('report.pdf');
+    await vi.waitFor(() => expect(onHandOff).toHaveBeenCalled());
+    expect(onHandOff.mock.calls[0][0].name).toBe('report.pdf');
   });
 
   it('says so while a file is over it', () => {
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
     fireEvent.dragOver(zone(), { dataTransfer: { types: ['Files'] } });
     expect(screen.getByText(/drop the report to start/i)).toBeTruthy();
   });
 
   it('stops saying so when the file leaves', () => {
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
     const node = zone();
     fireEvent.dragOver(node, { dataTransfer: { types: ['Files'] } });
     fireEvent.dragLeave(node, { relatedTarget: document.body });
@@ -77,7 +81,7 @@ describe('dropping a report onto the dialog', () => {
   it('still refuses anything that is not a PDF', async () => {
     // The same guard the file picker has. A drop is a different gesture, not a
     // different rule.
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
 
     drop(zone(), [new File(['x'], 'notes.txt', { type: 'text/plain' })]);
 
@@ -87,50 +91,38 @@ describe('dropping a report onto the dialog', () => {
 
   it('is still a button, so the picker route survives', () => {
     // Dropping is undiscoverable on its own and impossible from a keyboard.
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
     expect(zone().tagName).toBe('BUTTON');
     expect(document.querySelector('input[type="file"]')).not.toBeNull();
   });
 });
 
-describe('getting out of the way once the file has landed', () => {
-  it('reports the upload as finished so the dialog can minimize', async () => {
-    const onUploaded = vi.fn();
-    render(<InspectionReportImport inspectionId="inspection-1" onUploaded={onUploaded} />);
+describe('getting out of the way once the file is chosen', () => {
+  it('hands off exactly once', async () => {
+    const onHandOff = vi.fn();
+    render(<InspectionReportImport onHandOff={onHandOff} />);
 
     drop(zone(), [pdf()]);
 
-    await vi.waitFor(() => expect(onUploaded).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onHandOff).toHaveBeenCalledTimes(1));
   });
 
-  it('does not minimize when the upload fails', async () => {
-    // Minimizing on failure would hide the error into a dock that shows no
-    // failures, and the person would never learn the import never started.
-    const onUploaded = vi.fn();
-    startImport.mockRejectedValue(new Error('The API could not be reached.'));
-    render(<InspectionReportImport inspectionId="inspection-1" onUploaded={onUploaded} />);
-
-    drop(zone(), [pdf()]);
-
-    await vi.waitFor(() => expect(startImport).toHaveBeenCalled());
-    expect(onUploaded).not.toHaveBeenCalled();
-  });
-
-  it('does not minimize when the file was rejected before it was sent', async () => {
-    const onUploaded = vi.fn();
-    render(<InspectionReportImport inspectionId="inspection-1" onUploaded={onUploaded} />);
+  it('does not hand off a file it rejected', async () => {
+    // The PDF check happens before anything leaves the dialog, so a wrong file
+    // never reaches the drawer and never becomes a row that fails there.
+    const onHandOff = vi.fn();
+    render(<InspectionReportImport onHandOff={onHandOff} />);
 
     drop(zone(), [new File(['x'], 'notes.txt', { type: 'text/plain' })]);
 
     expect(await screen.findByText(/not a pdf/i)).toBeTruthy();
-    expect(onUploaded).not.toHaveBeenCalled();
+    expect(onHandOff).not.toHaveBeenCalled();
   });
 
-  it('works without a dialog to minimize', async () => {
+  it('works without anywhere to hand off to', async () => {
     // The panel is exported on its own and rendered outside a dialog in tests
     // and elsewhere; an absent callback must not be a crash.
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    drop(zone(), [pdf()]);
-    await vi.waitFor(() => expect(startImport).toHaveBeenCalled());
+    render(<InspectionReportImport />);
+    expect(() => drop(zone(), [pdf()])).not.toThrow();
   });
 });
