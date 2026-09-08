@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangleIcon, CheckCircle2Icon, FileTextIcon, UploadIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -58,6 +58,25 @@ export function ImportReportDialog({
 }) {
   const [open, setOpen] = useState(false);
   const kind = inspectionType ? humanize(inspectionType).toLowerCase() : 'inspection';
+
+  /**
+   * Opened straight from the drawer, not merely navigated near.
+   *
+   * A drawer row used to link to the inspection and stop there, leaving the
+   * reader to find the button that opens this. If they were already on the
+   * page it was a no-op navigation and nothing visibly happened at all — which
+   * is what eleven un-imported reports looked like from the outside.
+   *
+   * Read once into state rather than driving `open` from the URL, so closing
+   * the dialog does not fight a parameter that is still in the address bar.
+   */
+  const requestedImport = useSearchParams().get('import');
+  const openedFromLink = useRef(false);
+  useEffect(() => {
+    if (!requestedImport || openedFromLink.current) return;
+    openedFromLink.current = true;
+    setOpen(true);
+  }, [requestedImport]);
   /**
    * Asked of the inspection, not remembered from this dialog.
    *

@@ -22,7 +22,12 @@ const commitImport = vi.fn();
 let job: ImportJob | undefined;
 let active: ImportJob | null = null;
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  // The dialog reads `?import=<jobId>` so a drawer row can open the review
+  // directly. Absent here, so these tests exercise the ordinary entry point.
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock('@/lib/queries', () => ({
   useAdminMutations: () => ({
     startInspectionImport: { mutateAsync: startImport, isPending: false, error: null },

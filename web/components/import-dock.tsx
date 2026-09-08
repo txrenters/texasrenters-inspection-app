@@ -171,7 +171,10 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
         // vanishes before it is read is the problem it exists to solve.
         duration: 10_000,
         action: job.inspectionId
-          ? { label: 'Open', onClick: () => router.push(`/inspections/${job.inspectionId}`) }
+          ? {
+            label: 'Open',
+            onClick: () => router.push(`/inspections/${job.inspectionId}?import=${job.id}`),
+          }
           : undefined,
       });
     }
@@ -286,7 +289,11 @@ function ImportDock({ ref }: { ref: React.Ref<HTMLDivElement> }) {
                 'bg-background border-border flex items-center gap-3 rounded-lg border p-3',
                 'hover:bg-accent transition-colors',
               )}
-              href={job.inspectionId ? `/inspections/${job.inspectionId}` : '#'}
+              /* Straight to the review, not to the page that contains it.
+                 Landing on the inspection left the reader hunting for the
+                 button — and on the page they were already on, clicking did
+                 nothing visible whatsoever. */
+              href={job.inspectionId ? `/inspections/${job.inspectionId}?import=${job.id}` : '#'}
               key={job.id}
             >
               {job.awaitingReview ? (
