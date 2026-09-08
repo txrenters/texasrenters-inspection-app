@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangleIcon, CheckCircle2Icon, FileTextIcon, UploadIcon } from 'lucide-react';
 import { toast } from 'sonner';
@@ -26,6 +26,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useImportDock } from '@/components/import-dock';
+import { cn } from '@/lib/utils';
 import {
   useActiveInspectionImport,
   useAdminMutations,
@@ -57,6 +59,25 @@ export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
    */
   const active = useActiveInspectionImport(inspectionId);
   const running = isRunning(active.data);
+  const dock = useImportDock();
+  const content = useRef<HTMLDivElement>(null);
+
+  /**
+   * Gets out of the way the moment the file has landed.
+   *
+   * Everything after the upload happens on the server, so the dialog has
+   * nothing left to say — and leaving it open is what had these run one at a
+   * time. It flies into the dock instead, which is both the exit and the
+   * explanation: the work went over there, and it is still going.
+   *
+   * The rect is read before the dialog closes, because a closed dialog has no
+   * position to fly from.
+   */
+  const minimize = useCallback(() => {
+    const from = content.current?.getBoundingClientRect();
+    if (from) dock?.fly(from);
+    setOpen(false);
+  }, [dock]);
 
   return (
     <Dialog onOpenChange={setOpen} open={open}>
@@ -66,7 +87,7 @@ export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
           {running ? 'Import in progress' : 'Import a report'}
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent className="sm:max-w-3xl" ref={content}>
         <DialogHeader>
           <DialogTitle>Import an inspection report</DialogTitle>
           <DialogDescription>
@@ -77,6 +98,7 @@ export function ImportReportDialog({ inspectionId }: { inspectionId: string }) {
         </DialogHeader>
         <InspectionReportImport
           inspectionId={inspectionId}
+          onUploaded={minimize}
           resumeJobId={active.data && !active.data.committedAt ? active.data.id : null}
         />
       </DialogContent>
@@ -106,11 +128,15 @@ function isRunning(job: ImportJob | null | undefined) {
 export function InspectionReportImport({
   inspectionId,
   resumeJobId = null,
+  onUploaded,
 }: {
   inspectionId: string;
   /** An import already under way here, so reopening picks it up rather than
    * offering to start a second one. */
   resumeJobId?: string | null;
+  /** The file has landed and the server has taken over, so the dialog has
+   * nothing left to say. Absent when this is rendered outside one. */
+  onUploaded?: () => void;
 }) {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
@@ -135,6 +161,9 @@ export function InspectionReportImport({
    * indistinguishable from a hang. It was reported as one.
    */
   const [progress, setProgress] = useState<number | null>(null);
+  /** A file is over the drop zone. Purely visual, but without it there is no
+   * signal that dropping will do anything. */
+  const [dragging, setDragging] = useState(false);
   // Set when the write is asked for. The mutation resolving only means the
   // server accepted the job, so it cannot stand in for "still working".
   const [writing, setWriting] = useState(false);
@@ -177,6 +206,9 @@ export function InspectionReportImport({
       });
       setDismissed(false);
       setStartedJobId(started.jobId);
+      // Only once the file is actually up. Minimizing while it uploads would
+      // hide the one phase that genuinely cannot be walked away from.
+      onUploaded?.();
     } catch {
       // Rendered below from the mutation's own error.
     } finally {
@@ -259,33 +291,72 @@ export function InspectionReportImport({
 
       {!jobId ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              accept="application/pdf"
-              className="sr-only"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void upload(file);
-                // Cleared so choosing the same file twice still fires a change.
-                event.target.value = '';
-              }}
-              ref={fileInput}
-              type="file"
-            />
-            <Button disabled={uploading} onClick={() => fileInput.current?.click()}>
-              {uploading ? <Spinner /> : <UploadIcon />}
+          <input
+            accept="application/pdf"
+            className="sr-only"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void upload(file);
+              // Cleared so choosing the same file twice still fires a change.
+              event.target.value = '';
+            }}
+            ref={fileInput}
+            type="file"
+          />
+          {/*
+            A drop target, and still a button.
+
+            Dropping is the faster path when the report is already sitting in a
+            folder, but it is undiscoverable on its own and impossible from a
+            keyboard, so the click route stays exactly where it was. The whole
+            zone is the button — a small "browse" link inside a large inert
+            rectangle invites people to click the rectangle and get nothing.
+          */}
+          <button
+            className={cn(
+              'border-border flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 transition-colors',
+              dragging ? 'border-primary bg-primary/5' : 'hover:bg-accent/50',
+              uploading && 'pointer-events-none opacity-70',
+            )}
+            disabled={uploading}
+            onClick={() => fileInput.current?.click()}
+            onDragLeave={(event) => {
+              // Only when the pointer has actually left the zone. Moving over a
+              // child fires dragleave for the parent, which would flicker the
+              // highlight the entire time somebody hovers over it.
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                setDragging(false);
+            }}
+            onDragOver={(event) => {
+              // Both, and every time: without preventDefault the browser
+              // navigates to the file instead, which loses the page.
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              const file = event.dataTransfer.files?.[0];
+              if (file) void upload(file);
+            }}
+            type="button"
+          >
+            {uploading ? <Spinner /> : <UploadIcon className="text-muted-foreground size-5" />}
+            <span className="text-sm font-medium">
               {uploading
                 ? progress === null
                   ? 'Uploading…'
                   : `Uploading… ${Math.round(progress * 100)}%`
-                : 'Choose a report PDF'}
-            </Button>
+                : dragging
+                  ? 'Drop the report to start'
+                  : 'Drop a report PDF here, or click to choose one'}
+            </span>
             {uploading ? (
-              <span className="text-muted-foreground text-sm">
+              <span className="text-muted-foreground text-xs">
                 Keep this page open until the upload finishes.
               </span>
             ) : null}
-          </div>
+          </button>
           {/* Only while bytes are actually moving. `progress` is null before the
               first event and once the file has landed, and a bar sitting at
               100% while the server reads the file would claim progress that is

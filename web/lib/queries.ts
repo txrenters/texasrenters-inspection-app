@@ -108,6 +108,7 @@ export const keys = {
   inspectionImport: (jobId: string) => ['admin', 'inspection-import', jobId] as const,
   activeInspectionImport: (inspectionId: string) =>
     ['admin', 'inspection-import', 'active', inspectionId] as const,
+  runningImports: ['admin', 'inspection-import', 'running'] as const,
   propertyAreas: (id: string) => ['admin', 'property', id, 'areas'] as const,
   units: (id: string) => ['admin', 'units', id] as const,
   leases: (id: string) => ['admin', 'leases', id] as const,
@@ -699,6 +700,36 @@ export interface ImportJob {
  * The reading happens on the server, so this survives the page. Somebody who
  * closes the tab can open it again on the same job and see the result.
  */
+/** One line in the dock: an import still working, anywhere in the console. */
+export interface RunningImport {
+  id: string;
+  inspectionId: string | null;
+  status: ImportJob['status'];
+  /** Read, but nobody has asked for it to be written yet — waiting on a person
+   * rather than on the server, which the dock says out loud. */
+  awaitingReview: boolean;
+  address: string | null;
+  inspectionType: string | null;
+}
+
+/**
+ * Every import still working, across the organization.
+ *
+ * Seeding a backlog means starting an import and going straight to the next
+ * property, so what is running has to be visible from anywhere — a spinner that
+ * only exists on the page that started it is the same mistake as a job id that
+ * only existed inside a dialog.
+ */
+export const useRunningImports = () =>
+  useQuery({
+    queryKey: keys.runningImports,
+    queryFn: ({ signal }) =>
+      api<RunningImport[]>('/api/v1/admin/inspection-imports/running', { signal }),
+    // Only while something is actually running. An idle console polls once and
+    // then stops until a mutation invalidates this.
+    refetchInterval: (query) => (query.state.data?.length ? 3_000 : false),
+  });
+
 /** Is an import running against this inspection, whoever started it? */
 const importIsBusy = (job: ImportJob | null | undefined) => {
   if (!job || job.committedAt) return false;
@@ -1609,6 +1640,9 @@ export function useAdminMutations() {
           { onProgress },
         );
       },
+      // The dialog is about to minimize into the dock, so the dock has to know
+      // there is something to show before the flight lands on an empty corner.
+      onSuccess: () => void client.invalidateQueries({ queryKey: keys.runningImports }),
     }),
 
     /** Write the read report in, once somebody has looked at what it found. */
@@ -1630,6 +1664,9 @@ export function useAdminMutations() {
         // The inspection that was empty now has areas, photographs and
         // condition against every item the report graded.
         void verifyAffectedQueries(client, [keys.all, keys.dashboard]);
+        // And the dock stops showing it as awaiting review, since it no longer
+        // is — the write has been asked for.
+        void client.invalidateQueries({ queryKey: keys.runningImports });
       },
     }),
 

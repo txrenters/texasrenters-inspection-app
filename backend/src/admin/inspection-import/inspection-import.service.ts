@@ -235,6 +235,67 @@ export class InspectionImportService {
    * been the one that started it. Newest first, and only the last one: an
    * inspection is seeded once, so an older job is history rather than state.
    */
+  /**
+   * Every import still working, across the whole organization.
+   *
+   * `activeJob` answers about one inspection, which is enough for the page you
+   * are standing on and useless the moment you leave it. Seeding 134 baselines
+   * means starting an import and immediately going to the next property, so the
+   * console needs to be able to show what is running *anywhere* — otherwise the
+   * only record of an import is a page nobody is looking at, which is the same
+   * mistake the dialog used to make with its job id.
+   *
+   * Carries the address because a list of identical spinners tells nobody which
+   * property finished.
+   */
+  async runningJobs(user: AuthenticatedUser) {
+    const jobs = await this.prisma.inspectionImportJob.findMany({
+      where: {
+        organizationId: user.organizationId,
+        // Reading, or read and now writing. A committed or failed job is
+        // finished and belongs in neither a list of work nor a spinner.
+        status: { in: ['PENDING', 'RUNNING', 'COMPLETED'] },
+        committedAt: null,
+        errorCode: null,
+      },
+      orderBy: { createdAt: 'desc' },
+      // A guard, not a page: more than this many at once is not a longer list,
+      // it is something wrong worth noticing.
+      take: 50,
+      select: { id: true, inspectionId: true, status: true, createdAt: true, updatedAt: true },
+    });
+
+    const inspections = await this.prisma.inspection.findMany({
+      where: { id: { in: jobs.map((job) => job.inspectionId).filter((id): id is string => !!id) } },
+      select: {
+        id: true,
+        inspectionType: true,
+        propertywareBuilding: { select: { addressLine1: true } },
+      },
+    });
+    const byInspection = new Map(inspections.map((inspection) => [inspection.id, inspection]));
+
+    return jobs
+      // A job whose process died is not running, whatever the row says. Same
+      // rule `job` applies, so the two cannot disagree about what is live.
+      .filter((job) => !(job.status === 'RUNNING' && isStale(job.updatedAt)))
+      .map((job) => ({
+        id: job.id,
+        inspectionId: job.inspectionId,
+        status: job.status,
+        // The read is done and the write has not been asked for yet: somebody
+        // has to look at it. Worth distinguishing in a dock, because it is
+        // waiting on a person rather than on the server.
+        awaitingReview: job.status === 'COMPLETED',
+        address: job.inspectionId
+          ? (byInspection.get(job.inspectionId)?.propertywareBuilding?.addressLine1 ?? null)
+          : null,
+        inspectionType: job.inspectionId
+          ? (byInspection.get(job.inspectionId)?.inspectionType ?? null)
+          : null,
+      }));
+  }
+
   async activeJob(user: AuthenticatedUser, inspectionId: string) {
     const job = await this.prisma.inspectionImportJob.findFirst({
       where: { organizationId: user.organizationId, inspectionId },
