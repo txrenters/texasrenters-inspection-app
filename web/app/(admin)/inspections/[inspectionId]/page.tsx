@@ -382,22 +382,25 @@ function InspectionDetail() {
           even while the technician was still capturing, which put an action
           nobody could take yet ahead of the work everybody came for. */}
       <div className="mt-4 space-y-4">
-        {/* A move-in Jobber closed with nothing recorded against it: the walk
+        {/* An inspection closed with nothing recorded against it: the walk
             happened in Inspect & Cloud, so the record arrived here complete and
             empty. Offered only while it is still empty, because importing into
             an inspection that already has evidence would overwrite somebody's
             walkthrough with a document -- the API refuses that too, and a
-            button that only ever errors is worse than no button. */}
-        {item.inspectionType === 'MOVE_IN' &&
-        permissions.has('inspections:manage') &&
-        areas.data?.length === 0 ? (
+            button that only ever errors is worse than no button.
+
+            Every type, not only move-ins. That restriction was scope rather
+            than safety: move-ins were the reason this was built, but an
+            occupied inspection or a move-out walked in the same other system
+            arrives just as empty and is just as importable. */}
+        {permissions.has('inspections:manage') && areas.data?.length === 0 ? (
           <Alert>
             <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
               <span>
-                This move-in has no evidence recorded against it. Import the report if the
-                walkthrough was done outside this app.
+                This {humanize(item.inspectionType).toLowerCase()} inspection has no evidence
+                recorded against it. Import the report if the walkthrough was done outside this app.
               </span>
-              <ImportReportDialog inspectionId={id} />
+              <ImportReportDialog inspectionId={id} inspectionType={item.inspectionType} />
             </AlertDescription>
           </Alert>
         ) : null}

@@ -150,6 +150,17 @@ export class FinalizeInspectionDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(500) overrideReason?: string;
 }
 
+/**
+ * Close an inspection the technician never submitted.
+ *
+ * The reason is **required**, unlike the finalize override: this skips the
+ * submit and review steps entirely, so the only record of why it was closed is
+ * what the person types here.
+ */
+export class CompleteInspectionDto {
+  @IsString() @MinLength(2) @MaxLength(500) reason!: string;
+}
+
 /** Mark an inspection TBD / pending-finalization (spec §11). */
 export class InspectionTbdDto {
   @IsOptional() @IsString() @MaxLength(500) reason?: string;

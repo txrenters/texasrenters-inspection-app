@@ -1707,6 +1707,25 @@ export function useAdminMutations() {
         refreshInspection(variables.id);
       },
     }),
+    /**
+     * Close an inspection the technician never submitted.
+     *
+     * Distinct from finalizing: this does not freeze the evidence, because the
+     * work happened somewhere else and nobody here has reviewed anything. The
+     * ordinary review and finalize path stays open afterwards.
+     */
+    completeInspection: useMutation({
+      mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/complete`, {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        }),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshWorkflow(variables.id);
+      },
+    }),
     finalizeInspection: useMutation({
       mutationFn: ({ id, overrideReason }: { id: string; overrideReason?: string }) =>
         api<AdminInspection>(`/api/v1/admin/inspections/${id}/finalize`, {
