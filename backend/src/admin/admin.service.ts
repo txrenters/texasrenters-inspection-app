@@ -82,6 +82,29 @@ const ACTIVE_INSPECTION_STATUSES: InspectionStatus[] = [
 ];
 
 // An inspection can no longer transition once finalized or cancelled.
+/**
+ * Benefit-package enrolment as the office writes it, reduced to three answers.
+ *
+ * The report holds free text — `Yes`, `No`, `Not Verified` — and the third is a
+ * real third answer, not a missing yes. Seventeen active tenancies carry it and
+ * it means nobody has checked. Anything unrecognised also lands here rather
+ * than being read as a no, because guessing against the office is how a
+ * property ends up billed for a service it never had.
+ */
+function tbpState(value: string | null | undefined): 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED' {
+  const normalized = (value ?? '').trim().toLowerCase();
+  if (normalized === 'yes') return 'ENROLLED';
+  if (normalized === 'no') return 'NOT_ENROLLED';
+  return 'NOT_VERIFIED';
+}
+
+/** One answer for a building, or MIXED when its tenancies disagree. */
+function rollUpTbp(states: Set<string> | undefined) {
+  if (!states?.size) return null;
+  if (states.size > 1) return 'MIXED' as const;
+  return [...states][0] as 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED';
+}
+
 const FROZEN_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.COMPLETED,
   InspectionStatus.CANCELLED,
@@ -1068,6 +1091,38 @@ export class AdminService {
       photoCounts.map((row) => [row.inspectionId, row._count._all]),
     );
 
+    /**
+     * Whether the tenancy at each property is in the benefit package.
+     *
+     * Read from the office's tenancy report, which is the only source that
+     * knows about enrolment — the REST lease endpoint does not expose it.
+     * Joined on the building, because that is the only key the tenant sync
+     * writes; there is no unit on a tenancy row.
+     *
+     * `Not Verified` is carried through as its own answer rather than folded
+     * into "no". Seventeen active tenancies have it, and it means nobody has
+     * checked — which is neither yes nor no, and collapsing it would invent a
+     * fact the office deliberately did not give.
+     */
+    // The scalar id is not in the select — only the relation — so it is read
+    // from there rather than added, which would widen every other consumer.
+    const buildingIds = items
+      .map((item) => item.propertywareBuilding?.id)
+      .filter((id): id is string => Boolean(id));
+    const tenancies = buildingIds.length
+      ? await this.prisma.propertywareTenant.findMany({
+          where: { organizationId: user.organizationId, isActive: true, propertywareBuildingId: { in: buildingIds } },
+          select: { propertywareBuildingId: true, tbpEnrollment: true },
+        })
+      : [];
+    const enrolmentByBuilding = new Map<string, Set<string>>();
+    for (const tenancy of tenancies) {
+      if (!tenancy.propertywareBuildingId) continue;
+      const held = enrolmentByBuilding.get(tenancy.propertywareBuildingId) ?? new Set<string>();
+      held.add(tbpState(tenancy.tbpEnrollment));
+      enrolmentByBuilding.set(tenancy.propertywareBuildingId, held);
+    }
+
     return this.page(
       items.map((item) => ({
         ...item,
@@ -1076,6 +1131,18 @@ export class AdminService {
           findings: item._count.findings,
           photos: photosByInspection.get(item.id) ?? 0,
         },
+        /**
+         * Null when the property has no active tenancy at all — vacant, or a
+         * building the tenancy report does not cover. Deliberately not
+         * "not enrolled": there is nobody to enrol.
+         *
+         * MIXED where a multi-unit building's tenancies disagree. 5009 N Main
+         * St has three, and answering for it with whichever came back first
+         * would be a coin toss presented as a fact.
+         */
+        tbp: item.propertywareBuilding?.id
+          ? (rollUpTbp(enrolmentByBuilding.get(item.propertywareBuilding.id)) ?? null)
+          : null,
       })),
       total,
       query,

@@ -497,6 +497,15 @@ export interface AdminInspection {
    * count says a plan existed rather than that anybody walked the property.
    */
   evidence?: { areas: number; findings: number; photos: number };
+  /**
+   * Benefit-package enrolment for the tenancy at this property.
+   *
+   * Null when there is no active tenancy — vacant, or a property the tenancy
+   * report does not cover. Deliberately not "not enrolled": there is nobody to
+   * enrol. `NOT_VERIFIED` is the office's own third answer, meaning nobody has
+   * checked. `MIXED` is a multi-unit building whose tenancies disagree.
+   */
+  tbp?: 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED' | 'MIXED' | null;
   audit?: Array<{ id: string; action: string; metadata?: unknown; createdAt: string }>;
 }
 
