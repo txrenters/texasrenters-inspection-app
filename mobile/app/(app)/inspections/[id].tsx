@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
@@ -22,6 +22,8 @@ import type { Finding, InspectionRoom } from '@/src/domain/models';
 import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { registerIcons } from '@/src/lib/icons';
 import { formatVisitWindow } from '@/src/utils/visit-window';
+import { applyAreaOrder, loadAreaOrder, saveAreaOrder } from '@/src/areas/area-order';
+import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
@@ -86,7 +88,17 @@ const TONE_TEXT: Record<AreaStatusDescriptor['tone'], string> = {
   danger: 'text-destructive',
 };
 
-function RoomRow({ room, findings }: { room: InspectionRoom; findings: Finding[] }) {
+function RoomRow({
+  room,
+  findings,
+  dragging = false,
+}: {
+  room: InspectionRoom;
+  findings: Finding[];
+  /** Held by the technician right now. Only changes how it looks — a lifted row
+   * needs to read as picked up rather than merely selected. */
+  dragging?: boolean;
+}) {
   // Derived rather than open-coded: a failed upload now surfaces on this row
   // instead of reading as "not started", which is the one state a technician
   // has to act on before leaving the property.
@@ -109,8 +121,12 @@ function RoomRow({ room, findings }: { room: InspectionRoom; findings: Finding[]
         .filter(Boolean)
         .join(', ')}
       accessibilityRole="button"
-      accessibilityHint="Opens this area"
-      className="mx-5 mb-2 min-h-14 overflow-hidden rounded-xl bg-card active:scale-[0.98]"
+      accessibilityHint="Opens this area. Press and hold to move it in the list."
+      className={`mx-5 mb-2 min-h-14 overflow-hidden rounded-xl bg-card ${
+        // No press-scale while held: the row is already lifted by the drag, and
+        // two competing transforms read as a glitch.
+        dragging ? 'border border-primary/40 shadow-lg' : 'active:scale-[0.98]'
+      }`}
       onPress={() => router.push(`/areas/${room.id}`)}
     >
       <View importantForAccessibility="no-hide-descendants" className="flex-row items-center">
@@ -184,7 +200,38 @@ export default function InspectionOverviewScreen() {
   }
 
   const item = inspection.data;
-  const roomList = rooms.data ?? [];
+  /**
+   * The technician's own sequence for this inspection, if they have set one.
+   *
+   * Applied by rewriting `order` rather than sorting here, because three
+   * separate places sort by it — this list, "Up next", and the room the camera
+   * advances to after a capture. Sorting in one would leave somebody looking at
+   * their order while the app kept offering the server's.
+   */
+  const [areaOrder, setAreaOrder] = useState<string[]>([]);
+  const [draggingArea, setDraggingArea] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void loadAreaOrder(id).then((saved) => {
+      if (!cancelled) setAreaOrder(saved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const reorderAreas = useCallback(
+    async (ids: string[]) => {
+      // Applied immediately and persisted after. A reorder that waited on
+      // storage would feel broken on a slow handset, and the write is one small
+      // key — there is nothing to roll back if it fails.
+      setAreaOrder(ids);
+      await saveAreaOrder(id, ids);
+    },
+    [id],
+  );
+
+  const roomList = applyAreaOrder(rooms.data ?? [], areaOrder);
   const findingList = findings.data ?? [];
   // pickUpNextArea outranks a plain "first unfinished": it surfaces failed
   // uploads and ready-to-complete areas ahead of untouched required work.
@@ -209,6 +256,9 @@ export default function InspectionOverviewScreen() {
       <ScrollView
         className="flex-1"
         contentContainerStyle={{ paddingBottom: 132 }}
+        // Off while a row is held, so a single finger cannot scroll the list and
+        // rearrange it at the same time.
+        scrollEnabled={!draggingArea}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -366,9 +416,27 @@ export default function InspectionOverviewScreen() {
               {rooms.error instanceof Error ? rooms.error.message : 'Could not load areas.'}
             </Text>
           ) : null}
-          {roomList.map((room) => (
-            <RoomRow key={room.id} room={room} findings={findingList} />
-          ))}
+          {/*
+            Reorderable while the inspection is still the technician's to work.
+            Once it is submitted the sequence is history, and letting somebody
+            shuffle a finished list would imply it still meant something.
+
+            The order is theirs alone — stored on this handset, never sent to
+            the server, and it does not touch the property layout the office
+            approved. What it does change is what the app offers next, which is
+            the point: a technician who decides to start upstairs should not be
+            sent back down by "Up next".
+          */}
+          <ReorderableAreaList
+            enabled={canAddArea}
+            items={roomList}
+            keyOf={(room) => room.id}
+            onDragStateChange={setDraggingArea}
+            onReorder={(ids) => void reorderAreas(ids)}
+            renderItem={(room, { dragging }) => (
+              <RoomRow dragging={dragging} findings={findingList} room={room} />
+            )}
+          />
         </View>
 
         {!roomList.length && !rooms.isLoading ? (
