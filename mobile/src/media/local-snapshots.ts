@@ -20,6 +20,16 @@ type RoomSnapshotInput = {
   captureSource?: SnapshotCaptureSource;
   sequenceNumber?: number;
   findingId?: string;
+  /**
+   * When this photograph becomes due to upload.
+   *
+   * Set to a moment shortly in the future for a shot taken at the shutter, so
+   * the technician can throw away a test frame before anything is sent.
+   * `snapshotsAwaitingUpload` already skips whatever is not yet due, so a held
+   * photograph needs no new state. Absent means due now, which is what a frame
+   * cut out of a finished recording wants.
+   */
+  nextAttemptAt?: string;
 };
 
 export function buildRoomSnapshot({
@@ -36,6 +46,7 @@ export function buildRoomSnapshot({
   captureSource = 'SEPARATE_PHOTO_CAPTURE',
   sequenceNumber,
   findingId,
+  nextAttemptAt,
 }: RoomSnapshotInput): RoomSnapshot {
   return {
     // Doubles as the upload idempotency key (matches ^[A-Za-z0-9_-]{8,128}$).
@@ -54,6 +65,7 @@ export function buildRoomSnapshot({
     captureSource,
     sequenceNumber,
     findingId,
+    nextAttemptAt,
     uploadStatus: 'PENDING',
   };
 }

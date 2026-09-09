@@ -21,6 +21,7 @@ import {
 } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Image,
   Linking,
   Platform,
   Pressable,
@@ -63,10 +64,14 @@ import {
 import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
-import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
+import {
+  buildRoomSnapshot,
+  deleteRoomSnapshot,
+  persistRoomSnapshot,
+} from '@/src/media/local-snapshots';
 import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
 import { pickPictureSize } from '@/src/media/picture-size';
-import { uploadSnapshotNow } from '@/src/media/snapshot-upload';
+import { PHOTO_REVIEW_WINDOW_MS, reviewWindowEnd } from '@/src/media/snapshot-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -227,6 +232,9 @@ export default function RoomCameraScreen() {
   const [facing, setFacing] = useState<CameraType>('back');
   const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
   const [photoCount, setPhotoCount] = useState(0);
+  /** The shot just taken, while it is still held from upload. */
+  const [discardable, setDiscardable] = useState<RoomSnapshot | null>(null);
+  const discardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   // A count, not a flag: two shutter taps in a row have to be distinguishable
   // or the second renders the same value and nothing flashes.
@@ -252,7 +260,7 @@ export default function RoomCameraScreen() {
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
-  const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
+  const removeSnapshots = useDemoStore((state) => state.removeSnapshots);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
   // Persisted per area rather than held on this screen: coverage used to be
   // component state, so stepping out to review a recording and coming back lost
@@ -617,12 +625,59 @@ export default function RoomCameraScreen() {
     setConfirmStopOpen(true);
   };
 
-  // Sending it here is a head start, not the guarantee. A failure records why
-  // and when to try again, and the upload runner picks it up from there —
-  // this used to be a bare catch that marked the photo FAILED and left the
-  // JPEG on the device with nothing anywhere to re-send it.
-  const uploadSnapshot = (snapshot: RoomSnapshot) =>
-    uploadSnapshotNow(snapshot, { update: updateSnapshot });
+  /**
+   * There is no send-from-here any more.
+   *
+   * This screen used to fire the upload itself as a head start. It cannot now:
+   * a photograph is held for the review window so a test shot can be discarded
+   * before it leaves the device, and `UploadQueueRunner` is what sends it once
+   * it comes due. Sending from two places would defeat the hold from one of
+   * them.
+   */
+
+  /**
+   * Offers the shot just taken back, for as long as it is held from upload.
+   *
+   * A second photograph replaces the offer rather than stacking one. The
+   * control is about the shot in front of the technician; anything older is the
+   * area screen's business, and a growing row of thumbnails over a live camera
+   * is the opposite of what a fifteen-minute visit needs.
+   */
+  const showDiscardable = (snapshot: RoomSnapshot) => {
+    if (discardTimer.current) clearTimeout(discardTimer.current);
+    setDiscardable(snapshot);
+    discardTimer.current = setTimeout(() => {
+      // Only clears the offer. The photograph is already in the store and the
+      // queue sends it the moment it comes due, whether this screen is still
+      // open or not.
+      if (mountedRef.current) setDiscardable(null);
+    }, PHOTO_REVIEW_WINDOW_MS);
+  };
+
+  /**
+   * Throws the held photograph away, before anything has been sent.
+   *
+   * Local in every sense: the row leaves the store and the JPEG leaves the
+   * device. Nothing has reached the server yet — which is the point of holding
+   * it — so there is nothing to un-send and no round trip to wait on.
+   *
+   * The counters go back too. `photoCount` drives the capture summary attached
+   * to the recording, and `snapshotTypesRef` feeds `evidenceComplete`; leaving
+   * either would tell the reviewer about a photograph that does not exist.
+   */
+  const discardPhoto = () => {
+    const snapshot = discardable;
+    if (!snapshot) return;
+    if (discardTimer.current) clearTimeout(discardTimer.current);
+    setDiscardable(null);
+    removeSnapshots([snapshot.id]);
+    deleteRoomSnapshot(snapshot.uri);
+    setPhotoCount((count) => Math.max(0, count - 1));
+    const types = snapshotTypesRef.current;
+    const last = types.lastIndexOf(snapshot.captureType ?? 'AREA_OVERVIEW');
+    if (last >= 0) types.splice(last, 1);
+    announce('Photo discarded.');
+  };
 
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
@@ -676,8 +731,22 @@ export default function RoomCameraScreen() {
             ? 'NATIVE_STILL_DURING_VIDEO'
             : 'SEPARATE_PHOTO_CAPTURE',
         sequenceNumber: photoCount + 1,
+        /**
+         * Not due to send yet.
+         *
+         * The shutter and the upload used to be the same act, so a test shot —
+         * checking the light, checking the lens — was filed as evidence before
+         * the technician had looked at it. `snapshotsAwaitingUpload` already
+         * skips anything not yet due, so the hold needs no new state and the
+         * queue needs no new rule.
+         */
+        nextAttemptAt: reviewWindowEnd(),
       });
       addSnapshot(snapshot);
+      // Offer it back for as long as it is held. A second photograph replaces
+      // the offer rather than stacking one: the control is about the shot just
+      // taken, and anything older belongs to the area screen.
+      showDiscardable(snapshot);
       // Feeds evidenceComplete/snapshotCount in the capture summary.
       snapshotTypesRef.current.push(captureType);
       setPhotoCount((count) => count + 1);
@@ -692,7 +761,14 @@ export default function RoomCameraScreen() {
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
         }`,
       );
-      void uploadSnapshot(snapshot);
+      /**
+       * Deliberately not uploaded here.
+       *
+       * `UploadQueueRunner` picks it up once the review window passes, which is
+       * what makes the discard control mean anything — sending it now and
+       * deleting it afterwards would put a test shot on the server and take a
+       * round trip to remove it.
+       */
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
     } finally {
@@ -942,6 +1018,37 @@ export default function RoomCameraScreen() {
               read as unrelated groups and pushed the controls into the framing
               grid. Equal thirds keep record optically centred whatever the side
               captions say. */}
+          {/*
+            The shot just taken, while it is still held from upload.
+            
+            Above the controls rather than beside them: it is a transient offer,
+            and putting it in the row would move the shutter every time a
+            photograph is taken. Absent once the photograph is committed, which
+            is also the only signal that it has been.
+          */}
+          {discardable ? (
+            <View className="mb-3 w-full flex-row items-center gap-3 rounded-xl bg-black/55 p-2">
+              <Image
+                accessibilityIgnoresInvertColors
+                className="h-12 w-12 rounded-lg"
+                resizeMode="cover"
+                source={{ uri: discardable.uri }}
+              />
+              <Text className="min-w-0 flex-1 text-xs leading-4 text-white/85">
+                Saved. Not sent yet — discard it if that was a test shot.
+              </Text>
+              <Pressable
+                accessibilityHint="Deletes it from this device. Nothing has been sent."
+                accessibilityLabel="Discard the photo just taken"
+                accessibilityRole="button"
+                className={`min-h-11 justify-center rounded-lg border border-white/40 px-3 ${PRESS_SURFACE}`}
+                onPress={discardPhoto}
+              >
+                <Text className="text-xs font-semibold text-white">Discard</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <View className="w-full flex-row items-start justify-between">
             <View className="flex-1 items-center">
               <Pressable
