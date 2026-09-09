@@ -60,6 +60,27 @@ export function snapshotsAwaitingUpload(
       // still owed, and the idempotency key makes a duplicate attempt safe.
       if (snapshot.attempts !== undefined && snapshot.attempts >= MAX_AUTOMATIC_ATTEMPTS)
         return false;
+      /**
+       * A permanent refusal is finished, however few attempts it took.
+       *
+       * `retryPlanFor` answers `permanent` for any 4xx that is not 408 or 429 —
+       * a duplicate, or a finalized inspection — and `uploadSnapshotNow` records
+       * that by clearing `nextAttemptAt`. But an absent `nextAttemptAt` also
+       * means "due now", which is how a fresh capture is marked, so the two were
+       * indistinguishable and a photograph the server had refused outright came
+       * back due on every single pass, for ever.
+       *
+       * It has to be read together with FAILED. A snapshot that has never been
+       * attempted is not FAILED, so it still reads as due, which is the whole
+       * point of the absent value.
+       *
+       * This was survivable while the runner sent one photograph per tick — a
+       * doomed request every four seconds, wasteful and invisible. It stops
+       * being survivable the moment the queue drains, because the doomed item
+       * sorts first by capture time and would be retried on every iteration of
+       * the drain while the photographs behind it waited.
+       */
+      if (snapshot.uploadStatus === 'FAILED' && !snapshot.nextAttemptAt) return false;
       if (!snapshot.nextAttemptAt) return true;
       return new Date(snapshot.nextAttemptAt).getTime() <= now;
     })
