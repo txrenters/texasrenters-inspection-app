@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { ImportDockProvider } from './import-dock';
+import { ImportDockProvider, useImportDock } from './import-dock';
 import type { RunningImport } from '@/lib/queries';
 
 /**
@@ -61,19 +61,75 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
+/** Stands in for the import dialog, which hands its file over and closes. */
+function Hander() {
+  const dock = useImportDock();
+  return (
+    <button
+      onClick={() =>
+        dock?.upload({
+          inspectionId: 'inspection-2',
+          address: '12009 Tambourine',
+          file: new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' }),
+        })
+      }
+      type="button"
+    >
+      hand over
+    </button>
+  );
+}
+
 describe('what the drawer shows', () => {
-  it('renders nothing but an anchor when nothing is happening', () => {
-    // An empty drawer is still a rectangle over the corner where this console
-    // puts its form buttons. There is nothing to report, so there is nothing
-    // there — only the invisible target the minimise animation flies into.
+  it('still offers its handle when nothing is happening', () => {
+    /**
+     * It used to render nothing at all when idle, which made the drawer
+     * unfindable: the only way to see running imports was to already have one
+     * running. Somebody who started an import, walked to the next property and
+     * came back had no way left to ask what had happened to it.
+     */
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByRole('button', { name: /show imports/i })).toBeTruthy();
+    // Nothing is running, so nothing claims to be.
     expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('says so rather than opening onto a blank panel', () => {
+    // Opening the drawer asks "is anything still going?", and an empty box
+    // does not answer it — it reads as something that failed to load.
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /show imports/i }));
+    expect(screen.getByText(/no imports running/i)).toBeTruthy();
+  });
+
+  it('opens itself when a file is handed over here', async () => {
+    // The dialog closes as soon as it has the file, so without this the whole
+    // visible result of choosing a report is a dialog disappearing while the
+    // bytes go up behind a closed drawer.
+    render(
+      <ImportDockProvider>
+        <Hander />
+      </ImportDockProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /hand over/i }));
+    expect(await screen.findByText('12009 Tambourine')).toBeTruthy();
+  });
+
+  it('starts closed, so an idle drawer does not sit over the page', () => {
+    // The old default was open-unless-closed, which was right while the dock
+    // vanished when idle. Now that the handle is permanent, that default puts
+    // a panel over the right-hand side of every page saying nothing is
+    // happening.
+    imports = [job()];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
+    expect(screen.getByRole('button', { name: /show 1 import in progress/i })).toBeTruthy();
   });
 
   it('shows a report being read', () => {
     imports = [job()];
     render(<ImportDockProvider>page</ImportDockProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
     expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
     expect(screen.getByText(/reading the report/i)).toBeTruthy();
   });
@@ -83,28 +139,30 @@ describe('what the drawer shows', () => {
     // claim two things are happening when one already stopped.
     imports = [job({ id: 'done', state: 'IMPORTED' }), job({ id: 'busy', state: 'READING' })];
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.getByText(/1 import in progress/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /show 1 import in progress/i })).toBeTruthy();
   });
 
-  it('closes to a handle and comes back', () => {
+  it('opens to a list and closes back to a handle', () => {
     imports = [job()];
     render(<ImportDockProvider>page</ImportDockProvider>);
-
-    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
-    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
     expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
+    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
   });
 
-  it('remembers being closed across a reload', () => {
+  it('remembers being opened across a reload', () => {
+    // The preference is the whole reason storage is touched at all: somebody
+    // watching a backlog land should not have to reopen this on every route.
     imports = [job()];
     const first = render(<ImportDockProvider>page</ImportDockProvider>);
-    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
+    fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
     first.unmount();
 
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.getByRole('button', { name: /show 1 import in progress/i })).toBeTruthy();
+    expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
   });
 
   it('survives storage being unavailable', () => {
