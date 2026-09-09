@@ -104,3 +104,62 @@ describe('which photos the device still owes the server', () => {
     ]);
   });
 });
+
+describe('a photograph the server refused outright', () => {
+  const now = Date.parse('2026-08-26T12:00:00.000Z');
+
+  /**
+   * The bug this pins. `retryPlanFor` answers `permanent` for a 409, and
+   * `uploadSnapshotNow` records that by clearing `nextAttemptAt` — but an
+   * absent `nextAttemptAt` also means "due now". So a photograph the server had
+   * refused outright came back due on every pass, for ever, after a single
+   * attempt.
+   *
+   * Survivable at one photograph per four seconds. Not survivable once the
+   * queue drains: the doomed item sorts first by capture time, so it would be
+   * retried on every iteration while the photographs behind it waited.
+   */
+  it('is not owed again once it has been refused', () => {
+    const refused = snapshot({
+      id: 'refused',
+      uploadStatus: 'FAILED',
+      attempts: 1,
+      lastError: 'This photo key was already used for another area.',
+      nextAttemptAt: undefined,
+    });
+    expect(snapshotsAwaitingUpload([refused], now)).toEqual([]);
+  });
+
+  it('does not hold up the photographs captured after it', () => {
+    const refused = snapshot({
+      id: 'refused',
+      capturedAt: '2026-08-26T11:00:00.000Z',
+      uploadStatus: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: undefined,
+    });
+    const waiting = snapshot({ id: 'waiting', capturedAt: '2026-08-26T11:30:00.000Z' });
+    expect(snapshotsAwaitingUpload([refused, waiting], now).map((item) => item.id)).toEqual([
+      'waiting',
+    ]);
+  });
+
+  it('still owes a photograph that has never been attempted', () => {
+    // The other half of the same rule. An absent `nextAttemptAt` is how a fresh
+    // capture is marked, and reading it as "finished" would mean nothing was
+    // ever uploaded at all.
+    expect(snapshotsAwaitingUpload([snapshot({ id: 'fresh' })], now).map((item) => item.id)).toEqual(
+      ['fresh'],
+    );
+  });
+
+  it('still owes one that failed and is waiting to be retried', () => {
+    const retrying = snapshot({
+      id: 'retrying',
+      uploadStatus: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: '2026-08-26T11:59:00.000Z',
+    });
+    expect(snapshotsAwaitingUpload([retrying], now).map((item) => item.id)).toEqual(['retrying']);
+  });
+});

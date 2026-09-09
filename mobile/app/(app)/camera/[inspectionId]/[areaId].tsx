@@ -63,6 +63,7 @@ import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
 import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
+import { pickPictureSize } from '@/src/media/picture-size';
 import { uploadSnapshotNow } from '@/src/media/snapshot-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
@@ -170,6 +171,15 @@ export default function RoomCameraScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
+  /**
+   * Which of the camera's offered sizes stills are captured at.
+   *
+   * Undefined until the camera is mounted and has answered, and undefined for
+   * good on a device that reports presets by name rather than by resolution.
+   * Both leave the prop unset and the device at its default, which is what this
+   * screen did before any of this existed.
+   */
+  const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -245,6 +255,27 @@ export default function RoomCameraScreen() {
       camera?.stopRecording();
     };
   }, [camera]);
+
+  /**
+   * Ask the camera what sizes it offers, once it is mounted and ready.
+   *
+   * Never fatal. A device that refuses the question, or answers with presets
+   * this cannot read, keeps its default capture size — a photograph that is
+   * larger than we wanted is worth far more than one that was never taken.
+   */
+  useEffect(() => {
+    if (!camera || !ready) return;
+    let cancelled = false;
+    void camera
+      .getAvailablePictureSizesAsync()
+      .then((sizes) => {
+        if (!cancelled && mountedRef.current) setPictureSize(pickPictureSize(sizes));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [camera, ready]);
 
   // Haptic tick at each quarter of the clockwise loop, heavy at completion —
   // progress a technician can feel without looking away from the room.
@@ -623,6 +654,14 @@ export default function RoomCameraScreen() {
         mode="video"
         mute={false}
         videoQuality="720p"
+        /**
+         * Capture at roughly 2048 on the long edge, not at the sensor's full
+         * twelve megapixels. Undefined until the camera has told us what it
+         * offers, and undefined for ever on a device whose sizes we cannot
+         * read — both of which leave the prop unset, which is the behaviour
+         * this screen had before.
+         */
+        pictureSize={pictureSize}
         onCameraReady={() => setReady(true)}
         onMountError={(event) => setError(event.message)}
       />
