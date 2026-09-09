@@ -37,18 +37,61 @@
  * overwrites a layout that already exists.
  */
 
+/**
+ * Every member of the app's `AreaCategory`, spelled out.
+ *
+ * This field was `string | null`, and that is how four categories that do not
+ * exist — LIVING, KITCHEN, BEDROOM, BATHROOM — reached production. Nothing
+ * could catch them: the type accepted any string, the backend cast it to
+ * `AreaCategory` on the way to Prisma, and the cast silenced the one check that
+ * would have failed. It surfaced as a runtime
+ * `Invalid value for argument 'category'. Expected AreaCategory.` on the first
+ * property the seeder touched.
+ *
+ * Kept as a literal union rather than an import because `shared` deliberately
+ * does not depend on `@prisma/client`. The union can still drift from the
+ * schema, so `standard-layout-categories.spec.ts` in the backend — where the
+ * real enum *is* importable — asserts the two agree.
+ */
+export type AreaCategoryName =
+  | 'INDOOR_ROOM'
+  | 'HALLWAY'
+  | 'STAIRWAY'
+  | 'CLOSET'
+  | 'UTILITY'
+  | 'GARAGE'
+  | 'ATTIC'
+  | 'BASEMENT'
+  | 'BALCONY'
+  | 'PATIO'
+  | 'PORCH'
+  | 'DRIVEWAY'
+  | 'YARD'
+  | 'EXTERIOR_WALL'
+  | 'ROOF'
+  | 'PERIMETER_FENCE'
+  | 'GATE'
+  | 'POOL'
+  | 'SHED'
+  | 'OTHER_OUTDOOR'
+  | 'OTHER';
+
 export interface StandardLayoutArea {
   name: string;
   environment: 'INDOOR' | 'OUTDOOR' | 'SEMI_OUTDOOR';
   /**
-   * Set explicitly rather than left to the name rules.
+   * Deliberately unspecific for ordinary rooms, and that is not laziness.
    *
-   * `checklistTemplateFor` treats a set category as authoritative and only
-   * parses the name when the category is unspecific. Naming these here means
-   * the generated checklist for "Main Bathroom" cannot drift if the name rules
-   * are ever reordered.
+   * `checklistTemplateFor` treats a set category as **authoritative** and only
+   * reads the name when the category says nothing useful. `INDOOR_ROOM` has no
+   * entry in `CATEGORY_ALIASES`, so it falls through to the name rules — which
+   * is how "Main Bathroom" reaches the bathroom list and "Kitchen" the kitchen
+   * one. `classifyAreaByName` makes the same choice for the same reason.
+   *
+   * Set it only where the enum genuinely carries the answer and the name does
+   * not: HALLWAY, UTILITY for a laundry, GARAGE for a garage.
    */
-  category: string | null;
+  category: AreaCategoryName | null;
   /**
    * Whether an occupied visit counts this room toward completion.
    *
@@ -85,17 +128,20 @@ export interface StandardLayoutArea {
  * name below now matches a heading on that report.
  */
 export const STANDARD_PROPERTY_LAYOUT: readonly StandardLayoutArea[] = [
-  { name: 'Entrance', environment: 'INDOOR', category: null, isRequired: false },
-  { name: 'Living Room', environment: 'INDOOR', category: 'LIVING', isRequired: true },
-  { name: 'Kitchen', environment: 'INDOOR', category: 'KITCHEN', isRequired: true },
-  { name: 'Dining Area', environment: 'INDOOR', category: 'LIVING', isRequired: false },
-  { name: 'Main Bedroom', environment: 'INDOOR', category: 'BEDROOM', isRequired: true },
-  { name: 'Main Bathroom', environment: 'INDOOR', category: 'BATHROOM', isRequired: true },
+  // `INDOOR_ROOM` throughout, which is what sends each of these to the name
+  // rules: there is no LIVING, KITCHEN, BEDROOM or BATHROOM in `AreaCategory`,
+  // and the checklist reads "Main Bathroom" perfectly well without one.
+  { name: 'Entrance', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: false },
+  { name: 'Living Room', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: true },
+  { name: 'Kitchen', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: true },
+  { name: 'Dining Area', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: false },
+  { name: 'Main Bedroom', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: true },
+  { name: 'Main Bathroom', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: true },
   // Optional from here down: a one-bedroom property has none of them, and an
   // area a technician must skip on every visit teaches them to skip areas.
-  { name: 'Bedroom 2', environment: 'INDOOR', category: 'BEDROOM', isRequired: false },
-  { name: 'Bathroom 2', environment: 'INDOOR', category: 'BATHROOM', isRequired: false },
-  { name: 'Bedroom 3', environment: 'INDOOR', category: 'BEDROOM', isRequired: false },
+  { name: 'Bedroom 2', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: false },
+  { name: 'Bathroom 2', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: false },
+  { name: 'Bedroom 3', environment: 'INDOOR', category: 'INDOOR_ROOM', isRequired: false },
   { name: 'Hallway', environment: 'INDOOR', category: 'HALLWAY', isRequired: false },
   { name: 'Laundry', environment: 'INDOOR', category: 'UTILITY', isRequired: false },
   // Semi-outdoor with an explicit GARAGE category. The category has to be set:
