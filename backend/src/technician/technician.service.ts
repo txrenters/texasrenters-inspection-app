@@ -13,6 +13,7 @@ import { rm } from 'node:fs/promises';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  AreaChecklistItemKind,
   EvidenceRequestStatus,
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
@@ -796,23 +797,41 @@ export class TechnicianService {
     /**
      * The checklist for the area the technician just described.
      *
-     * Resolved before the transaction opens, not while it is held — this now
-     * makes a provider call, and a transaction left open across one would be
-     * dropped by the pooler long before it returned.
+     * Resolved before the transaction opens, not while it is held — the
+     * generator makes a provider call, and a transaction left open across one
+     * would be dropped by the pooler long before it returned.
      *
      * The same generator the floor-plan path uses, so an area surveyed on site
-     * gets the same quality of list as one extracted from a plan. Without this
-     * it fell back to the tables applied by room *kind*, and a staircase added
-     * in the field was still asked about its doors and locks.
+     * gets the same quality of list as one extracted from a plan. Without it
+     * the list fell back to the tables applied by room *kind*, and a staircase
+     * added in the field was still asked about its doors and locks.
      *
      * Never fatal: every failure inside `generate` yields the table list for
      * that area, so a technician with no signal still gets a checklist.
+     *
+     * ── WHY THE VISIT TYPE DECIDES WHETHER THE MODEL IS ASKED ────────────────
+     *
+     * Only a ROOM visit reads a per-area list. An occupied visit reads the
+     * organization's short list and an HVAC visit the equipment one — both
+     * stored once with a null area — and a lockbox visit reads nothing at all.
+     * So on any of those the rows written below are for *later* inspections of
+     * this property, not for the technician standing in the room.
+     *
+     * Which makes the provider call pure latency in front of somebody who will
+     * never see its output. An occupied inspection is walked in about fifteen
+     * minutes; waiting on a model to describe a closet nobody is going to be
+     * asked about is exactly the kind of delay that budget cannot absorb. The
+     * deterministic table gives the same rows for free, and an administrator
+     * can regenerate a better list later from the console.
      */
     const newArea = { name, category: input.category ?? null, environment: input.environment };
-    const configuration = await this.aiSettings
-      ?.resolve(user.organizationId)
-      .catch(() => undefined);
-    const generated = await this.checklistAi?.generate([newArea], configuration ?? undefined);
+    const visitReadsThisList = checklistKindFor(inspection.inspectionType) === 'ROOM';
+    const configuration = visitReadsThisList
+      ? await this.aiSettings?.resolve(user.organizationId).catch(() => undefined)
+      : undefined;
+    const generated = visitReadsThisList
+      ? await this.checklistAi?.generate([newArea], configuration ?? undefined)
+      : undefined;
     const templateItems: string[] = generated?.items[0]?.length
       ? generated.items[0]
       : checklistTemplateFor(newArea);
@@ -855,6 +874,16 @@ export class TechnicianService {
             createMany: {
               data: templateItems.map((label, index) => ({
                 organizationId: user.organizationId,
+                /**
+                 * Stated, not left to the column default.
+                 *
+                 * These are room questions whatever visit happened to add the
+                 * area, and the reader filters on `kind` — so an implicit
+                 * default is a silent bet that the default never changes. It is
+                 * also the field that decides whether the technician who just
+                 * typed this room sees these rows or the organization's list.
+                 */
+                kind: AreaChecklistItemKind.ROOM,
                 label,
                 // Derived from the label, exactly as an administrator-authored
                 // item is — the matcher does not care where the words came from.
