@@ -574,7 +574,10 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
 }
 
 const getJson = (path: string) => requestJson(path);
-const writeJson = (path: string, method: 'POST' | 'PATCH' | 'PUT', body?: object) =>
+// DELETE joins the three writers rather than getting a helper of its own: it
+// is the same request with the same auth, retry and error handling, and a
+// second implementation is how two paths drift apart.
+const writeJson = (path: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', body?: object) =>
   requestJson(path, { method, body: body ? JSON.stringify(body) : undefined });
 /**
  * The same request path a queued write took when it first failed, exported so
@@ -920,6 +923,20 @@ export class ApiInspectionRepository implements InspectionRepository {
     );
     await this.persistRoom(room);
     return room;
+  }
+  /**
+   * Not queued offline like a skip or a note.
+   *
+   * A removal is refused outright when the area holds evidence, and that
+   * refusal is the point — queuing it would report success on the handset and
+   * fail silently later, against exactly the guard that protects a
+   * technician's own work.
+   */
+  async removeRoom(roomId: string) {
+    return (await writeJson(
+      `/api/v1/technician/rooms/${encodeURIComponent(roomId)}`,
+      'DELETE',
+    )) as { id: string; removed: boolean; name: string };
   }
   async skipRoom(roomId: string, reason?: string) {
     const room = roomSchema.parse(

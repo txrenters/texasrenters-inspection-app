@@ -3,6 +3,7 @@ import {
   checklistTemplateFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  STANDARD_LAYOUT_SOURCE,
   inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
@@ -1394,6 +1395,136 @@ export class TechnicianService {
     });
     this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(await this.assignedRoom(user, roomId));
+  }
+
+  /**
+   * Takes an area off this inspection, at the request of the person standing
+   * in the property.
+   *
+   * The symmetric half of `createArea`. That method approves a
+   * technician-added area on sight, reasoning that somebody standing in a room
+   * is better evidence of the layout than an administrator reading a plan in an
+   * office. The same is true of a room that is not there: a standard-template
+   * layout offers Bedroom 3 to every property, and on a two-bedroom house that
+   * is a room the technician would otherwise skip on every visit for ever.
+   *
+   * Every inspection type, deliberately — a move-out is as capable of listing a
+   * room the property does not have as an occupied visit is.
+   *
+   * ── WHAT THIS WILL NOT DO ────────────────────────────────────────────────
+   *
+   * Remove an area holding anything. A recording, a photograph, a finding or a
+   * scored checklist item all mean somebody has already recorded evidence
+   * against this room, and deleting it would destroy that work — including the
+   * technician's own. Skipping exists for "cannot inspect this"; removal is for
+   * "this is not a room here", and the two must not be reachable from the same
+   * mistake.
+   *
+   * Nor does it touch a layout somebody surveyed. The property's `PropertyArea`
+   * survives unless it is a `STANDARD_TEMPLATE` guess that nothing else refers
+   * to any more — in which case it is archived, because otherwise the same
+   * invented room returns on the next visit and the technician removes it
+   * again. An imported or extracted layout is a record; this is a correction to
+   * this walkthrough, and the office keeps the last word on the plan.
+   */
+  async removeArea(user: AuthenticatedUser, roomId: string) {
+    const room = await this.assignedRoom(user, roomId);
+
+    // `finalizedAt`, not status alone — the same rule as renaming an area and
+    // deleting a photo. A reopen must not reopen the shape of an inspection
+    // behind a report that has been closed and possibly shared.
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: room.inspectionId },
+      select: { status: true, finalizedAt: true, inspectionType: true },
+    });
+    if (
+      inspection?.finalizedAt ||
+      inspection?.status === InspectionStatus.COMPLETED ||
+      inspection?.status === InspectionStatus.CANCELLED
+    )
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Areas cannot be changed after the inspection is finalized.',
+      );
+
+    /**
+     * Findings are counted by `propertyAreaId`, not `inspectionAreaId`.
+     *
+     * `InspectionFinding` has no link to the inspection *area* — it points at
+     * the property area and the inspection separately. Counting the wrong one
+     * would report zero for a room full of findings and delete it.
+     */
+    const [recordings, photographs, findings, answers] = await Promise.all([
+      this.prisma.inspectionMedia.count({ where: { inspectionAreaId: roomId } }),
+      this.prisma.inspectionPhoto.count({ where: { inspectionAreaId: roomId } }),
+      this.prisma.inspectionFinding.count({
+        where: { inspectionId: room.inspectionId, propertyAreaId: room.propertyAreaId },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.count({ where: { inspectionAreaId: roomId } }),
+    ]);
+    if (recordings || photographs || findings || answers)
+      throw new ApplicationError(
+        409,
+        'AREA_HAS_EVIDENCE',
+        'This area already has evidence recorded against it. Skip it instead, or ask the office to remove it.',
+      );
+
+    const areaName = room.propertyArea.name;
+    await this.prisma.$transaction(async (tx) => {
+      // Status history and upload sessions restrict rather than cascade, so
+      // they are cleared explicitly — the same order the report import uses
+      // when it drops a room a report did not mention.
+      await tx.inspectionAreaStatusHistory.deleteMany({ where: { inspectionAreaId: roomId } });
+      await tx.mediaUploadSession.deleteMany({ where: { inspectionAreaId: roomId } });
+      await tx.inspectionArea.delete({ where: { id: roomId } });
+
+      /**
+       * Archive the guess, once nothing points at it.
+       *
+       * Only a `STANDARD_TEMPLATE` row, and only when no other inspection still
+       * holds it — `AREA_IN_USE` exists to stop a layout being pulled out from
+       * under a visit somebody is walking. Archived rather than deleted so the
+       * office can see what was corrected and put it back.
+       */
+      const remaining = await tx.inspectionArea.count({
+        where: { propertyAreaId: room.propertyAreaId },
+      });
+      if (!remaining)
+        await tx.propertyArea.updateMany({
+          where: {
+            id: room.propertyAreaId,
+            source: STANDARD_LAYOUT_SOURCE,
+            archivedAt: null,
+          },
+          data: { archivedAt: new Date() },
+        });
+
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'TECHNICIAN_AREA_REMOVED',
+          entityType: 'InspectionArea',
+          entityId: roomId,
+          metadata: {
+            inspectionId: room.inspectionId,
+            propertyAreaId: room.propertyAreaId,
+            name: areaName,
+            /**
+             * A move-in and a move-out are compared area by area, and an area
+             * missing from one end drops out of the comparison silently. The
+             * removal is still allowed — the technician is the one who can see
+             * the room — but the record has to say the comparison changed, the
+             * same flag the admin add-areas route writes.
+             */
+            comparisonAffected: inspectionRequiresEveryArea(inspection?.inspectionType),
+          },
+        },
+      });
+    });
+    this.notifyInspectionChanged(user, room.inspectionId);
+    return { id: roomId, removed: true, name: areaName };
   }
 
   async room(user: AuthenticatedUser, id: string) {

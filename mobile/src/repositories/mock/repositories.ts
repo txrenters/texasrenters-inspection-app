@@ -295,6 +295,10 @@ export class MockInspectionRepository implements InspectionRepository {
     useDemoStore.getState().updateRoom(roomId, { note });
     return this.room(roomId);
   }
+  async removeRoom(roomId: string) {
+    const room = await this.room(roomId);
+    return { id: roomId, removed: true, name: room.name };
+  }
   async skipRoom(roomId: string, reason?: string) {
     // The reason is optional now, and the refusal that used to live here went
     // with it: skipping is confirmed, not justified. See `TechnicianReasonDto`.

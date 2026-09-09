@@ -153,6 +153,7 @@ export default function AreaDetailScreen() {
   const [editOpen, setEditOpen] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   if (room.isLoading || !room.data) {
     return (
@@ -198,6 +199,17 @@ export default function AreaDetailScreen() {
   // and no video still has evidence, and hiding it because there is no video
   // would be telling them nothing was saved.
   const hasEvidence = hasRecording || areaSnapshots.length > 0;
+  /**
+   * Anything at all recorded against this area, including on the server.
+   *
+   * Wider than `hasEvidence` above, which asks whether there is something to
+   * *show on this screen* and reads local snapshots. This asks whether removal
+   * would destroy somebody's work, so it counts the server's own photographs
+   * and findings too — and mirrors the refusal `removeArea` applies, so the
+   * control is not offered when the request would be refused.
+   */
+  const hasAnyEvidence =
+    hasEvidence || Boolean(photos.data?.length) || roomFindings.length > 0;
   const strandedSnapshots = areaSnapshots.filter(
     (snapshot) => snapshot.uploadStatus !== 'UPLOADED',
   );
@@ -515,6 +527,31 @@ export default function AreaDetailScreen() {
             variant="quiet"
           />
         )}
+
+        {/*
+          Removal, for a room the property does not have.
+
+          Distinct from skipping, and the distinction is the point. Skipping
+          says "this room exists and was not inspected"; removing says "this is
+          not a room here" — which a standard-template layout gets wrong on
+          every property that is not a three-bed, and which the technician
+          standing in the hall can see and an administrator cannot.
+
+          Offered on the same terms as skipping: only while the area holds
+          nothing. The server refuses a removal with evidence anyway, but a
+          control that is going to be refused should not be offered — and
+          hiding it keeps the two actions from looking interchangeable.
+        */}
+        {hasAnyEvidence || alreadyFinished ? null : (
+          <Button
+            accessibilityHint="Asks to confirm, then takes this area off the inspection"
+            accessibilityLabel="Remove this area from the inspection"
+            className="mx-5 mt-2"
+            label="Remove Area"
+            onPress={() => setRemoveOpen(true)}
+            variant="quiet"
+          />
+        )}
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
@@ -671,6 +708,63 @@ export default function AreaDetailScreen() {
               updates.skip.mutate(undefined, {
                 onSuccess: () => {
                   setSkipOpen(false);
+                  goBack();
+                },
+              })
+            }
+          />
+        </View>
+      </BottomSheet>
+
+      {/*
+        Removal, confirmed rather than justified.
+
+        Deliberately worded to separate it from skipping, which sits two lines
+        above it in the same screen: skipping records a room that exists and was
+        not inspected, removal says the room is not there. Confusing the two
+        would either lose a real room from a report or file an invented one as
+        deliberately uninspected.
+      */}
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
+        onClose={() => setRemoveOpen(false)}
+        visible={removeOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">Remove {item.name}?</Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          Use this when the property does not have this room. It comes off this inspection and
+          stops counting toward finishing it.
+        </Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          If the room exists but you cannot inspect it, skip it instead — that keeps it on the
+          report with your reason.
+        </Text>
+        {updates.remove.isError ? (
+          <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
+            {updates.remove.error instanceof Error
+              ? updates.remove.error.message
+              : 'The area could not be removed.'}
+          </Text>
+        ) : null}
+        <View className="mt-5 flex-row gap-3">
+          <Button
+            className="flex-1"
+            label="Cancel"
+            onPress={() => setRemoveOpen(false)}
+            variant="secondary"
+          />
+          <Button
+            busy={updates.remove.isPending}
+            busyLabel="Removing…"
+            className="flex-1"
+            label="Remove Area"
+            onPress={() =>
+              updates.remove.mutate(undefined, {
+                // Back to the inspection: the screen behind this sheet is about
+                // a room that no longer exists.
+                onSuccess: () => {
+                  setRemoveOpen(false);
                   goBack();
                 },
               })
