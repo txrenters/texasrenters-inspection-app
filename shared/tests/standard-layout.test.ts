@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  NON_ROOM_SOURCES,
   STANDARD_LAYOUT_SOURCE,
   STANDARD_PROPERTY_LAYOUT,
   layoutAreasFor,
@@ -140,5 +141,57 @@ describe('the standard layout uses the office’s own room names', () => {
     // The unique index is on (propertyId, unitId, floorId, name), so a repeat
     // would silently write one row fewer than the list has entries.
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+/**
+ * The HVAC placeholder is not a layout.
+ *
+ * `hvacSystemArea` attaches one synthetic approved area — "HVAC System",
+ * `isRequired: false` — to a property the first time an HVAC visit is
+ * scheduled, standing in for the equipment so the evidence, checklist and
+ * finding tables all have the area they require. Nothing about it is shown to
+ * anybody on an HVAC visit.
+ *
+ * But it is APPROVED, so every "does this property have a layout?" answer
+ * counted it. A property that had ever had an HVAC visit looked laid out, and
+ * an occupied inspection scheduled there skipped seeding and reached the
+ * technician holding exactly one area — called HVAC System — and no rooms.
+ * Two production inspections landed in that state on 2026-09-10.
+ */
+describe('an equipment area is not a room', () => {
+  const system = (id: string) => ({ id, source: 'SYSTEM' });
+
+  it('leaves a property whose only approved area is the HVAC placeholder with no layout', () => {
+    // Empty is what triggers seeding, which is exactly what should happen here.
+    expect(layoutAreasFor([system('hvac')])).toEqual([]);
+  });
+
+  it('drops it from a real layout rather than walking it as a room', () => {
+    const areas = [system('hvac'), imported('a'), imported('b')];
+    expect(layoutAreasFor(areas).map((area) => area.id)).toEqual(['a', 'b']);
+  });
+
+  it('drops it from a standard-template layout too', () => {
+    const areas = [system('hvac'), template('a'), template('b')];
+    expect(layoutAreasFor(areas).map((area) => area.id)).toEqual(['a', 'b']);
+  });
+
+  it('cannot tip the supersession answer, which is only ever about rooms', () => {
+    /**
+     * Order matters inside `layoutAreasFor`: equipment is filtered before the
+     * template rule is asked. `SYSTEM` is not in `WHOLE_LAYOUT_SOURCES`, so it
+     * could not supersede anything today — but asking the question of a list
+     * that still contained it would be one refactor away from doing so.
+     */
+    expect(standardLayoutSuperseded([system('hvac')])).toBe(false);
+    expect(layoutAreasFor([system('hvac'), template('a')]).map((a) => a.id)).toEqual(['a']);
+  });
+
+  it('is unaffected by an HVAC visit, which never reads this', () => {
+    // An HVAC visit is scoped HVAC_SYSTEM and resolves its equipment area
+    // through `hvacSystemArea`, so excluding it here takes nothing away from
+    // the one kind of visit that wants it.
+    expect(NON_ROOM_SOURCES).toContain('SYSTEM');
   });
 });

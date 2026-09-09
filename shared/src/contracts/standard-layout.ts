@@ -184,6 +184,34 @@ export const STANDARD_LAYOUT_SOURCE = 'STANDARD_TEMPLATE';
 export const WHOLE_LAYOUT_SOURCES: readonly string[] = ['IMPORTED_REPORT', 'AI_FLOOR_PLAN'];
 
 /**
+ * Sources that are not a room at all, and must never read as a layout.
+ *
+ * `SYSTEM` is the synthetic area `hvacSystemArea` attaches to a property the
+ * first time an HVAC visit is scheduled — one row named "HVAC System",
+ * `isRequired: false`, standing in for the equipment so the evidence, checklist
+ * and finding tables all have the area they require. Nothing about it is shown
+ * to anybody on an HVAC visit, which is the whole point of it.
+ *
+ * ── WHY THIS EXISTS ──────────────────────────────────────────────────────────
+ *
+ * It is `status: APPROVED`, so every "does this property have a layout?" answer
+ * counted it. A property that had ever had an HVAC visit therefore looked laid
+ * out, and an occupied inspection scheduled there skipped seeding and reached
+ * the technician holding exactly one area — called **HVAC System** — and no
+ * rooms at all.
+ *
+ * Two production inspections landed in that state on 2026-09-10 and it would
+ * have kept happening: the portfolio has HVAC visits, and every property that
+ * receives one acquires this row for good.
+ *
+ * Safe to exclude here because nothing that wants it reads this function. An
+ * HVAC visit is scoped `HVAC_SYSTEM`, which never touches the approved-area
+ * list — `insertInspection` resolves the equipment area separately, through
+ * `hvacSystemArea`.
+ */
+export const NON_ROOM_SOURCES: readonly string[] = ['SYSTEM'];
+
+/**
  * Whether a real layout has arrived and the standard rooms should stand aside.
  *
  * ── THE COLLISION THIS PREVENTS ──────────────────────────────────────────────
@@ -221,15 +249,25 @@ export function standardLayoutSuperseded(
 /**
  * The layout an inspection should actually be built from.
  *
- * Returns everything untouched unless a whole-layout source is present, in
- * which case the standard rooms drop out and the surveyed ones — plus any
- * manual or technician additions, which are additions to *that* layout — remain.
+ * Two filters, in order. Equipment first: a `SYSTEM` area is not a room and
+ * never counts as one, so a property whose only approved area is the HVAC
+ * placeholder reads as having no layout — which is what it has.
+ *
+ * Then the template rule: everything survives unless a whole-layout source is
+ * present, in which case the standard rooms drop out and the surveyed ones —
+ * plus any manual or technician additions, which are additions to *that*
+ * layout — remain.
+ *
+ * The order matters. Asking whether the template is superseded has to be asked
+ * of the rooms, or an equipment row could tip an answer that is only ever about
+ * rooms.
  */
 export function layoutAreasFor<T extends { source?: string | null }>(
   areas: readonly T[],
 ): T[] {
-  if (!standardLayoutSuperseded(areas)) return [...areas];
-  return areas.filter((area) => area.source !== STANDARD_LAYOUT_SOURCE);
+  const rooms = areas.filter((area) => !area.source || !NON_ROOM_SOURCES.includes(area.source));
+  if (!standardLayoutSuperseded(rooms)) return rooms;
+  return rooms.filter((area) => area.source !== STANDARD_LAYOUT_SOURCE);
 }
 
 /**
