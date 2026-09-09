@@ -268,10 +268,22 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
    */
   const [open, setOpen] = useState(() => {
     try {
-      // Open unless deliberately closed: a first-time import should be seen.
-      return window.localStorage.getItem(DRAWER_KEY) !== 'closed';
+      /**
+       * Closed unless deliberately opened.
+       *
+       * It used to be the other way round, on the reasoning that a first-time
+       * import should be seen — which held only while the dock rendered nothing
+       * at all when nothing was running. Now the handle is always there, so
+       * "open by default" means a panel sitting over the right-hand side of
+       * every page from the first load, saying that nothing is happening.
+       *
+       * Nothing is lost by starting closed: a finished import announces itself
+       * with a notification, and the handle carries the count of anything still
+       * moving.
+       */
+      return window.localStorage.getItem(DRAWER_KEY) === 'open';
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -284,18 +296,45 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
     }
   };
 
-  // Nothing running: render the anchor and no furniture at all. An empty dock
-  // is still a rectangle over the corner, and there is nothing to report.
-  if (!inFlight)
-    return <div className="pointer-events-none fixed right-4 bottom-4 z-50" ref={ref} />;
+  /**
+   * Opens itself when somebody hands a file over here.
+   *
+   * The dialog closes the moment it has the file, so without this the whole
+   * visible result of choosing a report is a dialog disappearing — the bytes
+   * go up behind a closed drawer with a small number on it. That is the
+   * complaint this drawer was built to fix, reintroduced from the other side.
+   *
+   * Only on an upload started in *this* tab, and only on the transition from
+   * none to some. An import appearing from a colleague's session is worth a
+   * count on the handle, not a panel opening over whatever the reader is
+   * doing, and re-firing while an upload continued would fight anybody who
+   * closed it deliberately.
+   *
+   * The preference is deliberately not written: this is a reaction to one
+   * action, not a new default.
+   */
+  const uploading = uploads.length;
+  const wasUploading = useRef(0);
+  useEffect(() => {
+    if (uploading > 0 && wasUploading.current === 0) setOpen(true);
+    wasUploading.current = uploading;
+  }, [uploading]);
 
   /**
-   * A drawer, not a panel that is simply gone.
+   * A drawer that is always there, whether or not anything is running.
+   *
+   * It used to render nothing at all when idle, on the reasoning that an empty
+   * dock is still a rectangle over the corner. True of a *panel*, and it made
+   * the drawer unfindable: the only way to see running imports was to already
+   * have one running, so somebody who started an import, navigated away and
+   * came back had no way to ask what had happened to it. A control that exists
+   * only while it has something to say cannot be looked at.
    *
    * Closed, it is a slim handle against the right edge — clear of the corner
-   * where this console puts form buttons, but still visible, so an import
-   * running in the background is never a secret. Open, it slides the list back
-   * out over the page.
+   * where this console puts form buttons, but always visible, so an import
+   * running in the background is never a secret and the way to check is always
+   * in the same place. Open, it slides the list out over the page, with an
+   * empty state rather than nothing when there is nothing to show.
    *
    * The handle sits at the vertical middle rather than the bottom corner for
    * the same reason the drawer closes at all: the corner is where the buttons
@@ -310,7 +349,11 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
 
       {!open ? (
         <button
-          aria-label={`Show ${inFlight} import${inFlight === 1 ? '' : 's'} in progress`}
+          aria-label={
+            inFlight
+              ? `Show ${inFlight} import${inFlight === 1 ? '' : 's'} in progress`
+              : 'Show imports'
+          }
           className={cn(
             'bg-card border-border fixed top-1/2 right-0 z-50 -translate-y-1/2 rounded-l-lg border border-r-0 py-3 pr-1 pl-1.5 shadow-lg',
             'text-muted-foreground hover:text-foreground hover:bg-accent transition-colors',
@@ -322,10 +365,17 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
           <span className="flex flex-col items-center gap-1">
             <ChevronLeftIcon className="size-4" />
             {/* The count, not a spinner: a closed drawer exists to stop pulling
-                the eye to the edge, and an animation there defeats that. */}
-            <span className="text-[11px] leading-none font-medium tabular-nums">
-              {inFlight}
-            </span>
+                the eye to the edge, and an animation there defeats that.
+
+                An icon when there is no count, rather than a "0". A zero is a
+                number worth reading, and reading it tells you nothing — the
+                icon says what the handle is for, which is the only thing an
+                idle handle has to communicate. */}
+            {inFlight ? (
+              <span className="text-[11px] leading-none font-medium tabular-nums">{inFlight}</span>
+            ) : (
+              <FileTextIcon className="size-3.5" />
+            )}
           </span>
         </button>
       ) : (
@@ -337,7 +387,7 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
         >
           <div className="flex items-center justify-between">
             <p className="text-muted-foreground text-xs font-medium">
-              {inFlight} import{inFlight === 1 ? '' : 's'} in progress
+              {inFlight ? `${inFlight} import${inFlight === 1 ? '' : 's'} in progress` : 'Imports'}
             </p>
             <button
               aria-label="Hide running imports"
@@ -399,6 +449,21 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
               </div>
             </Link>
           ))}
+          {/* An empty state rather than an empty box.
+
+              Opening the drawer is a question — "is anything still going?" —
+              and a blank panel does not answer it. Worse, it reads as broken:
+              the reader cannot tell "nothing is running" from "this failed to
+              load". Saying so also tells somebody who has never started an
+              import what the drawer is for. */}
+          {!inFlight ? (
+            <div className="border-border/60 rounded-lg border border-dashed p-4 text-center">
+              <p className="text-muted-foreground text-xs">No imports running.</p>
+              <p className="text-muted-foreground/70 mt-1 text-[11px]">
+                Reports you import appear here until they finish.
+              </p>
+            </div>
+          ) : null}
         </div>
       )}
     </>
