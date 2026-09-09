@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { FindingReviewStatus, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
 import { checklistKindFor } from '@texasrenters/shared';
-import { checklistKindWhere } from '../common/checklist-kind';
+import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
 import type {
   AreaEvidenceBundle,
   AreaEvidenceSummary,
@@ -63,7 +63,8 @@ export class AreaEvidenceService {
     await this.requireInspection(user.organizationId, inspectionId);
     const inspection = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
-      select: { finalizedAt: true },
+      // The type decides where this item is stored, not just what it asks.
+      select: { finalizedAt: true, inspectionType: true },
     });
     if (inspection?.finalizedAt)
       throw new ApplicationError(
@@ -85,10 +86,27 @@ export class AreaEvidenceService {
         'Inspection area was not found.',
       );
 
-    // The item has to belong to *this* area, or the report would show an
-    // assessment against a room nobody inspected.
+    /**
+     * The item has to belong to *this* area, or to the organization.
+     *
+     * Without the first, the report would show an assessment against a room
+     * nobody inspected.
+     *
+     * The second half was missing, and it is the same defect the technician
+     * route carried until an HVAC technician could see sixty items and record
+     * none of them: an organization-wide list is stored with a null area, so
+     * matching on `propertyAreaId` alone answers 404 for every one of its items.
+     * Reviewer-side scoring of an HVAC form has never worked, and the occupied
+     * checklist added 2026-09-09 is stored the same way.
+     */
     const item = await this.prisma.areaChecklistItem.findFirst({
-      where: { id: itemId, propertyAreaId: area.propertyAreaId, archivedAt: null },
+      where: {
+        id: itemId,
+        archivedAt: null,
+        ...(checklistItemsAreOrganizationWide(checklistKindFor(inspection?.inspectionType))
+          ? { organizationId: user.organizationId, propertyAreaId: null }
+          : { propertyAreaId: area.propertyAreaId }),
+      },
       select: { id: true },
     });
     if (!item)
@@ -504,15 +522,17 @@ export class AreaEvidenceService {
       this.prisma.areaChecklistItem.findMany({
         where: {
           /**
-           * The HVAC checklist belongs to the organization, not to an area.
+           * The HVAC and occupied checklists belong to the organization, not to
+           * an area.
            *
-           * It asks the same sixty questions of every system in the portfolio,
-           * so it is stored once with a null area. Matching on the area alone
+           * HVAC asks the same sixty questions of every system in the
+           * portfolio; the occupied list asks the same two of every room. Both
+           * are stored once with a null area. Matching on the area alone
            * returned nothing for an HVAC inspection: the reviewer saw "this
            * area has no checklist items yet" about a form the technician had
            * just filled in.
            */
-          ...(checklistKindFor(inspection.inspectionType) === 'AIR_CONDITIONING'
+          ...(checklistItemsAreOrganizationWide(checklistKindFor(inspection.inspectionType))
             ? { organizationId: user.organizationId, propertyAreaId: null }
             : { propertyAreaId: area.propertyArea.id }),
           archivedAt: null,
