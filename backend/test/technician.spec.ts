@@ -273,6 +273,10 @@ describe('technician mobile data boundary', () => {
           inspectionId: 'inspection-1',
           propertyAreaId: 'area-1',
           completionStatus: 'PENDING',
+          // The type decides which evidence is accepted, so the fixture has to
+          // carry it. `technicianRoomSelect` always selects it; this row simply
+          // predated the rule.
+          inspection: { inspectionType: 'MOVE_OUT' },
           propertyArea: { baselineConditions: [] },
           media: [],
         }),

@@ -3,10 +3,11 @@ import {
   checklistTemplateFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
-import { checklistKindWhere } from '../common/checklist-kind';
+import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
@@ -944,10 +945,12 @@ export class TechnicianService {
            *
            * An HVAC visit inspects the property's system as one subject and
            * asks the same questions everywhere, so its items are stored once
-           * per organization rather than copied onto every property. Every
-           * other visit asks about the specific room it is standing in.
+           * per organization rather than copied onto every property. An
+           * occupied visit is organization-wide for a stronger reason still:
+           * "Room condition" is the same question in a kitchen and in a
+           * hallway. Only the room list is per area.
            */
-          ...(checklistKindFor(room.inspection.inspectionType) === 'AIR_CONDITIONING'
+          ...(checklistItemsAreOrganizationWide(checklistKindFor(room.inspection.inspectionType))
             ? { organizationId: user.organizationId, propertyAreaId: null }
             : { propertyAreaId: room.propertyAreaId }),
           archivedAt: null,
@@ -1055,18 +1058,19 @@ export class TechnicianService {
      * entirely and the report would show an assessment against a room nobody
      * inspected.
      *
-     * The second half is not optional: the HVAC checklist is stored once per
-     * organization with a null area, because it asks the same questions of every
-     * system in the portfolio. `roomChecklist` was taught that and this was not,
-     * so an HVAC technician could see all sixty items and record none of them —
-     * every write answered 404.
+     * The second half is not optional: the HVAC and occupied checklists are
+     * stored once per organization with a null area, because they ask the same
+     * questions of every system, and of every room, in the portfolio.
+     * `roomChecklist` was taught that and this was not, so an HVAC technician
+     * could see all sixty items and record none of them — every write answered
+     * 404.
      */
     const kind = checklistKindFor(room.inspection.inspectionType);
     const item = await this.prisma.areaChecklistItem.findFirst({
       where: {
         id: itemId,
         archivedAt: null,
-        ...(kind === 'AIR_CONDITIONING'
+        ...(checklistItemsAreOrganizationWide(kind)
           ? { organizationId: user.organizationId, propertyAreaId: null }
           : { propertyAreaId: room.propertyAreaId }),
       },
@@ -1435,13 +1439,17 @@ export class TechnicianService {
     return this.mapRoom(room);
   }
 
-  async skipRoom(user: AuthenticatedUser, id: string, reason: string) {
+  async skipRoom(user: AuthenticatedUser, id: string, reason?: string) {
     await this.assignedRoom(user, id);
     const room = await this.prisma.inspectionArea.update({
       where: { id },
       data: {
         completionStatus: InspectionAreaCompletionStatus.SKIPPED,
-        skipReason: reason.trim(),
+        // Null rather than an empty string when nothing was written. A reader
+        // has to be able to tell "no reason given" from "a reason that is
+        // blank", and every consumer already handles the null: the column has
+        // always been nullable, and completing a room clears it the same way.
+        skipReason: reason?.trim() || null,
         completedAt: new Date(),
       },
       select: technicianRoomSelect,
@@ -1452,12 +1460,44 @@ export class TechnicianService {
 
   async completeRoom(user: AuthenticatedUser, id: string) {
     const existing = await this.assignedRoom(user, id);
-    if (!existing.media.some((item) => item.uploadStatus === MediaUploadStatus.UPLOADED))
-      throw new ApplicationError(
-        409,
-        'ROOM_VIDEO_REQUIRED',
-        'A confirmed uploaded video is required before completing this room.',
-      );
+    const hasRecording = existing.media.some(
+      (item) => item.uploadStatus === MediaUploadStatus.UPLOADED,
+    );
+    /**
+     * An occupied area may be finished with a photograph instead of a video.
+     *
+     * The rule is `inspectionRequiresAreaRecording`, shared with the handset's
+     * completion gate. It has to be, because it was previously stated only on
+     * the handset: #148 taught the gate that an occupied area needs a
+     * photograph *or* a recording, and this method went on demanding an
+     * uploaded video for every type. The two disagreed in the worst direction —
+     * Mark Complete looked enabled, and the request behind it answered 409. A
+     * technician has no way to read that as anything but a broken app.
+     *
+     * Evidence is still required either way. The photograph count is only
+     * queried when the type allows one, so a move-out costs exactly the
+     * round trips it did before.
+     */
+    const photoCount =
+      hasRecording || inspectionRequiresAreaRecording(existing.inspection.inspectionType)
+        ? 0
+        : await this.prisma.inspectionPhoto.count({ where: { inspectionAreaId: id } });
+    if (!hasRecording && photoCount === 0)
+      throw inspectionRequiresAreaRecording(existing.inspection.inspectionType)
+        ? new ApplicationError(
+            409,
+            'ROOM_VIDEO_REQUIRED',
+            'A confirmed uploaded video is required before completing this room.',
+          )
+        : // Named separately because the fix is different: on an occupied area
+          // the technician does not need to go back and film, only to take a
+          // photograph — or to skip the room, which is the honest answer when
+          // there was nothing to capture.
+          new ApplicationError(
+            409,
+            'ROOM_EVIDENCE_REQUIRED',
+            'Photograph this room or record a walkthrough before completing it. Skip it if there was nothing to capture.',
+          );
     const room = await this.prisma.inspectionArea.update({
       where: { id },
       data: {
@@ -1769,7 +1809,13 @@ export class TechnicianService {
             assignments: { some: { technicianId: user.id, isCurrent: true } },
           },
         },
-        select: { id: true, inspectionId: true, propertyAreaId: true },
+        select: {
+          id: true,
+          inspectionId: true,
+          propertyAreaId: true,
+          // Decides where a tagged checklist item is stored, below.
+          inspection: { select: { inspectionType: true } },
+        },
       });
       if (!area)
         throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
@@ -1787,7 +1833,15 @@ export class TechnicianService {
        */
       if (dto.checklistItemId) {
         const item = await this.prisma.areaChecklistItem.findFirst({
-          where: { id: dto.checklistItemId, propertyAreaId: area.propertyAreaId },
+          where: {
+            id: dto.checklistItemId,
+            // Or to the organization — the same null-area rule the scoring
+            // route needs, for the same reason. Without it a photograph
+            // evidencing an HVAC or occupied item is refused outright.
+            ...(checklistItemsAreOrganizationWide(checklistKindFor(area.inspection.inspectionType))
+              ? { organizationId: user.organizationId, propertyAreaId: null }
+              : { propertyAreaId: area.propertyAreaId }),
+          },
           select: { id: true },
         });
         if (!item)

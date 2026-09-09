@@ -54,6 +54,13 @@ enum AreaEnvironment {
 enum AreaChecklistItemKind {
   ROOM
   AIR_CONDITIONING
+  /// The short assessment an occupied inspection asks instead of the room list.
+  ///
+  /// Organization-wide rows, like AIR_CONDITIONING and unlike ROOM: the two
+  /// questions are the same in a kitchen and in a hallway, so there is nothing
+  /// per-area about them. Answers still separate, because a response is unique
+  /// on (inspectionAreaId, checklistItemId).
+  OCCUPIED
 }
 
 /// How one checklist item is answered.

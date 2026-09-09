@@ -6,6 +6,7 @@ import {
   checklistKindFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
 } from '../src/contracts/inspection-scope.js';
 import { InspectionType } from '../src/enums/index.js';
@@ -149,15 +150,25 @@ describe('which inspections deal in a move-in baseline', () => {
 });
 
 describe('which checklist a visit asks about an area', () => {
-  it('asks the room checklist for the tenancy chain', () => {
+  /**
+   * Occupied left this list on 2026-09-09, after a technician walked one in the
+   * field. It is in the tenancy chain and it does walk ordinary rooms, so it
+   * belonged here on every reading except the one that matters: what it asks.
+   * A periodic look around somebody's home was being handed the full move-out
+   * evaluation of every component in every room. See `occupied-checklist.ts`.
+   */
+  it('asks the room checklist for the tenancy visits that evaluate components', () => {
     for (const type of [
       InspectionType.MOVE_IN,
-      InspectionType.OCCUPIED,
       InspectionType.BACK_TO_MARKET,
       InspectionType.MOVE_OUT,
     ]) {
       expect(checklistKindFor(type)).toBe('ROOM');
     }
+  });
+
+  it('asks the short list on an occupied visit', () => {
+    expect(checklistKindFor(InspectionType.OCCUPIED)).toBe('OCCUPIED');
   });
 
   it('asks the equipment checklist when servicing an air conditioner', () => {
@@ -183,5 +194,36 @@ describe('which checklist a visit asks about an area', () => {
 
   it('still asks the room checklist for an unrecognised type', () => {
     expect(checklistKindFor('SOMETHING_NEW')).toBe('ROOM');
+  });
+});
+
+describe('which visits owe a video walkthrough of every area', () => {
+  /**
+   * The rule that was stated on the handset and not on the server. #148 taught
+   * the completion gate that an occupied area needs a photograph *or* a
+   * recording; `completeRoom` went on demanding an uploaded video for every
+   * type, so Mark Complete looked enabled and the request behind it answered
+   * 409. Both sides read this function now.
+   */
+  it('excuses only an occupied inspection', () => {
+    expect(inspectionRequiresAreaRecording(InspectionType.OCCUPIED)).toBe(false);
+  });
+
+  it.each([
+    [InspectionType.MOVE_IN],
+    [InspectionType.MOVE_OUT],
+    [InspectionType.BACK_TO_MARKET],
+    [InspectionType.HVAC],
+  ])('still requires one on %s', (type) => {
+    // A move-in and a move-out are the condition record a comparison is built
+    // from, and the walkthrough is the evidence. Photographs do not replace it.
+    expect(inspectionRequiresAreaRecording(type)).toBe(true);
+  });
+
+  it('requires one for an unrecognised type', () => {
+    // The safe direction: a type nobody has taught this rule asks for the
+    // stronger evidence, not the weaker.
+    expect(inspectionRequiresAreaRecording('SOMETHING_NEW')).toBe(true);
+    expect(inspectionRequiresAreaRecording(null)).toBe(true);
   });
 });

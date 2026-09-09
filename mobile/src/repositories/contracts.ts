@@ -183,7 +183,7 @@ export interface InspectionRepository {
   /** The technician's own call that a request is satisfied. */
   resolveEvidenceRequest(requestId: string): Promise<void>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
-  skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
+  skipRoom(roomId: string, reason?: string): Promise<InspectionRoom>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
   /**
    * Records that the technician read the AI summary for an area and it matches
