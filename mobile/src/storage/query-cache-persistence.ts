@@ -56,7 +56,12 @@ type StoredCache = {
 // window, and the screens would show only a day for a visit the office booked
 // to the hour. A technician comparing that against Jobber would be reading a
 // stale answer with nothing on screen to say so.
-const CACHE_SCHEMA_VERSION = 5;
+// 6: rooms carry `photoCount`. A cached room from 5 parses fine — the field
+// defaults to 0 — but it would restore reading "Not started" on an area the
+// technician had photographed, which is the bug this fixes, shown from the
+// cache instead of from the server. Restored data is not re-validated, so
+// the version is the only thing that discards it.
+const CACHE_SCHEMA_VERSION = 6;
 
 /**
  * Invalidates the whole stored cache when either the shipped version or the

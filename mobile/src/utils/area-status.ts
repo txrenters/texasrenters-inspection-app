@@ -11,6 +11,7 @@ import type { InspectionRoom } from '../domain/models';
  */
 export type AreaStatus =
   | 'NOT_STARTED'
+  | 'IN_PROGRESS'
   | 'RECORDING_SAVED'
   | 'PENDING_UPLOAD'
   | 'UPLOADING'
@@ -161,6 +162,35 @@ export function deriveAreaStatus(room: InspectionRoom): AreaStatusDescriptor {
       detail: 'Submitted — this area completes once the upload finishes',
       tone: 'info',
       icon: 'cloud-upload',
+      needsAttention: false,
+    };
+
+  /**
+   * Photographs are work, and this function could not see them.
+   *
+   * Every branch above reads `completionStatus` and `uploadStatus`, both of
+   * which describe a *recording*. So an area a technician had photographed and
+   * nothing else fell through to "Not started — not yet recorded", which is
+   * false twice over: they had started it, and on an occupied visit a
+   * photograph is the evidence rather than a step towards one.
+   *
+   * Reported from the field 2026-09-10: "it doesn't detect if the area
+   * inspection has started already if I just take a photo."
+   *
+   * Below the upload branches on purpose. A failed or in-flight recording is
+   * still the more urgent thing to say about an area that has both.
+   */
+  const photoCount = room.photoCount ?? 0;
+  if (photoCount > 0)
+    return {
+      status: 'IN_PROGRESS',
+      label: 'In progress',
+      detail:
+        photoCount === 1
+          ? '1 photo saved — add more, record a walkthrough, or complete this area'
+          : `${photoCount} photos saved — add more, record a walkthrough, or complete this area`,
+      tone: 'progress',
+      icon: 'circle',
       needsAttention: false,
     };
 

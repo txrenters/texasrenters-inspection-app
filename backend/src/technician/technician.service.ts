@@ -183,6 +183,19 @@ const technicianRoomSelect = {
       },
     },
   },
+  /**
+   * How many photographs this area holds.
+   *
+   * On the select rather than a second query: `mapRoom` is called for every
+   * area of an inspection, so a per-area count would be an N+1 against the
+   * pooler. `_count` rides along with the row.
+   *
+   * The handset cannot answer this for itself. It reads its own snapshot
+   * store, which reports zero after a reinstall or on a replacement
+   * handset — telling a technician their evidence is missing at the moment
+   * they are deciding whether to submit.
+   */
+  _count: { select: { photos: true } },
   media: {
     orderBy: { createdAt: 'desc' as const },
     take: 1,
@@ -2463,6 +2476,13 @@ export class TechnicianService {
       floorName: record.propertyArea.floor?.name ?? 'Property',
       order: record.propertyArea.inspectionOrder,
       isRequired: record.propertyArea.isRequired,
+      // What the handset cannot count for itself after a reinstall, and what
+      // lets a photographed area stop reporting "Not started".
+      // `?? 0` rather than a bare read: the select always provides `_count`,
+      // but a mapper that throws on a row somebody built differently turns a
+      // missing count into a 500. Absent means no photographs, which is the
+      // behaviour this field replaces anyway.
+      photoCount: record._count?.photos ?? 0,
       environment: record.propertyArea.environment,
       category: record.propertyArea.category ?? null,
       source: record.propertyArea.source,

@@ -187,6 +187,11 @@ export const roomSchema = z.object({
     'READY_FOR_REVIEW',
     'FAILED',
   ]),
+  /**
+   * Server-side photo count, defaulted for a cached room written before the
+   * field existed — a missing count must not discard the whole record.
+   */
+  photoCount: z.number().default(0),
   note: nullableString,
   skipReason: nullableString,
   // Optional, not defaulted: a room cached before this field existed was never

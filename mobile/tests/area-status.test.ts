@@ -180,3 +180,58 @@ describe('pickUpNextArea', () => {
     expect(pickUpNextArea(rooms)?.id).toBe('opt');
   });
 });
+
+/**
+ * Reported from the field, 2026-09-10: "it doesn't detect if the area
+ * inspection has started already if I just take a photo."
+ *
+ * Every other branch of `deriveAreaStatus` reads `completionStatus` and
+ * `uploadStatus`, and both describe a *recording*. So an area a technician had
+ * photographed and nothing else fell through to "Not started — not yet
+ * recorded", which is false twice over: they had started it, and on an occupied
+ * visit a photograph is the evidence rather than a step towards one.
+ */
+describe('an area with photographs and no recording', () => {
+  const photographed = (photoCount: number, overrides: Partial<InspectionRoom> = {}) =>
+    deriveAreaStatus(
+      room({
+        completionStatus: 'NOT_STARTED',
+        uploadStatus: 'PENDING',
+        processingStatus: 'NOT_STARTED',
+        photoCount,
+        ...overrides,
+      }),
+    );
+
+  it('reads as in progress, not as not started', () => {
+    expect(photographed(3).status).toBe('IN_PROGRESS');
+    expect(photographed(3).label).toBe('In progress');
+  });
+
+  it('says how many photographs it holds', () => {
+    expect(photographed(1).detail).toContain('1 photo saved');
+    expect(photographed(4).detail).toContain('4 photos saved');
+  });
+
+  it('stops nagging a required area that has been started', () => {
+    // `needsAttention` drives the required-and-untouched warning. An area with
+    // photographs is neither.
+    expect(photographed(2, { isRequired: true }).needsAttention).toBe(false);
+  });
+
+  it('still reads as not started with no photographs', () => {
+    expect(photographed(0).status).toBe('NOT_STARTED');
+  });
+
+  it('treats a missing count as none, for a room cached before the field existed', () => {
+    expect(deriveAreaStatus(room({ completionStatus: 'NOT_STARTED' })).status).toBe('NOT_STARTED');
+  });
+
+  it('lets a failed upload outrank the photographs', () => {
+    // A broken recording is the more urgent thing to say about an area that has
+    // both, which is why the photograph branch sits below the upload ones.
+    expect(
+      photographed(2, { completionStatus: 'RECORDING_SAVED', uploadStatus: 'FAILED' }).status,
+    ).toBe('UPLOAD_FAILED');
+  });
+});
