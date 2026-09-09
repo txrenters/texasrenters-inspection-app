@@ -137,8 +137,27 @@ export class TechnicianFindingsQueryDto {
   @IsOptional() @IsIn(['ALL', 'DEFECTS', 'SUMMARIES']) kind?: 'ALL' | 'DEFECTS' | 'SUMMARIES';
 }
 
+/**
+ * Why an area was skipped, when the technician has something to say.
+ *
+ * The reason used to be mandatory, and skipping meant typing a sentence into a
+ * multiline box mid-walkthrough. Field feedback, 2026-09-09: an occupied
+ * inspection is walked in about fifteen minutes, and the commonest skip — a
+ * bedroom the tenant has locked, a room being used — is fully described by the
+ * fact that it was skipped at all.
+ *
+ * What that box mostly produced was not an audit trail but a toll. A required
+ * free-text field that a technician has to clear to move on is answered with
+ * whatever clears it, and "n/a" typed forty times a week tells an administrator
+ * strictly less than an empty column, because an empty column at least does not
+ * look like an answer.
+ *
+ * Still recorded when given, and still capped. The skip itself remains the
+ * durable fact: `completionStatus: SKIPPED` with a `completedAt`, which is what
+ * the report and the review screen read.
+ */
 export class TechnicianReasonDto {
-  @IsString() @MinLength(1) @MaxLength(500) reason!: string;
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 export class TechnicianMediaUploadDto {

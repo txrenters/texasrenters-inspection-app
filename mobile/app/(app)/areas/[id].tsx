@@ -153,7 +153,6 @@ export default function AreaDetailScreen() {
   const [editOpen, setEditOpen] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
-  const [skipReason, setSkipReason] = useState('');
 
   if (room.isLoading || !room.data) {
     return (
@@ -631,22 +630,32 @@ export default function AreaDetailScreen() {
         onClose={() => setSkipOpen(false)}
         visible={skipOpen}
       >
+        {/*
+          A confirmation, not a form.
+
+          This asked for a written reason and refused to proceed without one.
+          Field feedback, 2026-09-09: an occupied inspection is walked in about
+          fifteen minutes, and the commonest skip — a bedroom the tenant has
+          locked, a room in use — is fully described by the fact that it was
+          skipped. A required free-text box mid-walkthrough is answered with
+          whatever clears it, and "n/a" forty times a week tells an
+          administrator less than an empty column, because an empty column does
+          not look like an answer.
+
+          The skip is still recorded, and is still a decision with the
+          technician's name on it: `completionStatus: SKIPPED` with a
+          `completedAt`, which is what the report and the review screen read.
+          What is gone is the toll, not the record.
+        */}
         <Text className="text-xl font-bold text-foreground">Skip this room?</Text>
-        <Text nativeID="skip-reason-label" className="mt-2 text-sm leading-5 text-muted-foreground">
-          Provide a reason for the administrator and audit trail.
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          It will be recorded as skipped and counted as finished, so you can submit the inspection
+          without it. No photograph or recording is kept for this room.
         </Text>
-        <TextInput
-          accessibilityLabel="Reason for skipping this room"
-          accessibilityLabelledBy="skip-reason-label"
-          className="mt-4 min-h-24 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-          multiline
-          textAlignVertical="top"
-          placeholder="Why can this room not be inspected?"
-          placeholderTextColor={theme.mutedForeground}
-          value={skipReason}
-          onChangeText={setSkipReason}
-        />
-        <View className="mt-4 flex-row gap-3">
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          You can come back and inspect it while this inspection is still open.
+        </Text>
+        <View className="mt-5 flex-row gap-3">
           <Button
             className="flex-1"
             label="Cancel"
@@ -654,17 +663,14 @@ export default function AreaDetailScreen() {
             variant="secondary"
           />
           <Button
-            accessibilityHint={skipReason.trim() ? undefined : 'Enter a reason before skipping'}
             busy={updates.skip.isPending}
             busyLabel="Saving…"
             className="flex-1"
-            disabled={!skipReason.trim()}
             label="Skip Room"
             onPress={() =>
-              updates.skip.mutate(skipReason.trim(), {
+              updates.skip.mutate(undefined, {
                 onSuccess: () => {
                   setSkipOpen(false);
-                  setSkipReason('');
                   goBack();
                 },
               })

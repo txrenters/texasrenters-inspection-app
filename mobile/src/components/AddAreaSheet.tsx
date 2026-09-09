@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import type { AreaEnvironment } from '../domain/models';
@@ -16,15 +16,20 @@ const ENVIRONMENTS: { value: AreaEnvironment; label: string }[] = [
 ];
 
 /**
- * Grace period between confirming and actually writing the area.
+ * There is no grace period. Confirming writes the area.
  *
- * An added area is a draft an administrator has to review, so a mistyped or
- * accidental one costs somebody else time. Three seconds is long enough to
- * catch the mistake you already know you made, and short enough that a
- * technician adding several rooms in a row is not waiting on a countdown each
- * time. It was five, which read as a delay rather than a safeguard.
+ * There used to be one: five seconds, then three, on the reasoning that an
+ * added area is a draft an administrator has to review, so an accidental one
+ * costs somebody else time. Both numbers were wrong, and the direction was too.
+ *
+ * The field answer, 2026-09-09: an occupied inspection is walked in about
+ * fifteen minutes, and a technician adding several rooms in a row paid the
+ * countdown every time. The safeguard also protected very little — the mistake
+ * it catches is one the technician has already seen on screen and can fix by
+ * asking an administrator to reject a draft, which is the same conversation
+ * they would have had anyway. A delay every technician pays on every area, to
+ * spare an occasional correction somebody else makes, is the wrong trade.
  */
-const UNDO_SECONDS = 3;
 
 /**
  * Lets a technician add an area the floor plan does not have.
@@ -58,27 +63,20 @@ export function AddAreaSheet({
   const [floorName, setFloorName] = useState('');
   const [notes, setNotes] = useState('');
 
-  const [countdown, setCountdown] = useState<number | null>(null);
-  const queuedRef = useRef<AddAreaInput | null>(null);
-
-  // Props are read through refs so the countdown effect does not depend on
-  // callback identity: the parent passes inline arrows, and re-running the
-  // effect every render would restart the one-second timer and stall the timer
-  // on screen forever.
+  // Props are read through refs so `commit` does not depend on callback
+  // identity: the parent passes inline arrows, and rebuilding the callback on
+  // every render used to restart the grace-period timer that lived here.
   const callbacks = useRef({ onClose, onAdded });
   callbacks.current = { onClose, onAdded };
 
   const trimmedName = name.trim();
-  const counting = countdown !== null;
-  const canSubmit = Boolean(trimmedName) && !addArea.isPending && !counting;
+  const canSubmit = Boolean(trimmedName) && !addArea.isPending;
 
   const reset = useCallback(() => {
     setName('');
     setEnvironment('INDOOR');
     setFloorName('');
     setNotes('');
-    setCountdown(null);
-    queuedRef.current = null;
     addArea.reset();
   }, [addArea]);
 
@@ -106,47 +104,15 @@ export function AddAreaSheet({
     [addArea, reset],
   );
 
-  // Ticks the grace period down, then writes.
-  useEffect(() => {
-    if (countdown === null) return;
-    if (countdown <= 0) {
-      const queued = queuedRef.current;
-      queuedRef.current = null;
-      setCountdown(null);
-      if (queued) commit(queued);
-      return;
-    }
-    const timer = setTimeout(
-      () => setCountdown((value) => (value === null ? null : value - 1)),
-      1000,
-    );
-    return () => clearTimeout(timer);
-  }, [countdown, commit]);
-
-  // A dismissed sheet must not keep counting toward a write nobody is watching.
-  useEffect(() => {
-    if (!visible) {
-      queuedRef.current = null;
-      setCountdown(null);
-    }
-  }, [visible]);
-
   const submit = () => {
     if (!canSubmit) return;
-    queuedRef.current = {
+    announce(`Adding ${trimmedName}.`);
+    commit({
       name: trimmedName,
       environment,
       floorName: floorName.trim() || undefined,
       notes: notes.trim() || undefined,
-    };
-    setCountdown(UNDO_SECONDS);
-    announce(`Adding ${trimmedName} in ${UNDO_SECONDS} seconds. Cancel is available.`);
-  };
-
-  const cancelPending = () => {
-    queuedRef.current = null;
-    setCountdown(null);
-    announce('Cancelled. Nothing was added.');
+    });
   };
 
   return (
@@ -157,51 +123,22 @@ export function AddAreaSheet({
       onClose={close}
       visible={visible}
     >
-      {counting || addArea.isPending ? (
+      {addArea.isPending ? (
         <View className="items-center gap-4 py-4">
           <View className="h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            {counting ? (
-              <Text
-                // Announced by the region below, not twice over.
-                accessibilityElementsHidden
-                importantForAccessibility="no"
-                className="text-2xl font-bold text-primary"
-              >
-                {countdown}
-              </Text>
-            ) : (
-              <Loader size="lg" />
-            )}
+            <Loader size="lg" />
           </View>
+          {/* No cancel. The request is already in flight, and offering one
+              would imply a rollback that will not happen — which is what the
+              button did for the last second of the old countdown anyway. */}
           <View
             accessibilityLiveRegion="polite"
             accessibilityRole="progressbar"
             className="items-center gap-1"
           >
-            <Text className="text-lg font-bold text-foreground">
-              Adding “{queuedRef.current?.name ?? trimmedName}”
-            </Text>
-            <Text className="text-center text-sm text-muted-foreground">
-              {counting
-                ? `Adding in ${countdown} second${countdown === 1 ? '' : 's'}. Tap cancel to stop.`
-                : 'Saving…'}
-            </Text>
+            <Text className="text-lg font-bold text-foreground">Adding “{trimmedName}”</Text>
+            <Text className="text-center text-sm text-muted-foreground">Saving…</Text>
           </View>
-          <Pressable
-            accessibilityLabel="Cancel adding this area"
-            accessibilityRole="button"
-            // Only while the grace period is running: once the request is
-            // in flight there is nothing left to cancel, and offering it
-            // would imply a rollback that will not happen.
-            accessibilityState={{ disabled: !counting }}
-            className={`min-h-12 w-full items-center justify-center rounded-xl border py-3 ${
-              counting ? 'border-border' : 'border-transparent opacity-0'
-            }`}
-            disabled={!counting}
-            onPress={cancelPending}
-          >
-            <Text className="font-semibold text-foreground">Cancel</Text>
-          </Pressable>
         </View>
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
