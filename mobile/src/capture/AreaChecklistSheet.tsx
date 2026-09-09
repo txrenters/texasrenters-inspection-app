@@ -5,7 +5,9 @@ import { BottomSheet } from '../components/BottomSheet';
 import { registerIcons } from '../lib/icons';
 import type { ChecklistAssessment } from '../domain/models';
 import { checklistProgress, type ChecklistItem } from './area-checklist';
-import { ChoiceField, ReadingField, TextField, isAnswered } from './ChecklistAnswerFields';
+import { choiceInvitesComment } from '@texasrenters/shared';
+
+import { CommentField, ChoiceField, ReadingField, TextField, isAnswered } from './ChecklistAnswerFields';
 
 registerIcons(CheckIcon, CircleIcon, MicIcon);
 
@@ -107,7 +109,7 @@ function renderAnswer(
   item: ChecklistItem,
   assessment: ChecklistAssessment | undefined,
   onAssess: (itemId: string, axis: ChecklistAxisKey, next: boolean | null) => void,
-  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null }) => void,
+  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null; comment?: string | null }) => void,
 ) {
   switch (item.responseType ?? 'STATUS') {
     case 'READING':
@@ -128,11 +130,31 @@ function renderAnswer(
       ) : null;
     case 'CHOICE':
       return onRecord ? (
-        <ChoiceField
-          item={item}
-          onChange={(textValue) => onRecord(item.id, { textValue })}
-          value={assessment?.textValue ?? null}
-        />
+        <>
+          <ChoiceField
+            item={item}
+            onChange={(textValue) =>
+              onRecord(item.id, {
+                textValue,
+                // Clearing the answer clears the explanation with it. A comment
+                // about damage left behind on a row now answered "Clean" is
+                // worse than no comment: it reads as a finding on a room the
+                // technician has just said is fine.
+                ...(choiceInvitesComment(textValue) ? {} : { comment: null }),
+              })
+            }
+            value={assessment?.textValue ?? null}
+          />
+          {/* Only once an answer says there is something to explain. A box on
+              every row is the toll the feedback asked us to remove. */}
+          {choiceInvitesComment(assessment?.textValue) ? (
+            <CommentField
+              item={item}
+              onChange={(comment) => onRecord(item.id, { comment })}
+              value={assessment?.comment ?? null}
+            />
+          ) : null}
+        </>
       ) : null;
     default:
       return (
@@ -169,7 +191,7 @@ export function AreaChecklistSheet({
    * carry a value rather than a yes/no, and collapsing the two would make every
    * caller unpack a union to find out which it had.
    */
-  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null }) => void;
+  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null; comment?: string | null }) => void;
   checkedIds: readonly string[];
   onToggle: (id: string) => void;
   visible: boolean;
@@ -227,8 +249,24 @@ export function AreaChecklistSheet({
         </Pressable>
       </View>
 
+      {/*
+        Said before the list, not after it.
+
+        This sentence used to sit at the bottom, under the last item — which on
+        a move-out is eighty-three rows down, and on any list is after the
+        technician has already decided the thing looks mandatory. The 2026-09-09
+        field feedback reported the checklist as *preventing* completion. It
+        never has: no answer here is consulted by the area gate or by
+        `completeInspection`. What the screen did was imply otherwise, and an
+        implication answered at the end is not answered at all.
+      */}
+      <Text className="mt-3 text-xs leading-4 text-muted-foreground">
+        Optional. Nothing here has to be answered to finish this area — it is a guide, and a record
+        of what you covered.
+      </Text>
+
       {recording ? (
-        <View className="mt-4 flex-row items-center gap-2 rounded-xl bg-primary/10 px-3 py-2.5">
+        <View className="mt-3 flex-row items-center gap-2 rounded-xl bg-primary/10 px-3 py-2.5">
           <MicIcon size={15} className="text-primary" />
           <Text className="min-w-0 flex-1 text-xs leading-4 text-primary">
             Items tick themselves when you mention them out loud. Tap any item to set it yourself.
@@ -287,9 +325,11 @@ export function AreaChecklistSheet({
             </View>
           );
         })}
+        {/* The "does not block" half of this moved above the list, where it is
+            read before the technician forms an impression rather than after.
+            What is left is the part that is genuinely a footnote. */}
         <Text className="mb-2 mt-1 px-1 text-xs leading-4 text-muted-foreground">
-          The checklist guides coverage. It does not replace the walkthrough video, and an unticked
-          item does not block completing the area.
+          The checklist records coverage. It does not replace the walkthrough.
         </Text>
       </ScrollView>
     </BottomSheet>
