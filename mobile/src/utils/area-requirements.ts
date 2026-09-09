@@ -1,3 +1,5 @@
+import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
+
 import type { InspectionRoom } from '../domain/models';
 
 export type AreaRequirement = {
@@ -32,20 +34,14 @@ export function deriveAreaRequirements(
   /**
    * An occupied inspection does not owe a video for every area.
    *
-   * These are periodic checks during a tenancy, walked room by room in
-   * somebody's home. Where a room is plainly fine, a photograph records that as
-   * well as a walkthrough does and takes a fraction of the time — and requiring
-   * a video regardless is what had technicians filming empty hallways to get
-   * past a disabled button. A move-in and a move-out are different: those are
-   * the condition record a comparison is built from, and the video is the
-   * evidence.
-   *
-   * Evidence is still required. "Not obliged to film" is not "may complete an
-   * area having recorded nothing" — an area with neither a photograph nor a
-   * recording is one nobody can show was inspected. Skipping it remains the
-   * honest way to say there was nothing to capture, and it is unchanged.
+   * The rule and its reasoning moved to `inspectionRequiresAreaRecording` in
+   * `@texasrenters/shared`, because it was stated here and *not* on the server:
+   * `completeRoom` went on refusing anything without an uploaded video, so a
+   * technician who photographed a room saw this gate open and was then answered
+   * `409 ROOM_VIDEO_REQUIRED`. Both sides read the shared function now, and
+   * neither should restate it.
    */
-  const filmingOptional = room.inspectionType === 'OCCUPIED';
+  const filmingOptional = !inspectionRequiresAreaRecording(room.inspectionType);
 
   const requirements: AreaRequirement[] = filmingOptional
     ? [
