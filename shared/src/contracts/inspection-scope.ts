@@ -131,15 +131,29 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 /**
  * Which set of checklist items this visit asks about an area.
  *
- * Both sets are persisted against the same area and only one is asked at a
+ * All three sets are persisted against the same area and only one is asked at a
  * time. Getting this wrong is the original bug: a technician servicing an air
  * conditioner was asked about the floor coverings, because the area's only
  * checklist was the room one written for the move-in.
+ *
+ * OCCUPIED is the same mistake in a quieter costume, and it survived far longer
+ * because the list it was handed is not absurd — merely far too long. A
+ * periodic look around an occupied home was asking the full move-out
+ * evaluation of every component in every room. See `occupied-checklist.ts`.
  */
 export function checklistKindFor(
   inspectionType: string | null | undefined,
-): 'ROOM' | 'AIR_CONDITIONING' | 'NONE' {
+): 'ROOM' | 'AIR_CONDITIONING' | 'OCCUPIED' | 'NONE' {
   switch (inspectionType) {
+    /**
+     * A short assessment of the room, not an evaluation of its components.
+     *
+     * Only OCCUPIED. Back-to-market is deliberately left on the room list: it
+     * is the inspection that decides what has to be made good before the next
+     * tenancy, so the detail is the point of it.
+     */
+    case InspectionType.OCCUPIED:
+      return 'OCCUPIED';
     // Nothing to score. A lockbox is placed or it is not, and a filter is
     // delivered or it is not; the evidence is the answer. Asking the room
     // checklist here would be the original bug in a new costume — a technician

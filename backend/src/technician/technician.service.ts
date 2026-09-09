@@ -6,7 +6,7 @@ import {
   inspectionRequiresEveryArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
-import { checklistKindWhere } from '../common/checklist-kind';
+import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
@@ -944,10 +944,12 @@ export class TechnicianService {
            *
            * An HVAC visit inspects the property's system as one subject and
            * asks the same questions everywhere, so its items are stored once
-           * per organization rather than copied onto every property. Every
-           * other visit asks about the specific room it is standing in.
+           * per organization rather than copied onto every property. An
+           * occupied visit is organization-wide for a stronger reason still:
+           * "Room condition" is the same question in a kitchen and in a
+           * hallway. Only the room list is per area.
            */
-          ...(checklistKindFor(room.inspection.inspectionType) === 'AIR_CONDITIONING'
+          ...(checklistItemsAreOrganizationWide(checklistKindFor(room.inspection.inspectionType))
             ? { organizationId: user.organizationId, propertyAreaId: null }
             : { propertyAreaId: room.propertyAreaId }),
           archivedAt: null,
@@ -1055,18 +1057,19 @@ export class TechnicianService {
      * entirely and the report would show an assessment against a room nobody
      * inspected.
      *
-     * The second half is not optional: the HVAC checklist is stored once per
-     * organization with a null area, because it asks the same questions of every
-     * system in the portfolio. `roomChecklist` was taught that and this was not,
-     * so an HVAC technician could see all sixty items and record none of them —
-     * every write answered 404.
+     * The second half is not optional: the HVAC and occupied checklists are
+     * stored once per organization with a null area, because they ask the same
+     * questions of every system, and of every room, in the portfolio.
+     * `roomChecklist` was taught that and this was not, so an HVAC technician
+     * could see all sixty items and record none of them — every write answered
+     * 404.
      */
     const kind = checklistKindFor(room.inspection.inspectionType);
     const item = await this.prisma.areaChecklistItem.findFirst({
       where: {
         id: itemId,
         archivedAt: null,
-        ...(kind === 'AIR_CONDITIONING'
+        ...(checklistItemsAreOrganizationWide(kind)
           ? { organizationId: user.organizationId, propertyAreaId: null }
           : { propertyAreaId: room.propertyAreaId }),
       },
@@ -1769,7 +1772,13 @@ export class TechnicianService {
             assignments: { some: { technicianId: user.id, isCurrent: true } },
           },
         },
-        select: { id: true, inspectionId: true, propertyAreaId: true },
+        select: {
+          id: true,
+          inspectionId: true,
+          propertyAreaId: true,
+          // Decides where a tagged checklist item is stored, below.
+          inspection: { select: { inspectionType: true } },
+        },
       });
       if (!area)
         throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
@@ -1787,7 +1796,15 @@ export class TechnicianService {
        */
       if (dto.checklistItemId) {
         const item = await this.prisma.areaChecklistItem.findFirst({
-          where: { id: dto.checklistItemId, propertyAreaId: area.propertyAreaId },
+          where: {
+            id: dto.checklistItemId,
+            // Or to the organization — the same null-area rule the scoring
+            // route needs, for the same reason. Without it a photograph
+            // evidencing an HVAC or occupied item is refused outright.
+            ...(checklistItemsAreOrganizationWide(checklistKindFor(area.inspection.inspectionType))
+              ? { organizationId: user.organizationId, propertyAreaId: null }
+              : { propertyAreaId: area.propertyAreaId }),
+          },
           select: { id: true },
         });
         if (!item)

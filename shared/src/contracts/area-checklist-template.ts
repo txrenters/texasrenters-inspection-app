@@ -18,6 +18,8 @@
  * the finding, not the checklist.
  */
 
+import { occupiedChecklistTemplate } from './occupied-checklist.js';
+
 /** Bumped when the tables below change, so regenerated lists can be told apart. */
 export const CHECKLIST_TEMPLATE_VERSION = 'nordway-2026-08';
 
@@ -254,16 +256,23 @@ export function airConditioningChecklistTemplate(): string[] {
 /**
  * The default items for an area, for a given kind of visit.
  *
- * The one entry point callers should reach for. Both sets are persisted against
- * the same area and only one is asked at a time, so getting the kind wrong is
- * how a technician servicing an air conditioner is asked about the floor
- * coverings — which is the bug this whole change exists to fix.
+ * The one entry point callers should reach for. All three sets are persisted
+ * against the same area and only one is asked at a time, so getting the kind
+ * wrong is how a technician servicing an air conditioner is asked about the
+ * floor coverings — which is the bug this whole change exists to fix.
+ *
+ * OCCUPIED ignores `area` entirely, and that is the point of it: the two
+ * questions an occupied visit asks are the same in a kitchen and in a hallway,
+ * so nothing here depends on which room it is. It takes the parameter only to
+ * keep one signature for every kind.
  */
 export function checklistTemplateForKind(
   area: ChecklistTemplateArea,
-  kind: 'ROOM' | 'AIR_CONDITIONING',
+  kind: 'ROOM' | 'AIR_CONDITIONING' | 'OCCUPIED',
 ): string[] {
-  return kind === 'AIR_CONDITIONING' ? airConditioningChecklistTemplate() : checklistTemplateFor(area);
+  if (kind === 'AIR_CONDITIONING') return airConditioningChecklistTemplate();
+  if (kind === 'OCCUPIED') return occupiedChecklistTemplate();
+  return checklistTemplateFor(area);
 }
 
 /**

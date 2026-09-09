@@ -1,0 +1,13 @@
+-- An occupied inspection asks its own short list, rather than the move-out one.
+--
+-- `checklistTemplateFor` took an area and nothing else, so an occupied visit was
+-- served the byte-identical per-room list as a move-out: roughly eighty items
+-- for a three-bed house, each a tri-state on three axes, against a visit the
+-- office allows fifteen minutes. Reported from the field, 2026-09-09.
+--
+-- Only the enum member is needed. The rows themselves are organization-wide
+-- (`propertyAreaId IS NULL`), written lazily at inspection creation exactly as
+-- the HVAC list is, and the partial unique index on
+-- ("organizationId", "kind", "label") created by 202609020002 already covers
+-- them — a new kind needs no new index.
+ALTER TYPE "AreaChecklistItemKind" ADD VALUE IF NOT EXISTS 'OCCUPIED';
