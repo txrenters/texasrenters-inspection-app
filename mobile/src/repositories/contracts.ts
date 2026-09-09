@@ -184,6 +184,13 @@ export interface InspectionRepository {
   resolveEvidenceRequest(requestId: string): Promise<void>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
   skipRoom(roomId: string, reason?: string): Promise<InspectionRoom>;
+  /**
+   * Takes a room off the inspection entirely — one the property does not have.
+   *
+   * Returns nothing to merge: the room is gone, so the caller invalidates
+   * rather than patching an entity that no longer exists.
+   */
+  removeRoom(roomId: string): Promise<{ id: string; removed: boolean; name: string }>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
   /**
    * Records that the technician read the AI summary for an area and it matches

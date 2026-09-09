@@ -590,6 +590,20 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
         void refresh();
       },
     }),
+    /**
+     * Removes the room from the inspection entirely.
+     *
+     * No `mergeEntity` and no optimistic patch: the room is gone, so there is
+     * no entity to merge into and the caller navigates away. `refresh` is what
+     * drops it from the area list the technician returns to.
+     */
+    remove: useMutation({
+      mutationFn: () => repositories.inspections.removeRoom(roomId),
+      onSuccess: () => {
+        client.removeQueries({ queryKey: queryKeys.room(roomId) });
+        void refresh();
+      },
+    }),
     skip: useMutation({
       mutationFn: (reason?: string) => repositories.inspections.skipRoom(roomId, reason),
       onSuccess: (room) => {
