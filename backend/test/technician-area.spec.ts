@@ -275,3 +275,82 @@ describe('technician manual area creation', () => {
     ).rejects.toMatchObject({ status: 422, code: 'INSPECTION_HAS_NO_PROPERTY' });
   });
 });
+
+/**
+ * An area added on site gets the list the *visit* will actually read.
+ *
+ * Reported 2026-09-10: "make sure our app is smart enough to know the kind of
+ * inspection — if the technician is doing an occupied inspection and adds an
+ * area, the checklist should align with it."
+ *
+ * Only a ROOM visit reads a per-area list. An occupied visit reads the
+ * organization's short list and an HVAC visit the equipment one, both stored
+ * once with a null area; a lockbox visit reads nothing. So on any of those, the
+ * rows written here are for *later* inspections of this property — which makes
+ * the provider call latency in front of somebody who will never see its output,
+ * inside a fifteen-minute visit.
+ */
+describe('the checklist an added area is given', () => {
+  function withType(inspectionType: string | undefined) {
+    const { prisma, tx } = buildPrisma({
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({ ...inspectionRecord, inspectionType }),
+      },
+    });
+    const generate = jest.fn().mockResolvedValue({ items: [['A model item']] });
+    const built = new TechnicianService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      // Positional: (prisma, floorPlanStorage, mediaStorage, mediaProcessing,
+      // technicianEvents?, checklistAi?, aiSettings?). The last three are
+      // @Optional() and appended, so the generator is sixth and the settings
+      // service seventh — reversing them makes `aiSettings.resolve` a function
+      // that does not exist, several frames from anything that says so.
+      undefined,
+      { generate } as never,
+      { resolve: jest.fn().mockResolvedValue({}) } as never,
+    );
+    return { service: built, tx, generate };
+  }
+
+  const add = (svc: TechnicianService) =>
+    svc.createArea(technician, 'insp-1', {
+      name: 'Guest bathroom',
+      environment: 'INDOOR' as never,
+    });
+
+  it('always writes ROOM items, whatever visit added the area', async () => {
+    // The area is the property's, permanently. Its room list is what a later
+    // move-in or move-out will read, so it is written either way — and `kind`
+    // is stated rather than left to the column default, because that field is
+    // what decides whether these rows are ever shown.
+    const { service: svc, tx } = withType('OCCUPIED');
+    await add(svc);
+    const rows = tx.areaChecklistItem.createMany.mock.calls[0]?.[0]?.data
+      ?? (tx.propertyArea.create.mock.calls[0][0].data.checklistItems.createMany.data as {
+        kind: string;
+      }[]);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row: { kind: string }) => row.kind === 'ROOM')).toBe(true);
+  });
+
+  it.each([['OCCUPIED'], ['HVAC'], ['SUPRA_LOCKBOX_PLACEMENT']])(
+    'does not wait on the model during a %s visit',
+    async (inspectionType) => {
+      const { service: svc, generate } = withType(inspectionType);
+      await add(svc);
+      expect(generate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([['MOVE_IN'], ['MOVE_OUT'], ['BACK_TO_MARKET']])(
+    'still asks the model on a %s visit, which does read this list',
+    async (inspectionType) => {
+      const { service: svc, generate } = withType(inspectionType);
+      await add(svc);
+      expect(generate).toHaveBeenCalled();
+    },
+  );
+});
