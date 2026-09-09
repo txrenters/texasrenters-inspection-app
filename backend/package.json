@@ -40,6 +40,7 @@
     "stream:webhook": "node --env-file-if-exists=.env.local scripts/configure-cloudflare-stream-webhook.mjs",
     "db:reset-inspections": "node --env-file-if-exists=.env.local scripts/reset-inspection-data.mjs",
     "db:backfill-area-classification": "node --env-file-if-exists=.env.local scripts/backfill-area-classification.mjs",
+    "db:backfill-standard-layout": "node --env-file-if-exists=.env.local scripts/backfill-standard-layout.mjs",
     "db:setup-app-role": "node --env-file-if-exists=.env.local scripts/setup-app-database-role.mjs"
   },
   "dependencies": {

@@ -85,3 +85,60 @@ describe('when it is not', () => {
     expect(layoutAreasFor(areas).map((area) => area.id)).toEqual(['a', 'b']);
   });
 });
+
+/**
+ * The names are the office's, read off a real occupied inspection: 14547
+ * Gleaming Rose Dr, walked by Moses Rodriguez on 2026-09-08 under their own
+ * "Occupied Inspection" template.
+ *
+ * Not cosmetic. A report import matches existing areas by **normalised name**,
+ * so a template that calls a room something the office does not creates a
+ * duplicate rather than filling in the room it meant — which is the collision
+ * `standardLayoutSuperseded` exists to contain, made needlessly likely.
+ */
+describe('the standard layout uses the office’s own room names', () => {
+  const names = STANDARD_PROPERTY_LAYOUT.map((area) => area.name);
+
+  it.each([
+    ['Main Bedroom'],
+    ['Main Bathroom'],
+    ['Bedroom 2'],
+    ['Bathroom 2'],
+    ['Bedroom 3'],
+    ['Kitchen'],
+    ['Laundry'],
+    ['Entrance'],
+    ['Garage/Carport'],
+    ['Front Exterior'],
+    ['Rear Exterior'],
+    ['Code & Cut Offs'],
+  ])('has a heading the report also has: %s', (name) => {
+    expect(names).toContain(name);
+  });
+
+  it.each([['Second Bedroom'], ['Second Bathroom'], ['Third Bedroom'], ['Garage'], ['Exterior']])(
+    'no longer guesses at %s',
+    (guess) => {
+      expect(names).not.toContain(guess);
+    },
+  );
+
+  it('keeps the required set to rooms every rental has', () => {
+    // An occupied visit counts only its required areas, so anything a property
+    // might not have belongs in the optional tail — otherwise a one-bedroom
+    // house cannot be finished without skipping rooms it never had.
+    expect(STANDARD_PROPERTY_LAYOUT.filter((a) => a.isRequired).map((a) => a.name)).toEqual([
+      'Living Room',
+      'Kitchen',
+      'Main Bedroom',
+      'Main Bathroom',
+      'Front Exterior',
+    ]);
+  });
+
+  it('gives every area a name of its own', () => {
+    // The unique index is on (propertyId, unitId, floorId, name), so a repeat
+    // would silently write one row fewer than the list has entries.
+    expect(new Set(names).size).toBe(names.length);
+  });
+});
