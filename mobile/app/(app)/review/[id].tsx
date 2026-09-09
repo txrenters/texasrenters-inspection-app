@@ -21,6 +21,7 @@ import type { InspectionReportRoom } from '@/src/domain/models';
 import { useInspectionActions, useInspectionReport } from '@/src/features/queries';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { AI_REVIEW_DISCLAIMER } from '@/src/utils/ai-review';
+import { deriveAreaStatus } from '@/src/utils/area-status';
 import { FINISHED_STATUSES, evaluateSubmissionGate } from '@/src/utils/submission-gate';
 import { HomeButton } from '@/src/components/HomeButton';
 import { registerIcons } from '@/src/lib/icons';
@@ -54,6 +55,22 @@ function RoomReviewRow({
   inspectionId: string;
   room: InspectionReportRoom;
 }) {
+  /**
+   * The status a technician recognises, not the column behind it.
+   *
+   * This row printed `readable(room.completionStatus)` — the raw server enum,
+   * prettified — so an area walked with photographs and not yet submitted read
+   * **"Not started"** on the screen where the technician checks their work
+   * before handing it in. `completionStatus` only moves when a recording is
+   * saved, or the area is completed or skipped; it has never known about
+   * photographs.
+   *
+   * `deriveAreaStatus` is the function that does, and every other surface in
+   * the app already asks it. Doing the same here also picks up the states this
+   * row could not express at all: an upload in flight, one that failed, an
+   * analysis still running.
+   */
+  const status = deriveAreaStatus(room);
   const finished = FINISHED_STATUSES.has(room.completionStatus);
   const findingCount = room.findings?.length ?? 0;
   return (
@@ -97,9 +114,15 @@ function RoomReviewRow({
         ) : null}
       </View>
       <Text
-        className={`text-xs font-semibold ${finished ? 'text-chart-3' : 'text-muted-foreground'}`}
+        className={`text-xs font-semibold ${
+          finished
+            ? 'text-chart-3'
+            : status.needsAttention
+              ? 'text-chart-4'
+              : 'text-muted-foreground'
+        }`}
       >
-        {readable(room.completionStatus)}
+        {status.label}
       </Text>
       <ChevronRightIcon size={15} className="text-muted-foreground" />
     </Pressable>
