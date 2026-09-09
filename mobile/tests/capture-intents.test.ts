@@ -1,4 +1,4 @@
-import { snapshotMode, stopRequestOutcome } from '../src/capture/capture-intents';
+import { initialCameraMode, snapshotMode, stopRequestOutcome } from '../src/capture/capture-intents';
 
 /**
  * Exercised as predicates rather than through a renderer, matching the
@@ -38,5 +38,36 @@ describe('what a stop control does', () => {
     // not raise a question about ending a take that never started.
     expect(stopRequestOutcome({ recording: false, stopping: false })).toBe('ignore');
     expect(stopRequestOutcome({ recording: false, stopping: true })).toBe('ignore');
+  });
+});
+
+/**
+ * Reported from the field, 2026-09-10: "I can't take a picture without making a
+ * recording first — for occupied inspection we want it fast."
+ *
+ * It was never a rule. `mode` on `CameraView` selects image **or** video output
+ * and the screen hard-coded `video`, so the image-capture use case was never
+ * bound and `takePictureAsync` had nothing to shoot with on Android. A default
+ * nobody had revisited, wearing the costume of a workflow requirement.
+ */
+describe('which use case the camera binds when the screen opens', () => {
+  it('opens ready to photograph when the visit does not owe a recording', () => {
+    // An occupied visit is often only photographs: look at the room, take a
+    // picture, leave a note, film only if something warrants it.
+    expect(initialCameraMode(false)).toBe('picture');
+  });
+
+  it('opens ready to film when the visit does owe a recording', () => {
+    // A move-in or move-out is the condition record a comparison is built from,
+    // and the walkthrough is the evidence — so filming is the first thing its
+    // technician does, and making them wait for a rebind would be a regression.
+    expect(initialCameraMode(true)).toBe('video');
+  });
+
+  it('is the only thing that decides the opening mode', () => {
+    // Keyed on `inspectionRequiresAreaRecording`, the same rule the completion
+    // gate and the server both read. Stated as a boolean so this file stays
+    // free of the inspection-type taxonomy.
+    expect(new Set([initialCameraMode(true), initialCameraMode(false)]).size).toBe(2);
   });
 });

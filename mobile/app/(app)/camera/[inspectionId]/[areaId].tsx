@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CameraView,
+  type CameraMode,
   type CameraType,
   useCameraPermissions,
   useMicrophonePermissions,
@@ -39,7 +40,7 @@ import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
 import { StopRecordingSheet } from '@/src/capture/StopRecordingSheet';
-import { snapshotMode, stopRequestOutcome } from '@/src/capture/capture-intents';
+import { initialCameraMode, snapshotMode, stopRequestOutcome } from '@/src/capture/capture-intents';
 import {
   GUIDED_CAPTURE_POLICY,
   clampRotationDegrees,
@@ -59,6 +60,7 @@ import {
   useRoom,
   useRoomChecklist,
 } from '@/src/features/queries';
+import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
@@ -80,6 +82,16 @@ registerIcons(
 );
 
 const MAX_RECORDING_SECONDS = 10 * 60;
+
+/**
+ * How long to wait for the camera to rebind between stills and video.
+ *
+ * Only ever waited on when the two differ, which is an occupied visit whose
+ * technician has chosen to film. Generous because it is the pause before a
+ * recording rather than during one, and bounded because `onCameraReady` firing
+ * again after a mode change is the native module's business, not a promise.
+ */
+const CAMERA_REBIND_TIMEOUT_MS = 1_500;
 
 // A stable empty array: returning a fresh [] from the selector would give
 // zustand a new reference every render and loop on "getSnapshot should be
@@ -171,6 +183,34 @@ export default function RoomCameraScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
+  /**
+   * Which use case the camera has bound: stills or video, never both.
+   *
+   * This screen hard-coded `video`, so the image-capture use case was never
+   * bound and a technician who had not started recording could not photograph
+   * at all — on Android `takePictureAsync` has nothing to shoot with. It read
+   * as a rule ("film before you can photograph") and was a default nobody had
+   * revisited.
+   *
+   * An occupied visit therefore opens on `picture`, because it is often only
+   * photographs; every other visit opens on `video`, which is what its
+   * technician does first. `bindCamera` moves between them.
+   */
+  const requiresRecording = inspectionRequiresAreaRecording(room.data?.inspectionType);
+  const [cameraMode, setCameraMode] = useState<CameraMode>(() =>
+    initialCameraMode(requiresRecording),
+  );
+  // Read inside async work, where the state value would be the one captured
+  // when the callback was created.
+  const cameraModeRef = useRef(cameraMode);
+  /**
+   * Resolvers waiting for the camera to finish re-configuring.
+   *
+   * Changing `mode` rebinds the use case, and `recordAsync` on a camera still
+   * bound to stills fails. `onCameraReady` fires again once the new binding is
+   * live, which is the only signal available that it is safe to proceed.
+   */
+  const readyWaiters = useRef<(() => void)[]>([]);
   /**
    * Which of the camera's offered sizes stills are captured at.
    *
@@ -396,10 +436,49 @@ export default function RoomCameraScreen() {
     };
   };
 
+  /** The camera has finished configuring — release anything waiting on it. */
+  const markCameraReady = () => {
+    setReady(true);
+    const waiting = readyWaiters.current;
+    readyWaiters.current = [];
+    for (const resolve of waiting) resolve();
+  };
+
+  /**
+   * Rebinds the camera to `next`, resolving once it reports ready again.
+   *
+   * Returns immediately when it is already bound that way, so a visit that
+   * opens on `video` — every kind but occupied — reaches `recordAsync` by
+   * exactly the path it did before, with no wait and no new failure mode.
+   *
+   * On timeout it resolves anyway rather than refusing. Whether
+   * `onCameraReady` fires a second time after a mode change is a detail of the
+   * native module, and betting a technician's ability to record on it would
+   * turn a missing callback into "the record button does nothing". Proceeding
+   * is no worse than before: if the binding really has not applied,
+   * `recordAsync` reports it through the error path that already exists.
+   */
+  const bindCamera = (next: CameraMode) =>
+    new Promise<void>((resolve) => {
+      if (cameraModeRef.current === next) return resolve();
+      cameraModeRef.current = next;
+      setReady(false);
+      setCameraMode(next);
+      const timer = setTimeout(resolve, CAMERA_REBIND_TIMEOUT_MS);
+      readyWaiters.current.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
   const beginRecording = async () => {
     if (!(await requestPermissions())) return;
     if (!camera || !ready || recording) return;
     setError(null);
+    // Stills and video are separate bindings, so a screen that opened ready to
+    // photograph has to become a video camera before it can record.
+    await bindCamera('video');
+    if (!mountedRef.current) return;
     secondsRef.current = 0;
     setSeconds(0);
     sessionStartedAtRef.current = new Date().toISOString();
@@ -500,6 +579,16 @@ export default function RoomCameraScreen() {
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The video could not be recorded.');
+      /**
+       * Give the shutter back.
+       *
+       * The success path leaves through `router.replace`, so the screen is
+       * gone and the next one opens bound correctly. A failure keeps the
+       * technician here — on a camera now bound to video, unable to photograph
+       * the room they came to photograph. That would turn one failed recording
+       * into an area they cannot finish at all.
+       */
+      if (mountedRef.current) void bindCamera(initialCameraMode(requiresRecording));
     } finally {
       if (mountedRef.current) {
         setRecording(false);
@@ -651,7 +740,7 @@ export default function RoomCameraScreen() {
         style={StyleSheet.absoluteFill}
         facing={facing}
         enableTorch={torch && facing === 'back'}
-        mode="video"
+        mode={cameraMode}
         mute={false}
         videoQuality="720p"
         /**
@@ -662,7 +751,7 @@ export default function RoomCameraScreen() {
          * this screen had before.
          */
         pictureSize={pictureSize}
-        onCameraReady={() => setReady(true)}
+        onCameraReady={markCameraReady}
         onMountError={(event) => setError(event.message)}
       />
       <View className="absolute inset-x-0 top-0 h-44 bg-black/45" />
