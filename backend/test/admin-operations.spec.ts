@@ -217,6 +217,16 @@ describe('administrator inspection operations', () => {
       propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      /**
+       * An occupied inspection writes the organization's two-question
+       * checklist on the way past (`ensureOccupiedChecklist`), so a double
+       * standing in for a transaction has to answer for it.
+       *
+       * Absent, these two tests failed with `Cannot read properties of
+       * undefined (reading 'createMany')` — a message about a mock, several
+       * frames from the line that actually mattered.
+       */
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       inspection: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
@@ -265,6 +275,16 @@ describe('administrator inspection operations', () => {
       propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      /**
+       * An occupied inspection writes the organization's two-question
+       * checklist on the way past (`ensureOccupiedChecklist`), so a double
+       * standing in for a transaction has to answer for it.
+       *
+       * Absent, these two tests failed with `Cannot read properties of
+       * undefined (reading 'createMany')` — a message about a mock, several
+       * frames from the line that actually mattered.
+       */
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       inspection: {
         findFirst: jest.fn().mockResolvedValueOnce({ id: 'move-in-1' }).mockResolvedValueOnce(null),
         create: jest.fn().mockResolvedValue({ id: 'occupied-1' }),
@@ -321,6 +341,16 @@ describe('administrator inspection operations', () => {
         propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
         propertywareLease: { findFirst: jest.fn() },
         propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      /**
+       * An occupied inspection writes the organization's two-question
+       * checklist on the way past (`ensureOccupiedChecklist`), so a double
+       * standing in for a transaction has to answer for it.
+       *
+       * Absent, these two tests failed with `Cannot read properties of
+       * undefined (reading 'createMany')` — a message about a mock, several
+       * frames from the line that actually mattered.
+       */
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
         inspection: {
           // A move-in exists; the predecessor in the chain does not.
           findFirst: jest.fn().mockResolvedValueOnce({ id: 'move-in-1' }).mockResolvedValue(null),

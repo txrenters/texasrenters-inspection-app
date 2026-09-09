@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { InspectionType, PropertyAreaStatus } from '@prisma/client';
+import { AreaChecklistItemKind, InspectionType, PropertyAreaStatus } from '@prisma/client';
 import { STANDARD_LAYOUT_SOURCE, STANDARD_PROPERTY_LAYOUT } from '@texasrenters/shared';
 
 import {
@@ -135,7 +135,17 @@ describe('an occupied inspection at a property nobody has laid out', () => {
     // there is dropped by the pooler and loses the inspection with it.
     const { tx, checklistCreateMany } = client();
     await insertInspection(tx, plan(InspectionType.OCCUPIED), details);
-    const items = checklistCreateMany.mock.calls[0][0].data as { label: string }[];
+    /**
+     * Not `calls[0]`. An occupied inspection also writes the organization's
+     * two-question list through `ensureOccupiedChecklist`, and that one goes
+     * first — so indexing by position asserted against the wrong write the
+     * moment the two features met on main. Selected by kind instead, which is
+     * what actually distinguishes them.
+     */
+    const roomWrite = checklistCreateMany.mock.calls.find(
+      ([argument]) => argument.data[0]?.kind === AreaChecklistItemKind.ROOM,
+    );
+    const items = roomWrite![0].data as { label: string }[];
     expect(items.length).toBeGreaterThan(STANDARD_PROPERTY_LAYOUT.length);
     expect(items.map((item) => item.label)).toEqual(
       expect.arrayContaining(['Bath, shower and taps', 'Stove, hobs and griller']),

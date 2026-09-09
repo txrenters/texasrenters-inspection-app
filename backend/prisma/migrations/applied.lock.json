@@ -39,5 +39,6 @@
   "202609040001_import_job_committed_at": "cd24f83303d7ceb3",
   "202609040002_client_error_report": "e6f0095433fae329",
   "202609040003_hvac_checklist_shape": "c462066a7fa21147",
-  "202609040004_propertyware_tenant": "eb079a25fa1a76fe"
+  "202609040004_propertyware_tenant": "eb079a25fa1a76fe",
+  "202609090001_occupied_checklist": "6fa6af51c4118396"
 }

@@ -12,10 +12,12 @@ import {
 import {
   AreaScope,
   HVAC_CHECKLIST,
+  OCCUPIED_CHECKLIST,
   STANDARD_LAYOUT_NOTE,
   STANDARD_LAYOUT_SOURCE,
   STANDARD_PROPERTY_LAYOUT,
   areaScopeFor,
+  checklistKindFor,
   checklistTemplateFor,
   layoutAreasFor,
   inspectionComparesToBaseline,
@@ -655,6 +657,49 @@ async function ensureHvacChecklist(tx: InspectionCreationClient, organizationId:
 }
 
 /**
+ * Makes sure the organization's occupied checklist exists.
+ *
+ * Organization-wide for the same reason the HVAC list is, and for a stronger
+ * one: "Room condition" is the same question in a kitchen and in a hallway, so
+ * there is nothing per-area about it at all. Writing it per area would put two
+ * rows on every area of every property and leave thousands of copies to be kept
+ * in step when the office rewords an option.
+ *
+ * The answers stay separate regardless — `InspectionAreaChecklistResponse` is
+ * unique on `(inspectionAreaId, checklistItemId)`, so every room records its own
+ * answer against the one shared item.
+ *
+ * `skipDuplicates` and the same partial unique index the HVAC list relies on, so
+ * a re-run is free and two inspections created at the same moment cannot produce
+ * two sets. An answer already recorded survives, because the row is reused
+ * rather than replaced.
+ *
+ * No keywords. These are not items a spoken walkthrough can tick: no phrasing in
+ * a transcript means "the overall condition of this room is Fair", and matching
+ * the bare word "condition" against narration would answer the question for the
+ * technician. They are two taps, which is the entire point of the list.
+ */
+async function ensureOccupiedChecklist(tx: InspectionCreationClient, organizationId: string) {
+  await tx.areaChecklistItem.createMany({
+    data: OCCUPIED_CHECKLIST.map((item, index) => ({
+      organizationId,
+      propertyAreaId: null,
+      kind: AreaChecklistItemKind.OCCUPIED,
+      label: item.label,
+      // Two items need no heading, and an empty-looking subheading above every
+      // room is worse than none.
+      section: null,
+      responseType: item.responseType,
+      unit: null,
+      choices: item.choices,
+      keywords: [],
+      sortOrder: index,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+/**
  * Gives a property the standard layout when it has none, and returns the areas.
  *
  * The Jobber sync's own comment names the problem: visits are refused or
@@ -800,12 +845,24 @@ export async function insertInspection(
     areaIds = [await hvacSystemArea(tx, plan)];
   } else {
     /**
+     * An occupied visit walks ordinary rooms, so it resolves its areas exactly
+     * as every other type does — only the questions differ. The list is written
+     * here rather than at floor-plan approval because it is not a property's
+     * list: it belongs to the organization, and a property that has never had an
+     * occupied inspection has no reason to carry a copy.
+     */
+    if (checklistKindFor(plan.inspectionType) === 'OCCUPIED')
+      await ensureOccupiedChecklist(tx, plan.organizationId);
+    /**
      * A visit that walks rooms, at a property with no rooms recorded.
      *
      * Only when the scope is CHOSEN and the plan resolved to nothing — an
      * office selection that came back empty is a property with no approved
      * layout, which is currently every property in this portfolio. Move-in and
      * move-out are excluded on purpose; see `ensureStandardLayout`.
+     *
+     * After the checklist above, and independent of it: an occupied visit at a
+     * property nobody has laid out needs both, and neither reads the other.
      */
     areaIds =
       areaScopeFor(plan.inspectionType) === AreaScope.CHOSEN && !plan.scopedAreas.length

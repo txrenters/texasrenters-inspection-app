@@ -591,7 +591,7 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
       },
     }),
     skip: useMutation({
-      mutationFn: (reason: string) => repositories.inspections.skipRoom(roomId, reason),
+      mutationFn: (reason?: string) => repositories.inspections.skipRoom(roomId, reason),
       onSuccess: (room) => {
         mergeEntity(client, queryKeys.all, room);
         client.setQueryData(queryKeys.room(roomId), room);

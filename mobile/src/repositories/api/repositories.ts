@@ -921,7 +921,7 @@ export class ApiInspectionRepository implements InspectionRepository {
     await this.persistRoom(room);
     return room;
   }
-  async skipRoom(roomId: string, reason: string) {
+  async skipRoom(roomId: string, reason?: string) {
     const room = roomSchema.parse(
       await queueOnConnectionFailure(
         { id: `skip:${roomId}`, kind: 'room-skip', payload: { roomId, reason } },
