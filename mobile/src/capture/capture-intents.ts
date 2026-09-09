@@ -24,6 +24,31 @@ export function snapshotMode(platform: string, recording: boolean): 'marker' | '
 }
 
 /**
+ * Which use case the camera binds when the screen opens.
+ *
+ * `mode` on `CameraView` selects image **or** video output — never both — and
+ * this screen hard-coded `video`. So the image-capture use case was never
+ * bound, and a technician who had not started recording could not take a
+ * photograph at all: on Android `takePictureAsync` has nothing to shoot with.
+ *
+ * It looked like a rule ("you must film before you can photograph") and was
+ * really a default nobody had revisited. Reported from the field 2026-09-10:
+ * an occupied visit is often *only* photographs — the technician looks at the
+ * room, takes a picture, leaves a note, and films only if something warrants
+ * it.
+ *
+ * So an occupied visit opens ready to photograph, and every other visit opens
+ * ready to film, which is what its technician does first. Recording still works
+ * from either: the screen rebinds the camera when the take starts.
+ *
+ * Keyed on the same `inspectionRequiresAreaRecording` the completion gate uses,
+ * passed in as a boolean so this file stays free of the type taxonomy.
+ */
+export function initialCameraMode(requiresRecording: boolean): 'picture' | 'video' {
+  return requiresRecording ? 'video' : 'picture';
+}
+
+/**
  * What a tap on either stop control should do.
  *
  * Ending a take is reachable from two places — the red button and the header
