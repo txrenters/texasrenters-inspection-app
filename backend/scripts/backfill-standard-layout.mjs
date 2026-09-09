@@ -54,6 +54,7 @@ import {
   STANDARD_LAYOUT_NOTE,
   STANDARD_LAYOUT_SOURCE,
   STANDARD_PROPERTY_LAYOUT,
+  NON_ROOM_SOURCES,
   areaScopeFor,
   checklistTemplateFor,
   keywordsFromLabel,
@@ -182,7 +183,17 @@ async function main() {
       // Work still to be walked, and nothing else. See the header.
       status: { in: ['SCHEDULED', 'IN_PROGRESS'] },
       propertywareBuildingId: { not: null },
-      areas: { none: {} },
+      /**
+       * No *room* areas, rather than no areas.
+       *
+       * `hvacSystemArea` attaches one synthetic approved area — "HVAC System",
+       * `source: SYSTEM` — to a property the first time an HVAC visit is
+       * scheduled, and it never goes away. An occupied inspection created at
+       * such a property before that was understood holds exactly that one area
+       * and no rooms, so `none: {}` would walk straight past it and leave the
+       * technician looking at a piece of equipment.
+       */
+      areas: { none: { propertyArea: { source: { notIn: NON_ROOM_SOURCES } } } },
     },
     select: {
       id: true,
