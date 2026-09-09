@@ -3,6 +3,7 @@ import {
   checklistTemplateFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
@@ -1459,12 +1460,44 @@ export class TechnicianService {
 
   async completeRoom(user: AuthenticatedUser, id: string) {
     const existing = await this.assignedRoom(user, id);
-    if (!existing.media.some((item) => item.uploadStatus === MediaUploadStatus.UPLOADED))
-      throw new ApplicationError(
-        409,
-        'ROOM_VIDEO_REQUIRED',
-        'A confirmed uploaded video is required before completing this room.',
-      );
+    const hasRecording = existing.media.some(
+      (item) => item.uploadStatus === MediaUploadStatus.UPLOADED,
+    );
+    /**
+     * An occupied area may be finished with a photograph instead of a video.
+     *
+     * The rule is `inspectionRequiresAreaRecording`, shared with the handset's
+     * completion gate. It has to be, because it was previously stated only on
+     * the handset: #148 taught the gate that an occupied area needs a
+     * photograph *or* a recording, and this method went on demanding an
+     * uploaded video for every type. The two disagreed in the worst direction —
+     * Mark Complete looked enabled, and the request behind it answered 409. A
+     * technician has no way to read that as anything but a broken app.
+     *
+     * Evidence is still required either way. The photograph count is only
+     * queried when the type allows one, so a move-out costs exactly the
+     * round trips it did before.
+     */
+    const photoCount =
+      hasRecording || inspectionRequiresAreaRecording(existing.inspection.inspectionType)
+        ? 0
+        : await this.prisma.inspectionPhoto.count({ where: { inspectionAreaId: id } });
+    if (!hasRecording && photoCount === 0)
+      throw inspectionRequiresAreaRecording(existing.inspection.inspectionType)
+        ? new ApplicationError(
+            409,
+            'ROOM_VIDEO_REQUIRED',
+            'A confirmed uploaded video is required before completing this room.',
+          )
+        : // Named separately because the fix is different: on an occupied area
+          // the technician does not need to go back and film, only to take a
+          // photograph — or to skip the room, which is the honest answer when
+          // there was nothing to capture.
+          new ApplicationError(
+            409,
+            'ROOM_EVIDENCE_REQUIRED',
+            'Photograph this room or record a walkthrough before completing it. Skip it if there was nothing to capture.',
+          );
     const room = await this.prisma.inspectionArea.update({
       where: { id },
       data: {

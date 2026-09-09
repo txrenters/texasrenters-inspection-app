@@ -171,6 +171,38 @@ export function checklistKindFor(
 }
 
 /**
+ * Whether every area of this visit owes a video walkthrough.
+ *
+ * False only for an occupied inspection. These are periodic checks during a
+ * tenancy, walked room by room in somebody's home: where a room is plainly
+ * fine, a photograph records that as well as a walkthrough does and takes a
+ * fraction of the time. Requiring a video regardless is what had technicians
+ * filming empty hallways to get past a disabled button. A move-in and a
+ * move-out are different — those are the condition record a comparison is built
+ * from, and the video is the evidence.
+ *
+ * "Not obliged to film" is not "may finish an area having recorded nothing".
+ * An area with neither a photograph nor a recording is one nobody can show was
+ * inspected; skipping it remains the honest way to say there was nothing to
+ * capture, and that is unchanged.
+ *
+ * ── WHY THIS IS IN SHARED ────────────────────────────────────────────────────
+ *
+ * Because it was written twice and only one copy was changed. The handset's
+ * completion gate learned this rule in #148; `completeRoom` on the server kept
+ * refusing anything without an uploaded video, for every type. So a technician
+ * who photographed a room saw Mark Complete enabled, tapped it, and was
+ * answered `409 ROOM_VIDEO_REQUIRED` — a disagreement between two clients of
+ * the same rule, which is the one thing a shared contract exists to prevent.
+ * Both sides now read this function.
+ */
+export function inspectionRequiresAreaRecording(
+  inspectionType: string | null | undefined,
+): boolean {
+  return inspectionType !== InspectionType.OCCUPIED;
+}
+
+/**
  * Whether this inspection is the one that records the condition others are
  * later compared against.
  *

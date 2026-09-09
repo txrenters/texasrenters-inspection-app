@@ -6,6 +6,7 @@ import {
   checklistKindFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
 } from '../src/contracts/inspection-scope.js';
 import { InspectionType } from '../src/enums/index.js';
@@ -193,5 +194,36 @@ describe('which checklist a visit asks about an area', () => {
 
   it('still asks the room checklist for an unrecognised type', () => {
     expect(checklistKindFor('SOMETHING_NEW')).toBe('ROOM');
+  });
+});
+
+describe('which visits owe a video walkthrough of every area', () => {
+  /**
+   * The rule that was stated on the handset and not on the server. #148 taught
+   * the completion gate that an occupied area needs a photograph *or* a
+   * recording; `completeRoom` went on demanding an uploaded video for every
+   * type, so Mark Complete looked enabled and the request behind it answered
+   * 409. Both sides read this function now.
+   */
+  it('excuses only an occupied inspection', () => {
+    expect(inspectionRequiresAreaRecording(InspectionType.OCCUPIED)).toBe(false);
+  });
+
+  it.each([
+    [InspectionType.MOVE_IN],
+    [InspectionType.MOVE_OUT],
+    [InspectionType.BACK_TO_MARKET],
+    [InspectionType.HVAC],
+  ])('still requires one on %s', (type) => {
+    // A move-in and a move-out are the condition record a comparison is built
+    // from, and the walkthrough is the evidence. Photographs do not replace it.
+    expect(inspectionRequiresAreaRecording(type)).toBe(true);
+  });
+
+  it('requires one for an unrecognised type', () => {
+    // The safe direction: a type nobody has taught this rule asks for the
+    // stronger evidence, not the weaker.
+    expect(inspectionRequiresAreaRecording('SOMETHING_NEW')).toBe(true);
+    expect(inspectionRequiresAreaRecording(null)).toBe(true);
   });
 });
