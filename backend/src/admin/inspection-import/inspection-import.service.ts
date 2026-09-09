@@ -27,7 +27,8 @@ import type {
 import {
   type AreaCategory,
   type AreaEnvironment,
-  InspectionSource
+  InspectionSource,
+  InspectionStatus
 } from '@prisma/client';
 import { classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
 
@@ -188,7 +189,7 @@ export class InspectionImportService {
     if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-')
       throw new ApplicationError(400, 'REPORT_NOT_A_PDF', 'That file is not a PDF.');
 
-    const inspection = await this.requireSeedableInspection(user, inspectionId);
+    const inspection = await this.requireImportableInspection(user, inspectionId);
     const fingerprint = reportFingerprint(file.buffer);
 
     const previous = await this.findPreviousImport(user.organizationId, fingerprint);
@@ -541,11 +542,11 @@ export class InspectionImportService {
 
     const report = job.output as unknown as ImportedReport;
     const fingerprint = job.fingerprint;
-    // Re-checked at commit, not trusted from the read. Minutes pass while a
-    // report is parsed, and an inspection that gained evidence in between must
-    // not have it written over.
-    // Only the check runs here; `runCommit` reads the building off `target`.
-    const target = await this.requireSeedableInspection(user, job.inspectionId);
+    // Re-read at commit, not trusted from the start. Minutes pass while a
+    // report is parsed, and the inspection can be deleted or moved to another
+    // property in that window — so the commit writes against what is there now,
+    // and `runCommit` takes the property and the unit scope off this `target`.
+    const target = await this.requireImportableInspection(user, job.inspectionId);
 
     // The same file twice is almost always somebody clicking again, and a
     // second baseline for one walkthrough is worse than a refusal: the
@@ -596,7 +597,7 @@ export class InspectionImportService {
     jobId: string,
     fingerprint: string,
     report: ImportedReport,
-    target: Awaited<ReturnType<InspectionImportService['requireSeedableInspection']>>,
+    target: Awaited<ReturnType<InspectionImportService['requireImportableInspection']>>,
   ) {
    try {
     const property = target.building;
@@ -604,6 +605,20 @@ export class InspectionImportService {
     const photos = extractPhotos(bytes);
     const perPage = await countPhotosPerPage(bytes);
     const stored = await this.storePhotos(user.organizationId, fingerprint, photos);
+
+    /**
+     * The photographs this import is about to supersede.
+     *
+     * Read before the transaction and deleted from storage only after it
+     * commits. The other order — clearing objects as the rows go — destroys the
+     * evidence an import was going to replace even when that import then rolls
+     * back, and this one rolls back for a living: a single duplicated checklist
+     * row took a fifteen-area commit down with it.
+     */
+    const superseded = await this.prisma.inspectionPhoto.findMany({
+      where: { inspectionId: target.id },
+      select: { storageKey: true },
+    });
 
     const inspectionId = await this.prisma.$transaction(async (tx) => {
       await tx.property.upsert({
@@ -634,6 +649,32 @@ export class InspectionImportService {
       });
       const inspection = { id: target.id };
 
+      /**
+       * What was here before, cleared in one place before anything new lands.
+       *
+       * An import is what the office reaches for when the record here is
+       * *wrong*, so the report supersedes what it finds rather than merging
+       * into it. Merging is worse than it sounds: a second import would stack
+       * its photographs on top of the first, and `worseOf` — which is right for
+       * two rows of one report disagreeing — would let a defect from a stale
+       * walkthrough outrank a clean grade in the new one, permanently.
+       *
+       * Responses go first because they hang off areas: an area whose
+       * photographs were cleared but whose grades survived would report a
+       * condition that nothing evidences. Both are scoped to this inspection.
+       */
+      const replacedResponses = await tx.inspectionAreaChecklistResponse.deleteMany({
+        where: { inspectionArea: { inspectionId: inspection.id } },
+      });
+      const replacedPhotos = await tx.inspectionPhoto.deleteMany({
+        where: { inspectionId: inspection.id },
+      });
+
+      /** Areas this report actually describes; the rest are dropped below. */
+      const touched = new Set<string>();
+      /** The same rooms as the property knows them, for the inspections below. */
+      const layout = new Set<string>();
+
       let photoCursor = 0;
       for (const area of report.areas) {
         const propertyArea = await this.resolveArea(tx, property.id, area.name, user.id);
@@ -646,11 +687,11 @@ export class InspectionImportService {
         // whole import back, so one repeated room costs every other area rather
         // than merging into the one already open.
         //
-        // The same write is what makes filling in a room that is already
-        // attached safe. `requireSeedableInspection` refuses an inspection
-        // holding evidence, but it is checked before `storePhotos` writes
-        // several hundred objects; an area that appears in that window would
-        // otherwise fail the commit outright instead of being filled in.
+        // The same write is what carries a room the inspection already had.
+        // Areas are snapshotted onto an inspection when it is created, so the
+        // room this report describes is usually already attached — the import
+        // fills it in rather than replacing it, which keeps anything else
+        // pointing at that area pointing at the same row.
         const inspectionArea = await tx.inspectionArea.upsert({
           where: {
             inspectionId_propertyAreaId: {
@@ -667,6 +708,8 @@ export class InspectionImportService {
           },
           select: { id: true },
         });
+        touched.add(inspectionArea.id);
+        layout.add(propertyArea.id);
 
         const items = new Map<string, string>();
         for (const item of area.items) {
@@ -762,6 +805,96 @@ export class InspectionImportService {
         }
       }
 
+      /**
+       * Rooms the new report does not have.
+       *
+       * Areas are snapshotted onto an inspection when it is created, from the
+       * property's layout — so an inspection carries whatever that layout said
+       * at the time, including mistakes. Two test rooms invented at 10051
+       * Spotted Horse Dr could not be deleted from the property while an
+       * inspection still referenced them, and the inspection could not be
+       * re-imported to drop them. A report that does not mention a room is the
+       * office saying that room is not part of this walkthrough.
+       *
+       * Except a room holding a recording. `InspectionMedia.inspectionArea`
+       * restricts rather than cascades, so deleting one fails — inside the
+       * transaction, taking the whole import with it — and a video is the one
+       * piece of evidence a PDF cannot put back. Status history and upload
+       * sessions restrict too, so they are cleared explicitly; photographs,
+       * checklist responses and evidence requests cascade.
+       */
+      const stale = await tx.inspectionArea.findMany({
+        where: {
+          inspectionId: inspection.id,
+          id: { notIn: [...touched] },
+          media: { none: {} },
+        },
+        select: { id: true },
+      });
+      const staleIds = stale.map((area) => area.id);
+      if (staleIds.length) {
+        await tx.inspectionAreaStatusHistory.deleteMany({
+          where: { inspectionAreaId: { in: staleIds } },
+        });
+        await tx.mediaUploadSession.deleteMany({ where: { inspectionAreaId: { in: staleIds } } });
+        await tx.inspectionArea.deleteMany({ where: { id: { in: staleIds } } });
+      }
+
+      /**
+       * The same rooms, on this property's other inspections that have none.
+       *
+       * `InspectionArea` is a snapshot taken when an inspection is created,
+       * from the property's *approved* layout. A property nobody had walked yet
+       * has no approved layout, so every inspection scheduled against it was
+       * born with zero rooms — and nothing that happens to the layout
+       * afterwards reaches them, by design: an inspection is a record of a
+       * walkthrough, not a live view of a floor plan.
+       *
+       * The import is the moment that layout first exists. 21223 Harbor Shore
+       * Dr is the report: a move-in imported twelve rooms, and the occupied
+       * inspection at the same address still showed "0 areas · No areas match
+       * this filter" with an Add area button and nothing to add. Move-in,
+       * occupied and move-out walk the same rooms — the office's own rule —
+       * so the layout one of them establishes is the layout for all of them.
+       *
+       * Deliberately narrow, because this writes to records nobody asked to
+       * import into:
+       *
+       * - **Zero areas only.** An inspection holding rooms has a snapshot, and
+       *   a snapshot is not ours to extend. This is filling in one that was
+       *   never taken.
+       * - **The rooms this report described**, not the property's whole
+       *   approved layout. The sweep above just dropped rooms the report does
+       *   not have; handing those to a sibling would put them straight back.
+       * - **Same unit**, since a unit's layout is its own.
+       * - **Not finalized, not cancelled.** A signed-off record stays as it was
+       *   signed off, and a cancelled one is not going to be walked.
+       */
+      const sharing = layout.size
+        ? await tx.inspection.findMany({
+            where: {
+              organizationId: user.organizationId,
+              propertywareBuildingId: target.propertywareBuildingId,
+              propertywareUnitId: target.propertywareUnitId,
+              id: { not: inspection.id },
+              finalizedAt: null,
+              status: { not: InspectionStatus.CANCELLED },
+              areas: { none: {} },
+            },
+            select: { id: true },
+          })
+        : [];
+      if (sharing.length)
+        // skipDuplicates because the unique pair is the real guard: two
+        // imports landing at one property at once should produce one row each
+        // and no failure.
+        await tx.inspectionArea.createMany({
+          data: sharing.flatMap((other) =>
+            [...layout].map((propertyAreaId) => ({ inspectionId: other.id, propertyAreaId })),
+          ),
+          skipDuplicates: true,
+        });
+
       await tx.auditLog.create({
         data: {
           organizationId: user.organizationId,
@@ -775,12 +908,36 @@ export class InspectionImportService {
             photos: stored.length,
             pagesWithPhotos: perPage.filter((count) => count > 0).length,
             unrecognisedRows: report.unrecognised.length,
+            // What the import overwrote. An import now replaces rather than
+            // refuses, so the thing worth being able to answer later is what
+            // was standing here before it did.
+            replaced: {
+              photos: replacedPhotos.count,
+              checklistResponses: replacedResponses.count,
+              areas: staleIds.length,
+            },
+            // Inspections at this property that had no rooms and now share
+            // these. Written down because the import touched records nobody
+            // named, and that should be answerable from the audit alone.
+            sharedLayoutWith: sharing.length,
           },
         },
       });
 
       return inspection.id;
     });
+
+    /**
+     * The objects behind the superseded rows.
+     *
+     * After the commit, and best-effort: an orphaned object costs storage,
+     * while deleting one for a transaction that then rolled back destroys a
+     * photograph nothing replaced. Same order `TechnicianService.deletePhoto`
+     * uses, for the same reason.
+     */
+    await Promise.all(
+      superseded.map((photo) => this.storage.delete(photo.storageKey).catch(() => undefined)),
+    );
 
     await this.prisma.inspectionImportJob.update({
       where: { id: jobId },
@@ -849,13 +1006,17 @@ export class InspectionImportService {
    * Move-in only. The point is a baseline for a later move-out, and seeding a
    * move-out with a move-in report would compare the property against itself.
    */
-  private async requireSeedableInspection(user: AuthenticatedUser, inspectionId: string) {
+  private async requireImportableInspection(user: AuthenticatedUser, inspectionId: string) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId: user.organizationId },
       select: {
         id: true,
         inspectionType: true,
         propertywareBuildingId: true,
+        // Which inspections share this one's rooms. A unit's layout is its own,
+        // so the sharing below is scoped to the same unit — or to the same
+        // whole property, when neither has one.
+        propertywareUnitId: true,
         propertywareBuilding: {
           select: {
             id: true,
@@ -866,34 +1027,38 @@ export class InspectionImportService {
             postalCode: true,
           },
         },
-        // Areas alone are enough to mean "has evidence": a photograph's
-        // `inspectionAreaId` is required, so one cannot exist without an area
-        // to hang from.
-        _count: { select: { areas: true } },
       },
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
     /**
-     * Any type, not only a move-in.
+     * Any inspection, of any type, in any state.
      *
-     * The restriction was scope, not safety: move-ins were the reason this was
-     * built, because a missing baseline is what breaks a later comparison. But
-     * an occupied inspection or a move-out walked in Inspect & Cloud arrives
-     * here exactly as empty and is exactly as importable, and refusing it left
-     * the office with a PDF and no way in.
+     * Two refusals used to stand here and both are gone.
      *
-     * The two guards below are the ones that were ever load-bearing: the
-     * inspection must be empty, so an import cannot overwrite somebody's
-     * walkthrough, and it must have a property, so its areas have somewhere to
-     * live. Neither depends on the type.
+     * The type restriction was scope, not safety: move-ins were the reason this
+     * was built, because a missing baseline is what breaks a later comparison,
+     * but a report walked in Inspect & Cloud for an occupied inspection or a
+     * move-out is just as importable.
+     *
+     * The emptiness refusal was the load-bearing one, and it was wrong twice
+     * over. It counted *areas*, on the reasoning that a photograph needs an
+     * area so one cannot exist without the other — true, and backwards, because
+     * an area does not need a photograph. Every inspection at a property with
+     * an approved plan is born with areas snapshotted at creation, so counting
+     * them made half the inspections in the system permanently un-importable
+     * while holding no evidence at all: seventeen of thirty-four, when
+     * measured. Counting real evidence instead would have fixed that, and the
+     * office asked for something else outright — an import is what they reach
+     * for when the record here is *wrong*, so refusing to overwrite refused the
+     * only case that mattered. 10051 Spotted Horse Dr is the example: two test
+     * areas nobody could delete, on an inspection nobody could import over.
+     *
+     * So the import now replaces what it finds, and `runCommit` is where that
+     * happens — deliberately, in one transaction, and never quietly: what it
+     * supersedes is counted into the audit row. The one refusal left is the one
+     * with nowhere to write.
      */
-    if (inspection._count.areas > 0)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_NOT_EMPTY',
-        'This inspection already has evidence. A report can only be imported into an empty one.',
-      );
     if (!inspection.propertywareBuilding)
       throw new ApplicationError(
         409,

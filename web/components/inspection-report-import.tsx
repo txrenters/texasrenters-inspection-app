@@ -38,9 +38,11 @@ import {
 /**
  * The way in, from the inspection that needs filling.
  *
- * Shown on a move-in that Jobber closed but nothing was ever recorded
- * against -- the walk happened in another system, so the record arrives here
- * complete and empty. The import is what puts its evidence back.
+ * Shown on an inspection Jobber closed and nothing was ever recorded against --
+ * the walk happened in another system, so the record arrives here complete and
+ * empty -- and equally on one whose record here is simply wrong. The import
+ * replaces what it finds either way; `replacing` is what makes that plain
+ * before a file is chosen rather than after.
  *
  * A dialog rather than a panel: this is done once per inspection, and a
  * permanent block on a page people read repeatedly costs more attention than
@@ -50,13 +52,22 @@ export function ImportReportDialog({
   inspectionId,
   inspectionType,
   propertyLabel,
+  replacing = false,
 }: {
   inspectionId: string;
   /** Named in the drawer while it uploads, so a row is not just a spinner. */
   propertyLabel?: string | null;
-  /** Only shapes the wording. Every type is importable; the rules that decide
-   * are emptiness and having a property, neither of which is about type. */
+  /** Only shapes the wording. Every type is importable; the one rule that
+   * decides is having a property, which is not about type. */
   inspectionType?: string | null;
+  /**
+   * Whether there is evidence here for the import to overwrite.
+   *
+   * Defaults to false, and the caller that knows passes the answer. Getting it
+   * wrong in this direction promises a clean fill on a record about to be
+   * replaced, which is the mistake worth a prop.
+   */
+  replacing?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const kind = inspectionType ? humanize(inspectionType).toLowerCase() : 'inspection';
@@ -106,16 +117,31 @@ export function ImportReportDialog({
       </DialogTrigger>
       <DialogContent className="sm:max-w-3xl" ref={content}>
         <DialogHeader>
-          <DialogTitle>Import an inspection report</DialogTitle>
+          <DialogTitle>{replacing ? 'Replace this inspection’s evidence' : 'Import an inspection report'}</DialogTitle>
           <DialogDescription>
-            {/* The baseline argument is true of a move-in and only a move-in.
+            {/* Two different things to say, and the difference matters more
+                than the wording of either. On an empty record this explains why
+                the import exists; on one holding evidence it is the warning,
+                and the last point at which the reader can stop.
+
+                The baseline argument is true of a move-in and only a move-in.
                 Saying it over a move-out would be explaining the wrong reason
                 for doing the right thing. */}
-            This {kind} was closed in Jobber but has no evidence recorded against it. Reading the
-            Inspect &amp; Cloud report fills it in
-            {inspectionType === 'MOVE_IN'
-              ? ', so a later move-out has a baseline to compare against.'
-              : ', so the walkthrough is on the record here.'}
+            {replacing ? (
+              <>
+                Reading the Inspect &amp; Cloud report will <strong>replace</strong> what is recorded
+                against this {kind}: its photos, its checklist answers, and any room the new report
+                does not cover. Recordings are kept, and so is anything filed against them.
+              </>
+            ) : (
+              <>
+                This {kind} was closed in Jobber but has no evidence recorded against it. Reading the
+                Inspect &amp; Cloud report fills it in
+                {inspectionType === 'MOVE_IN'
+                  ? ', so a later move-out has a baseline to compare against.'
+                  : ', so the walkthrough is on the record here.'}
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <InspectionReportImport

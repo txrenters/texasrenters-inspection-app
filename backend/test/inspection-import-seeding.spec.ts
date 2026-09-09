@@ -6,12 +6,27 @@ import type { AuthenticatedUser } from '../src/common/auth';
 /**
  * Which inspection a report may be read into.
  *
- * The record already exists. Jobber closes a move-in when the visit completes,
- * so a walkthrough done in Inspect & Cloud arrives here as a finished
- * inspection with nothing in it. The import puts the evidence back into *that*
- * record — creating a second one would leave two move-ins for one walkthrough,
- * and the comparison takes the latest, so the duplicate would quietly become
- * the baseline every future move-out is judged against.
+ * Nearly all of them, now. The record already exists — Jobber closes a visit
+ * when the work is done, so a walkthrough done in Inspect & Cloud arrives here
+ * as a finished inspection with nothing in it — and the import puts the
+ * evidence into *that* record rather than creating a second one, because the
+ * comparison takes the latest move-in and a duplicate would quietly become the
+ * baseline every future move-out is judged against.
+ *
+ * Two refusals used to guard this and both are gone. Neither was safety:
+ *
+ * - The **type** check only ever expressed scope. Move-ins were the reason this
+ *   was built, but any type walked in another system is just as importable.
+ * - The **emptiness** check counted areas, on the reasoning that a photograph
+ *   needs an area so one cannot exist without the other — true, and backwards.
+ *   Areas are snapshotted onto an inspection at creation, so half the
+ *   inspections in the system were permanently un-importable while holding no
+ *   evidence at all. Counting real evidence would have fixed that and still had
+ *   it wrong: an import is what the office reaches for when the record here is
+ *   *wrong*, so refusing to overwrite refused the only case that mattered.
+ *
+ * What replaced them is in `inspection-import-replaces-evidence.spec.ts`: the
+ * import supersedes what it finds, in one transaction, counted into the audit.
  */
 
 const user = {
@@ -35,7 +50,6 @@ const inspection = (overrides: Record<string, unknown> = {}) => ({
   inspectionType: InspectionType.MOVE_IN,
   propertywareBuildingId: building.id,
   propertywareBuilding: building,
-  _count: { areas: 0 },
   ...overrides,
 });
 
@@ -69,27 +83,15 @@ const report = () => ({
 });
 
 describe('reading a report into an inspection that already exists', () => {
-  it('refuses an inspection that already has evidence', async () => {
-    // The one rule that matters. Seeding a record with areas would overwrite
-    // somebody's walkthrough with a document — that is not an import.
-    const { service, storage } = build(inspection({ _count: { areas: 12 } }));
-
-    await expect(service.start(user, INSPECTION_ID, report())).rejects.toMatchObject({
-      status: 409,
-      code: 'INSPECTION_NOT_EMPTY',
-    });
-    // Nothing uploaded either: refusing after storing 73 MB would leave the
-    // object behind for a job that never existed.
-    expect(storage.putBytes).not.toHaveBeenCalled();
-  });
-
-  it('accepts an inspection that is not a move-in', async () => {
-    // This used to be refused, and the refusal was scope rather than safety.
-    // Move-ins were the reason it was built — a missing baseline is what breaks
-    // a later comparison — but an occupied inspection or a move-out walked in
-    // Inspect & Cloud arrives just as empty and is just as importable. Refusing
-    // it left the office holding a PDF with no way in.
-    const { service, prisma } = build(inspection({ inspectionType: InspectionType.MOVE_OUT }));
+  it('accepts an inspection that has areas but nothing recorded in them', async () => {
+    /**
+     * The regression this file used to enshrine.
+     *
+     * Every inspection at a property with an approved plan is *born* with
+     * areas, so counting them as evidence hid the import on seventeen of
+     * thirty-four inspections — each an empty shell nobody could fill.
+     */
+    const { service, prisma } = build(inspection());
     prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
 
     await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
@@ -97,10 +99,44 @@ describe('reading a report into an inspection that already exists', () => {
     });
   });
 
-  it('accepts an occupied inspection too', async () => {
-    // The type that prompted this: the office walks these in Inspect & Cloud
-    // routinely, and 122 of them can never be backfilled from Jobber.
-    const { service, prisma } = build(inspection({ inspectionType: InspectionType.OCCUPIED }));
+  it('accepts an inspection that already holds evidence', async () => {
+    // What the office asked for, and the reversal worth stating plainly: an
+    // import is the tool for a record that is wrong, so it replaces rather than
+    // refuses. 10051 Spotted Horse Dr is the case — two test rooms nobody could
+    // delete, on an inspection nobody could import over.
+    const { service, prisma } = build(inspection());
+    prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
+
+    await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
+      status: 'RUNNING',
+    });
+    // And it does not go looking for a reason to refuse: no evidence is counted
+    // at this point, because none of it decides anything any more.
+    expect(prisma.inspection.findFirst.mock.calls[0][0].select).not.toHaveProperty('_count');
+  });
+
+  it.each([InspectionType.MOVE_OUT, InspectionType.OCCUPIED])(
+    'accepts a %s inspection as readily as a move-in',
+    async (inspectionType) => {
+      // Move-ins were the reason this was built — a missing baseline is what
+      // breaks a later comparison — but the office walks occupied inspections
+      // in Inspect & Cloud routinely, and 122 of them can never be backfilled
+      // from Jobber. Refusing left them holding a PDF with no way in.
+      const { service, prisma } = build(inspection({ inspectionType }));
+      prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
+
+      await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
+        status: 'RUNNING',
+      });
+    },
+  );
+
+  it('does not care that the inspection is finalized', async () => {
+    // Finalizing freezes evidence, and this is the one place that now writes
+    // through it — asked for outright, because a record closed with the wrong
+    // walkthrough in it is exactly the record somebody needs to fix. The audit
+    // row is what makes that answerable afterwards.
+    const { service, prisma } = build(inspection({ finalizedAt: new Date() }));
     prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
 
     await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
@@ -109,22 +145,13 @@ describe('reading a report into an inspection that already exists', () => {
   });
 
   it('refuses an inspection with no property to hang areas from', async () => {
+    // The only refusal left, and the only one that was ever about the import
+    // being impossible rather than unwise: areas are created against a
+    // property, so without one there is nowhere to write.
     const { service } = build(inspection({ propertywareBuilding: null }));
 
     await expect(service.start(user, INSPECTION_ID, report())).rejects.toMatchObject({
       code: 'INSPECTION_HAS_NO_PROPERTY',
-    });
-  });
-
-  it('does not care that the inspection is finalized', async () => {
-    // Finalizing freezes evidence, and there is none: the record was closed in
-    // Jobber because the walk happened, not because anything was recorded here.
-    // Refusing a finalized shell would refuse every record this exists for.
-    const { service, prisma } = build(inspection({ finalizedAt: new Date() }));
-    prisma.inspectionImportJob.create.mockResolvedValue({ id: 'job-1' });
-
-    await expect(service.start(user, INSPECTION_ID, report())).resolves.toMatchObject({
-      status: 'RUNNING',
     });
   });
 
@@ -164,5 +191,19 @@ describe('reading a report into an inspection that already exists', () => {
       service.start(user, INSPECTION_ID, { ...report(), buffer: Buffer.from('not a pdf') }),
     ).rejects.toMatchObject({ code: 'REPORT_NOT_A_PDF' });
     expect(prisma.inspection.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('still refuses the same file twice', async () => {
+    // Not emptiness, and worth keeping for a different reason: the same report
+    // imported twice is somebody clicking again. Nothing is gained by redoing
+    // it, and a second run would spend minutes replacing evidence with an
+    // identical copy of itself.
+    const { service, prisma } = build(inspection());
+    prisma.auditLog.findFirst.mockResolvedValue({ entityId: INSPECTION_ID });
+
+    await expect(service.start(user, INSPECTION_ID, report())).rejects.toMatchObject({
+      status: 409,
+      code: 'REPORT_ALREADY_IMPORTED',
+    });
   });
 });

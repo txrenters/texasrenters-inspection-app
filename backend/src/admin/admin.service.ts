@@ -1251,6 +1251,33 @@ export class AdminService {
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
 
     /**
+     * What has actually been recorded here, as opposed to planned.
+     *
+     * The same distinction the list makes. An inspection is created with its
+     * property's approved layout snapshotted onto it, so an area count says a
+     * plan exists — not that anybody walked the property.
+     *
+     * The console warns from this. An import replaces what it finds, so before
+     * a file is chosen the page has to be able to say whether anything is
+     * standing there to lose. It no longer decides *whether* to offer the
+     * import: that was gated on emptiness, and gating on it refused the case
+     * an import is actually for — a record here that is wrong.
+     */
+    const [areas, findings, photos, media, responses] = await Promise.all([
+      this.prisma.inspectionArea.count({ where: { inspectionId: inspection.id } }),
+      this.prisma.inspectionFinding.count({ where: { inspectionId: inspection.id } }),
+      this.prisma.inspectionPhoto.count({ where: { inspectionId: inspection.id } }),
+      this.prisma.inspectionMedia.count({ where: { inspectionId: inspection.id } }),
+      this.prisma.inspectionAreaChecklistResponse.count({
+        where: { inspectionArea: { inspectionId: inspection.id } },
+      }),
+    ]);
+    // All five asked the same way, rather than two from the `_count` above and
+    // three from here. They answer one question and are read as one object, and
+    // splitting the source made each new counter a separate place to remember.
+    const evidence = { areas, findings, photos, media, responses };
+
+    /**
      * Whether this move-out has anything to compare against.
      *
      * The same predicate the comparison uses, so the page cannot promise a
@@ -1272,7 +1299,7 @@ export class AdminService {
           }))
         : undefined;
 
-    return { ...inspection, baselineMissing };
+    return { ...inspection, evidence, baselineMissing };
   }
 
   async inspectionAudit(user: AuthenticatedUser, id: string, query: AuditListQueryDto) {

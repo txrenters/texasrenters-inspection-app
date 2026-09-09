@@ -5,6 +5,7 @@ import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { TechnicianService } from '../src/technician/technician.service';
+import { ZERO_EVIDENCE } from './support/prisma-evidence';
 
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
@@ -103,14 +104,16 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('blocks finalization while findings await review unless an override is documented', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: { findFirst: jest.fn().mockResolvedValue(reviewableInspection()) },
       inspectionFinding: {
+        count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([
           { title: 'Cracked tile', propertyArea: { name: 'Kitchen' } },
           { title: 'Scuffed baseboard', propertyArea: { name: 'Hall' } },
         ]),
       },
-      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
       $transaction: jest.fn(),
     };
     const service = new AdminService(prisma as never, new PresenceService());
@@ -151,6 +154,7 @@ describe('inspection status lifecycle (spec §11)', () => {
     };
     const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest
           .fn()
@@ -158,22 +162,29 @@ describe('inspection status lifecycle (spec §11)', () => {
           .mockResolvedValueOnce(detail),
       },
       inspectionFinding: {
+        count: jest.fn().mockResolvedValue(0),
         findMany: jest
           .fn()
           .mockResolvedValue([{ title: 'Cracked tile', propertyArea: { name: 'Kitchen' } }]),
       },
-      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     const service = new AdminService(prisma as never, new PresenceService());
 
-    // By value, not by reference. `inspection()` now returns a spread carrying
-    // `baselineMissing`, so identity no longer holds — but what this asserts is
-    // that finalizing hands back the inspection detail, which it still does.
-    // `toEqual` rather than `toMatchObject`, so the shape stays pinned.
+    // By value, not by reference. `inspection()` returns a spread carrying
+    // `baselineMissing` and an `evidence` tally, so identity no longer holds —
+    // but what this asserts is that finalizing hands back the inspection
+    // detail, which it still does. `toEqual` rather than `toMatchObject`, so
+    // the shape stays pinned and a field appearing here is a decision rather
+    // than a drift.
     await expect(
       service.finalizeInspection(admin, 'insp-1', { overrideReason: 'Owner approved closure' }),
-    ).resolves.toEqual(detail);
+    ).resolves.toEqual({
+      ...detail,
+      baselineMissing: undefined,
+      evidence: { areas: 0, findings: 0, media: 0, photos: 0, responses: 0 },
+    });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'insp-1' },
@@ -215,14 +226,15 @@ describe('inspection status lifecycle (spec §11)', () => {
     };
     const detail = { id: 'insp-1', status: InspectionStatus.COMPLETED };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest
           .fn()
           .mockResolvedValueOnce(reviewableInspection())
           .mockResolvedValueOnce(detail),
       },
-      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]) },
-      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]) },
+      inspectionFinding: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
+      inspectionMedia: { findMany: jest.fn().mockResolvedValue([]), count: jest.fn().mockResolvedValue(0) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
     };
     const service = new AdminService(prisma as never, new PresenceService());
@@ -243,6 +255,7 @@ describe('inspection status lifecycle (spec §11)', () => {
 
   it('rejects finalizing an inspection the technician has not submitted', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest.fn().mockResolvedValue(reviewableInspection(InspectionStatus.SCHEDULED)),
       },
@@ -265,6 +278,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest
           .fn()
@@ -297,6 +311,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest
           .fn()
@@ -332,6 +347,7 @@ describe('inspection status lifecycle (spec §11)', () => {
       jobberOutboundTask: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest
           .fn()
@@ -621,6 +637,7 @@ describe('duplicate area merge (spec §16)', () => {
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: { findFirst: jest.fn().mockResolvedValue(reviewableInspection()) },
       inspectionArea: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
@@ -670,7 +687,8 @@ describe('duplicate area merge (spec §16)', () => {
   });
 
   it('refuses to merge an area into itself', async () => {
-    const prisma = { inspection: { findFirst: jest.fn() }, $transaction: jest.fn() };
+    const prisma = {
+    ...ZERO_EVIDENCE, inspection: { findFirst: jest.fn() }, $transaction: jest.fn() };
     const service = new AdminService(prisma as never, new PresenceService());
     await expect(
       service.mergeInspectionAreas(admin, 'insp-1', {

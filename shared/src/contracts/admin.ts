@@ -496,7 +496,16 @@ export interface AdminInspection {
    * created with its property's approved layout snapshotted onto it, so an area
    * count says a plan existed rather than that anybody walked the property.
    */
-  evidence?: { areas: number; findings: number; photos: number };
+  evidence?: {
+    areas: number;
+    findings: number;
+    photos: number;
+    /** Present on the detail only. Recordings and checklist responses are
+     * evidence too, and the import warns from all of them: it replaces what it
+     * finds, so the console has to say what is standing there first. */
+    media?: number;
+    responses?: number;
+  };
   /**
    * Benefit-package enrolment for the tenancy at this property.
    *
