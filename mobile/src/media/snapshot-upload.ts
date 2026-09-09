@@ -27,6 +27,35 @@ const MAX_RETRY_MS = 5 * 60_000;
  */
 export const MAX_AUTOMATIC_ATTEMPTS = 8;
 
+/**
+ * How long a freshly captured photograph waits before it is sent.
+ *
+ * Reported from the field 2026-09-10: a technician takes a test shot — checking
+ * the light, checking the lens is clean — and wants it gone rather than filed
+ * as evidence. Until now the shutter and the upload were the same act.
+ *
+ * Held rather than confirmed, and the distinction is the whole design. A
+ * Keep/Discard prompt after every shutter is a tap on each of the twenty-five
+ * to thirty photographs an occupied visit takes, which is the per-photo toll
+ * the same feedback asked us to remove. Keeping a photograph should cost
+ * nothing, because keeping it is what almost always happens.
+ *
+ * Fifteen seconds: long enough to look at what you just took and decide, short
+ * enough that evidence is not sitting unsent while a technician drives to the
+ * next property. Nothing is blocked during it — the shutter, the walkthrough
+ * and the rest of the queue all carry on.
+ *
+ * Expressed through `nextAttemptAt`, which `snapshotsAwaitingUpload` already
+ * honours, rather than a new state. A held photograph is simply one that is not
+ * due yet, which is a thing the queue has always understood.
+ */
+export const PHOTO_REVIEW_WINDOW_MS = 15_000;
+
+/** When a photograph captured now becomes due to send. */
+export function reviewWindowEnd(now = Date.now()): string {
+  return new Date(now + PHOTO_REVIEW_WINDOW_MS).toISOString();
+}
+
 export type RetryPlan = { kind: 'permanent' } | { kind: 'retry'; delayMs: number };
 
 /**
