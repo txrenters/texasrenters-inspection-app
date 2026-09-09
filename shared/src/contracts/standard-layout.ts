@@ -101,6 +101,70 @@ export const STANDARD_PROPERTY_LAYOUT: readonly StandardLayoutArea[] = [
 export const STANDARD_LAYOUT_SOURCE = 'STANDARD_TEMPLATE';
 
 /**
+ * The sources that arrive as a *whole layout* rather than as one more room.
+ *
+ * A report import and a floor-plan extraction each describe the entire
+ * property, so either of them answers the question this template was guessing
+ * at. Once one exists, the guess is superseded — see `standardLayoutSuperseded`.
+ *
+ * MANUAL and TECHNICIAN are deliberately absent, and the distinction is the
+ * whole point of this constant. An administrator adding a shed, or a technician
+ * adding a hall closet they found on site, is *adding to* whatever layout the
+ * property has. Treating either as a replacement would delete twelve rooms from
+ * an inspection because somebody recorded a thirteenth.
+ */
+export const WHOLE_LAYOUT_SOURCES: readonly string[] = ['IMPORTED_REPORT', 'AI_FLOOR_PLAN'];
+
+/**
+ * Whether a real layout has arrived and the standard rooms should stand aside.
+ *
+ * ── THE COLLISION THIS PREVENTS ──────────────────────────────────────────────
+ *
+ * An occupied visit seeds "Main Bedroom". A move-in report is imported later
+ * and creates "Bedroom 1", because `resolveArea` in the import matches existing
+ * areas by normalised name and those two do not match. Both are approved, both
+ * belong to the property, and nothing removes either — the import's own cleanup
+ * deletes `InspectionArea` rows on the inspection it is importing and never
+ * touches `PropertyArea`.
+ *
+ * The next move-out at that property then walks about twenty-five rooms instead
+ * of twelve. That is likely rather than theoretical: the move-in backfill will
+ * import reports at properties that have had occupied visits by then.
+ *
+ * ── WHY SUPERSEDE RATHER THAN DELETE ─────────────────────────────────────────
+ *
+ * The occupied inspection that seeded them still references those rows, so they
+ * cannot be deleted — `AREA_IN_USE` exists precisely to stop that, and deleting
+ * them would rewrite the record of a visit somebody actually walked. The rows
+ * stay, that inspection keeps its history, and only *future* scoping ignores
+ * them.
+ *
+ * All-or-nothing, on purpose. There is no attempt to match "Main Bedroom" to
+ * "Bedroom 1" and keep the better name: a guess that survives alongside
+ * evidence is the problem being fixed, and a partial merge decided by string
+ * similarity is how you get a property with eleven of one and two of the other.
+ */
+export function standardLayoutSuperseded(
+  areas: readonly { source?: string | null }[],
+): boolean {
+  return areas.some((area) => area.source && WHOLE_LAYOUT_SOURCES.includes(area.source));
+}
+
+/**
+ * The layout an inspection should actually be built from.
+ *
+ * Returns everything untouched unless a whole-layout source is present, in
+ * which case the standard rooms drop out and the surveyed ones — plus any
+ * manual or technician additions, which are additions to *that* layout — remain.
+ */
+export function layoutAreasFor<T extends { source?: string | null }>(
+  areas: readonly T[],
+): T[] {
+  if (!standardLayoutSuperseded(areas)) return [...areas];
+  return areas.filter((area) => area.source !== STANDARD_LAYOUT_SOURCE);
+}
+
+/**
  * What an administrator reads on a generated area.
  *
  * Says where it came from and that it is a guess, so a layout nobody has

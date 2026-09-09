@@ -17,6 +17,7 @@ import {
   STANDARD_PROPERTY_LAYOUT,
   areaScopeFor,
   checklistTemplateFor,
+  layoutAreasFor,
   inspectionComparesToBaseline,
   keywordsFromLabel,
 } from '@texasrenters/shared';
@@ -349,33 +350,48 @@ export async function resolveInspectionPlan(
     inspectionType: input.inspectionType,
     scheduledAt,
   });
+  /**
+   * The layout an inspection is built from.
+   *
+   * `archivedAt: null` was missing, and its absence is a plain bug rather than
+   * anything to do with the template below: the column's own comment says
+   * "archived areas drop out of active lists", and every new inspection was
+   * scoping them straight back in. An administrator who archived a room they
+   * had merged away saw it reappear on the next visit with nothing to explain
+   * why.
+   */
+  const layoutWhere = (areaUnitId: string | null) => ({
+    propertyId: property.id,
+    unitId: areaUnitId,
+    status: PropertyAreaStatus.APPROVED,
+    archivedAt: null,
+  });
+  const layoutSelect = {
+    orderBy: { inspectionOrder: 'asc' as const },
+    // `category` for the roof scope, which picks areas by what the property
+    // records rather than by anything the caller sent. `source` for the
+    // standard-template rule below.
+    select: { id: true, category: true, source: true },
+  };
   // Prefer the unit's own approved layout; fall back to the building-level
   // layout when the unit has none (identical-layout buildings share one
   // building-level plan instead of duplicating it per unit).
   const unitAreas = unit
-    ? await tx.propertyArea.findMany({
-        where: {
-          propertyId: property.id,
-          unitId: unit.id,
-          status: PropertyAreaStatus.APPROVED,
-        },
-        orderBy: { inspectionOrder: 'asc' },
-        // `category` for the roof scope, which picks areas by what the
-        // property records rather than by anything the caller sent.
-        select: { id: true, category: true },
-      })
+    ? await tx.propertyArea.findMany({ where: layoutWhere(unit.id), ...layoutSelect })
     : [];
-  const approvedAreas = unitAreas.length
+  const layoutAreas = unitAreas.length
     ? unitAreas
-    : await tx.propertyArea.findMany({
-        where: {
-          propertyId: property.id,
-          unitId: null,
-          status: PropertyAreaStatus.APPROVED,
-        },
-        orderBy: { inspectionOrder: 'asc' },
-        select: { id: true, category: true },
-      });
+    : await tx.propertyArea.findMany({ where: layoutWhere(null), ...layoutSelect });
+  /**
+   * A standard-template room stands aside once a real layout exists.
+   *
+   * Without this, a property seeded by an occupied visit and later given a
+   * move-in report carries both sets — the import matches areas by normalised
+   * name, and "Main Bedroom" is not "Bedroom 1" — so the next move-out walks
+   * about twenty-five rooms instead of twelve. See `standardLayoutSuperseded`
+   * for why they are superseded rather than deleted.
+   */
+  const approvedAreas = layoutAreasFor(layoutAreas);
 
   /**
    * The areas this inspection actually covers, decided three different ways.

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { InspectionType, PropertyAreaStatus } from '@prisma/client';
 import { STANDARD_LAYOUT_SOURCE, STANDARD_PROPERTY_LAYOUT } from '@texasrenters/shared';
 
@@ -167,4 +170,48 @@ describe('when the standard layout must not be written', () => {
       expect(areaCreateMany).not.toHaveBeenCalled();
     },
   );
+});
+
+/**
+ * Asserted against the source, in the style of `jobber-completed-move-in.spec.ts`.
+ *
+ * `resolveInspectionPlan` reaches for six tables before it gets to the layout,
+ * so a behavioural test here would be mostly scaffolding for one `where`
+ * clause. What matters is that the clause is present, and that is what this
+ * reads. The rule it feeds is unit-tested in `shared/tests/standard-layout.test.ts`.
+ */
+describe('the layout query', () => {
+  const CREATION = readFileSync(
+    join(__dirname, '..', 'src', 'admin', 'inspection-creation.ts'),
+    'utf8',
+  );
+  const layoutWhere = CREATION.slice(
+    CREATION.indexOf('const layoutWhere'),
+    CREATION.indexOf('const layoutSelect'),
+  );
+
+  it('excludes archived areas', () => {
+    /**
+     * This filter was missing, and its absence is a plain bug: the column's own
+     * comment says "archived areas drop out of active lists", and every new
+     * inspection scoped them straight back in. An administrator who archived a
+     * room they had merged away saw it return on the next visit with nothing on
+     * screen to explain why.
+     */
+    expect(layoutWhere).toContain('archivedAt: null');
+  });
+
+  it('still takes only approved areas', () => {
+    // The rule that predates all of this, and the one a careless edit here
+    // would quietly drop: a DRAFT area belongs to nobody's inspection yet.
+    expect(layoutWhere).toContain('status: PropertyAreaStatus.APPROVED');
+  });
+
+  it('reads source, because the template rule depends on it', () => {
+    const layoutSelect = CREATION.slice(
+      CREATION.indexOf('const layoutSelect'),
+      CREATION.indexOf('const unitAreas'),
+    );
+    expect(layoutSelect).toContain('source: true');
+  });
 });
