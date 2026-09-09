@@ -67,6 +67,7 @@ export * from './area-checklist-template.js';
 export * from './hvac-checklist.js';
 export * from './occupied-checklist.js';
 export * from './standard-layout.js';
+export * from './checklist-comment.js';
 export * from './area-classification.js';
 export * from './inspection-scope.js';
 export * from './property-location.js';
