@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import { TechnicianService } from '../src/technician/technician.service';
+import { ZERO_EVIDENCE } from './support/prisma-evidence';
 
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000002',
@@ -74,6 +75,7 @@ function buildTx(overrides: Record<string, unknown> = {}) {
 
 function buildService(tx: ReturnType<typeof buildTx>) {
   const prisma = {
+    ...ZERO_EVIDENCE,
     inspection: {
       findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', assignments: [] }),
     },
@@ -561,6 +563,7 @@ describe('technician payloads for unit inspections', () => {
 
   it("uses the inspection's own unit for identity and bed/bath counts", async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'inspection-1',

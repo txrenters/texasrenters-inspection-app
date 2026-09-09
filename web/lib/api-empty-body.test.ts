@@ -59,10 +59,10 @@ describe('reading a response', () => {
 
   it('does not swallow a real error response', async () => {
     // The guard against fixing an empty body by treating every failure as one.
-    respond({ status: 409, body: '{"code":"INSPECTION_NOT_EMPTY","message":"nope"}' });
+    respond({ status: 409, body: '{"code":"REPORT_ALREADY_IMPORTED","message":"nope"}' });
     await expect(api('/api/v1/admin/thing')).rejects.toMatchObject({
       status: 409,
-      code: 'INSPECTION_NOT_EMPTY',
+      code: 'REPORT_ALREADY_IMPORTED',
     });
   });
 
