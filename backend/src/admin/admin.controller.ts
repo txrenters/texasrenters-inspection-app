@@ -355,6 +355,25 @@ export class AdminController {
   areaChecklist(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.areaChecklist(request.user, id);
   }
+  /**
+   * The short list an occupied visit asks instead of the room checklist above.
+   *
+   * Not addressed by area, because it is not stored by area: it is the same two
+   * questions in every room, held once for the organization with a null area.
+   * The route above therefore cannot return it — it matches on
+   * `propertyAreaId` — and until this existed the console showed the room list
+   * as though it were the only one, which is exactly how a reader concluded an
+   * occupied visit still asks nine questions about a bathroom.
+   *
+   * Read-only on purpose. Editing one organization-wide list from a dialog
+   * titled after a single area would let somebody change every property while
+   * believing they had changed one room.
+   */
+  @Get('checklists/occupied')
+  @RequirePermissions('properties:read')
+  occupiedChecklist(@Req() request: AuthenticatedRequest) {
+    return this.floorPlans.occupiedChecklist(request.user);
+  }
   @Post('property-areas/:areaId/checklist')
   @RequirePermissions('properties:manage')
   createChecklistItem(
