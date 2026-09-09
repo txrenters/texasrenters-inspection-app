@@ -1435,13 +1435,17 @@ export class TechnicianService {
     return this.mapRoom(room);
   }
 
-  async skipRoom(user: AuthenticatedUser, id: string, reason: string) {
+  async skipRoom(user: AuthenticatedUser, id: string, reason?: string) {
     await this.assignedRoom(user, id);
     const room = await this.prisma.inspectionArea.update({
       where: { id },
       data: {
         completionStatus: InspectionAreaCompletionStatus.SKIPPED,
-        skipReason: reason.trim(),
+        // Null rather than an empty string when nothing was written. A reader
+        // has to be able to tell "no reason given" from "a reason that is
+        // blank", and every consumer already handles the null: the column has
+        // always been nullable, and completing a room clears it the same way.
+        skipReason: reason?.trim() || null,
         completedAt: new Date(),
       },
       select: technicianRoomSelect,
