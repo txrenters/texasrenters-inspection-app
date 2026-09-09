@@ -167,3 +167,32 @@ export async function uploadSnapshotNow(
     return false;
   }
 }
+
+/**
+ * Sends everything this area still owes, now, ignoring the review window.
+ *
+ * Completing an area is the technician saying they are done with it, which is
+ * a stronger statement than the fifteen-second hold above was waiting for — so
+ * the hold ends here rather than being waited out. Without this, `completeRoom`
+ * was answered `409 ROOM_EVIDENCE_REQUIRED` for the first fifteen seconds after
+ * the last shutter: the server counts `InspectionPhoto` rows, and the only
+ * photograph of the area was still sitting on the handset by design.
+ *
+ * `Number.POSITIVE_INFINITY` as the clock is what waives the hold, and it is
+ * deliberately the *only* thing waived. Reusing `snapshotsAwaitingUpload` keeps
+ * every other rule it enforces — a permanently refused photograph stays
+ * refused, and one past its attempt cap is not retried — so submitting an area
+ * cannot start a doomed request loop.
+ */
+export async function flushRoomSnapshots(
+  roomId: string,
+  snapshots: readonly RoomSnapshot[],
+  store: SnapshotUploadPort,
+): Promise<void> {
+  const owed = snapshotsAwaitingUpload(snapshots, Number.POSITIVE_INFINITY).filter(
+    (snapshot) => snapshot.roomId === roomId,
+  );
+  // Sequential, like the runner's own drain: these are three-to-five megabyte
+  // JPEGs and firing them at once on a weak signal is how they all time out.
+  for (const snapshot of owed) await uploadSnapshotNow(snapshot, store);
+}
