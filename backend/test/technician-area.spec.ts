@@ -37,6 +37,7 @@ const roomRecord = {
   skipReason: null,
   technicianNote: null,
   inspection: { inspectionType: 'MOVE_OUT', baselineInspectionId: null },
+  _count: { photos: 0 },
   propertyArea: {
     name: 'Backyard',
     inspectionOrder: 5,
