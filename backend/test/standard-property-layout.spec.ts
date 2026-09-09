@@ -85,8 +85,8 @@ describe('an occupied inspection at a property nobody has laid out', () => {
       expect.arrayContaining([
         'Main Bedroom',
         'Main Bathroom',
-        'Second Bedroom',
-        'Second Bathroom',
+        'Bedroom 2',
+        'Bathroom 2',
       ]),
     );
     // The inspection actually gets them, which is the whole point.
@@ -113,8 +113,14 @@ describe('an occupied inspection at a property nobody has laid out', () => {
     await insertInspection(tx, plan(InspectionType.OCCUPIED), details);
     const rows = areaCreateMany.mock.calls[0][0].data as { name: string; isRequired: boolean }[];
     const required = rows.filter((row) => row.isRequired).map((row) => row.name);
-    expect(required).toEqual(['Living Room', 'Kitchen', 'Main Bedroom', 'Main Bathroom', 'Exterior']);
-    expect(rows.find((row) => row.name === 'Second Bedroom')?.isRequired).toBe(false);
+    expect(required).toEqual([
+      'Living Room',
+      'Kitchen',
+      'Main Bedroom',
+      'Main Bathroom',
+      'Front Exterior',
+    ]);
+    expect(rows.find((row) => row.name === 'Bedroom 2')?.isRequired).toBe(false);
   });
 
   it('creates the Property row before the areas that point at it', async () => {

@@ -68,11 +68,21 @@ export interface StandardLayoutArea {
  * A standard single-family rental, in the order a technician walks it.
  *
  * Front door inward, then the bedrooms and bathrooms, then the service rooms,
- * then outside — the same shape as the Nordway report the room checklists are
+ * then outside — the same shape as the report the room checklists are
  * transcribed from, so the two read consistently.
  *
- * The four names the office gave in the feedback are here verbatim. "Main"
- * rather than "Master" because that is the wording they used.
+ * ── THE NAMES ARE THE OFFICE'S, NOT OURS ─────────────────────────────────────
+ *
+ * Taken from a real occupied inspection: 14547 Gleaming Rose Dr, walked by
+ * Moses Rodriguez on 2026-09-08 under the office's own "Occupied Inspection"
+ * template. The first version of this list guessed at half of them, and the
+ * guesses were wrong in a way that matters — "Second Bedroom" where the office
+ * writes "Bedroom 2", one "Exterior" where the form separates front from rear.
+ *
+ * Wrong names are not cosmetic here. A report import matches existing areas by
+ * **normalised name**, so a template that calls a room something the office
+ * does not creates a duplicate rather than filling in the room it meant. Every
+ * name below now matches a heading on that report.
  */
 export const STANDARD_PROPERTY_LAYOUT: readonly StandardLayoutArea[] = [
   { name: 'Entrance', environment: 'INDOOR', category: null, isRequired: false },
@@ -83,18 +93,30 @@ export const STANDARD_PROPERTY_LAYOUT: readonly StandardLayoutArea[] = [
   { name: 'Main Bathroom', environment: 'INDOOR', category: 'BATHROOM', isRequired: true },
   // Optional from here down: a one-bedroom property has none of them, and an
   // area a technician must skip on every visit teaches them to skip areas.
-  { name: 'Second Bedroom', environment: 'INDOOR', category: 'BEDROOM', isRequired: false },
-  { name: 'Second Bathroom', environment: 'INDOOR', category: 'BATHROOM', isRequired: false },
-  { name: 'Third Bedroom', environment: 'INDOOR', category: 'BEDROOM', isRequired: false },
+  { name: 'Bedroom 2', environment: 'INDOOR', category: 'BEDROOM', isRequired: false },
+  { name: 'Bathroom 2', environment: 'INDOOR', category: 'BATHROOM', isRequired: false },
+  { name: 'Bedroom 3', environment: 'INDOOR', category: 'BEDROOM', isRequired: false },
   { name: 'Hallway', environment: 'INDOOR', category: 'HALLWAY', isRequired: false },
   { name: 'Laundry', environment: 'INDOOR', category: 'UTILITY', isRequired: false },
   // Semi-outdoor with an explicit GARAGE category. The category has to be set:
   // `checklistTemplateFor` once answered on the environment alone, and a
   // semi-outdoor garage was asked about its lawn and never about its doors.
-  { name: 'Garage', environment: 'SEMI_OUTDOOR', category: 'GARAGE', isRequired: false },
+  { name: 'Garage/Carport', environment: 'SEMI_OUTDOOR', category: 'GARAGE', isRequired: false },
+  /**
+   * Where the cutoffs and detectors are recorded.
+   *
+   * Not a room, and the one entry here that is not obvious from a floor plan.
+   * It is on the office's own form — water and gas cutoff locations, the
+   * breaker box, the smoke detectors — and it is the section a landlord needs
+   * most and a technician is least likely to invent on the spot.
+   */
+  { name: 'Code & Cut Offs', environment: 'INDOOR', category: null, isRequired: false },
   // Outdoor areas take their own checklist rather than extending the indoor
-  // base — a lawn has no ceiling.
-  { name: 'Exterior', environment: 'OUTDOOR', category: null, isRequired: true },
+  // base — a lawn has no ceiling. Front and rear are separate because the form
+  // separates them: the front is photographed from the street, the rear covers
+  // the fence, patio and pool.
+  { name: 'Front Exterior', environment: 'OUTDOOR', category: null, isRequired: true },
+  { name: 'Rear Exterior', environment: 'OUTDOOR', category: null, isRequired: false },
 ] as const;
 
 /** Written to `PropertyArea.source`, beside AI_FLOOR_PLAN, MANUAL and TECHNICIAN. */
