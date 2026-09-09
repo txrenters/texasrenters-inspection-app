@@ -485,6 +485,73 @@ export default function AreaDetailScreen() {
           <AreaCompletionChecklist requirements={requirements} blockedReason={gate.reason} />
         )}
 
+        {/*
+          Where an area is reviewed and handed in.
+
+          This screen already showed the evidence and the outstanding
+          requirements, and then offered nothing to do about either: no way to
+          say anything about the room, and no way to finish it. An area could be
+          photographed and never submitted from here.
+
+          The gap only showed up on a photographs-only visit. A recording routes
+          to `recording-review`, which has carried a note field and a submit
+          button all along — but that screen is built entirely around a draft
+          recording and bails out without one, so an occupied area walked with
+          photographs alone reached no review surface at all.
+
+          Shown once there is something to review, and gone once the area is
+          finished.
+        */}
+        {alreadyFinished || !hasAnyEvidence ? null : (
+          <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
+            <Text className="text-base font-bold text-foreground">Finish this area</Text>
+            <Text
+              className="mt-1 text-sm leading-5 text-muted-foreground"
+              nativeID="area-note-label"
+            >
+              Anything the office should know about this room. Optional — findings and photographs
+              carry most of it.
+            </Text>
+            <TextInput
+              accessibilityLabel="Notes about this area, optional"
+              accessibilityLabelledBy="area-note-label"
+              className="mt-3 min-h-20 rounded-xl border border-border bg-background px-4 py-3 text-foreground"
+              defaultValue={item.note ?? ''}
+              multiline
+              /* Saved on blur rather than per keystroke: the same choice the
+                 checklist's own text fields make, and the whole note is sent
+                 each time so there is nothing to merge. */
+              onEndEditing={(event) => updates.note.mutate(event.nativeEvent.text.trim())}
+              placeholder="Tenant reported the window sticks…"
+              placeholderTextColor={theme.mutedForeground}
+              textAlignVertical="top"
+            />
+            {updates.complete.isError ? (
+              <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
+                {updates.complete.error instanceof Error
+                  ? updates.complete.error.message
+                  : 'This area could not be submitted.'}
+              </Text>
+            ) : null}
+            <Button
+              accessibilityHint={
+                gate.canComplete
+                  ? 'Marks this area finished and returns to the inspection'
+                  : gate.reason
+              }
+              busy={updates.complete.isPending}
+              busyLabel="Submitting…"
+              className="mt-4"
+              /* Disabled rather than hidden, with the reason above it in the
+                 checklist: a control that vanishes tells a technician nothing
+                 about what is missing. */
+              disabled={!gate.canComplete}
+              label="Submit Evidence"
+              onPress={() => updates.complete.mutate(undefined, { onSuccess: () => goBack() })}
+            />
+          </View>
+        )}
+
         {/* The Clean / Undamaged / Working checklist used to sit here. It is now
             scored by the office during review, against the same items: the
             reviewer is the one reading the recording and the photographs, and
@@ -614,12 +681,28 @@ export default function AreaDetailScreen() {
               <PlayCircleIcon size={18} className="text-primary-foreground" />
             )
           }
+          /**
+           * "Begin" only when nothing has been captured.
+           *
+           * Taking a photograph starts the area — that is the whole of what
+           * starting means here — but the label went on saying Begin, so a
+           * technician who had photographed a room came back to a screen
+           * offering to start it. Reported from the field alongside the same
+           * confusion on the area's status.
+           *
+           * Three labels for three states, and `hasAnyEvidence` is the one that
+           * knows about photographs: a recording earns "Record Additional
+           * Video" because that is what a second take is, photographs alone
+           * earn "Continue", and an untouched area earns "Begin".
+           */
           label={
             isSkipped
               ? 'Inspect Anyway'
               : hasRecording
                 ? 'Record Additional Video'
-                : 'Begin Walkthrough'
+                : hasAnyEvidence
+                  ? 'Continue Walkthrough'
+                  : 'Begin Walkthrough'
           }
           onPress={() =>
             router.push(

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  BackHandler,
   Image,
   Linking,
   Platform,
@@ -32,7 +33,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
-import { PRESS_SURFACE } from '@/src/components/ui';
+import { Button, PRESS_SURFACE } from '@/src/components/ui';
+import { BottomSheet } from '@/src/components/BottomSheet';
 import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
 import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
@@ -234,6 +236,15 @@ export default function RoomCameraScreen() {
   const [photoCount, setPhotoCount] = useState(0);
   /** The shot just taken, while it is still held from upload. */
   const [discardable, setDiscardable] = useState<RoomSnapshot | null>(null);
+  /**
+   * Whether leaving should ask first.
+   *
+   * Capturing anything starts the area, and walking out of a started area with
+   * a single tap of the back arrow is how a technician loses their place —
+   * they meant to keep going and the screen simply left. Reported from the
+   * field 2026-09-10.
+   */
+  const [exitOpen, setExitOpen] = useState(false);
   const discardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   // A count, not a flag: two shutter taps in a row have to be distinguishable
@@ -303,6 +314,23 @@ export default function RoomCameraScreen() {
       camera?.stopRecording();
     };
   }, [camera]);
+
+  /**
+   * Android's hardware back asks the same question the arrow does.
+   *
+   * Without this it is a way around the prompt — and on Android it is the way
+   * most people leave a screen, so the guard would be missing exactly where it
+   * is needed most. Returning true means handled; false lets the navigator do
+   * what it always did, which is what an untouched area still wants.
+   */
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!recording && photoCount === 0) return false;
+      requestExit();
+      return true;
+    });
+    return () => subscription.remove();
+  });
 
   /**
    * Ask the camera what sizes it offers, once it is mounted and ready.
@@ -626,6 +654,25 @@ export default function RoomCameraScreen() {
   };
 
   /**
+   * What the back arrow means, which depends on what is under way.
+   *
+   * Three states, and they were two. Mid-recording it stops the take, as it
+   * always has. On an untouched area it simply leaves — there is nothing to
+   * lose and nothing worth asking about.
+   *
+   * The new one in the middle: an area where photographs have been taken is an
+   * area the technician has *started*, and leaving it with one tap of an arrow
+   * that sits exactly where a thumb rests is how somebody loses their place —
+   * they meant to keep going and the screen simply left. Asked, not blocked:
+   * both answers are one tap, and neither is hidden.
+   */
+  const requestExit = () => {
+    if (recording) return requestStopRecording();
+    if (photoCount > 0) return setExitOpen(true);
+    goBack();
+  };
+
+  /**
    * There is no send-from-here any more.
    *
    * This screen used to fire the upload itself as a head start. It cannot now:
@@ -865,7 +912,7 @@ export default function RoomCameraScreen() {
               // 40pt visual, 44pt target: hitSlop keeps the design and still
               // clears the minimum for a gloved or unsteady hand.
               hitSlop={8}
-              onPress={() => (recording ? requestStopRecording() : goBack())}
+              onPress={requestExit}
             >
               <BackGlyph size={21} className="text-white" />
             </Pressable>
@@ -1238,6 +1285,47 @@ export default function RoomCameraScreen() {
         photoCount={photoCount}
         visible={confirmStopOpen}
       />
+
+      {/*
+        Leaving a started area is a decision, so it is asked rather than
+        assumed.
+
+        Neither answer is hidden and neither costs more than a tap. "Keep
+        inspecting" is listed first because it is the one a technician who hit
+        the arrow by accident wants, and it is the answer that loses nothing.
+
+        Finishing goes to the area screen rather than completing the area from
+        here. Completion has a gate — evidence, and an upload that has at least
+        reached the queue — and the area screen is where that gate explains
+        itself. Refusing inside this sheet would be a dead end held one screen
+        away from its own explanation.
+      */}
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
+        onClose={() => setExitOpen(false)}
+        visible={exitOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">
+          {photoCount === 1 ? '1 photo taken here' : `${photoCount} photos taken here`}
+        </Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          This area is under way. Keep capturing, or go through what you have, add a note and
+          submit it.
+        </Text>
+        <View className="mt-5 gap-3">
+          <Button label="Keep Taking Evidence" onPress={() => setExitOpen(false)} />
+          <Button
+            accessibilityHint="Opens the area, where you can review the media, add a note and submit"
+            label="Continue & Review"
+            onPress={() => {
+              setExitOpen(false);
+              goBack();
+            }}
+            variant="secondary"
+          />
+        </View>
+      </BottomSheet>
     </View>
   );
 }
