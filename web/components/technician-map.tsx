@@ -9,12 +9,14 @@ import {
   AdvancedMarker,
   APIProvider,
   APILoadingStatus,
+  ColorScheme,
   InfoWindow,
   Map as GoogleMap,
   useApiLoadingStatus,
   useMap,
 } from '@vis.gl/react-google-maps';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, memo, useEffect, useMemo, useState } from 'react';
+import { useTheme } from 'next-themes';
 
 import { pointsToFit } from '@/components/map-bounds';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
@@ -117,7 +119,7 @@ function MarkerShadow() {
 }
 
 /** A teardrop pin with a house in it, anchored at its point. */
-function PropertyPin({ dim = false }: { dim?: boolean }) {
+const PropertyPin = memo(function PropertyPin({ dim = false }: { dim?: boolean }) {
   return (
     <svg height="32" opacity={dim ? 0.25 : 1} viewBox="0 0 24 32" width="24">
       <MarkerShadow />
@@ -131,7 +133,7 @@ function PropertyPin({ dim = false }: { dim?: boolean }) {
       <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff" />
     </svg>
   );
-}
+});
 
 /**
  * A round badge with a person in it, anchored at its centre.
@@ -149,7 +151,7 @@ function PropertyPin({ dim = false }: { dim?: boolean }) {
  * were the fix. React reconciles this instead — the `<circle>` survives a
  * re-render, and so does its animation.
  */
-function TechnicianPin({ stale, dim = false }: { stale: boolean; dim?: boolean }) {
+const TechnicianPin = memo(function TechnicianPin({ stale, dim = false }: { stale: boolean; dim?: boolean }) {
   const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
   // Only for someone reporting now, and only when they are not dimmed. A stale
   // position is the opposite of live, so animating it would say the wrong
@@ -178,7 +180,7 @@ function TechnicianPin({ stale, dim = false }: { stale: boolean; dim?: boolean }
       </g>
     </svg>
   );
-}
+});
 
 /**
  * A badge standing in for several properties too close to draw separately.
@@ -187,7 +189,7 @@ function TechnicianPin({ stale, dim = false }: { stale: boolean; dim?: boolean }
  * the useful signal is "a few" versus "a lot", and a smoothly growing circle
  * just makes every cluster look slightly different from every other one.
  */
-function ClusterPin({ count, dim = false }: { count: number; dim?: boolean }) {
+const ClusterPin = memo(function ClusterPin({ count, dim = false }: { count: number; dim?: boolean }) {
   const size = count < 10 ? 30 : count < 50 ? 36 : 42;
   return (
     <svg
@@ -225,10 +227,10 @@ function ClusterPin({ count, dim = false }: { count: number; dim?: boolean }) {
       </text>
     </svg>
   );
-}
+});
 
 /** A numbered stop on the recommended route. */
-function StopPin({ order }: { order: number }) {
+const StopPin = memo(function StopPin({ order }: { order: number }) {
   return (
     <svg height="24" viewBox="0 0 24 24" width="24">
       <circle className="fill-map-route" cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" />
@@ -246,10 +248,10 @@ function StopPin({ order }: { order: number }) {
       </text>
     </svg>
   );
-}
+});
 
 /** A plane, marking a journey nobody is driving. */
-function PlanePin() {
+const PlanePin = memo(function PlanePin() {
   return (
     <svg height="26" viewBox="0 0 24 24" width="26">
       <circle className="fill-map-air" cx="12" cy="12" r="11" stroke="#fff" strokeWidth="2" />
@@ -259,7 +261,7 @@ function PlanePin() {
       />
     </svg>
   );
-}
+});
 
 /**
  * Fits the map to the data once it arrives.
@@ -323,9 +325,22 @@ function useZoom() {
 
   useEffect(() => {
     if (!map) return;
-    const sync = () => setZoom(map.getZoom() ?? FALLBACK_ZOOM);
+    const sync = () => setZoom((current) => map.getZoom() ?? current);
     sync();
-    const listener = map.addListener('zoom_changed', sync);
+    /**
+     * `idle`, not `zoom_changed`.
+     *
+     * `zoom_changed` fires at every level of a scroll or pinch, and each one
+     * re-grouped 552 properties and remounted every marker on the map —
+     * mid-gesture, several times a second. That was the stutter. `idle` fires
+     * once, when the map settles, so the regrouping happens exactly as often as
+     * the answer actually changes.
+     *
+     * The functional update matters too: a pan fires `idle` without changing
+     * the zoom, and returning the same number lets React bail out of the render
+     * entirely rather than reconciling every marker to the same position.
+     */
+    const listener = map.addListener('idle', sync);
     return () => listener.remove();
   }, [map]);
 
@@ -453,7 +468,7 @@ function AccuracyRing({
  * folding two of them into a badge would hide exactly what somebody opened the
  * map to see.
  */
-function PropertyLayer({
+const PropertyLayer = memo(function PropertyLayer({
   highlighted,
   properties,
   selectedPropertyId,
@@ -557,7 +572,18 @@ function PropertyLayer({
       })}
     </>
   );
-}
+});
+
+/**
+ * Memoised, and that is the single biggest thing on this map.
+ *
+ * Technician positions arrive over the socket every few seconds, re-rendering
+ * this page and everything under it. Without this, each of those frames
+ * reconciled ~40 cluster markers whose props had not changed — every one an
+ * `AdvancedMarker`, which is a real DOM element Google repositions itself.
+ *
+ * None of this layer's props move when a technician does.
+ */
 
 /**
  * The recommended drive, under the markers.
@@ -565,7 +591,7 @@ function PropertyLayer({
  * Two lines, not one: a wide casing under a narrow line is what keeps a route
  * legible over both pale suburb and dark motorway.
  */
-function RouteLayer({ route }: { route: TechnicianRoute | null }) {
+const RouteLayer = memo(function RouteLayer({ route }: { route: TechnicianRoute | null }) {
   const [openStop, setOpenStop] = useState<string | null>(null);
 
   if (!route?.geometry.length) return null;
@@ -609,7 +635,7 @@ function RouteLayer({ route }: { route: TechnicianRoute | null }) {
       })}
     </>
   );
-}
+});
 
 /**
  * The journey when there is no drive.
@@ -623,7 +649,7 @@ function RouteLayer({ route }: { route: TechnicianRoute | null }) {
  * connections this system does not have, and deriving one from distance would
  * be wrong by hours while looking authoritative.
  */
-function AirTravelLayer({ route }: { route: TechnicianRoute | null }) {
+const AirTravelLayer = memo(function AirTravelLayer({ route }: { route: TechnicianRoute | null }) {
   const runs = useMemo(() => {
     if (!route?.airTravel || !route.origin) return [];
     const stop = route.stops.find((entry) => entry.inspectionId === route.airTravel?.inspectionId);
@@ -654,7 +680,7 @@ function AirTravelLayer({ route }: { route: TechnicianRoute | null }) {
       ) : null}
     </>
   );
-}
+});
 
 /**
  * Takes the map to a property picked from the list.
@@ -797,6 +823,21 @@ export function TechnicianMap({
 }) {
   const [openTechnician, setOpenTechnician] = useState<string | null>(null);
 
+  /**
+   * The map follows the console, not the operating system.
+   *
+   * `resolvedTheme` rather than `theme`, because `theme` can be the string
+   * `system` and Google needs an answer. A light map inside a dark console was
+   * the brightest thing on the screen by a wide margin — and this console is
+   * read at night, from Manila, by people looking at a Texas afternoon.
+   *
+   * Google's own `FOLLOW_SYSTEM` is deliberately not used: it follows the
+   * operating system, which is a different question from what the reader chose
+   * in the theme switcher two inches away.
+   */
+  const { resolvedTheme } = useTheme();
+  const colorScheme = resolvedTheme === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT;
+
   // Fit to everything, technicians and properties alike, rather than centring
   // on a fixed point: this office works one metropolitan area today, but a
   // hard-coded centre is the kind of thing that silently stops making sense
@@ -852,6 +893,7 @@ export function TechnicianMap({
       <MapOrReason>
         <GoogleMap
           className="h-full w-full rounded-lg"
+          colorScheme={colorScheme}
           defaultCenter={FALLBACK_CENTER}
           defaultZoom={FALLBACK_ZOOM}
           disableDefaultUI={false}
