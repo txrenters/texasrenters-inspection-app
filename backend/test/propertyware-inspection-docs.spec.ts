@@ -158,8 +158,22 @@ describe('reading the type the report states about itself', () => {
      * space is stripped before comparison rather than collapsed to one.
      */
     expect(classifyTemplate('Ingo ing Inspect io n')).toBe(InspectionType.MOVE_IN);
+    expect(classifyTemplate('Exit Inspect io n')).toBe(InspectionType.MOVE_OUT);
     expect(classifyTemplate('Occupied Inspect io n')).toBe(InspectionType.OCCUPIED);
     expect(classifyTemplate('Ro ut ine Inspect io n')).toBe(InspectionType.OCCUPIED);
+  });
+
+  it('knows the move-out template is called Exit', () => {
+    /**
+     * The pairing is Ingoing/Exit, not Ingoing/Outgoing.
+     *
+     * "Outgoing" was inferred from "Ingoing" and no report uses it. Four of the
+     * first five move-outs imported on production were skipped as
+     * TEMPLATE_NOT_RECOGNISED because of that guess — 25303 Lynbriar Ln, 3407
+     * Nutwood Ln and 12009 Tambourine Dr all state `Exit Inspection`.
+     */
+    expect(classifyTemplate('Exit Inspection')).toBe(InspectionType.MOVE_OUT);
+    expect(classifyTemplate('Ingoing Inspection')).toBe(InspectionType.MOVE_IN);
   });
 
   it('treats Routine and Occupied as one thing', () => {

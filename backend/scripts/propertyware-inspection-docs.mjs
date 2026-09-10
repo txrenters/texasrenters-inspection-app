@@ -20,6 +20,9 @@
  *
  * Options
  *   --apply                  actually write (import is a dry run without it)
+ *   --retry-skipped          put documents skipped for an unrecognised template
+ *                            back in the queue, after the classifier has learned
+ *                            the name they use
  *   --types MOVE_IN,MOVE_OUT restrict to these inspection types
  *   --since 2023-01-01       ignore anything older
  *   --limit 25               stop after this many
@@ -139,6 +142,25 @@ async function main() {
     const types = value('types')?.split(',').map((t) => t.trim().toUpperCase());
     const since = value('since') ? new Date(value('since')) : undefined;
     const limit = value('limit') ? Number(value('limit')) : undefined;
+
+    /**
+     * An unrecognised template is a recoverable skip, unlike the others.
+     *
+     * `NOT_AN_INSPECTION_TYPE` is a decision -- an owner's comparison summary,
+     * an HOA visit -- and re-running should not keep paying to re-download it.
+     * `TEMPLATE_NOT_RECOGNISED` means the report said something the classifier
+     * had never seen, which is a gap that gets closed: the office's move-out
+     * template turned out to be called "Exit Inspection", and four documents
+     * were skipped before anyone knew that. This puts those back in the queue
+     * without touching anything that was skipped on purpose.
+     */
+    if (flag('retry-skipped')) {
+      const requeued = await prisma.propertywareInspectionDocument.updateMany({
+        where: { organizationId, status: 'SKIPPED', errorCode: 'TEMPLATE_NOT_RECOGNISED' },
+        data: { status: 'DISCOVERED', errorCode: null },
+      });
+      console.log(`re-queued ${requeued.count} skipped for an unrecognised template`);
+    }
 
     const waiting = await prisma.propertywareInspectionDocument.count({
       where: { organizationId, status: 'DISCOVERED' },
