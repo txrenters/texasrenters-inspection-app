@@ -945,17 +945,38 @@ export class ApiInspectionRepository implements InspectionRepository {
     )) as { id: string; removed: boolean; name: string };
   }
   async skipRoom(roomId: string, reason?: string) {
-    const room = roomSchema.parse(
-      await queueOnConnectionFailure(
-        { id: `skip:${roomId}`, kind: 'room-skip', payload: { roomId, reason } },
-        () =>
-          writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
-            reason,
-          }),
-      ),
-    );
-    await this.persistRoom(room);
-    return room;
+    try {
+      const room = roomSchema.parse(
+        await queueOnConnectionFailure(
+          { id: `skip:${roomId}`, kind: 'room-skip', payload: { roomId, reason } },
+          () =>
+            writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
+              reason,
+            }),
+        ),
+      );
+      await this.persistRoom(room);
+      return room;
+    } catch (error) {
+      /**
+       * A held skip still has to show on screen.
+       *
+       * Reported from the field 2026-09-10: an area marked skipped went on
+       * offering "Begin walkthrough" and a button still reading "Mark as
+       * skipped". #171 corrected what those controls say about a skipped area;
+       * this is why one could still be looking at an area the app did not think
+       * was skipped. The skip was safely queued and nothing on screen said so.
+       *
+       * `skipReason` goes in with it so the screen explains the skip rather
+       * than showing a bare state with no account of it.
+       */
+      if (error instanceof QueuedOfflineError)
+        await this.patchCachedRoom(roomId, {
+          completionStatus: 'SKIPPED',
+          skipReason: reason?.trim() || null,
+        });
+      throw error;
+    }
   }
   /**
    * Marks an area done — after making sure the evidence for it has gone.
@@ -1010,40 +1031,47 @@ export class ApiInspectionRepository implements InspectionRepository {
        * indistinguishable from the app having lost it. The server's own row
        * replaces this the moment the queue drains.
        */
-      if (error instanceof QueuedOfflineError) await this.markRoomCompletedLocally(roomId);
+      if (error instanceof QueuedOfflineError)
+        await this.patchCachedRoom(roomId, { completionStatus: 'COMPLETED' });
       throw error;
     }
   }
 
   /**
-   * Mirrors a queued completion into the three records `persistRoom` keeps.
+   * Mirrors a write held offline into the three records `persistRoom` keeps.
    *
-   * `completionStatus` is the whole patch: the client contract carries no
-   * `completedAt`, and it is what `deriveAreaStatus` and the submission gate
-   * both read. The server's own row replaces all of this when the queue drains.
+   * Every queued mutation has the same hole: `queueOnConnectionFailure` throws
+   * `QueuedOfflineError` instead of returning a room, so the `persistRoom` call
+   * after it never runs and the cache keeps the state the area had *before* the
+   * technician acted. The screen then reads back the old row — an area just
+   * skipped still offering "Begin walkthrough", an area just completed still
+   * reading as unfinished — which is indistinguishable from the app having
+   * ignored the tap.
+   *
+   * `recordChecklistItem` already patched its own cached list for exactly this
+   * reason, with exactly this reasoning. This is that fix, generalised to the
+   * room records, so the next queued write does not have to rediscover it.
+   *
+   * The server's own row replaces all of it the moment the queue drains.
    */
-  private async markRoomCompletedLocally(roomId: string) {
-    const complete = { completionStatus: 'COMPLETED' as const };
+  private async patchCachedRoom(roomId: string, patch: Partial<z.input<typeof roomSchema>>) {
     const room = await updateExistingApiRecord(`room:${roomId}`, roomSchema, (current) => ({
       ...current,
-      ...complete,
+      ...patch,
     }));
     if (!room) return;
     await Promise.all([
       updateExistingApiRecord(
         `inspection-rooms:${room.inspectionId}`,
         z.array(roomSchema),
-        (current) =>
-          current.map((item) => (item.id === roomId ? { ...item, ...complete } : item)),
+        (current) => current.map((item) => (item.id === roomId ? { ...item, ...patch } : item)),
       ),
       updateExistingApiRecord(
         `inspection-context:${room.inspectionId}`,
         inspectionContextSchema,
         (current) => ({
           ...current,
-          rooms: current.rooms.map((item) =>
-            item.id === roomId ? { ...item, ...complete } : item,
-          ),
+          rooms: current.rooms.map((item) => (item.id === roomId ? { ...item, ...patch } : item)),
         }),
       ),
     ]);
