@@ -15,8 +15,24 @@ import {
 
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
-import { normalizeAddressKey } from '../integrations/jobber/jobber.address';
+import {
+  addressKeyCandidates,
+  buildAddressIndex,
+  buildLooseAddressIndex,
+  looseAddressKey,
+  matchBuildingWithFallback,
+  normalizeAddressKey,
+} from '../integrations/jobber/jobber.address';
 import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-report';
+
+/**
+ * What the office calls the programme, lowercased for the SQL comparison.
+ *
+ * The same phrase `DEFAULT_VISIT_TYPE_RULES` files under `AC_FILTER_DELIVERY`.
+ * Kept as one constant rather than repeated inline so the bootstrap and the
+ * classifier cannot end up looking for different things.
+ */
+const TBP_TITLE_MARKER = 'tenant benefit package';
 
 /**
  * The tenancy fields generation needs, and no more.
@@ -93,7 +109,7 @@ export class TbpPlanService {
       );
 
     const { enrolled, unverified } = await this.enrolledTenancies(organizationId);
-    const priorQuarters = await this.priorOrders(organizationId, quarter);
+    const priorQuarters = await this.ordersForRotation(organizationId, quarter);
     const ranked = carryForwardOrder(enrolled.map(rotationCandidate), priorQuarters);
 
     const byExternalId = new Map(enrolled.map((tenant) => [tenant.externalId, tenant]));
@@ -203,6 +219,137 @@ export class TbpPlanService {
       else if ((tbpEnrollment ?? '').trim().toLowerCase() !== 'no') unverified += 1;
     }
     return { enrolled, unverified };
+  }
+
+  /**
+   * Earlier quarters' orders, newest first, falling back to Jobber's own
+   * history for the first quarter this system plans.
+   *
+   * Without the fallback the first plan would treat every enrolled tenancy as a
+   * new enrolment and order the lot alphabetically by zone — discarding the
+   * rotation the office has actually been running and moving every tenant to a
+   * different point in the year. That is the one quarter where getting it wrong
+   * is most visible, and the data to get it right already exists.
+   */
+  private async ordersForRotation(organizationId: string, quarter: Quarter) {
+    const published = await this.priorOrders(organizationId, quarter);
+    if (published.length > 0) return published;
+
+    const bootstrapped = await this.bootstrapOrderFromJobber(organizationId, quarter);
+    return bootstrapped.length > 0 ? [bootstrapped] : [];
+  }
+
+  /**
+   * Last quarter's order, recovered from the visits Jobber already ran.
+   *
+   * Benefit-package visits type as `AC_FILTER_DELIVERY`, which is in
+   * `TYPES_NOT_SYNCED`, so there are no `Inspection` rows to read and no plans
+   * of our own yet. But `processVisit` upserts `JobberVisitImport.payload` for
+   * *every* visit it sees, before any of the skip branches — so the full title,
+   * address and start time of every benefit-package visit is sitting there
+   * regardless of the row being marked `SKIPPED_NOT_SYNCED`. It is the only
+   * surviving record of the order the office ran, and this reads it.
+   *
+   * Runs only when no plan of ours has been published. Once one has, that is a
+   * better answer and this never runs again.
+   */
+  private async bootstrapOrderFromJobber(organizationId: string, quarter: Quarter) {
+    const previous = previousQuarter(quarter);
+    const from = quarterStart(previous);
+    const to = quarterStart(quarter);
+
+    // Ordering lexicographically on the raw string, which is safe *here* and
+    // only because it was checked: every `startAt` in this table ends in `Z`,
+    // so the text sorts the same way the instants do. A mixed-offset feed would
+    // silently interleave the quarter, so this is asserted below rather than
+    // assumed.
+    const visits = await this.prisma.$queryRaw<
+      {
+        startAt: string;
+        street1: string | null;
+        street2: string | null;
+        postalCode: string | null;
+      }[]
+    >`
+      SELECT payload->>'startAt' AS "startAt",
+             payload->'property'->'address'->>'street1'    AS street1,
+             payload->'property'->'address'->>'street2'    AS street2,
+             payload->'property'->'address'->>'postalCode' AS "postalCode"
+      FROM "JobberVisitImport"
+      WHERE "organizationId" = ${organizationId}::uuid
+        AND lower(payload->>'title') LIKE ${`%${TBP_TITLE_MARKER}%`}
+        AND payload->>'startAt' >= ${from.toISOString()}
+        AND payload->>'startAt' <  ${to.toISOString()}
+      ORDER BY payload->>'startAt' ASC
+    `;
+    if (visits.length === 0) return [];
+
+    const offending = visits.filter((visit) => !isUtcTimestamp(visit.startAt)).length;
+    if (offending > 0) {
+      // Refuse rather than produce a plausible wrong order. A rotation built
+      // from an interleaved quarter looks entirely normal and moves hundreds of
+      // tenants to the wrong week.
+      this.logger.warn({
+        event: 'tbp_rotation_bootstrap_refused',
+        reason: 'Some Jobber startAt values are not UTC, so text ordering is not chronological.',
+        offending,
+      });
+      return [];
+    }
+
+    const buildings = await this.prisma.propertywareBuilding.findMany({
+      where: { organizationId },
+      select: { id: true, addressLine1: true, postalCode: true },
+    });
+    const strict = buildAddressIndex(buildings);
+    const loose = buildLooseAddressIndex(buildings);
+
+    // A building can hold more than one enrolled tenancy, and a visit carries
+    // an address rather than a lease — so there is no tiebreak here that would
+    // not be a guess. Those buildings are skipped and their tenancies start as
+    // new enrolments, which is the honest answer to "we cannot tell which of
+    // these two this visit was for".
+    const tenancies = await this.prisma.propertywareTenant.findMany({
+      where: { organizationId, isActive: true },
+      select: { externalId: true, propertywareBuildingId: true, tbpEnrollment: true },
+    });
+    const byBuilding = new Map<string, string[]>();
+    for (const tenancy of tenancies) {
+      if (!tenancy.propertywareBuildingId || !isTbpEnrolled(tenancy.tbpEnrollment)) continue;
+      const held = byBuilding.get(tenancy.propertywareBuildingId);
+      if (held) held.push(tenancy.externalId);
+      else byBuilding.set(tenancy.propertywareBuildingId, [tenancy.externalId]);
+    }
+
+    const { ranks, unmatchedAddress, ambiguousBuilding } = rankBootstrapVisits(
+      visits,
+      (visit) => {
+        const match = matchBuildingWithFallback(
+          strict,
+          loose,
+          // Jobber splits a unit onto its own line while Propertyware writes it
+          // inline, so both the unit-bearing and street-only keys are tried,
+          // most specific first.
+          addressKeyCandidates(visit.street1, visit.street2, visit.postalCode),
+          looseAddressKey(visit.street1, visit.postalCode),
+        );
+        if (match.outcome !== 'MATCHED') return 'NO_ADDRESS_MATCH';
+        const candidates = byBuilding.get(match.buildingId) ?? [];
+        return candidates.length === 1 ? candidates[0] : 'AMBIGUOUS_BUILDING';
+      },
+    );
+
+    this.logger.log({
+      event: 'tbp_rotation_bootstrapped_from_jobber',
+      organizationId,
+      fromQuarter: quarterLabel(previous),
+      visitsFound: visits.length,
+      ranked: ranks.length,
+      unmatchedAddress,
+      ambiguousBuilding,
+    });
+
+    return ranks;
   }
 
   /**
@@ -404,6 +551,75 @@ export class TbpPlanService {
 
     return { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
   }
+}
+
+/**
+ * One benefit-package visit as it survives in `JobberVisitImport.payload`.
+ */
+export interface BootstrapVisit {
+  startAt: string;
+  street1: string | null;
+  street2: string | null;
+  postalCode: string | null;
+}
+
+/**
+ * Why a visit could not be turned into a place in the queue.
+ *
+ * Two distinct failures, counted separately because they need different fixes:
+ * an address we hold no building for is a mapping gap, while a building with
+ * two enrolled tenancies is a question no address can answer.
+ */
+export type BootstrapResolution = string | 'NO_ADDRESS_MATCH' | 'AMBIGUOUS_BUILDING';
+
+/**
+ * Whether a Jobber timestamp is UTC, and therefore safe to order as text.
+ *
+ * The bootstrap sorts on the raw string in SQL, which is only chronological if
+ * every value shares an offset. Every `startAt` in the live table ends in `Z`,
+ * but a feed that started mixing offsets would interleave the quarter while
+ * looking entirely normal — so this is checked rather than assumed.
+ */
+export function isUtcTimestamp(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.endsWith('Z');
+}
+
+/**
+ * Turn a quarter's visits, already in chronological order, into positions.
+ *
+ * Separated from the database work so the three decisions here — order,
+ * de-duplication, and what counts as unresolvable — can be tested without a
+ * Prisma fake. The address matching itself is `jobber.address`'s job and is
+ * tested there.
+ */
+export function rankBootstrapVisits(
+  visits: readonly BootstrapVisit[],
+  resolveTenant: (visit: BootstrapVisit) => BootstrapResolution,
+) {
+  const ranks: { tenantExternalId: string; sequence: number }[] = [];
+  const seen = new Set<string>();
+  let unmatchedAddress = 0;
+  let ambiguousBuilding = 0;
+
+  for (const visit of visits) {
+    const resolved = resolveTenant(visit);
+    if (resolved === 'NO_ADDRESS_MATCH') {
+      unmatchedAddress += 1;
+      continue;
+    }
+    if (resolved === 'AMBIGUOUS_BUILDING') {
+      ambiguousBuilding += 1;
+      continue;
+    }
+    // A property visited twice in a quarter keeps its first position: the
+    // second visit is a repeat of the same work, not a later place in the
+    // queue.
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    ranks.push({ tenantExternalId: resolved, sequence: ranks.length + 1 });
+  }
+
+  return { ranks, unmatchedAddress, ambiguousBuilding };
 }
 
 const rotationCandidate = (tenant: PlanTenant): RotationCandidate => ({
