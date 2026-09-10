@@ -1,3 +1,5 @@
+import { inspectionRequiresEveryArea } from '@texasrenters/shared';
+
 /**
  * Whether an inspection can be handed to the office, and if not, why.
  *
@@ -109,4 +111,46 @@ export function evaluateSubmissionGate(
       : 'Submission unavailable';
 
   return { canSubmit, blockedReason, incompleteRequiredRooms, analysisPendingRooms };
+}
+
+/**
+ * The areas a technician can dispose of in one action, and whether to offer it.
+ *
+ * An occupied visit is offered the standard fifteen-room layout and a real
+ * property is rarely all fifteen — no third bedroom, no laundry, no carport.
+ * Skipping those one at a time is the per-area toll the 2026-09-09 feedback
+ * asked us to remove, on the visit type with the least time to pay it.
+ *
+ * ── WHY NOT ON A MOVE-IN OR MOVE-OUT ─────────────────────────────────────────
+ *
+ * `inspectionRequiresEveryArea` is the whole gate. On those two the scope *is*
+ * every area, so an unwalked one is work outstanding — a control that waives
+ * ten at once is the opposite of what the visit is for, and a move-out is read
+ * against its move-in area by area.
+ *
+ * ── WHY THE DERIVED STATUS, NOT `completionStatus` ───────────────────────────
+ *
+ * `completionStatus` has never known about photographs: an area walked with
+ * stills and not yet submitted still reads NOT_STARTED on the column. Sweeping
+ * that up would skip an area the technician had just documented and throw the
+ * work away. `status` here is the derived one, which is what the review screen
+ * already shows.
+ */
+export function bulkSkippableAreas<T extends { isRequired: boolean }>(
+  rooms: readonly T[],
+  inspectionType: string | null | undefined,
+  statusOf: (room: T) => string,
+): { offered: boolean; skippable: T[]; required: T[] } {
+  if (inspectionRequiresEveryArea(inspectionType))
+    return { offered: false, skippable: [], required: [] };
+  const skippable = rooms.filter((room) => statusOf(room) === 'NOT_STARTED');
+  return {
+    offered: skippable.length > 0,
+    skippable,
+    // Reported separately so the confirmation can name them. Skipping a
+    // required area is what lets the inspection be submitted without it, and
+    // that is a different decision from tidying away a room the property does
+    // not have.
+    required: skippable.filter((room) => room.isRequired),
+  };
 }
