@@ -194,7 +194,20 @@ export function classifyTemplate(template: string | null | undefined): DocumentK
   const value = (template ?? '').toLowerCase().replace(/\s+/g, '');
   if (!value) return 'UNKNOWN';
   if (value.includes('ingoing') || value.includes('movein')) return InspectionType.MOVE_IN;
-  if (value.includes('outgoing') || value.includes('moveout')) return InspectionType.MOVE_OUT;
+  /**
+   * `Exit Inspection` is what the office's move-out template is actually called.
+   *
+   * Not "Outgoing", which is the word this guessed from `Ingoing` and which no
+   * report uses. Four of the first five move-outs imported on production were
+   * skipped as TEMPLATE_NOT_RECOGNISED because of it — 25303 Lynbriar Ln, 3407
+   * Nutwood Ln and 12009 Tambourine Dr all read `Inspection Template: Exit
+   * Inspection`, and `exit` was in the *filename* rules but never here.
+   *
+   * The pairing is Ingoing/Exit, not Ingoing/Outgoing. `outgoing` and `moveout`
+   * are kept because they cost nothing and a template could yet use them.
+   */
+  if (value.includes('exit') || value.includes('outgoing') || value.includes('moveout'))
+    return InspectionType.MOVE_OUT;
   // "Routine" and "Occupied" are the same visit under two template names; the
   // office renamed it, and reports under both are still in Propertyware.
   if (value.includes('occupied') || value.includes('routine')) return InspectionType.OCCUPIED;
