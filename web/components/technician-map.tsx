@@ -63,6 +63,25 @@ const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
  */
 const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
 
+/**
+ * Satellite imagery with the roads and labels drawn over it.
+ *
+ * The office reads this map to recognise a property, not to navigate to it —
+ * a roof, a driveway and a pool say "that one" faster than a street name does.
+ * Hybrid keeps the labels, so it does not lose the thing a plain satellite view
+ * gives up.
+ *
+ * Available on a vector map, unlike `terrain`, which is raster-only and would
+ * have cost the `AdvancedMarker` pins and the dark styling together. The
+ * imagery ignores `colorScheme` — it is photography — but the controls and any
+ * roadmap the reader switches to still follow the console's theme.
+ *
+ * `mapTypeControl` is left on for this — the only Google control that is —
+ * because imagery is a preference, and a reader who wants plain roads should
+ * not need a deploy to get them.
+ */
+const DEFAULT_MAP_TYPE = 'hybrid';
+
 /** Past this, a position is history rather than an answer to "where are they". */
 const STALE_AFTER_MS = 30 * 60_000;
 
@@ -899,7 +918,8 @@ export function TechnicianMap({
           disableDefaultUI={false}
           gestureHandling="greedy"
           mapId={MAP_ID}
-          mapTypeControl={false}
+          mapTypeControl
+          mapTypeId={DEFAULT_MAP_TYPE}
           // One world. Google repeats the map horizontally when zoomed out, so
           // without this a technician can appear in two places at once and the
           // properties are drawn three times over.
