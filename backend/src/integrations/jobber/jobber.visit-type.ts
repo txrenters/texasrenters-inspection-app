@@ -211,6 +211,72 @@ export function occupiedInspectionInDetails(details: string | null | undefined):
   return OCCUPIED_IN_DETAILS.some((phrase) => haystack.includes(phrase));
 }
 
+/**
+ * Words in a title that mean the office booked an inspection.
+ *
+ * ── WHY A TITLE HAS TO SAY IT ────────────────────────────────────────────────
+ *
+ * The type rules match equipment and place names — `hvac`, `roof` — because
+ * that is how the office names an inspection *of* those things. They also match
+ * how it names ordinary repair work on them, and Jobber holds far more of the
+ * second. On the live calendar every visit that resolved to HVAC was a repair
+ * work order: "Zone 4 - HVAC - #44027", ten of them, each imported as an
+ * inspection and put in front of a technician under that word.
+ *
+ * The rest of the maintenance calendar — cleaning, drywall, a smoke alarm, a
+ * water leak — matched nothing and was refused as an unknown type, which is
+ * worse than it sounds: a refusal is work waiting for a person, so eighteen
+ * work orders nobody was ever going to import sat in the console as a queue.
+ *
+ * ── WHY NOT THE WORK ORDER NUMBER ────────────────────────────────────────────
+ *
+ * Those titles carry one — `#44027`, `WO#44098`, a bare trailing `43000` — and
+ * keying on it is the obvious rule. It is also wrong. Twelve real move-in
+ * inspections carry a work order number too, because the office bundles the
+ * inspection with the code work it is booked alongside:
+ *
+ *   "21227 Teal Lovegrass Ln ... - Code Work + Move in Inspection - Work Order #42914"
+ *
+ * Excluding on the number drops eleven genuine inspections. The number
+ * correlates with work orders; the missing word is what actually distinguishes
+ * them, and on the live calendar it separates the two sets completely.
+ *
+ * ── THE MISSPELLINGS ARE REAL ────────────────────────────────────────────────
+ *
+ * `insp` rather than `inspection` because the office types these by hand and
+ * gets them wrong: "Move in inspeciton" is a real title of a real move-in.
+ * `inscpection` is listed separately because it transposes the c and cannot be
+ * caught by any prefix of the correct spelling. Both are from live data, not
+ * imagined.
+ */
+const INSPECTION_TITLE_MARKERS = ['insp', 'inscpection'];
+
+/** Whether the title itself names the visit an inspection. */
+export function titleNamesAnInspection(title: string | null | undefined): boolean {
+  const haystack = (title ?? '').toLowerCase();
+  return INSPECTION_TITLE_MARKERS.some((marker) => haystack.includes(marker));
+}
+
+/**
+ * Whether this visit is an inspection at all, by title or by details.
+ *
+ * The details half is the occupied case and nothing wider: this office books
+ * the walkthrough inside a filter delivery, so sixty-seven live occupied
+ * inspections have a title that never says the word. `occupiedInspectionInDetails`
+ * is deliberately narrow about that — see its own note — and this reuses it
+ * rather than opening free text up as a second source of truth.
+ */
+export function namesAnInspection(
+  title: string | null | undefined,
+  details: string | null | undefined,
+): boolean {
+  return titleNamesAnInspection(title) || occupiedInspectionInDetails(details);
+}
+
+/** Shown in the console against a visit skipped for not being an inspection. */
+export const NOT_AN_INSPECTION_REASON =
+  'This visit is not named as an inspection, so it is treated as other work and not imported. Rename the job in Jobber if it is one.';
+
 export function isSyncedType(inspectionType: InspectionType): boolean {
   return !TYPES_NOT_SYNCED.has(inspectionType);
 }

@@ -34,6 +34,8 @@ import {
   allowsTechnicianCapture,
   isSyncedType,
   notSyncedReason,
+  namesAnInspection,
+  NOT_AN_INSPECTION_REASON,
   resolveVisitType,
   visitTypeRules,
   occupiedInspectionInDetails,
@@ -492,6 +494,38 @@ export class JobberSyncWorker {
         },
       });
       result.alreadyComplete += 1;
+      return;
+    }
+
+    /**
+     * Other work, not an inspection.
+     *
+     * The maintenance calendar is most of what Jobber holds — cleaning, a water
+     * leak, drywall, a smoke alarm, and repair work orders on the very
+     * equipment the type rules name. Ten of those resolved to HVAC and were
+     * imported as inspections; eighteen more matched nothing and were *refused*,
+     * which put them in the console as a queue of work waiting for a person.
+     * Neither was ever going to become an inspection.
+     *
+     * Skipped rather than refused, for the reason the filter-delivery branch
+     * below gives: this is a decision already made, not a question for someone.
+     *
+     * Placed after the completed branch so a finished visit keeps
+     * SKIPPED_COMPLETE, which says more about it than this would — and before
+     * the property is resolved, which is the ordering `notSyncedReason` had to
+     * learn: resolving first put work we never import into the mapping queue as
+     * addresses to reconcile.
+     */
+    if (!namesAnInspection(visit.title, visit.instructions)) {
+      await this.prisma.jobberVisitImport.update({
+        where: { id: record.id },
+        data: {
+          status: JobberVisitImportStatus.SKIPPED_NOT_SYNCED,
+          failureCode: null,
+          failureMessage: NOT_AN_INSPECTION_REASON,
+        },
+      });
+      result.notSynced += 1;
       return;
     }
 
