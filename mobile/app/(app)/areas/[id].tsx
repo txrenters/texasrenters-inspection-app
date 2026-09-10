@@ -25,10 +25,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Badge, type BadgeTone } from '@/src/components/ui';
 import { AreaAnalysisCard } from '@/src/areas/AreaAnalysisCard';
+import { OccupiedConditionCard } from '@/src/areas/OccupiedConditionCard';
 import { BaselineCard } from '@/src/areas/BaselineCard';
 import { WalkthroughGuideCard } from '@/src/areas/WalkthroughGuideCard';
 import { areaStage, deriveAreaStatus, type AreaStatusDescriptor } from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
+import { checklistKindFor } from '@texasrenters/shared';
+
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
@@ -39,7 +42,9 @@ import {
   useEvidenceRequests,
   useFindings,
   useResolveEvidenceRequest,
+  useRecordChecklistItem,
   useRoom,
+  useRoomChecklist,
   useRoomMedia,
   useRoomPhotos,
   useRoomSummaries,
@@ -113,6 +118,20 @@ export default function AreaDetailScreen() {
     environment: room.data?.environment,
   });
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
+  /**
+   * The authored condition items, for the occupied questions below.
+   *
+   * `useRoomChecklist` rather than `areaChecklist` above: that one falls back to
+   * a *generated* list for areas nobody has configured, and those synthetic ids
+   * do not exist on the server, so scoring one would 404. Only authored items
+   * can be answered.
+   */
+  const conditionItems = useRoomChecklist(id);
+  const recordCondition = useRecordChecklistItem(id);
+  const conditionAssessments = useMemo(
+    () => new Map((conditionItems.data ?? []).map((entry) => [entry.id, entry])),
+    [conditionItems.data],
+  );
   // Scoped to this area: a request about the kitchen is not this room's problem,
   // and showing it here would send the technician to the wrong place.
   const uploadActions = useUploadActions();
@@ -226,6 +245,13 @@ export default function AreaDetailScreen() {
   // and no video still has evidence, and hiding it because there is no video
   // would be telling them nothing was saved.
   const hasEvidence = hasRecording || areaSnapshots.length > 0;
+  /**
+   * Whether this visit's questions are the technician's to answer.
+   *
+   * Read from the shared kind rather than compared to 'OCCUPIED' here, so the
+   * screen agrees with whatever the row writer wrote for this inspection.
+   */
+  const asksOccupiedCondition = checklistKindFor(item.inspectionType) === 'OCCUPIED';
   /**
    * Anything at all recorded against this area, including on the server.
    *
@@ -523,6 +549,38 @@ export default function AreaDetailScreen() {
           Shown once there is something to review, and gone once the area is
           finished.
         */}
+        {/* Above "Finish this area" rather than inside it: the condition answers
+            describe the room, and the card below is about handing it in. Shown
+            whether or not the area is finished, because an answer is still
+            worth correcting after the fact — unlike the submit control, which
+            has nothing left to do. */}
+        {asksOccupiedCondition ? (
+          <OccupiedConditionCard
+            assessments={conditionAssessments}
+            items={conditionItems.data ?? []}
+            onRecord={(itemId, patch) => {
+              const current = conditionAssessments.get(itemId);
+              recordCondition.mutate({
+                itemId,
+                assessment: {
+                  // The whole assessment every time: the API takes a complete
+                  // record, so sending one field would clear the others.
+                  isClean: current?.isClean ?? null,
+                  isUndamaged: current?.isUndamaged ?? null,
+                  isWorking: current?.isWorking ?? null,
+                  comment: current?.comment ?? null,
+                  numericValue: current?.numericValue ?? null,
+                  textValue: current?.textValue ?? null,
+                  ...patch,
+                  // Nothing is being filmed on this screen, so there is no
+                  // moment in a recording to point the reviewer at.
+                  videoTimestampSeconds: null,
+                },
+              });
+            }}
+          />
+        ) : null}
+
         {alreadyFinished || !hasAnyEvidence ? null : (
           <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
             <Text className="text-base font-bold text-foreground">Finish this area</Text>
@@ -577,7 +635,12 @@ export default function AreaDetailScreen() {
             scored by the office during review, against the same items: the
             reviewer is the one reading the recording and the photographs, and
             each axis is a judgement about that evidence. The technician's job on
-            site is to capture it. */}
+            site is to capture it.
+
+            The occupied condition card above is not that checklist coming back.
+            Those two questions are a judgement about the room rather than about
+            the evidence, and only the person standing in it can answer them —
+            see `OccupiedConditionCard` for why the two are separated. */}
 
         {/* One card for the analysis and its findings. They are the same
             subject at two moments and were never both on screen, so the second
