@@ -58,6 +58,16 @@ const PAGE_SIZE = 25;
 /** A guard against a filter that does not narrow the way we think it does. */
 const MAX_PAGES = 200;
 
+/**
+ * How many times a throttled page is retried before the run gives up.
+ *
+ * Five, with doubling waits, is roughly four minutes of patience — far longer
+ * than Jobber's bucket needs to refill, and short enough that a genuine outage
+ * still ends the run rather than hanging on it.
+ */
+const THROTTLE_RETRIES = 5;
+const THROTTLE_BACKOFF_SECONDS = 5;
+
 export interface JobberSyncResult {
   correlationId: string;
   visitsSeen: number;
@@ -208,7 +218,7 @@ export class JobberSyncWorker {
       let cursor: string | null = null;
 
       for (let page = 0; page < MAX_PAGES; page += 1) {
-        const { data, cost } = await this.fetchVisitsPage(
+        const { data, cost } = await this.fetchVisitsPageWithRetry(
           organizationId,
           { first: PAGE_SIZE, after: cursor, ...window },
           correlationId,
@@ -367,7 +377,11 @@ export class JobberSyncWorker {
     const needed = PAGE_SIZE * 20;
     if (currentlyAvailable >= needed || restoreRate <= 0) return;
     const seconds = (needed - currentlyAvailable) / restoreRate;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(seconds, 30) * 1_000));
+    // Capped, but generously. Thirty seconds was not enough to outlast a
+    // drained bucket on a quarter-wide backfill: the next page fired early,
+    // Jobber answered THROTTLED, and the run ended. The cap exists to stop a
+    // pathological sleep, not to cut a legitimate one short.
+    await new Promise((resolve) => setTimeout(resolve, Math.min(seconds, 120) * 1_000));
   }
 
   /**
@@ -384,6 +398,44 @@ export class JobberSyncWorker {
    * request for the whole run.
    */
   private detailsFieldRejected = false;
+
+  /**
+   * The same page, after waiting out a throttle.
+   *
+   * `JobberClient` already decides that a THROTTLED response is recoverable and
+   * sets `retryable` on the error — and nothing read it, so the sync aborted on
+   * a failure it had itself labelled as temporary. A quarter-wide backfill died
+   * this way after importing forty inspections: the work was done, the run
+   * reported a rejection, and the remaining pages were simply never fetched.
+   *
+   * Retrying the *same cursor* rather than advancing, because a rejected page
+   * returned nothing — moving on would skip the visits it would have carried,
+   * silently, which is the one outcome worse than stopping.
+   */
+  private async fetchVisitsPageWithRetry(
+    organizationId: string,
+    variables: Record<string, unknown>,
+    correlationId?: string,
+  ) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.fetchVisitsPage(organizationId, variables, correlationId);
+      } catch (error) {
+        const recoverable = error instanceof JobberError && error.retryable;
+        if (!recoverable || attempt >= THROTTLE_RETRIES) throw error;
+        // Jobber's bucket refills on a clock, so waiting longer each time is
+        // the whole remedy; there is nothing to negotiate.
+        const seconds = Math.min(2 ** attempt * THROTTLE_BACKOFF_SECONDS, 120);
+        this.logger.warn({
+          event: 'jobber_sync_throttled_retry',
+          correlationId,
+          attempt: attempt + 1,
+          waitingSeconds: seconds,
+        });
+        await new Promise((resolve) => setTimeout(resolve, seconds * 1_000));
+      }
+    }
+  }
 
   private async fetchVisitsPage(
     organizationId: string,
