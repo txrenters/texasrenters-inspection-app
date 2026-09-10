@@ -57,6 +57,16 @@ export interface UploadedRoomVideo {
   originalname: string;
 }
 
+/**
+ * Tells a checklist item's id from its label.
+ *
+ * Both arrive on the same route segment: the handset sends the id when it has
+ * the real list, and the label when it is working from the offline fallback.
+ * Tested rather than caught, because `id` is a uuid column — a label reaching
+ * it is a database error, not a miss that returns nothing.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const allowedVideoMimeTypes = new Set([
   'video/mp4',
   'video/quicktime',
@@ -1109,16 +1119,47 @@ export class TechnicianService {
      * 404.
      */
     const kind = checklistKindFor(room.inspection.inspectionType);
-    const item = await this.prisma.areaChecklistItem.findFirst({
-      where: {
-        id: itemId,
-        archivedAt: null,
-        ...(checklistItemsAreOrganizationWide(kind)
-          ? { organizationId: user.organizationId, propertyAreaId: null }
-          : { propertyAreaId: room.propertyAreaId }),
-      },
-      select: { id: true, responseType: true, choices: true },
-    });
+    const scope = checklistItemsAreOrganizationWide(kind)
+      ? { organizationId: user.organizationId, propertyAreaId: null }
+      : { propertyAreaId: room.propertyAreaId };
+    /**
+     * An answer given offline names the item by its label, not its id.
+     *
+     * The handset falls back to a generated checklist for an area whose real
+     * one it has never fetched — a technician who reaches a property with no
+     * signal and opens a room for the first time — and that fallback uses the
+     * label as the id, deliberately, so a locally ticked item keeps its meaning
+     * if the real items arrive mid-walkthrough.
+     *
+     * Answering one then sent `PUT .../checklist/Room%20condition`. Nothing
+     * here could match it: `id` is a uuid column, so the lookup did not merely
+     * miss, it failed. And because the write is queued when the network is
+     * gone, the answer was held on the device and then rejected on every replay
+     * until it ran out of attempts — lost quietly, which is the one outcome the
+     * queue exists to prevent.
+     *
+     * Resolving by label is not a second identity invented here. The database
+     * already treats it as one: `(propertyAreaId, kind, label)` is unique, and
+     * so is `(organizationId, kind, label)` where the area is null. This looks
+     * up the same row by the other key it already has.
+     *
+     * `kind` is part of the match, so a label shared between an occupied
+     * question and a room item cannot cross over.
+     */
+    const identity = UUID_PATTERN.test(itemId)
+      ? { id: itemId }
+      : // A visit with no checklist has no label to resolve either — NONE is
+        // not a member of the stored enum, and a lockbox job genuinely has
+        // nothing to score.
+        kind === 'NONE'
+        ? null
+        : { label: itemId, kind: kind as AreaChecklistItemKind };
+    const item = identity
+      ? await this.prisma.areaChecklistItem.findFirst({
+          where: { ...identity, archivedAt: null, ...scope },
+          select: { id: true, responseType: true, choices: true },
+        })
+      : null;
     if (!item)
       throw new ApplicationError(
         404,
@@ -1157,12 +1198,15 @@ export class TechnicianService {
     };
     const response = await this.prisma.inspectionAreaChecklistResponse.upsert({
       where: {
-        inspectionAreaId_checklistItemId: { inspectionAreaId: roomId, checklistItemId: itemId },
+        // `item.id`, never the parameter: an answer that arrived by label has
+        // to land on the same row a later answer by id would, or the report
+        // shows the same question answered twice.
+        inspectionAreaId_checklistItemId: { inspectionAreaId: roomId, checklistItemId: item.id },
       },
       create: {
         organizationId: user.organizationId,
         inspectionAreaId: roomId,
-        checklistItemId: itemId,
+        checklistItemId: item.id,
         recordedById: user.id,
         ...values,
       },
