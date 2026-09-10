@@ -91,6 +91,37 @@ export function quarterDueForPlanning(
     : null;
 }
 
+/**
+ * The days of a quarter somebody could actually be sent out on.
+ *
+ * Weekends excluded, and nothing else assumed. Public holidays are passed in
+ * rather than derived: this office's calendar is theirs to state, and a
+ * hardcoded list of US federal holidays would be wrong for the days they
+ * actually close and right for days they do not.
+ *
+ * Returned as `YYYY-MM-DD` strings, which is what `Inspection.scheduledAt`
+ * stores and what the console reads back — a `Date` here would invite a
+ * timezone to creep into a calendar fact.
+ */
+export function workingDaysOfQuarter(quarter: Quarter, holidays: readonly string[] = []): string[] {
+  const closed = new Set(holidays);
+  const days: string[] = [];
+  const end = quarterEnd(quarter);
+
+  for (
+    let cursor = quarterStart(quarter);
+    cursor < end;
+    cursor = new Date(cursor.getTime() + MS_PER_DAY)
+  ) {
+    const weekday = cursor.getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    const date = cursor.toISOString().slice(0, 10);
+    if (closed.has(date)) continue;
+    days.push(date);
+  }
+  return days;
+}
+
 // ---------------------------------------------------------------- rotation
 
 export interface RotationCandidate {

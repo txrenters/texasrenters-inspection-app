@@ -12,6 +12,7 @@ import {
   quarterLabel,
   quarterOf,
   quarterStart,
+  workingDaysOfQuarter,
 } from '../src/contracts/quarter-plan.js';
 
 const utc = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
@@ -89,6 +90,45 @@ describe('when a quarter becomes due for planning', () => {
 
   it('crosses the year boundary', () => {
     expect(quarterDueForPlanning(utc('2026-12-18'))).toEqual({ year: 2027, quarter: 1 });
+  });
+});
+
+describe('the working days of a quarter', () => {
+  it('covers the quarter and stops at its last day', () => {
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 });
+
+    expect(days[0]).toBe('2026-10-01');
+    expect(days.at(-1)).toBe('2026-12-31');
+  });
+
+  it('leaves out weekends', () => {
+    // 3 and 4 October 2026 are a Saturday and a Sunday.
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 });
+
+    expect(days).toContain('2026-10-02');
+    expect(days).not.toContain('2026-10-03');
+    expect(days).not.toContain('2026-10-04');
+    expect(days).toContain('2026-10-05');
+  });
+
+  /**
+   * Passed in rather than derived. A hardcoded list of US federal holidays
+   * would be wrong for the days this office actually closes and right for days
+   * it does not — their calendar is theirs to state.
+   */
+  it('leaves out the days the office says it is closed', () => {
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-26', '2026-12-25']);
+
+    expect(days).not.toContain('2026-11-26');
+    expect(days).not.toContain('2026-12-25');
+    expect(days).toContain('2026-11-27');
+  });
+
+  it('ignores a holiday that falls outside the quarter', () => {
+    const withStray = workingDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-07-04']);
+    const without = workingDaysOfQuarter({ year: 2026, quarter: 4 });
+
+    expect(withStray).toEqual(without);
   });
 });
 

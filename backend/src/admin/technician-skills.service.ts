@@ -30,6 +30,59 @@ export interface QualifiedTechnician {
 /** A skill key is a slug: lowercase, digits, and single dashes between them. */
 const SKILL_KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+interface QualificationInputs {
+  required: string[];
+  preferred: string[];
+  technicians: { id: string; displayName: string }[];
+  grants: { technicianId: string; skillId: string; expiresAt: Date | null }[];
+}
+
+/**
+ * Who clears the bar on one particular day.
+ *
+ * Pure, so the rule that matters most here can be argued with in a test: a
+ * grant is good *on* its expiry date and lapses the day after, and a null
+ * expiry never lapses at all.
+ *
+ * **No requirements qualifies everyone**, and that default is load-bearing
+ * rather than convenient. Requirements start empty in every organization, so
+ * the opposite would make every inspection unassignable the day this feature is
+ * switched on — and the console would report it as "no qualified technicians",
+ * which reads like a staffing problem rather than an unconfigured one.
+ */
+export function qualifyOn(inputs: QualificationInputs, onDate: Date): QualifiedTechnician[] {
+  const { required, preferred, technicians, grants } = inputs;
+  if (!required.length && !preferred.length)
+    return technicians.map((technician) => ({
+      technicianId: technician.id,
+      displayName: technician.displayName,
+      preferredHeld: 0,
+      preferredTotal: 0,
+    }));
+
+  const day = onDate.toISOString().slice(0, 10);
+  const held = new Map<string, Set<string>>();
+  for (const grant of grants) {
+    if (grant.expiresAt && grant.expiresAt.toISOString().slice(0, 10) < day) continue;
+    const skills = held.get(grant.technicianId) ?? new Set<string>();
+    skills.add(grant.skillId);
+    held.set(grant.technicianId, skills);
+  }
+
+  const qualified: QualifiedTechnician[] = [];
+  for (const technician of technicians) {
+    const skills = held.get(technician.id) ?? new Set<string>();
+    if (!required.every((skillId) => skills.has(skillId))) continue;
+    qualified.push({
+      technicianId: technician.id,
+      displayName: technician.displayName,
+      preferredHeld: preferred.filter((skillId) => skills.has(skillId)).length,
+      preferredTotal: preferred.length,
+    });
+  }
+  return qualified;
+}
+
 @Injectable()
 export class TechnicianSkillsService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
@@ -311,6 +364,39 @@ export class TechnicianSkillsService {
     inspectionType: InspectionType,
     onDate: Date,
   ): Promise<QualifiedTechnician[]> {
+    const inputs = await this.qualificationInputs(organizationId, inspectionType);
+    return qualifyOn(inputs, onDate);
+  }
+
+  /**
+   * The same question asked about every working day of a quarter.
+   *
+   * One set of queries rather than one per date. A quarter has about sixty-two
+   * working days, and asking separately would be sixty-two round trips to learn
+   * something that changes only when a certificate lapses — while holding the
+   * answer for a whole quarter costs a few dozen rows.
+   */
+  async qualificationCalendar(
+    organizationId: string,
+    inspectionType: InspectionType,
+    dates: readonly Date[],
+  ): Promise<Map<string, QualifiedTechnician[]>> {
+    const inputs = await this.qualificationInputs(organizationId, inspectionType);
+    return new Map(
+      dates.map((date) => [date.toISOString().slice(0, 10), qualifyOn(inputs, date)]),
+    );
+  }
+
+  /**
+   * Everything qualification depends on, fetched once.
+   *
+   * Expiry is applied in `qualifyOn` rather than in this query, deliberately:
+   * the rule is date-relative, and pushing it into SQL would mean one query per
+   * date. The set is small — technicians times the skills one inspection type
+   * asks for — so holding it and evaluating in memory is both cheaper and
+   * directly testable.
+   */
+  private async qualificationInputs(organizationId: string, inspectionType: InspectionType) {
     const requirements = await this.prisma.inspectionTypeSkillRequirement.findMany({
       where: { organizationId, inspectionType, skill: { isActive: true } },
       select: { skillId: true, requirement: true },
@@ -330,46 +416,21 @@ export class TechnicianSkillsService {
       select: { id: true, displayName: true },
       orderBy: { displayName: 'asc' },
     });
-    if (!required.length && !preferred.length)
-      return technicians.map((technician) => ({
-        technicianId: technician.id,
-        displayName: technician.displayName,
-        preferredHeld: 0,
-        preferredTotal: 0,
-      }));
 
-    const held = await this.prisma.technicianSkillGrant.findMany({
-      where: {
-        organizationId,
-        technicianId: { in: technicians.map((technician) => technician.id) },
-        skillId: { in: [...required, ...preferred] },
-        revokedAt: null,
-        // Null never lapses; a date lapses the day after it, so a grant is
-        // still good *on* its expiry date.
-        OR: [{ expiresAt: null }, { expiresAt: { gte: onDate } }],
-      },
-      select: { technicianId: true, skillId: true },
-    });
+    const grants =
+      required.length || preferred.length
+        ? await this.prisma.technicianSkillGrant.findMany({
+            where: {
+              organizationId,
+              technicianId: { in: technicians.map((technician) => technician.id) },
+              skillId: { in: [...required, ...preferred] },
+              revokedAt: null,
+            },
+            select: { technicianId: true, skillId: true, expiresAt: true },
+          })
+        : [];
 
-    const byTechnician = new Map<string, Set<string>>();
-    for (const grant of held) {
-      const skills = byTechnician.get(grant.technicianId) ?? new Set<string>();
-      skills.add(grant.skillId);
-      byTechnician.set(grant.technicianId, skills);
-    }
-
-    const qualified: QualifiedTechnician[] = [];
-    for (const technician of technicians) {
-      const skills = byTechnician.get(technician.id) ?? new Set<string>();
-      if (!required.every((skillId) => skills.has(skillId))) continue;
-      qualified.push({
-        technicianId: technician.id,
-        displayName: technician.displayName,
-        preferredHeld: preferred.filter((skillId) => skills.has(skillId)).length,
-        preferredTotal: preferred.length,
-      });
-    }
-    return qualified;
+    return { required, preferred, technicians, grants };
   }
 
   // ---------------------------------------------------------------- helpers
