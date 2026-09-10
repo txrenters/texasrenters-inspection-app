@@ -132,6 +132,58 @@ export const VISIT_COMPLETE_MUTATION = `
 `;
 
 /**
+ * Books a visit on a job that already exists.
+ *
+ * **Verified against the live schema on API version 2025-01-20**, not guessed —
+ * `jobCreateNote` below records what guessing costs. Confirmed by
+ * introspection:
+ *
+ *   visitCreate(jobId: EncodedId, input: VisitCreateInput): VisitCreatePayload
+ *   VisitCreateInput        { visits: [VisitCreateAttributes]! }
+ *   VisitCreateAttributes   { title, instructions, overrideOrder, schedule }
+ *   ScheduledItemAttributes { notifyTeam, teamReminderOffset, startAt, endAt,
+ *                             teamMemberIdsToAssign }
+ *   LocalDateTimeAttributes { date: ISO8601Date!, time: ISO8601Time,
+ *                             timezone: Timezone! }
+ *   VisitCreatePayload      { createdVisits, job, userErrors }
+ *
+ * Two things that settle open questions elsewhere in this integration.
+ * **`instructions` is writable on create**, so the "+ Occupied Inspection"
+ * phrase the importer keys on can actually be set — see
+ * `occupiedInspectionInDetails`. And **`time` is optional while `date` and
+ * `timezone` are not**, so a visit can be booked for a whole day, which is
+ * exactly the shape of `Inspection.scheduledAt` (`@db.Date`).
+ *
+ * The variables are declared non-null even though the arguments are nullable.
+ * GraphQL permits a `T!` variable wherever `T` is accepted, and being stricter
+ * here means a missing id fails locally rather than at Jobber.
+ *
+ * **This is not sufficient for the quarterly planner on its own.** Every one of
+ * the 115 benefit-package visits in the live table belongs to its own job —
+ * 115 visits, 115 distinct jobs — so the office creates a job per visit rather
+ * than adding visits to a recurring one. Booking a new quarter therefore needs
+ * `jobCreate` first, whose `invoicing` argument is required and carries two
+ * enums (`BillingStrategy`, `BillingFrequencyEnum`) that decide how the office
+ * bills. That is a business decision, not a technical one, and it is why the
+ * outbound worker still refuses TBP_VISIT_CREATE.
+ */
+export const VISIT_CREATE_MUTATION = `
+  mutation CreateVisit($jobId: EncodedId!, $input: VisitCreateInput!) {
+    visitCreate(jobId: $jobId, input: $input) {
+      createdVisits {
+        id
+        title
+        startAt
+      }
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
  * Attaches a note to the job the visit belongs to.
  *
  * `jobCreateNote`, not `jobNoteCreate`. The latter was a guess and does not

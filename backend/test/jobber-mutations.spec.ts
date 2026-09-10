@@ -36,17 +36,38 @@ describe('Jobber mutation shapes', () => {
     expect(QUERIES).toContain('visitComplete(visitId: $visitId, input: $input)');
   });
 
-  it('selects userErrors on both, since Jobber rejects inside a 200', () => {
+  /**
+   * Verified 2026-09-11 by introspection against the same API version:
+   *   visitCreate(jobId: EncodedId, input: VisitCreateInput): VisitCreatePayload
+   *   VisitCreateInput      { visits: [VisitCreateAttributes]! }
+   *   VisitCreateAttributes { title, instructions, overrideOrder, schedule }
+   *   VisitCreatePayload    { createdVisits, job, userErrors }
+   */
+  it('books a visit with the name and payload Jobber actually has', () => {
+    expect(QUERIES).toContain('visitCreate(jobId: $jobId, input: $input)');
+    expect(QUERIES).toMatch(/\$input: VisitCreateInput!/);
+    // `createdVisits`, plural — the payload returns a list, and reading it as a
+    // single `visit` would come back undefined and lose the new id.
+    expect(QUERIES).toMatch(/createdVisits\s*\{/);
+    expect(QUERIES).not.toMatch(/visitCreate\([^)]*\)\s*\{\s*visit\s*\{/);
+  });
+
+  it('selects userErrors on every mutation, since Jobber rejects inside a 200', () => {
     // Counted from actual declarations, not the word: the doc comments discuss
     // mutations and userErrors at length, and would inflate a naive count.
     const declarations = QUERIES.match(/mutation \w+\(/g) ?? [];
-    expect(declarations).toHaveLength(2);
+    expect(declarations).toHaveLength(3);
 
-    const visit = QUERIES.slice(
-      QUERIES.indexOf('VISIT_COMPLETE_MUTATION'),
-      QUERIES.indexOf('JOB_NOTE_CREATE_MUTATION'),
-    );
-    const note = QUERIES.slice(QUERIES.indexOf('JOB_NOTE_CREATE_MUTATION'));
-    for (const body of [visit, note]) expect(body).toContain('userErrors');
+    // Sliced between the constants in the order they appear, so a mutation
+    // added between two others is checked rather than folded into a neighbour.
+    const names = ['VISIT_COMPLETE_MUTATION', 'VISIT_CREATE_MUTATION', 'JOB_NOTE_CREATE_MUTATION'];
+    const bounds = names
+      .map((name) => ({ name, at: QUERIES.indexOf(`export const ${name}`) }))
+      .sort((left, right) => left.at - right.at);
+
+    for (const [index, entry] of bounds.entries()) {
+      const end = bounds[index + 1]?.at ?? QUERIES.length;
+      expect(QUERIES.slice(entry.at, end)).toContain('userErrors');
+    }
   });
 });
