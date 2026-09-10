@@ -113,16 +113,28 @@ async function main() {
       await app.close();
       return;
     }
-    const actor = await prisma.userProfile.findFirst({
-      where: { email: actorEmail, organizationId },
-      select: { id: true, organizationId: true, email: true },
+    /**
+     * Through `memberships`, because a profile has no organization column.
+     *
+     * `UserProfile` is one row per person for the whole system -- email is
+     * unique across it -- and `OrganizationMember` is what places them in an
+     * organization. Filtering on a non-existent `organizationId` field is a
+     * Prisma validation error, not an empty result, so this failed loudly
+     * rather than quietly importing under the wrong actor.
+     */
+    const profile = await prisma.userProfile.findFirst({
+      where: { email: actorEmail, memberships: { some: { organizationId } } },
+      select: { id: true, email: true },
     });
-    if (!actor) {
-      console.error(`No account here for ${actorEmail}.`);
+    if (!profile) {
+      console.error(`No account in this organization for ${actorEmail}.`);
       process.exitCode = 1;
       await app.close();
       return;
     }
+    // The shape the importer expects; the organization is the one resolved
+    // above rather than anything read off the profile.
+    const actor = { id: profile.id, organizationId, email: profile.email };
 
     const types = value('types')?.split(',').map((t) => t.trim().toUpperCase());
     const since = value('since') ? new Date(value('since')) : undefined;
