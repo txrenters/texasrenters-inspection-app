@@ -69,6 +69,9 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
   ],
   // For the third-party gateway controller, which serves a curated read-only
   // slice of the same data rather than reimplementing the queries behind it.
-  exports: [AdminService, PropertyGeocodingService],
+  // `InspectionImportService` is exported for the Propertyware document
+  // backfill, which finds the reports and hands them here rather than growing a
+  // second importer beside this one.
+  exports: [AdminService, PropertyGeocodingService, InspectionImportService],
 })
 export class AdminModule {}

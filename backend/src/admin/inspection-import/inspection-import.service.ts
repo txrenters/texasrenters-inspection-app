@@ -586,6 +586,95 @@ export class InspectionImportService {
   }
 
   /**
+   * Import a report that has already been read, and wait for it to land.
+   *
+   * For the Propertyware backfill, which differs from the console in two ways
+   * that both matter.
+   *
+   * It **parses before choosing an inspection.** A document in Propertyware is
+   * filed against a building, not against an inspection — the REST
+   * `/inspections` module is denied to this API client — so the only reliable
+   * statement of which walkthrough a PDF describes is the report's own
+   * `Inspection Template:` line. The caller reads it, decides, and hands the
+   * parsed report back here rather than paying to parse an 81 MB file twice.
+   *
+   * It **waits.** `start` and `commit` deliberately detach: a browser will not
+   * hold a connection for minutes, and `main.ts` gives the server a 30-second
+   * socket timeout that once destroyed the connection mid-import. A backfill
+   * has the opposite problem — 4,664 documents fired detached is 4,664
+   * concurrent transactions, several hundred megabytes of PDF resident at once,
+   * and no way to pace or report. So this awaits the same `runCommit` the
+   * console reaches through a floating promise.
+   *
+   * Never rejects for a failed *write*: `runCommit` records its outcome on the
+   * job, exactly as it does for the console, and the job is re-read here to say
+   * what happened. It does still throw for the guards above it — no property,
+   * not a PDF, already imported — because those are decisions the caller makes
+   * differently per document.
+   */
+  async importPreparsed(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    file: UploadedReport,
+    report: ImportedReport,
+  ) {
+    if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-')
+      throw new ApplicationError(400, 'REPORT_NOT_A_PDF', 'That file is not a PDF.');
+
+    const target = await this.requireImportableInspection(user, inspectionId);
+    const fingerprint = reportFingerprint(file.buffer);
+
+    const previous = await this.findPreviousImport(user.organizationId, fingerprint);
+    if (previous)
+      throw new ApplicationError(
+        409,
+        'REPORT_ALREADY_IMPORTED',
+        'This report has already been imported.',
+        [previous],
+      );
+
+    const job = await this.prisma.inspectionImportJob.create({
+      data: {
+        organizationId: user.organizationId,
+        buildingId: target.propertywareBuildingId ?? target.id,
+        inspectionId: target.id,
+        fingerprint,
+        // COMPLETED, not RUNNING: the reading is already done and its result is
+        // stored below. A RUNNING row with output would read as a job whose
+        // process died, and the staleness sweep would close it underneath us.
+        status: 'COMPLETED',
+        method: 'DETERMINISTIC',
+        output: JSON.parse(JSON.stringify(report)) as Prisma.InputJsonValue,
+        startedById: user.id,
+      },
+      select: { id: true },
+    });
+
+    // The source is kept for the same reason the console keeps it: an imported
+    // inspection is argued from somebody else's record, so the record itself
+    // is retained rather than discarded once parsed.
+    await this.storage.putBytes(
+      sourceKey(user.organizationId, fingerprint),
+      file.buffer,
+      'application/pdf',
+    );
+
+    await this.runCommit(user, job.id, fingerprint, report, target);
+
+    const settled = await this.prisma.inspectionImportJob.findUnique({
+      where: { id: job.id },
+      select: { committedAt: true, errorCode: true },
+    });
+    return {
+      jobId: job.id,
+      inspectionId: target.id,
+      fingerprint,
+      committed: Boolean(settled?.committedAt),
+      errorCode: settled?.errorCode ?? null,
+    };
+  }
+
+  /**
    * Write the read report in. Never rejects; records its outcome on the job.
    *
    * The console distinguishes the three states from the job alone:
