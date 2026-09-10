@@ -18,6 +18,7 @@ import {
   classifyTemplate,
   isImportableKind,
   looksLikeInspectionReport,
+  worthDownloading,
   type PropertywareDocument,
 } from './propertyware.inspection-docs';
 
@@ -200,9 +201,21 @@ export class PropertywareInspectionDocsService {
     const outcome = { considered: pending.length, imported: 0, skipped: 0, failed: 0 };
     for (const row of pending) {
       try {
-        // Stored as text, because a catalogue row can hold COMPARISON or
-        // UNKNOWN and neither is an InspectionType.
-        if (!isImportableKind(row.guessedKind as DocumentKind)) {
+        /**
+         * The filename only decides whether to fetch the bytes.
+         *
+         * `UNKNOWN` is fetched, not discarded: the name is a guess and the
+         * report's own template line is the answer, so a name nobody
+         * anticipated should cost one download and then be decided properly.
+         * That is not hypothetical — "Turnover Inspection", "TO Inspection",
+         * "Exit Inspection" and `occupiedinspection` written without a space
+         * were all sitting unclassified after the first discovery run.
+         *
+         * Only two are certainly not one inspection and are never fetched: an
+         * owner's move-in-versus-move-out summary, and somebody else's HOA or
+         * municipal visit.
+         */
+        if (!worthDownloading(row.guessedKind as DocumentKind)) {
           await this.settle(row.id, 'SKIPPED', { errorCode: 'NOT_AN_INSPECTION_TYPE' });
           outcome.skipped += 1;
           continue;

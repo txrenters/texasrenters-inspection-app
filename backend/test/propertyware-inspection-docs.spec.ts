@@ -6,6 +6,7 @@ import {
   dateFromFileName,
   isImportableKind,
   looksLikeInspectionReport,
+  worthDownloading,
   type PropertywareDocument,
 } from '../src/integrations/propertyware/propertyware.inspection-docs';
 
@@ -93,6 +94,45 @@ describe('guessing the type from the filename', () => {
      */
     expect(classifyFileName('7306 Cypress Prairie Dr MOVE IN VS MOVE OUT.pdf')).toBe('COMPARISON');
     expect(isImportableKind(classifyFileName('MI vs MO 1234 Somewhere.pdf'))).toBe(false);
+  });
+
+  it.each([
+    ['4742 Tain Dr_EXIT inspection 03082017.pdf', InspectionType.MOVE_OUT],
+    ['1506 Spencer Glen Ln_occupiedinspection .pdf', InspectionType.OCCUPIED],
+    ['19615 Kingston Green Ln_OccupiedInspection .pdf', InspectionType.OCCUPIED],
+    ['479 Folk Crest Ln_Saftey Inspection_07012020.pdf', InspectionType.OCCUPIED],
+  ])('reads %s, which the first run could not', (fileName, expected) => {
+    /**
+     * Every one of these sat unclassified after the first real discovery run.
+     *
+     * `occupiedinspection` is the interesting one: written with no separator at
+     * all, so `\boccupied\b` had no word boundary to match and four occupied
+     * inspections went unrecognised. `EXIT` is the office's other word for a
+     * move-out, on thirteen files, and `Saftey` is their typo, not ours to
+     * correct in their filenames.
+     */
+    expect(classifyFileName(fileName)).toBe(expected);
+  });
+
+  it('leaves a turnover unclassified rather than guessing', () => {
+    // 39 files say "Turnover" or "TO Inspection", and that is genuinely
+    // ambiguous between a move-out and a back-to-market. Guessing either from
+    // the name would invent a fact the PDF already states, so these are
+    // downloaded and read instead.
+    expect(classifyFileName('13722 Lynnwood Ln_Turnover Inspection.pdf')).toBe('UNKNOWN');
+    expect(worthDownloading(classifyFileName('10542 Paula Bluff Ln TO Inspection.pdf'))).toBe(true);
+  });
+
+  it('never fetches an inspection that is somebody else’s', () => {
+    // An HOA walk and a municipal compliance visit concern the property but are
+    // not walkthroughs of the tenancy, and no template inside them would be
+    // recognised. Skipped without paying for the download.
+    const hoa = classifyFileName('10339_solitude_acct#229042_HOA_INSPECTION_02052021.pdf');
+    const city = classifyFileName('2926 Riata Ln_City Of Houston_Inspection_Pending Items.pdf');
+    expect(hoa).toBe('NOT_AN_INSPECTION');
+    expect(city).toBe('NOT_AN_INSPECTION');
+    expect(worthDownloading(hoa)).toBe(false);
+    expect(worthDownloading(city)).toBe(false);
   });
 
   it('does not find a type inside an ordinary word', () => {
