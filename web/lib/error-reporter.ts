@@ -11,6 +11,8 @@
  * page is worth as much as one behind it.
  */
 
+import { APP_VERSION_LABEL } from './app-version';
+
 const INSTALL_KEY = 'texasrenters.error-install-id';
 const SENT_KEY = 'texasrenters.error-sent-ids';
 
@@ -145,7 +147,21 @@ export async function flush(): Promise<number> {
         installId: browserId(),
         source: 'CONSOLE',
         platform: 'web',
-        buildId: process.env.NEXT_PUBLIC_BUILD_ID || undefined,
+        /**
+         * The release, from the one variable CI actually sets.
+         *
+         * This read `NEXT_PUBLIC_BUILD_ID`, which is set nowhere — not in
+         * `docker/web/Dockerfile`, not in the publish workflow, not in any env
+         * file. So every console report ever filed carried `Build: —`.
+         *
+         * That is the field that answers "is this crash from a build we have
+         * already fixed", and without it a report cannot be aged: a React #185
+         * burst from 9 September looked exactly like one from today, across six
+         * releases in between. `NEXT_PUBLIC_APP_VERSION` is inlined from the
+         * image tag and is already what the console footer shows, so the report
+         * and the footer now name the same build.
+         */
+        buildId: APP_VERSION_LABEL === 'dev' ? undefined : APP_VERSION_LABEL,
         apiBaseUrl: baseUrl,
         entries: pending,
       }),
