@@ -8,8 +8,10 @@ import type {
 import {
   AdvancedMarker,
   APIProvider,
+  APILoadingStatus,
   InfoWindow,
   Map as GoogleMap,
+  useApiLoadingStatus,
   useMap,
 } from '@vis.gl/react-google-maps';
 import { Fragment, useEffect, useMemo, useState } from 'react';
@@ -730,16 +732,50 @@ function FocusSelected({
 }
 
 /** Said plainly, rather than rendering a grey rectangle nobody can diagnose. */
-function MissingKey() {
+function MapUnavailable({ children }: { children: React.ReactNode }) {
   return (
     <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
-      <p>
-        The map needs a Google Maps browser key.
-        <br />
-        Set <code className="font-mono">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> and rebuild.
-      </p>
+      <p>{children}</p>
     </div>
   );
+}
+
+/**
+ * The map, or the reason there is not one.
+ *
+ * **The page has to survive Google refusing us.** When the API rejects the key
+ * — a referrer restriction that does not cover the host is the easy way to get
+ * there — the map never initialises, and the first `AdvancedMarker` to mount
+ * calls `getRootNode` on an element that was never created. That exception is
+ * uncaught, so the route's error boundary replaced the whole technician map
+ * page with "This page could not be displayed", roster and property list
+ * included.
+ *
+ * A third-party auth failure is not a reason to lose everything beside the map.
+ * Nothing that touches `google.maps` mounts until the API says it is ready, so
+ * the failure stays the size of the map.
+ */
+function MapOrReason({ children }: { children: React.ReactNode }) {
+  const status = useApiLoadingStatus();
+
+  if (status === APILoadingStatus.AUTH_FAILURE)
+    return (
+      <MapUnavailable>
+        Google rejected this key for this site.
+        <br />
+        Add <code className="font-mono">{globalThis.location?.origin ?? 'this origin'}/*</code> to
+        the key&rsquo;s HTTP referrer restrictions in the Cloud console.
+      </MapUnavailable>
+    );
+
+  if (status === APILoadingStatus.FAILED)
+    return (
+      <MapUnavailable>Google Maps could not be loaded. Reloading usually clears it.</MapUnavailable>
+    );
+
+  // NOT_LOADED and LOADING both render the children: the `<Map>` element has to
+  // be mounted for the library to begin loading at all.
+  return <>{children}</>;
 }
 
 export function TechnicianMap({
@@ -802,86 +838,95 @@ export function TechnicianMap({
     [positions, properties],
   );
 
-  if (!API_KEY) return <MissingKey />;
+  if (!API_KEY)
+    return (
+      <MapUnavailable>
+        The map needs a Google Maps browser key.
+        <br />
+        Set <code className="font-mono">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> and rebuild.
+      </MapUnavailable>
+    );
 
   return (
     <APIProvider apiKey={API_KEY}>
-      <GoogleMap
-        className="h-full w-full rounded-lg"
-        defaultCenter={FALLBACK_CENTER}
-        defaultZoom={FALLBACK_ZOOM}
-        disableDefaultUI={false}
-        gestureHandling="greedy"
-        mapId={MAP_ID}
-        mapTypeControl={false}
-        // One world. Google repeats the map horizontally when zoomed out, so
-        // without this a technician can appear in two places at once and the
-        // properties are drawn three times over.
-        restriction={{ latLngBounds: WORLD_BOUNDS, strictBounds: false }}
-        streetViewControl={false}
-      >
-        <FitToData
-          fitKey={fitKey}
-          points={points}
-          suspended={Boolean(selectedTechnicianId) || Boolean(selectedPropertyId)}
-        />
-        <FocusProperty properties={properties} selectedPropertyId={selectedPropertyId} />
-        <FocusSelected
-          fallback={selectedStops}
-          position={selectedPosition}
-          selectedTechnicianId={selectedTechnicianId}
-        />
+      <MapOrReason>
+        <GoogleMap
+          className="h-full w-full rounded-lg"
+          defaultCenter={FALLBACK_CENTER}
+          defaultZoom={FALLBACK_ZOOM}
+          disableDefaultUI={false}
+          gestureHandling="greedy"
+          mapId={MAP_ID}
+          mapTypeControl={false}
+          // One world. Google repeats the map horizontally when zoomed out, so
+          // without this a technician can appear in two places at once and the
+          // properties are drawn three times over.
+          restriction={{ latLngBounds: WORLD_BOUNDS, strictBounds: false }}
+          streetViewControl={false}
+        >
+          <FitToData
+            fitKey={fitKey}
+            points={points}
+            suspended={Boolean(selectedTechnicianId) || Boolean(selectedPropertyId)}
+          />
+          <FocusProperty properties={properties} selectedPropertyId={selectedPropertyId} />
+          <FocusSelected
+            fallback={selectedStops}
+            position={selectedPosition}
+            selectedTechnicianId={selectedTechnicianId}
+          />
 
-        {/* Under the markers and over the properties: the route is context for
-            the pins, not a thing to be read on its own. */}
-        <RouteLayer route={route} />
-        <AirTravelLayer route={route} />
+          {/* Under the markers and over the properties: the route is context for
+              the pins, not a thing to be read on its own. */}
+          <RouteLayer route={route} />
+          <AirTravelLayer route={route} />
 
-        <PropertyLayer
-          highlighted={highlightedBuildingIds}
-          properties={properties}
-          selectedPropertyId={selectedPropertyId}
-        />
+          <PropertyLayer
+            highlighted={highlightedBuildingIds}
+            properties={properties}
+            selectedPropertyId={selectedPropertyId}
+          />
 
-        {positions.map((position) => {
-          const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
-          const dim =
-            Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
-          const at = { lat: position.latitude, lng: position.longitude };
-          return (
-            <Fragment key={position.id}>
-              {position.accuracyMeters && position.accuracyMeters > 25 ? (
-                <AccuracyRing
-                  latitude={position.latitude}
-                  longitude={position.longitude}
-                  radiusMeters={position.accuracyMeters}
-                />
-              ) : null}
-              <AdvancedMarker
-                onClick={() => setOpenTechnician(position.id)}
-                position={at}
-                title={position.technician?.displayName ?? 'Unknown technician'}
-                zIndex={500}
-              >
-                <TechnicianPin dim={dim} stale={stale} />
-              </AdvancedMarker>
-              {openTechnician === position.id ? (
-                <InfoWindow onCloseClick={() => setOpenTechnician(null)} position={at}>
-                  <span className="font-medium">
-                    {position.technician?.displayName ?? 'Unknown technician'}
-                  </span>
-                  <br />
-                  {formatRelative(position.recordedAt)}
-                  {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
-                  {position.batteryPercent === null ? null : (
-                    <> · {position.batteryPercent}% battery</>
-                  )}
-                </InfoWindow>
-              ) : null}
-            </Fragment>
-          );
-        })}
-      </GoogleMap>
+          {positions.map((position) => {
+            const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
+            const dim =
+              Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
+            const at = { lat: position.latitude, lng: position.longitude };
+            return (
+              <Fragment key={position.id}>
+                {position.accuracyMeters && position.accuracyMeters > 25 ? (
+                  <AccuracyRing
+                    latitude={position.latitude}
+                    longitude={position.longitude}
+                    radiusMeters={position.accuracyMeters}
+                  />
+                ) : null}
+                <AdvancedMarker
+                  onClick={() => setOpenTechnician(position.id)}
+                  position={at}
+                  title={position.technician?.displayName ?? 'Unknown technician'}
+                  zIndex={500}
+                >
+                  <TechnicianPin dim={dim} stale={stale} />
+                </AdvancedMarker>
+                {openTechnician === position.id ? (
+                  <InfoWindow onCloseClick={() => setOpenTechnician(null)} position={at}>
+                    <span className="font-medium">
+                      {position.technician?.displayName ?? 'Unknown technician'}
+                    </span>
+                    <br />
+                    {formatRelative(position.recordedAt)}
+                    {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
+                    {position.batteryPercent === null ? null : (
+                      <> · {position.batteryPercent}% battery</>
+                    )}
+                  </InfoWindow>
+                ) : null}
+              </Fragment>
+            );
+          })}
+        </GoogleMap>
+      </MapOrReason>
     </APIProvider>
   );
 }
