@@ -24,6 +24,7 @@ export const PERMISSION_KEYS = [
   'technicians:locate',
   'technicians:manage',
   'technicians:provision',
+  'technicians:skills',
   'findings:read',
   'findings:review',
   'comparisons:review',
@@ -161,7 +162,7 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
       {
         key: 'technicians:read',
         label: 'View technicians',
-        description: 'See technician accounts, availability, and assigned workloads.',
+        description: 'See technician accounts, their skills, and assigned workloads.',
       },
       {
         key: 'technicians:locate',
@@ -178,6 +179,12 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'technicians:provision',
         label: 'Create technicians',
         description: 'Provision a new mobile technician account and temporary password.',
+      },
+      {
+        key: 'technicians:skills',
+        label: 'Manage technician skills',
+        description:
+          'Edit the skill catalog, grant and revoke skills on a technician, and set which skills each kind of inspection requires. Scheduling reads these to decide who is eligible for a visit.',
       },
     ],
   },

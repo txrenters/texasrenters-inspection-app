@@ -564,18 +564,37 @@ export class JobberSyncWorker {
      * `IN_PROGRESS` only, so a finished visit cannot reappear as work somebody
      * already did.
      *
-     * Deliberately move-ins alone. Of the 130 finished visits sitting here, 47
-     * are filter deliveries and 77 carry a job number for a title and no type
-     * at all; importing those would be inventing history rather than recovering
-     * it. Only a move-in is owed a baseline.
+     * **No longer move-ins alone.** It was, and the reasoning was sound at the
+     * time: of the 130 finished visits then sitting here, 47 were filter
+     * deliveries and 77 carried a job number for a title and no type at all, so
+     * importing them would have been inventing history rather than recovering
+     * it.
+     *
+     * Both of those are now excluded by guards that did not exist when this was
+     * written. The 77 untyped ones fail `outcome === 'RESOLVED'`. The filter
+     * deliveries fail `namesAnInspection` — unless their details say
+     * "+ Occupied Inspection", in which case `type` was already upgraded above
+     * and the visit genuinely *is* an occupied inspection. So the type
+     * restriction was the only part still doing work, and what it excluded was
+     * every completed occupied inspection and move-out in the office's history.
+     *
+     * That cost was invisible until a quarter was backfilled: 700 of 856 Q3
+     * visits came back `alreadyComplete`, and July finished with zero occupied
+     * inspections against seventy in September — the difference being that
+     * September's had not happened yet.
+     *
+     * `namesAnInspection` is repeated here rather than relied on below, because
+     * the check below runs *after* this branch: a finished visit keeps
+     * SKIPPED_COMPLETE, which says more about it. Recovering one without
+     * repeating the check would import exactly what that comment feared.
      */
-    const isRecoverableMoveIn =
+    const isRecoverable =
       type.outcome === 'RESOLVED' &&
-      type.inspectionType === InspectionType.MOVE_IN &&
       Boolean(visit.property?.id) &&
-      Boolean(visit.startAt);
+      Boolean(visit.startAt) &&
+      namesAnInspection(visit.title, visit.instructions);
 
-    if (isComplete && !isRecoverableMoveIn) {
+    if (isComplete && !isRecoverable) {
       await this.prisma.jobberVisitImport.update({
         where: { id: record.id },
         data: {
