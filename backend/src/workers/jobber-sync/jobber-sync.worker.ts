@@ -81,6 +81,23 @@ export interface JobberSyncResult {
    */
   completedFromJobber: number;
   skipped: number;
+  /**
+   * Jobber still had more pages when the run stopped.
+   *
+   * `MAX_PAGES × PAGE_SIZE` is 5,000 visits, and the loop simply falls out at
+   * the cap. Before this the result was indistinguishable from a complete run:
+   * a truncated sync reported a number and nothing said the number was partial.
+   * That matters most for exactly the case this field was added for — widening
+   * the window to backfill a quarter, where the visit count is unknown in
+   * advance and the cap is reachable.
+   */
+  truncated: boolean;
+}
+
+/** The slice of calendar a run covers. ISO 8601, as Jobber's filter wants. */
+export interface JobberSyncWindow {
+  startAfter: string;
+  startBefore: string;
 }
 
 /**
@@ -141,7 +158,7 @@ export class JobberSyncWorker {
    * code. Nothing is dropped silently, because a visit this sync ignored is a
    * property visit nobody is going to.
    */
-  async run(organizationId: string): Promise<JobberSyncResult> {
+  async run(organizationId: string, over?: JobberSyncWindow): Promise<JobberSyncResult> {
     const correlationId = randomUUID();
     const result: JobberSyncResult = {
       correlationId,
@@ -155,6 +172,7 @@ export class JobberSyncWorker {
       assigned: 0,
       completedFromJobber: 0,
       skipped: 0,
+      truncated: false,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
       where: { organizationId },
@@ -177,7 +195,16 @@ export class JobberSyncWorker {
       // small, and re-reading it per page would be the most expensive thing here.
       const index = await this.mapping.buildingIndex(organizationId);
       const rules = visitTypeRules();
-      const window = this.window();
+      /**
+       * The rolling window unless a caller names one.
+       *
+       * The scheduled sync wants the moving window and always will. A backfill
+       * wants a fixed slice of the past -- the third quarter, say -- which the
+       * rolling one cannot reach: the lookback is seven days, so anything older
+       * than a week is invisible to every run no matter how often it runs. That
+       * is why only September appeared in the console.
+       */
+      const window = over ?? this.window();
       let cursor: string | null = null;
 
       for (let page = 0; page < MAX_PAGES; page += 1) {
@@ -204,6 +231,17 @@ export class JobberSyncWorker {
         const { hasNextPage, endCursor } = parsed.data.visits.pageInfo;
         if (!hasNextPage || !endCursor) break;
         cursor = endCursor;
+        // The last page allowed, and Jobber has more. Said out loud rather
+        // than left as a number that looks complete.
+        if (page === MAX_PAGES - 1) {
+          result.truncated = true;
+          this.logger.warn({
+            event: 'jobber_sync_truncated',
+            correlationId,
+            visitsSeen: result.visitsSeen,
+            reason: `Stopped at the ${MAX_PAGES}-page cap with more visits pending.`,
+          });
+        }
         await this.pace(cost);
       }
 
@@ -252,6 +290,7 @@ export class JobberSyncWorker {
       assigned: 0,
       completedFromJobber: 0,
       skipped: 0,
+      truncated: false,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
       where: { organizationId },

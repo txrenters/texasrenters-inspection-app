@@ -36,6 +36,7 @@ const emptyResult = (): JobberSyncResult => ({
   assigned: 0,
   completedFromJobber: 0,
   skipped: 0,
+  truncated: false,
 });
 
 type InspectionRow = { id: string; status: InspectionStatus; startedAt: Date | null };
