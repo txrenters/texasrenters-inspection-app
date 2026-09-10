@@ -643,6 +643,52 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
   };
 }
 
+/**
+ * Marks every area a technician did not walk, in one action.
+ *
+ * An occupied visit is offered the standard fifteen-room layout, and a real
+ * property is rarely all fifteen — there is no third bedroom, no laundry, no
+ * carport. Disposing of those one at a time is the per-area toll the 2026-09-09
+ * feedback asked us to remove, on the visit type with the least time to pay it.
+ *
+ * Sequential rather than parallel, and every failure is collected rather than
+ * thrown. Firing ten writes at once on a weak signal is how they all time out,
+ * and one refusal in the middle must not leave the technician unable to tell
+ * which areas were dealt with — this returns the tally and the screen says so.
+ *
+ * A queued skip counts as done. `skipRoom` holds the write when the network is
+ * gone and throws `QueuedOfflineError` to say so, which is the normal case for
+ * this button: the technician is standing in the property, finishing up.
+ */
+export function useSkipAreas(inspectionId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (roomIds: readonly string[]) => {
+      let skipped = 0;
+      let queued = 0;
+      const failed: string[] = [];
+      for (const roomId of roomIds) {
+        try {
+          await repositories.inspections.skipRoom(roomId);
+          skipped += 1;
+        } catch (error) {
+          if (error instanceof QueuedOfflineError) queued += 1;
+          else failed.push(roomId);
+        }
+      }
+      return { skipped, queued, failed };
+    },
+    onSettled: () =>
+      verifyQueries(client, [
+        queryKeys.roomRoot,
+        queryKeys.rooms(inspectionId),
+        queryKeys.inspectionContext(inspectionId),
+        queryKeys.inspectionReport(inspectionId),
+        queryKeys.dashboard,
+      ]),
+  });
+}
+
 export function useSaveRecording() {
   const client = useQueryClient();
   return useMutation({
