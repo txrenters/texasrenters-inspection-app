@@ -190,6 +190,12 @@ const environmentSchema = z
      * entirely -- so a typo in it produced no error anywhere, just routing that
      * silently reported every stop unordered. */
     OSRM_URL: z.string().url().optional(),
+    /** Google Routes, used only for the quarterly forecast -- OSRM stays the
+     * default for ordering a day, where free-flow and traffic-aware give the
+     * same answer. SERVER-SIDE ONLY: this is not the browser key, it carries no
+     * referrer restriction, and anything holding it can spend money. It must
+     * never gain a NEXT_PUBLIC_ or EXPO_PUBLIC_ prefix. */
+    GOOGLE_ROUTES_API_KEY: z.string().optional(),
     JOBBER_LOCAL_ORGANIZATION_ID: z.string().uuid().optional(),
     JOBBER_INCREMENTAL_SYNC_CRON: z.string().optional(),
     JOBBER_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().max(365).default(7),
