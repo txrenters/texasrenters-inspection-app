@@ -1,4 +1,10 @@
-import { AiProvider, AreaCategory, AreaEnvironment, InspectionType } from '@prisma/client';
+import {
+  AiProvider,
+  AreaCategory,
+  AreaEnvironment,
+  InspectionType,
+  SkillRequirementLevel,
+} from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -553,4 +559,51 @@ export class AdminChecklistAssessmentDto {
   @IsOptional() @IsBoolean() isUndamaged?: boolean | null;
   @IsOptional() @IsBoolean() isWorking?: boolean | null;
   @IsOptional() @IsString() @MaxLength(2000) comment?: string | null;
+}
+
+/**
+ * A capability the office can grant a technician.
+ *
+ * The key is a slug and is fixed once created -- it is what an audit row and
+ * an import both read, so a key that means one thing in June and another in
+ * September makes both unreadable. Retire the skill and add a new one.
+ */
+export class TechnicianSkillDto {
+  @IsString() @MinLength(2) @MaxLength(60) key!: string;
+  @IsString() @MinLength(2) @MaxLength(80) label!: string;
+  @IsOptional() @IsString() @MaxLength(500) description?: string;
+}
+
+export class UpdateTechnicianSkillDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(80) label?: string;
+  @IsOptional() @IsString() @MaxLength(500) description?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class GrantTechnicianSkillDto {
+  @IsUUID() skillId!: string;
+  /**
+   * The last day the skill counts, or omitted when it does not lapse.
+   *
+   * A date rather than a timestamp, to match `Inspection.scheduledAt`:
+   * scheduling asks whether somebody is qualified on the day of a visit, and a
+   * clock time would make that question answerable differently depending on
+   * which hour of that day it was asked.
+   */
+  @IsOptional() @IsDateString() expiresAt?: string;
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+}
+
+export class RevokeTechnicianSkillDto {
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+}
+
+export class SetSkillRequirementDto {
+  @IsEnum(InspectionType) inspectionType!: InspectionType;
+  @IsUUID() skillId!: string;
+  @IsEnum(SkillRequirementLevel) requirement!: SkillRequirementLevel;
+}
+
+export class SkillCatalogQueryDto {
+  @IsOptional() @IsIn(['true', 'false']) includeInactive?: string;
 }

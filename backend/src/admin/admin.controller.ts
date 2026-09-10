@@ -20,7 +20,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { AiProvider } from '@prisma/client';
+import { AiProvider, InspectionType } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
@@ -78,7 +78,13 @@ import {
   TenantListQueryDto,
   RejectPropertyAreaDto,
   ReopenInspectionDto,
+  GrantTechnicianSkillDto,
+  RevokeTechnicianSkillDto,
+  SetSkillRequirementDto,
+  SkillCatalogQueryDto,
   TechnicianListQueryDto,
+  TechnicianSkillDto,
+  UpdateTechnicianSkillDto,
   TechnicianStatusDto,
   TestMailDto,
   UnassignDto,
@@ -100,6 +106,7 @@ import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
+import { TechnicianSkillsService } from './technician-skills.service';
 import type { ComparisonClassification } from '@prisma/client';
 
 /**
@@ -149,6 +156,7 @@ export class AdminController {
     private readonly mailer: MailService,
     private readonly profileDeletion: ProfileDeletionService,
     private readonly access: AccessService,
+    private readonly skills: TechnicianSkillsService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -1084,6 +1092,86 @@ export class AdminController {
   @RequirePermissions('technicians:manage')
   deleteTechnician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
     return this.profileDeletion.remove(request.user, id, 'TECHNICIAN');
+  }
+
+  /**
+   * What technicians are qualified to do.
+   *
+   * Reading is `technicians:read` — a skill is part of the directory entry, and
+   * anyone who may see who the technicians are may see what they do. Changing
+   * one is `technicians:skills`, its own grant, because these decide who
+   * scheduling is allowed to send to a job: quietly granting somebody a skill
+   * puts them on work nobody chose them for.
+   */
+  @Get('technician-skills')
+  @RequirePermissions('technicians:read')
+  skillCatalog(@Req() request: AuthenticatedRequest, @Query() query: SkillCatalogQueryDto) {
+    return this.skills.catalog(request.user, query.includeInactive === 'true');
+  }
+
+  @Post('technician-skills')
+  @RequirePermissions('technicians:skills')
+  createSkill(@Req() request: AuthenticatedRequest, @Body() body: TechnicianSkillDto) {
+    return this.skills.createSkill(request.user, body);
+  }
+
+  @Patch('technician-skills/:skillId')
+  @RequirePermissions('technicians:skills')
+  updateSkill(
+    @Req() request: AuthenticatedRequest,
+    @Param('skillId') skillId: string,
+    @Body() body: UpdateTechnicianSkillDto,
+  ) {
+    return this.skills.updateSkill(request.user, skillId, body);
+  }
+
+  @Get('technicians/:technicianId/skills')
+  @RequirePermissions('technicians:read')
+  technicianSkills(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
+    return this.skills.technicianSkills(request.user, id);
+  }
+
+  @Post('technicians/:technicianId/skills')
+  @RequirePermissions('technicians:skills')
+  grantTechnicianSkill(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Body() body: GrantTechnicianSkillDto,
+  ) {
+    return this.skills.grant(request.user, id, body);
+  }
+
+  @Delete('technicians/:technicianId/skills/:skillId')
+  @RequirePermissions('technicians:skills')
+  revokeTechnicianSkill(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Param('skillId') skillId: string,
+    @Body() body: RevokeTechnicianSkillDto,
+  ) {
+    return this.skills.revoke(request.user, id, skillId, body?.reason);
+  }
+
+  @Get('skill-requirements')
+  @RequirePermissions('technicians:read')
+  skillRequirements(@Req() request: AuthenticatedRequest) {
+    return this.skills.requirements(request.user);
+  }
+
+  @Put('skill-requirements')
+  @RequirePermissions('technicians:skills')
+  setSkillRequirement(@Req() request: AuthenticatedRequest, @Body() body: SetSkillRequirementDto) {
+    return this.skills.setRequirement(request.user, body);
+  }
+
+  @Delete('skill-requirements/:inspectionType/:skillId')
+  @RequirePermissions('technicians:skills')
+  removeSkillRequirement(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionType', new ParseEnumPipe(InspectionType)) inspectionType: InspectionType,
+    @Param('skillId') skillId: string,
+  ) {
+    return this.skills.removeRequirement(request.user, inspectionType, skillId);
   }
 
   /**
