@@ -366,6 +366,7 @@ model Organization {
   inspectionImportJobs InspectionImportJob[]
   clientErrorReports   ClientErrorReport[]
   tenants              PropertywareTenant[]
+  propertywareInspectionDocuments PropertywareInspectionDocument[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -733,6 +734,83 @@ model InspectionImportJob {
 
   @@index([organizationId, status])
   @@index([organizationId, fingerprint])
+}
+
+/**
+ * One file Propertyware holds against a building, and what became of it.
+ *
+ * Propertyware keeps every document for a property in a single undifferentiated
+ * list — leasing agreements, flood certificates, and the Inspect & Cloud
+ * inspection reports the office had been importing one at a time. There are
+ * roughly 7,500 of the latter across 577 buildings, some of them 81 MB, and the
+ * REST `/inspections` module is denied to this API client, so nothing joins a
+ * document to the inspection it documents.
+ *
+ * This table is that join, and the reason the sync is resumable: cataloguing is
+ * one cheap request per building, importing is a large download each. Without a
+ * record of what has already been seen, a second run re-downloads every report
+ * in the portfolio to discover it has them.
+ */
+model PropertywareInspectionDocument {
+  id                String                         @id @default(uuid()) @db.Uuid
+  organizationId    String                         @db.Uuid
+  /// Propertyware's own document id. Unique because it is the identity the
+  /// catalogue is keyed on -- re-running discovery must recognise a file it has
+  /// already seen rather than download it again.
+  externalDocumentId String                        @unique
+  /// The building the document hangs off, as Propertyware files it.
+  buildingId        String                         @db.Uuid
+  externalBuildingId String
+  fileName          String
+  fileType          String?
+  /// When Propertyware received the file. Not when the inspection happened --
+  /// the report states its own date, and some were uploaded years later.
+  sourceCreatedAt   DateTime?
+  /// What the filename suggests, recorded so a misclassification is visible
+  /// without re-reading the PDF. Superseded by `inspectionType` once the report
+  /// itself has been read.
+  guessedKind       String
+  /// What the report's own `Inspection Template:` line said. Null until the
+  /// document has been downloaded and parsed.
+  inspectionType    InspectionType?
+  /// Content hash of the downloaded PDF, the same one the importer dedupes on.
+  /// Two documents can be byte-identical -- the office re-uploads reports -- so
+  /// this is deliberately not unique.
+  fingerprint       String?
+  sizeBytes         Int?
+  status            PropertywareDocumentStatus     @default(DISCOVERED)
+  /// Why it was skipped or how it failed, in the importer's own error codes so
+  /// the two cannot drift.
+  errorCode         String?
+  /// The inspection the report was written into, once it has been.
+  inspectionId      String?                        @db.Uuid
+  importedAt        DateTime?
+  createdAt         DateTime                       @default(now())
+  updatedAt         DateTime                       @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id])
+  building     PropertywareBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  // Named, because the generated name would be 64 characters and Postgres
+  // truncates at 63 without complaining.
+  @@index([organizationId, inspectionType], map: "PropertywareInspectionDocument_org_inspectionType_idx")
+  @@index([buildingId])
+  @@index([organizationId, fingerprint])
+}
+
+/// Where a Propertyware document has got to.
+///
+/// DISCOVERED is the catalogue entry and costs one listing request. IMPORTED is
+/// the only state that wrote anything. SKIPPED is a deliberate decision --- a
+/// comparison summary, or a type nobody asked for --- and is distinct from
+/// FAILED so a re-run does not keep retrying a file that was never wanted.
+enum PropertywareDocumentStatus {
+  DISCOVERED
+  DOWNLOADED
+  IMPORTED
+  SKIPPED
+  FAILED
 }
 
 model FloorPlanExtractionJob {
@@ -1289,6 +1367,7 @@ model PropertywareBuilding {
   @@map("propertyware_buildings")
   jobberPropertyLinks    JobberPropertyLink[]
   tenants             PropertywareTenant[]
+  inspectionDocuments PropertywareInspectionDocument[]
 }
 
 model PropertywareUnit {

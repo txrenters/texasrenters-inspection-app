@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { AdminModule } from '../../admin/admin.module';
+
 import { PropertywareReconciliationWorker } from '../../workers/propertyware-sync/propertyware-reconciliation.worker';
 import { PropertywareSyncCoordinator } from '../../workers/propertyware-sync/propertyware-sync.coordinator';
 import { PropertywareSyncScheduler } from '../../workers/propertyware-sync/propertyware-sync.scheduler';
@@ -19,14 +21,19 @@ import {
   PropertywareCatalogController,
   PropertywareIntegrationController,
 } from './propertyware.controller';
+import { PropertywareInspectionDocsService } from './propertyware.inspection-docs.service';
 import { PropertywareService } from './propertyware.service';
 
 @Module({
+  // AdminModule for the importer only. The dependency runs one way -- nothing
+  // in the admin chain imports Propertyware -- so this cannot become a cycle.
+  imports: [AdminModule],
   controllers: [PropertywareIntegrationController, PropertywareCatalogController],
   providers: [
     { provide: PROPERTYWARE_CONFIG, useFactory: getPropertywareConfig },
     PropertywareClient,
     PropertywareService,
+    PropertywareInspectionDocsService,
     InMemoryPropertywareSyncStore,
     PrismaPropertywareSyncStore,
     {
@@ -48,6 +55,6 @@ import { PropertywareService } from './propertyware.service';
     ApiAuthGuard,
     PermissionsGuard,
   ],
-  exports: [PROPERTYWARE_SYNC_STORE, PropertywareSyncCoordinator],
+  exports: [PROPERTYWARE_SYNC_STORE, PropertywareSyncCoordinator, PropertywareInspectionDocsService],
 })
 export class PropertywareModule {}
