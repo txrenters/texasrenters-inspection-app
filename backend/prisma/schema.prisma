@@ -367,6 +367,9 @@ model Organization {
   clientErrorReports   ClientErrorReport[]
   tenants              PropertywareTenant[]
   propertywareInspectionDocuments PropertywareInspectionDocument[]
+  technicianSkills                TechnicianSkill[]
+  technicianSkillGrants           TechnicianSkillGrant[]
+  inspectionTypeSkillRequirements InspectionTypeSkillRequirement[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -472,6 +475,9 @@ model UserProfile {
   photos               InspectionPhoto[]
   finalizedInspections Inspection[]             @relation("InspectionFinalizedBy")
   credential           AuthCredential?
+  skillGrants          TechnicianSkillGrant[]   @relation("TechnicianSkillHolder")
+  skillGrantsIssued    TechnicianSkillGrant[]   @relation("TechnicianSkillGrantedBy")
+  skillGrantsRevoked   TechnicianSkillGrant[]   @relation("TechnicianSkillRevokedBy")
 }
 
 /// Sign-in credentials, replacing Supabase's `auth.users`.
@@ -2636,4 +2642,101 @@ model PropertywareTenant {
   @@index([organizationId, isActive])
   @@index([organizationId, tbpEnrollment])
   @@index([propertywareBuildingId])
+}
+
+/// How badly a skill is wanted for a kind of inspection.
+enum SkillRequirementLevel {
+  /// A hard filter. A technician without it is not a candidate at all.
+  REQUIRED
+  /// A scoring term. Separates otherwise equal candidates, which is what stops
+  /// "most qualified" collapsing into "anyone eligible".
+  PREFERRED
+}
+
+/// A capability a technician can hold -- "HVAC certified", "Lead-safe".
+///
+/// A catalog row rather than an enum, because these are the office's words and
+/// they change with the work. A skill that needs a migration to exist is a
+/// skill nobody will add.
+model TechnicianSkill {
+  id             String  @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  /// The stable slug requirements key on. Renaming the label must not silently
+  /// detach every rule that depends on it.
+  key            String
+  label          String
+  description    String?
+  isActive       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  grants       TechnicianSkillGrant[]
+  requirements InspectionTypeSkillRequirement[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId, isActive])
+}
+
+/// One technician holding one skill.
+///
+/// `expiresAt` is a DATE to match `Inspection.scheduledAt`, and that match is
+/// the whole reason the column earns its place: qualification is evaluated
+/// against the day of the visit, never against now. Planning a quarter three
+/// months ahead means a certificate lapsing in week six has to disqualify week
+/// seven onward, and a boolean cannot say that.
+model TechnicianSkillGrant {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  technicianId   String @db.Uuid
+  skillId        String @db.Uuid
+
+  grantedById String?   @db.Uuid
+  grantedAt   DateTime  @default(now())
+  /// Null means it does not lapse.
+  expiresAt   DateTime? @db.Date
+  /// Revoked rather than deleted, so a plan published months ago can still
+  /// explain why it chose the person it chose.
+  revokedAt   DateTime?
+  revokedById String?   @db.Uuid
+  note        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile     @relation("TechnicianSkillHolder", fields: [technicianId], references: [id], onDelete: Cascade)
+  skill        TechnicianSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  grantedBy    UserProfile?    @relation("TechnicianSkillGrantedBy", fields: [grantedById], references: [id])
+  revokedBy    UserProfile?    @relation("TechnicianSkillRevokedBy", fields: [revokedById], references: [id])
+
+  /// One row per person per skill. Re-granting a revoked skill clears
+  /// `revokedAt` rather than stacking a second row, so "does this person hold
+  /// it" stays a single lookup and never becomes an ordering question.
+  @@unique([organizationId, technicianId, skillId])
+  @@index([organizationId, skillId, expiresAt])
+  @@index([technicianId, revokedAt])
+}
+
+/// Which skills a kind of inspection asks for.
+///
+/// Per organization rather than hardcoded per `InspectionType`: two companies
+/// running this can disagree about what an occupied inspection needs, and both
+/// are right about their own field staff.
+model InspectionTypeSkillRequirement {
+  id             String                @id @default(uuid()) @db.Uuid
+  organizationId String                @db.Uuid
+  inspectionType InspectionType
+  skillId        String                @db.Uuid
+  requirement    SkillRequirementLevel @default(REQUIRED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  skill        TechnicianSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, inspectionType, skillId])
+  @@index([organizationId, inspectionType])
 }
