@@ -101,7 +101,15 @@ export function UploadQueueRunner() {
       }
 
       if (!uploaded) return;
-      await verifyQueries(client, [queryKeys.roomsRoot, queryKeys.roomRoot, queryKeys.dashboard]);
+      await verifyQueries(client, [
+        queryKeys.roomsRoot,
+        queryKeys.roomRoot,
+        // The area screen's own photo list, which `roomRoot` does not cover.
+        // Without it a photograph landed on the server and the screen that
+        // gates completion on one went on showing the list it had at open.
+        queryKeys.roomPhotosRoot,
+        queryKeys.dashboard,
+      ]);
     } finally {
       running.current = false;
     }

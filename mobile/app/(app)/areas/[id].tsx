@@ -178,9 +178,33 @@ export default function AreaDetailScreen() {
   // re-run. Additional clips ride along with it.
   const primaryMediaId = media.data?.[0]?.id ?? null;
   const recordingCount = media.data?.length ?? 0;
+  /**
+   * Photographs taken here that the server does not have yet.
+   *
+   * Hoisted above the gate because it is part of the answer, not just the retry
+   * control it was written for. This screen counted evidence two different
+   * ways: `hasEvidence` below reads these local captures and decides what to
+   * *show*, while the gate read only the server's list and decided what is
+   * *allowed*. For as long as an upload was pending the two disagreed, and the
+   * screen said "In progress — 1 photo saved" directly above "Photograph or
+   * recording captured — not met".
+   */
+  const pendingSnapshots = areaSnapshots.filter(
+    (snapshot) => snapshot.uploadStatus !== 'UPLOADED',
+  );
   const requirements = deriveAreaRequirements(item, {
     hasPrimaryRecording: hasRecording,
-    photoCount: photos.data?.length ?? 0,
+    /**
+     * Captured counts, not just delivered.
+     *
+     * A photograph on the handset is evidence the technician has produced —
+     * `completeRoom` flushes the queue before it asks the server, so a pending
+     * capture is a completion that will land rather than one that is missing.
+     * Reading the server's list alone made an occupied area uncompletable for
+     * the fifteen seconds of the review window, and permanently uncompletable
+     * with no signal at all.
+     */
+    photoCount: (photos.data?.length ?? 0) + pendingSnapshots.length,
     findingCount: roomFindings.length,
     // Queued counts as settled: the durable queue will deliver it, and blocking
     // completion on a finished upload would strand a technician with no signal
@@ -213,9 +237,6 @@ export default function AreaDetailScreen() {
    */
   const hasAnyEvidence =
     hasEvidence || Boolean(photos.data?.length) || roomFindings.length > 0;
-  const strandedSnapshots = areaSnapshots.filter(
-    (snapshot) => snapshot.uploadStatus !== 'UPLOADED',
-  );
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -432,13 +453,13 @@ export default function AreaDetailScreen() {
             {/* Automatic retry gives up on a refusal the server will repeat, and
                 after enough attempts. Without a way back by hand, those
                 photographs would stay on the handset for good. */}
-            {strandedSnapshots.length ? (
+            {pendingSnapshots.length ? (
               <Button
                 accessibilityHint="Queues them to send again"
                 className="mt-1"
-                label={`Retry ${strandedSnapshots.length} photo${strandedSnapshots.length === 1 ? '' : 's'}`}
+                label={`Retry ${pendingSnapshots.length} photo${pendingSnapshots.length === 1 ? '' : 's'}`}
                 onPress={() => {
-                  for (const snapshot of strandedSnapshots)
+                  for (const snapshot of pendingSnapshots)
                     updateSnapshot(snapshot.id, {
                       uploadStatus: 'PENDING',
                       attempts: 0,

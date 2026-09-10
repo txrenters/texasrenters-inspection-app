@@ -38,6 +38,7 @@ import type {
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
+import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import { resolveApiUrl } from '@texasrenters/shared';
@@ -956,13 +957,98 @@ export class ApiInspectionRepository implements InspectionRepository {
     await this.persistRoom(room);
     return room;
   }
+  /**
+   * Marks an area done — after making sure the evidence for it has gone.
+   *
+   * Two separate things were wrong here, and they compounded.
+   *
+   * The server decides whether an area may be completed by counting
+   * `InspectionPhoto` rows, so an occupied area photographed but not yet
+   * uploaded was refused. That is every occupied area for the first fifteen
+   * seconds after the shutter, because the review window holds a fresh
+   * photograph back on purpose — and it is every occupied area *for ever* in a
+   * property with no signal. `flushRoomSnapshotsNow` settles the first case by
+   * ending the hold: completing an area is a stronger statement than the hold
+   * was waiting for.
+   *
+   * The second is that this was the only technician write that failed hard
+   * offline. A note, a skip, a checklist answer and a summary confirmation are
+   * all queued and replayed; the one action that *finishes* an area was not, so
+   * a technician in a basement could document a room and then not close it.
+   * Queuing it is safe for the same reason a skip is: it sets a value rather
+   * than appending one, and the server writes the same COMPLETED row however
+   * many times it arrives.
+   *
+   * This is the distinction `removeRoom` above does not meet, and the contrast
+   * is the point — a removal is *refused* when the area holds evidence, so
+   * queuing one would report a success the server is going to deny. A
+   * completion held here will succeed, because the queue delivers the
+   * photographs that justify it first.
+   */
   async completeRoom(roomId: string) {
-    const room = roomSchema.parse(
-      await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST'),
-    );
-    await this.persistRoom(room);
-    return room;
+    try {
+      const room = roomSchema.parse(
+        await queueOnConnectionFailure(
+          { id: `complete:${roomId}`, kind: 'room-complete', payload: { roomId } },
+          async () => {
+            await flushRoomSnapshotsNow(roomId);
+            return writeJson(
+              `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`,
+              'POST',
+            );
+          },
+        ),
+      );
+      await this.persistRoom(room);
+      return room;
+    } catch (error) {
+      /**
+       * A held completion still has to show on screen.
+       *
+       * Same reasoning as the queued checklist answer above: without this the
+       * area a technician just finished reads back as unfinished, which is
+       * indistinguishable from the app having lost it. The server's own row
+       * replaces this the moment the queue drains.
+       */
+      if (error instanceof QueuedOfflineError) await this.markRoomCompletedLocally(roomId);
+      throw error;
+    }
   }
+
+  /**
+   * Mirrors a queued completion into the three records `persistRoom` keeps.
+   *
+   * `completionStatus` is the whole patch: the client contract carries no
+   * `completedAt`, and it is what `deriveAreaStatus` and the submission gate
+   * both read. The server's own row replaces all of this when the queue drains.
+   */
+  private async markRoomCompletedLocally(roomId: string) {
+    const complete = { completionStatus: 'COMPLETED' as const };
+    const room = await updateExistingApiRecord(`room:${roomId}`, roomSchema, (current) => ({
+      ...current,
+      ...complete,
+    }));
+    if (!room) return;
+    await Promise.all([
+      updateExistingApiRecord(
+        `inspection-rooms:${room.inspectionId}`,
+        z.array(roomSchema),
+        (current) =>
+          current.map((item) => (item.id === roomId ? { ...item, ...complete } : item)),
+      ),
+      updateExistingApiRecord(
+        `inspection-context:${room.inspectionId}`,
+        inspectionContextSchema,
+        (current) => ({
+          ...current,
+          rooms: current.rooms.map((item) =>
+            item.id === roomId ? { ...item, ...complete } : item,
+          ),
+        }),
+      ),
+    ]);
+  }
+
   /**
    * Records that the technician read the AI summary and it matches the area.
    *

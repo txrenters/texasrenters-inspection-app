@@ -1,4 +1,5 @@
 import { ApiConnectionError } from '../../storage/offline-record-cache';
+import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import {
   drainQueue,
   enqueueMutation,
@@ -77,6 +78,27 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
           textValue: payload.textValue ?? null,
         },
       ),
+    /**
+     * Sends the area's photographs first, then completes it.
+     *
+     * The order is the whole entry. `completeRoom` is refused by the server
+     * unless it can count evidence, and on an occupied area that evidence is a
+     * photograph sitting in a different queue — this one is drained by
+     * `ConnectivitySync` when the signal returns, the photographs by
+     * `UploadQueueRunner` on its own four-second timer, and nothing sequences
+     * the two. Flushing here rather than hoping they interleave is what makes a
+     * completion held in a basement actually land.
+     *
+     * Safe to replay: completing sets COMPLETED and a timestamp, so a duplicate
+     * writes the same row. `flushRoomSnapshotsNow` is safe to repeat too — an
+     * uploaded snapshot is no longer owed, and the idempotency key resolves a
+     * re-sent one to the same photograph.
+     */
+    'room-complete': async (payload, send) => {
+      const roomId = String(payload.roomId);
+      await flushRoomSnapshotsNow(roomId);
+      return send(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST', {});
+    },
     // Safe to replay: the server keeps the first confirmation's timestamp, so a
     // duplicate cannot rewrite when the technician actually read the summary.
     'room-confirm-summary': (payload, send) =>

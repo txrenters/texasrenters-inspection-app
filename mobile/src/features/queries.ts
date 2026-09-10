@@ -67,6 +67,18 @@ export const queryKeys = {
   roomRoot: ['room'] as const,
   room: (id: string) => ['room', id] as const,
   media: (roomId: string) => ['media', roomId] as const,
+  /**
+   * Rooted so the upload runner can refresh every area's photo list at once.
+   *
+   * The runner invalidated `roomRoot` — `['room']` — and stopped there, on the
+   * reasonable-looking assumption that it covered an area's photographs too. It
+   * does not: react-query matches a key by prefix, and `['room']` is not a
+   * prefix of `['roomPhotos', id]`. Nothing else invalidated this key anywhere
+   * in the app, so an uploaded photograph never reached the screen that gates
+   * completion on it — the badge read "1 photo saved" off the room record while
+   * the gate below it read zero off this one.
+   */
+  roomPhotosRoot: ['roomPhotos'] as const,
   roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
   roomChecklist: (roomId: string) => ['roomChecklist', roomId] as const,
   evidenceRequests: (inspectionId: string) => ['evidenceRequests', inspectionId] as const,
