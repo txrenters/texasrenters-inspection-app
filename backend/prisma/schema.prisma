@@ -2441,6 +2441,12 @@ model JobberVisitImport {
 /// one is foreseeable and a boolean column would have to be migrated away.
 enum JobberOutboundKind {
   VISIT_COMPLETED
+  /// Book a benefit-package visit in Jobber for a published quarter plan.
+  ///
+  /// The only kind that has no `jobberVisitId` when it is enqueued -- it is
+  /// creating the visit, so the id comes back from Jobber and is written on
+  /// success. That is why the column below is nullable.
+  TBP_VISIT_CREATE
 }
 
 enum JobberOutboundStatus {
@@ -2465,7 +2471,11 @@ model JobberOutboundTask {
   id             String               @id @default(uuid()) @db.Uuid
   organizationId String               @db.Uuid
   inspectionId   String               @db.Uuid
-  jobberVisitId  String
+  /// Null only for TBP_VISIT_CREATE before it has been sent: that task is
+  /// creating the visit, so Jobber supplies the id and this is written back
+  /// on success. Identity is (organization, inspection, kind), so nothing
+  /// depends on this being populated.
+  jobberVisitId  String?
   jobberJobId    String?
   kind           JobberOutboundKind
   status         JobberOutboundStatus @default(PENDING)

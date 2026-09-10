@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { JobberOutboundStatus } from '@prisma/client';
+import { JobberOutboundKind, JobberOutboundStatus } from '@prisma/client';
 
 import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
@@ -103,8 +103,36 @@ export class JobberOutboundWorker {
 
   private async send(
     organizationId: string,
-    task: { id: string; inspectionId: string; jobberVisitId: string; jobberJobId: string | null; createdById: string | null },
+    task: {
+      id: string;
+      inspectionId: string;
+      kind: JobberOutboundKind;
+      jobberVisitId: string | null;
+      jobberJobId: string | null;
+      createdById: string | null;
+    },
   ) {
+    // A create has no visit id yet — that is the point of it — and this worker
+    // cannot send one until the mutation has been confirmed against Jobber's
+    // schema. Refused explicitly rather than falling through to `visitComplete`
+    // with a null id, which would complete an arbitrary visit or fail with a
+    // message about the wrong thing entirely.
+    if (task.kind === JobberOutboundKind.TBP_VISIT_CREATE)
+      throw new JobberError(
+        'Booking a visit in Jobber is not implemented yet; the inspection exists here and this task is waiting.',
+        'JOBBER_VISIT_CREATE_UNAVAILABLE',
+        501,
+      );
+
+    // Only a completion reaches here, and a completion without a visit id is a
+    // row that should never have been enqueued.
+    if (!task.jobberVisitId)
+      throw new JobberError(
+        'This completion task has no Jobber visit to complete.',
+        'JOBBER_TASK_MISSING_VISIT',
+        500,
+      );
+    const jobberVisitId = task.jobberVisitId;
     /**
      * Jobber is told when the work was signed off, not when the outbox drained.
      *
@@ -119,7 +147,7 @@ export class JobberOutboundWorker {
       organizationId,
       VISIT_COMPLETE_MUTATION,
       {
-        visitId: task.jobberVisitId,
+        visitId: jobberVisitId,
         input: { completedAt: (finalizedAt?.finalizedAt ?? new Date()).toISOString() },
       },
     );
