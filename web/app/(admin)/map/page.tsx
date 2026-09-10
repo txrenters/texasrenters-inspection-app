@@ -21,10 +21,13 @@ import { businessToday } from '@/lib/clock';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 /**
- * `ssr: false` is not optional. Leaflet reads `window` at import time and
- * measures its container to lay tiles out, so a server render throws before it
- * can produce anything — and `dynamic` may only disable SSR from a client
- * component, which is why this page is one.
+ * `ssr: false` is not optional, and stayed so when the map moved to Google.
+ *
+ * The Maps JavaScript API injects a script tag and measures its container, so
+ * a server render produces nothing and throws on the way. Leaflet failed the
+ * same way for the same reason, which is why this guard predates the change and
+ * outlives it. `dynamic` may only disable SSR from a client component, which is
+ * why this page is one.
  */
 const TechnicianMap = dynamic(
   () => import('@/components/technician-map').then((module) => module.TechnicianMap),

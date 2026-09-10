@@ -89,6 +89,8 @@ jobs:
             NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL || 'https://inspection-api.texasrenters.com' }}
             NEXT_PUBLIC_ENABLE_DEMO_DATA=false
             NEXT_PUBLIC_APP_VERSION=${{ github.event.release.tag_name || inputs.tag || github.run_number }}
+            NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${{ secrets.GOOGLE_MAPS_API_KEY }}
+            NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=${{ vars.GOOGLE_MAPS_MAP_ID }}
 
       - name: Summary
         run: |
