@@ -76,19 +76,40 @@ export interface PropertywareDocument {
 /**
  * What a document turned out to be.
  *
- * `COMPARISON` and `UNKNOWN` are not inspection types and never become one.
- * A "MOVE IN VS MOVE OUT" file is a *summary* of two inspections written for an
- * owner — importing it as either one would attach one walkthrough's evidence to
- * the other's record.
+ * Four of these are not inspection types and never become one, and they are not
+ * equivalent:
+ *
+ * - `COMPARISON` — a "MOVE IN VS MOVE OUT" summary written for an owner.
+ *   Importing it as either type would attach one walkthrough's evidence to the
+ *   other's record.
+ * - `NOT_AN_INSPECTION` — somebody else's visit filed against the property: an
+ *   HOA walk, a municipal compliance inspection.
+ * - `UNKNOWN` — a name nobody anticipated. **Still downloaded**, because the
+ *   filename is only a guess and the report states its own template; see
+ *   {@link worthDownloading}.
  */
-export type DocumentKind = InspectionType | 'COMPARISON' | 'UNKNOWN';
+export type DocumentKind =
+  | InspectionType
+  | 'COMPARISON'
+  | 'NOT_AN_INSPECTION'
+  | 'UNKNOWN';
 
-/** Case, punctuation and Propertyware's inconsistent separators all removed. */
+/**
+ * Case, punctuation and Propertyware's inconsistent separators all removed.
+ *
+ * `occupiedinspection` is why the last step exists. Four real files are named
+ * that way, with no separator at all, and every rule here is anchored on word
+ * boundaries — so "occupied" never matched and four occupied inspections sat
+ * unclassified. Splitting a glued "…inspection" puts them back in reach
+ * without loosening any of the boundaries that stop "mo" matching inside
+ * "moisture".
+ */
 const normalise = (value: string) =>
   value
     .toLowerCase()
     .replace(/\.pdf$/, '')
     .replace(/[_\-.]+/g, ' ')
+    .replace(/([a-z])inspection\b/g, '$1 inspection')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -104,6 +125,10 @@ const normalise = (value: string) =>
 const FILENAME_RULES: ReadonlyArray<[RegExp, DocumentKind]> = [
   // Comparisons first: they name both types and are neither.
   [/\bmove\s?in\s?(vs|versus|v)\s?move\s?out\b|\bmi\s?(vs|v)\s?mo\b/, 'COMPARISON'],
+  // Somebody else's inspection, filed here because it concerns the property: a
+  // homeowners' association walk, a municipal compliance visit. Not a
+  // walkthrough of the tenancy, and not ours to import.
+  [/\bhoa\b|\bcity of [a-z]+\b|\bmunicipal\b/, 'NOT_AN_INSPECTION'],
   // Equipment and off-cycle work, which are their own types and must not be
   // read as a tenancy inspection just because the word "inspection" is there.
   [/\bhvac\b|\bac\s?filter\b/, InspectionType.HVAC],
@@ -111,11 +136,18 @@ const FILENAME_RULES: ReadonlyArray<[RegExp, DocumentKind]> = [
   [/\blockbox\b|\bsupra\b/, 'UNKNOWN'],
   // Occupied. "Routine" is the older template name for the same visit, and
   // "safety" and the day-count visits are all walked as occupied inspections.
-  [/\boccupied\b|\broutine\b|\bsafety\b|\bclean\s?check\b/, InspectionType.OCCUPIED],
+  // `saftey` is not a typo here. It is a typo in Propertyware, and correcting
+  // the office's spelling in their own filenames is not on offer.
+  [/\boccupied\b|\broutine\b|\bsafety\b|\bsaftey\b|\bclean\s?check\b/, InspectionType.OCCUPIED],
   [/\b\d{2,3}\s?day\b/, InspectionType.OCCUPIED],
   // Move-out before move-in: "mo" is a substring risk either way, but the
   // long forms are unambiguous and checked first.
-  [/\bmove\s?out\b|\bmoveout\b|\boutgoing\b/, InspectionType.MOVE_OUT],
+  // `exit` is the office's other word for a move-out, on thirteen files.
+  // "Turnover" and "TO Inspection" are deliberately *not* here: 39 files, and
+  // genuinely ambiguous between a move-out and a back-to-market. They stay
+  // UNKNOWN, which now means "download it and read the template" rather than
+  // "discard it" — see `worthDownloading`.
+  [/\bmove\s?out\b|\bmoveout\b|\boutgoing\b|\bexit\b/, InspectionType.MOVE_OUT],
   [/\bmove\s?in\b|\bmovein\b|\bingoing\b/, InspectionType.MOVE_IN],
   // The abbreviations the office uses, anchored as whole words so "mo" cannot
   // match inside "moisture" and "mi" cannot match inside "mildew".
@@ -174,7 +206,25 @@ export function classifyTemplate(template: string | null | undefined): DocumentK
 
 /** Only these become an inspection; the rest are catalogued and left alone. */
 export function isImportableKind(kind: DocumentKind): kind is InspectionType {
-  return kind !== 'COMPARISON' && kind !== 'UNKNOWN';
+  return kind !== 'COMPARISON' && kind !== 'NOT_AN_INSPECTION' && kind !== 'UNKNOWN';
+}
+
+/**
+ * Whether to fetch the bytes, which is a different question from what it is.
+ *
+ * `UNKNOWN` is downloaded on purpose. The filename is a guess and the report's
+ * own template line is the answer, so a name nobody anticipated should cost a
+ * download and then be decided properly — not be discarded unread. "Turnover
+ * Inspection" and "TO Inspection" are the live example: 39 files that are
+ * genuinely ambiguous between a move-out and a back-to-market, and guessing
+ * either from the name would be inventing a fact the PDF already states.
+ *
+ * The two that are never fetched are the two that are certainly not one
+ * inspection: an owner's move-in-versus-move-out summary, and somebody else's
+ * HOA or municipal visit.
+ */
+export function worthDownloading(kind: DocumentKind): boolean {
+  return kind !== 'COMPARISON' && kind !== 'NOT_AN_INSPECTION';
 }
 
 /**

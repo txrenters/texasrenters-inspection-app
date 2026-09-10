@@ -43,6 +43,7 @@ const { PrismaService } = require(join(dist, 'common', 'prisma.service.js'));
 const {
   PropertywareInspectionDocsService,
 } = require(join(dist, 'integrations', 'propertyware', 'propertyware.inspection-docs.service.js'));
+const { withSystemTenant } = require(join(dist, 'database', 'tenant-context.js'));
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
@@ -60,6 +61,16 @@ if (!DISCOVER && !IMPORT) {
   process.exit(1);
 }
 
+/**
+ * Everything runs inside the system tenant.
+ *
+ * Every table this touches carries a tenant-isolation policy keyed on
+ * `app.organization_id`, and a script has no request to take one from. With it
+ * unset the policy matches nothing and the run reports "0 organizations" --
+ * indistinguishable from an empty database, which is exactly the shape of
+ * failure the policies are known for. `SYSTEM_TENANT` is the '*' escape the
+ * policies already carry for maintenance work.
+ */
 async function main() {
   const app = await NestFactory.createApplicationContext(AppModule, { logger: ['warn', 'error'] });
   const prisma = app.get(PrismaService);
@@ -140,7 +151,7 @@ async function main() {
   await app.close();
 }
 
-main().catch((error) => {
+withSystemTenant(main).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
