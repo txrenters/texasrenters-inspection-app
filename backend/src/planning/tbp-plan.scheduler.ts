@@ -3,6 +3,7 @@ import { type Quarter, quarterDueForPlanning, quarterLabel } from '@texasrenters
 import { CronJob } from 'cron';
 
 import { withTenant } from '../database/tenant-context';
+import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanService } from './tbp-plan.service';
 
 /**
@@ -22,7 +23,10 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
   /** One run at a time; a slow generation must not stack on the next tick. */
   private running = false;
 
-  constructor(@Inject(TbpPlanService) private readonly plans: TbpPlanService) {}
+  constructor(
+    @Inject(TbpPlanService) private readonly plans: TbpPlanService,
+    @Inject(QuarterPlannerService) private readonly planner: QuarterPlannerService,
+  ) {}
 
   onModuleInit() {
     // Fail closed. A planner that starts by default would book a quarter of
@@ -100,5 +104,38 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
         blockedCount: result.blockedCount,
         consequence: 'Publishing is refused until every blocked stop is resolved or excluded.',
       });
+
+    // Routing is attempted even when stops are blocked. A draft with a day and
+    // a technician against every stop it *can* place is reviewable; one that
+    // refused to route because a single tenancy is missing a unit is not, and
+    // the coordinator has two weeks to fix that tenancy and re-route.
+    const routed = await withTenant(organizationId, () =>
+      this.planner.route(organizationId, result.planId, this.holidays()),
+    );
+
+    if (routed.unplaced.length > 0)
+      this.logger.warn({
+        event: 'tbp_plan_has_unplaced_stops',
+        quarter: quarterLabel(quarter),
+        planId: result.planId,
+        unplaced: routed.unplaced.length,
+        reasons: [...new Set(routed.unplaced.map((entry) => entry.reason))],
+      });
+  }
+
+  /**
+   * The days the office is closed, as `YYYY-MM-DD`.
+   *
+   * Configuration rather than a derived calendar: a hardcoded list of US
+   * federal holidays would be wrong for the days this office actually closes
+   * and right for days it does not. Malformed entries are dropped rather than
+   * throwing — a typo in a holiday list should cost one working day, not the
+   * quarter's plan.
+   */
+  private holidays(): string[] {
+    return (process.env.TBP_PLANNING_HOLIDAYS ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry));
   }
 }
