@@ -160,6 +160,9 @@ const isStale = (updatedAt: Date) => Date.now() - updatedAt.getTime() > IMPORT_S
 const aiFailureCode = (reason: 'NO_CREDENTIAL' | 'REFUSED' | 'INVALID_OUTPUT' | 'OK') =>
   reason === 'NO_CREDENTIAL' ? 'REPORT_NOT_RECOGNISED_NO_AI' : 'REPORT_NOT_READABLE';
 
+/** How a read report is written onto its inspection. */
+export type ImportCommitMode = 'REPLACE' | 'ADD';
+
 @Injectable()
 export class InspectionImportService {
   private readonly logger = new Logger(InspectionImportService.name);
@@ -520,7 +523,27 @@ export class InspectionImportService {
    * lands in review, where an administrator finalizes it the same way they
    * would an inspection the app captured.
    */
-  async commit(user: AuthenticatedUser, jobId: string) {
+  /**
+   * Write a read report onto its inspection.
+   *
+   * `REPLACE` is the default and the historical behaviour: the report becomes
+   * the inspection's evidence, and rooms it does not mention are dropped,
+   * because a report that omits a room is the office saying that room was not
+   * part of the walkthrough.
+   *
+   * `ADD` is for the second report. An agent who submits an incomplete
+   * walkthrough issues another PDF covering what was missed -- the garage, a
+   * room they could not reach -- and under REPLACE that second file would
+   * delete every area the first one established, keeping only the garage. ADD
+   * writes the areas this report describes and leaves every other area of the
+   * inspection exactly as it was.
+   *
+   * An area the additional report *does* cover is still replaced, not merged:
+   * two readings of one room would otherwise leave a defect from the older pass
+   * outranking a clean grade in the newer one, with nothing to say which is
+   * current.
+   */
+  async commit(user: AuthenticatedUser, jobId: string, mode: ImportCommitMode = 'REPLACE') {
     const job = await this.prisma.inspectionImportJob.findFirst({
       where: { id: jobId, organizationId: user.organizationId },
     });
@@ -578,7 +601,7 @@ export class InspectionImportService {
     // the fix: "No timeout value fixes that for arbitrarily complex plans; the
     // work has to leave the request." The reading was moved out and the writing
     // was left behind. This moves the rest.
-    void this.runCommit(user, job.id, fingerprint, report, target).catch((error: unknown) => {
+    void this.runCommit(user, job.id, fingerprint, report, target, mode).catch((error: unknown) => {
       this.logger.error({
         event: 'inspection_import_commit_crashed',
         message: error instanceof Error ? error.message : 'unknown',
@@ -689,6 +712,8 @@ export class InspectionImportService {
     fingerprint: string,
     report: ImportedReport,
     target: Awaited<ReturnType<InspectionImportService['requireImportableInspection']>>,
+    // Defaulted, so the bulk pre-parsed path keeps the behaviour it had.
+    mode: ImportCommitMode = 'REPLACE',
   ) {
    try {
     const property = target.building;
@@ -706,10 +731,22 @@ export class InspectionImportService {
      * back, and this one rolls back for a living: a single duplicated checklist
      * row took a fifteen-area commit down with it.
      */
-    const superseded = await this.prisma.inspectionPhoto.findMany({
-      where: { inspectionId: target.id },
-      select: { storageKey: true },
-    });
+    /*
+     * Under ADD this must NOT be every photograph on the inspection. Those
+     * objects are deleted from storage after the commit, and an additional
+     * report keeps most of them -- deleting the files while their rows survive
+     * would leave the first report's areas pointing at nothing, which reads as
+     * corrupt evidence rather than a missing file. The keys are instead
+     * collected inside the transaction, as each covered area is actually
+     * cleared, and only for the areas this report replaces.
+     */
+    const superseded: Array<{ storageKey: string }> =
+      mode === 'REPLACE'
+        ? await this.prisma.inspectionPhoto.findMany({
+            where: { inspectionId: target.id },
+            select: { storageKey: true },
+          })
+        : [];
 
     const inspectionId = await this.prisma.$transaction(async (tx) => {
       await tx.property.upsert({
@@ -754,12 +791,18 @@ export class InspectionImportService {
        * photographs were cleared but whose grades survived would report a
        * condition that nothing evidences. Both are scoped to this inspection.
        */
-      const replacedResponses = await tx.inspectionAreaChecklistResponse.deleteMany({
-        where: { inspectionArea: { inspectionId: inspection.id } },
-      });
-      const replacedPhotos = await tx.inspectionPhoto.deleteMany({
-        where: { inspectionId: inspection.id },
-      });
+      // Under ADD the clearing happens per area, inside the loop, so an area
+      // this report never mentions keeps the evidence the first report gave it.
+      const replacedResponses =
+        mode === 'REPLACE'
+          ? await tx.inspectionAreaChecklistResponse.deleteMany({
+              where: { inspectionArea: { inspectionId: inspection.id } },
+            })
+          : { count: 0 };
+      const replacedPhotos =
+        mode === 'REPLACE'
+          ? await tx.inspectionPhoto.deleteMany({ where: { inspectionId: inspection.id } })
+          : { count: 0 };
 
       /** Areas this report actually describes; the rest are dropped below. */
       const touched = new Set<string>();
@@ -801,6 +844,36 @@ export class InspectionImportService {
         });
         touched.add(inspectionArea.id);
         layout.add(propertyArea.id);
+
+        /*
+         * The narrow equivalent of the bulk clear above.
+         *
+         * Only the areas this report actually covers are cleared, so an
+         * additional report replaces the garage it describes without touching
+         * the kitchen the first report established. Responses go first because
+         * they hang off the area: grades surviving cleared photographs would
+         * report a condition nothing evidences.
+         */
+        if (mode === 'ADD') {
+          const responses = await tx.inspectionAreaChecklistResponse.deleteMany({
+            where: { inspectionAreaId: inspectionArea.id },
+          });
+          // Read before the delete, so the objects behind these rows can be
+          // removed after the commit -- and only these. Collected rather than
+          // deleted here for the same reason the bulk path defers: this
+          // transaction rolls back for a living, and a rollback must not have
+          // destroyed the evidence it failed to replace.
+          const replacing = await tx.inspectionPhoto.findMany({
+            where: { inspectionAreaId: inspectionArea.id },
+            select: { storageKey: true },
+          });
+          const photos = await tx.inspectionPhoto.deleteMany({
+            where: { inspectionAreaId: inspectionArea.id },
+          });
+          superseded.push(...replacing);
+          replacedResponses.count += responses.count;
+          replacedPhotos.count += photos.count;
+        }
 
         const items = new Map<string, string>();
         for (const item of area.items) {
@@ -914,14 +987,20 @@ export class InspectionImportService {
        * sessions restrict too, so they are cleared explicitly; photographs,
        * checklist responses and evidence requests cascade.
        */
-      const stale = await tx.inspectionArea.findMany({
-        where: {
-          inspectionId: inspection.id,
-          id: { notIn: [...touched] },
-          media: { none: {} },
-        },
-        select: { id: true },
-      });
+      // Under ADD there is no such thing as a stale area: the report is a
+      // supplement, and its silence about the kitchen says nothing at all about
+      // the kitchen.
+      const stale =
+        mode === 'REPLACE'
+          ? await tx.inspectionArea.findMany({
+              where: {
+                inspectionId: inspection.id,
+                id: { notIn: [...touched] },
+                media: { none: {} },
+              },
+              select: { id: true },
+            })
+          : [];
       const staleIds = stale.map((area) => area.id);
       if (staleIds.length) {
         await tx.inspectionAreaStatusHistory.deleteMany({
@@ -995,6 +1074,10 @@ export class InspectionImportService {
           entityId: inspection.id,
           metadata: {
             fingerprint,
+            // Which way this report was written. ADD leaves areas it does not
+            // mention alone, so "replaced.areas: 0" means something different
+            // under each mode and the row should say which one it was.
+            mode,
             areas: report.areas.length,
             photos: stored.length,
             pagesWithPhotos: perPage.filter((count) => count > 0).length,

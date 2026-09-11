@@ -1676,10 +1676,10 @@ export function useAdminMutations() {
      * followed the reading follows the writing.
      */
     commitInspectionImport: useMutation({
-      mutationFn: (jobId: string) =>
+      mutationFn: ({ jobId, mode }: { jobId: string; mode?: 'REPLACE' | 'ADD' }) =>
         api<{ jobId: string; committing: boolean }>(
           `/api/v1/admin/inspection-imports/${jobId}/commit`,
-          { method: 'POST' },
+          { method: 'POST', body: JSON.stringify(mode ? { mode } : {}) },
         ),
       onSuccess: () => {
         // The inspection that was empty now has areas, photographs and

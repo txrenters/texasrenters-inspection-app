@@ -139,7 +139,26 @@ describe('importing an inspection report', () => {
     expect(commitImport).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /^import as .* inspection$/i }));
-    await waitFor(() => expect(commitImport).toHaveBeenCalledWith('job-1'));
+    await waitFor(() => expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'REPLACE' }));
+  });
+
+  /**
+   * The second report. An agent who submits an incomplete walkthrough issues
+   * another PDF for what was missed, and importing that the usual way would
+   * keep only the areas it names and drop everything the first one established.
+   */
+  it('writes an additional report without replacing the inspection', async () => {
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
+    render(<InspectionReportImport resumeJobId="job-1" />);
+
+    // Replace is the default, so an import nobody thinks about behaves as it always did.
+    const replace = await screen.findByRole('radio', { name: /replace this inspection/i });
+    expect((replace as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: /add to this inspection/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add these areas/i }));
+
+    await waitFor(() => expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'ADD' }));
   });
 
   it('keeps showing progress while the server is still writing', async () => {
@@ -166,7 +185,7 @@ describe('importing an inspection report', () => {
       fireEvent.click(button);
     });
 
-    expect(commitImport).toHaveBeenCalledWith('job-1');
+    expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'REPLACE' });
     // Still writing: the job has no committedAt yet, so the screen must not
     // claim the import is done just because the request came back.
     await waitFor(() =>
