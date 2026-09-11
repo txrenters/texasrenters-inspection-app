@@ -391,7 +391,13 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
   });
 
-  it('refuses to regenerate over an approved comparison', async () => {
+  /**
+   * The automatic trigger fires whenever a move-out becomes ready for review.
+   * Letting it rewrite an approved comparison is the silent overwrite this
+   * guard exists to prevent: the reviewer would never learn their approval had
+   * gone.
+   */
+  it('refuses to regenerate over an approved comparison on the system trigger', async () => {
     const { prisma } = generatePrisma({
       moveOut,
       moveIn: { id: 'move-in-1' },
@@ -404,9 +410,41 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     });
     const service = new ComparisonService(prisma as never);
 
-    await expect(
-      service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id }),
-    ).rejects.toMatchObject({ status: 409, code: 'COMPARISON_ALREADY_APPROVED' });
+    // No actor: this is the system asking.
+    await expect(service.generate('move-out-1')).rejects.toMatchObject({
+      status: 409,
+      code: 'COMPARISON_ALREADY_APPROVED',
+    });
+  });
+
+  /**
+   * A reviewer may regenerate their own approved comparison without rejecting
+   * it first. The approval does not carry over -- the record returns to DRAFT
+   * with the reviewer cleared, so the new draft never inherits a decision
+   * nobody made about it.
+   */
+  it('lets a reviewer regenerate an approved comparison, back to draft', async () => {
+    const { prisma, created } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      existing: { id: 'comparison-1', status: 'APPROVED', version: 2 },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [],
+      moveInFindings: [soundFinding('pa-kitchen')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(created.data).toMatchObject({
+      status: 'DRAFT',
+      version: 3,
+      reviewedById: null,
+      reviewedAt: null,
+      reviewNote: null,
+    });
   });
 
   it('bumps the version when regenerating a draft', async () => {
