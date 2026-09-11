@@ -132,6 +132,7 @@ export const SUBMITTED_STATUSES: readonly InspectionStatus[] =
  */
 export type InspectionFilterKey =
   | 'ALL'
+  | 'TODAY'
   | 'SUBMITTED'
   | 'SCHEDULED'
   | 'IN_PROGRESS'
@@ -143,6 +144,15 @@ export type InspectionFilterKey =
  */
 export function statusesForFilter(key: InspectionFilterKey): readonly InspectionStatus[] | undefined {
   if (key === 'ALL') return undefined;
+  // Today is a date, not a status: every status still shows, narrowed to the
+  // one day. Returning a status set here would quietly hide this morning's
+  // finished work from a technician looking at their own round.
+  if (key === 'TODAY') return undefined;
   if (key === 'SUBMITTED') return SUBMITTED_STATUSES;
   return [key];
+}
+
+/** Whether a chip narrows to today's round rather than to a status. */
+export function isDueTodayFilter(key: InspectionFilterKey): boolean {
+  return key === 'TODAY';
 }

@@ -97,6 +97,15 @@ export interface InspectionListFilters {
   search?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * Only today's round.
+   *
+   * A flag rather than a date, because "today" is a fact about Texas and the
+   * server owns it. A handset in another time zone -- or simply set wrong --
+   * would otherwise ask for the wrong day and be given exactly what it asked
+   * for.
+   */
+  dueToday?: boolean;
 }
 
 /**

@@ -32,6 +32,7 @@ import { useInspectionPages } from '@/src/features/queries';
 import {
   INSPECTION_STATUS_TONE_CLASS,
   inspectionStatusPresentation,
+  isDueTodayFilter,
   statusesForFilter,
   type InspectionFilterKey,
   type InspectionStatusTone,
@@ -72,6 +73,9 @@ registerIcons(
  */
 const FILTERS: { key: InspectionFilterKey; label: string }[] = [
   { key: 'ALL', label: 'All' },
+  // First after All, and deliberately ahead of the status chips: a technician
+  // opening the app in the morning wants their round, not a taxonomy.
+  { key: 'TODAY', label: 'Today' },
   { key: 'SCHEDULED', label: 'Assigned' },
   { key: 'IN_PROGRESS', label: 'In Progress' },
   { key: 'SUBMITTED', label: 'Submitted' },
@@ -196,6 +200,7 @@ export default function InspectionsScreen() {
 
   const inspections = useInspectionPages({
     statuses: statusesForFilter(filter),
+    dueToday: isDueTodayFilter(filter) || undefined,
     search: debouncedSearch || undefined,
   });
   const pull = usePullToRefresh([inspections.refetch]);
