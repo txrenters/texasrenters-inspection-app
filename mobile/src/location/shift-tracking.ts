@@ -194,7 +194,23 @@ async function watchInForeground() {
 /** Whether the OS accepted the background task. */
 async function startBackgroundUpdates(): Promise<boolean> {
   try {
-    if (await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK)) return true;
+    /**
+     * Whether it is *delivering*, not whether it is registered.
+     *
+     * `isTaskRegisteredAsync` answers a different question, and the difference
+     * is the bug this file had: when the OS stops a background location task --
+     * an Android battery manager reclaiming it, iOS terminating it under
+     * pressure -- the registration survives. The guard said "already running",
+     * returned early, and nothing ever restarted the updates. A technician's
+     * trail simply stopped for the rest of the day.
+     */
+    if (await Location.hasStartedLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => false))
+      return true;
+
+    // Registered but not delivering: clear it out before starting again, or
+    // `startLocationUpdatesAsync` has nothing to do and the stall persists.
+    if (await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false))
+      await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
 
     await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, {
     accuracy: Location.Accuracy.Balanced,
@@ -241,5 +257,29 @@ export async function stopShiftTracking() {
  */
 export async function isShiftTrackingActive() {
   if (foregroundWatch) return true;
-  return TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false);
+  // As above: registered is not running. This reported a stalled task as
+  // active, so Settings told a technician their location was being recorded
+  // while nothing had been sent for an hour.
+  return Location.hasStartedLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => false);
+}
+
+/**
+ * Put tracking back if it has stopped, and do nothing if it has not.
+ *
+ * Called whenever the app comes back to the foreground and on a timer while it
+ * is there. `startShiftTracking` was previously called exactly once, from an
+ * effect keyed on whether the technician is signed in -- which does not change
+ * during a working day. So a task the OS stopped at eleven stayed stopped
+ * until the app was relaunched, and the trail had an hour-long hole in it that
+ * looked from the console exactly like somebody who had gone home.
+ *
+ * Idempotent and cheap: when updates are running this asks the OS one question
+ * and returns.
+ */
+export async function ensureShiftTracking(): Promise<ShiftStartResult | null> {
+  // Nothing to re-arm if this device never granted anything. `startShiftTracking`
+  // re-checks permissions itself and reports the reason, so this stays a thin
+  // wrapper rather than a second copy of that logic.
+  if (await isShiftTrackingActive()) return null;
+  return startShiftTracking();
 }
