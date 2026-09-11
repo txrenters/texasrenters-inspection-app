@@ -9,22 +9,13 @@ import {
 } from './map-clusters';
 
 /**
- * A stand-in for Leaflet's projection.
+ * No stand-in any more.
  *
- * Web Mercator scaled by zoom, which is what `map.project` does. Real enough
- * that grid arithmetic behaves the way it will on the map, without needing a
- * DOM or a rendered container.
+ * This file used to carry four lines of Web Mercator to impersonate Leaflet's
+ * `map.project`, which was the tell that the dependency was never real: the
+ * grouping rule needs a projection, not a map. `projectToPixels` is now that
+ * arithmetic, in the module itself, and these tests exercise the real one.
  */
-const map = {
-  project(latlng: [number, number] | { lat: number; lng: number }, zoom: number) {
-    const [lat, lng] = Array.isArray(latlng) ? latlng : [latlng.lat, latlng.lng];
-    const scale = 256 * 2 ** (zoom ?? 0);
-    const x = ((lng + 180) / 360) * scale;
-    const sin = Math.sin((lat * Math.PI) / 180);
-    const y = (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * scale;
-    return { x, y };
-  },
-} as unknown as Parameters<typeof clusterByGrid>[0];
 
 /** The three real 77044 properties that drew as one pin. */
 const HOUSTON_77044: Clusterable[] = [
@@ -39,7 +30,7 @@ describe('clusterByGrid', () => {
   it('merges neighbours that would overlap at metropolitan zoom', () => {
     // Zoom 10 is roughly the framing in the report: three properties within
     // 250m occupying about one pixel.
-    const clusters = clusterByGrid(map, HOUSTON_77044, 10);
+    const clusters = clusterByGrid(HOUSTON_77044, 10);
     expect(clusters).toHaveLength(1);
     expect(clusters[0]?.members).toHaveLength(3);
   });
@@ -47,12 +38,12 @@ describe('clusterByGrid', () => {
   it('separates them again once zoomed in', () => {
     // The whole point of clustering rather than hiding: zooming must reveal
     // what the badge stood for.
-    const clusters = clusterByGrid(map, HOUSTON_77044, 17);
+    const clusters = clusterByGrid(HOUSTON_77044, 17);
     expect(clusters).toHaveLength(3);
   });
 
   it('keeps distant properties in their own group', () => {
-    const clusters = clusterByGrid(map, [...HOUSTON_77044, FAR_AWAY], 10);
+    const clusters = clusterByGrid([...HOUSTON_77044, FAR_AWAY], 10);
     expect(clusters).toHaveLength(2);
     expect(clusters.flatMap((cluster) => cluster.members)).toHaveLength(4);
   });
@@ -67,14 +58,14 @@ describe('clusterByGrid', () => {
     }));
 
     for (const zoom of [8, 10, 12, 14, 17]) {
-      const members = clusterByGrid(map, many, zoom).flatMap((cluster) => cluster.members);
+      const members = clusterByGrid(many, zoom).flatMap((cluster) => cluster.members);
       expect(members).toHaveLength(570);
       expect(new Set(members.map((member) => member.id)).size).toBe(570);
     }
   });
 
   it('places a cluster among its members rather than in a grid corner', () => {
-    const [cluster] = clusterByGrid(map, HOUSTON_77044, 10);
+    const [cluster] = clusterByGrid(HOUSTON_77044, 10);
     const latitudes = HOUSTON_77044.map((property) => property.latitude);
     expect(cluster?.latitude).toBeGreaterThanOrEqual(Math.min(...latitudes));
     expect(cluster?.latitude).toBeLessThanOrEqual(Math.max(...latitudes));
@@ -83,13 +74,13 @@ describe('clusterByGrid', () => {
   it('gives a cluster a key that changes when its membership does', () => {
     // React reuses a marker whose key is unchanged; a cluster that gained a
     // property while keeping its key would keep displaying the old count.
-    const [before] = clusterByGrid(map, HOUSTON_77044, 10);
-    const [after] = clusterByGrid(map, HOUSTON_77044.slice(0, 2), 10);
+    const [before] = clusterByGrid(HOUSTON_77044, 10);
+    const [after] = clusterByGrid(HOUSTON_77044.slice(0, 2), 10);
     expect(before?.key).not.toBe(after?.key);
   });
 
   it('groups nothing when there is nothing to group', () => {
-    expect(clusterByGrid(map, [], 10)).toEqual([]);
+    expect(clusterByGrid([], 10)).toEqual([]);
   });
 
   it('uses a grid wide enough to matter', () => {
@@ -116,13 +107,13 @@ describe('zoomToIsolate', () => {
   ];
 
   it('goes past the default zoom when a neighbour is too close', () => {
-    const zoom = zoomToIsolate(map, SAME_STREET, 'western-ridge-8', 15, 19);
+    const zoom = zoomToIsolate(SAME_STREET, 'western-ridge-8', 15, 19);
     expect(zoom).toBeGreaterThan(15);
     expect(zoom).toBeLessThanOrEqual(19);
 
     // The point of the exercise: at the zoom it chose, the property really is
     // drawn on its own rather than inside a badge.
-    const own = clusterByGrid(map, SAME_STREET, zoom).find((cluster) =>
+    const own = clusterByGrid(SAME_STREET, zoom).find((cluster) =>
       cluster.members.some((member) => member.id === 'western-ridge-8'),
     );
     expect(own?.members).toHaveLength(1);
@@ -131,7 +122,7 @@ describe('zoomToIsolate', () => {
   it('does not zoom past what is needed', () => {
     // Nothing near it, so the ordinary zoom already shows it alone. Going
     // further would drop somebody onto the rooftops for no reason.
-    expect(zoomToIsolate(map, [...HOUSTON_77044, FAR_AWAY], 'woodlands', 15, 19)).toBe(15);
+    expect(zoomToIsolate([...HOUSTON_77044, FAR_AWAY], 'woodlands', 15, 19)).toBe(15);
   });
 
   it('gives up at the ceiling for two records on the same spot', () => {
@@ -141,11 +132,11 @@ describe('zoomToIsolate', () => {
       { id: 'unit-a', latitude: 29.8657, longitude: -95.2028 },
       { id: 'unit-b', latitude: 29.8657, longitude: -95.2028 },
     ];
-    expect(zoomToIsolate(map, twins, 'unit-a', 15, 19)).toBe(19);
+    expect(zoomToIsolate(twins, 'unit-a', 15, 19)).toBe(19);
   });
 
   it('never returns below the ceiling it was given', () => {
-    expect(zoomToIsolate(map, HOUSTON_77044, 'copper-hollow', 21, 19)).toBe(19);
+    expect(zoomToIsolate(HOUSTON_77044, 'copper-hollow', 21, 19)).toBe(19);
   });
 });
 
@@ -172,14 +163,14 @@ describe('properties closer together than the grid', () => {
     // fall, which is the same straddling that makes distance a bad proxy for
     // grouping. The claim worth pinning is that zooming to 18 does not show
     // them all.
-    expect(clusterByGrid(map, CUL_DE_SAC, 18).length).toBeLessThan(CUL_DE_SAC.length);
+    expect(clusterByGrid(CUL_DE_SAC, 18).length).toBeLessThan(CUL_DE_SAC.length);
   });
 
   it('each stand alone once past the clustering ceiling', () => {
     // The fix. Above CLUSTER_MAX_ZOOM nothing is grouped, so every property is
     // reachable — overlapping pins being a far smaller problem than a property
     // that cannot be got at.
-    const clusters = clusterByGrid(map, CUL_DE_SAC, CLUSTER_MAX_ZOOM + 1);
+    const clusters = clusterByGrid(CUL_DE_SAC, CLUSTER_MAX_ZOOM + 1);
     expect(clusters).toHaveLength(3);
     for (const cluster of clusters) expect(cluster.members).toHaveLength(1);
   });
@@ -187,10 +178,10 @@ describe('properties closer together than the grid', () => {
   it('can be isolated within the map ceiling', () => {
     // The tile layer now allows 21, so `zoomToIsolate` has room to succeed
     // rather than giving up and handing back a badge.
-    const zoom = zoomToIsolate(map, CUL_DE_SAC, 'merrill-1', 15, 21);
+    const zoom = zoomToIsolate(CUL_DE_SAC, 'merrill-1', 15, 21);
     expect(zoom).toBeLessThanOrEqual(21);
 
-    const own = clusterByGrid(map, CUL_DE_SAC, zoom).find((cluster) =>
+    const own = clusterByGrid(CUL_DE_SAC, zoom).find((cluster) =>
       cluster.members.some((member) => member.id === 'merrill-1'),
     );
     expect(own?.members).toHaveLength(1);
@@ -204,6 +195,6 @@ describe('properties closer together than the grid', () => {
       { id: 'unit-a', latitude: 30.1401, longitude: -95.4602 },
       { id: 'unit-b', latitude: 30.1401, longitude: -95.4602 },
     ];
-    expect(clusterByGrid(map, twins, CLUSTER_MAX_ZOOM + 1)).toHaveLength(2);
+    expect(clusterByGrid(twins, CLUSTER_MAX_ZOOM + 1)).toHaveLength(2);
   });
 });

@@ -10,9 +10,20 @@ import { join } from 'node:path';
  * Eight of them sat in `SKIPPED_COMPLETE`, and each one is a baseline a later
  * move-out has nothing to compare against.
  *
- * The skip itself is right and stays: of the 130 finished visits, 47 are filter
- * deliveries and 77 carry a job number for a title and no type at all.
- * Importing those would invent history rather than recover it.
+ * The skip itself is right and stays for anything that is not an inspection: of
+ * the 130 finished visits, 47 were filter deliveries and 77 carried a job
+ * number for a title and no type at all. Importing those would invent history
+ * rather than recover it.
+ *
+ * It was *only* move-ins for exactly that reason, and no longer is. Both of
+ * those groups are now excluded by guards that did not exist then — the untyped
+ * ones fail `outcome === 'RESOLVED'`, the filter deliveries fail
+ * `namesAnInspection` — so the type restriction was excluding every completed
+ * occupied inspection and move-out in the office's history for nothing. A Q3
+ * backfill made the cost visible: 700 of 856 visits came back
+ * `alreadyComplete`, and July finished with zero occupied inspections against
+ * seventy in September, the difference being that September's had not happened
+ * yet.
  *
  * Asserted against the worker source. The decision is an ordering between four
  * branches in one method, and the thing worth pinning is which branch wins —
@@ -31,17 +42,33 @@ const CREATION = readFileSync(
 );
 
 describe('which finished visits are recovered', () => {
-  it('recovers only a move-in', () => {
-    // The narrowness is the safety. A filter delivery or an untyped job number
-    // has no baseline to be, and creating one would be fabricating a
-    // walkthrough that never happened here.
+  it('recovers any visit whose type is certain, not move-ins alone', () => {
+    // The safety was never the type; it was that the type is *known*. A visit
+    // the resolver could not place is still refused, and that is what keeps a
+    // job number with no type from becoming a walkthrough.
     const guard = WORKER.slice(
-      WORKER.indexOf('const isRecoverableMoveIn'),
-      WORKER.indexOf('if (isComplete && !isRecoverableMoveIn)'),
+      WORKER.indexOf('const isRecoverable ='),
+      WORKER.indexOf('if (isComplete && !isRecoverable)'),
     );
-    expect(guard).toContain('InspectionType.MOVE_IN');
-    expect(guard).not.toContain('OCCUPIED');
-    expect(guard).not.toContain('MOVE_OUT');
+    expect(guard).toContain("outcome === 'RESOLVED'");
+    expect(guard).not.toContain('InspectionType.MOVE_IN');
+  });
+
+  it('demands the visit name an inspection, even though the check below repeats it', () => {
+    /**
+     * The load-bearing one.
+     *
+     * `namesAnInspection` runs *after* this branch, so a finished visit keeps
+     * SKIPPED_COMPLETE — which says more about it than "not an inspection"
+     * would. Widening the recovery without repeating the check here would
+     * import every completed filter delivery and every job-number title, which
+     * is precisely the fabrication the original narrowness prevented.
+     */
+    const guard = WORKER.slice(
+      WORKER.indexOf('const isRecoverable ='),
+      WORKER.indexOf('if (isComplete && !isRecoverable)'),
+    );
+    expect(guard).toContain('namesAnInspection(visit.title, visit.instructions)');
   });
 
   it('requires a property and a date before recovering anything', () => {
@@ -49,8 +76,8 @@ describe('which finished visits are recovered', () => {
     // branches below and change status for finished work that used to be left
     // alone. It stays skipped instead.
     const guard = WORKER.slice(
-      WORKER.indexOf('const isRecoverableMoveIn'),
-      WORKER.indexOf('if (isComplete && !isRecoverableMoveIn)'),
+      WORKER.indexOf('const isRecoverable ='),
+      WORKER.indexOf('if (isComplete && !isRecoverable)'),
     );
     expect(guard).toContain('visit.property?.id');
     expect(guard).toContain('visit.startAt');
@@ -99,9 +126,9 @@ describe('the ordering the mapping queue depends on', () => {
   });
 
   it('decides the finished case before the property and date checks', () => {
-    // So a finished visit that is not a recoverable move-in is skipped rather
-    // than rejected, which is what it was before.
-    const complete = WORKER.indexOf('if (isComplete && !isRecoverableMoveIn)');
+    // So a finished visit that is not recoverable is skipped rather than
+    // rejected, which is what it was before.
+    const complete = WORKER.indexOf('if (isComplete && !isRecoverable)');
     const noProperty = WORKER.indexOf("'JOBBER_VISIT_HAS_NO_PROPERTY'");
     expect(complete).toBeGreaterThan(-1);
     expect(noProperty).toBeGreaterThan(complete);

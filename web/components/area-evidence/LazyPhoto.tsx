@@ -1,6 +1,5 @@
 'use client';
 
-import type { AreaPhoto } from '@texasrenters/shared';
 import { useEffect, useRef, useState } from 'react';
 
 import { apiBlob } from '@/lib/api';
@@ -42,7 +41,16 @@ export function LazyPhoto({
   areaName,
   onOpen,
 }: {
-  photo: AreaPhoto;
+  /*
+   * Only what this actually renders, rather than a whole `AreaPhoto`.
+   *
+   * The comparison report carries report-shaped photographs, which have no
+   * `sequenceNumber` or `capturedByName` and no capture type -- their caption is
+   * the checklist item they evidence. Widening the payload to satisfy a type
+   * this component never reads would put three dead fields on every photo in a
+   * document that can carry hundreds.
+   */
+  photo: { contentPath: string; captureType?: string | null; label?: string | null };
   areaName: string;
   onOpen?: () => void;
 }) {
@@ -89,7 +97,7 @@ export function LazyPhoto({
     };
   }, [visible, photo.contentPath]);
 
-  const alt = `${captureLabel(photo.captureType)} of ${areaName}${
+  const alt = `${captureLabel(photo.captureType ?? 'OTHER')} of ${areaName}${
     photo.label ? ` - ${photo.label}` : ''
   }`;
 
@@ -121,7 +129,7 @@ export function LazyPhoto({
         )}
       </span>
       <span className="text-muted-foreground truncate text-xs">
-        {photo.label || captureLabel(photo.captureType)}
+        {photo.label || captureLabel(photo.captureType ?? 'OTHER')}
       </span>
     </button>
   );

@@ -714,6 +714,7 @@ export class ApiInspectionRepository implements InspectionRepository {
     // chip sees work beyond the first page.
     if (filters.statuses?.length) query.set('status', filters.statuses.join(','));
     if (filters.search?.trim()) query.set('search', filters.search.trim());
+    if (filters.dueToday) query.set('dueToday', 'true');
     return cachedApiRecord(`inspections:${query.toString()}`, inspectionPageSchema, () =>
       getJson(`/api/v1/technician/inspections?${query.toString()}`),
     );

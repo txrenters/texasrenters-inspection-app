@@ -29,6 +29,7 @@ import type { FindingReviewStatus, Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { businessDayBounds } from '../common/business-day';
 import { PrismaService } from '../common/prisma.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
@@ -156,6 +157,12 @@ function formatUnitLabel(name: string) {
 }
 
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
+
+/** Today in Texas, as a `scheduledAt` range. */
+const dayBounds = () => {
+  const { start, end } = businessDayBounds();
+  return { gte: start, lt: end };
+};
 
 /**
  * Statuses that still need the technician on the home screen's queue.
@@ -365,11 +372,10 @@ export class TechnicianService {
   }
 
   async dashboard(user: AuthenticatedUser) {
-    const now = new Date();
-    const todayStart = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    );
-    const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    // Texas, not UTC. This used to be UTC midnight — 6 or 7 p.m. Texas the
+    // previous evening — so from dinner time onwards a technician's "today"
+    // already held tomorrow's work.
+    const { start: todayStart, end: tomorrowStart } = businessDayBounds();
     const where = {
       organizationId: user.organizationId,
       status: visibleStatuses,
@@ -444,7 +450,7 @@ export class TechnicianService {
 
   async inspections(
     user: AuthenticatedUser,
-    query: Pick<TechnicianInspectionListQueryDto, 'page' | 'pageSize' | 'status' | 'search'> = {
+    query: Pick<TechnicianInspectionListQueryDto, 'page' | 'pageSize' | 'status' | 'search' | 'dueToday'> = {
       page: 1,
       pageSize: 25,
     },
@@ -456,6 +462,15 @@ export class TechnicianService {
       // past `visibleStatuses`.
       status: query.status?.length ? { in: query.status as InspectionStatus[] } : visibleStatuses,
       assignments: { some: { technicianId: user.id, isCurrent: true } },
+      /**
+       * Today's round, when the handset asks for it.
+       *
+       * Resolved here rather than sent as a date range by the app: "today" is a
+       * fact about Texas, and a handset that has travelled — or is simply set
+       * to another zone — would otherwise ask for the wrong day and be given
+       * it. The server owns the definition; see `business-day.ts`.
+       */
+      ...(query.dueToday ? { scheduledAt: dayBounds() } : {}),
       ...(query.search
         ? {
             OR: [

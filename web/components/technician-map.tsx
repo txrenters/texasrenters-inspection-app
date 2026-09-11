@@ -1,73 +1,104 @@
 'use client';
 
-import 'leaflet/dist/leaflet.css';
-
 import type {
   PropertyPosition,
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
 import {
-  divIcon,
-  type LatLngBoundsExpression,
-  type Marker as LeafletMarker,
-} from 'leaflet';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Circle,
-  MapContainer,
-  Marker,
-  Polyline,
-  Popup,
-  TileLayer,
+  AdvancedMarker,
+  APIProvider,
+  APILoadingStatus,
+  ColorScheme,
+  InfoWindow,
+  Map as GoogleMap,
+  useApiLoadingStatus,
   useMap,
-  useMapEvents,
-} from 'react-leaflet';
+} from '@vis.gl/react-google-maps';
+import { Fragment, memo, useEffect, useMemo, useState } from 'react';
+import { useTheme } from 'next-themes';
 
 import { pointsToFit } from '@/components/map-bounds';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
 import { clusterByGrid, zoomToIsolate } from '@/components/map-clusters';
 import { formatRelative } from '@/lib/format';
+import { MapSettings, useMapPreferences } from '@/components/map-settings';
 
 /**
  * Where every technician was when their handset last reported, over the
  * properties they are working.
  *
- * Leaflet rather than Google or Mapbox: pins on a street map need no routing,
- * no satellite imagery and no billing relationship, and the tile source is a
- * single URL — so moving to a paid provider later is configuration rather than
- * a rewrite.
+ * Google Maps, replacing Leaflet and OpenStreetMap. The previous note here
+ * promised that moving to another provider would be "configuration rather than
+ * a rewrite", on the strength of a single tile URL — and that is true of any
+ * XYZ tile source, which Google is not. Their terms require the Maps JavaScript
+ * API, so the markers, popups, lines and circles are all theirs now. What did
+ * survive is the part that was never about the provider: `map-bounds.ts` and
+ * `map-clusters.ts` are pure arithmetic and came across untouched.
  *
- * Must be loaded with `ssr: false`. Leaflet touches `window` at import time and
- * measures the container to lay tiles out, neither of which exists on a server.
+ * Must be loaded with `ssr: false`. The Maps script touches `window` and
+ * measures its container, neither of which exists on a server.
  */
 
 /**
- * OpenStreetMap only as a default.
+ * The browser key.
  *
- * Their tile policy discourages production commercial traffic, and this is a
- * commercial product. Fine while the console is a handful of administrators;
- * point `NEXT_PUBLIC_MAP_TILE_URL` at a paid provider before it is in daily
- * use. Public by nature — the browser fetches it — but inlined at build time,
- * so changing it needs a rebuild rather than a restart.
+ * Public by nature — it ships inside the JavaScript bundle and anyone reading
+ * the page can see it, which is true of every Maps browser key and is why
+ * Google's answer is **HTTP referrer restrictions**, not secrecy. Restrict it
+ * to this console's hosts in the Cloud console; an unrestricted key is one
+ * anybody can spend.
+ *
+ * Inlined at build time like every NEXT_PUBLIC_* value, so it is a property of
+ * the image rather than something a restart can change.
  */
-const TILE_URL =
-  process.env.NEXT_PUBLIC_MAP_TILE_URL ?? 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 
-/** Required by OpenStreetMap's licence, and good manners for any tile source. */
-const ATTRIBUTION =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+/**
+ * The styled map this console draws on.
+ *
+ * Required, not decorative: `AdvancedMarker` is only available to a map that
+ * has one, and without it Google silently falls back to the legacy marker and
+ * the pins below stop rendering as React at all. Created in the Cloud console
+ * under Map Management.
+ */
+const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
 
 /** Past this, a position is history rather than an answer to "where are they". */
 const STALE_AFTER_MS = 30 * 60_000;
 
 /**
- * Markers drawn as inline SVG rather than Leaflet's own images.
+ * The view the map opens with, before any data has arrived.
  *
- * Leaflet's default icon resolves its PNGs relative to the stylesheet, which
- * bundlers rewrite and break — the usual symptom is a map with invisible
- * markers. A `divIcon` sidesteps the asset question entirely, and vectors stay
- * sharp on the high-density displays these are actually read on.
+ * Google needs a defaultCenter and defaultZoom or it renders nothing at all.
+ * The Leaflet version needed this too, for a sharper reason — a map with no
+ * view could not project, and every layer added to it died on
+ * `undefined.subtract`. Google fails more quietly, which is arguably worse.
+ */
+const FALLBACK_CENTER = { lat: 31.0, lng: -99.0 };
+const FALLBACK_ZOOM = 5;
+
+/**
+ * One Earth, and only one.
+ *
+ * Latitude stops at ±85 rather than ±90 because Web Mercator cannot project the
+ * poles — they sit at infinity. `strictBounds` is off so the edge is firm
+ * without being unpannable near it.
+ */
+const WORLD_BOUNDS = {
+  north: 85,
+  south: -85,
+  west: -180,
+  east: 180,
+};
+
+/**
+ * Markers drawn as inline SVG, now as real React rather than HTML strings.
+ *
+ * Leaflet needed `divIcon` and a template string because its markers are DOM it
+ * builds itself. An `AdvancedMarker` takes children, so these are components —
+ * the same vectors, type-checked, and the class names the stylesheet already
+ * targets still apply.
  *
  * The two are separated by **shape as well as colour**: a property is the
  * classic teardrop pin planted at a spot, a technician is a round badge with a
@@ -78,32 +109,32 @@ const STALE_AFTER_MS = 30 * 60_000;
  * water and red arterial roads, and an unoutlined marker disappears into
  * whatever it happens to land on.
  */
-const MARKER_SHADOW =
-  '<filter id="pin-shadow" x="-40%" y="-40%" width="180%" height="180%">' +
-  '<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.35"/></filter>';
-
-/**
- * A teardrop pin with a house in it, anchored at its point.
- *
- * `iconAnchor` is the tip rather than the centre — a pin whose point does not
- * touch the coordinate is simply showing the wrong place, and at street zoom
- * the half-height error is most of a block.
- */
-function propertyPin(dim = false) {
-  return divIcon({
-    className: '',
-    html: `<svg width="24" height="32" viewBox="0 0 24 32" opacity="${dim ? 0.25 : 1}" xmlns="http://www.w3.org/2000/svg">
-      <defs>${MARKER_SHADOW}</defs>
-      <path filter="url(#pin-shadow)"
-        d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
-        class="fill-map-property" stroke="#fff" stroke-width="2"/>
-      <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff"/>
-    </svg>`,
-    iconSize: [24, 32],
-    iconAnchor: [12, 31],
-    popupAnchor: [0, -28],
-  });
+function MarkerShadow() {
+  return (
+    <defs>
+      <filter height="180%" id="pin-shadow" width="180%" x="-40%" y="-40%">
+        <feDropShadow dx="0" dy="1" floodOpacity="0.35" stdDeviation="1" />
+      </filter>
+    </defs>
+  );
 }
+
+/** A teardrop pin with a house in it, anchored at its point. */
+const PropertyPin = memo(function PropertyPin({ dim = false }: { dim?: boolean }) {
+  return (
+    <svg height="32" opacity={dim ? 0.25 : 1} viewBox="0 0 24 32" width="24">
+      <MarkerShadow />
+      <path
+        className="fill-map-property"
+        d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
+        filter="url(#pin-shadow)"
+        stroke="#fff"
+        strokeWidth="2"
+      />
+      <path d="M12 6.6 6.6 11v6.1h3.6v-3.5h3.6v3.5h3.6V11z" fill="#fff" />
+    </svg>
+  );
+});
 
 /**
  * A round badge with a person in it, anchored at its centre.
@@ -111,35 +142,17 @@ function propertyPin(dim = false) {
  * Centred rather than pointed, because unlike a property this is a reading of
  * where somebody was, not a marked spot — and the accuracy circle it sits
  * inside is drawn from the same centre.
- */
-/**
- * Built once per appearance, then reused.
- *
- * Leaflet replaces a marker's DOM whenever the `icon` prop is a new object, and
- * positions arrive over the socket every few seconds -- so a freshly built icon
- * on every render restarts the pulse animation from zero each time, which reads
- * as a stutter rather than a heartbeat. There are three possible appearances,
- * so caching them is both cheap and the only way the animation survives.
- *
- * Sharing one icon instance across several markers is fine: `divIcon` is a
- * template, and Leaflet builds separate DOM for each marker from it.
- */
-const TECHNICIAN_PINS = new Map<string, ReturnType<typeof divIcon>>();
-
-/**
- * A round badge with a person in it, anchored at its centre.
  *
  * The canvas is 44px while the badge is still 22px across: the extra room is
- * for the pulse, which expands past the badge and would otherwise be clipped by
- * the SVG viewport. The badge geometry is unchanged -- it is drawn at its
- * original coordinates inside a translate -- so nothing about the marker's
- * apparent size or anchoring moved.
+ * for the pulse, which expands past the badge and would otherwise be clipped.
+ *
+ * No icon cache any more. Leaflet replaced a marker's whole DOM whenever the
+ * `icon` prop was a new object, so a freshly built icon on every render
+ * restarted the pulse from zero and read as a stutter; three cached instances
+ * were the fix. React reconciles this instead — the `<circle>` survives a
+ * re-render, and so does its animation.
  */
-function technicianPin(stale: boolean, dim = false) {
-  const key = `${stale}|${dim}`;
-  const cached = TECHNICIAN_PINS.get(key);
-  if (cached) return cached;
-
+const TechnicianPin = memo(function TechnicianPin({ stale, dim = false }: { stale: boolean; dim?: boolean }) {
   const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
   // Only for someone reporting now, and only when they are not dimmed. A stale
   // position is the opposite of live, so animating it would say the wrong
@@ -147,28 +160,28 @@ function technicianPin(stale: boolean, dim = false) {
   // pulse is the loudest thing on the map.
   const live = !stale && !dim;
 
-  const icon = divIcon({
-    className: '',
-    html: `<svg width="44" height="44" viewBox="0 0 44 44" opacity="${dim ? 0.3 : 1}" xmlns="http://www.w3.org/2000/svg">
-      <defs>${MARKER_SHADOW}</defs>
-      ${live ? '<circle class="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11"/>' : ''}
+  return (
+    <svg height="44" opacity={dim ? 0.3 : 1} viewBox="0 0 44 44" width="44">
+      <MarkerShadow />
+      {live ? (
+        <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11" />
+      ) : null}
       <g transform="translate(8,8)">
-        <circle filter="url(#pin-shadow)" cx="14" cy="14" r="11"
-          class="${fill}" stroke="#fff" stroke-width="2.5"/>
-        <circle cx="14" cy="11.1" r="2.9" fill="#fff"/>
-        <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff"/>
+        <circle
+          className={fill}
+          cx="14"
+          cy="14"
+          filter="url(#pin-shadow)"
+          r="11"
+          stroke="#fff"
+          strokeWidth="2.5"
+        />
+        <circle cx="14" cy="11.1" fill="#fff" r="2.9" />
+        <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff" />
       </g>
-    </svg>`,
-    iconSize: [44, 44],
-    iconAnchor: [22, 22],
-    // Unchanged from the 28px icon: the badge is the same size in the same
-    // place, so the popup should sit exactly where it did.
-    popupAnchor: [0, -14],
-  });
-
-  TECHNICIAN_PINS.set(key, icon);
-  return icon;
-}
+    </svg>
+  );
+});
 
 /**
  * A badge standing in for several properties too close to draw separately.
@@ -177,64 +190,86 @@ function technicianPin(stale: boolean, dim = false) {
  * the useful signal is "a few" versus "a lot", and a smoothly growing circle
  * just makes every cluster look slightly different from every other one.
  */
-function clusterPin(count: number, dim = false) {
+const ClusterPin = memo(function ClusterPin({ count, dim = false }: { count: number; dim?: boolean }) {
   const size = count < 10 ? 30 : count < 50 ? 36 : 42;
-  return divIcon({
-    className: '',
-    html: `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" opacity="${dim ? 0.25 : 1}" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 3}"
-        class="fill-map-property" opacity="0.35"/>
-      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 6}"
-        class="fill-map-property" stroke="#fff" stroke-width="2"/>
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
-        fill="#fff" font-size="${count < 100 ? 12 : 10}" font-weight="600"
-        font-family="system-ui, sans-serif">${count}</text>
-    </svg>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-  });
-}
+  return (
+    <svg
+      height={size}
+      opacity={dim ? 0.25 : 1}
+      viewBox={`0 0 ${size} ${size}`}
+      width={size}
+    >
+      <circle
+        className="fill-map-property"
+        cx={size / 2}
+        cy={size / 2}
+        opacity="0.35"
+        r={size / 2 - 3}
+      />
+      <circle
+        className="fill-map-property"
+        cx={size / 2}
+        cy={size / 2}
+        r={size / 2 - 6}
+        stroke="#fff"
+        strokeWidth="2"
+      />
+      <text
+        dominantBaseline="central"
+        fill="#fff"
+        fontFamily="system-ui, sans-serif"
+        fontSize={count < 100 ? 12 : 10}
+        fontWeight="600"
+        textAnchor="middle"
+        x="50%"
+        y="50%"
+      >
+        {count}
+      </text>
+    </svg>
+  );
+});
 
-/**
- * The view the map opens with, before any data has arrived.
- *
- * **`zoom` is not optional and its absence is not cosmetic.** react-leaflet
- * only sets a view when `center != null && zoom != null`, falling back to
- * `bounds` and otherwise doing nothing at all. A map with no view cannot
- * project, so every layer added to it fails to compute `_point`, and the next
- * `setStyle` dies on `undefined.subtract` — taking the whole page down with a
- * client-side exception rather than merely rendering an empty map.
- *
- * That is reachable here on any cold load: both queries are still pending on
- * first render, so there are no points to fit and `bounds` is undefined. It
- * looked intermittent only because a warm react-query cache supplied bounds
- * before the map was built.
- */
-const FALLBACK_CENTER: [number, number] = [31.0, -99.0];
-const FALLBACK_ZOOM = 5;
+/** A numbered stop on the recommended route. */
+const StopPin = memo(function StopPin({ order }: { order: number }) {
+  return (
+    <svg height="24" viewBox="0 0 24 24" width="24">
+      <circle className="fill-map-route" cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" />
+      <text
+        dominantBaseline="central"
+        fill="#fff"
+        fontFamily="system-ui, sans-serif"
+        fontSize="11"
+        fontWeight="700"
+        textAnchor="middle"
+        x="50%"
+        y="50%"
+      >
+        {order}
+      </text>
+    </svg>
+  );
+});
 
-/**
- * One Earth, and only one.
- *
- * Latitude stops at ±85 rather than ±90 because Web Mercator cannot project
- * the poles — they sit at infinity, and asking Leaflet to bound them produces
- * a map that will not settle.
- */
-const WORLD_BOUNDS: LatLngBoundsExpression = [
-  [-85, -180],
-  [85, 180],
-];
+/** A plane, marking a journey nobody is driving. */
+const PlanePin = memo(function PlanePin() {
+  return (
+    <svg height="26" viewBox="0 0 24 24" width="26">
+      <circle className="fill-map-air" cx="12" cy="12" r="11" stroke="#fff" strokeWidth="2" />
+      <path
+        d="M12 4.6c.5 0 .9.4.9.9v3.2l4.7 2.8v1.3l-4.7-1.4v3.3l1.6 1.2v1L12 17.4l-2.5.5v-1l1.6-1.2v-3.3l-4.7 1.4v-1.3l4.7-2.8V5.5c0-.5.4-.9.9-.9z"
+        fill="#fff"
+      />
+    </svg>
+  );
+});
 
 /**
  * Fits the map to the data once it arrives.
  *
- * `MapContainer`'s own `bounds` prop is read exactly once, when the map is
- * constructed, so it cannot do this: positions that load a moment later would
- * leave the map sitting on its fallback view with every pin off screen.
- *
  * **Keyed on which entities are present, never on where they are.** Positions
- * now arrive over the socket every few seconds, and refitting on coordinates
- * would drag the view back to a computed framing under the hands of whoever is
+ * arrive over the socket every few seconds, and refitting on coordinates would
+ * drag the view back to a computed framing under the hands of whoever is
  * reading the map — the more often technicians moved, the less usable it would
  * become. So the map re-fits when somebody comes on shift or a property loads,
  * and holds still while people drive around.
@@ -258,15 +293,166 @@ function FitToData({
 }) {
   const map = useMap();
 
-  // Held in a ref so the effect can read current coordinates without listing
-  // them as a dependency — they change constantly and must not trigger it.
-  const latest = useRef(points);
-  latest.current = points;
+  useEffect(() => {
+    if (!map || suspended || !points.length) return;
+    const bounds = new google.maps.LatLngBounds();
+    for (const [lat, lng] of points) bounds.extend({ lat, lng });
+    map.fitBounds(bounds, 48);
+    // A single point fits to the maximum zoom, which drops the reader onto a
+    // rooftop with no context. Pulled back to the same ceiling the Leaflet
+    // version used.
+    const listener = google.maps.event.addListenerOnce(map, 'idle', () => {
+      const zoom = map.getZoom();
+      if (zoom !== undefined && zoom > 15) map.setZoom(15);
+    });
+    return () => listener.remove();
+    // `points` is deliberately absent: it changes on every socket frame, and
+    // `fitKey` is the honest trigger — who is present, not where they are.
+  }, [map, fitKey, suspended, points]);
+
+  return null;
+}
+
+/**
+ * The zoom, as state, so clustering can be computed from it.
+ *
+ * Grouping is worked out in projected pixels at the current zoom, so it changes
+ * when the zoom does and never when panning — a clustering that reshuffled as
+ * you dragged would read as the data itself moving.
+ */
+function useZoom() {
+  const map = useMap();
+  const [zoom, setZoom] = useState(FALLBACK_ZOOM);
 
   useEffect(() => {
-    if (suspended || !latest.current.length) return;
-    map.fitBounds(latest.current as LatLngBoundsExpression, { padding: [48, 48], maxZoom: 15 });
-  }, [map, fitKey, suspended]);
+    if (!map) return;
+    const sync = () => setZoom((current) => map.getZoom() ?? current);
+    sync();
+    /**
+     * `idle`, not `zoom_changed`.
+     *
+     * `zoom_changed` fires at every level of a scroll or pinch, and each one
+     * re-grouped 552 properties and remounted every marker on the map —
+     * mid-gesture, several times a second. That was the stutter. `idle` fires
+     * once, when the map settles, so the regrouping happens exactly as often as
+     * the answer actually changes.
+     *
+     * The functional update matters too: a pan fires `idle` without changing
+     * the zoom, and returning the same number lets React bail out of the render
+     * entirely rather than reconciling every marker to the same position.
+     */
+    const listener = map.addListener('idle', sync);
+    return () => listener.remove();
+  }, [map]);
+
+  return zoom;
+}
+
+/**
+ * A `google.maps.Polyline`, as a component.
+ *
+ * There is no React wrapper for these in the library, and the imperative
+ * lifecycle is the whole reason this exists: a polyline added on every render
+ * without being removed leaves the old one on the map, and a route redrawn
+ * every few seconds turns into a thicket.
+ */
+function Line({
+  path,
+  className,
+  weight,
+  opacity,
+  dashed = false,
+  zIndex,
+}: {
+  path: readonly [number, number][];
+  className: string;
+  weight: number;
+  opacity: number;
+  dashed?: boolean;
+  zIndex: number;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || !path.length) return;
+    /**
+     * The colour comes from the stylesheet, read off a probe element.
+     *
+     * Google styles its overlays through options rather than CSS classes, so
+     * the design-system tokens these lines are drawn in — `map-route-line`,
+     * `map-air-line` — cannot simply be handed over as a class name. Reading
+     * the computed colour keeps one source of truth: change the token and the
+     * line follows, exactly as it did under Leaflet.
+     */
+    const probe = document.createElement('span');
+    probe.className = className;
+    probe.style.display = 'none';
+    document.body.append(probe);
+    const stroke = getComputedStyle(probe).color || '#2563eb';
+    probe.remove();
+
+    const line = new google.maps.Polyline({
+      map,
+      path: path.map(([lat, lng]) => ({ lat, lng })),
+      strokeColor: stroke,
+      strokeOpacity: dashed ? 0 : opacity,
+      strokeWeight: weight,
+      zIndex,
+      ...(dashed
+        ? {
+            icons: [
+              {
+                icon: {
+                  path: 'M 0,-1 0,1',
+                  strokeOpacity: opacity,
+                  strokeWeight: weight,
+                  scale: 3,
+                },
+                offset: '0',
+                repeat: '14px',
+              },
+            ],
+          }
+        : {}),
+    });
+
+    return () => line.setMap(null);
+  }, [map, path, className, weight, opacity, dashed, zIndex]);
+
+  return null;
+}
+
+/**
+ * The claimed accuracy, drawn to scale.
+ *
+ * A 5m fix and a 300m fix are very different statements, and a map that drew
+ * them as the same dot would be asserting something nobody knows.
+ */
+function AccuracyRing({
+  latitude,
+  longitude,
+  radiusMeters,
+}: {
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map) return;
+    const circle = new google.maps.Circle({
+      map,
+      center: { lat: latitude, lng: longitude },
+      radius: radiusMeters,
+      strokeOpacity: 0.45,
+      strokeWeight: 1,
+      fillOpacity: 0.1,
+      clickable: false,
+      zIndex: 1,
+    });
+    return () => circle.setMap(null);
+  }, [map, latitude, longitude, radiusMeters]);
 
   return null;
 }
@@ -276,14 +462,14 @@ function FitToData({
  *
  * Clustered because this is a portfolio of hundreds: drawn individually at
  * metropolitan zoom they merge into a green smear that reports neither where
- * the work is nor how much of it there is. Three Houston properties within
- * 250m already drew as one pin while the legend said three.
+ * the work is nor how much of it there is. Three Houston properties within 250m
+ * already drew as one pin while the legend said three.
  *
  * **Only properties cluster.** Technicians are the thing being watched, and
  * folding two of them into a badge would hide exactly what somebody opened the
  * map to see.
  */
-function PropertyLayer({
+const PropertyLayer = memo(function PropertyLayer({
   highlighted,
   properties,
   selectedPropertyId,
@@ -292,48 +478,23 @@ function PropertyLayer({
    * The selected technician's buildings, or null when nobody is selected.
    *
    * Null rather than an empty set, because the two mean opposite things: null
-   * is "show everything at full strength", empty is "this person has no
-   * mapped stops", and drawing those the same way would make a technician with
-   * no work look like no selection at all.
+   * is "show everything at full strength", empty is "this person has no mapped
+   * stops", and drawing those the same way would make a technician with no work
+   * look like no selection at all.
    */
   highlighted: ReadonlySet<string> | null;
   properties: readonly PropertyPosition[];
-  /** Picked from the list, so its own popup opens without a second click. */
+  /** Picked from the list, so its own window opens without a second click. */
   selectedPropertyId: string | null;
 }) {
   const map = useMap();
-  const [zoom, setZoom] = useState(() => map.getZoom());
+  const zoom = useZoom();
+  const [openKey, setOpenKey] = useState<string | null>(null);
+
+  const clusters = useMemo(() => clusterByGrid(properties, zoom), [properties, zoom]);
 
   /**
-   * Every property drawn on its own, by id.
-   *
-   * Held rather than looked up through the map, because Leaflet has no index
-   * from our ids to its markers -- and a marker only exists while its property
-   * is not folded into a cluster, so the entry has to come and go with it.
-   */
-  const markers = useRef(new Map<string, LeafletMarker>());
-
-  /**
-   * The badge a property is hiding inside, by that property's id.
-   *
-   * Only reached when no zoom separates it -- two records at identical
-   * coordinates. Opening the group's popup at least answers "it is here, with
-   * another", where opening nothing looks like the click was lost.
-   */
-  const groups = useRef(new Map<string, LeafletMarker>());
-
-  // Grouping is computed in projected pixels at the current zoom, so it changes
-  // when the zoom does and never when panning — a clustering that reshuffled as
-  // you dragged would read as the data itself moving.
-  useMapEvents({ zoomend: () => setZoom(map.getZoom()) });
-
-  const clusters = useMemo(
-    () => clusterByGrid(map, properties, zoom),
-    [map, properties, zoom],
-  );
-
-  /**
-   * Opens the selected property's popup once it is actually drawn.
+   * Opens the selected property's window once it is actually drawn.
    *
    * Depends on `clusters` as well as the selection, and that is the whole
    * trick: selecting flies the map in, the zoom change regroups the clusters,
@@ -341,183 +502,141 @@ function PropertyLayer({
    * marker of its own. Running on the selection alone would fire while it was
    * still inside a cluster and find nothing to open.
    *
-   * Silent when it is still clustered -- two properties within a stone's throw
-   * stay grouped even at this zoom, and forcing them apart would move the map
-   * somewhere the reader did not ask to go.
+   * Falls back to the badge it is hiding in rather than opening nothing —
+   * reached when no zoom separates them, which is two records at identical
+   * coordinates. "It is here, with another" beats a click that looks lost.
    */
   useEffect(() => {
-    if (!selectedPropertyId) return;
-    const own = markers.current.get(selectedPropertyId);
-    (own ?? groups.current.get(selectedPropertyId))?.openPopup();
+    if (!selectedPropertyId) {
+      setOpenKey(null);
+      return;
+    }
+    const own = clusters.find(
+      (cluster) => cluster.members.length === 1 && cluster.members[0].id === selectedPropertyId,
+    );
+    const group = clusters.find((cluster) =>
+      cluster.members.some((member) => member.id === selectedPropertyId),
+    );
+    setOpenKey(own?.key ?? group?.key ?? null);
   }, [clusters, selectedPropertyId]);
 
   return (
     <>
       {clusters.map((cluster) => {
-        // A cluster stays bright if any of its members belong to the selected
-        // technician: dimming it would hide their stop inside a group of
-        // somebody else's properties, which is the case selection exists for.
-        const dim = highlighted
-          ? !cluster.members.some((member) => highlighted.has(member.id))
-          : false;
+        const single = cluster.members.length === 1 ? cluster.members[0] : null;
+        // Everything recedes rather than disappearing when somebody is
+        // selected: a dispatcher looking at one technician still needs to see
+        // what is near them.
+        const dim = Boolean(
+          highlighted && !cluster.members.some((member) => highlighted.has(member.id)),
+        );
+        const position = { lat: cluster.latitude, lng: cluster.longitude };
 
-        return cluster.members.length === 1 ? (
-          <Marker
-            key={cluster.key}
-            icon={propertyPin(dim)}
-            position={[cluster.latitude, cluster.longitude]}
-            ref={(instance) => {
-              const id = cluster.members[0]?.id;
-              if (!id) return;
-              // Removed on unmount, not left behind: a stale marker whose
-              // property has since been folded into a cluster would be asked
-              // to open a popup that is no longer on the map.
-              if (instance) markers.current.set(id, instance);
-              else markers.current.delete(id);
-            }}
-            zIndexOffset={-500}
-          >
-            <Popup>
-              <span className="font-medium">{cluster.members[0]?.name}</span>
-              {/* Only when it says something the name did not. A synced
-                  building is usually named by its own street address, so
-                  printing both put the same line on screen twice. */}
-              {cluster.members[0]?.addressLine1 &&
-              cluster.members[0]?.addressLine1 !== cluster.members[0]?.name ? (
-                <>
-                  <br />
-                  {cluster.members[0]?.addressLine1}
-                </>
-              ) : null}
-              <br />
-              {cluster.members[0]?.city}, {cluster.members[0]?.state}{' '}
-              {cluster.members[0]?.postalCode}
-              {/* Census geocoding interpolates along a street segment rather
-                  than pointing at a roof, so the pin is the right block and
-                  approximately the right house. Saying so is cheaper than
-                  somebody discovering it while standing in a driveway. */}
-              <br />
-              <span className="text-muted-foreground text-xs">Approximate location</span>
-            </Popup>
-          </Marker>
-        ) : (
-          <Marker
-            key={cluster.key}
-            icon={clusterPin(cluster.members.length, dim)}
-            position={[cluster.latitude, cluster.longitude]}
-            ref={(instance) => {
-              for (const member of cluster.members) {
-                if (instance) groups.current.set(member.id, instance);
-                else groups.current.delete(member.id);
-              }
-            }}
-            zIndexOffset={-500}
-            eventHandlers={{
-              // Zoom to the members rather than stepping in by a fixed amount:
-              // a cluster of three neighbours and a cluster spanning a county
-              // need very different zooms to come apart.
-              click: () =>
-                map.fitBounds(
-                  cluster.members.map(
-                    (member) => [member.latitude, member.longitude] as [number, number],
-                  ),
-                  { padding: [64, 64], maxZoom: 17 },
-                ),
-            }}
-          >
-            <Popup>
-              <span className="font-medium">{cluster.members.length} properties here</span>
-              {/* Named, not counted. A badge saying "3" with no way to learn
-                  which three is the thing that sent somebody hunting; and
-                  telling them to zoom was advice that did not work once the
-                  properties were closer together than the grid. */}
-              <ul className="mt-1 mb-0 list-none space-y-0.5 pl-0">
-                {cluster.members.slice(0, 8).map((member) => (
-                  <li key={member.id} className="text-xs">
-                    {member.name}
-                  </li>
-                ))}
-              </ul>
-              {cluster.members.length > 8 ? (
-                <span className="text-muted-foreground text-xs">
-                  and {cluster.members.length - 8} more
-                </span>
-              ) : null}
-            </Popup>
-          </Marker>
+        return (
+          <Fragment key={cluster.key}>
+            <AdvancedMarker
+              onClick={() => {
+                if (single) {
+                  setOpenKey(cluster.key);
+                  return;
+                }
+                // A badge is a request to see inside it, not a thing to read.
+                // Zoom until its members separate rather than opening a window
+                // that can only say "several".
+                const target = zoomToIsolate(cluster.members, cluster.members[0].id, zoom, 21);
+                map?.panTo(position);
+                map?.setZoom(target);
+              }}
+              position={position}
+              title={single ? single.name : `${cluster.members.length} properties`}
+              zIndex={single ? 100 : 90}
+            >
+              {single ? <PropertyPin dim={dim} /> : <ClusterPin count={cluster.members.length} dim={dim} />}
+            </AdvancedMarker>
+
+            {openKey === cluster.key ? (
+              <InfoWindow onCloseClick={() => setOpenKey(null)} position={position}>
+                {single ? (
+                  <>
+                    <span className="font-medium">{single.name}</span>
+                    <br />
+                    {single.addressLine1}
+                    {single.city ? `, ${single.city}` : null}
+                  </>
+                ) : (
+                  <span className="font-medium">{cluster.members.length} properties here</span>
+                )}
+              </InfoWindow>
+            ) : null}
+          </Fragment>
         );
       })}
     </>
   );
-}
+});
 
 /**
- * The drive, along the roads it actually uses.
+ * Memoised, and that is the single biggest thing on this map.
  *
- * Two lines rather than one: a wide pale casing under a narrower solid stroke.
- * That is how every road map draws a route, and for the same reason — a single
- * line the width of a street disappears into the street beneath it, while the
- * casing separates it from the cartography without hiding what it crosses.
+ * Technician positions arrive over the socket every few seconds, re-rendering
+ * this page and everything under it. Without this, each of those frames
+ * reconciled ~40 cluster markers whose props had not changed — every one an
+ * `AdvancedMarker`, which is a real DOM element Google repositions itself.
  *
- * Numbered markers sit at each stop, because the order is the recommendation.
- * Without them the line says where somebody drives and not which end they
- * start from, which is the question the panel exists to answer.
+ * None of this layer's props move when a technician does.
  */
-function RouteLayer({ route }: { route: TechnicianRoute | null }) {
+
+/**
+ * The recommended drive, under the markers.
+ *
+ * Two lines, not one: a wide casing under a narrow line is what keeps a route
+ * legible over both pale suburb and dark motorway.
+ */
+const RouteLayer = memo(function RouteLayer({ route }: { route: TechnicianRoute | null }) {
+  const [openStop, setOpenStop] = useState<string | null>(null);
+
   if (!route?.geometry.length) return null;
 
   return (
     <>
-      <Polyline
-        pathOptions={{ className: 'map-route-casing', weight: 9, opacity: 0.9 }}
-        positions={route.geometry}
+      <Line
+        className="map-route-casing"
+        opacity={0.9}
+        path={route.geometry}
+        weight={9}
+        zIndex={2}
       />
-      <Polyline
-        pathOptions={{ className: 'map-route-line', weight: 4, opacity: 1 }}
-        positions={route.geometry}
-      />
-      {route.stops.map((stop, index) => (
-        <Marker
-          icon={stopPin(index + 1)}
-          key={stop.inspectionId}
-          position={[stop.latitude, stop.longitude]}
-          zIndexOffset={800}
-        >
-          <Popup>
-            <span className="font-medium">
-              {index + 1}. {stop.propertyName}
-            </span>
-            <br />
-            {stop.addressLine1}
-            {stop.city ? `, ${stop.city}` : null}
-          </Popup>
-        </Marker>
-      ))}
+      <Line className="map-route-line" opacity={1} path={route.geometry} weight={4} zIndex={3} />
+      {route.stops.map((stop, index) => {
+        const position = { lat: stop.latitude, lng: stop.longitude };
+        return (
+          <Fragment key={stop.inspectionId}>
+            {/* Above the property pin it sits on, and above the technician,
+                because while a route is shown the order is the thing being
+                read. */}
+            <AdvancedMarker
+              onClick={() => setOpenStop(stop.inspectionId)}
+              position={position}
+              zIndex={800}
+            >
+              <StopPin order={index + 1} />
+            </AdvancedMarker>
+            {openStop === stop.inspectionId ? (
+              <InfoWindow onCloseClick={() => setOpenStop(null)} position={position}>
+                <span className="font-medium">
+                  {index + 1}. {stop.propertyName}
+                </span>
+                <br />
+                {stop.addressLine1}
+                {stop.city ? `, ${stop.city}` : null}
+              </InfoWindow>
+            ) : null}
+          </Fragment>
+        );
+      })}
     </>
   );
-}
-
-/**
- * A numbered stop on the recommended route.
- *
- * Above the property pin it sits on, and above the technician, because while a
- * route is shown the order is the thing being read. It carries its own dark
- * ground so a number stays legible over both the line and the map.
- */
-function stopPin(order: number) {
-  return divIcon({
-    className: '',
-    html: `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="10" class="fill-map-route" stroke="#fff" stroke-width="2"/>
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
-        fill="#fff" font-size="11" font-weight="700"
-        font-family="system-ui, sans-serif">${order}</text>
-    </svg>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
-    popupAnchor: [0, -12],
-  });
-}
+});
 
 /**
  * The journey when there is no drive.
@@ -531,7 +650,7 @@ function stopPin(order: number) {
  * connections this system does not have, and deriving one from distance would
  * be wrong by hours while looking authoritative.
  */
-function AirTravelLayer({ route }: { route: TechnicianRoute | null }) {
+const AirTravelLayer = memo(function AirTravelLayer({ route }: { route: TechnicianRoute | null }) {
   const runs = useMemo(() => {
     if (!route?.airTravel || !route.origin) return [];
     const stop = route.stops.find((entry) => entry.inspectionId === route.airTravel?.inspectionId);
@@ -545,35 +664,24 @@ function AirTravelLayer({ route }: { route: TechnicianRoute | null }) {
   return (
     <>
       {runs.map((run, index) => (
-        <Polyline
+        <Line
+          className="map-air-line"
+          dashed
           key={index}
-          pathOptions={{
-            className: 'map-air-line',
-            weight: 2,
-            opacity: 0.9,
-            dashArray: '6 8',
-          }}
-          positions={run}
+          opacity={0.9}
+          path={run}
+          weight={2}
+          zIndex={2}
         />
       ))}
-      {middle ? <Marker icon={planePin()} position={middle} zIndexOffset={700} /> : null}
+      {middle ? (
+        <AdvancedMarker position={{ lat: middle[0], lng: middle[1] }} zIndex={700}>
+          <PlanePin />
+        </AdvancedMarker>
+      ) : null}
     </>
   );
-}
-
-/** A plane, marking a journey nobody is driving. */
-function planePin() {
-  return divIcon({
-    className: '',
-    html: `<svg width="26" height="26" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="11" class="fill-map-air" stroke="#fff" stroke-width="2"/>
-      <path fill="#fff" d="M12 4.6c.5 0 .9.4.9.9v3.2l4.7 2.8v1.3l-4.7-1.4v3.3l1.6 1.2v1L12 17.4l-2.5.5v-1l1.6-1.2v-3.3l-4.7 1.4v-1.3l4.7-2.8V5.5c0-.5.4-.9.9-.9z"/>
-    </svg>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
-    popupAnchor: [0, -13],
-  });
-}
+});
 
 /**
  * Takes the map to a property picked from the list.
@@ -596,101 +704,28 @@ function FocusProperty({
 }) {
   const map = useMap();
 
-  const latest = useRef(properties);
-  latest.current = properties;
-
   useEffect(() => {
-    if (!selectedPropertyId) return;
-    const property = latest.current.find((entry) => entry.id === selectedPropertyId);
+    if (!map || !selectedPropertyId) return;
+    const property = properties.find((entry) => entry.id === selectedPropertyId);
     if (!property) return;
-
-    // Far enough in that this property is drawn on its own, rather than a
-    // fixed zoom that leaves close neighbours folded into a badge. Starts at
-    // the usual zoom and only goes further when the grouping says it must, so
-    // a property with nothing near it is not slammed into the rooftops.
-    const zoom = zoomToIsolate(
-      map,
-      latest.current,
-      selectedPropertyId,
-      SELECTED_ZOOM,
-      map.getMaxZoom(),
-    );
-
-    const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    map.flyTo([property.latitude, property.longitude], zoom, {
-      animate,
-      duration: 0.6,
-    });
-  }, [map, selectedPropertyId]);
+    map.panTo({ lat: property.latitude, lng: property.longitude });
+    // Past the clustering ceiling, so the property is drawn on its own rather
+    // than still folded into a badge when the reader arrives.
+    map.setZoom(18);
+    // `properties` is read but intentionally not depended on; see the
+    // docblock — the array is rebuilt on every refetch and would fly the map
+    // back to the same place every couple of minutes.
+  }, [map, selectedPropertyId, properties]);
 
   return null;
 }
 
 /**
- * Lets the map zoom out far enough to actually show the whole world.
+ * Takes the map to a technician picked from the roster.
  *
- * The floor used to be a fixed `minZoom={3}`, which on a console-sized pane
- * stops with a third of the planet off screen -- so the button greyed out with
- * the map still cropped, and a technician reporting from outside Texas could
- * not be brought into the same view as the properties. It read as the map being
- * stuck, which is exactly what it was.
- *
- * The floor is now whatever zoom makes one Earth fit this pane, recomputed when
- * the pane changes size. So "as far out as the world" is always reachable, and
- * never further -- which is the part `minZoom` was there to protect, since past
- * that point the world starts repeating.
- *
- * `Math.floor` rather than `ceil`: the fitting zoom is fractional, and rounding
- * up leaves the world overflowing the pane by a few degrees, which is the whole
- * complaint. Rounding down letterboxes it instead.
- */
-function WorldMinZoom() {
-  const map = useMap();
-
-  useEffect(() => {
-    const apply = () => {
-      const fits = map.getBoundsZoom(WORLD_BOUNDS);
-      // Zero-sized containers and a not-yet-measured pane both produce
-      // nonsense here; leaving the floor alone is better than setting one from
-      // a bad measurement.
-      if (!Number.isFinite(fits)) return;
-
-      const floor = Math.max(0, Math.floor(fits));
-      if (floor !== map.getMinZoom()) map.setMinZoom(floor);
-    };
-
-    apply();
-    map.on('resize', apply);
-    return () => {
-      map.off('resize', apply);
-    };
-  }, [map]);
-
-  return null;
-}
-
-/**
- * How close the map goes when somebody is picked from the roster.
- *
- * Street level rather than rooftop. The position is a Balanced-accuracy fix
- * from a handset, good to a few tens of metres, so a closer zoom would imply a
- * precision the dot does not have -- and a technician standing in a garden
- * would appear to be in next door's kitchen.
- */
-const SELECTED_ZOOM = 15;
-
-/**
- * Moves the map to whoever was selected in the roster.
- *
- * **Keyed on the selection, never on the position.** Positions arrive every
- * fifteen seconds now, and re-centring on each one would drag the map out from
- * under anybody who had panned away to look at something — following a moving
- * dot is a different feature, and one that has to be asked for rather than
- * imposed the moment a name is clicked.
- *
- * Falls back to the technician's stops when they have no position: somebody who
- * has not opened the app yet still has a round, and showing where their work is
- * answers more than leaving the map where it was.
+ * Falls back to their work when they have no position yet — a technician who
+ * has not opened the app today still has stops, and framing those answers
+ * "where is this person working" when "where are they" has no answer.
  */
 function FocusSelected({
   fallback,
@@ -703,30 +738,71 @@ function FocusSelected({
 }) {
   const map = useMap();
 
-  // Read through refs so the effect depends on the selection alone. Both change
-  // as fixes arrive, and listing them would re-run this every fifteen seconds.
-  const latest = useRef({ fallback, position });
-  latest.current = { fallback, position };
-
   useEffect(() => {
-    if (!selectedTechnicianId) return;
-    const { fallback: stops, position: at } = latest.current;
+    if (!map || !selectedTechnicianId) return;
 
-    // Animation is a courtesy, not the point: somebody who has asked for less
-    // motion gets the same destination without the flight.
-    const animate = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-    if (at) {
-      map.flyTo([at.latitude, at.longitude], SELECTED_ZOOM, {
-        animate,
-        duration: 0.6,
-      });
+    if (position) {
+      map.panTo({ lat: position.latitude, lng: position.longitude });
+      map.setZoom(15);
       return;
     }
-    if (stops.length) map.fitBounds(stops, { padding: [64, 64], maxZoom: SELECTED_ZOOM });
-  }, [map, selectedTechnicianId]);
+
+    if (!fallback.length) return;
+    const bounds = new google.maps.LatLngBounds();
+    for (const [lat, lng] of fallback) bounds.extend({ lat, lng });
+    map.fitBounds(bounds, 64);
+    // `fallback` and `position` change shape on every refetch; the selection is
+    // the honest trigger.
+  }, [map, selectedTechnicianId, fallback, position]);
 
   return null;
+}
+
+/** Said plainly, rather than rendering a grey rectangle nobody can diagnose. */
+function MapUnavailable({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-card text-muted-foreground flex h-full w-full items-center justify-center rounded-lg border p-6 text-center text-sm">
+      <p>{children}</p>
+    </div>
+  );
+}
+
+/**
+ * The map, or the reason there is not one.
+ *
+ * **The page has to survive Google refusing us.** When the API rejects the key
+ * — a referrer restriction that does not cover the host is the easy way to get
+ * there — the map never initialises, and the first `AdvancedMarker` to mount
+ * calls `getRootNode` on an element that was never created. That exception is
+ * uncaught, so the route's error boundary replaced the whole technician map
+ * page with "This page could not be displayed", roster and property list
+ * included.
+ *
+ * A third-party auth failure is not a reason to lose everything beside the map.
+ * Nothing that touches `google.maps` mounts until the API says it is ready, so
+ * the failure stays the size of the map.
+ */
+function MapOrReason({ children }: { children: React.ReactNode }) {
+  const status = useApiLoadingStatus();
+
+  if (status === APILoadingStatus.AUTH_FAILURE)
+    return (
+      <MapUnavailable>
+        Google rejected this key for this site.
+        <br />
+        Add <code className="font-mono">{globalThis.location?.origin ?? 'this origin'}/*</code> to
+        the key&rsquo;s HTTP referrer restrictions in the Cloud console.
+      </MapUnavailable>
+    );
+
+  if (status === APILoadingStatus.FAILED)
+    return (
+      <MapUnavailable>Google Maps could not be loaded. Reloading usually clears it.</MapUnavailable>
+    );
+
+  // NOT_LOADED and LOADING both render the children: the `<Map>` element has to
+  // be mounted for the library to begin loading at all.
+  return <>{children}</>;
 }
 
 export function TechnicianMap({
@@ -746,13 +822,41 @@ export function TechnicianMap({
   selectedPropertyId?: string | null;
   selectedTechnicianId?: string | null;
 }) {
+  const [openTechnician, setOpenTechnician] = useState<string | null>(null);
+
+  /**
+   * The map follows the console, not the operating system.
+   *
+   * `resolvedTheme` rather than `theme`, because `theme` can be the string
+   * `system` and Google needs an answer. A light map inside a dark console was
+   * the brightest thing on the screen by a wide margin — and this console is
+   * read at night, from Manila, by people looking at a Texas afternoon.
+   *
+   * Google's own `FOLLOW_SYSTEM` is deliberately not used: it follows the
+   * operating system, which is a different question from what the reader chose
+   * in the theme switcher two inches away.
+   */
+  const { resolvedTheme } = useTheme();
+  const colorScheme = resolvedTheme === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT;
+
+  /**
+   * Imagery and tilt, chosen by the reader and remembered per browser.
+   *
+   * Google's own `mapTypeControl` was briefly used and does most of this, but
+   * it forgets the choice between visits and has no notion of tilt — so "3D"
+   * was unreachable through it. Ours is off to the left, clear of Google's own
+   * controls in the other three corners.
+   */
+  const [mapPreferences, setMapPreferences] = useMapPreferences();
+
   // Fit to everything, technicians and properties alike, rather than centring
   // on a fixed point: this office works one metropolitan area today, but a
   // hard-coded centre is the kind of thing that silently stops making sense
   // when a second one is added.
-  // Not simply everything. A handset reporting from another continent -- a
-  // test device, a phone that travelled -- would otherwise drag the view out
-  // to a world map on which neither it nor the properties could be read. The
+  //
+  // Not simply everything. A handset reporting from another continent — a test
+  // device, a phone that travelled — would otherwise drag the view out to a
+  // world map on which neither it nor the properties could be read. The
   // properties anchor the frame; an outlier is still drawn, it just does not
   // get to decide the zoom.
   const points = useMemo(() => pointsToFit(properties, positions), [positions, properties]);
@@ -786,118 +890,110 @@ export function TechnicianMap({
     [positions, properties],
   );
 
+  if (!API_KEY)
+    return (
+      <MapUnavailable>
+        The map needs a Google Maps browser key.
+        <br />
+        Set <code className="font-mono">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> and rebuild.
+      </MapUnavailable>
+    );
+
   return (
-    <MapContainer
-      center={FALLBACK_CENTER}
-      zoom={FALLBACK_ZOOM}
-      className="h-full w-full rounded-lg"
-      // Leaflet tiles the world endlessly on the horizontal axis, so zooming
-      // out drew the Earth three times over with the properties repeated in
-      // each copy — and a technician could appear to be in two places at once.
-      // `maxBounds` pins the map to one world, and the viscosity makes the
-      // edge firm rather than springy.
-      maxBounds={WORLD_BOUNDS}
-      maxBoundsViscosity={1}
-      // No `minZoom` here on purpose: `WorldMinZoom` sets it from the pane's
-      // own size on mount and on resize. A constant cannot be right for both a
-      // wide console and a phone, and the one that was here stopped short of
-      // the whole world on both.
-      scrollWheelZoom
-    >
-      <WorldMinZoom />
-      <FitToData
-        fitKey={fitKey}
-        points={points}
-        suspended={Boolean(selectedTechnicianId) || Boolean(selectedPropertyId)}
-      />
-      <FocusProperty properties={properties} selectedPropertyId={selectedPropertyId} />
-      <FocusSelected
-        fallback={selectedStops}
-        position={selectedPosition}
-        selectedTechnicianId={selectedTechnicianId}
-      />
-      {/* `noWrap` stops the tile layer itself repeating. Both this and the
-          container's `maxBounds` are needed: one bounds the view, the other
-          bounds what is painted, and without the pair the copies come back at
-          the edges. */}
-      {/* `maxZoom` above `maxNativeZoom` on purpose. OpenStreetMap serves
-          tiles to 19; past that Leaflet upscales the last real tile rather
-          than requesting one that does not exist. The image softens, and in
-          exchange the map keeps zooming — which is the only way to separate
-          properties a few metres apart, because the cluster grid is a fixed
-          number of pixels. At 18 that grid was about thirty metres wide, so a
-          cul-de-sac could never be opened at all. */}
-      <TileLayer
-        attribution={ATTRIBUTION}
-        maxNativeZoom={19}
-        maxZoom={21}
-        noWrap
-        url={TILE_URL}
-      />
+    <div className="relative h-full w-full">
+      <APIProvider apiKey={API_KEY}>
+        <MapOrReason>
+        <GoogleMap
+          className="h-full w-full rounded-lg"
+          colorScheme={colorScheme}
+          defaultCenter={FALLBACK_CENTER}
+          defaultZoom={FALLBACK_ZOOM}
+          disableDefaultUI={false}
+          gestureHandling="greedy"
+          mapId={MAP_ID}
+          // Ours instead, which remembers the choice and can also tilt.
+          mapTypeControl={false}
+          mapTypeId={mapPreferences.mapType}
+          // One world. Google repeats the map horizontally when zoomed out, so
+          // without this a technician can appear in two places at once and the
+          // properties are drawn three times over.
+          restriction={{ latLngBounds: WORLD_BOUNDS, strictBounds: false }}
+          streetViewControl={false}
+          /* 45° is what Google's own 3D control gives, and the only angle the
+             vector basemap has buildings modelled for. Raster imagery ignores
+             it rather than refusing, so the setting is harmless where it does
+             nothing. */
+          tilt={mapPreferences.tilted ? 45 : 0}
+        >
+          <FitToData
+            fitKey={fitKey}
+            points={points}
+            suspended={Boolean(selectedTechnicianId) || Boolean(selectedPropertyId)}
+          />
+          <FocusProperty properties={properties} selectedPropertyId={selectedPropertyId} />
+          <FocusSelected
+            fallback={selectedStops}
+            position={selectedPosition}
+            selectedTechnicianId={selectedTechnicianId}
+          />
 
-      {/* Under the markers and over the properties: the route is context for
-          the pins, not a thing to be read on its own. */}
-      <RouteLayer route={route} />
-      <AirTravelLayer route={route} />
+          {/* Under the markers and over the properties: the route is context for
+              the pins, not a thing to be read on its own. */}
+          <RouteLayer route={route} />
+          <AirTravelLayer route={route} />
 
-      {/* Properties first so they paint underneath, and pinned below the
-          technicians by z-index as well — marker order alone does not decide
-          it once Leaflet starts sorting by latitude. */}
-      <PropertyLayer
-        highlighted={highlightedBuildingIds}
-        properties={properties}
-        selectedPropertyId={selectedPropertyId}
-      />
+          <PropertyLayer
+            highlighted={highlightedBuildingIds}
+            properties={properties}
+            selectedPropertyId={selectedPropertyId}
+          />
 
-      {positions.map((position) => {
-        const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
-        // Everybody else recedes rather than disappearing. A dispatcher looking
-        // at one technician still needs to see who is near them.
-        const dim = Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
-        return (
-          <Fragment key={position.id}>
-            {/* The claimed accuracy, drawn to scale. A 5m fix and a 300m fix
-                are very different statements, and a map that drew them as the
-                same dot would be asserting something nobody knows.
-
-                A sibling of the marker rather than a child, because only
-                `Popup` and `Tooltip` belong inside a `Marker`. Nesting it did
-                work — `useLayerLifecycle` falls back to `context.map`, and a
-                `Marker` sets `overlayContainer`, not `layerContainer` — but
-                relying on that is relying on a detail nothing guarantees.
-                Drawn before the marker so it sits underneath. */}
-            {position.accuracyMeters && position.accuracyMeters > 25 ? (
-              <Circle
-                center={[position.latitude, position.longitude]}
-                radius={position.accuracyMeters}
-                pathOptions={{
-                  className: 'map-accuracy-ring',
-                  weight: 1,
-                  opacity: 0.45,
-                  fillOpacity: 0.1,
-                }}
-              />
-            ) : null}
-            <Marker
-              icon={technicianPin(stale, dim)}
-              position={[position.latitude, position.longitude]}
-              zIndexOffset={500}
-            >
-              <Popup>
-                <span className="font-medium">
-                  {position.technician?.displayName ?? 'Unknown technician'}
-                </span>
-                <br />
-                {formatRelative(position.recordedAt)}
-                {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
-                {position.batteryPercent === null ? null : (
-                  <> · {position.batteryPercent}% battery</>
-                )}
-              </Popup>
-            </Marker>
-          </Fragment>
-        );
-      })}
-    </MapContainer>
+          {positions.map((position) => {
+            const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
+            const dim =
+              Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
+            const at = { lat: position.latitude, lng: position.longitude };
+            return (
+              <Fragment key={position.id}>
+                {position.accuracyMeters && position.accuracyMeters > 25 ? (
+                  <AccuracyRing
+                    latitude={position.latitude}
+                    longitude={position.longitude}
+                    radiusMeters={position.accuracyMeters}
+                  />
+                ) : null}
+                <AdvancedMarker
+                  onClick={() => setOpenTechnician(position.id)}
+                  position={at}
+                  title={position.technician?.displayName ?? 'Unknown technician'}
+                  zIndex={500}
+                >
+                  <TechnicianPin dim={dim} stale={stale} />
+                </AdvancedMarker>
+                {openTechnician === position.id ? (
+                  <InfoWindow onCloseClick={() => setOpenTechnician(null)} position={at}>
+                    <span className="font-medium">
+                      {position.technician?.displayName ?? 'Unknown technician'}
+                    </span>
+                    <br />
+                    {formatRelative(position.recordedAt)}
+                    {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
+                    {position.batteryPercent === null ? null : (
+                      <> · {position.batteryPercent}% battery</>
+                    )}
+                  </InfoWindow>
+                ) : null}
+              </Fragment>
+            );
+          })}
+        </GoogleMap>
+        </MapOrReason>
+      </APIProvider>
+      {/* Outside `APIProvider` on purpose: the settings still open, and still
+          remember, when Google will not load at all. */}
+      <div className="absolute top-3 left-3 z-10">
+        <MapSettings onChange={setMapPreferences} preferences={mapPreferences} />
+      </div>
+    </div>
   );
 }

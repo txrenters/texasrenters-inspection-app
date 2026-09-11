@@ -37,6 +37,7 @@ import type {
   AdminRoleSummary,
   AdminTechnician,
   AdminUnit,
+  ComparisonReport,
   AdminUser,
   AdminUserDetail,
   AiProviderName,
@@ -129,6 +130,7 @@ export const keys = {
   inspectionAreas: (id: string) => ['admin', 'inspection', id, 'areas'] as const,
   evidenceRequests: (id: string) => ['admin', 'inspection', id, 'evidence-requests'] as const,
   inspectionComparison: (id: string) => ['admin', 'inspection', id, 'comparison'] as const,
+  comparisonReport: (id: string) => ['admin', 'inspection', id, 'comparison-report'] as const,
   inspectionPets: (id: string) => ['admin', 'inspection', id, 'pets'] as const,
   inspectionCharges: (id: string) => ['admin', 'inspection', id, 'charges'] as const,
   chargeReport: (id: string) => ['admin', 'inspection', id, 'charge-report'] as const,
@@ -427,6 +429,14 @@ export const useChargeReport = (id: string, enabled = true) =>
     queryKey: keys.chargeReport(id),
     queryFn: ({ signal }) =>
       api<AdminChargeReport>(`/api/v1/admin/inspections/${id}/charge-report`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
+/** Move-in beside move-out, as one printable document. */
+export const useComparisonReport = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.comparisonReport(id),
+    queryFn: ({ signal }) =>
+      api<ComparisonReport>(`/api/v1/admin/inspections/${id}/comparison-report`, { signal }),
     enabled: Boolean(id) && enabled,
   });
 export const useChargeRules = (enabled = true) =>

@@ -100,6 +100,7 @@ import {
 import { AdminService } from './admin.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
+import { ComparisonReportService } from './comparison-report.service';
 import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
 import { AreaEvidenceService } from './area-evidence.service';
@@ -146,6 +147,7 @@ export class AdminController {
     private readonly floorPlans: FloorPlanAdminService,
     private readonly reportShares: ReportShareService,
     private readonly comparison: ComparisonService,
+    private readonly comparisonReport: ComparisonReportService,
     private readonly locations: TechnicianLocationService,
     private readonly propertyGeocoding: PropertyGeocodingService,
     private readonly passwordResets: PasswordResetService,
@@ -801,6 +803,20 @@ export class AdminController {
   @RequirePermissions('inspections:read')
   inspectionComparison(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.comparison.get(request.user, id);
+  }
+  /**
+   * The comparison as a printable document: both inspections side by side.
+   *
+   * Same permission as reading the comparison itself -- it is the same
+   * information, laid out for a person rather than a list.
+   */
+  @Get('inspections/:inspectionId/comparison-report')
+  @RequirePermissions('inspections:read')
+  inspectionComparisonReport(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.comparisonReport.report(request.user, id);
   }
   @Post('inspections/:inspectionId/comparison/generate')
   @RequirePermissions('inspections:manage')

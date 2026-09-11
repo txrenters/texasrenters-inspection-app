@@ -1,5 +1,3 @@
-import type { Map as LeafletMap } from 'leaflet';
-
 /**
  * Grouping property pins that land on top of each other.
  *
@@ -11,7 +9,34 @@ import type { Map as LeafletMap } from 'leaflet';
  * react-leaflet v4 and this console is on v5 with React 19. Clustering a
  * handful of points is a grid and a count, and that is cheaper than a
  * dependency whose compatibility nobody can promise.
+ *
+ * Provider-agnostic. This took a Leaflet map and called `map.project`, which
+ * is plain Web Mercator — the test always stubbed it with four lines of
+ * arithmetic, which is the tell. Doing the projection here rather than
+ * borrowing it means the grouping rule does not change when the map underneath
+ * it does.
  */
+
+/**
+ * Where a coordinate lands in the world pixel plane at a given zoom.
+ *
+ * The Web Mercator projection every slippy map shares: the world is 256px at
+ * zoom 0 and doubles each level, longitude is linear, and latitude goes through
+ * the Gudermannian so that a rhumb line stays straight.
+ *
+ * Latitude is clamped to the Mercator limit. Beyond ±85.0511° the projection
+ * runs to infinity, and a point at either pole would otherwise produce a cell
+ * index no other point could share — one pin per cluster, silently.
+ */
+export function projectToPixels(latitude: number, longitude: number, zoom: number) {
+  const scale = 256 * 2 ** zoom;
+  const clamped = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  const radians = (clamped * Math.PI) / 180;
+  return {
+    x: ((longitude + 180) / 360) * scale,
+    y: ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * scale,
+  };
+}
 
 /**
  * How close two pins must be, in screen pixels, before they merge.
@@ -81,7 +106,6 @@ export interface Cluster<T extends Clusterable> {
  * group instead.
  */
 export function zoomToIsolate<T extends Clusterable>(
-  map: Parameters<typeof clusterByGrid>[0],
   items: readonly T[],
   id: string,
   from: number,
@@ -89,7 +113,7 @@ export function zoomToIsolate<T extends Clusterable>(
   gridPx: number = CLUSTER_GRID_PX,
 ): number {
   for (let zoom = Math.min(from, max); zoom <= max; zoom += 1) {
-    const own = clusterByGrid(map, items, zoom, gridPx).find((cluster) =>
+    const own = clusterByGrid(items, zoom, gridPx).find((cluster) =>
       cluster.members.some((member) => member.id === id),
     );
     if (own && own.members.length === 1) return zoom;
@@ -99,7 +123,6 @@ export function zoomToIsolate<T extends Clusterable>(
 }
 
 export function clusterByGrid<T extends Clusterable>(
-  map: Pick<LeafletMap, 'project'>,
   points: readonly T[],
   zoom: number,
   gridPx: number = CLUSTER_GRID_PX,
@@ -117,7 +140,7 @@ export function clusterByGrid<T extends Clusterable>(
   const cells = new Map<string, T[]>();
 
   for (const point of points) {
-    const projected = map.project([point.latitude, point.longitude], zoom);
+    const projected = projectToPixels(point.latitude, point.longitude, zoom);
     const cell = `${Math.floor(projected.x / gridPx)}:${Math.floor(projected.y / gridPx)}`;
     const existing = cells.get(cell);
     if (existing) existing.push(point);

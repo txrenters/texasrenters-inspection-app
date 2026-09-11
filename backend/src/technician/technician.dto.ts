@@ -126,6 +126,20 @@ export class TechnicianInspectionListQueryDto {
   @IsString()
   @MaxLength(120)
   search?: string;
+
+  /**
+   * Only what is scheduled for today, in Texas.
+   *
+   * Asked for by a technician using the app in the field: an outstanding
+   * inspection from weeks ago sorts above today's round, because the list is
+   * ordered by schedule and the oldest comes first. A flag rather than a date
+   * range because the server owns what "today" means -- a handset set to
+   * another zone would otherwise ask for the wrong day and be given it.
+   */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  dueToday?: boolean;
 }
 
 export class TechnicianFindingsQueryDto {
