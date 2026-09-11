@@ -33,6 +33,9 @@ export async function drainLocationQueue(): Promise<{ sent: number; remaining: n
           // and a queue written by an older build has neither key at all.
           const motion = normaliseMotion(fix);
           return {
+            // The queue's own id, which is what makes a retry idempotent. It
+            // has always existed and never left the device.
+            deviceFixId: fix.id,
             latitude: fix.latitude,
             longitude: fix.longitude,
             recordedAt: fix.recordedAt,

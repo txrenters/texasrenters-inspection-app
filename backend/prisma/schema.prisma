@@ -2129,6 +2129,19 @@ model TechnicianLocationPing {
   organizationId String @db.Uuid
   technicianId   String @db.Uuid
 
+  /// The id the handset gave this fix, so an upload can be retried safely.
+  ///
+  /// The device has always kept one -- the queue calls it "stable across
+  /// retries, so a duplicate send is recognisable" -- and the server has never
+  /// received it. So a batch whose response was lost got sent again and written
+  /// again: production holds fixes stored twice, and one stored three times,
+  /// each from a separate upload with identical coordinates.
+  ///
+  /// Nullable because every row that predates this has no such id, and
+  /// Postgres treats NULLs as distinct, so the unique index below leaves them
+  /// all alone rather than refusing the second one.
+  deviceFixId String?
+
   /// `Decimal(9, 6)`, not the `Decimal(6, 5)` the floor-plan markers use. That
   /// type holds a single integer digit and cannot represent a longitude at all
   /// — -97.7431 would overflow it. Six decimal places is roughly 11cm, far
@@ -2173,6 +2186,12 @@ model TechnicianLocationPing {
 
   organization Organization @relation(fields: [organizationId], references: [id])
   technician   UserProfile  @relation("TechnicianLocation", fields: [technicianId], references: [id])
+
+  /// What makes a retried upload idempotent. Scoped to the technician because
+  /// the id is generated on the device and two handsets can produce the same
+  /// one; scoping it means a collision between them is impossible rather than
+  /// merely unlikely.
+  @@unique([technicianId, deviceFixId])
 
   /// One technician's trail, in order.
   @@index([technicianId, recordedAt])

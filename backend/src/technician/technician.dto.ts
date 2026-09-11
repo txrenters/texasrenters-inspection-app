@@ -375,6 +375,11 @@ export class RemoveMobilePushDeviceDto {
  * will refuse. This layer only makes sure the numbers are numbers.
  */
 export class TechnicianLocationFixDto {
+  /**
+   * The handset's id for this fix. Bounded, because it is used as a uniqueness
+   * key and an unbounded string from a device is an unbounded index entry.
+   */
+  @IsOptional() @IsString() @MaxLength(64) deviceFixId?: string;
   @Type(() => Number) @IsNumber() @Min(-90) @Max(90) latitude!: number;
   @Type(() => Number) @IsNumber() @Min(-180) @Max(180) longitude!: number;
   /** The handset's clock at the moment of the fix, not when it was sent. */

@@ -278,3 +278,48 @@ describe('re-arming tracking', () => {
     await expect(ensureShiftTracking()).resolves.toBeDefined();
   });
 });
+
+/**
+ * Only one recorder at a time.
+ *
+ * Production held two genuinely different fixes -- three to twenty-two metres
+ * apart -- stamped with the same millisecond and uploaded in one batch, which
+ * drew two markers for one technician. A background task registered in an
+ * earlier session outlives the app, so falling through to the foreground
+ * watcher could leave both delivering into the same queue.
+ */
+describe('the two recording modes', () => {
+  it('stops the background task before watching in the foreground', async () => {
+    // Background refused, but a task from a previous session is still alive.
+    mockRequestBackground.mockResolvedValue({ granted: false });
+    mockIsRegistered.mockResolvedValue(true);
+
+    const result = await startShiftTracking();
+
+    expect(result).toEqual({ started: true, mode: 'FOREGROUND_ONLY' });
+    expect(mockStopUpdates).toHaveBeenCalled();
+    expect(mockWatchPosition).toHaveBeenCalled();
+  });
+
+  it('drops a foreground watch before starting the background task', async () => {
+    // The same duplicate arriving the other way round.
+    mockRequestBackground.mockResolvedValue({ granted: false });
+    mockIsRegistered.mockResolvedValue(false);
+    const remove = jest.fn();
+    mockWatchPosition.mockResolvedValue({ remove });
+    await startShiftTracking();
+
+    mockRequestBackground.mockResolvedValue({ granted: true });
+    await startShiftTracking();
+
+    expect(remove).toHaveBeenCalled();
+  });
+
+  it('leaves nothing running after a stop', async () => {
+    mockIsRegistered.mockResolvedValue(true);
+    await stopShiftTracking();
+
+    expect(mockStopUpdates).toHaveBeenCalled();
+  });
+});
+

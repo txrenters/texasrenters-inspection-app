@@ -177,6 +177,19 @@ async function beginShiftTracking(): Promise<ShiftStartResult> {
  */
 async function watchInForeground() {
   if (foregroundWatch) return;
+
+  /**
+   * Only one recorder at a time.
+   *
+   * A background task registered in an earlier session outlives the app, so
+   * reaching here -- background permission refused, or the task refusing to
+   * start -- could leave it still delivering while a foreground watch started
+   * alongside it. Both append to the same queue, and production shows the
+   * result: two genuinely different fixes, three to twenty-two metres apart,
+   * stamped with the same millisecond and uploaded in one batch. The map drew
+   * two markers for one person.
+   */
+  await stopBackgroundUpdates();
   foregroundWatch = await Location.watchPositionAsync(
     {
       accuracy: Location.Accuracy.Balanced,
@@ -193,6 +206,12 @@ async function watchInForeground() {
 
 /** Whether the OS accepted the background task. */
 async function startBackgroundUpdates(): Promise<boolean> {
+  // The mirror of the guard in `watchInForeground`: a foreground watch left
+  // running alongside the task is the same duplicate, arriving the other way
+  // round.
+  foregroundWatch?.remove();
+  foregroundWatch = null;
+
   try {
     /**
      * Whether it is *delivering*, not whether it is registered.
@@ -241,9 +260,16 @@ async function startBackgroundUpdates(): Promise<boolean> {
 export async function stopShiftTracking() {
   foregroundWatch?.remove();
   foregroundWatch = null;
+  await stopBackgroundUpdates();
+}
 
-  // Guarded: stopping a task that was never started throws on Android, and
-  // this is called on sign-out where the shift may never have begun.
+/**
+ * Stops the registered task, if there is one.
+ *
+ * Guarded: stopping a task that was never started throws on Android, and this
+ * is reached from sign-out, where the shift may never have begun.
+ */
+async function stopBackgroundUpdates() {
   if (!(await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false))) return;
   await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
 }
