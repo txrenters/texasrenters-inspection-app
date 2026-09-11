@@ -1,6 +1,6 @@
 'use client';
 
-import { LayersIcon } from 'lucide-react';
+import { ChevronDownIcon, LayersIcon } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -110,8 +110,18 @@ export function MapSettings({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button aria-label="Map settings" size="icon" variant="secondary">
+        {/* Labelled, not an icon.
+            
+            This was a bare `LayersIcon` in an icon button, and it was missed
+            entirely: a small unlabelled glyph in the corner of a map full of
+            other small glyphs reads as decoration. Naming the current map type
+            makes it obviously a control, and says what it is currently set to
+            without opening it. */}
+        <Button aria-label="Change the map type" size="sm" variant="secondary">
           <LayersIcon />
+          {MAP_TYPES[preferences.mapType]}
+          {preferences.tilted ? ' · 3D' : null}
+          <ChevronDownIcon className="opacity-60" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-44">
