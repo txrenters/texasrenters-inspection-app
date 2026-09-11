@@ -24,6 +24,9 @@ export const PERMISSION_KEYS = [
   'technicians:locate',
   'technicians:manage',
   'technicians:provision',
+  'technicians:skills',
+  'planning:read',
+  'planning:publish',
   'findings:read',
   'findings:review',
   'comparisons:review',
@@ -161,7 +164,7 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
       {
         key: 'technicians:read',
         label: 'View technicians',
-        description: 'See technician accounts, availability, and assigned workloads.',
+        description: 'See technician accounts, their skills, and assigned workloads.',
       },
       {
         key: 'technicians:locate',
@@ -178,6 +181,30 @@ export const PERMISSION_CATALOG: PermissionGroup[] = [
         key: 'technicians:provision',
         label: 'Create technicians',
         description: 'Provision a new mobile technician account and temporary password.',
+      },
+      {
+        key: 'technicians:skills',
+        label: 'Manage technician skills',
+        description:
+          'Edit the skill catalog, grant and revoke skills on a technician, and set which skills each kind of inspection requires. Scheduling reads these to decide who is eligible for a visit.',
+      },
+    ],
+  },
+  {
+    group: 'Scheduling',
+    description: 'Quarterly inspection plans, from draft to published work.',
+    permissions: [
+      {
+        key: 'planning:read',
+        label: 'View quarterly plans',
+        description:
+          'Open a quarter plan and see the tenant order, the technician on each stop, and the routes.',
+      },
+      {
+        key: 'planning:publish',
+        label: 'Publish quarterly plans',
+        description:
+          'Edit a draft plan and publish it. Publishing creates every inspection in the quarter and books each visit in Jobber, and there is no bulk undo — this is the moment a plan becomes several hundred real appointments.',
       },
     ],
   },
@@ -285,9 +312,11 @@ export function resolveEffectivePermissions(
  * **Irreversibility.** `inspections:delete` hard-deletes an inspection *and its
  * media* — there is no restore, and a machine caller looping over a list is
  * exactly how that becomes catastrophic rather than merely bad. Finalization
- * freezes evidence permanently, and charge review is money. A person, holding
- * the permission and looking at the screen, may do these things; a credential
- * left in a third party's configuration file may not.
+ * freezes evidence permanently, and charge review is money. `planning:publish`
+ * turns a draft into several hundred inspections and several hundred Jobber
+ * visits in one call, with no bulk undo behind it. A person, holding the
+ * permission and looking at the screen, may do these things; a credential left
+ * in a third party's configuration file may not.
  *
  * Enforced where keys are issued, not only where they are used, so a key that
  * should never have existed cannot be created in the first place.
@@ -300,6 +329,7 @@ export const MACHINE_FORBIDDEN_PERMISSIONS = [
   'inspections:delete',
   'properties:delete-areas',
   'inspections:finalize',
+  'planning:publish',
   'charges:review',
 ] as const satisfies readonly PermissionKey[];
 

@@ -15,7 +15,22 @@ import {
   propertywarePortfolioReportSchema,
   propertywareSchemas,
 } from './propertyware.schemas';
+import {
+  PROPERTYWARE_DOCUMENT_PAGE_SIZE,
+  type PropertywareDocument,
+  type PropertywareDocumentEntity,
+} from './propertyware.inspection-docs';
 import type { PropertywarePage, PropertywarePageQuery } from './propertyware.types';
+
+/**
+ * How long a single document download may take.
+ *
+ * Minutes, not seconds. An inspection report carries every photograph the
+ * inspector took — 408 of them in one 81 MB file at 7306 Cypress Prairie — and
+ * the page timeout that suits a list of records would abort every large report
+ * and quietly leave only the small ones imported.
+ */
+const DOCUMENT_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Report dates arrive as MM/DD/YYYY; the rest of the pipeline expects ISO. */
 export function reportDate(value: string | undefined): string | undefined {
@@ -349,6 +364,118 @@ export class PropertywareClient {
       offset,
       limit,
     };
+  }
+
+  /**
+   * The files Propertyware holds against one entity.
+   *
+   * `/docs` is permitted to this API client where `/inspections`, `/leases`,
+   * `/portfolios` and `/documents` are all denied — verified against the live
+   * API, and the reason the inspection backfill goes through documents rather
+   * than through the inspection module it would obviously belong in.
+   *
+   * `entityType` is required and rejects anything outside its own list, so a
+   * blank one answers "entityType cannot be blank" rather than returning
+   * everything. `BUILDING` is the one that matters: Propertyware files every
+   * report against the property, and we already hold all 577 building ids.
+   */
+  async listDocuments(
+    entityType: PropertywareDocumentEntity,
+    entityId: string | number | null,
+    correlationId: string,
+    query: {
+      limit?: number;
+      offset?: number;
+      lastModifiedDateTimeStart?: string;
+      lastModifiedDateTimeEnd?: string;
+      orderby?: string;
+    } = {},
+  ): Promise<PropertywareDocument[]> {
+    const url = new URL(`${this.config.baseUrl}/docs`);
+    url.searchParams.set('entityType', entityType);
+    // Required for every type except these two, which are not filed against
+    // anything: sending a blank one answers "entityId cannot be blank".
+    if (entityId != null && entityType !== 'DESKTOP' && entityType !== 'OTHER')
+      url.searchParams.set('entityId', String(entityId));
+    // 500 is the documented ceiling; the default of 100 would page every
+    // building with a long history for no reason.
+    url.searchParams.set('limit', String(Math.min(query.limit ?? PROPERTYWARE_DOCUMENT_PAGE_SIZE, PROPERTYWARE_DOCUMENT_PAGE_SIZE)));
+    url.searchParams.set('offset', String(query.offset ?? 0));
+    // What makes a re-run cheap. Discovery is one request per building and
+    // there are 577 of them; asking only for what changed turns a full sweep
+    // into a handful of documents.
+    if (query.lastModifiedDateTimeStart)
+      url.searchParams.set('lastModifiedDateTimeStart', query.lastModifiedDateTimeStart);
+    if (query.lastModifiedDateTimeEnd)
+      url.searchParams.set('lastModifiedDateTimeEnd', query.lastModifiedDateTimeEnd);
+    if (query.orderby) url.searchParams.set('orderby', query.orderby);
+
+    const { payload } = await this.request(url, correlationId);
+    if (!Array.isArray(payload))
+      throw new PropertywareError(
+        'Propertyware returned an unexpected document list.',
+        'PROPERTYWARE_INVALID_DOCUMENT_PAGE',
+      );
+    return payload as PropertywareDocument[];
+  }
+
+  /**
+   * The bytes of one document.
+   *
+   * Not routed through `request`, for two reasons that are both about size. It
+   * calls `response.json()`, which would parse a PDF as JSON and throw; and it
+   * uses `requestTimeoutMs`, which is tuned for a page of records. These are
+   * inspection reports — 19 MB is ordinary and one at 7306 Cypress Prairie is
+   * **81 MB** — so the timeout is separate and generous, and a retry re-downloads
+   * from the start rather than resuming.
+   *
+   * Returned as a Buffer rather than streamed to disk because the importer
+   * already takes a Buffer and already handles reports this size; adding a
+   * spool file would be a second copy of the same bytes.
+   */
+  async downloadDocument(
+    documentId: string | number,
+    correlationId: string,
+    timeoutMs = DOCUMENT_DOWNLOAD_TIMEOUT_MS,
+  ): Promise<{ bytes: Buffer; contentType: string | null }> {
+    const url = new URL(`${this.config.baseUrl}/docs/${documentId}/download`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          // Not `application/json`: this endpoint answers
+          // `application/octet-stream` and the accept header should say so.
+          accept: '*/*',
+          [PROPERTYWARE_AUTH_HEADERS.clientId]: this.config.clientId ?? '',
+          [PROPERTYWARE_AUTH_HEADERS.clientSecret]: this.config.clientSecret ?? '',
+          [PROPERTYWARE_AUTH_HEADERS.organizationId]: this.config.organizationId ?? '',
+          'x-correlation-id': correlationId,
+        },
+        signal: controller.signal,
+      });
+      if (!response.ok)
+        throw new PropertywareError(
+          sanitizedProviderMessage(response.status),
+          `PROPERTYWARE_HTTP_${response.status}`,
+          response.status,
+          response.status === 429 || response.status >= 500,
+        );
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return { bytes, contentType: response.headers.get('content-type') };
+    } catch (error) {
+      if (error instanceof PropertywareError) throw error;
+      const timedOut = error instanceof Error && error.name === 'AbortError';
+      throw new PropertywareError(
+        timedOut ? 'Propertyware document download timed out.' : 'Propertyware download failed.',
+        timedOut ? 'PROPERTYWARE_TIMEOUT' : 'PROPERTYWARE_NETWORK_ERROR',
+        undefined,
+        true,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async request(url: URL, correlationId: string, includeCredentials = true) {

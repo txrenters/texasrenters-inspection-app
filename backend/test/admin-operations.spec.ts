@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import { PresenceService } from '../src/realtime/presence.service';
 import { AdminService } from '../src/admin/admin.service';
 import { TechnicianProvisioningService } from '../src/admin/technician-provisioning.service';
+import { ZERO_EVIDENCE } from './support/prisma-evidence';
 
 const user: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000003',
@@ -21,6 +22,7 @@ describe('administrator catalog operations', () => {
   it('paginates and searches active portfolios without loading the full catalog', async () => {
     const items = [{ id: 'portfolio-11', name: 'Austin Residential' }];
     const prisma = {
+    ...ZERO_EVIDENCE,
       propertywarePortfolio: {
         findMany: jest.fn().mockResolvedValue(items),
         count: jest.fn().mockResolvedValue(21),
@@ -68,6 +70,7 @@ describe('administrator catalog operations', () => {
       .mockResolvedValueOnce([{ technicianId: 'technician-1', _count: { _all: 1 } }])
       .mockResolvedValueOnce([{ technicianId: 'technician-2', _count: { _all: 3 } }]);
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: {
         findMany: jest.fn().mockResolvedValue(profiles),
         count: jest.fn().mockResolvedValue(2),
@@ -100,6 +103,7 @@ describe('administrator inspection operations', () => {
   it('paginates the inspection audit trail without exposing audit metadata', async () => {
     const event = { id: 'audit-1', action: 'INSPECTION_CREATED', createdAt: new Date() };
     const prisma = {
+    ...ZERO_EVIDENCE,
       auditLog: {
         findMany: jest.fn().mockResolvedValue([event]),
         count: jest.fn().mockResolvedValue(21),
@@ -153,6 +157,7 @@ describe('administrator inspection operations', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: { findFirst: jest.fn().mockResolvedValue({ ...created, assignments: [] }) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
@@ -212,6 +217,16 @@ describe('administrator inspection operations', () => {
       propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      /**
+       * An occupied inspection writes the organization's two-question
+       * checklist on the way past (`ensureOccupiedChecklist`), so a double
+       * standing in for a transaction has to answer for it.
+       *
+       * Absent, these two tests failed with `Cannot read properties of
+       * undefined (reading 'createMany')` — a message about a mock, several
+       * frames from the line that actually mattered.
+       */
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       inspection: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'inspection-1' }),
@@ -220,6 +235,7 @@ describe('administrator inspection operations', () => {
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       // Read back on `this.prisma` after the transaction commits.
       inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', assignments: [] }) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
@@ -259,6 +275,16 @@ describe('administrator inspection operations', () => {
       propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       propertywareLease: { findFirst: jest.fn() },
       propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      /**
+       * An occupied inspection writes the organization's two-question
+       * checklist on the way past (`ensureOccupiedChecklist`), so a double
+       * standing in for a transaction has to answer for it.
+       *
+       * Absent, these two tests failed with `Cannot read properties of
+       * undefined (reading 'createMany')` — a message about a mock, several
+       * frames from the line that actually mattered.
+       */
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       inspection: {
         findFirst: jest.fn().mockResolvedValueOnce({ id: 'move-in-1' }).mockResolvedValueOnce(null),
         create: jest.fn().mockResolvedValue({ id: 'occupied-1' }),
@@ -266,6 +292,7 @@ describe('administrator inspection operations', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findFirst: jest.fn().mockResolvedValue({ id: 'occupied-1', assignments: [] }),
       },
@@ -314,6 +341,16 @@ describe('administrator inspection operations', () => {
         propertywareUnit: { findFirst: jest.fn(), count: jest.fn().mockResolvedValue(0) },
         propertywareLease: { findFirst: jest.fn() },
         propertyArea: { findMany: jest.fn().mockResolvedValue([{ id: 'area-1' }]) },
+      /**
+       * An occupied inspection writes the organization's two-question
+       * checklist on the way past (`ensureOccupiedChecklist`), so a double
+       * standing in for a transaction has to answer for it.
+       *
+       * Absent, these two tests failed with `Cannot read properties of
+       * undefined (reading 'createMany')` — a message about a mock, several
+       * frames from the line that actually mattered.
+       */
+      areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
         inspection: {
           // A move-in exists; the predecessor in the chain does not.
           findFirst: jest.fn().mockResolvedValueOnce({ id: 'move-in-1' }).mockResolvedValue(null),
@@ -323,6 +360,7 @@ describe('administrator inspection operations', () => {
         auditLog: { create: jest.fn().mockResolvedValue({}) },
       };
       const prisma = {
+    ...ZERO_EVIDENCE,
         inspection: {
           findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1', assignments: [] }),
         },
@@ -350,7 +388,8 @@ describe('administrator inspection operations', () => {
       },
       inspectionAssignment: { findFirst: jest.fn(), create: jest.fn() },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+    ...ZERO_EVIDENCE, $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
     const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
@@ -378,6 +417,7 @@ describe('administrator inspection operations', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: { findFirst: jest.fn().mockResolvedValue(existing) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
@@ -413,7 +453,8 @@ describe('administrator inspection operations', () => {
       },
       inspectionAssignment: { findFirst: jest.fn(), update: jest.fn() },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+    ...ZERO_EVIDENCE, $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
     const service = new AdminService(prisma as never, new PresenceService());
 
     await expect(
@@ -426,6 +467,7 @@ describe('administrator inspection operations', () => {
 describe('administrator assignment operations', () => {
   it('filters assignment history by inspection and skips the unassigned query when requested', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspectionAssignment: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),
@@ -470,6 +512,7 @@ describe('administrator assignment operations', () => {
       assignments: [],
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspection: {
         findMany: jest.fn().mockResolvedValue([inspection]),
         count: jest.fn().mockResolvedValue(1),
@@ -522,7 +565,8 @@ describe('administrator assignment operations', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const events = { publish: jest.fn() };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+    ...ZERO_EVIDENCE, $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
     const service = new AdminService(prisma as never, new PresenceService(), events as never);
 
     await expect(
@@ -560,7 +604,8 @@ describe('administrator assignment operations', () => {
       userProfile: { findFirst: jest.fn().mockResolvedValue({ id: 'technician-new' }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+    ...ZERO_EVIDENCE, $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
     const service = new AdminService(prisma as never, new PresenceService());
 
     await service.reassign(user, 'inspection-1', {
@@ -606,7 +651,8 @@ describe('administrator assignment operations', () => {
         create: jest.fn(),
       },
     };
-    const prisma = { $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
+    const prisma = {
+    ...ZERO_EVIDENCE, $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)) };
     const events = { publish: jest.fn() };
     const service = new AdminService(prisma as never, new PresenceService(), events as never);
 
@@ -623,6 +669,7 @@ describe('administrator assignment operations', () => {
 
   it('rejects deactivation while a technician owns current assignments', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: {
         findFirst: jest.fn().mockResolvedValue({ id: 'technician-1', isActive: true }),
         update: jest.fn(),
@@ -639,6 +686,7 @@ describe('administrator assignment operations', () => {
 
   it('returns a compact technician profile with a current-assignment count', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: {
         findFirst: jest.fn().mockResolvedValue({
           id: 'technician-1',
@@ -690,6 +738,7 @@ describe('technician account provisioning', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
@@ -758,6 +807,7 @@ describe('technician account provisioning', () => {
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-new' }) },
     };
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'orphan-profile',
@@ -784,6 +834,7 @@ describe('technician account provisioning', () => {
 
   it('does not repair a profile while its Supabase identity still exists', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'existing-profile',
@@ -808,6 +859,7 @@ describe('technician account provisioning', () => {
 
   it('removes the external identity when local provisioning fails', async () => {
     const prisma = {
+    ...ZERO_EVIDENCE,
       userProfile: {
         findUnique: jest.fn().mockResolvedValue(null),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -836,6 +888,7 @@ describe('technician account provisioning', () => {
 describe('which assignments a work list shows', () => {
   function harness() {
     const prisma = {
+    ...ZERO_EVIDENCE,
       inspectionAssignment: {
         findMany: jest.fn().mockResolvedValue([]),
         count: jest.fn().mockResolvedValue(0),

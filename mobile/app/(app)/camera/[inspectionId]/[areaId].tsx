@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CameraView,
+  type CameraMode,
   type CameraType,
   useCameraPermissions,
   useMicrophonePermissions,
@@ -20,6 +21,8 @@ import {
 } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  BackHandler,
+  Image,
   Linking,
   Platform,
   Pressable,
@@ -30,7 +33,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
-import { PRESS_SURFACE } from '@/src/components/ui';
+import { Button, PRESS_SURFACE } from '@/src/components/ui';
+import { BottomSheet } from '@/src/components/BottomSheet';
 import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
 import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
@@ -39,7 +43,7 @@ import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
 import { StopRecordingSheet } from '@/src/capture/StopRecordingSheet';
-import { snapshotMode, stopRequestOutcome } from '@/src/capture/capture-intents';
+import { initialCameraMode, snapshotMode, stopRequestOutcome } from '@/src/capture/capture-intents';
 import {
   GUIDED_CAPTURE_POLICY,
   clampRotationDegrees,
@@ -59,11 +63,17 @@ import {
   useRoom,
   useRoomChecklist,
 } from '@/src/features/queries';
+import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
-import { buildRoomSnapshot, persistRoomSnapshot } from '@/src/media/local-snapshots';
+import {
+  buildRoomSnapshot,
+  deleteRoomSnapshot,
+  persistRoomSnapshot,
+} from '@/src/media/local-snapshots';
 import { extractMarkerStills, pairMarkers } from '@/src/media/marker-stills';
-import { uploadSnapshotNow } from '@/src/media/snapshot-upload';
+import { pickPictureSize } from '@/src/media/picture-size';
+import { PHOTO_REVIEW_WINDOW_MS, reviewWindowEnd } from '@/src/media/snapshot-upload';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { registerIcons } from '@/src/lib/icons';
 
@@ -79,6 +89,16 @@ registerIcons(
 );
 
 const MAX_RECORDING_SECONDS = 10 * 60;
+
+/**
+ * How long to wait for the camera to rebind between stills and video.
+ *
+ * Only ever waited on when the two differ, which is an occupied visit whose
+ * technician has chosen to film. Generous because it is the pause before a
+ * recording rather than during one, and bounded because `onCameraReady` firing
+ * again after a mode change is the native module's business, not a promise.
+ */
+const CAMERA_REBIND_TIMEOUT_MS = 1_500;
 
 // A stable empty array: returning a fresh [] from the selector would give
 // zustand a new reference every render and loop on "getSnapshot should be
@@ -170,6 +190,43 @@ export default function RoomCameraScreen() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
+  /**
+   * Which use case the camera has bound: stills or video, never both.
+   *
+   * This screen hard-coded `video`, so the image-capture use case was never
+   * bound and a technician who had not started recording could not photograph
+   * at all — on Android `takePictureAsync` has nothing to shoot with. It read
+   * as a rule ("film before you can photograph") and was a default nobody had
+   * revisited.
+   *
+   * An occupied visit therefore opens on `picture`, because it is often only
+   * photographs; every other visit opens on `video`, which is what its
+   * technician does first. `bindCamera` moves between them.
+   */
+  const requiresRecording = inspectionRequiresAreaRecording(room.data?.inspectionType);
+  const [cameraMode, setCameraMode] = useState<CameraMode>(() =>
+    initialCameraMode(requiresRecording),
+  );
+  // Read inside async work, where the state value would be the one captured
+  // when the callback was created.
+  const cameraModeRef = useRef(cameraMode);
+  /**
+   * Resolvers waiting for the camera to finish re-configuring.
+   *
+   * Changing `mode` rebinds the use case, and `recordAsync` on a camera still
+   * bound to stills fails. `onCameraReady` fires again once the new binding is
+   * live, which is the only signal available that it is safe to proceed.
+   */
+  const readyWaiters = useRef<(() => void)[]>([]);
+  /**
+   * Which of the camera's offered sizes stills are captured at.
+   *
+   * Undefined until the camera is mounted and has answered, and undefined for
+   * good on a device that reports presets by name rather than by resolution.
+   * Both leave the prop unset and the device at its default, which is what this
+   * screen did before any of this existed.
+   */
+  const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
   const [recording, setRecording] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -177,6 +234,18 @@ export default function RoomCameraScreen() {
   const [facing, setFacing] = useState<CameraType>('back');
   const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
   const [photoCount, setPhotoCount] = useState(0);
+  /** The shot just taken, while it is still held from upload. */
+  const [discardable, setDiscardable] = useState<RoomSnapshot | null>(null);
+  /**
+   * Whether leaving should ask first.
+   *
+   * Capturing anything starts the area, and walking out of a started area with
+   * a single tap of the back arrow is how a technician loses their place —
+   * they meant to keep going and the screen simply left. Reported from the
+   * field 2026-09-10.
+   */
+  const [exitOpen, setExitOpen] = useState(false);
+  const discardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [capturingPhoto, setCapturingPhoto] = useState(false);
   // A count, not a flag: two shutter taps in a row have to be distinguishable
   // or the second renders the same value and nothing flashes.
@@ -202,7 +271,7 @@ export default function RoomCameraScreen() {
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
-  const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
+  const removeSnapshots = useDemoStore((state) => state.removeSnapshots);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
   // Persisted per area rather than held on this screen: coverage used to be
   // component state, so stepping out to review a recording and coming back lost
@@ -245,6 +314,44 @@ export default function RoomCameraScreen() {
       camera?.stopRecording();
     };
   }, [camera]);
+
+  /**
+   * Android's hardware back asks the same question the arrow does.
+   *
+   * Without this it is a way around the prompt — and on Android it is the way
+   * most people leave a screen, so the guard would be missing exactly where it
+   * is needed most. Returning true means handled; false lets the navigator do
+   * what it always did, which is what an untouched area still wants.
+   */
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!recording && photoCount === 0) return false;
+      requestExit();
+      return true;
+    });
+    return () => subscription.remove();
+  });
+
+  /**
+   * Ask the camera what sizes it offers, once it is mounted and ready.
+   *
+   * Never fatal. A device that refuses the question, or answers with presets
+   * this cannot read, keeps its default capture size — a photograph that is
+   * larger than we wanted is worth far more than one that was never taken.
+   */
+  useEffect(() => {
+    if (!camera || !ready) return;
+    let cancelled = false;
+    void camera
+      .getAvailablePictureSizesAsync()
+      .then((sizes) => {
+        if (!cancelled && mountedRef.current) setPictureSize(pickPictureSize(sizes));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [camera, ready]);
 
   // Haptic tick at each quarter of the clockwise loop, heavy at completion —
   // progress a technician can feel without looking away from the room.
@@ -365,10 +472,49 @@ export default function RoomCameraScreen() {
     };
   };
 
+  /** The camera has finished configuring — release anything waiting on it. */
+  const markCameraReady = () => {
+    setReady(true);
+    const waiting = readyWaiters.current;
+    readyWaiters.current = [];
+    for (const resolve of waiting) resolve();
+  };
+
+  /**
+   * Rebinds the camera to `next`, resolving once it reports ready again.
+   *
+   * Returns immediately when it is already bound that way, so a visit that
+   * opens on `video` — every kind but occupied — reaches `recordAsync` by
+   * exactly the path it did before, with no wait and no new failure mode.
+   *
+   * On timeout it resolves anyway rather than refusing. Whether
+   * `onCameraReady` fires a second time after a mode change is a detail of the
+   * native module, and betting a technician's ability to record on it would
+   * turn a missing callback into "the record button does nothing". Proceeding
+   * is no worse than before: if the binding really has not applied,
+   * `recordAsync` reports it through the error path that already exists.
+   */
+  const bindCamera = (next: CameraMode) =>
+    new Promise<void>((resolve) => {
+      if (cameraModeRef.current === next) return resolve();
+      cameraModeRef.current = next;
+      setReady(false);
+      setCameraMode(next);
+      const timer = setTimeout(resolve, CAMERA_REBIND_TIMEOUT_MS);
+      readyWaiters.current.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
   const beginRecording = async () => {
     if (!(await requestPermissions())) return;
     if (!camera || !ready || recording) return;
     setError(null);
+    // Stills and video are separate bindings, so a screen that opened ready to
+    // photograph has to become a video camera before it can record.
+    await bindCamera('video');
+    if (!mountedRef.current) return;
     secondsRef.current = 0;
     setSeconds(0);
     sessionStartedAtRef.current = new Date().toISOString();
@@ -469,6 +615,16 @@ export default function RoomCameraScreen() {
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The video could not be recorded.');
+      /**
+       * Give the shutter back.
+       *
+       * The success path leaves through `router.replace`, so the screen is
+       * gone and the next one opens bound correctly. A failure keeps the
+       * technician here — on a camera now bound to video, unable to photograph
+       * the room they came to photograph. That would turn one failed recording
+       * into an area they cannot finish at all.
+       */
+      if (mountedRef.current) void bindCamera(initialCameraMode(requiresRecording));
     } finally {
       if (mountedRef.current) {
         setRecording(false);
@@ -497,12 +653,78 @@ export default function RoomCameraScreen() {
     setConfirmStopOpen(true);
   };
 
-  // Sending it here is a head start, not the guarantee. A failure records why
-  // and when to try again, and the upload runner picks it up from there —
-  // this used to be a bare catch that marked the photo FAILED and left the
-  // JPEG on the device with nothing anywhere to re-send it.
-  const uploadSnapshot = (snapshot: RoomSnapshot) =>
-    uploadSnapshotNow(snapshot, { update: updateSnapshot });
+  /**
+   * What the back arrow means, which depends on what is under way.
+   *
+   * Three states, and they were two. Mid-recording it stops the take, as it
+   * always has. On an untouched area it simply leaves — there is nothing to
+   * lose and nothing worth asking about.
+   *
+   * The new one in the middle: an area where photographs have been taken is an
+   * area the technician has *started*, and leaving it with one tap of an arrow
+   * that sits exactly where a thumb rests is how somebody loses their place —
+   * they meant to keep going and the screen simply left. Asked, not blocked:
+   * both answers are one tap, and neither is hidden.
+   */
+  const requestExit = () => {
+    if (recording) return requestStopRecording();
+    if (photoCount > 0) return setExitOpen(true);
+    goBack();
+  };
+
+  /**
+   * There is no send-from-here any more.
+   *
+   * This screen used to fire the upload itself as a head start. It cannot now:
+   * a photograph is held for the review window so a test shot can be discarded
+   * before it leaves the device, and `UploadQueueRunner` is what sends it once
+   * it comes due. Sending from two places would defeat the hold from one of
+   * them.
+   */
+
+  /**
+   * Offers the shot just taken back, for as long as it is held from upload.
+   *
+   * A second photograph replaces the offer rather than stacking one. The
+   * control is about the shot in front of the technician; anything older is the
+   * area screen's business, and a growing row of thumbnails over a live camera
+   * is the opposite of what a fifteen-minute visit needs.
+   */
+  const showDiscardable = (snapshot: RoomSnapshot) => {
+    if (discardTimer.current) clearTimeout(discardTimer.current);
+    setDiscardable(snapshot);
+    discardTimer.current = setTimeout(() => {
+      // Only clears the offer. The photograph is already in the store and the
+      // queue sends it the moment it comes due, whether this screen is still
+      // open or not.
+      if (mountedRef.current) setDiscardable(null);
+    }, PHOTO_REVIEW_WINDOW_MS);
+  };
+
+  /**
+   * Throws the held photograph away, before anything has been sent.
+   *
+   * Local in every sense: the row leaves the store and the JPEG leaves the
+   * device. Nothing has reached the server yet — which is the point of holding
+   * it — so there is nothing to un-send and no round trip to wait on.
+   *
+   * The counters go back too. `photoCount` drives the capture summary attached
+   * to the recording, and `snapshotTypesRef` feeds `evidenceComplete`; leaving
+   * either would tell the reviewer about a photograph that does not exist.
+   */
+  const discardPhoto = () => {
+    const snapshot = discardable;
+    if (!snapshot) return;
+    if (discardTimer.current) clearTimeout(discardTimer.current);
+    setDiscardable(null);
+    removeSnapshots([snapshot.id]);
+    deleteRoomSnapshot(snapshot.uri);
+    setPhotoCount((count) => Math.max(0, count - 1));
+    const types = snapshotTypesRef.current;
+    const last = types.lastIndexOf(snapshot.captureType ?? 'AREA_OVERVIEW');
+    if (last >= 0) types.splice(last, 1);
+    announce('Photo discarded.');
+  };
 
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
@@ -556,8 +778,22 @@ export default function RoomCameraScreen() {
             ? 'NATIVE_STILL_DURING_VIDEO'
             : 'SEPARATE_PHOTO_CAPTURE',
         sequenceNumber: photoCount + 1,
+        /**
+         * Not due to send yet.
+         *
+         * The shutter and the upload used to be the same act, so a test shot —
+         * checking the light, checking the lens — was filed as evidence before
+         * the technician had looked at it. `snapshotsAwaitingUpload` already
+         * skips anything not yet due, so the hold needs no new state and the
+         * queue needs no new rule.
+         */
+        nextAttemptAt: reviewWindowEnd(),
       });
       addSnapshot(snapshot);
+      // Offer it back for as long as it is held. A second photograph replaces
+      // the offer rather than stacking one: the control is about the shot just
+      // taken, and anything older belongs to the area screen.
+      showDiscardable(snapshot);
       // Feeds evidenceComplete/snapshotCount in the capture summary.
       snapshotTypesRef.current.push(captureType);
       setPhotoCount((count) => count + 1);
@@ -572,7 +808,14 @@ export default function RoomCameraScreen() {
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
         }`,
       );
-      void uploadSnapshot(snapshot);
+      /**
+       * Deliberately not uploaded here.
+       *
+       * `UploadQueueRunner` picks it up once the review window passes, which is
+       * what makes the discard control mean anything — sending it now and
+       * deleting it afterwards would put a test shot on the server and take a
+       * round trip to remove it.
+       */
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
     } finally {
@@ -620,10 +863,18 @@ export default function RoomCameraScreen() {
         style={StyleSheet.absoluteFill}
         facing={facing}
         enableTorch={torch && facing === 'back'}
-        mode="video"
+        mode={cameraMode}
         mute={false}
         videoQuality="720p"
-        onCameraReady={() => setReady(true)}
+        /**
+         * Capture at roughly 2048 on the long edge, not at the sensor's full
+         * twelve megapixels. Undefined until the camera has told us what it
+         * offers, and undefined for ever on a device whose sizes we cannot
+         * read — both of which leave the prop unset, which is the behaviour
+         * this screen had before.
+         */
+        pictureSize={pictureSize}
+        onCameraReady={markCameraReady}
         onMountError={(event) => setError(event.message)}
       />
       <View className="absolute inset-x-0 top-0 h-44 bg-black/45" />
@@ -661,7 +912,7 @@ export default function RoomCameraScreen() {
               // 40pt visual, 44pt target: hitSlop keeps the design and still
               // clears the minimum for a gloved or unsteady hand.
               hitSlop={8}
-              onPress={() => (recording ? requestStopRecording() : goBack())}
+              onPress={requestExit}
             >
               <BackGlyph size={21} className="text-white" />
             </Pressable>
@@ -814,6 +1065,37 @@ export default function RoomCameraScreen() {
               read as unrelated groups and pushed the controls into the framing
               grid. Equal thirds keep record optically centred whatever the side
               captions say. */}
+          {/*
+            The shot just taken, while it is still held from upload.
+            
+            Above the controls rather than beside them: it is a transient offer,
+            and putting it in the row would move the shutter every time a
+            photograph is taken. Absent once the photograph is committed, which
+            is also the only signal that it has been.
+          */}
+          {discardable ? (
+            <View className="mb-3 w-full flex-row items-center gap-3 rounded-xl bg-black/55 p-2">
+              <Image
+                accessibilityIgnoresInvertColors
+                className="h-12 w-12 rounded-lg"
+                resizeMode="cover"
+                source={{ uri: discardable.uri }}
+              />
+              <Text className="min-w-0 flex-1 text-xs leading-4 text-white/85">
+                Saved. Not sent yet — discard it if that was a test shot.
+              </Text>
+              <Pressable
+                accessibilityHint="Deletes it from this device. Nothing has been sent."
+                accessibilityLabel="Discard the photo just taken"
+                accessibilityRole="button"
+                className={`min-h-11 justify-center rounded-lg border border-white/40 px-3 ${PRESS_SURFACE}`}
+                onPress={discardPhoto}
+              >
+                <Text className="text-xs font-semibold text-white">Discard</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <View className="w-full flex-row items-start justify-between">
             <View className="flex-1 items-center">
               <Pressable
@@ -1003,6 +1285,47 @@ export default function RoomCameraScreen() {
         photoCount={photoCount}
         visible={confirmStopOpen}
       />
+
+      {/*
+        Leaving a started area is a decision, so it is asked rather than
+        assumed.
+
+        Neither answer is hidden and neither costs more than a tap. "Keep
+        inspecting" is listed first because it is the one a technician who hit
+        the arrow by accident wants, and it is the answer that loses nothing.
+
+        Finishing goes to the area screen rather than completing the area from
+        here. Completion has a gate — evidence, and an upload that has at least
+        reached the queue — and the area screen is where that gate explains
+        itself. Refusing inside this sheet would be a dead end held one screen
+        away from its own explanation.
+      */}
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
+        onClose={() => setExitOpen(false)}
+        visible={exitOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">
+          {photoCount === 1 ? '1 photo taken here' : `${photoCount} photos taken here`}
+        </Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          This area is under way. Keep capturing, or go through what you have, add a note and
+          submit it.
+        </Text>
+        <View className="mt-5 gap-3">
+          <Button label="Keep Taking Evidence" onPress={() => setExitOpen(false)} />
+          <Button
+            accessibilityHint="Opens the area, where you can review the media, add a note and submit"
+            label="Continue & Review"
+            onPress={() => {
+              setExitOpen(false);
+              goBack();
+            }}
+            variant="secondary"
+          />
+        </View>
+      </BottomSheet>
     </View>
   );
 }

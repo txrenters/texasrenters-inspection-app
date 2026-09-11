@@ -13,11 +13,13 @@
  * built around AI analysis of a video, which an imported report does not have.
  * The defects are not lost — each one is the comment and the failed grades on
  * its checklist response, which is where the web review screen already reads
- * condition from. The consequence to know about is that
- * `ComparisonService.loadDamageCounts` counts findings, so pre-existing damage
- * from an import does not yet reach a comparison's damage tally; making that
- * work needs `inspectionMediaId` to become nullable, which is a change to a
- * core evidence table and is deliberately not bundled here.
+ * condition from. `ComparisonService.loadConditionSignals` reads those grades as
+ * well as findings, so an import does reach a comparison; that turned out not to
+ * need `inspectionMediaId` to become nullable after all, and this table stays
+ * untouched. Note it reads them for two separate things: `isUndamaged` and
+ * `isWorking` are damage, while `isClean` is not — a dirty move-out is a
+ * cleaning charge — and *any* graded item marks the area as assessed, which is
+ * what lets a later move-out call a defect new rather than merely unexplained.
  */
 import { createHash } from 'node:crypto';
 
@@ -27,7 +29,8 @@ import type {
 import {
   type AreaCategory,
   type AreaEnvironment,
-  InspectionSource
+  InspectionSource,
+  InspectionStatus
 } from '@prisma/client';
 import { classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
 
@@ -125,6 +128,28 @@ export function summarise(report: ImportedReport) {
   };
 }
 
+/**
+ * The worse of two gradings for one checklist item.
+ *
+ * `false` means the inspector marked a problem, `true` means they did not, and
+ * `null` means they did not look. A recorded problem outranks both: losing one
+ * to a later "fine" would delete a finding, and a move-out is compared against
+ * these. An unanswered row never overwrites an answered one.
+ */
+function worseOf(left: boolean | null, right: boolean | null): boolean | null {
+  if (left === false || right === false) return false;
+  if (left === true || right === true) return true;
+  return null;
+}
+
+/** Both inspectors' words, in the order the report gave them. */
+function joinComments(left: string | null, right: string | null): string | null {
+  const parts = [left, right].map((part) => part?.trim()).filter(Boolean) as string[];
+  if (!parts.length) return null;
+  // A row repeated verbatim is one comment, not the same sentence twice.
+  return [...new Set(parts)].join(' — ');
+}
+
 /** Where the uploaded report itself is kept, keyed by its own content. */
 const sourceKey = (organizationId: string, fingerprint: string) =>
   `${organizationId}/imported/${fingerprint.slice(0, 16)}/source.pdf`;
@@ -134,6 +159,9 @@ const isStale = (updatedAt: Date) => Date.now() - updatedAt.getTime() > IMPORT_S
 /** Why a model could not read a report, in terms the console can show. */
 const aiFailureCode = (reason: 'NO_CREDENTIAL' | 'REFUSED' | 'INVALID_OUTPUT' | 'OK') =>
   reason === 'NO_CREDENTIAL' ? 'REPORT_NOT_RECOGNISED_NO_AI' : 'REPORT_NOT_READABLE';
+
+/** How a read report is written onto its inspection. */
+export type ImportCommitMode = 'REPLACE' | 'ADD';
 
 @Injectable()
 export class InspectionImportService {
@@ -166,7 +194,7 @@ export class InspectionImportService {
     if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-')
       throw new ApplicationError(400, 'REPORT_NOT_A_PDF', 'That file is not a PDF.');
 
-    const inspection = await this.requireSeedableInspection(user, inspectionId);
+    const inspection = await this.requireImportableInspection(user, inspectionId);
     const fingerprint = reportFingerprint(file.buffer);
 
     const previous = await this.findPreviousImport(user.organizationId, fingerprint);
@@ -248,20 +276,41 @@ export class InspectionImportService {
    * property finished.
    */
   async runningJobs(user: AuthenticatedUser) {
+    /**
+     * Long enough for somebody to have looked away and come back.
+     *
+     * A finished job is reported for a short while so the console can announce
+     * it. Without that window the only signal an import landed is its row
+     * vanishing, and a row can vanish because it *failed* just as easily —
+     * announcing "imported" on a disappearance would be a cheerful lie.
+     */
+    const ANNOUNCE_WINDOW_MS = 10 * 60 * 1000;
+    const since = new Date(Date.now() - ANNOUNCE_WINDOW_MS);
+
     const jobs = await this.prisma.inspectionImportJob.findMany({
       where: {
         organizationId: user.organizationId,
-        // Reading, or read and now writing. A committed or failed job is
-        // finished and belongs in neither a list of work nor a spinner.
-        status: { in: ['PENDING', 'RUNNING', 'COMPLETED'] },
-        committedAt: null,
-        errorCode: null,
+        OR: [
+          // Still working.
+          { status: { in: ['PENDING', 'RUNNING'] }, committedAt: null, errorCode: null },
+          // Just landed, either way.
+          { committedAt: { gte: since } },
+          { errorCode: { not: null }, updatedAt: { gte: since } },
+        ],
       },
       orderBy: { createdAt: 'desc' },
       // A guard, not a page: more than this many at once is not a longer list,
       // it is something wrong worth noticing.
       take: 50,
-      select: { id: true, inspectionId: true, status: true, createdAt: true, updatedAt: true },
+      select: {
+        id: true,
+        inspectionId: true,
+        status: true,
+        errorCode: true,
+        committedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
 
     const inspections = await this.prisma.inspection.findMany({
@@ -277,15 +326,23 @@ export class InspectionImportService {
     return jobs
       // A job whose process died is not running, whatever the row says. Same
       // rule `job` applies, so the two cannot disagree about what is live.
-      .filter((job) => !(job.status === 'RUNNING' && isStale(job.updatedAt)))
+      .filter((job) => !(job.status === 'RUNNING' && !job.committedAt && !job.errorCode && isStale(job.updatedAt)))
       .map((job) => ({
         id: job.id,
         inspectionId: job.inspectionId,
         status: job.status,
-        // The read is done and the write has not been asked for yet: somebody
-        // has to look at it. Worth distinguishing in a dock, because it is
-        // waiting on a person rather than on the server.
-        awaitingReview: job.status === 'COMPLETED',
+        /**
+         * What the console should say about this one.
+         *
+         * Three answers, not two, because a row leaving the list is ambiguous:
+         * it means the report was written in, or it means the import failed.
+         * Naming the outcome is what lets the notification be true.
+         */
+        state: job.errorCode ? ('FAILED' as const) : job.committedAt ? ('IMPORTED' as const) : ('READING' as const),
+        errorCode: job.errorCode,
+        /** Kept, always false: nothing waits on a person now that a read report
+         * is written in as soon as it is read. */
+        awaitingReview: false,
         address: job.inspectionId
           ? (byInspection.get(job.inspectionId)?.propertywareBuilding?.addressLine1 ?? null)
           : null,
@@ -381,12 +438,65 @@ export class InspectionImportService {
           output: JSON.parse(JSON.stringify(report)) as Prisma.InputJsonValue,
         },
       });
+
+      /**
+       * Written in as soon as it is read.
+       *
+       * This used to stop here and wait for somebody to open the report,
+       * look at what it found and press Import. That step cost eleven
+       * inspections: every one uploaded, parsed, and left showing zero areas,
+       * because the person who started it had moved on to the next property
+       * and nothing brought them back.
+       *
+       * The check it performed is not lost, only unblocked. The parse is
+       * deterministic and reconciles exactly on a known layout; what it could
+       * not resolve — a label no template carries, a row typed by hand, a
+       * photograph whose caption matched nothing — is still recorded on the
+       * job and still shown on the inspection. It is now read after the fact
+       * rather than standing in front of the evidence.
+       *
+       * What this does *not* do is finalize. The inspection lands under review,
+       * so a human still signs off before anything reaches a charge — which is
+       * the guarantee the old gate was really there for.
+       */
+      await this.applyRead(user, jobId);
     } catch (error) {
       this.logger.error({
         event: 'inspection_import_read_failed',
         message: error instanceof Error ? error.message : 'unknown',
       });
       await this.fail(jobId, 'REPORT_NOT_READABLE');
+    }
+  }
+
+  /**
+   * Commits a read report without asking.
+   *
+   * Separate from `commit` rather than folded into it: `commit` is the console
+   * asking on a person's behalf and answers with an ApplicationError the
+   * console renders. This runs on a detached promise where nothing is
+   * listening, so a refusal has to become a recorded failure instead of a
+   * rejection nobody catches.
+   *
+   * The guards inside `commit` still run — the inspection must be empty and
+   * have a property, and the same report must not already be imported. Those
+   * are exactly the conditions where applying automatically would be wrong,
+   * and they now surface as a failed job with a reason rather than as a
+   * silently skipped import.
+   */
+  private async applyRead(user: AuthenticatedUser, jobId: string) {
+    try {
+      await this.commit(user, jobId);
+    } catch (error) {
+      const code =
+        error instanceof ApplicationError ? error.code : 'REPORT_NOT_APPLIED';
+      this.logger.error({
+        event: 'inspection_import_auto_apply_failed',
+        jobId,
+        code,
+        message: error instanceof Error ? error.message : 'unknown',
+      });
+      await this.fail(jobId, code);
     }
   }
 
@@ -413,7 +523,27 @@ export class InspectionImportService {
    * lands in review, where an administrator finalizes it the same way they
    * would an inspection the app captured.
    */
-  async commit(user: AuthenticatedUser, jobId: string) {
+  /**
+   * Write a read report onto its inspection.
+   *
+   * `REPLACE` is the default and the historical behaviour: the report becomes
+   * the inspection's evidence, and rooms it does not mention are dropped,
+   * because a report that omits a room is the office saying that room was not
+   * part of the walkthrough.
+   *
+   * `ADD` is for the second report. An agent who submits an incomplete
+   * walkthrough issues another PDF covering what was missed -- the garage, a
+   * room they could not reach -- and under REPLACE that second file would
+   * delete every area the first one established, keeping only the garage. ADD
+   * writes the areas this report describes and leaves every other area of the
+   * inspection exactly as it was.
+   *
+   * An area the additional report *does* cover is still replaced, not merged:
+   * two readings of one room would otherwise leave a defect from the older pass
+   * outranking a clean grade in the newer one, with nothing to say which is
+   * current.
+   */
+  async commit(user: AuthenticatedUser, jobId: string, mode: ImportCommitMode = 'REPLACE') {
     const job = await this.prisma.inspectionImportJob.findFirst({
       where: { id: jobId, organizationId: user.organizationId },
     });
@@ -437,11 +567,11 @@ export class InspectionImportService {
 
     const report = job.output as unknown as ImportedReport;
     const fingerprint = job.fingerprint;
-    // Re-checked at commit, not trusted from the read. Minutes pass while a
-    // report is parsed, and an inspection that gained evidence in between must
-    // not have it written over.
-    // Only the check runs here; `runCommit` reads the building off `target`.
-    const target = await this.requireSeedableInspection(user, job.inspectionId);
+    // Re-read at commit, not trusted from the start. Minutes pass while a
+    // report is parsed, and the inspection can be deleted or moved to another
+    // property in that window — so the commit writes against what is there now,
+    // and `runCommit` takes the property and the unit scope off this `target`.
+    const target = await this.requireImportableInspection(user, job.inspectionId);
 
     // The same file twice is almost always somebody clicking again, and a
     // second baseline for one walkthrough is worse than a refusal: the
@@ -471,13 +601,102 @@ export class InspectionImportService {
     // the fix: "No timeout value fixes that for arbitrarily complex plans; the
     // work has to leave the request." The reading was moved out and the writing
     // was left behind. This moves the rest.
-    void this.runCommit(user, job.id, fingerprint, report, target).catch((error: unknown) => {
+    void this.runCommit(user, job.id, fingerprint, report, target, mode).catch((error: unknown) => {
       this.logger.error({
         event: 'inspection_import_commit_crashed',
         message: error instanceof Error ? error.message : 'unknown',
       });
     });
     return { jobId: job.id, committing: true as const };
+  }
+
+  /**
+   * Import a report that has already been read, and wait for it to land.
+   *
+   * For the Propertyware backfill, which differs from the console in two ways
+   * that both matter.
+   *
+   * It **parses before choosing an inspection.** A document in Propertyware is
+   * filed against a building, not against an inspection — the REST
+   * `/inspections` module is denied to this API client — so the only reliable
+   * statement of which walkthrough a PDF describes is the report's own
+   * `Inspection Template:` line. The caller reads it, decides, and hands the
+   * parsed report back here rather than paying to parse an 81 MB file twice.
+   *
+   * It **waits.** `start` and `commit` deliberately detach: a browser will not
+   * hold a connection for minutes, and `main.ts` gives the server a 30-second
+   * socket timeout that once destroyed the connection mid-import. A backfill
+   * has the opposite problem — 4,664 documents fired detached is 4,664
+   * concurrent transactions, several hundred megabytes of PDF resident at once,
+   * and no way to pace or report. So this awaits the same `runCommit` the
+   * console reaches through a floating promise.
+   *
+   * Never rejects for a failed *write*: `runCommit` records its outcome on the
+   * job, exactly as it does for the console, and the job is re-read here to say
+   * what happened. It does still throw for the guards above it — no property,
+   * not a PDF, already imported — because those are decisions the caller makes
+   * differently per document.
+   */
+  async importPreparsed(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    file: UploadedReport,
+    report: ImportedReport,
+  ) {
+    if (file.buffer.subarray(0, 5).toString('latin1') !== '%PDF-')
+      throw new ApplicationError(400, 'REPORT_NOT_A_PDF', 'That file is not a PDF.');
+
+    const target = await this.requireImportableInspection(user, inspectionId);
+    const fingerprint = reportFingerprint(file.buffer);
+
+    const previous = await this.findPreviousImport(user.organizationId, fingerprint);
+    if (previous)
+      throw new ApplicationError(
+        409,
+        'REPORT_ALREADY_IMPORTED',
+        'This report has already been imported.',
+        [previous],
+      );
+
+    const job = await this.prisma.inspectionImportJob.create({
+      data: {
+        organizationId: user.organizationId,
+        buildingId: target.propertywareBuildingId ?? target.id,
+        inspectionId: target.id,
+        fingerprint,
+        // COMPLETED, not RUNNING: the reading is already done and its result is
+        // stored below. A RUNNING row with output would read as a job whose
+        // process died, and the staleness sweep would close it underneath us.
+        status: 'COMPLETED',
+        method: 'DETERMINISTIC',
+        output: JSON.parse(JSON.stringify(report)) as Prisma.InputJsonValue,
+        startedById: user.id,
+      },
+      select: { id: true },
+    });
+
+    // The source is kept for the same reason the console keeps it: an imported
+    // inspection is argued from somebody else's record, so the record itself
+    // is retained rather than discarded once parsed.
+    await this.storage.putBytes(
+      sourceKey(user.organizationId, fingerprint),
+      file.buffer,
+      'application/pdf',
+    );
+
+    await this.runCommit(user, job.id, fingerprint, report, target);
+
+    const settled = await this.prisma.inspectionImportJob.findUnique({
+      where: { id: job.id },
+      select: { committedAt: true, errorCode: true },
+    });
+    return {
+      jobId: job.id,
+      inspectionId: target.id,
+      fingerprint,
+      committed: Boolean(settled?.committedAt),
+      errorCode: settled?.errorCode ?? null,
+    };
   }
 
   /**
@@ -492,7 +711,9 @@ export class InspectionImportService {
     jobId: string,
     fingerprint: string,
     report: ImportedReport,
-    target: Awaited<ReturnType<InspectionImportService['requireSeedableInspection']>>,
+    target: Awaited<ReturnType<InspectionImportService['requireImportableInspection']>>,
+    // Defaulted, so the bulk pre-parsed path keeps the behaviour it had.
+    mode: ImportCommitMode = 'REPLACE',
   ) {
    try {
     const property = target.building;
@@ -500,6 +721,32 @@ export class InspectionImportService {
     const photos = extractPhotos(bytes);
     const perPage = await countPhotosPerPage(bytes);
     const stored = await this.storePhotos(user.organizationId, fingerprint, photos);
+
+    /**
+     * The photographs this import is about to supersede.
+     *
+     * Read before the transaction and deleted from storage only after it
+     * commits. The other order — clearing objects as the rows go — destroys the
+     * evidence an import was going to replace even when that import then rolls
+     * back, and this one rolls back for a living: a single duplicated checklist
+     * row took a fifteen-area commit down with it.
+     */
+    /*
+     * Under ADD this must NOT be every photograph on the inspection. Those
+     * objects are deleted from storage after the commit, and an additional
+     * report keeps most of them -- deleting the files while their rows survive
+     * would leave the first report's areas pointing at nothing, which reads as
+     * corrupt evidence rather than a missing file. The keys are instead
+     * collected inside the transaction, as each covered area is actually
+     * cleared, and only for the areas this report replaces.
+     */
+    const superseded: Array<{ storageKey: string }> =
+      mode === 'REPLACE'
+        ? await this.prisma.inspectionPhoto.findMany({
+            where: { inspectionId: target.id },
+            select: { storageKey: true },
+          })
+        : [];
 
     const inspectionId = await this.prisma.$transaction(async (tx) => {
       await tx.property.upsert({
@@ -530,6 +777,38 @@ export class InspectionImportService {
       });
       const inspection = { id: target.id };
 
+      /**
+       * What was here before, cleared in one place before anything new lands.
+       *
+       * An import is what the office reaches for when the record here is
+       * *wrong*, so the report supersedes what it finds rather than merging
+       * into it. Merging is worse than it sounds: a second import would stack
+       * its photographs on top of the first, and `worseOf` — which is right for
+       * two rows of one report disagreeing — would let a defect from a stale
+       * walkthrough outrank a clean grade in the new one, permanently.
+       *
+       * Responses go first because they hang off areas: an area whose
+       * photographs were cleared but whose grades survived would report a
+       * condition that nothing evidences. Both are scoped to this inspection.
+       */
+      // Under ADD the clearing happens per area, inside the loop, so an area
+      // this report never mentions keeps the evidence the first report gave it.
+      const replacedResponses =
+        mode === 'REPLACE'
+          ? await tx.inspectionAreaChecklistResponse.deleteMany({
+              where: { inspectionArea: { inspectionId: inspection.id } },
+            })
+          : { count: 0 };
+      const replacedPhotos =
+        mode === 'REPLACE'
+          ? await tx.inspectionPhoto.deleteMany({ where: { inspectionId: inspection.id } })
+          : { count: 0 };
+
+      /** Areas this report actually describes; the rest are dropped below. */
+      const touched = new Set<string>();
+      /** The same rooms as the property knows them, for the inspections below. */
+      const layout = new Set<string>();
+
       let photoCursor = 0;
       for (const area of report.areas) {
         const propertyArea = await this.resolveArea(tx, property.id, area.name, user.id);
@@ -542,11 +821,11 @@ export class InspectionImportService {
         // whole import back, so one repeated room costs every other area rather
         // than merging into the one already open.
         //
-        // The same write is what makes filling in a room that is already
-        // attached safe. `requireSeedableInspection` refuses an inspection
-        // holding evidence, but it is checked before `storePhotos` writes
-        // several hundred objects; an area that appears in that window would
-        // otherwise fail the commit outright instead of being filled in.
+        // The same write is what carries a room the inspection already had.
+        // Areas are snapshotted onto an inspection when it is created, so the
+        // room this report describes is usually already attached — the import
+        // fills it in rather than replacing it, which keeps anything else
+        // pointing at that area pointing at the same row.
         const inspectionArea = await tx.inspectionArea.upsert({
           where: {
             inspectionId_propertyAreaId: {
@@ -563,6 +842,38 @@ export class InspectionImportService {
           },
           select: { id: true },
         });
+        touched.add(inspectionArea.id);
+        layout.add(propertyArea.id);
+
+        /*
+         * The narrow equivalent of the bulk clear above.
+         *
+         * Only the areas this report actually covers are cleared, so an
+         * additional report replaces the garage it describes without touching
+         * the kitchen the first report established. Responses go first because
+         * they hang off the area: grades surviving cleared photographs would
+         * report a condition nothing evidences.
+         */
+        if (mode === 'ADD') {
+          const responses = await tx.inspectionAreaChecklistResponse.deleteMany({
+            where: { inspectionAreaId: inspectionArea.id },
+          });
+          // Read before the delete, so the objects behind these rows can be
+          // removed after the commit -- and only these. Collected rather than
+          // deleted here for the same reason the bulk path defers: this
+          // transaction rolls back for a living, and a rollback must not have
+          // destroyed the evidence it failed to replace.
+          const replacing = await tx.inspectionPhoto.findMany({
+            where: { inspectionAreaId: inspectionArea.id },
+            select: { storageKey: true },
+          });
+          const photos = await tx.inspectionPhoto.deleteMany({
+            where: { inspectionAreaId: inspectionArea.id },
+          });
+          superseded.push(...replacing);
+          replacedResponses.count += responses.count;
+          replacedPhotos.count += photos.count;
+        }
 
         const items = new Map<string, string>();
         for (const item of area.items) {
@@ -575,21 +886,60 @@ export class InspectionImportService {
             user.id,
           );
           items.set(label, checklistItem.id);
-          await tx.inspectionAreaChecklistResponse.create({
-            data: {
-              organizationId: user.organizationId,
-              inspectionAreaId: inspectionArea.id,
-              checklistItemId: checklistItem.id,
-              // Null where the report left the row blank. Storing false there
-              // would turn "the inspector did not look" into "it failed", and
-              // a move-out would be compared against a defect nobody recorded.
-              isClean: item.isClean,
-              isUndamaged: item.isUndamaged,
-              isWorking: item.isWorking,
-              comment: item.comment,
-              recordedById: user.id,
+          /**
+           * Two report rows can land on one checklist item.
+           *
+           * `resolveChecklistItem` matches on the label, so a report carrying
+           * two differently-worded lines that mean the same thing — and real
+           * ones do — resolves both to the same item. An unconditional create
+           * then violates `@@unique([inspectionAreaId, checklistItemId])`, and
+           * because this runs inside a transaction it took the *entire* import
+           * down with it. 1547 Revolution Way failed exactly this way: fifteen
+           * areas and 185 photographs rolled back over one duplicated row.
+           *
+           * The second row is merged rather than dropped or preferred
+           * wholesale. Where the two disagree, the **worse** condition wins: a
+           * recorded defect that loses to a later pass is a real finding
+           * deleted, while a pass that loses to a defect is only an
+           * over-report a reviewer can see and correct. Comments are joined so
+           * neither inspector's words are thrown away.
+           */
+          const existingResponse = await tx.inspectionAreaChecklistResponse.findUnique({
+            where: {
+              inspectionAreaId_checklistItemId: {
+                inspectionAreaId: inspectionArea.id,
+                checklistItemId: checklistItem.id,
+              },
             },
+            select: { id: true, isClean: true, isUndamaged: true, isWorking: true, comment: true },
           });
+
+          if (existingResponse)
+            await tx.inspectionAreaChecklistResponse.update({
+              where: { id: existingResponse.id },
+              data: {
+                isClean: worseOf(existingResponse.isClean, item.isClean),
+                isUndamaged: worseOf(existingResponse.isUndamaged, item.isUndamaged),
+                isWorking: worseOf(existingResponse.isWorking, item.isWorking),
+                comment: joinComments(existingResponse.comment, item.comment),
+              },
+            });
+          else
+            await tx.inspectionAreaChecklistResponse.create({
+              data: {
+                organizationId: user.organizationId,
+                inspectionAreaId: inspectionArea.id,
+                checklistItemId: checklistItem.id,
+                // Null where the report left the row blank. Storing false there
+                // would turn "the inspector did not look" into "it failed", and
+                // a move-out would be compared against a defect nobody recorded.
+                isClean: item.isClean,
+                isUndamaged: item.isUndamaged,
+                isWorking: item.isWorking,
+                comment: item.comment,
+                recordedById: user.id,
+              },
+            });
         }
 
         for (const photo of area.photos) {
@@ -619,6 +969,102 @@ export class InspectionImportService {
         }
       }
 
+      /**
+       * Rooms the new report does not have.
+       *
+       * Areas are snapshotted onto an inspection when it is created, from the
+       * property's layout — so an inspection carries whatever that layout said
+       * at the time, including mistakes. Two test rooms invented at 10051
+       * Spotted Horse Dr could not be deleted from the property while an
+       * inspection still referenced them, and the inspection could not be
+       * re-imported to drop them. A report that does not mention a room is the
+       * office saying that room is not part of this walkthrough.
+       *
+       * Except a room holding a recording. `InspectionMedia.inspectionArea`
+       * restricts rather than cascades, so deleting one fails — inside the
+       * transaction, taking the whole import with it — and a video is the one
+       * piece of evidence a PDF cannot put back. Status history and upload
+       * sessions restrict too, so they are cleared explicitly; photographs,
+       * checklist responses and evidence requests cascade.
+       */
+      // Under ADD there is no such thing as a stale area: the report is a
+      // supplement, and its silence about the kitchen says nothing at all about
+      // the kitchen.
+      const stale =
+        mode === 'REPLACE'
+          ? await tx.inspectionArea.findMany({
+              where: {
+                inspectionId: inspection.id,
+                id: { notIn: [...touched] },
+                media: { none: {} },
+              },
+              select: { id: true },
+            })
+          : [];
+      const staleIds = stale.map((area) => area.id);
+      if (staleIds.length) {
+        await tx.inspectionAreaStatusHistory.deleteMany({
+          where: { inspectionAreaId: { in: staleIds } },
+        });
+        await tx.mediaUploadSession.deleteMany({ where: { inspectionAreaId: { in: staleIds } } });
+        await tx.inspectionArea.deleteMany({ where: { id: { in: staleIds } } });
+      }
+
+      /**
+       * The same rooms, on this property's other inspections that have none.
+       *
+       * `InspectionArea` is a snapshot taken when an inspection is created,
+       * from the property's *approved* layout. A property nobody had walked yet
+       * has no approved layout, so every inspection scheduled against it was
+       * born with zero rooms — and nothing that happens to the layout
+       * afterwards reaches them, by design: an inspection is a record of a
+       * walkthrough, not a live view of a floor plan.
+       *
+       * The import is the moment that layout first exists. 21223 Harbor Shore
+       * Dr is the report: a move-in imported twelve rooms, and the occupied
+       * inspection at the same address still showed "0 areas · No areas match
+       * this filter" with an Add area button and nothing to add. Move-in,
+       * occupied and move-out walk the same rooms — the office's own rule —
+       * so the layout one of them establishes is the layout for all of them.
+       *
+       * Deliberately narrow, because this writes to records nobody asked to
+       * import into:
+       *
+       * - **Zero areas only.** An inspection holding rooms has a snapshot, and
+       *   a snapshot is not ours to extend. This is filling in one that was
+       *   never taken.
+       * - **The rooms this report described**, not the property's whole
+       *   approved layout. The sweep above just dropped rooms the report does
+       *   not have; handing those to a sibling would put them straight back.
+       * - **Same unit**, since a unit's layout is its own.
+       * - **Not finalized, not cancelled.** A signed-off record stays as it was
+       *   signed off, and a cancelled one is not going to be walked.
+       */
+      const sharing = layout.size
+        ? await tx.inspection.findMany({
+            where: {
+              organizationId: user.organizationId,
+              propertywareBuildingId: target.propertywareBuildingId,
+              propertywareUnitId: target.propertywareUnitId,
+              id: { not: inspection.id },
+              finalizedAt: null,
+              status: { not: InspectionStatus.CANCELLED },
+              areas: { none: {} },
+            },
+            select: { id: true },
+          })
+        : [];
+      if (sharing.length)
+        // skipDuplicates because the unique pair is the real guard: two
+        // imports landing at one property at once should produce one row each
+        // and no failure.
+        await tx.inspectionArea.createMany({
+          data: sharing.flatMap((other) =>
+            [...layout].map((propertyAreaId) => ({ inspectionId: other.id, propertyAreaId })),
+          ),
+          skipDuplicates: true,
+        });
+
       await tx.auditLog.create({
         data: {
           organizationId: user.organizationId,
@@ -628,16 +1074,44 @@ export class InspectionImportService {
           entityId: inspection.id,
           metadata: {
             fingerprint,
+            // Which way this report was written. ADD leaves areas it does not
+            // mention alone, so "replaced.areas: 0" means something different
+            // under each mode and the row should say which one it was.
+            mode,
             areas: report.areas.length,
             photos: stored.length,
             pagesWithPhotos: perPage.filter((count) => count > 0).length,
             unrecognisedRows: report.unrecognised.length,
+            // What the import overwrote. An import now replaces rather than
+            // refuses, so the thing worth being able to answer later is what
+            // was standing here before it did.
+            replaced: {
+              photos: replacedPhotos.count,
+              checklistResponses: replacedResponses.count,
+              areas: staleIds.length,
+            },
+            // Inspections at this property that had no rooms and now share
+            // these. Written down because the import touched records nobody
+            // named, and that should be answerable from the audit alone.
+            sharedLayoutWith: sharing.length,
           },
         },
       });
 
       return inspection.id;
     });
+
+    /**
+     * The objects behind the superseded rows.
+     *
+     * After the commit, and best-effort: an orphaned object costs storage,
+     * while deleting one for a transaction that then rolled back destroys a
+     * photograph nothing replaced. Same order `TechnicianService.deletePhoto`
+     * uses, for the same reason.
+     */
+    await Promise.all(
+      superseded.map((photo) => this.storage.delete(photo.storageKey).catch(() => undefined)),
+    );
 
     await this.prisma.inspectionImportJob.update({
       where: { id: jobId },
@@ -706,13 +1180,17 @@ export class InspectionImportService {
    * Move-in only. The point is a baseline for a later move-out, and seeding a
    * move-out with a move-in report would compare the property against itself.
    */
-  private async requireSeedableInspection(user: AuthenticatedUser, inspectionId: string) {
+  private async requireImportableInspection(user: AuthenticatedUser, inspectionId: string) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId: user.organizationId },
       select: {
         id: true,
         inspectionType: true,
         propertywareBuildingId: true,
+        // Which inspections share this one's rooms. A unit's layout is its own,
+        // so the sharing below is scoped to the same unit — or to the same
+        // whole property, when neither has one.
+        propertywareUnitId: true,
         propertywareBuilding: {
           select: {
             id: true,
@@ -723,34 +1201,38 @@ export class InspectionImportService {
             postalCode: true,
           },
         },
-        // Areas alone are enough to mean "has evidence": a photograph's
-        // `inspectionAreaId` is required, so one cannot exist without an area
-        // to hang from.
-        _count: { select: { areas: true } },
       },
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
     /**
-     * Any type, not only a move-in.
+     * Any inspection, of any type, in any state.
      *
-     * The restriction was scope, not safety: move-ins were the reason this was
-     * built, because a missing baseline is what breaks a later comparison. But
-     * an occupied inspection or a move-out walked in Inspect & Cloud arrives
-     * here exactly as empty and is exactly as importable, and refusing it left
-     * the office with a PDF and no way in.
+     * Two refusals used to stand here and both are gone.
      *
-     * The two guards below are the ones that were ever load-bearing: the
-     * inspection must be empty, so an import cannot overwrite somebody's
-     * walkthrough, and it must have a property, so its areas have somewhere to
-     * live. Neither depends on the type.
+     * The type restriction was scope, not safety: move-ins were the reason this
+     * was built, because a missing baseline is what breaks a later comparison,
+     * but a report walked in Inspect & Cloud for an occupied inspection or a
+     * move-out is just as importable.
+     *
+     * The emptiness refusal was the load-bearing one, and it was wrong twice
+     * over. It counted *areas*, on the reasoning that a photograph needs an
+     * area so one cannot exist without the other — true, and backwards, because
+     * an area does not need a photograph. Every inspection at a property with
+     * an approved plan is born with areas snapshotted at creation, so counting
+     * them made half the inspections in the system permanently un-importable
+     * while holding no evidence at all: seventeen of thirty-four, when
+     * measured. Counting real evidence instead would have fixed that, and the
+     * office asked for something else outright — an import is what they reach
+     * for when the record here is *wrong*, so refusing to overwrite refused the
+     * only case that mattered. 10051 Spotted Horse Dr is the example: two test
+     * areas nobody could delete, on an inspection nobody could import over.
+     *
+     * So the import now replaces what it finds, and `runCommit` is where that
+     * happens — deliberately, in one transaction, and never quietly: what it
+     * supersedes is counted into the audit row. The one refusal left is the one
+     * with nowhere to write.
      */
-    if (inspection._count.areas > 0)
-      throw new ApplicationError(
-        409,
-        'INSPECTION_NOT_EMPTY',
-        'This inspection already has evidence. A report can only be imported into an empty one.',
-      );
     if (!inspection.propertywareBuilding)
       throw new ApplicationError(
         409,

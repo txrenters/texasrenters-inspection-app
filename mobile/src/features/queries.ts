@@ -67,6 +67,18 @@ export const queryKeys = {
   roomRoot: ['room'] as const,
   room: (id: string) => ['room', id] as const,
   media: (roomId: string) => ['media', roomId] as const,
+  /**
+   * Rooted so the upload runner can refresh every area's photo list at once.
+   *
+   * The runner invalidated `roomRoot` — `['room']` — and stopped there, on the
+   * reasonable-looking assumption that it covered an area's photographs too. It
+   * does not: react-query matches a key by prefix, and `['room']` is not a
+   * prefix of `['roomPhotos', id]`. Nothing else invalidated this key anywhere
+   * in the app, so an uploaded photograph never reached the screen that gates
+   * completion on it — the badge read "1 photo saved" off the room record while
+   * the gate below it read zero off this one.
+   */
+  roomPhotosRoot: ['roomPhotos'] as const,
   roomPhotos: (roomId: string) => ['roomPhotos', roomId] as const,
   roomChecklist: (roomId: string) => ['roomChecklist', roomId] as const,
   evidenceRequests: (inspectionId: string) => ['evidenceRequests', inspectionId] as const,
@@ -590,8 +602,22 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
         void refresh();
       },
     }),
+    /**
+     * Removes the room from the inspection entirely.
+     *
+     * No `mergeEntity` and no optimistic patch: the room is gone, so there is
+     * no entity to merge into and the caller navigates away. `refresh` is what
+     * drops it from the area list the technician returns to.
+     */
+    remove: useMutation({
+      mutationFn: () => repositories.inspections.removeRoom(roomId),
+      onSuccess: () => {
+        client.removeQueries({ queryKey: queryKeys.room(roomId) });
+        void refresh();
+      },
+    }),
     skip: useMutation({
-      mutationFn: (reason: string) => repositories.inspections.skipRoom(roomId, reason),
+      mutationFn: (reason?: string) => repositories.inspections.skipRoom(roomId, reason),
       onSuccess: (room) => {
         mergeEntity(client, queryKeys.all, room);
         client.setQueryData(queryKeys.room(roomId), room);
@@ -615,6 +641,52 @@ export function useUpdateRoom(inspectionId: string, roomId: string) {
       },
     }),
   };
+}
+
+/**
+ * Marks every area a technician did not walk, in one action.
+ *
+ * An occupied visit is offered the standard fifteen-room layout, and a real
+ * property is rarely all fifteen — there is no third bedroom, no laundry, no
+ * carport. Disposing of those one at a time is the per-area toll the 2026-09-09
+ * feedback asked us to remove, on the visit type with the least time to pay it.
+ *
+ * Sequential rather than parallel, and every failure is collected rather than
+ * thrown. Firing ten writes at once on a weak signal is how they all time out,
+ * and one refusal in the middle must not leave the technician unable to tell
+ * which areas were dealt with — this returns the tally and the screen says so.
+ *
+ * A queued skip counts as done. `skipRoom` holds the write when the network is
+ * gone and throws `QueuedOfflineError` to say so, which is the normal case for
+ * this button: the technician is standing in the property, finishing up.
+ */
+export function useSkipAreas(inspectionId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (roomIds: readonly string[]) => {
+      let skipped = 0;
+      let queued = 0;
+      const failed: string[] = [];
+      for (const roomId of roomIds) {
+        try {
+          await repositories.inspections.skipRoom(roomId);
+          skipped += 1;
+        } catch (error) {
+          if (error instanceof QueuedOfflineError) queued += 1;
+          else failed.push(roomId);
+        }
+      }
+      return { skipped, queued, failed };
+    },
+    onSettled: () =>
+      verifyQueries(client, [
+        queryKeys.roomRoot,
+        queryKeys.rooms(inspectionId),
+        queryKeys.inspectionContext(inspectionId),
+        queryKeys.inspectionReport(inspectionId),
+        queryKeys.dashboard,
+      ]),
+  });
 }
 
 export function useSaveRecording() {

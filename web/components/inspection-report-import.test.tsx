@@ -69,31 +69,28 @@ describe('importing an inspection report', () => {
     // Warning about work that is not at risk is how people learn to ignore
     // warnings that matter.
     job = { id: 'job-1', status: 'RUNNING', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: null };
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     expect(await screen.findByText(/keeps running if you close the page/i)).toBeTruthy();
   });
 
   it('will not send a file that is not a PDF', async () => {
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    const onHandOff = vi.fn();
+    render(<InspectionReportImport onHandOff={onHandOff} />);
     choose(new File(['x'], 'notes.txt', { type: 'text/plain' }));
 
     expect(await screen.findByText(/not a PDF/i)).toBeTruthy();
-    expect(startImport).not.toHaveBeenCalled();
+    expect(onHandOff).not.toHaveBeenCalled();
   });
 
-  it('sends the report against the inspection it is filling in', async () => {
-    // The destination is the empty move-in itself, not a property: Jobber
-    // already created the record and this is what puts its evidence back.
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+  it('hands the file over rather than uploading it itself', async () => {
+    // The upload moved to the drawer so this dialog can close immediately.
+    // What it still owns is choosing the file and refusing a wrong one.
+    const onHandOff = vi.fn();
+    render(<InspectionReportImport onHandOff={onHandOff} />);
     choose(pdf());
 
-    await waitFor(() =>
-      expect(startImport).toHaveBeenCalledWith(
-        expect.objectContaining({ inspectionId: 'inspection-1' }),
-      ),
-    );
+    await waitFor(() => expect(onHandOff).toHaveBeenCalled());
   });
 
   it('shows what the reader could not resolve before anything is written', async () => {
@@ -117,8 +114,7 @@ describe('importing an inspection report', () => {
         },
       }),
     };
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     // JSX splits "{n} things to check" into two text nodes, so the heading is
     // found by its static half and the count read off the element around it.
@@ -133,22 +129,39 @@ describe('importing an inspection report', () => {
     // An imported inspection is evidence, and whether it was measured or
     // inferred is part of it.
     job = { id: 'job-1', status: 'COMPLETED', method: 'AI', provider: 'ANTHROPIC', errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     expect(await screen.findByText(/read by AI/i)).toBeTruthy();
   });
 
   it('does not import until somebody presses the button', async () => {
     job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     await screen.findByRole('button', { name: /^import as .* inspection$/i });
     expect(commitImport).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /^import as .* inspection$/i }));
-    await waitFor(() => expect(commitImport).toHaveBeenCalledWith('job-1'));
+    await waitFor(() => expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'REPLACE' }));
+  });
+
+  /**
+   * The second report. An agent who submits an incomplete walkthrough issues
+   * another PDF for what was missed, and importing that the usual way would
+   * keep only the areas it names and drop everything the first one established.
+   */
+  it('writes an additional report without replacing the inspection', async () => {
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
+    render(<InspectionReportImport resumeJobId="job-1" />);
+
+    // Replace is the default, so an import nobody thinks about behaves as it always did.
+    const replace = await screen.findByRole('radio', { name: /replace this inspection/i });
+    expect((replace as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: /add to this inspection/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add these areas/i }));
+
+    await waitFor(() => expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'ADD' }));
   });
 
   it('keeps showing progress while the server is still writing', async () => {
@@ -166,8 +179,7 @@ describe('importing an inspection report', () => {
       committedAt: null,
       summary: summary(),
     };
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     const button = await screen.findByRole('button', { name: /^import as .* inspection$/i });
     // Wrapped: `commit` sets its flag in an async continuation, which the click
@@ -176,7 +188,7 @@ describe('importing an inspection report', () => {
       fireEvent.click(button);
     });
 
-    expect(commitImport).toHaveBeenCalledWith('job-1');
+    expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'REPLACE' });
     // Still writing: the job has no committedAt yet, so the screen must not
     // claim the import is done just because the request came back.
     await waitFor(() =>
@@ -195,8 +207,7 @@ describe('importing an inspection report', () => {
       committedAt: null,
       summary: null,
     };
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
+    render(<InspectionReportImport resumeJobId="job-1" />);
 
     expect(await screen.findByText(/no AI provider is configured/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /try another file/i })).toBeTruthy();

@@ -253,6 +253,20 @@ export class TechnicianController {
   ) {
     return this.service.updateRoomNote(request.user, id, body.note);
   }
+  /**
+   * Removes an area from this inspection — a room the property does not have.
+   *
+   * DELETE on the room itself rather than a `/remove` verb: the resource is
+   * gone afterwards, and the route should say so. Refused outright when the
+   * area holds any evidence; skipping is the answer for a room that exists and
+   * cannot be inspected.
+   */
+  @Delete('rooms/:roomId') removeArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('roomId') id: string,
+  ) {
+    return this.service.removeArea(request.user, id);
+  }
   @Post('rooms/:roomId/skip') skip(
     @Req() request: AuthenticatedRequest,
     @Param('roomId') id: string,

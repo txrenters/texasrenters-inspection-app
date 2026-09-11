@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { rejectLocationFix, usableLocationFixes } from '@texasrenters/shared';
+import { normaliseMotion, rejectLocationFix, usableLocationFixes } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
@@ -57,6 +57,11 @@ export class TechnicianLocationService {
           longitude: fix.longitude,
           accuracyMeters: fix.accuracyMeters ?? null,
           batteryPercent: fix.batteryPercent ?? null,
+          // Normalised again here, not only on the handset. A queue survives an
+          // app update, so a batch arriving today can hold points written by a
+          // build that predates `normaliseMotion` and still carries the
+          // platforms' `-1` for "no course".
+          ...normaliseMotion(fix),
           recordedAt: new Date(fix.recordedAt),
         })),
       });
@@ -97,6 +102,8 @@ export class TechnicianLocationService {
           longitude: true,
           accuracyMeters: true,
           batteryPercent: true,
+          headingDegrees: true,
+          speedMetersPerSecond: true,
           recordedAt: true,
           technician: { select: { id: true, displayName: true } },
         },
@@ -154,6 +161,8 @@ export class TechnicianLocationService {
         longitude: true,
         accuracyMeters: true,
         batteryPercent: true,
+        headingDegrees: true,
+        speedMetersPerSecond: true,
         recordedAt: true,
         technician: { select: { id: true, displayName: true } },
       },

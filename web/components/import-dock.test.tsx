@@ -1,33 +1,50 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { ImportDockProvider } from './import-dock';
+import { ImportDockProvider, useImportDock } from './import-dock';
 import type { RunningImport } from '@/lib/queries';
 
 /**
- * The dock has to be dismissible.
+ * The drawer an import lives in from beginning to end.
  *
- * It sits over the bottom-right corner, which is where this console puts the
- * buttons on almost every form — so an import running in the background made
- * those buttons unclickable. A progress indicator that blocks the work it
- * reports on is worse than no indicator.
+ * Importing used to be three acts with the reader present for all of them: a
+ * dialog that could not be closed while the file went up, a wait, and then a
+ * review step that had to be found and pressed. The middle act was invisible
+ * and the last one was skipped — eleven reports sat parsed and never written
+ * in, every one an inspection showing zero areas.
+ *
+ * Now the dialog hands the file over and closes. The drawer carries the upload,
+ * the server reads and applies the report, and the only thing asked of anybody
+ * is to read a notification saying it landed.
  */
 
 let imports: RunningImport[] = [];
+const startImport = vi.fn();
+const success = vi.fn();
+const failure = vi.fn();
+const push = vi.fn();
 
 vi.mock('next/link', () => ({
   default: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock('sonner', () => ({ toast: { info: (...a: unknown[]) => notify(...a) } }));
-vi.mock('@/lib/queries', () => ({ useRunningImports: () => ({ data: imports }) }));
-
-const notify = vi.fn();
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
+vi.mock('sonner', () => ({
+  toast: {
+    success: (...a: unknown[]) => success(...a),
+    error: (...a: unknown[]) => failure(...a),
+  },
+}));
+vi.mock('@/lib/queries', () => ({
+  useRunningImports: () => ({ data: imports }),
+  useAdminMutations: () => ({ startInspectionImport: { mutateAsync: startImport } }),
+}));
 
 const job = (overrides: Partial<RunningImport> = {}): RunningImport => ({
   id: 'job-1',
   inspectionId: 'inspection-1',
   status: 'RUNNING',
+  state: 'READING',
+  errorCode: null,
   awaitingReview: false,
   address: '1547 Revolution Way',
   inspectionType: 'MOVE_IN',
@@ -36,159 +53,181 @@ const job = (overrides: Partial<RunningImport> = {}): RunningImport => ({
 
 beforeEach(() => {
   imports = [];
-  notify.mockReset();
+  // Never settles, so an upload under test stays in flight and visible.
+  startImport.mockReset().mockReturnValue(new Promise(() => {}));
+  success.mockReset();
+  failure.mockReset();
+  push.mockReset();
   window.localStorage.clear();
 });
 
-describe('the import drawer', () => {
-  it('renders nothing but an anchor when no import is running', () => {
-    // An empty dock is still a rectangle over the corner. There is nothing to
-    // report, so there should be nothing there.
+/** Stands in for the import dialog, which hands its file over and closes. */
+function Hander() {
+  const dock = useImportDock();
+  return (
+    <button
+      onClick={() =>
+        dock?.upload({
+          inspectionId: 'inspection-2',
+          address: '12009 Tambourine',
+          file: new File(['%PDF-1.4'], 'report.pdf', { type: 'application/pdf' }),
+        })
+      }
+      type="button"
+    >
+      hand over
+    </button>
+  );
+}
+
+describe('what the drawer shows', () => {
+  it('still offers its handle when nothing is happening', () => {
+    /**
+     * It used to render nothing at all when idle, which made the drawer
+     * unfindable: the only way to see running imports was to already have one
+     * running. Somebody who started an import, walked to the next property and
+     * came back had no way left to ask what had happened to it.
+     */
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByRole('button', { name: /show imports/i })).toBeTruthy();
+    // Nothing is running, so nothing claims to be.
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  it('closes to a handle, leaving only a way back', () => {
-    imports = [job()];
+  it('says so rather than opening onto a blank panel', () => {
+    // Opening the drawer asks "is anything still going?", and an empty box
+    // does not answer it — it reads as something that failed to load.
     render(<ImportDockProvider>page</ImportDockProvider>);
-
-    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
-
-    expect(screen.queryByRole('link')).toBeNull();
-    expect(screen.getByRole('button', { name: /show 1 running import$/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /show imports/i }));
+    expect(screen.getByText(/no imports running/i)).toBeTruthy();
   });
 
-  it('comes back when asked', () => {
+  it('opens itself when a file is handed over here', async () => {
+    // The dialog closes as soon as it has the file, so without this the whole
+    // visible result of choosing a report is a dialog disappearing while the
+    // bytes go up behind a closed drawer.
+    render(
+      <ImportDockProvider>
+        <Hander />
+      </ImportDockProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /hand over/i }));
+    expect(await screen.findByText('12009 Tambourine')).toBeTruthy();
+  });
+
+  it('starts closed, so an idle drawer does not sit over the page', () => {
+    // The old default was open-unless-closed, which was right while the dock
+    // vanished when idle. Now that the handle is permanent, that default puts
+    // a panel over the right-hand side of every page saying nothing is
+    // happening.
     imports = [job()];
     render(<ImportDockProvider>page</ImportDockProvider>);
-    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
+    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
+    expect(screen.getByRole('button', { name: /show 1 import in progress/i })).toBeTruthy();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: /show 1 running import/i }));
-
+  it('shows a report being read', () => {
+    imports = [job()];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
     expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
+    expect(screen.getByText(/reading the report/i)).toBeTruthy();
   });
 
-  it('remembers being closed across a reload', () => {
-    // The whole point. Re-collapsing it on every page would make the fix
-    // useless to somebody working through a queue of imports.
+  it('does not count a finished import as work in progress', () => {
+    // A finished job lingers briefly so it can be announced. Counting it would
+    // claim two things are happening when one already stopped.
+    imports = [job({ id: 'done', state: 'IMPORTED' }), job({ id: 'busy', state: 'READING' })];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    expect(screen.getByRole('button', { name: /show 1 import in progress/i })).toBeTruthy();
+  });
+
+  it('opens to a list and closes back to a handle', () => {
+    imports = [job()];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
+    expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
+    expect(screen.queryByText('1547 Revolution Way')).toBeNull();
+  });
+
+  it('remembers being opened across a reload', () => {
+    // The preference is the whole reason storage is touched at all: somebody
+    // watching a backlog land should not have to reopen this on every route.
     imports = [job()];
     const first = render(<ImportDockProvider>page</ImportDockProvider>);
-    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
+    fireEvent.click(screen.getByRole('button', { name: /show 1 import in progress/i }));
     first.unmount();
 
     render(<ImportDockProvider>page</ImportDockProvider>);
-
-    expect(screen.queryByRole('link')).toBeNull();
-    expect(screen.getByRole('button', { name: /show 1 running import/i })).toBeTruthy();
-  });
-
-  it('counts what is hidden, so it is not silence', () => {
-    imports = [job(), job({ id: 'job-2', address: '12009 Tambourine Dr' })];
-    render(<ImportDockProvider>page</ImportDockProvider>);
-    fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
-
-    expect(screen.getByRole('button', { name: /show 2 running imports/i })).toBeTruthy();
+    expect(screen.getByText('1547 Revolution Way')).toBeTruthy();
   });
 
   it('survives storage being unavailable', () => {
-    // Private windows and some embedded contexts throw on access rather than
-    // returning null. Losing the preference is fine; taking the shell down
-    // with it is not.
+    // Private windows throw on access rather than returning null. Losing the
+    // preference is fine; taking the shell down with it is not.
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('blocked');
     });
-    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('blocked');
-    });
     imports = [job()];
-
-    expect(() => {
-      render(<ImportDockProvider>page</ImportDockProvider>);
-      fireEvent.click(screen.getByRole('button', { name: /hide running imports/i }));
-    }).not.toThrow();
-
+    expect(() => render(<ImportDockProvider>page</ImportDockProvider>)).not.toThrow();
     getItem.mockRestore();
-    setItem.mockRestore();
-  });
-
-  it('still distinguishes the two kinds of waiting while expanded', () => {
-    // One finishes on its own; the other needs somebody to act. The wording
-    // moved from describing the state to naming the action, because describing
-    // it left eleven reports parsed and never written in.
-    imports = [job({ awaitingReview: true })];
-    render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.getByText(/open and press import to finish/i)).toBeTruthy();
   });
 });
 
-/**
- * Telling somebody a report needs them.
- *
- * The dialog minimises itself when the upload finishes, which is right — the
- * file is safe and the reading takes minutes. But the reading ends at a
- * decision only a person can make, and nothing said so: eleven reports sat
- * parsed and uncommitted in production, each one an inspection still showing
- * zero areas, because everybody believed the import had happened.
- */
-describe('asking the reader back', () => {
-  it('says when a report is ready to import', () => {
-    imports = [job({ awaitingReview: true })];
+describe('announcing what happened', () => {
+  it('says when a report has been written in', () => {
+    imports = [job({ state: 'IMPORTED' })];
     render(<ImportDockProvider>page</ImportDockProvider>);
 
-    expect(notify).toHaveBeenCalledWith(
-      '1547 Revolution Way is ready to import',
-      expect.objectContaining({ description: expect.stringContaining('press Import') }),
+    expect(success).toHaveBeenCalledWith(
+      '1547 Revolution Way imported',
+      expect.objectContaining({ description: expect.stringContaining('on the inspection now') }),
     );
   });
 
-  it('says nothing while a report is still being read', () => {
-    // That one finishes on its own. Announcing it would train people to ignore
-    // the notice that actually asks for something.
-    imports = [job({ awaitingReview: false })];
+  it('says when one failed, rather than dropping it quietly', () => {
+    // A row leaving the list is ambiguous on its own — it means written in, or
+    // it means failed. Announcing success on a disappearance would be a
+    // cheerful lie, and believing an import happened when it did not is the
+    // exact failure this whole feature has been fixing.
+    imports = [job({ state: 'FAILED', errorCode: 'REPORT_NOT_READABLE' })];
     render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(notify).not.toHaveBeenCalled();
+
+    expect(failure).toHaveBeenCalledWith(
+      '1547 Revolution Way could not be imported',
+      expect.objectContaining({ description: 'REPORT_NOT_READABLE' }),
+    );
+    expect(success).not.toHaveBeenCalled();
   });
 
-  it('announces each report once, not on every poll', () => {
-    // The list is polled every few seconds. Without the guard, a queue of
-    // waiting reports would re-announce itself continuously.
-    imports = [job({ awaitingReview: true })];
+  it('says nothing while a report is still being read', () => {
+    imports = [job({ state: 'READING' })];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    expect(success).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+  });
+
+  it('announces once, not on every poll', () => {
+    // A finished job stays in the list for a window so it can be announced.
+    // Without the guard, every poll in that window would repeat itself.
+    imports = [job({ state: 'IMPORTED' })];
     const view = render(<ImportDockProvider>page</ImportDockProvider>);
     view.rerender(<ImportDockProvider>page</ImportDockProvider>);
     view.rerender(<ImportDockProvider>page</ImportDockProvider>);
-    expect(notify).toHaveBeenCalledTimes(1);
+    expect(success).toHaveBeenCalledTimes(1);
   });
 
-  it('counts the two states apart instead of calling both running', () => {
-    // "11 imports running" while nothing was running is what made the drawer
-    // unreadable — the number that mattered was how many needed a person.
-    imports = [
-      job({ awaitingReview: true }),
-      job({ id: 'job-2', awaitingReview: true, address: '323 Lakeview Dr' }),
-      job({ id: 'job-3', awaitingReview: false, address: '12009 Tambourine Dr' }),
-    ];
+  it('offers a way to the inspection that just filled in', () => {
+    imports = [job({ state: 'IMPORTED' })];
     render(<ImportDockProvider>page</ImportDockProvider>);
 
-    expect(screen.getByText(/2 need your review/i)).toBeTruthy();
-    expect(screen.getByText(/1 reading/i)).toBeTruthy();
-  });
-
-  it('tells a row what to do rather than what it is', () => {
-    imports = [job({ awaitingReview: true })];
-    render(<ImportDockProvider>page</ImportDockProvider>);
-    expect(screen.getByText(/open and press import to finish/i)).toBeTruthy();
-  });
-
-  it('puts the ones needing a person first', () => {
-    imports = [
-      job({ id: 'reading', awaitingReview: false, address: 'Still reading' }),
-      job({ id: 'ready', awaitingReview: true, address: 'Needs you' }),
-    ];
-    render(<ImportDockProvider>page</ImportDockProvider>);
-
-    const rows = screen.getAllByRole('link').map((link) => link.textContent ?? '');
-    expect(rows[0]).toContain('Needs you');
+    const action = success.mock.calls[0][1].action as { label: string; onClick: () => void };
+    expect(action.label).toBe('Open');
+    action.onClick();
+    expect(push).toHaveBeenCalledWith('/inspections/inspection-1?import=job-1');
   });
 });
 
@@ -204,6 +243,10 @@ describe('where a row takes you', () => {
   it('links to the review, not just the inspection', () => {
     imports = [job({ id: 'job-7', inspectionId: 'inspection-9', awaitingReview: true })];
     render(<ImportDockProvider>page</ImportDockProvider>);
+    // The dock starts collapsed now — the button is always on screen and the
+    // rows are behind it — so it has to be opened before there are any rows to
+    // ask about. These three were written before that change.
+    fireEvent.click(screen.getByRole('button', { name: /show .*import/i }));
     expect(screen.getByRole('link').getAttribute('href')).toBe(
       '/inspections/inspection-9?import=job-7',
     );
@@ -217,6 +260,10 @@ describe('where a row takes you', () => {
       job({ id: 'second', inspectionId: 'same', awaitingReview: true, address: 'B' }),
     ];
     render(<ImportDockProvider>page</ImportDockProvider>);
+    // The dock starts collapsed now — the button is always on screen and the
+    // rows are behind it — so it has to be opened before there are any rows to
+    // ask about. These three were written before that change.
+    fireEvent.click(screen.getByRole('button', { name: /show .*import/i }));
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
     expect(hrefs).toContain('/inspections/same?import=first');
     expect(hrefs).toContain('/inspections/same?import=second');
@@ -225,6 +272,10 @@ describe('where a row takes you', () => {
   it('does not invent a link for a job with no inspection', () => {
     imports = [job({ inspectionId: null, awaitingReview: true })];
     render(<ImportDockProvider>page</ImportDockProvider>);
+    // The dock starts collapsed now — the button is always on screen and the
+    // rows are behind it — so it has to be opened before there are any rows to
+    // ask about. These three were written before that change.
+    fireEvent.click(screen.getByRole('button', { name: /show .*import/i }));
     expect(screen.getByRole('link').getAttribute('href')).toBe('#');
   });
 });

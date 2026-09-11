@@ -21,7 +21,9 @@ import {
   archiveChecklistItem,
   createChecklistItem,
   fetchAreaChecklist,
+  fetchOccupiedChecklist,
   type AreaChecklistItem,
+  type OccupiedChecklistItem,
 } from '@/lib/area-checklist';
 
 /**
@@ -50,6 +52,9 @@ export function AreaChecklistDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [items, setItems] = useState<AreaChecklistItem[]>([]);
+  // Null while unknown or unreachable, [] when the organization genuinely
+  // has none yet — the panel says something different for each.
+  const [occupiedItems, setOccupiedItems] = useState<OccupiedChecklistItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   // Split by origin: a failed load belongs in the list region it replaces, a
@@ -66,7 +71,18 @@ export function AreaChecklistDialog({
       setLoading(true);
       setLoadError(null);
       try {
-        setItems(await fetchAreaChecklist(areaId, signal));
+        /**
+         * Both lists, because this area has two and the dialog used to imply
+         * one. The occupied list never fails the dialog: it is a secondary
+         * panel, and an administrator opening this to edit the room checklist
+         * should not be blocked by a request that only informs.
+         */
+        const [areaItems, occupied] = await Promise.all([
+          fetchAreaChecklist(areaId, signal),
+          fetchOccupiedChecklist(signal).catch(() => null),
+        ]);
+        setItems(areaItems);
+        setOccupiedItems(occupied);
       } catch (cause) {
         if (signal?.aborted) return;
         setLoadError(cause instanceof Error ? cause.message : 'Could not load the checklist.');
@@ -122,9 +138,17 @@ export function AreaChecklistDialog({
       <DialogContent className="flex max-h-[85vh] flex-col gap-4 sm:max-w-xl">
         <DialogHeader className="shrink-0 pr-8">
           <DialogTitle>{areaName} checklist</DialogTitle>
+          {/*
+            This said "What the technician is asked to cover while recording this
+            area", full stop — which is untrue on an occupied visit, and read to
+            a reviewer as though a fifteen-minute walk still asked nine questions
+            about a bathroom. It is the move-in, move-out and back-to-market
+            list; occupied asks the two questions shown below it.
+          */}
           <DialogDescription>
-            What the technician is asked to cover while recording this area. Each item ticks itself
-            when its wording is spoken, matched against the recording&apos;s AI summary.
+            What a <strong>move-in, move-out or back-to-market</strong> visit asks about this area.
+            Each item ticks itself when its wording is spoken, matched against the recording&apos;s
+            AI summary. An occupied visit asks the shorter list below instead.
           </DialogDescription>
         </DialogHeader>
 
@@ -173,6 +197,58 @@ export function AreaChecklistDialog({
               No items yet. The technician sees a generated fallback list until you add some.
             </p>
           )}
+
+          {/*
+            The other list this area has.
+
+            Shown here rather than on a settings page because this dialog is
+            where somebody comes to ask "what does the technician see?", and
+            answering with only half of it is what caused the confusion. Read
+            only: these two rows are held once for the whole organization, so an
+            edit control here would let somebody change every property while
+            believing they had changed one room.
+          */}
+          {!loading && !loadError ? (
+            <section aria-labelledby="occupied-checklist-heading" className="mt-6">
+              <h3
+                className="text-muted-foreground mb-1 text-xs font-semibold tracking-wide uppercase"
+                id="occupied-checklist-heading"
+              >
+                On an occupied visit
+              </h3>
+              <p className="text-muted-foreground mb-2 text-xs">
+                The same two questions in every room, for the whole organization — not this area
+                alone. An occupied inspection is walked in about fifteen minutes, so it asks these
+                instead of the list above.
+              </p>
+              {occupiedItems === null ? (
+                <p className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
+                  Could not load the occupied checklist.
+                </p>
+              ) : occupiedItems.length ? (
+                <ul aria-label="Occupied inspection questions" className="grid gap-2">
+                  {occupiedItems.map((item) => (
+                    <li className="rounded-md border p-3" key={item.id}>
+                      <p className="text-sm font-medium">{item.label}</p>
+                      {item.choices?.length ? (
+                        <p className="text-muted-foreground mt-1 text-xs">
+                          {item.choices.join(' · ')}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                /* Empty is a real state, not a fault: the rows are written when
+                   an occupied inspection is created, so an organization whose
+                   occupied visits all predate that has none yet. */
+                <p className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
+                  Not created yet. The two questions are written the first time an occupied
+                  inspection is scheduled.
+                </p>
+              )}
+            </section>
+          ) : null}
         </div>
 
         {/* A real form, so Enter submits from either field rather than only the

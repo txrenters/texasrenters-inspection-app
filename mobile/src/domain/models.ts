@@ -123,6 +123,14 @@ export interface InspectionRoom {
    */
   baseline?: BaselineCondition;
   completionStatus: RoomCompletionStatus;
+  /**
+   * Photographs the server holds for this area.
+   *
+   * Optional so a cached room from before the field existed still parses.
+   * Read by `deriveAreaStatus`, which otherwise sees only recording state
+   * and calls a photographed area "Not started".
+   */
+  photoCount?: number;
   uploadStatus: UploadStatus;
   processingStatus: ProcessingStatus;
   reviewStatus?: FindingStatus;

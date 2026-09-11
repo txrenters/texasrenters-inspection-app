@@ -34,6 +34,8 @@ import {
   allowsTechnicianCapture,
   isSyncedType,
   notSyncedReason,
+  namesAnInspection,
+  NOT_AN_INSPECTION_REASON,
   resolveVisitType,
   visitTypeRules,
   occupiedInspectionInDetails,
@@ -55,6 +57,16 @@ const PAGE_SIZE = 25;
 
 /** A guard against a filter that does not narrow the way we think it does. */
 const MAX_PAGES = 200;
+
+/**
+ * How many times a throttled page is retried before the run gives up.
+ *
+ * Five, with doubling waits, is roughly four minutes of patience — far longer
+ * than Jobber's bucket needs to refill, and short enough that a genuine outage
+ * still ends the run rather than hanging on it.
+ */
+const THROTTLE_RETRIES = 5;
+const THROTTLE_BACKOFF_SECONDS = 5;
 
 export interface JobberSyncResult {
   correlationId: string;
@@ -79,6 +91,23 @@ export interface JobberSyncResult {
    */
   completedFromJobber: number;
   skipped: number;
+  /**
+   * Jobber still had more pages when the run stopped.
+   *
+   * `MAX_PAGES × PAGE_SIZE` is 5,000 visits, and the loop simply falls out at
+   * the cap. Before this the result was indistinguishable from a complete run:
+   * a truncated sync reported a number and nothing said the number was partial.
+   * That matters most for exactly the case this field was added for — widening
+   * the window to backfill a quarter, where the visit count is unknown in
+   * advance and the cap is reachable.
+   */
+  truncated: boolean;
+}
+
+/** The slice of calendar a run covers. ISO 8601, as Jobber's filter wants. */
+export interface JobberSyncWindow {
+  startAfter: string;
+  startBefore: string;
 }
 
 /**
@@ -139,7 +168,7 @@ export class JobberSyncWorker {
    * code. Nothing is dropped silently, because a visit this sync ignored is a
    * property visit nobody is going to.
    */
-  async run(organizationId: string): Promise<JobberSyncResult> {
+  async run(organizationId: string, over?: JobberSyncWindow): Promise<JobberSyncResult> {
     const correlationId = randomUUID();
     const result: JobberSyncResult = {
       correlationId,
@@ -153,6 +182,7 @@ export class JobberSyncWorker {
       assigned: 0,
       completedFromJobber: 0,
       skipped: 0,
+      truncated: false,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
       where: { organizationId },
@@ -175,11 +205,20 @@ export class JobberSyncWorker {
       // small, and re-reading it per page would be the most expensive thing here.
       const index = await this.mapping.buildingIndex(organizationId);
       const rules = visitTypeRules();
-      const window = this.window();
+      /**
+       * The rolling window unless a caller names one.
+       *
+       * The scheduled sync wants the moving window and always will. A backfill
+       * wants a fixed slice of the past -- the third quarter, say -- which the
+       * rolling one cannot reach: the lookback is seven days, so anything older
+       * than a week is invisible to every run no matter how often it runs. That
+       * is why only September appeared in the console.
+       */
+      const window = over ?? this.window();
       let cursor: string | null = null;
 
       for (let page = 0; page < MAX_PAGES; page += 1) {
-        const { data, cost } = await this.fetchVisitsPage(
+        const { data, cost } = await this.fetchVisitsPageWithRetry(
           organizationId,
           { first: PAGE_SIZE, after: cursor, ...window },
           correlationId,
@@ -202,6 +241,17 @@ export class JobberSyncWorker {
         const { hasNextPage, endCursor } = parsed.data.visits.pageInfo;
         if (!hasNextPage || !endCursor) break;
         cursor = endCursor;
+        // The last page allowed, and Jobber has more. Said out loud rather
+        // than left as a number that looks complete.
+        if (page === MAX_PAGES - 1) {
+          result.truncated = true;
+          this.logger.warn({
+            event: 'jobber_sync_truncated',
+            correlationId,
+            visitsSeen: result.visitsSeen,
+            reason: `Stopped at the ${MAX_PAGES}-page cap with more visits pending.`,
+          });
+        }
         await this.pace(cost);
       }
 
@@ -250,6 +300,7 @@ export class JobberSyncWorker {
       assigned: 0,
       completedFromJobber: 0,
       skipped: 0,
+      truncated: false,
     };
     const connection = await this.prisma.jobberConnection.findUnique({
       where: { organizationId },
@@ -326,7 +377,11 @@ export class JobberSyncWorker {
     const needed = PAGE_SIZE * 20;
     if (currentlyAvailable >= needed || restoreRate <= 0) return;
     const seconds = (needed - currentlyAvailable) / restoreRate;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(seconds, 30) * 1_000));
+    // Capped, but generously. Thirty seconds was not enough to outlast a
+    // drained bucket on a quarter-wide backfill: the next page fired early,
+    // Jobber answered THROTTLED, and the run ended. The cap exists to stop a
+    // pathological sleep, not to cut a legitimate one short.
+    await new Promise((resolve) => setTimeout(resolve, Math.min(seconds, 120) * 1_000));
   }
 
   /**
@@ -343,6 +398,44 @@ export class JobberSyncWorker {
    * request for the whole run.
    */
   private detailsFieldRejected = false;
+
+  /**
+   * The same page, after waiting out a throttle.
+   *
+   * `JobberClient` already decides that a THROTTLED response is recoverable and
+   * sets `retryable` on the error — and nothing read it, so the sync aborted on
+   * a failure it had itself labelled as temporary. A quarter-wide backfill died
+   * this way after importing forty inspections: the work was done, the run
+   * reported a rejection, and the remaining pages were simply never fetched.
+   *
+   * Retrying the *same cursor* rather than advancing, because a rejected page
+   * returned nothing — moving on would skip the visits it would have carried,
+   * silently, which is the one outcome worse than stopping.
+   */
+  private async fetchVisitsPageWithRetry(
+    organizationId: string,
+    variables: Record<string, unknown>,
+    correlationId?: string,
+  ) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.fetchVisitsPage(organizationId, variables, correlationId);
+      } catch (error) {
+        const recoverable = error instanceof JobberError && error.retryable;
+        if (!recoverable || attempt >= THROTTLE_RETRIES) throw error;
+        // Jobber's bucket refills on a clock, so waiting longer each time is
+        // the whole remedy; there is nothing to negotiate.
+        const seconds = Math.min(2 ** attempt * THROTTLE_BACKOFF_SECONDS, 120);
+        this.logger.warn({
+          event: 'jobber_sync_throttled_retry',
+          correlationId,
+          attempt: attempt + 1,
+          waitingSeconds: seconds,
+        });
+        await new Promise((resolve) => setTimeout(resolve, seconds * 1_000));
+      }
+    }
+  }
 
   private async fetchVisitsPage(
     organizationId: string,
@@ -471,18 +564,37 @@ export class JobberSyncWorker {
      * `IN_PROGRESS` only, so a finished visit cannot reappear as work somebody
      * already did.
      *
-     * Deliberately move-ins alone. Of the 130 finished visits sitting here, 47
-     * are filter deliveries and 77 carry a job number for a title and no type
-     * at all; importing those would be inventing history rather than recovering
-     * it. Only a move-in is owed a baseline.
+     * **No longer move-ins alone.** It was, and the reasoning was sound at the
+     * time: of the 130 finished visits then sitting here, 47 were filter
+     * deliveries and 77 carried a job number for a title and no type at all, so
+     * importing them would have been inventing history rather than recovering
+     * it.
+     *
+     * Both of those are now excluded by guards that did not exist when this was
+     * written. The 77 untyped ones fail `outcome === 'RESOLVED'`. The filter
+     * deliveries fail `namesAnInspection` — unless their details say
+     * "+ Occupied Inspection", in which case `type` was already upgraded above
+     * and the visit genuinely *is* an occupied inspection. So the type
+     * restriction was the only part still doing work, and what it excluded was
+     * every completed occupied inspection and move-out in the office's history.
+     *
+     * That cost was invisible until a quarter was backfilled: 700 of 856 Q3
+     * visits came back `alreadyComplete`, and July finished with zero occupied
+     * inspections against seventy in September — the difference being that
+     * September's had not happened yet.
+     *
+     * `namesAnInspection` is repeated here rather than relied on below, because
+     * the check below runs *after* this branch: a finished visit keeps
+     * SKIPPED_COMPLETE, which says more about it. Recovering one without
+     * repeating the check would import exactly what that comment feared.
      */
-    const isRecoverableMoveIn =
+    const isRecoverable =
       type.outcome === 'RESOLVED' &&
-      type.inspectionType === InspectionType.MOVE_IN &&
       Boolean(visit.property?.id) &&
-      Boolean(visit.startAt);
+      Boolean(visit.startAt) &&
+      namesAnInspection(visit.title, visit.instructions);
 
-    if (isComplete && !isRecoverableMoveIn) {
+    if (isComplete && !isRecoverable) {
       await this.prisma.jobberVisitImport.update({
         where: { id: record.id },
         data: {
@@ -492,6 +604,38 @@ export class JobberSyncWorker {
         },
       });
       result.alreadyComplete += 1;
+      return;
+    }
+
+    /**
+     * Other work, not an inspection.
+     *
+     * The maintenance calendar is most of what Jobber holds — cleaning, a water
+     * leak, drywall, a smoke alarm, and repair work orders on the very
+     * equipment the type rules name. Ten of those resolved to HVAC and were
+     * imported as inspections; eighteen more matched nothing and were *refused*,
+     * which put them in the console as a queue of work waiting for a person.
+     * Neither was ever going to become an inspection.
+     *
+     * Skipped rather than refused, for the reason the filter-delivery branch
+     * below gives: this is a decision already made, not a question for someone.
+     *
+     * Placed after the completed branch so a finished visit keeps
+     * SKIPPED_COMPLETE, which says more about it than this would — and before
+     * the property is resolved, which is the ordering `notSyncedReason` had to
+     * learn: resolving first put work we never import into the mapping queue as
+     * addresses to reconcile.
+     */
+    if (!namesAnInspection(visit.title, visit.instructions)) {
+      await this.prisma.jobberVisitImport.update({
+        where: { id: record.id },
+        data: {
+          status: JobberVisitImportStatus.SKIPPED_NOT_SYNCED,
+          failureCode: null,
+          failureMessage: NOT_AN_INSPECTION_REASON,
+        },
+      });
+      result.notSynced += 1;
       return;
     }
 

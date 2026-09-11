@@ -1,4 +1,5 @@
 import {
+  OCCUPIED_CHECKLIST,
   checklistKindFor,
   checklistTemplateForKind,
   keywordsFromLabel,
@@ -108,6 +109,29 @@ export function checklistForArea(
   // coverings" in front of a technician standing at a front door with a key
   // safe, which is the HVAC bug this rule exists to have fixed.
   if (kind === 'NONE') return [];
+  /**
+   * The occupied list is answered, not ticked, so labels alone would be wrong.
+   *
+   * `checklistTemplateForKind` returns wording; every other kind here is STATUS,
+   * where wording is all there is. These two are CHOICE, and a fallback that
+   * dropped the options would show a technician with no signal two rows they
+   * cannot answer — and, worse, two rows that look like the three-axis controls
+   * they are not.
+   *
+   * Read from the same `OCCUPIED_CHECKLIST` the server writes its rows from, so
+   * the offline list and the one that arrives cannot disagree.
+   */
+  if (kind === 'OCCUPIED')
+    return OCCUPIED_CHECKLIST.map((item) => ({
+      id: item.label,
+      label: item.label,
+      responseType: item.responseType,
+      choices: item.choices,
+      // Not spoken-tickable: no phrasing in a transcript means "the overall
+      // condition of this room is Fair", and matching the bare word
+      // "condition" would answer the question for the technician.
+      keywords: [],
+    }));
   return checklistTemplateForKind(
     { name: area.name, environment: area.environment, category: area.category },
     kind,

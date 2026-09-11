@@ -295,11 +295,16 @@ export class MockInspectionRepository implements InspectionRepository {
     useDemoStore.getState().updateRoom(roomId, { note });
     return this.room(roomId);
   }
-  async skipRoom(roomId: string, reason: string) {
-    if (!reason.trim()) throw new Error('A reason is required to skip this room.');
+  async removeRoom(roomId: string) {
+    const room = await this.room(roomId);
+    return { id: roomId, removed: true, name: room.name };
+  }
+  async skipRoom(roomId: string, reason?: string) {
+    // The reason is optional now, and the refusal that used to live here went
+    // with it: skipping is confirmed, not justified. See `TechnicianReasonDto`.
     useDemoStore.getState().updateRoom(roomId, {
       completionStatus: 'SKIPPED',
-      skipReason: reason.trim(),
+      skipReason: reason?.trim() || undefined,
     });
     return this.room(roomId);
   }

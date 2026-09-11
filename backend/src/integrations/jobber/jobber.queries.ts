@@ -132,6 +132,109 @@ export const VISIT_COMPLETE_MUTATION = `
 `;
 
 /**
+ * Books a visit on a job that already exists.
+ *
+ * **Verified against the live schema on API version 2025-01-20**, not guessed —
+ * `jobCreateNote` below records what guessing costs. Confirmed by
+ * introspection:
+ *
+ *   visitCreate(jobId: EncodedId, input: VisitCreateInput): VisitCreatePayload
+ *   VisitCreateInput        { visits: [VisitCreateAttributes]! }
+ *   VisitCreateAttributes   { title, instructions, overrideOrder, schedule }
+ *   ScheduledItemAttributes { notifyTeam, teamReminderOffset, startAt, endAt,
+ *                             teamMemberIdsToAssign }
+ *   LocalDateTimeAttributes { date: ISO8601Date!, time: ISO8601Time,
+ *                             timezone: Timezone! }
+ *   VisitCreatePayload      { createdVisits, job, userErrors }
+ *
+ * Two things that settle open questions elsewhere in this integration.
+ * **`instructions` is writable on create**, so the "+ Occupied Inspection"
+ * phrase the importer keys on can actually be set — see
+ * `occupiedInspectionInDetails`. And **`time` is optional while `date` and
+ * `timezone` are not**, so a visit can be booked for a whole day, which is
+ * exactly the shape of `Inspection.scheduledAt` (`@db.Date`).
+ *
+ * The variables are declared non-null even though the arguments are nullable.
+ * GraphQL permits a `T!` variable wherever `T` is accepted, and being stricter
+ * here means a missing id fails locally rather than at Jobber.
+ *
+ * **This is not sufficient on its own**, because it needs a job to hang the
+ * visit on. Every one of the 115 benefit-package visits in the live table
+ * belongs to its own job — 115 visits, 115 distinct jobs — so the office
+ * creates a job per visit rather than adding visits to a recurring one.
+ * `JOB_CREATE_MUTATION` below is the other half.
+ */
+export const VISIT_CREATE_MUTATION = `
+  mutation CreateVisit($jobId: EncodedId!, $input: VisitCreateInput!) {
+    visitCreate(jobId: $jobId, input: $input) {
+      createdVisits {
+        id
+        title
+        startAt
+      }
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
+ * The one-off job a benefit-package visit hangs on.
+ *
+ * Verified against the live schema, and — more usefully — against the office's
+ * **own existing jobs**, so this copies what they already do rather than
+ * choosing on their behalf. Three of the jobs behind live TBP visits read:
+ *
+ *   jobType ONE_OFF, billingType FIXED_PRICE, billingFrequency ON_COMPLETION
+ *   title "Zone 1 - Q3 2026 Tenant Benefit Package"
+ *
+ * `invoicing` is a required argument carrying two enums that decide how a
+ * client is billed, which is not a decision this code should invent. Reading it
+ * off their existing jobs is why `TBP_JOB_INVOICING` below is a fact rather
+ * than a default.
+ *
+ * Note the **job** title carries no address while the **visit** title does —
+ * `19803 Bolton Bridge Ln - Zone 1 - Q3 2026 Tenant Benefit Package`. That is
+ * the office's own convention and the visit title is the one
+ * `resolveVisitType` reads, so the two are built separately rather than one
+ * being derived from the other.
+ *
+ * Scheduling is deliberately omitted here. `JobSchedulingAttributes.createVisits`
+ * would have Jobber mint the visit itself, and then the visit's title and
+ * instructions are whatever Jobber derives — including the
+ * "+ Occupied Inspection" phrase the importer depends on. Creating the job bare
+ * and then calling `visitCreate` keeps both strings under our control.
+ */
+export const JOB_CREATE_MUTATION = `
+  mutation CreateJob($input: JobCreateAttributes!) {
+    jobCreate(input: $input) {
+      job {
+        id
+        jobNumber
+      }
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
+ * How the office bills a benefit-package job, read from their own jobs.
+ *
+ * Not a default and not a guess: three live TBP jobs were inspected and all
+ * three carry exactly this. If the office changes how they bill the programme,
+ * this is the line that has to change with it.
+ */
+export const TBP_JOB_INVOICING = {
+  invoicingType: 'FIXED_PRICE',
+  invoicingSchedule: 'ON_COMPLETION',
+} as const;
+
+/**
  * Attaches a note to the job the visit belongs to.
  *
  * `jobCreateNote`, not `jobNoteCreate`. The latter was a guess and does not

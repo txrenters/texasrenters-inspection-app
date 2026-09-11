@@ -3,15 +3,18 @@ import {
   checklistTemplateFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  STANDARD_LAYOUT_SOURCE,
+  inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
-import { checklistKindWhere } from '../common/checklist-kind';
+import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  AreaChecklistItemKind,
   EvidenceRequestStatus,
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
@@ -26,6 +29,7 @@ import type { FindingReviewStatus, Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { businessDayBounds } from '../common/business-day';
 import { PrismaService } from '../common/prisma.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
@@ -53,6 +57,16 @@ export interface UploadedRoomVideo {
   size: number;
   originalname: string;
 }
+
+/**
+ * Tells a checklist item's id from its label.
+ *
+ * Both arrive on the same route segment: the handset sends the id when it has
+ * the real list, and the label when it is working from the offline fallback.
+ * Tested rather than caught, because `id` is a uuid column — a label reaching
+ * it is a database error, not a miss that returns nothing.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const allowedVideoMimeTypes = new Set([
   'video/mp4',
@@ -144,6 +158,12 @@ function formatUnitLabel(name: string) {
 
 const visibleStatuses = { not: InspectionStatus.CANCELLED } as const;
 
+/** Today in Texas, as a `scheduledAt` range. */
+const dayBounds = () => {
+  const { start, end } = businessDayBounds();
+  return { gte: start, lt: end };
+};
+
 /**
  * Statuses that still need the technician on the home screen's queue.
  *
@@ -181,6 +201,19 @@ const technicianRoomSelect = {
       },
     },
   },
+  /**
+   * How many photographs this area holds.
+   *
+   * On the select rather than a second query: `mapRoom` is called for every
+   * area of an inspection, so a per-area count would be an N+1 against the
+   * pooler. `_count` rides along with the row.
+   *
+   * The handset cannot answer this for itself. It reads its own snapshot
+   * store, which reports zero after a reinstall or on a replacement
+   * handset — telling a technician their evidence is missing at the moment
+   * they are deciding whether to submit.
+   */
+  _count: { select: { photos: true } },
   media: {
     orderBy: { createdAt: 'desc' as const },
     take: 1,
@@ -339,11 +372,10 @@ export class TechnicianService {
   }
 
   async dashboard(user: AuthenticatedUser) {
-    const now = new Date();
-    const todayStart = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    );
-    const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    // Texas, not UTC. This used to be UTC midnight — 6 or 7 p.m. Texas the
+    // previous evening — so from dinner time onwards a technician's "today"
+    // already held tomorrow's work.
+    const { start: todayStart, end: tomorrowStart } = businessDayBounds();
     const where = {
       organizationId: user.organizationId,
       status: visibleStatuses,
@@ -418,7 +450,7 @@ export class TechnicianService {
 
   async inspections(
     user: AuthenticatedUser,
-    query: Pick<TechnicianInspectionListQueryDto, 'page' | 'pageSize' | 'status' | 'search'> = {
+    query: Pick<TechnicianInspectionListQueryDto, 'page' | 'pageSize' | 'status' | 'search' | 'dueToday'> = {
       page: 1,
       pageSize: 25,
     },
@@ -430,6 +462,15 @@ export class TechnicianService {
       // past `visibleStatuses`.
       status: query.status?.length ? { in: query.status as InspectionStatus[] } : visibleStatuses,
       assignments: { some: { technicianId: user.id, isCurrent: true } },
+      /**
+       * Today's round, when the handset asks for it.
+       *
+       * Resolved here rather than sent as a date range by the app: "today" is a
+       * fact about Texas, and a handset that has travelled — or is simply set
+       * to another zone — would otherwise ask for the wrong day and be given
+       * it. The server owns the definition; see `business-day.ts`.
+       */
+      ...(query.dueToday ? { scheduledAt: dayBounds() } : {}),
       ...(query.search
         ? {
             OR: [
@@ -795,23 +836,41 @@ export class TechnicianService {
     /**
      * The checklist for the area the technician just described.
      *
-     * Resolved before the transaction opens, not while it is held — this now
-     * makes a provider call, and a transaction left open across one would be
-     * dropped by the pooler long before it returned.
+     * Resolved before the transaction opens, not while it is held — the
+     * generator makes a provider call, and a transaction left open across one
+     * would be dropped by the pooler long before it returned.
      *
      * The same generator the floor-plan path uses, so an area surveyed on site
-     * gets the same quality of list as one extracted from a plan. Without this
-     * it fell back to the tables applied by room *kind*, and a staircase added
-     * in the field was still asked about its doors and locks.
+     * gets the same quality of list as one extracted from a plan. Without it
+     * the list fell back to the tables applied by room *kind*, and a staircase
+     * added in the field was still asked about its doors and locks.
      *
      * Never fatal: every failure inside `generate` yields the table list for
      * that area, so a technician with no signal still gets a checklist.
+     *
+     * ── WHY THE VISIT TYPE DECIDES WHETHER THE MODEL IS ASKED ────────────────
+     *
+     * Only a ROOM visit reads a per-area list. An occupied visit reads the
+     * organization's short list and an HVAC visit the equipment one — both
+     * stored once with a null area — and a lockbox visit reads nothing at all.
+     * So on any of those the rows written below are for *later* inspections of
+     * this property, not for the technician standing in the room.
+     *
+     * Which makes the provider call pure latency in front of somebody who will
+     * never see its output. An occupied inspection is walked in about fifteen
+     * minutes; waiting on a model to describe a closet nobody is going to be
+     * asked about is exactly the kind of delay that budget cannot absorb. The
+     * deterministic table gives the same rows for free, and an administrator
+     * can regenerate a better list later from the console.
      */
     const newArea = { name, category: input.category ?? null, environment: input.environment };
-    const configuration = await this.aiSettings
-      ?.resolve(user.organizationId)
-      .catch(() => undefined);
-    const generated = await this.checklistAi?.generate([newArea], configuration ?? undefined);
+    const visitReadsThisList = checklistKindFor(inspection.inspectionType) === 'ROOM';
+    const configuration = visitReadsThisList
+      ? await this.aiSettings?.resolve(user.organizationId).catch(() => undefined)
+      : undefined;
+    const generated = visitReadsThisList
+      ? await this.checklistAi?.generate([newArea], configuration ?? undefined)
+      : undefined;
     const templateItems: string[] = generated?.items[0]?.length
       ? generated.items[0]
       : checklistTemplateFor(newArea);
@@ -854,6 +913,16 @@ export class TechnicianService {
             createMany: {
               data: templateItems.map((label, index) => ({
                 organizationId: user.organizationId,
+                /**
+                 * Stated, not left to the column default.
+                 *
+                 * These are room questions whatever visit happened to add the
+                 * area, and the reader filters on `kind` — so an implicit
+                 * default is a silent bet that the default never changes. It is
+                 * also the field that decides whether the technician who just
+                 * typed this room sees these rows or the organization's list.
+                 */
+                kind: AreaChecklistItemKind.ROOM,
                 label,
                 // Derived from the label, exactly as an administrator-authored
                 // item is — the matcher does not care where the words came from.
@@ -944,10 +1013,12 @@ export class TechnicianService {
            *
            * An HVAC visit inspects the property's system as one subject and
            * asks the same questions everywhere, so its items are stored once
-           * per organization rather than copied onto every property. Every
-           * other visit asks about the specific room it is standing in.
+           * per organization rather than copied onto every property. An
+           * occupied visit is organization-wide for a stronger reason still:
+           * "Room condition" is the same question in a kitchen and in a
+           * hallway. Only the room list is per area.
            */
-          ...(checklistKindFor(room.inspection.inspectionType) === 'AIR_CONDITIONING'
+          ...(checklistItemsAreOrganizationWide(checklistKindFor(room.inspection.inspectionType))
             ? { organizationId: user.organizationId, propertyAreaId: null }
             : { propertyAreaId: room.propertyAreaId }),
           archivedAt: null,
@@ -1055,23 +1126,55 @@ export class TechnicianService {
      * entirely and the report would show an assessment against a room nobody
      * inspected.
      *
-     * The second half is not optional: the HVAC checklist is stored once per
-     * organization with a null area, because it asks the same questions of every
-     * system in the portfolio. `roomChecklist` was taught that and this was not,
-     * so an HVAC technician could see all sixty items and record none of them —
-     * every write answered 404.
+     * The second half is not optional: the HVAC and occupied checklists are
+     * stored once per organization with a null area, because they ask the same
+     * questions of every system, and of every room, in the portfolio.
+     * `roomChecklist` was taught that and this was not, so an HVAC technician
+     * could see all sixty items and record none of them — every write answered
+     * 404.
      */
     const kind = checklistKindFor(room.inspection.inspectionType);
-    const item = await this.prisma.areaChecklistItem.findFirst({
-      where: {
-        id: itemId,
-        archivedAt: null,
-        ...(kind === 'AIR_CONDITIONING'
-          ? { organizationId: user.organizationId, propertyAreaId: null }
-          : { propertyAreaId: room.propertyAreaId }),
-      },
-      select: { id: true, responseType: true, choices: true },
-    });
+    const scope = checklistItemsAreOrganizationWide(kind)
+      ? { organizationId: user.organizationId, propertyAreaId: null }
+      : { propertyAreaId: room.propertyAreaId };
+    /**
+     * An answer given offline names the item by its label, not its id.
+     *
+     * The handset falls back to a generated checklist for an area whose real
+     * one it has never fetched — a technician who reaches a property with no
+     * signal and opens a room for the first time — and that fallback uses the
+     * label as the id, deliberately, so a locally ticked item keeps its meaning
+     * if the real items arrive mid-walkthrough.
+     *
+     * Answering one then sent `PUT .../checklist/Room%20condition`. Nothing
+     * here could match it: `id` is a uuid column, so the lookup did not merely
+     * miss, it failed. And because the write is queued when the network is
+     * gone, the answer was held on the device and then rejected on every replay
+     * until it ran out of attempts — lost quietly, which is the one outcome the
+     * queue exists to prevent.
+     *
+     * Resolving by label is not a second identity invented here. The database
+     * already treats it as one: `(propertyAreaId, kind, label)` is unique, and
+     * so is `(organizationId, kind, label)` where the area is null. This looks
+     * up the same row by the other key it already has.
+     *
+     * `kind` is part of the match, so a label shared between an occupied
+     * question and a room item cannot cross over.
+     */
+    const identity = UUID_PATTERN.test(itemId)
+      ? { id: itemId }
+      : // A visit with no checklist has no label to resolve either — NONE is
+        // not a member of the stored enum, and a lockbox job genuinely has
+        // nothing to score.
+        kind === 'NONE'
+        ? null
+        : { label: itemId, kind: kind as AreaChecklistItemKind };
+    const item = identity
+      ? await this.prisma.areaChecklistItem.findFirst({
+          where: { ...identity, archivedAt: null, ...scope },
+          select: { id: true, responseType: true, choices: true },
+        })
+      : null;
     if (!item)
       throw new ApplicationError(
         404,
@@ -1110,12 +1213,15 @@ export class TechnicianService {
     };
     const response = await this.prisma.inspectionAreaChecklistResponse.upsert({
       where: {
-        inspectionAreaId_checklistItemId: { inspectionAreaId: roomId, checklistItemId: itemId },
+        // `item.id`, never the parameter: an answer that arrived by label has
+        // to land on the same row a later answer by id would, or the report
+        // shows the same question answered twice.
+        inspectionAreaId_checklistItemId: { inspectionAreaId: roomId, checklistItemId: item.id },
       },
       create: {
         organizationId: user.organizationId,
         inspectionAreaId: roomId,
-        checklistItemId: itemId,
+        checklistItemId: item.id,
         recordedById: user.id,
         ...values,
       },
@@ -1363,6 +1469,136 @@ export class TechnicianService {
     return this.mapRoom(await this.assignedRoom(user, roomId));
   }
 
+  /**
+   * Takes an area off this inspection, at the request of the person standing
+   * in the property.
+   *
+   * The symmetric half of `createArea`. That method approves a
+   * technician-added area on sight, reasoning that somebody standing in a room
+   * is better evidence of the layout than an administrator reading a plan in an
+   * office. The same is true of a room that is not there: a standard-template
+   * layout offers Bedroom 3 to every property, and on a two-bedroom house that
+   * is a room the technician would otherwise skip on every visit for ever.
+   *
+   * Every inspection type, deliberately — a move-out is as capable of listing a
+   * room the property does not have as an occupied visit is.
+   *
+   * ── WHAT THIS WILL NOT DO ────────────────────────────────────────────────
+   *
+   * Remove an area holding anything. A recording, a photograph, a finding or a
+   * scored checklist item all mean somebody has already recorded evidence
+   * against this room, and deleting it would destroy that work — including the
+   * technician's own. Skipping exists for "cannot inspect this"; removal is for
+   * "this is not a room here", and the two must not be reachable from the same
+   * mistake.
+   *
+   * Nor does it touch a layout somebody surveyed. The property's `PropertyArea`
+   * survives unless it is a `STANDARD_TEMPLATE` guess that nothing else refers
+   * to any more — in which case it is archived, because otherwise the same
+   * invented room returns on the next visit and the technician removes it
+   * again. An imported or extracted layout is a record; this is a correction to
+   * this walkthrough, and the office keeps the last word on the plan.
+   */
+  async removeArea(user: AuthenticatedUser, roomId: string) {
+    const room = await this.assignedRoom(user, roomId);
+
+    // `finalizedAt`, not status alone — the same rule as renaming an area and
+    // deleting a photo. A reopen must not reopen the shape of an inspection
+    // behind a report that has been closed and possibly shared.
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: room.inspectionId },
+      select: { status: true, finalizedAt: true, inspectionType: true },
+    });
+    if (
+      inspection?.finalizedAt ||
+      inspection?.status === InspectionStatus.COMPLETED ||
+      inspection?.status === InspectionStatus.CANCELLED
+    )
+      throw new ApplicationError(
+        409,
+        'INSPECTION_FINALIZED',
+        'Areas cannot be changed after the inspection is finalized.',
+      );
+
+    /**
+     * Findings are counted by `propertyAreaId`, not `inspectionAreaId`.
+     *
+     * `InspectionFinding` has no link to the inspection *area* — it points at
+     * the property area and the inspection separately. Counting the wrong one
+     * would report zero for a room full of findings and delete it.
+     */
+    const [recordings, photographs, findings, answers] = await Promise.all([
+      this.prisma.inspectionMedia.count({ where: { inspectionAreaId: roomId } }),
+      this.prisma.inspectionPhoto.count({ where: { inspectionAreaId: roomId } }),
+      this.prisma.inspectionFinding.count({
+        where: { inspectionId: room.inspectionId, propertyAreaId: room.propertyAreaId },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.count({ where: { inspectionAreaId: roomId } }),
+    ]);
+    if (recordings || photographs || findings || answers)
+      throw new ApplicationError(
+        409,
+        'AREA_HAS_EVIDENCE',
+        'This area already has evidence recorded against it. Skip it instead, or ask the office to remove it.',
+      );
+
+    const areaName = room.propertyArea.name;
+    await this.prisma.$transaction(async (tx) => {
+      // Status history and upload sessions restrict rather than cascade, so
+      // they are cleared explicitly — the same order the report import uses
+      // when it drops a room a report did not mention.
+      await tx.inspectionAreaStatusHistory.deleteMany({ where: { inspectionAreaId: roomId } });
+      await tx.mediaUploadSession.deleteMany({ where: { inspectionAreaId: roomId } });
+      await tx.inspectionArea.delete({ where: { id: roomId } });
+
+      /**
+       * Archive the guess, once nothing points at it.
+       *
+       * Only a `STANDARD_TEMPLATE` row, and only when no other inspection still
+       * holds it — `AREA_IN_USE` exists to stop a layout being pulled out from
+       * under a visit somebody is walking. Archived rather than deleted so the
+       * office can see what was corrected and put it back.
+       */
+      const remaining = await tx.inspectionArea.count({
+        where: { propertyAreaId: room.propertyAreaId },
+      });
+      if (!remaining)
+        await tx.propertyArea.updateMany({
+          where: {
+            id: room.propertyAreaId,
+            source: STANDARD_LAYOUT_SOURCE,
+            archivedAt: null,
+          },
+          data: { archivedAt: new Date() },
+        });
+
+      await tx.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          actorUserId: user.id,
+          action: 'TECHNICIAN_AREA_REMOVED',
+          entityType: 'InspectionArea',
+          entityId: roomId,
+          metadata: {
+            inspectionId: room.inspectionId,
+            propertyAreaId: room.propertyAreaId,
+            name: areaName,
+            /**
+             * A move-in and a move-out are compared area by area, and an area
+             * missing from one end drops out of the comparison silently. The
+             * removal is still allowed — the technician is the one who can see
+             * the room — but the record has to say the comparison changed, the
+             * same flag the admin add-areas route writes.
+             */
+            comparisonAffected: inspectionRequiresEveryArea(inspection?.inspectionType),
+          },
+        },
+      });
+    });
+    this.notifyInspectionChanged(user, room.inspectionId);
+    return { id: roomId, removed: true, name: areaName };
+  }
+
   async room(user: AuthenticatedUser, id: string) {
     const room = await this.assignedRoom(user, id);
     return this.mapRoom(room);
@@ -1435,13 +1671,17 @@ export class TechnicianService {
     return this.mapRoom(room);
   }
 
-  async skipRoom(user: AuthenticatedUser, id: string, reason: string) {
+  async skipRoom(user: AuthenticatedUser, id: string, reason?: string) {
     await this.assignedRoom(user, id);
     const room = await this.prisma.inspectionArea.update({
       where: { id },
       data: {
         completionStatus: InspectionAreaCompletionStatus.SKIPPED,
-        skipReason: reason.trim(),
+        // Null rather than an empty string when nothing was written. A reader
+        // has to be able to tell "no reason given" from "a reason that is
+        // blank", and every consumer already handles the null: the column has
+        // always been nullable, and completing a room clears it the same way.
+        skipReason: reason?.trim() || null,
         completedAt: new Date(),
       },
       select: technicianRoomSelect,
@@ -1452,12 +1692,44 @@ export class TechnicianService {
 
   async completeRoom(user: AuthenticatedUser, id: string) {
     const existing = await this.assignedRoom(user, id);
-    if (!existing.media.some((item) => item.uploadStatus === MediaUploadStatus.UPLOADED))
-      throw new ApplicationError(
-        409,
-        'ROOM_VIDEO_REQUIRED',
-        'A confirmed uploaded video is required before completing this room.',
-      );
+    const hasRecording = existing.media.some(
+      (item) => item.uploadStatus === MediaUploadStatus.UPLOADED,
+    );
+    /**
+     * An occupied area may be finished with a photograph instead of a video.
+     *
+     * The rule is `inspectionRequiresAreaRecording`, shared with the handset's
+     * completion gate. It has to be, because it was previously stated only on
+     * the handset: #148 taught the gate that an occupied area needs a
+     * photograph *or* a recording, and this method went on demanding an
+     * uploaded video for every type. The two disagreed in the worst direction —
+     * Mark Complete looked enabled, and the request behind it answered 409. A
+     * technician has no way to read that as anything but a broken app.
+     *
+     * Evidence is still required either way. The photograph count is only
+     * queried when the type allows one, so a move-out costs exactly the
+     * round trips it did before.
+     */
+    const photoCount =
+      hasRecording || inspectionRequiresAreaRecording(existing.inspection.inspectionType)
+        ? 0
+        : await this.prisma.inspectionPhoto.count({ where: { inspectionAreaId: id } });
+    if (!hasRecording && photoCount === 0)
+      throw inspectionRequiresAreaRecording(existing.inspection.inspectionType)
+        ? new ApplicationError(
+            409,
+            'ROOM_VIDEO_REQUIRED',
+            'A confirmed uploaded video is required before completing this room.',
+          )
+        : // Named separately because the fix is different: on an occupied area
+          // the technician does not need to go back and film, only to take a
+          // photograph — or to skip the room, which is the honest answer when
+          // there was nothing to capture.
+          new ApplicationError(
+            409,
+            'ROOM_EVIDENCE_REQUIRED',
+            'Photograph this room or record a walkthrough before completing it. Skip it if there was nothing to capture.',
+          );
     const room = await this.prisma.inspectionArea.update({
       where: { id },
       data: {
@@ -1769,7 +2041,13 @@ export class TechnicianService {
             assignments: { some: { technicianId: user.id, isCurrent: true } },
           },
         },
-        select: { id: true, inspectionId: true, propertyAreaId: true },
+        select: {
+          id: true,
+          inspectionId: true,
+          propertyAreaId: true,
+          // Decides where a tagged checklist item is stored, below.
+          inspection: { select: { inspectionType: true } },
+        },
       });
       if (!area)
         throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
@@ -1787,7 +2065,15 @@ export class TechnicianService {
        */
       if (dto.checklistItemId) {
         const item = await this.prisma.areaChecklistItem.findFirst({
-          where: { id: dto.checklistItemId, propertyAreaId: area.propertyAreaId },
+          where: {
+            id: dto.checklistItemId,
+            // Or to the organization — the same null-area rule the scoring
+            // route needs, for the same reason. Without it a photograph
+            // evidencing an HVAC or occupied item is refused outright.
+            ...(checklistItemsAreOrganizationWide(checklistKindFor(area.inspection.inspectionType))
+              ? { organizationId: user.organizationId, propertyAreaId: null }
+              : { propertyAreaId: area.propertyAreaId }),
+          },
           select: { id: true },
         });
         if (!item)
@@ -2380,6 +2666,13 @@ export class TechnicianService {
       floorName: record.propertyArea.floor?.name ?? 'Property',
       order: record.propertyArea.inspectionOrder,
       isRequired: record.propertyArea.isRequired,
+      // What the handset cannot count for itself after a reinstall, and what
+      // lets a photographed area stop reporting "Not started".
+      // `?? 0` rather than a bare read: the select always provides `_count`,
+      // but a mapper that throws on a row somebody built differently turns a
+      // missing count into a 500. Absent means no photographs, which is the
+      // behaviour this field replaces anyway.
+      photoCount: record._count?.photos ?? 0,
       environment: record.propertyArea.environment,
       category: record.propertyArea.category ?? null,
       source: record.propertyArea.source,

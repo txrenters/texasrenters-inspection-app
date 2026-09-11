@@ -66,22 +66,50 @@ export function UploadQueueRunner() {
         // instead of jumping at the end of the whole batch.
         client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
       }
-      // Photographs, after the recordings. They are small and there are more
-      // of them, but a walkthrough video is the evidence an inspection cannot
-      // be finished without, so it goes first when the signal is poor.
-      //
-      // One per pass: the store is read fresh each time, so a photo that has
-      // just been marked FAILED carries its backoff and drops out of the next
-      // pass rather than being retried immediately.
-      const { snapshots, updateSnapshot } = useDemoStore.getState();
-      const [due] = snapshotsAwaitingUpload(snapshots ?? []);
-      if (due) {
+      /**
+       * Photographs, after the recordings — and drained, not one per tick.
+       *
+       * A walkthrough video is the evidence an inspection cannot be finished
+       * without, so it still goes first when the signal is poor. That ordering
+       * is unchanged.
+       *
+       * What changed is the rate. This sent exactly one photograph per pass, on
+       * the reasoning that they are "small and there are more of them". The
+       * second half was right and the first was not: nothing downscaled a
+       * capture, so each one is three to five megabytes — and at a four-second
+       * interval, the twenty-five to thirty photographs of an occupied
+       * inspection spent **a hundred seconds doing nothing at all**, on top of
+       * the transfers themselves. A technician watching the queue after
+       * finishing a property saw it crawl for no reason they could see.
+       *
+       * The store is still read fresh on every iteration, which is what made
+       * the original one-per-pass rule safe: a photograph just marked FAILED
+       * carries its backoff and `snapshotsAwaitingUpload` drops it from the
+       * next look, so a failing queue walks its list once and stops rather than
+       * retrying the same item in a tight loop. `MAX_DRAIN_PASSES` bounds it
+       * either way.
+       */
+      for (let pass = 0; pass < MAX_DRAIN_PASSES; pass += 1) {
+        const { snapshots, updateSnapshot } = useDemoStore.getState();
+        const [due] = snapshotsAwaitingUpload(snapshots ?? []);
+        if (!due) break;
         await uploadSnapshotNow(due, { update: updateSnapshot });
         uploaded += 1;
+        // Refresh between photographs for the same reason the recordings do:
+        // the screen shows each one land instead of jumping at the end.
+        client.setQueryData(queryKeys.uploads, await repositories.uploads.list());
       }
 
       if (!uploaded) return;
-      await verifyQueries(client, [queryKeys.roomsRoot, queryKeys.roomRoot, queryKeys.dashboard]);
+      await verifyQueries(client, [
+        queryKeys.roomsRoot,
+        queryKeys.roomRoot,
+        // The area screen's own photo list, which `roomRoot` does not cover.
+        // Without it a photograph landed on the server and the screen that
+        // gates completion on one went on showing the list it had at open.
+        queryKeys.roomPhotosRoot,
+        queryKeys.dashboard,
+      ]);
     } finally {
       running.current = false;
     }

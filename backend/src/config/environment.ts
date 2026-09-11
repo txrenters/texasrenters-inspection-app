@@ -45,6 +45,23 @@ const environmentSchema = z
     CORS_ORIGINS: z.string().optional(),
     MOBILE_APP_ORIGIN: z.string().url().optional(),
     WEB_APP_ORIGIN: z.string().url().optional(),
+    /**
+     * One key, used from the server only, for Google's Geocoding API (and the
+     * Routes API when that lands).
+     *
+     * Deliberately *not* the browser key the map loads with. A key carries
+     * exactly one application restriction: the browser key is restricted by
+     * HTTP referrer, and Google refuses a referrer-restricted key outright for
+     * these APIs -- "API keys with referer restrictions cannot be used with
+     * this API" -- because a server sends no referrer. Making one key serve
+     * both would mean removing that restriction from a key which is printed in
+     * every page's JavaScript bundle, so anybody who opened devtools could
+     * spend it.
+     *
+     * Optional: without it geocoding falls back to the US Census, which needs
+     * no key. Nothing fails to boot for want of it.
+     */
+    GOOGLE_SERVER_API_KEY: z.string().optional(),
     MICROSOFT_GRAPH_TENANT_ID: z.string().optional(),
     MICROSOFT_GRAPH_CLIENT_ID: z.string().optional(),
     MICROSOFT_GRAPH_CLIENT_SECRET: z.string().optional(),
@@ -174,6 +191,33 @@ const environmentSchema = z
     JOBBER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
     JOBBER_MAX_RETRIES: z.coerce.number().int().min(1).max(8).default(4),
     JOBBER_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
+    /** Quarterly benefit-package planning. Fail closed: a planner that ran by
+     * default would book a quarter of work in any deployment that merely
+     * happens to have the code. */
+    TBP_PLANNING_ENABLED: z.enum(['true', 'false']).default('false'),
+    TBP_PLANNING_ORGANIZATION_ID: z.string().uuid().optional(),
+    /** Daily by default, because cron cannot express "fourteen days before the
+     * first of January, April, July and October" -- the lead time moves the
+     * date across two different months. The job asks whether today falls in a
+     * planning window and does nothing on the days it does not. */
+    TBP_PLAN_CRON: z.string().optional(),
+    TBP_PLANNING_LEAD_DAYS: z.coerce.number().int().min(1).max(90).default(14),
+    /** Comma-separated YYYY-MM-DD days the office is closed. Configuration
+     * rather than a derived calendar: a hardcoded list of US federal holidays
+     * would be wrong for the days this office actually closes and right for
+     * days it does not. */
+    TBP_PLANNING_HOLIDAYS: z.string().optional(),
+
+    /** Read directly by `OsrmClient`, and previously absent from this schema
+     * entirely -- so a typo in it produced no error anywhere, just routing that
+     * silently reported every stop unordered. */
+    OSRM_URL: z.string().url().optional(),
+    /** Google Routes, used only for the quarterly forecast -- OSRM stays the
+     * default for ordering a day, where free-flow and traffic-aware give the
+     * same answer. SERVER-SIDE ONLY: this is not the browser key, it carries no
+     * referrer restriction, and anything holding it can spend money. It must
+     * never gain a NEXT_PUBLIC_ or EXPO_PUBLIC_ prefix. */
+    GOOGLE_ROUTES_API_KEY: z.string().optional(),
     JOBBER_LOCAL_ORGANIZATION_ID: z.string().uuid().optional(),
     JOBBER_INCREMENTAL_SYNC_CRON: z.string().optional(),
     JOBBER_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().max(365).default(7),
@@ -255,6 +299,15 @@ const environmentSchema = z
         message:
           'Jobber sync requires JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET, and JOBBER_OAUTH_REDIRECT_URI.',
         path: ['JOBBER_SYNC_ENABLED'],
+      });
+    // Same reasoning as the Jobber block above: a deployment with planning
+    // switched on and no organization to plan for should fail at boot, not at
+    // 4am on the day a quarter needed booking.
+    if (config.TBP_PLANNING_ENABLED === 'true' && !config.TBP_PLANNING_ORGANIZATION_ID)
+      context.addIssue({
+        code: 'custom',
+        message: 'Quarterly planning requires TBP_PLANNING_ORGANIZATION_ID.',
+        path: ['TBP_PLANNING_ENABLED'],
       });
     if (
       config.JOBBER_TOKEN_ENCRYPTION_KEY &&

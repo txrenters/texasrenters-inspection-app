@@ -139,3 +139,41 @@ export function formatDistance(meters?: number | null) {
   const miles = meters / 1609.344;
   return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
 }
+
+/**
+ * The sixteen-point compass name for a bearing.
+ *
+ * "Heading northeast" is a thing a dispatcher can act on; "heading 47°" is a
+ * number they have to translate first. Sixteen points rather than eight
+ * because GPS course is good to a few degrees and eight would round a genuine
+ * north-northeast onto north, which reads as a different road.
+ */
+const COMPASS = [
+  'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW',
+] as const;
+
+export function formatCompass(degrees?: number | null) {
+  if (degrees === null || degrees === undefined || !Number.isFinite(degrees)) return EMPTY;
+  // `+ 360) % 360` first, so a device that reports a negative bearing lands on
+  // the right point instead of a negative array index.
+  const normalised = ((degrees % 360) + 360) % 360;
+  return COMPASS[Math.round(normalised / 22.5) % 16];
+}
+
+/**
+ * Ground speed in miles per hour, which is what the road signs say.
+ *
+ * Rounded to whole miles: the underlying figure is a Doppler estimate that
+ * moves by a mile or two between fixes, and a decimal place would be claiming
+ * precision the sensor does not have.
+ */
+export function formatSpeed(metersPerSecond?: number | null) {
+  if (
+    metersPerSecond === null ||
+    metersPerSecond === undefined ||
+    !Number.isFinite(metersPerSecond)
+  )
+    return EMPTY;
+  return `${Math.round(metersPerSecond * 2.236936)} mph`;
+}

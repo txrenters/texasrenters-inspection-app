@@ -18,10 +18,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { goBack } from '@/src/lib/navigation';
 import type { InspectionReportRoom } from '@/src/domain/models';
-import { useInspectionActions, useInspectionReport } from '@/src/features/queries';
+import { useInspectionActions, useInspectionReport, useSkipAreas } from '@/src/features/queries';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { AI_REVIEW_DISCLAIMER } from '@/src/utils/ai-review';
-import { FINISHED_STATUSES, evaluateSubmissionGate } from '@/src/utils/submission-gate';
+import { deriveAreaStatus } from '@/src/utils/area-status';
+import {
+  FINISHED_STATUSES,
+  bulkSkippableAreas,
+  evaluateSubmissionGate,
+} from '@/src/utils/submission-gate';
 import { HomeButton } from '@/src/components/HomeButton';
 import { registerIcons } from '@/src/lib/icons';
 import { formatVisitWindow } from '@/src/utils/visit-window';
@@ -54,6 +59,22 @@ function RoomReviewRow({
   inspectionId: string;
   room: InspectionReportRoom;
 }) {
+  /**
+   * The status a technician recognises, not the column behind it.
+   *
+   * This row printed `readable(room.completionStatus)` — the raw server enum,
+   * prettified — so an area walked with photographs and not yet submitted read
+   * **"Not started"** on the screen where the technician checks their work
+   * before handing it in. `completionStatus` only moves when a recording is
+   * saved, or the area is completed or skipped; it has never known about
+   * photographs.
+   *
+   * `deriveAreaStatus` is the function that does, and every other surface in
+   * the app already asks it. Doing the same here also picks up the states this
+   * row could not express at all: an upload in flight, one that failed, an
+   * analysis still running.
+   */
+  const status = deriveAreaStatus(room);
   const finished = FINISHED_STATUSES.has(room.completionStatus);
   const findingCount = room.findings?.length ?? 0;
   return (
@@ -97,9 +118,15 @@ function RoomReviewRow({
         ) : null}
       </View>
       <Text
-        className={`text-xs font-semibold ${finished ? 'text-chart-3' : 'text-muted-foreground'}`}
+        className={`text-xs font-semibold ${
+          finished
+            ? 'text-chart-3'
+            : status.needsAttention
+              ? 'text-chart-4'
+              : 'text-muted-foreground'
+        }`}
       >
-        {readable(room.completionStatus)}
+        {status.label}
       </Text>
       <ChevronRightIcon size={15} className="text-muted-foreground" />
     </Pressable>
@@ -110,6 +137,7 @@ export default function InspectionReviewScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
   const report = useInspectionReport(id);
   const actions = useInspectionActions(id);
+  const skipAreas = useSkipAreas(id);
   // Only the *pending* count comes from the device: an item still in the
   // local queue is by definition not yet on the server. Everything else reads
   // from the report, so a reinstalled or replacement handset does not report
@@ -178,6 +206,62 @@ export default function InspectionReviewScreen() {
   const completedPercent = rooms.length
     ? Math.round((totals.finishedRooms / rooms.length) * 100)
     : 0;
+
+  // The rule lives in `submission-gate` so it can be tested without a screen:
+  // which areas may be swept up, and which of them are required.
+  const bulkSkip = bulkSkippableAreas(
+    rooms,
+    inspection.type,
+    (room) => deriveAreaStatus(room).status,
+  );
+  const notStartedRooms = bulkSkip.skippable;
+  const requiredNotStarted = bulkSkip.required;
+
+  const skipNotStarted = () => {
+    const count = notStartedRooms.length;
+    Alert.alert(
+      `Skip ${count} area${count === 1 ? '' : 's'}?`,
+      [
+        `${count} area${count === 1 ? ' has' : 's have'} nothing recorded against ${
+          count === 1 ? 'it' : 'them'
+        }. Skipping marks ${count === 1 ? 'it' : 'them'} as nothing to capture.`,
+        // Named, not counted. Skipping a required area is what lets the
+        // inspection be submitted without it, so the technician should be
+        // reading the room's name when they decide that — not a number.
+        requiredNotStarted.length
+          ? `This includes ${requiredNotStarted
+              .map((room) => room.name)
+              .join(', ')}, which ${
+              requiredNotStarted.length === 1 ? 'is a required area' : 'are required areas'
+            }.`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Skip them',
+          style: requiredNotStarted.length ? 'destructive' : 'default',
+          onPress: () =>
+            skipAreas.mutate(
+              notStartedRooms.map((room) => room.id),
+              {
+                onSuccess: ({ failed }) => {
+                  if (!failed.length) return;
+                  Alert.alert(
+                    'Some areas could not be skipped',
+                    `${failed.length} area${
+                      failed.length === 1 ? '' : 's'
+                    } were left as they were. Open them to skip individually.`,
+                  );
+                },
+              },
+            ),
+        },
+      ],
+    );
+  };
 
   const submitInspection = () => {
     Alert.alert(
@@ -306,6 +390,33 @@ export default function InspectionReviewScreen() {
           {rooms.map((room) => (
             <RoomReviewRow key={room.id} inspectionId={id} room={room} />
           ))}
+
+          {/* Under the list, not above it: it acts on what the technician has
+              just read, and a control that disposes of areas should not be the
+              first thing offered about them. Gone once the inspection is out of
+              the field, and gone when there is nothing left to skip. */}
+          {bulkSkip.offered && inspection.status === 'IN_PROGRESS' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityHint="Marks every area with nothing recorded against it as nothing to capture"
+              accessibilityLabel={`Skip ${notStartedRooms.length} not started area${
+                notStartedRooms.length === 1 ? '' : 's'
+              }`}
+              accessibilityState={{ disabled: skipAreas.isPending }}
+              className="mt-3 min-h-11 flex-row items-center justify-center gap-2 rounded-xl border border-border py-3 active:opacity-60"
+              disabled={skipAreas.isPending}
+              onPress={skipNotStarted}
+            >
+              <CircleIcon size={15} className="text-muted-foreground" />
+              <Text className="text-sm font-semibold text-foreground">
+                {skipAreas.isPending
+                  ? 'Skipping…'
+                  : `Skip ${notStartedRooms.length} not started area${
+                      notStartedRooms.length === 1 ? '' : 's'
+                    }`}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View className="mx-5 mt-4 flex-row gap-3">

@@ -47,7 +47,6 @@ import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspec
 import {
   useAssignments,
   useInspection,
-  useInspectionAreas,
   useInspectionAudit,
   useInspectionFindings,
 } from '@/lib/queries';
@@ -92,6 +91,34 @@ const ASSIGNMENT_COLUMNS: Array<Column<AssignmentRow>> = [
   },
 ];
 
+/**
+ * Whether anybody has recorded anything against this inspection.
+ *
+ * This chooses what the import prompt *says*, not whether it appears — an
+ * import is offered on every inspection now, because it replaces what it
+ * finds. Warning first is the whole difference between a replacement and an
+ * accident.
+ *
+ * Areas are deliberately not counted. An inspection is created with its
+ * property's approved layout snapshotted onto it, so an area says a plan
+ * exists — not that somebody walked the property.
+ */
+function hasEvidence(item: {
+  evidence?: { photos: number; findings: number; media?: number; responses?: number };
+}) {
+  const evidence = item.evidence;
+  // Absent rather than zero: an older API that does not send this should not
+  // be read as "nothing here", which would promise a clean import over a
+  // walkthrough it is about to overwrite.
+  if (!evidence) return true;
+  return (
+    evidence.photos > 0 ||
+    evidence.findings > 0 ||
+    (evidence.media ?? 0) > 0 ||
+    (evidence.responses ?? 0) > 0
+  );
+}
+
 function InspectionDetail() {
   const id = useParams<{ inspectionId: string }>().inspectionId;
   const permissions = usePermissions();
@@ -108,19 +135,6 @@ function InspectionDetail() {
     pageSize: 20,
   });
   const audit = useInspectionAudit(id, state.auditPage);
-  /**
-   * Whether this inspection has any evidence yet, for the import prompt.
-   *
-   * Up here with the other hooks, not beside the markup that reads it. Two
-   * early returns sit below — an error state and a skeleton while the
-   * inspection loads — so a hook after them runs on some renders and not
-   * others, and React counts a different number each time. That is error #310,
-   * and it took the whole page down rather than just the prompt.
-   *
-   * Shared with AreaEvidenceWorkspace through the same query key, so asking
-   * here costs no extra request.
-   */
-  const areas = useInspectionAreas(id, permissions.has('inspections:read'));
   const [assigning, setAssigning] = useState(false);
   const [editing, setEditing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -407,25 +421,34 @@ function InspectionDetail() {
           even while the technician was still capturing, which put an action
           nobody could take yet ahead of the work everybody came for. */}
       <div className="mt-4 space-y-4">
-        {/* An inspection closed with nothing recorded against it: the walk
-            happened in Inspect & Cloud, so the record arrived here complete and
-            empty. Offered only while it is still empty, because importing into
-            an inspection that already has evidence would overwrite somebody's
-            walkthrough with a document -- the API refuses that too, and a
-            button that only ever errors is worse than no button.
+        {/* Offered on every inspection, of every type, in every state.
 
-            Every type, not only move-ins. That restriction was scope rather
-            than safety: move-ins were the reason this was built, but an
-            occupied inspection or a move-out walked in the same other system
-            arrives just as empty and is just as importable. */}
-        {permissions.has('inspections:manage') && areas.data?.length === 0 ? (
-          <Alert>
+            It used to appear only on an inspection with no areas, which hid it
+            on every inspection at a property with an approved layout: areas are
+            snapshotted at creation, so a record is born with rooms and no
+            evidence. Seventeen of thirty-four were un-importable that way.
+            Counting real evidence instead fixed that and still got it wrong —
+            an import is what the office reaches for when the record here is
+            *wrong*, so refusing to overwrite refused the case that mattered.
+
+            So the import replaces what it finds: photographs, checklist grades
+            and any room the new report does not mention. That is destructive,
+            and the warning below is the only thing standing between a
+            replacement and an accident -- which is why it is worded from what
+            is actually there rather than from the type of the inspection. */}
+        {permissions.has('inspections:manage') ? (
+          <Alert variant={hasEvidence(item) ? 'warning' : undefined}>
             <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
               <span>
-                This {humanize(item.inspectionType).toLowerCase()} inspection has no evidence
-                recorded against it. Import the report if the walkthrough was done outside this app.
+                {hasEvidence(item)
+                  ? 'Importing a report replaces the evidence on this inspection — its photos, its checklist answers, and any room the new report does not cover. Recordings are kept.'
+                  : `This ${humanize(item.inspectionType).toLowerCase()} inspection has no evidence recorded against it. Import the report if the walkthrough was done outside this app.`}
               </span>
-              <ImportReportDialog inspectionId={id} inspectionType={item.inspectionType} />
+              <ImportReportDialog
+                inspectionId={id}
+                inspectionType={item.inspectionType}
+                replacing={hasEvidence(item)}
+              />
             </AlertDescription>
           </Alert>
         ) : null}

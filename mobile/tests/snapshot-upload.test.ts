@@ -1,7 +1,9 @@
 import type { RoomSnapshot } from '../src/domain/models';
 import {
   MAX_AUTOMATIC_ATTEMPTS,
+  PHOTO_REVIEW_WINDOW_MS,
   retryPlanFor,
+  reviewWindowEnd,
   snapshotsAwaitingUpload,
 } from '../src/media/snapshot-upload';
 
@@ -102,5 +104,122 @@ describe('which photos the device still owes the server', () => {
       'earlier',
       'later',
     ]);
+  });
+});
+
+describe('a photograph the server refused outright', () => {
+  const now = Date.parse('2026-08-26T12:00:00.000Z');
+
+  /**
+   * The bug this pins. `retryPlanFor` answers `permanent` for a 409, and
+   * `uploadSnapshotNow` records that by clearing `nextAttemptAt` — but an
+   * absent `nextAttemptAt` also means "due now". So a photograph the server had
+   * refused outright came back due on every pass, for ever, after a single
+   * attempt.
+   *
+   * Survivable at one photograph per four seconds. Not survivable once the
+   * queue drains: the doomed item sorts first by capture time, so it would be
+   * retried on every iteration while the photographs behind it waited.
+   */
+  it('is not owed again once it has been refused', () => {
+    const refused = snapshot({
+      id: 'refused',
+      uploadStatus: 'FAILED',
+      attempts: 1,
+      lastError: 'This photo key was already used for another area.',
+      nextAttemptAt: undefined,
+    });
+    expect(snapshotsAwaitingUpload([refused], now)).toEqual([]);
+  });
+
+  it('does not hold up the photographs captured after it', () => {
+    const refused = snapshot({
+      id: 'refused',
+      capturedAt: '2026-08-26T11:00:00.000Z',
+      uploadStatus: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: undefined,
+    });
+    const waiting = snapshot({ id: 'waiting', capturedAt: '2026-08-26T11:30:00.000Z' });
+    expect(snapshotsAwaitingUpload([refused, waiting], now).map((item) => item.id)).toEqual([
+      'waiting',
+    ]);
+  });
+
+  it('still owes a photograph that has never been attempted', () => {
+    // The other half of the same rule. An absent `nextAttemptAt` is how a fresh
+    // capture is marked, and reading it as "finished" would mean nothing was
+    // ever uploaded at all.
+    expect(snapshotsAwaitingUpload([snapshot({ id: 'fresh' })], now).map((item) => item.id)).toEqual(
+      ['fresh'],
+    );
+  });
+
+  it('still owes one that failed and is waiting to be retried', () => {
+    const retrying = snapshot({
+      id: 'retrying',
+      uploadStatus: 'FAILED',
+      attempts: 1,
+      nextAttemptAt: '2026-08-26T11:59:00.000Z',
+    });
+    expect(snapshotsAwaitingUpload([retrying], now).map((item) => item.id)).toEqual(['retrying']);
+  });
+});
+
+/**
+ * A photograph is held briefly before it is sent, so a test shot can be thrown
+ * away rather than filed as evidence.
+ *
+ * Reported from the field, 2026-09-10: "I just want to have a confirmation
+ * first before upload… sometimes technician tends to take a picture but then
+ * they want to delete those photos because they are just testing it."
+ *
+ * Held rather than confirmed, deliberately. A Keep/Discard prompt after every
+ * shutter is a tap on each of the twenty-five to thirty photographs an occupied
+ * visit takes — the per-photo toll the same feedback asked us to remove.
+ * Keeping a photograph costs nothing, because keeping it is what almost always
+ * happens.
+ */
+describe('the review window before a photograph is sent', () => {
+  const now = Date.parse('2026-09-10T12:00:00.000Z');
+
+  it('holds a photograph just taken', () => {
+    const fresh = snapshot({ id: 'fresh', nextAttemptAt: reviewWindowEnd(now) });
+    expect(snapshotsAwaitingUpload([fresh], now)).toEqual([]);
+  });
+
+  it('sends it once the window has passed', () => {
+    const fresh = snapshot({ id: 'fresh', nextAttemptAt: reviewWindowEnd(now) });
+    expect(
+      snapshotsAwaitingUpload([fresh], now + PHOTO_REVIEW_WINDOW_MS + 1).map((item) => item.id),
+    ).toEqual(['fresh']);
+  });
+
+  it('leaves a frame cut from a recording due immediately', () => {
+    // Marker stills are not test shots — the technician deliberately marked
+    // those moments mid-walkthrough, and the screen navigates away straight
+    // afterwards, so there is nobody left to offer a discard to.
+    expect(snapshotsAwaitingUpload([snapshot({ id: 'marker' })], now).map((i) => i.id)).toEqual([
+      'marker',
+    ]);
+  });
+
+  it('is short enough that evidence is not left sitting unsent', () => {
+    // Long enough to look at what you just took; short enough that a technician
+    // driving to the next property is not carrying unsent evidence.
+    expect(PHOTO_REVIEW_WINDOW_MS).toBeLessThanOrEqual(30_000);
+    expect(PHOTO_REVIEW_WINDOW_MS).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it('does not disturb the permanent-refusal rule', () => {
+    // Both express themselves through `nextAttemptAt`, so it is worth pinning
+    // that a held photograph and a refused one stay distinguishable: the
+    // refused one is FAILED with no next attempt, and stays out for ever.
+    const refused = snapshot({ id: 'refused', uploadStatus: 'FAILED', attempts: 1 });
+    const held = snapshot({ id: 'held', nextAttemptAt: reviewWindowEnd(now) });
+    expect(snapshotsAwaitingUpload([refused, held], now)).toEqual([]);
+    expect(
+      snapshotsAwaitingUpload([refused, held], now + PHOTO_REVIEW_WINDOW_MS + 1).map((i) => i.id),
+    ).toEqual(['held']);
   });
 });

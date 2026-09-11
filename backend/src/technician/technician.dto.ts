@@ -126,6 +126,20 @@ export class TechnicianInspectionListQueryDto {
   @IsString()
   @MaxLength(120)
   search?: string;
+
+  /**
+   * Only what is scheduled for today, in Texas.
+   *
+   * Asked for by a technician using the app in the field: an outstanding
+   * inspection from weeks ago sorts above today's round, because the list is
+   * ordered by schedule and the oldest comes first. A flag rather than a date
+   * range because the server owns what "today" means -- a handset set to
+   * another zone would otherwise ask for the wrong day and be given it.
+   */
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  dueToday?: boolean;
 }
 
 export class TechnicianFindingsQueryDto {
@@ -137,8 +151,27 @@ export class TechnicianFindingsQueryDto {
   @IsOptional() @IsIn(['ALL', 'DEFECTS', 'SUMMARIES']) kind?: 'ALL' | 'DEFECTS' | 'SUMMARIES';
 }
 
+/**
+ * Why an area was skipped, when the technician has something to say.
+ *
+ * The reason used to be mandatory, and skipping meant typing a sentence into a
+ * multiline box mid-walkthrough. Field feedback, 2026-09-09: an occupied
+ * inspection is walked in about fifteen minutes, and the commonest skip — a
+ * bedroom the tenant has locked, a room being used — is fully described by the
+ * fact that it was skipped at all.
+ *
+ * What that box mostly produced was not an audit trail but a toll. A required
+ * free-text field that a technician has to clear to move on is answered with
+ * whatever clears it, and "n/a" typed forty times a week tells an administrator
+ * strictly less than an empty column, because an empty column at least does not
+ * look like an answer.
+ *
+ * Still recorded when given, and still capped. The skip itself remains the
+ * durable fact: `completionStatus: SKIPPED` with a `completedAt`, which is what
+ * the report and the review screen read.
+ */
 export class TechnicianReasonDto {
-  @IsString() @MinLength(1) @MaxLength(500) reason!: string;
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 export class TechnicianMediaUploadDto {
@@ -348,6 +381,19 @@ export class TechnicianLocationFixDto {
   @IsISO8601() recordedAt!: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100000) accuracyMeters?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) batteryPercent?: number;
+  /**
+   * Course over ground, 0-360 clockwise from true north.
+   *
+   * 360 is accepted as well as 0 because devices report both for north, and
+   * refusing one of them would drop the heading on a fix that is otherwise
+   * perfectly good.
+   */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(360) headingDegrees?: number;
+  /**
+   * Ground speed in metres per second. Not an integer: walking pace is under
+   * 1.5 m/s, and rounding it would quantise the whole useful range to nothing.
+   */
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(1000) speedMetersPerSecond?: number;
 }
 
 /**

@@ -124,6 +124,47 @@ export function ChoiceField({
 }
 
 /**
+ * What was wrong, asked only once an answer says something was.
+ *
+ * From the field feedback: *"Comments: Required only when an issue is
+ * identified."* Prompted rather than required — see `choiceInvitesComment` in
+ * shared for why the literal wording is not what gets the office a real
+ * sentence.
+ *
+ * `onEndEditing` rather than `onChangeText`, matching `TextField` above: a
+ * technician typing a sentence should not fire a request per keystroke, and the
+ * whole assessment is re-sent on every write.
+ */
+export function CommentField({
+  item,
+  value,
+  onChange,
+}: {
+  item: ChecklistItem;
+  value: string | null;
+  onChange: (next: string | null) => void;
+}) {
+  return (
+    <View className="mt-2">
+      <Text className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        What did you find?{' '}
+        <Text className="font-normal normal-case tracking-normal">(optional)</Text>
+      </Text>
+      <TextInput
+        accessibilityLabel={`What did you find in ${item.label}, optional`}
+        className="min-h-11 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+        defaultValue={value ?? ''}
+        multiline
+        onEndEditing={(event) => onChange(event.nativeEvent.text.trim() || null)}
+        placeholder="Scuffed paint behind the door…"
+        placeholderTextColor="#9ca3af"
+        textAlignVertical="top"
+      />
+    </View>
+  );
+}
+
+/**
  * Whether an item counts as answered, for the coverage figure in the header.
  *
  * A reading of zero and an empty string are different things: the first is a

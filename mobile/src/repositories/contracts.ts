@@ -97,6 +97,15 @@ export interface InspectionListFilters {
   search?: string;
   page?: number;
   pageSize?: number;
+  /**
+   * Only today's round.
+   *
+   * A flag rather than a date, because "today" is a fact about Texas and the
+   * server owns it. A handset in another time zone -- or simply set wrong --
+   * would otherwise ask for the wrong day and be given exactly what it asked
+   * for.
+   */
+  dueToday?: boolean;
 }
 
 /**
@@ -183,7 +192,14 @@ export interface InspectionRepository {
   /** The technician's own call that a request is satisfied. */
   resolveEvidenceRequest(requestId: string): Promise<void>;
   updateRoomNote(roomId: string, note: string): Promise<InspectionRoom>;
-  skipRoom(roomId: string, reason: string): Promise<InspectionRoom>;
+  skipRoom(roomId: string, reason?: string): Promise<InspectionRoom>;
+  /**
+   * Takes a room off the inspection entirely — one the property does not have.
+   *
+   * Returns nothing to merge: the room is gone, so the caller invalidates
+   * rather than patching an entity that no longer exists.
+   */
+  removeRoom(roomId: string): Promise<{ id: string; removed: boolean; name: string }>;
   completeRoom(roomId: string): Promise<InspectionRoom>;
   /**
    * Records that the technician read the AI summary for an area and it matches

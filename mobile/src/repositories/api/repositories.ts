@@ -38,6 +38,7 @@ import type {
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
+import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import { resolveApiUrl } from '@texasrenters/shared';
@@ -187,6 +188,11 @@ export const roomSchema = z.object({
     'READY_FOR_REVIEW',
     'FAILED',
   ]),
+  /**
+   * Server-side photo count, defaulted for a cached room written before the
+   * field existed — a missing count must not discard the whole record.
+   */
+  photoCount: z.number().default(0),
   note: nullableString,
   skipReason: nullableString,
   // Optional, not defaulted: a room cached before this field existed was never
@@ -574,7 +580,10 @@ export async function requestJson(path: string, options: RequestInit = {}): Prom
 }
 
 const getJson = (path: string) => requestJson(path);
-const writeJson = (path: string, method: 'POST' | 'PATCH' | 'PUT', body?: object) =>
+// DELETE joins the three writers rather than getting a helper of its own: it
+// is the same request with the same auth, retry and error handling, and a
+// second implementation is how two paths drift apart.
+const writeJson = (path: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', body?: object) =>
   requestJson(path, { method, body: body ? JSON.stringify(body) : undefined });
 /**
  * The same request path a queued write took when it first failed, exported so
@@ -705,6 +714,7 @@ export class ApiInspectionRepository implements InspectionRepository {
     // chip sees work beyond the first page.
     if (filters.statuses?.length) query.set('status', filters.statuses.join(','));
     if (filters.search?.trim()) query.set('search', filters.search.trim());
+    if (filters.dueToday) query.set('dueToday', 'true');
     return cachedApiRecord(`inspections:${query.toString()}`, inspectionPageSchema, () =>
       getJson(`/api/v1/technician/inspections?${query.toString()}`),
     );
@@ -921,26 +931,153 @@ export class ApiInspectionRepository implements InspectionRepository {
     await this.persistRoom(room);
     return room;
   }
-  async skipRoom(roomId: string, reason: string) {
-    const room = roomSchema.parse(
-      await queueOnConnectionFailure(
-        { id: `skip:${roomId}`, kind: 'room-skip', payload: { roomId, reason } },
-        () =>
-          writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
-            reason,
-          }),
-      ),
-    );
-    await this.persistRoom(room);
-    return room;
+  /**
+   * Not queued offline like a skip or a note.
+   *
+   * A removal is refused outright when the area holds evidence, and that
+   * refusal is the point — queuing it would report success on the handset and
+   * fail silently later, against exactly the guard that protects a
+   * technician's own work.
+   */
+  async removeRoom(roomId: string) {
+    return (await writeJson(
+      `/api/v1/technician/rooms/${encodeURIComponent(roomId)}`,
+      'DELETE',
+    )) as { id: string; removed: boolean; name: string };
   }
+  async skipRoom(roomId: string, reason?: string) {
+    try {
+      const room = roomSchema.parse(
+        await queueOnConnectionFailure(
+          { id: `skip:${roomId}`, kind: 'room-skip', payload: { roomId, reason } },
+          () =>
+            writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/skip`, 'POST', {
+              reason,
+            }),
+        ),
+      );
+      await this.persistRoom(room);
+      return room;
+    } catch (error) {
+      /**
+       * A held skip still has to show on screen.
+       *
+       * Reported from the field 2026-09-10: an area marked skipped went on
+       * offering "Begin walkthrough" and a button still reading "Mark as
+       * skipped". #171 corrected what those controls say about a skipped area;
+       * this is why one could still be looking at an area the app did not think
+       * was skipped. The skip was safely queued and nothing on screen said so.
+       *
+       * `skipReason` goes in with it so the screen explains the skip rather
+       * than showing a bare state with no account of it.
+       */
+      if (error instanceof QueuedOfflineError)
+        await this.patchCachedRoom(roomId, {
+          completionStatus: 'SKIPPED',
+          skipReason: reason?.trim() || null,
+        });
+      throw error;
+    }
+  }
+  /**
+   * Marks an area done — after making sure the evidence for it has gone.
+   *
+   * Two separate things were wrong here, and they compounded.
+   *
+   * The server decides whether an area may be completed by counting
+   * `InspectionPhoto` rows, so an occupied area photographed but not yet
+   * uploaded was refused. That is every occupied area for the first fifteen
+   * seconds after the shutter, because the review window holds a fresh
+   * photograph back on purpose — and it is every occupied area *for ever* in a
+   * property with no signal. `flushRoomSnapshotsNow` settles the first case by
+   * ending the hold: completing an area is a stronger statement than the hold
+   * was waiting for.
+   *
+   * The second is that this was the only technician write that failed hard
+   * offline. A note, a skip, a checklist answer and a summary confirmation are
+   * all queued and replayed; the one action that *finishes* an area was not, so
+   * a technician in a basement could document a room and then not close it.
+   * Queuing it is safe for the same reason a skip is: it sets a value rather
+   * than appending one, and the server writes the same COMPLETED row however
+   * many times it arrives.
+   *
+   * This is the distinction `removeRoom` above does not meet, and the contrast
+   * is the point — a removal is *refused* when the area holds evidence, so
+   * queuing one would report a success the server is going to deny. A
+   * completion held here will succeed, because the queue delivers the
+   * photographs that justify it first.
+   */
   async completeRoom(roomId: string) {
-    const room = roomSchema.parse(
-      await writeJson(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST'),
-    );
-    await this.persistRoom(room);
-    return room;
+    try {
+      const room = roomSchema.parse(
+        await queueOnConnectionFailure(
+          { id: `complete:${roomId}`, kind: 'room-complete', payload: { roomId } },
+          async () => {
+            await flushRoomSnapshotsNow(roomId);
+            return writeJson(
+              `/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`,
+              'POST',
+            );
+          },
+        ),
+      );
+      await this.persistRoom(room);
+      return room;
+    } catch (error) {
+      /**
+       * A held completion still has to show on screen.
+       *
+       * Same reasoning as the queued checklist answer above: without this the
+       * area a technician just finished reads back as unfinished, which is
+       * indistinguishable from the app having lost it. The server's own row
+       * replaces this the moment the queue drains.
+       */
+      if (error instanceof QueuedOfflineError)
+        await this.patchCachedRoom(roomId, { completionStatus: 'COMPLETED' });
+      throw error;
+    }
   }
+
+  /**
+   * Mirrors a write held offline into the three records `persistRoom` keeps.
+   *
+   * Every queued mutation has the same hole: `queueOnConnectionFailure` throws
+   * `QueuedOfflineError` instead of returning a room, so the `persistRoom` call
+   * after it never runs and the cache keeps the state the area had *before* the
+   * technician acted. The screen then reads back the old row — an area just
+   * skipped still offering "Begin walkthrough", an area just completed still
+   * reading as unfinished — which is indistinguishable from the app having
+   * ignored the tap.
+   *
+   * `recordChecklistItem` already patched its own cached list for exactly this
+   * reason, with exactly this reasoning. This is that fix, generalised to the
+   * room records, so the next queued write does not have to rediscover it.
+   *
+   * The server's own row replaces all of it the moment the queue drains.
+   */
+  private async patchCachedRoom(roomId: string, patch: Partial<z.input<typeof roomSchema>>) {
+    const room = await updateExistingApiRecord(`room:${roomId}`, roomSchema, (current) => ({
+      ...current,
+      ...patch,
+    }));
+    if (!room) return;
+    await Promise.all([
+      updateExistingApiRecord(
+        `inspection-rooms:${room.inspectionId}`,
+        z.array(roomSchema),
+        (current) => current.map((item) => (item.id === roomId ? { ...item, ...patch } : item)),
+      ),
+      updateExistingApiRecord(
+        `inspection-context:${room.inspectionId}`,
+        inspectionContextSchema,
+        (current) => ({
+          ...current,
+          rooms: current.rooms.map((item) => (item.id === roomId ? { ...item, ...patch } : item)),
+        }),
+      ),
+    ]);
+  }
+
   /**
    * Records that the technician read the AI summary and it matches the area.
    *

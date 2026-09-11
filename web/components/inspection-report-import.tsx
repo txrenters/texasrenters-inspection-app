@@ -16,7 +16,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import {
   Table,
@@ -39,9 +38,11 @@ import {
 /**
  * The way in, from the inspection that needs filling.
  *
- * Shown on a move-in that Jobber closed but nothing was ever recorded
- * against -- the walk happened in another system, so the record arrives here
- * complete and empty. The import is what puts its evidence back.
+ * Shown on an inspection Jobber closed and nothing was ever recorded against --
+ * the walk happened in another system, so the record arrives here complete and
+ * empty -- and equally on one whose record here is simply wrong. The import
+ * replaces what it finds either way; `replacing` is what makes that plain
+ * before a file is chosen rather than after.
  *
  * A dialog rather than a panel: this is done once per inspection, and a
  * permanent block on a page people read repeatedly costs more attention than
@@ -50,11 +51,23 @@ import {
 export function ImportReportDialog({
   inspectionId,
   inspectionType,
+  propertyLabel,
+  replacing = false,
 }: {
   inspectionId: string;
-  /** Only shapes the wording. Every type is importable; the rules that decide
-   * are emptiness and having a property, neither of which is about type. */
+  /** Named in the drawer while it uploads, so a row is not just a spinner. */
+  propertyLabel?: string | null;
+  /** Only shapes the wording. Every type is importable; the one rule that
+   * decides is having a property, which is not about type. */
   inspectionType?: string | null;
+  /**
+   * Whether there is evidence here for the import to overwrite.
+   *
+   * Defaults to false, and the caller that knows passes the answer. Getting it
+   * wrong in this direction promises a clean fill on a record about to be
+   * replaced, which is the mistake worth a prop.
+   */
+  replacing?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const kind = inspectionType ? humanize(inspectionType).toLowerCase() : 'inspection';
@@ -102,11 +115,16 @@ export function ImportReportDialog({
    * The rect is read before the dialog closes, because a closed dialog has no
    * position to fly from.
    */
-  const minimize = useCallback(() => {
-    const from = content.current?.getBoundingClientRect();
-    if (from) dock?.fly(from);
-    setOpen(false);
-  }, [dock]);
+  const handOff = useCallback(
+    (file: File) => {
+      // Read before closing: a closed dialog has no position to fly from.
+      const from = content.current?.getBoundingClientRect();
+      dock?.upload({ inspectionId, address: propertyLabel ?? null, file });
+      if (from) dock?.fly(from);
+      setOpen(false);
+    },
+    [dock, inspectionId, propertyLabel],
+  );
 
   return (
     <Dialog onOpenChange={setOpen} open={open}>
@@ -118,22 +136,36 @@ export function ImportReportDialog({
       </DialogTrigger>
       <DialogContent className="sm:max-w-3xl" ref={content}>
         <DialogHeader>
-          <DialogTitle>Import an inspection report</DialogTitle>
+          <DialogTitle>{replacing ? 'Replace this inspection’s evidence' : 'Import an inspection report'}</DialogTitle>
           <DialogDescription>
-            {/* The baseline argument is true of a move-in and only a move-in.
+            {/* Two different things to say, and the difference matters more
+                than the wording of either. On an empty record this explains why
+                the import exists; on one holding evidence it is the warning,
+                and the last point at which the reader can stop.
+
+                The baseline argument is true of a move-in and only a move-in.
                 Saying it over a move-out would be explaining the wrong reason
                 for doing the right thing. */}
-            This {kind} was closed in Jobber but has no evidence recorded against it. Reading the
-            Inspect &amp; Cloud report fills it in
-            {inspectionType === 'MOVE_IN'
-              ? ', so a later move-out has a baseline to compare against.'
-              : ', so the walkthrough is on the record here.'}
+            {replacing ? (
+              <>
+                Reading the Inspect &amp; Cloud report will <strong>replace</strong> what is recorded
+                against this {kind}: its photos, its checklist answers, and any room the new report
+                does not cover. Recordings are kept, and so is anything filed against them.
+              </>
+            ) : (
+              <>
+                This {kind} was closed in Jobber but has no evidence recorded against it. Reading the
+                Inspect &amp; Cloud report fills it in
+                {inspectionType === 'MOVE_IN'
+                  ? ', so a later move-out has a baseline to compare against.'
+                  : ', so the walkthrough is on the record here.'}
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <InspectionReportImport
-          inspectionId={inspectionId}
           inspectionType={inspectionType}
-          onUploaded={minimize}
+          onHandOff={handOff}
           resumeJobId={active.data && !active.data.committedAt ? active.data.id : null}
         />
       </DialogContent>
@@ -161,21 +193,19 @@ function isRunning(job: ImportJob | null | undefined) {
  * evidence behind a charge.
  */
 export function InspectionReportImport({
-  inspectionId,
   inspectionType,
   resumeJobId = null,
-  onUploaded,
+  onHandOff,
 }: {
-  inspectionId: string;
   /** Wording only. Emptiness and having a property decide importability, not
    * the type. */
   inspectionType?: string | null;
   /** An import already under way here, so reopening picks it up rather than
    * offering to start a second one. */
   resumeJobId?: string | null;
-  /** The file has landed and the server has taken over, so the dialog has
-   * nothing left to say. Absent when this is rendered outside one. */
-  onUploaded?: () => void;
+  /** Takes the chosen file. The drawer uploads it and reports progress, so
+   * this dialog can close immediately. Absent when rendered outside one. */
+  onHandOff?: (file: File) => void;
 }) {
   const router = useRouter();
   const { startInspectionImport, commitInspectionImport } = useAdminMutations();
@@ -190,16 +220,6 @@ export function InspectionReportImport({
   const [dismissed, setDismissed] = useState(false);
   const jobId = dismissed ? null : (startedJobId ?? resumeJobId);
   const [rejected, setRejected] = useState<string | null>(null);
-  /**
-   * How much of the file has reached the server, 0 to 1.
-   *
-   * Null until the first progress event, and null again once the upload is
-   * done. A report is tens of megabytes — one recent upload took 165 seconds,
-   * during which the server ran no queries at all because it was purely
-   * receiving bytes — and a spinner that never moves for that long is
-   * indistinguishable from a hang. It was reported as one.
-   */
-  const [progress, setProgress] = useState<number | null>(null);
   /** A file is over the drop zone. Purely visual, but without it there is no
    * signal that dropping will do anything. */
   const [dragging, setDragging] = useState(false);
@@ -209,7 +229,8 @@ export function InspectionReportImport({
   const fileInput = useRef<HTMLInputElement>(null);
   const job = useInspectionImportJob(jobId);
 
-  const uploading = startInspectionImport.isPending;
+  // The upload lives in the drawer now, so this panel is never in that state.
+  const uploading = false;
 
   /**
    * Only while the file is in the air.
@@ -230,41 +251,32 @@ export function InspectionReportImport({
     return () => window.removeEventListener('beforeunload', warn);
   }, [uploading]);
 
-  async function upload(file: File) {
+  /**
+   * Hands the file to the drawer and gets out of the way.
+   *
+   * The upload used to run inside this dialog, which is why the dialog could
+   * not be closed while it went: closing it took the only progress display with
+   * it. The drawer carries it now, so this closes the moment the file is
+   * accepted — and everything after, the reading and the writing-in, happens on
+   * the server with nothing to watch.
+   */
+  function upload(file: File) {
     setRejected(null);
     if (file.type !== 'application/pdf') {
       setRejected('That file is not a PDF.');
       return;
     }
-    try {
-      setProgress(0);
-      const started = await startInspectionImport.mutateAsync({
-        inspectionId,
-        file,
-        onProgress: setProgress,
-      });
-      setDismissed(false);
-      setStartedJobId(started.jobId);
-      // Only once the file is actually up. Minimizing while it uploads would
-      // hide the one phase that genuinely cannot be walked away from.
-      onUploaded?.();
-    } catch {
-      // Rendered below from the mutation's own error.
-    } finally {
-      // Cleared either way: the upload is over, and leaving a bar at 100% while
-      // the server reads the file would claim progress that is not being made.
-      setProgress(null);
-    }
+    onHandOff?.(file);
   }
 
-  async function commit() {
+  async function commit(mode: 'REPLACE' | 'ADD') {
     if (!jobId) return;
     try {
       setWriting(true);
       // Returns as soon as the write has started. Writing 376 photographs takes
       // longer than the server will hold a socket open, so the job reports the
       // outcome and the poll below follows it.
-      await commitInspectionImport.mutateAsync(jobId);
+      await commitInspectionImport.mutateAsync({ jobId, mode });
     } catch {
       setWriting(false);
       // Rendered below from the mutation's own error.
@@ -382,11 +394,7 @@ export function InspectionReportImport({
           >
             {uploading ? <Spinner /> : <UploadIcon className="text-muted-foreground size-5" />}
             <span className="text-sm font-medium">
-              {uploading
-                ? progress === null
-                  ? 'Uploading…'
-                  : `Uploading… ${Math.round(progress * 100)}%`
-                : dragging
+              {dragging
                   ? 'Drop the report to start'
                   : 'Drop a report PDF here, or click to choose one'}
             </span>
@@ -400,9 +408,7 @@ export function InspectionReportImport({
               first event and once the file has landed, and a bar sitting at
               100% while the server reads the file would claim progress that is
               not being made — which is the thing this exists to stop. */}
-          {uploading && progress !== null ? (
-            <Progress className="h-1.5" value={Math.round(progress * 100)} />
-          ) : null}
+
         </div>
       ) : (
         <ImportProgress
@@ -414,7 +420,7 @@ export function InspectionReportImport({
             (writing && !job.data?.committedAt && !job.data?.errorCode)
           }
           job={job.data}
-          onCommit={() => void commit()}
+          onCommit={(mode) => void commit(mode)}
           onDiscard={() => {
             // Both, because the job may have come from the inspection rather
             // than from this session. Clearing only what this session started
@@ -439,9 +445,13 @@ function ImportProgress({
   committing: boolean;
   inspectionType?: string | null;
   job: ImportJob | undefined;
-  onCommit: () => void;
+  onCommit: (mode: 'REPLACE' | 'ADD') => void;
   onDiscard: () => void;
 }) {
+  // Before the early returns: a hook cannot sit behind one. Defaults to the
+  // historical behaviour, so an import nobody thinks about writes as it always did.
+  const [mode, setMode] = useState<'REPLACE' | 'ADD'>('REPLACE');
+
   if (!job)
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">
@@ -578,12 +588,58 @@ function ImportProgress({
         </TableBody>
       </Table>
 
+      {/*
+        An agent who submits an incomplete walkthrough issues a second report
+        covering what was missed. Importing that the usual way would keep only
+        the areas it names and drop the rest, so the choice is made here, with
+        the parsed areas visible above, rather than assumed.
+      */}
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium">How should this be written?</legend>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            checked={mode === 'REPLACE'}
+            className="mt-1"
+            name="import-mode"
+            onChange={() => setMode('REPLACE')}
+            type="radio"
+            value="REPLACE"
+          />
+          <span>
+            Replace this inspection
+            <span className="text-muted-foreground block text-xs">
+              The report becomes the inspection&apos;s evidence. Areas it does not mention are
+              removed.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            checked={mode === 'ADD'}
+            className="mt-1"
+            name="import-mode"
+            onChange={() => setMode('ADD')}
+            type="radio"
+            value="ADD"
+          />
+          <span>
+            Add to this inspection
+            <span className="text-muted-foreground block text-xs">
+              For a follow-up report covering areas the first one missed. Areas above are written;
+              everything else already on the inspection is left alone.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
       <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={committing} onClick={onCommit}>
+        <Button disabled={committing} onClick={() => onCommit(mode)}>
           {committing ? <Spinner /> : <FileTextIcon />}
           {committing
             ? 'Importing…'
-            : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
+            : mode === 'ADD'
+              ? 'Add these areas to the inspection'
+              : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
         </Button>
         <Button disabled={committing} onClick={onDiscard} variant="outline">
           Cancel

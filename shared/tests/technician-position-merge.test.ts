@@ -13,6 +13,11 @@ function position(overrides: Partial<TechnicianPosition> = {}): TechnicianPositi
     longitude: -95.204,
     accuracyMeters: 8,
     batteryPercent: 74,
+    // Null, not absent. They are required on the contract because the API
+    // always sends them -- a position with no course says so with a null, and
+    // an optional field would let a caller forget to answer the question.
+    headingDegrees: null,
+    speedMetersPerSecond: null,
     recordedAt: '2026-08-27T10:00:00.000Z',
     technician: { id: 'tech-a', displayName: 'Ernie Saavedra' },
     ...overrides,

@@ -25,10 +25,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Badge, type BadgeTone } from '@/src/components/ui';
 import { AreaAnalysisCard } from '@/src/areas/AreaAnalysisCard';
+import { OccupiedConditionCard } from '@/src/areas/OccupiedConditionCard';
 import { BaselineCard } from '@/src/areas/BaselineCard';
 import { WalkthroughGuideCard } from '@/src/areas/WalkthroughGuideCard';
 import { areaStage, deriveAreaStatus, type AreaStatusDescriptor } from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
+import { checklistKindFor } from '@texasrenters/shared';
+
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
@@ -39,7 +42,9 @@ import {
   useEvidenceRequests,
   useFindings,
   useResolveEvidenceRequest,
+  useRecordChecklistItem,
   useRoom,
+  useRoomChecklist,
   useRoomMedia,
   useRoomPhotos,
   useRoomSummaries,
@@ -113,6 +118,20 @@ export default function AreaDetailScreen() {
     environment: room.data?.environment,
   });
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
+  /**
+   * The authored condition items, for the occupied questions below.
+   *
+   * `useRoomChecklist` rather than `areaChecklist` above: that one falls back to
+   * a *generated* list for areas nobody has configured, and those synthetic ids
+   * do not exist on the server, so scoring one would 404. Only authored items
+   * can be answered.
+   */
+  const conditionItems = useRoomChecklist(id);
+  const recordCondition = useRecordChecklistItem(id);
+  const conditionAssessments = useMemo(
+    () => new Map((conditionItems.data ?? []).map((entry) => [entry.id, entry])),
+    [conditionItems.data],
+  );
   // Scoped to this area: a request about the kitchen is not this room's problem,
   // and showing it here would send the technician to the wrong place.
   const uploadActions = useUploadActions();
@@ -153,7 +172,7 @@ export default function AreaDetailScreen() {
   const [editOpen, setEditOpen] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
-  const [skipReason, setSkipReason] = useState('');
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   if (room.isLoading || !room.data) {
     return (
@@ -178,9 +197,33 @@ export default function AreaDetailScreen() {
   // re-run. Additional clips ride along with it.
   const primaryMediaId = media.data?.[0]?.id ?? null;
   const recordingCount = media.data?.length ?? 0;
+  /**
+   * Photographs taken here that the server does not have yet.
+   *
+   * Hoisted above the gate because it is part of the answer, not just the retry
+   * control it was written for. This screen counted evidence two different
+   * ways: `hasEvidence` below reads these local captures and decides what to
+   * *show*, while the gate read only the server's list and decided what is
+   * *allowed*. For as long as an upload was pending the two disagreed, and the
+   * screen said "In progress — 1 photo saved" directly above "Photograph or
+   * recording captured — not met".
+   */
+  const pendingSnapshots = areaSnapshots.filter(
+    (snapshot) => snapshot.uploadStatus !== 'UPLOADED',
+  );
   const requirements = deriveAreaRequirements(item, {
     hasPrimaryRecording: hasRecording,
-    photoCount: photos.data?.length ?? 0,
+    /**
+     * Captured counts, not just delivered.
+     *
+     * A photograph on the handset is evidence the technician has produced —
+     * `completeRoom` flushes the queue before it asks the server, so a pending
+     * capture is a completion that will land rather than one that is missing.
+     * Reading the server's list alone made an occupied area uncompletable for
+     * the fifteen seconds of the review window, and permanently uncompletable
+     * with no signal at all.
+     */
+    photoCount: (photos.data?.length ?? 0) + pendingSnapshots.length,
     findingCount: roomFindings.length,
     // Queued counts as settled: the durable queue will deliver it, and blocking
     // completion on a finished upload would strand a technician with no signal
@@ -195,13 +238,31 @@ export default function AreaDetailScreen() {
   const status = deriveAreaStatus(item);
   const stage = areaStage(status.status, hasRecording);
   const alreadyFinished = stage === 'FINISHED';
+  // Skipped is finished, but not in the way completed is: the area was never
+  // walked, so the screen has different things to say about it.
+  const isSkipped = status.status === 'SKIPPED';
   // Photographs can exist without a recording — a technician who shot stills
   // and no video still has evidence, and hiding it because there is no video
   // would be telling them nothing was saved.
   const hasEvidence = hasRecording || areaSnapshots.length > 0;
-  const strandedSnapshots = areaSnapshots.filter(
-    (snapshot) => snapshot.uploadStatus !== 'UPLOADED',
-  );
+  /**
+   * Whether this visit's questions are the technician's to answer.
+   *
+   * Read from the shared kind rather than compared to 'OCCUPIED' here, so the
+   * screen agrees with whatever the row writer wrote for this inspection.
+   */
+  const asksOccupiedCondition = checklistKindFor(item.inspectionType) === 'OCCUPIED';
+  /**
+   * Anything at all recorded against this area, including on the server.
+   *
+   * Wider than `hasEvidence` above, which asks whether there is something to
+   * *show on this screen* and reads local snapshots. This asks whether removal
+   * would destroy somebody's work, so it counts the server's own photographs
+   * and findings too — and mirrors the refusal `removeArea` applies, so the
+   * control is not offered when the request would be refused.
+   */
+  const hasAnyEvidence =
+    hasEvidence || Boolean(photos.data?.length) || roomFindings.length > 0;
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -260,6 +321,25 @@ export default function AreaDetailScreen() {
               server sends a status outside the union. */}
           <Badge label={status.label} tone={STATUS_BADGE_TONE[status.tone]} />
         </View>
+
+        {/*
+          What a skipped area is, said in words.
+
+          The badge alone reads as one more status pill among several, and the
+          reason — the thing a technician wrote and an administrator will read —
+          was not on this screen at all. Reported from the field: a skipped area
+          looked no different from an unstarted one.
+        */}
+        {status.status === 'SKIPPED' ? (
+          <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
+            <Text className="text-base font-bold text-foreground">This area was skipped</Text>
+            <Text className="mt-1 text-sm leading-5 text-muted-foreground">
+              {item.skipReason
+                ? `Reason given: ${item.skipReason}`
+                : 'No reason was recorded. It counts as finished, so the inspection can be submitted without it.'}
+            </Text>
+          </View>
+        ) : null}
 
         {/* First thing in the area, above the baseline: an outstanding request
             is the reason the technician is standing here again. */}
@@ -399,13 +479,13 @@ export default function AreaDetailScreen() {
             {/* Automatic retry gives up on a refusal the server will repeat, and
                 after enough attempts. Without a way back by hand, those
                 photographs would stay on the handset for good. */}
-            {strandedSnapshots.length ? (
+            {pendingSnapshots.length ? (
               <Button
                 accessibilityHint="Queues them to send again"
                 className="mt-1"
-                label={`Retry ${strandedSnapshots.length} photo${strandedSnapshots.length === 1 ? '' : 's'}`}
+                label={`Retry ${pendingSnapshots.length} photo${pendingSnapshots.length === 1 ? '' : 's'}`}
                 onPress={() => {
-                  for (const snapshot of strandedSnapshots)
+                  for (const snapshot of pendingSnapshots)
                     updateSnapshot(snapshot.id, {
                       uploadStatus: 'PENDING',
                       attempts: 0,
@@ -452,11 +532,115 @@ export default function AreaDetailScreen() {
           <AreaCompletionChecklist requirements={requirements} blockedReason={gate.reason} />
         )}
 
+        {/*
+          Where an area is reviewed and handed in.
+
+          This screen already showed the evidence and the outstanding
+          requirements, and then offered nothing to do about either: no way to
+          say anything about the room, and no way to finish it. An area could be
+          photographed and never submitted from here.
+
+          The gap only showed up on a photographs-only visit. A recording routes
+          to `recording-review`, which has carried a note field and a submit
+          button all along — but that screen is built entirely around a draft
+          recording and bails out without one, so an occupied area walked with
+          photographs alone reached no review surface at all.
+
+          Shown once there is something to review, and gone once the area is
+          finished.
+        */}
+        {/* Above "Finish this area" rather than inside it: the condition answers
+            describe the room, and the card below is about handing it in. Shown
+            whether or not the area is finished, because an answer is still
+            worth correcting after the fact — unlike the submit control, which
+            has nothing left to do. */}
+        {asksOccupiedCondition ? (
+          <OccupiedConditionCard
+            assessments={conditionAssessments}
+            items={conditionItems.data ?? []}
+            onRecord={(itemId, patch) => {
+              const current = conditionAssessments.get(itemId);
+              recordCondition.mutate({
+                itemId,
+                assessment: {
+                  // The whole assessment every time: the API takes a complete
+                  // record, so sending one field would clear the others.
+                  isClean: current?.isClean ?? null,
+                  isUndamaged: current?.isUndamaged ?? null,
+                  isWorking: current?.isWorking ?? null,
+                  comment: current?.comment ?? null,
+                  numericValue: current?.numericValue ?? null,
+                  textValue: current?.textValue ?? null,
+                  ...patch,
+                  // Nothing is being filmed on this screen, so there is no
+                  // moment in a recording to point the reviewer at.
+                  videoTimestampSeconds: null,
+                },
+              });
+            }}
+          />
+        ) : null}
+
+        {alreadyFinished || !hasAnyEvidence ? null : (
+          <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
+            <Text className="text-base font-bold text-foreground">Finish this area</Text>
+            <Text
+              className="mt-1 text-sm leading-5 text-muted-foreground"
+              nativeID="area-note-label"
+            >
+              Anything the office should know about this room. Optional — findings and photographs
+              carry most of it.
+            </Text>
+            <TextInput
+              accessibilityLabel="Notes about this area, optional"
+              accessibilityLabelledBy="area-note-label"
+              className="mt-3 min-h-20 rounded-xl border border-border bg-background px-4 py-3 text-foreground"
+              defaultValue={item.note ?? ''}
+              multiline
+              /* Saved on blur rather than per keystroke: the same choice the
+                 checklist's own text fields make, and the whole note is sent
+                 each time so there is nothing to merge. */
+              onEndEditing={(event) => updates.note.mutate(event.nativeEvent.text.trim())}
+              placeholder="Tenant reported the window sticks…"
+              placeholderTextColor={theme.mutedForeground}
+              textAlignVertical="top"
+            />
+            {updates.complete.isError ? (
+              <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
+                {updates.complete.error instanceof Error
+                  ? updates.complete.error.message
+                  : 'This area could not be submitted.'}
+              </Text>
+            ) : null}
+            <Button
+              accessibilityHint={
+                gate.canComplete
+                  ? 'Marks this area finished and returns to the inspection'
+                  : gate.reason
+              }
+              busy={updates.complete.isPending}
+              busyLabel="Submitting…"
+              className="mt-4"
+              /* Disabled rather than hidden, with the reason above it in the
+                 checklist: a control that vanishes tells a technician nothing
+                 about what is missing. */
+              disabled={!gate.canComplete}
+              label="Submit Evidence"
+              onPress={() => updates.complete.mutate(undefined, { onSuccess: () => goBack() })}
+            />
+          </View>
+        )}
+
         {/* The Clean / Undamaged / Working checklist used to sit here. It is now
             scored by the office during review, against the same items: the
             reviewer is the one reading the recording and the photographs, and
             each axis is a judgement about that evidence. The technician's job on
-            site is to capture it. */}
+            site is to capture it.
+
+            The occupied condition card above is not that checklist coming back.
+            Those two questions are a judgement about the room rather than about
+            the evidence, and only the person standing in it can answer them —
+            see `OccupiedConditionCard` for why the two are separated. */}
 
         {/* One card for the analysis and its findings. They are the same
             subject at two moments and were never both on screen, so the second
@@ -504,16 +688,48 @@ export default function AreaDetailScreen() {
             offering it there invites a technician to file a recorded area as
             uninspected. Finished areas lose it for the same reason. */}
         {hasRecording || alreadyFinished ? null : (
-          // Deliberately the quietest control on the screen: skipping is a
-          // claim about the property, not a shortcut, and it should take a
-          // moment to find.
+          /*
+            `secondary`, not `quiet`.
+        
+            `quiet` carries no fill and no border, so it renders as a line of
+            text — and was read in the field as a label rather than something
+            you could press. The intent behind it was right: skipping is a claim
+            about the property, not a shortcut, and it should not compete with
+            the primary action. A bordered secondary button says both things,
+            where invisibility only said one.
+          */
           <Button
-            accessibilityHint="Asks for a reason, then records this area as not inspected"
+            accessibilityHint="Asks you to confirm, then records this area as not inspected"
             accessibilityLabel="Mark area as skipped"
             className="mx-5 mt-4"
             label="Mark as Skipped"
             onPress={() => setSkipOpen(true)}
-            variant="quiet"
+            variant="secondary"
+          />
+        )}
+
+        {/*
+          Removal, for a room the property does not have.
+
+          Distinct from skipping, and the distinction is the point. Skipping
+          says "this room exists and was not inspected"; removing says "this is
+          not a room here" — which a standard-template layout gets wrong on
+          every property that is not a three-bed, and which the technician
+          standing in the hall can see and an administrator cannot.
+
+          Offered on the same terms as skipping: only while the area holds
+          nothing. The server refuses a removal with evidence anyway, but a
+          control that is going to be refused should not be offered — and
+          hiding it keeps the two actions from looking interchangeable.
+        */}
+        {hasAnyEvidence || alreadyFinished ? null : (
+          <Button
+            accessibilityHint="Asks to confirm, then takes this area off the inspection"
+            accessibilityLabel="Remove this area from the inspection"
+            className="mx-5 mt-2"
+            label="Remove Area"
+            onPress={() => setRemoveOpen(true)}
+            variant="secondary"
           />
         )}
       </ScrollView>
@@ -522,16 +738,56 @@ export default function AreaDetailScreen() {
         {/* This carried no accessible label of its own, so a screen reader read
             the button's own text — which is right, but only by accident, and it
             said nothing about where the button goes. */}
+        {/*
+          A skipped area was offering "Begin Walkthrough" as though nothing had
+          happened to it — the loudest control on the screen inviting the
+          technician to start work they had just recorded as not being done.
+          Reported from the field.
+
+          It still opens the camera, because skipping by mistake has to be
+          recoverable and completing an area clears its skip reason on the
+          server. What changes is that the screen stops pretending: the label
+          says what it would be doing, and it steps back from primary so it no
+          longer reads as the expected next action.
+
+          A *completed* area keeps its loud "Record Additional Video" on
+          purpose. Noticing something else in a finished room is normal, and an
+          extra clip does not undo the walkthrough.
+        */}
         <Button
-          accessibilityHint="Opens the camera"
+          accessibilityHint={
+            isSkipped ? 'Opens the camera and inspects this area after all' : 'Opens the camera'
+          }
           icon={
-            hasRecording ? (
+            isSkipped ? null : hasRecording ? (
               <CameraIcon size={18} className="text-primary-foreground" />
             ) : (
               <PlayCircleIcon size={18} className="text-primary-foreground" />
             )
           }
-          label={hasRecording ? 'Record Additional Video' : 'Begin Walkthrough'}
+          /**
+           * "Begin" only when nothing has been captured.
+           *
+           * Taking a photograph starts the area — that is the whole of what
+           * starting means here — but the label went on saying Begin, so a
+           * technician who had photographed a room came back to a screen
+           * offering to start it. Reported from the field alongside the same
+           * confusion on the area's status.
+           *
+           * Three labels for three states, and `hasAnyEvidence` is the one that
+           * knows about photographs: a recording earns "Record Additional
+           * Video" because that is what a second take is, photographs alone
+           * earn "Continue", and an untouched area earns "Begin".
+           */
+          label={
+            isSkipped
+              ? 'Inspect Anyway'
+              : hasRecording
+                ? 'Record Additional Video'
+                : hasAnyEvidence
+                  ? 'Continue Walkthrough'
+                  : 'Begin Walkthrough'
+          }
           onPress={() =>
             router.push(
               hasRecording
@@ -539,6 +795,7 @@ export default function AreaDetailScreen() {
                 : `/camera/${inspectionId}/${id}`,
             )
           }
+          variant={isSkipped ? 'secondary' : 'primary'}
         />
       </View>
 
@@ -631,22 +888,32 @@ export default function AreaDetailScreen() {
         onClose={() => setSkipOpen(false)}
         visible={skipOpen}
       >
+        {/*
+          A confirmation, not a form.
+
+          This asked for a written reason and refused to proceed without one.
+          Field feedback, 2026-09-09: an occupied inspection is walked in about
+          fifteen minutes, and the commonest skip — a bedroom the tenant has
+          locked, a room in use — is fully described by the fact that it was
+          skipped. A required free-text box mid-walkthrough is answered with
+          whatever clears it, and "n/a" forty times a week tells an
+          administrator less than an empty column, because an empty column does
+          not look like an answer.
+
+          The skip is still recorded, and is still a decision with the
+          technician's name on it: `completionStatus: SKIPPED` with a
+          `completedAt`, which is what the report and the review screen read.
+          What is gone is the toll, not the record.
+        */}
         <Text className="text-xl font-bold text-foreground">Skip this room?</Text>
-        <Text nativeID="skip-reason-label" className="mt-2 text-sm leading-5 text-muted-foreground">
-          Provide a reason for the administrator and audit trail.
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          It will be recorded as skipped and counted as finished, so you can submit the inspection
+          without it. No photograph or recording is kept for this room.
         </Text>
-        <TextInput
-          accessibilityLabel="Reason for skipping this room"
-          accessibilityLabelledBy="skip-reason-label"
-          className="mt-4 min-h-24 rounded-xl border border-border bg-card px-4 py-3 text-foreground"
-          multiline
-          textAlignVertical="top"
-          placeholder="Why can this room not be inspected?"
-          placeholderTextColor={theme.mutedForeground}
-          value={skipReason}
-          onChangeText={setSkipReason}
-        />
-        <View className="mt-4 flex-row gap-3">
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          You can come back and inspect it while this inspection is still open.
+        </Text>
+        <View className="mt-5 flex-row gap-3">
           <Button
             className="flex-1"
             label="Cancel"
@@ -654,17 +921,74 @@ export default function AreaDetailScreen() {
             variant="secondary"
           />
           <Button
-            accessibilityHint={skipReason.trim() ? undefined : 'Enter a reason before skipping'}
             busy={updates.skip.isPending}
             busyLabel="Saving…"
             className="flex-1"
-            disabled={!skipReason.trim()}
             label="Skip Room"
             onPress={() =>
-              updates.skip.mutate(skipReason.trim(), {
+              updates.skip.mutate(undefined, {
                 onSuccess: () => {
                   setSkipOpen(false);
-                  setSkipReason('');
+                  goBack();
+                },
+              })
+            }
+          />
+        </View>
+      </BottomSheet>
+
+      {/*
+        Removal, confirmed rather than justified.
+
+        Deliberately worded to separate it from skipping, which sits two lines
+        above it in the same screen: skipping records a room that exists and was
+        not inspected, removal says the room is not there. Confusing the two
+        would either lose a real room from a report or file an invented one as
+        deliberately uninspected.
+      */}
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
+        onClose={() => setRemoveOpen(false)}
+        visible={removeOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">Remove {item.name}?</Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          Use this when the property does not have this room. It comes off this inspection and
+          stops counting toward finishing it.
+        </Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          If the room exists but you cannot inspect it, skip it instead — that keeps it on the
+          report with your reason.
+        </Text>
+        {updates.remove.isError ? (
+          <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
+            {updates.remove.error instanceof Error
+              ? updates.remove.error.message
+              : 'The area could not be removed.'}
+          </Text>
+        ) : null}
+        <View className="mt-5 flex-row gap-3">
+          <Button
+            className="flex-1"
+            label="Cancel"
+            onPress={() => setRemoveOpen(false)}
+            variant="secondary"
+          />
+          <Button
+            busy={updates.remove.isPending}
+            busyLabel="Removing…"
+            className="flex-1"
+            label="Remove Area"
+            // The sheet is where the weight belongs: this is the tap that
+            // deletes, and it should not look like the one that cancels.
+            variant="destructive"
+            onPress={() =>
+              updates.remove.mutate(undefined, {
+                // Back to the inspection: the screen behind this sheet is about
+                // a room that no longer exists.
+                onSuccess: () => {
+                  setRemoveOpen(false);
                   goBack();
                 },
               })

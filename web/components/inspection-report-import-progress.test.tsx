@@ -1,22 +1,20 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { InspectionReportImport } from './inspection-report-import';
 import type { ImportJob } from '@/lib/queries';
 
 /**
- * Saying how far along an import is.
+ * Announcing what became of an import.
  *
- * A report PDF is tens of megabytes. One recent upload spent **165 seconds** in
- * transit — the server logged the request as slow having run no queries at all,
- * because it was purely receiving bytes. Three minutes of a spinner reading
- * "Uploading…" that never moves is indistinguishable from a hang, and was
- * reported as one.
+ * Upload progress used to be tested here too. It moved to the drawer with the
+ * upload itself — the dialog hands the file over and closes now, so it has no
+ * progress of its own to report. Those assertions live in
+ * `import-dock.test.tsx` beside the code that owns them.
  *
- * The other half is the opposite problem: the dialog can now be closed while an
- * import runs, so whoever started it is usually somewhere else when it lands.
- * Without an announcement the only signal is a page they are no longer looking
- * at quietly gaining areas.
+ * What remains is the outcome. Whoever starts an import is usually on another
+ * property when it lands, so the only signal that anything happened is what is
+ * said about it.
  */
 
 const startImport = vi.fn();
@@ -62,15 +60,6 @@ const committedJob = (overrides: Partial<ImportJob> = {}) =>
     ...overrides,
   }) as ImportJob;
 
-const pdf = () =>
-  new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], 'report.pdf', { type: 'application/pdf' });
-
-function choose(file: File) {
-  const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-  Object.defineProperty(input, 'files', { value: [file], configurable: true });
-  fireEvent.change(input);
-}
-
 beforeEach(() => {
   startImport.mockReset().mockResolvedValue({ jobId: 'job-1', status: 'RUNNING' });
   commitImport.mockReset();
@@ -80,52 +69,10 @@ beforeEach(() => {
   uploading = false;
 });
 
-describe('reporting how much of the file has gone', () => {
-  it('hands the mutation somewhere to report progress', async () => {
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
-
-    await vi.waitFor(() => expect(startImport).toHaveBeenCalled());
-    expect(typeof startImport.mock.calls[0][0].onProgress).toBe('function');
-  });
-
-  it('shows the percentage as it arrives', async () => {
-    // The whole point: a number that moves, rather than a spinner that does
-    // not. `fetch` cannot do this, which is why the upload uses XHR.
-    //
-    // The upload is left in flight deliberately — a promise that never settles.
-    // Letting it resolve would move the component on to the next phase, and the
-    // percentage only exists while bytes are actually moving.
-    uploading = true;
-    startImport.mockImplementation(({ onProgress }: { onProgress: (n: number) => void }) => {
-      onProgress(0.42);
-      return new Promise(() => {});
-    });
-
-    const view = render(<InspectionReportImport inspectionId="inspection-1" />);
-    choose(pdf());
-
-    await vi.waitFor(() => expect(startImport).toHaveBeenCalled());
-    view.rerender(<InspectionReportImport inspectionId="inspection-1" />);
-    await vi.waitFor(() => expect(screen.getByText(/42%/)).toBeTruthy());
-  });
-
-  it('falls back to a plain spinner before any progress is known', () => {
-    // `lengthComputable` is false when the size is unknown. Reporting 0% for
-    // ever would be worse than the spinner it replaces.
-    uploading = true;
-    render(<InspectionReportImport inspectionId="inspection-1" />);
-    const zone = screen.getByRole('button', { name: /uploading…/i });
-    // Saying "Uploading…" with no number, rather than "Uploading… 0%".
-    expect(zone.textContent).toContain('Uploading…');
-    expect(zone.textContent).not.toMatch(/\d+%/);
-  });
-});
-
 describe('announcing the outcome', () => {
   it('says so when the report has been written in', () => {
     job = committedJob();
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
 
     expect(success).toHaveBeenCalledWith(
       'Report imported',
@@ -137,7 +84,7 @@ describe('announcing the outcome', () => {
     // The import is evidence somebody else recorded, and nobody has confirmed
     // the matches. A success notice that omitted that would imply otherwise.
     job = committedJob();
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
     expect(success.mock.calls[0][1].description).toContain('under review');
   });
 
@@ -145,15 +92,15 @@ describe('announcing the outcome', () => {
     // The job keeps being polled after it commits. Without a guard every answer
     // would raise the same notification again.
     job = committedJob();
-    const view = render(<InspectionReportImport inspectionId="inspection-1" />);
-    view.rerender(<InspectionReportImport inspectionId="inspection-1" />);
-    view.rerender(<InspectionReportImport inspectionId="inspection-1" />);
+    const view = render(<InspectionReportImport />);
+    view.rerender(<InspectionReportImport />);
+    view.rerender(<InspectionReportImport />);
     expect(success).toHaveBeenCalledTimes(1);
   });
 
   it('announces a failure too', () => {
     job = committedJob({ committedAt: null, status: 'FAILED', errorCode: 'REPORT_NOT_READABLE' });
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
     expect(failure).toHaveBeenCalledWith(
       'The report could not be imported',
       expect.objectContaining({ description: 'REPORT_NOT_READABLE' }),
@@ -163,7 +110,7 @@ describe('announcing the outcome', () => {
 
   it('says nothing while the import is still running', () => {
     job = committedJob({ committedAt: null, status: 'RUNNING' });
-    render(<InspectionReportImport inspectionId="inspection-1" />);
+    render(<InspectionReportImport />);
     expect(success).not.toHaveBeenCalled();
     expect(failure).not.toHaveBeenCalled();
   });

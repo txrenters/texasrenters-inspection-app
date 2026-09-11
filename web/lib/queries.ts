@@ -8,6 +8,7 @@ import type {
   AdminAssignmentListItem,
   PropertyPosition,
   TechnicianAssignments,
+  TechnicianDayTimeline,
   TechnicianRoute,
   TechnicianPosition,
   AdminAuditEvent,
@@ -37,6 +38,7 @@ import type {
   AdminRoleSummary,
   AdminTechnician,
   AdminUnit,
+  ComparisonReport,
   AdminUser,
   AdminUserDetail,
   AiProviderName,
@@ -129,6 +131,7 @@ export const keys = {
   inspectionAreas: (id: string) => ['admin', 'inspection', id, 'areas'] as const,
   evidenceRequests: (id: string) => ['admin', 'inspection', id, 'evidence-requests'] as const,
   inspectionComparison: (id: string) => ['admin', 'inspection', id, 'comparison'] as const,
+  comparisonReport: (id: string) => ['admin', 'inspection', id, 'comparison-report'] as const,
   inspectionPets: (id: string) => ['admin', 'inspection', id, 'pets'] as const,
   inspectionCharges: (id: string) => ['admin', 'inspection', id, 'charges'] as const,
   chargeReport: (id: string) => ['admin', 'inspection', id, 'charge-report'] as const,
@@ -139,6 +142,8 @@ export const keys = {
   technicianLocations: ['technician-locations'] as const,
   propertyLocations: ['property-locations'] as const,
   technicianRoute: (id: string, date: string) => ['technician-route', id, date] as const,
+  technicianTimeline: (id: string, date: string) =>
+    ['technician-timeline', id, date] as const,
   mapAssignments: (date: string) => ['map-assignments', date] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
@@ -429,6 +434,14 @@ export const useChargeReport = (id: string, enabled = true) =>
       api<AdminChargeReport>(`/api/v1/admin/inspections/${id}/charge-report`, { signal }),
     enabled: Boolean(id) && enabled,
   });
+/** Move-in beside move-out, as one printable document. */
+export const useComparisonReport = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.comparisonReport(id),
+    queryFn: ({ signal }) =>
+      api<ComparisonReport>(`/api/v1/admin/inspections/${id}/comparison-report`, { signal }),
+    enabled: Boolean(id) && enabled,
+  });
 export const useChargeRules = (enabled = true) =>
   useQuery({
     queryKey: keys.chargeRules,
@@ -501,6 +514,25 @@ export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
     queryFn: ({ signal }) =>
       api<TechnicianRoute>(
         `/api/v1/admin/technicians/${id}/route${queryString({ date })}`,
+        { signal },
+      ),
+    refetchInterval: 2 * 60_000,
+    enabled,
+  });
+/**
+ * What a technician's day has actually come to, so far.
+ *
+ * Two minutes, matching the route beside it. Faster would be spending requests
+ * to watch a number that moves in minutes: the visit somebody is inside of is
+ * still happening, and refreshing it every few seconds only makes the figure
+ * jitter while it climbs.
+ */
+export const useTechnicianTimeline = (id: string, date: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.technicianTimeline(id, date),
+    queryFn: ({ signal }) =>
+      api<TechnicianDayTimeline>(
+        `/api/v1/admin/technicians/${id}/timeline${queryString({ date })}`,
         { signal },
       ),
     refetchInterval: 2 * 60_000,
@@ -705,8 +737,17 @@ export interface RunningImport {
   id: string;
   inspectionId: string | null;
   status: ImportJob['status'];
-  /** Read, but nobody has asked for it to be written yet — waiting on a person
-   * rather than on the server, which the dock says out loud. */
+  /**
+   * What to say about this one.
+   *
+   * Three answers, not two: a row leaving the list means the report was written
+   * in, *or* that it failed. Naming the outcome is what lets the notification
+   * be true rather than cheerful.
+   */
+  state: 'READING' | 'IMPORTED' | 'FAILED';
+  errorCode: string | null;
+  /** Always false now that a read report is written in immediately. Kept so a
+   * console built against the older contract keeps working. */
   awaitingReview: boolean;
   address: string | null;
   inspectionType: string | null;
@@ -725,9 +766,11 @@ export const useRunningImports = () =>
     queryKey: keys.runningImports,
     queryFn: ({ signal }) =>
       api<RunningImport[]>('/api/v1/admin/inspection-imports/running', { signal }),
-    // Only while something is actually running. An idle console polls once and
-    // then stops until a mutation invalidates this.
-    refetchInterval: (query) => (query.state.data?.length ? 3_000 : false),
+    // Only while something is actually working. A list holding nothing but
+    // finished rows stops polling — they are there to be announced once, not
+    // watched.
+    refetchInterval: (query) =>
+      query.state.data?.some((job) => job.state === 'READING') ? 3_000 : false,
   });
 
 /** Is an import running against this inspection, whoever started it? */
@@ -1655,10 +1698,10 @@ export function useAdminMutations() {
      * followed the reading follows the writing.
      */
     commitInspectionImport: useMutation({
-      mutationFn: (jobId: string) =>
+      mutationFn: ({ jobId, mode }: { jobId: string; mode?: 'REPLACE' | 'ADD' }) =>
         api<{ jobId: string; committing: boolean }>(
           `/api/v1/admin/inspection-imports/${jobId}/commit`,
-          { method: 'POST' },
+          { method: 'POST', body: JSON.stringify(mode ? { mode } : {}) },
         ),
       onSuccess: () => {
         // The inspection that was empty now has areas, photographs and

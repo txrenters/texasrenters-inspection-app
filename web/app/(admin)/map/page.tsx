@@ -13,18 +13,24 @@ import {
   usePropertyLocations,
   useTechnicianLocations,
   useTechnicianRoute,
+  useTechnicianTimeline,
 } from '@/lib/queries';
 import { PropertyList } from '@/components/property-list';
 import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
+import { TechnicianDaySummary } from '@/components/technician-day-summary';
 import { DatePicker } from '@/components/ui/date-picker';
 import { businessToday } from '@/lib/clock';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { presenceOf, type TechnicianPresence } from '@texasrenters/shared';
 
 /**
- * `ssr: false` is not optional. Leaflet reads `window` at import time and
- * measures its container to lay tiles out, so a server render throws before it
- * can produce anything — and `dynamic` may only disable SSR from a client
- * component, which is why this page is one.
+ * `ssr: false` is not optional, and stayed so when the map moved to Google.
+ *
+ * The Maps JavaScript API injects a script tag and measures its container, so
+ * a server render produces nothing and throws on the way. Leaflet failed the
+ * same way for the same reason, which is why this guard predates the change and
+ * outlives it. `dynamic` may only disable SSR from a client component, which is
+ * why this page is one.
  */
 const TechnicianMap = dynamic(
   () => import('@/components/technician-map').then((module) => module.TechnicianMap),
@@ -148,10 +154,59 @@ export default function TechnicianMapPage() {
   // for five answers to use one.
   const route = useTechnicianRoute(selectedId ?? '', date, Boolean(selectedId));
 
+  /**
+   * Only for the selected technician, and only for the day being looked at.
+   *
+   * Segmenting a trail is cheap but it is one query per person, and the roster
+   * is a list somebody scans rather than reads -- fetching a day for everyone
+   * on it would spend a dozen requests to fill in numbers nobody asked for yet.
+   */
+  const timeline = useTechnicianTimeline(selectedId ?? '', date, Boolean(selectedId));
+
+  /**
+   * Which technicians to show: everybody, only those reporting now, or only
+   * those who are not.
+   *
+   * Page level rather than inside the Technicians tab, because it moves the
+   * markers on the map as well as the rows in the list. A control tucked into
+   * one tab would carry on filtering the map while somebody was looking at the
+   * Properties tab and could not see it.
+   */
+  const [presence, setPresence] = useState<TechnicianPresence | 'ALL'>('ALL');
+
   const roster = useMemo(
     () => buildRoster(positions.data ?? [], assignments.data ?? []),
     [positions.data, assignments.data],
   );
+
+  /**
+   * The counts, computed before filtering.
+   *
+   * On the labels because "who is out right now" is the question the page is
+   * usually opened to answer, and a number answers it without anyone having to
+   * click the filter to find out it is empty.
+   */
+  const presenceCounts = useMemo(() => {
+    const now = Date.now();
+    let online = 0;
+    for (const entry of roster) if (presenceOf(entry.position, now) === 'ONLINE') online += 1;
+    return { all: roster.length, online, offline: roster.length - online };
+  }, [roster]);
+
+  const visibleRoster = useMemo(
+    () =>
+      presence === 'ALL'
+        ? roster
+        : roster.filter((entry) => presenceOf(entry.position) === presence),
+    [roster, presence],
+  );
+
+  // The markers follow the same rule, so the list and the map never disagree
+  // about who is being shown.
+  const visiblePositions = useMemo(() => {
+    const all = positions.data ?? [];
+    return presence === 'ALL' ? all : all.filter((row) => presenceOf(row) === presence);
+  }, [positions.data, presence]);
 
   // Null when nobody is selected, which the map reads as "show everything at
   // full strength". An empty set is different and means the selected person
@@ -197,6 +252,49 @@ export default function TechnicianMapPage() {
            the most ordinary state of all, nobody on shift, showed nothing at
            all. Anything worth saying is said over the top of it instead. */
         <div className="space-y-2">
+          {/* Who the page is about, above everything it governs.
+              
+              Counts on the labels because "how many are out right now" is the
+              question this page is usually opened for, and reading it should
+              not require clicking a filter to discover it is empty. They count
+              the whole roster, not the filtered view, or the number would
+              change to match whatever was already selected. */}
+          <Tabs
+            onValueChange={(value) => setPresence(value as TechnicianPresence | 'ALL')}
+            value={presence}
+          >
+            <TabsList aria-label="Filter technicians by whether they are reporting now">
+              <TabsTrigger value="ALL">
+                All
+                <span className="text-muted-foreground ml-1.5 tabular-nums">
+                  {presenceCounts.all}
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="ONLINE">
+                {/* A dot, not a colour on the word: the same signal the marker
+                    uses, so the filter and the map read alike. */}
+                <span
+                  aria-hidden
+                  className="bg-map-technician mr-1.5 inline-block size-1.5 rounded-full"
+                />
+                Online
+                <span className="text-muted-foreground ml-1.5 tabular-nums">
+                  {presenceCounts.online}
+                </span>
+              </TabsTrigger>
+              <TabsTrigger value="OFFLINE">
+                <span
+                  aria-hidden
+                  className="bg-map-technician-stale mr-1.5 inline-block size-1.5 rounded-full"
+                />
+                Offline
+                <span className="text-muted-foreground ml-1.5 tabular-nums">
+                  {presenceCounts.offline}
+                </span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
           {/* The roster sits beside the map on a wide screen and above it on a
               narrow one. Above rather than below: on a phone the list is the
               faster answer to "who is out", and a map you have to scroll past
@@ -248,8 +346,15 @@ export default function TechnicianMapPage() {
                 />
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
+                {/* Above the list, because it describes the person whose row
+                    is open rather than any one stop in it. Only when somebody
+                    is selected: there is no such thing as the roster's day. */}
+                {selectedId && timeline.data ? (
+                  <TechnicianDaySummary timeline={timeline.data} />
+                ) : null}
+
                 <TechnicianRoster
-                  entries={roster}
+                  entries={visibleRoster}
                   onSelect={selectTechnician}
                   onSelectStop={selectStop}
                   route={selectedId ? (route.data ?? null) : null}
@@ -282,7 +387,7 @@ export default function TechnicianMapPage() {
             <div className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border">
               <TechnicianMap
                 highlightedBuildingIds={highlighted}
-                positions={positions.data ?? []}
+                positions={visiblePositions}
                 properties={properties.data ?? []}
                 route={selectedId ? (route.data ?? null) : null}
                 selectedPropertyId={selectedPropertyId}

@@ -20,7 +20,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { AiProvider } from '@prisma/client';
+import { AiProvider, InspectionType } from '@prisma/client';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 
@@ -36,6 +36,7 @@ import { InspectionImportService } from './inspection-import/inspection-import.s
 import type { UploadedReport } from './inspection-import/inspection-import.service';
 import { AccessService } from './access.service';
 import { RouteService } from '../routing/route.service';
+import { TechnicianTimelineService } from '../technician/technician-timeline.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
@@ -51,6 +52,7 @@ import {
   ChargeReviewDto,
   ChargeRuleDto,
   ComparisonReviewDto,
+  CommitInspectionImportDto,
   CreateAdminInspectionDto,
   AdminChecklistAssessmentDto,
   CreateAreaChecklistItemDto,
@@ -78,7 +80,13 @@ import {
   TenantListQueryDto,
   RejectPropertyAreaDto,
   ReopenInspectionDto,
+  GrantTechnicianSkillDto,
+  RevokeTechnicianSkillDto,
+  SetSkillRequirementDto,
+  SkillCatalogQueryDto,
   TechnicianListQueryDto,
+  TechnicianSkillDto,
+  UpdateTechnicianSkillDto,
   TechnicianStatusDto,
   TestMailDto,
   UnassignDto,
@@ -94,12 +102,14 @@ import {
 import { AdminService } from './admin.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
+import { ComparisonReportService } from './comparison-report.service';
 import { ComparisonService } from './comparison.service';
 import { FloorPlanAdminService, type UploadedFloorPlan } from './floor-plan-admin.service';
 import { AreaEvidenceService } from './area-evidence.service';
 import { ProfileDeletionService } from './profile-deletion.service';
 import { ReportShareService } from './report-share.service';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
+import { TechnicianSkillsService } from './technician-skills.service';
 import type { ComparisonClassification } from '@prisma/client';
 
 /**
@@ -139,16 +149,19 @@ export class AdminController {
     private readonly floorPlans: FloorPlanAdminService,
     private readonly reportShares: ReportShareService,
     private readonly comparison: ComparisonService,
+    private readonly comparisonReport: ComparisonReportService,
     private readonly locations: TechnicianLocationService,
     private readonly propertyGeocoding: PropertyGeocodingService,
     private readonly passwordResets: PasswordResetService,
     private readonly inspectionImports: InspectionImportService,
     private readonly routes: RouteService,
+    private readonly timelines: TechnicianTimelineService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
     private readonly profileDeletion: ProfileDeletionService,
     private readonly access: AccessService,
+    private readonly skills: TechnicianSkillsService,
     @Optional() @Inject(CacheService) private readonly cache?: CacheService,
     @Optional()
     @Inject(CacheInvalidationService)
@@ -309,8 +322,12 @@ export class AdminController {
   @Post('inspection-imports/:jobId/commit')
   @ApiTags(INSPECTION_IMPORT_TAG)
   @RequirePermissions('inspections:manage')
-  commitInspectionImport(@Req() request: AuthenticatedRequest, @Param('jobId') id: string) {
-    return this.inspectionImports.commit(request.user, id);
+  commitInspectionImport(
+    @Req() request: AuthenticatedRequest,
+    @Param('jobId') id: string,
+    @Body() body: CommitInspectionImportDto,
+  ) {
+    return this.inspectionImports.commit(request.user, id, body.mode);
   }
 
   @Get('floor-plans/:floorPlanId/content')
@@ -354,6 +371,25 @@ export class AdminController {
   @RequirePermissions('properties:read')
   areaChecklist(@Req() request: AuthenticatedRequest, @Param('areaId') id: string) {
     return this.floorPlans.areaChecklist(request.user, id);
+  }
+  /**
+   * The short list an occupied visit asks instead of the room checklist above.
+   *
+   * Not addressed by area, because it is not stored by area: it is the same two
+   * questions in every room, held once for the organization with a null area.
+   * The route above therefore cannot return it — it matches on
+   * `propertyAreaId` — and until this existed the console showed the room list
+   * as though it were the only one, which is exactly how a reader concluded an
+   * occupied visit still asks nine questions about a bathroom.
+   *
+   * Read-only on purpose. Editing one organization-wide list from a dialog
+   * titled after a single area would let somebody change every property while
+   * believing they had changed one room.
+   */
+  @Get('checklists/occupied')
+  @RequirePermissions('properties:read')
+  occupiedChecklist(@Req() request: AuthenticatedRequest) {
+    return this.floorPlans.occupiedChecklist(request.user);
   }
   @Post('property-areas/:areaId/checklist')
   @RequirePermissions('properties:manage')
@@ -775,6 +811,20 @@ export class AdminController {
   inspectionComparison(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.comparison.get(request.user, id);
   }
+  /**
+   * The comparison as a printable document: both inspections side by side.
+   *
+   * Same permission as reading the comparison itself -- it is the same
+   * information, laid out for a person rather than a list.
+   */
+  @Get('inspections/:inspectionId/comparison-report')
+  @RequirePermissions('inspections:read')
+  inspectionComparisonReport(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.comparisonReport.report(request.user, id);
+  }
   @Post('inspections/:inspectionId/comparison/generate')
   @RequirePermissions('inspections:manage')
   generateInspectionComparison(
@@ -1017,6 +1067,32 @@ export class AdminController {
     );
   }
 
+  /**
+   * What a technician's day actually came to, read off their location trail.
+   *
+   * `technicians:locate`, the same key as the map and the route. This is the
+   * strongest reading of a named person's movements in the system -- where they
+   * were, for how long, and how long they drove between -- so it sits behind
+   * the key that already governs looking at somebody's position rather than
+   * behind the weaker `technicians:read`.
+   *
+   * `date` defaults to today, bounded in Texas rather than UTC.
+   */
+  @Get('technicians/:technicianId/timeline')
+  @RequirePermissions('technicians:locate')
+  technicianTimeline(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Query('date') date?: string,
+  ) {
+    const day = date ? new Date(date) : new Date();
+    return this.timelines.dayFor(
+      request.user,
+      id,
+      Number.isNaN(day.getTime()) ? new Date() : day,
+    );
+  }
+
   @Get('technicians/:technicianId/route')
   @RequirePermissions('technicians:locate')
   technicianRoute(
@@ -1065,6 +1141,86 @@ export class AdminController {
   @RequirePermissions('technicians:manage')
   deleteTechnician(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
     return this.profileDeletion.remove(request.user, id, 'TECHNICIAN');
+  }
+
+  /**
+   * What technicians are qualified to do.
+   *
+   * Reading is `technicians:read` — a skill is part of the directory entry, and
+   * anyone who may see who the technicians are may see what they do. Changing
+   * one is `technicians:skills`, its own grant, because these decide who
+   * scheduling is allowed to send to a job: quietly granting somebody a skill
+   * puts them on work nobody chose them for.
+   */
+  @Get('technician-skills')
+  @RequirePermissions('technicians:read')
+  skillCatalog(@Req() request: AuthenticatedRequest, @Query() query: SkillCatalogQueryDto) {
+    return this.skills.catalog(request.user, query.includeInactive === 'true');
+  }
+
+  @Post('technician-skills')
+  @RequirePermissions('technicians:skills')
+  createSkill(@Req() request: AuthenticatedRequest, @Body() body: TechnicianSkillDto) {
+    return this.skills.createSkill(request.user, body);
+  }
+
+  @Patch('technician-skills/:skillId')
+  @RequirePermissions('technicians:skills')
+  updateSkill(
+    @Req() request: AuthenticatedRequest,
+    @Param('skillId') skillId: string,
+    @Body() body: UpdateTechnicianSkillDto,
+  ) {
+    return this.skills.updateSkill(request.user, skillId, body);
+  }
+
+  @Get('technicians/:technicianId/skills')
+  @RequirePermissions('technicians:read')
+  technicianSkills(@Req() request: AuthenticatedRequest, @Param('technicianId') id: string) {
+    return this.skills.technicianSkills(request.user, id);
+  }
+
+  @Post('technicians/:technicianId/skills')
+  @RequirePermissions('technicians:skills')
+  grantTechnicianSkill(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Body() body: GrantTechnicianSkillDto,
+  ) {
+    return this.skills.grant(request.user, id, body);
+  }
+
+  @Delete('technicians/:technicianId/skills/:skillId')
+  @RequirePermissions('technicians:skills')
+  revokeTechnicianSkill(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Param('skillId') skillId: string,
+    @Body() body: RevokeTechnicianSkillDto,
+  ) {
+    return this.skills.revoke(request.user, id, skillId, body?.reason);
+  }
+
+  @Get('skill-requirements')
+  @RequirePermissions('technicians:read')
+  skillRequirements(@Req() request: AuthenticatedRequest) {
+    return this.skills.requirements(request.user);
+  }
+
+  @Put('skill-requirements')
+  @RequirePermissions('technicians:skills')
+  setSkillRequirement(@Req() request: AuthenticatedRequest, @Body() body: SetSkillRequirementDto) {
+    return this.skills.setRequirement(request.user, body);
+  }
+
+  @Delete('skill-requirements/:inspectionType/:skillId')
+  @RequirePermissions('technicians:skills')
+  removeSkillRequirement(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionType', new ParseEnumPipe(InspectionType)) inspectionType: InspectionType,
+    @Param('skillId') skillId: string,
+  ) {
+    return this.skills.removeRequirement(request.user, inspectionType, skillId);
   }
 
   /**

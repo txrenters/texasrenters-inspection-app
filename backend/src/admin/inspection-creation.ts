@@ -12,7 +12,14 @@ import {
 import {
   AreaScope,
   HVAC_CHECKLIST,
+  OCCUPIED_CHECKLIST,
+  STANDARD_LAYOUT_NOTE,
+  STANDARD_LAYOUT_SOURCE,
+  STANDARD_PROPERTY_LAYOUT,
   areaScopeFor,
+  checklistKindFor,
+  checklistTemplateFor,
+  layoutAreasFor,
   inspectionComparesToBaseline,
   keywordsFromLabel,
 } from '@texasrenters/shared';
@@ -345,33 +352,48 @@ export async function resolveInspectionPlan(
     inspectionType: input.inspectionType,
     scheduledAt,
   });
+  /**
+   * The layout an inspection is built from.
+   *
+   * `archivedAt: null` was missing, and its absence is a plain bug rather than
+   * anything to do with the template below: the column's own comment says
+   * "archived areas drop out of active lists", and every new inspection was
+   * scoping them straight back in. An administrator who archived a room they
+   * had merged away saw it reappear on the next visit with nothing to explain
+   * why.
+   */
+  const layoutWhere = (areaUnitId: string | null) => ({
+    propertyId: property.id,
+    unitId: areaUnitId,
+    status: PropertyAreaStatus.APPROVED,
+    archivedAt: null,
+  });
+  const layoutSelect = {
+    orderBy: { inspectionOrder: 'asc' as const },
+    // `category` for the roof scope, which picks areas by what the property
+    // records rather than by anything the caller sent. `source` for the
+    // standard-template rule below.
+    select: { id: true, category: true, source: true },
+  };
   // Prefer the unit's own approved layout; fall back to the building-level
   // layout when the unit has none (identical-layout buildings share one
   // building-level plan instead of duplicating it per unit).
   const unitAreas = unit
-    ? await tx.propertyArea.findMany({
-        where: {
-          propertyId: property.id,
-          unitId: unit.id,
-          status: PropertyAreaStatus.APPROVED,
-        },
-        orderBy: { inspectionOrder: 'asc' },
-        // `category` for the roof scope, which picks areas by what the
-        // property records rather than by anything the caller sent.
-        select: { id: true, category: true },
-      })
+    ? await tx.propertyArea.findMany({ where: layoutWhere(unit.id), ...layoutSelect })
     : [];
-  const approvedAreas = unitAreas.length
+  const layoutAreas = unitAreas.length
     ? unitAreas
-    : await tx.propertyArea.findMany({
-        where: {
-          propertyId: property.id,
-          unitId: null,
-          status: PropertyAreaStatus.APPROVED,
-        },
-        orderBy: { inspectionOrder: 'asc' },
-        select: { id: true, category: true },
-      });
+    : await tx.propertyArea.findMany({ where: layoutWhere(null), ...layoutSelect });
+  /**
+   * A standard-template room stands aside once a real layout exists.
+   *
+   * Without this, a property seeded by an occupied visit and later given a
+   * move-in report carries both sets — the import matches areas by normalised
+   * name, and "Main Bedroom" is not "Bedroom 1" — so the next move-out walks
+   * about twenty-five rooms instead of twelve. See `standardLayoutSuperseded`
+   * for why they are superseded rather than deleted.
+   */
+  const approvedAreas = layoutAreasFor(layoutAreas);
 
   /**
    * The areas this inspection actually covers, decided three different ways.
@@ -635,6 +657,170 @@ async function ensureHvacChecklist(tx: InspectionCreationClient, organizationId:
 }
 
 /**
+ * Makes sure the organization's occupied checklist exists.
+ *
+ * Organization-wide for the same reason the HVAC list is, and for a stronger
+ * one: "Room condition" is the same question in a kitchen and in a hallway, so
+ * there is nothing per-area about it at all. Writing it per area would put two
+ * rows on every area of every property and leave thousands of copies to be kept
+ * in step when the office rewords an option.
+ *
+ * The answers stay separate regardless — `InspectionAreaChecklistResponse` is
+ * unique on `(inspectionAreaId, checklistItemId)`, so every room records its own
+ * answer against the one shared item.
+ *
+ * `skipDuplicates` and the same partial unique index the HVAC list relies on, so
+ * a re-run is free and two inspections created at the same moment cannot produce
+ * two sets. An answer already recorded survives, because the row is reused
+ * rather than replaced.
+ *
+ * No keywords. These are not items a spoken walkthrough can tick: no phrasing in
+ * a transcript means "the overall condition of this room is Fair", and matching
+ * the bare word "condition" against narration would answer the question for the
+ * technician. They are two taps, which is the entire point of the list.
+ */
+async function ensureOccupiedChecklist(tx: InspectionCreationClient, organizationId: string) {
+  await tx.areaChecklistItem.createMany({
+    data: OCCUPIED_CHECKLIST.map((item, index) => ({
+      organizationId,
+      propertyAreaId: null,
+      kind: AreaChecklistItemKind.OCCUPIED,
+      label: item.label,
+      // Two items need no heading, and an empty-looking subheading above every
+      // room is worse than none.
+      section: null,
+      responseType: item.responseType,
+      unit: null,
+      choices: item.choices,
+      keywords: [],
+      sortOrder: index,
+    })),
+    skipDuplicates: true,
+  });
+}
+
+/**
+ * Gives a property the standard layout when it has none, and returns the areas.
+ *
+ * The Jobber sync's own comment names the problem: visits are refused or
+ * arrive empty "on a property with no approved plan, which is currently every
+ * property in this portfolio". So an occupied inspection reached the technician
+ * with no rooms, and the technician typed them in — at every property, on every
+ * visit, inside the fifteen minutes the office allows for the whole walk.
+ *
+ * ── WHERE THIS RUNS, AND WHY NOT IN `resolveInspectionPlan` ──────────────────
+ *
+ * Here, in the writer. `resolveInspectionPlan` is deliberately read-only — the
+ * Jobber sync calls it to validate a visit without writing anything — and this
+ * has to create rows. `hvacSystemArea` sits here for exactly the same reason.
+ *
+ * ── WHY ONLY A CHOSEN SCOPE ──────────────────────────────────────────────────
+ *
+ * Occupied and back-to-market, not move-in or move-out. On those two the type
+ * *overrides* `isRequired`, so every generated area becomes mandatory and a
+ * technician at a one-bedroom property would have to skip the rooms this list
+ * guessed at. Worse, a move-out is compared to its move-in area by area, and
+ * seeding both ends from a guess would produce a comparison against rooms
+ * nobody has seen.
+ *
+ * They lose nothing by waiting. The layout written here is the *property's*,
+ * permanently — so the first occupied visit establishes it and every later
+ * inspection of any type inherits it through the ordinary lookup.
+ */
+async function ensureStandardLayout(tx: InspectionCreationClient, plan: InspectionPlan) {
+  /**
+   * The `Property` row has to exist before an area can point at it.
+   *
+   * `PropertyArea.propertyId` carries a *building* id but its foreign key
+   * references `Property`, a separate table populated lazily. Most buildings
+   * have never had one, so creating an area first violates the foreign key and
+   * takes the whole sync down with it — the same trap `hvacSystemArea`
+   * documents, and the same upsert.
+   */
+  await tx.property.upsert({
+    where: { id: plan.property.id },
+    update: {},
+    create: {
+      id: plan.property.id,
+      organizationId: plan.organizationId,
+      name: plan.property.name,
+      addressLine1: plan.property.addressLine1 || 'Address not provided',
+      city: plan.property.city || 'Not provided',
+      state: plan.property.state || 'TX',
+      postalCode: plan.property.postalCode || 'Not provided',
+    },
+  });
+
+  /**
+   * Written at the unit when there is one, at the building when there is not.
+   *
+   * Mirrors the lookup in `resolveInspectionPlan`, which prefers a unit's own
+   * layout and falls back to the building's. Seeding at the wrong level would
+   * produce areas the next inspection does not find.
+   */
+  const unitId = plan.unit?.id ?? null;
+  await tx.propertyArea.createMany({
+    data: STANDARD_PROPERTY_LAYOUT.map((area, index) => ({
+      propertyId: plan.property.id,
+      unitId,
+      floorId: null,
+      name: area.name,
+      inspectionOrder: index,
+      isRequired: area.isRequired,
+      // Approved, or the snapshot would exclude every one of them and this
+      // would fix nothing. The provenance below is what keeps that honest.
+      status: PropertyAreaStatus.APPROVED,
+      source: STANDARD_LAYOUT_SOURCE,
+      environment: area.environment as AreaEnvironment,
+      category: (area.category as AreaCategory | null) ?? null,
+      notes: STANDARD_LAYOUT_NOTE,
+    })),
+    // The unique index on (propertyId, unitId, floorId, name) is NULLS NOT
+    // DISTINCT, so this is idempotent and two inspections created at the same
+    // moment cannot produce two layouts.
+    skipDuplicates: true,
+  });
+
+  const areas = await tx.propertyArea.findMany({
+    where: { propertyId: plan.property.id, unitId, status: PropertyAreaStatus.APPROVED },
+    orderBy: { inspectionOrder: 'asc' },
+    select: { id: true, name: true, category: true, environment: true },
+  });
+
+  /**
+   * The room checklists for the areas just created.
+   *
+   * Deterministic, from the shared table — never the AI generator. That makes a
+   * provider call, and this runs inside the inspection-creation transaction,
+   * where a 60-second call would be dropped by the pooler and lose the
+   * inspection along with it. An administrator can regenerate a better list
+   * later; a technician needs *a* list now.
+   *
+   * Occupied visits do not read these — their checklist is organization-wide —
+   * but the move-in and move-out that inherit this layout do.
+   */
+  await tx.areaChecklistItem.createMany({
+    data: areas.flatMap((area) =>
+      checklistTemplateFor({
+        name: area.name,
+        category: area.category,
+        environment: area.environment,
+      }).map((label, index) => ({
+        organizationId: plan.organizationId,
+        propertyAreaId: area.id,
+        kind: AreaChecklistItemKind.ROOM,
+        label,
+        keywords: keywordsFromLabel(label),
+        sortOrder: index,
+      })),
+    ),
+    skipDuplicates: true,
+  });
+
+  return areas.map((area) => ({ id: area.id, category: area.category }));
+}
+
+/**
  * Writes the inspection a resolved plan describes.
  *
  * Split from the resolution above so the area snapshot — the thing the whole
@@ -658,7 +844,30 @@ export async function insertInspection(
     await ensureHvacChecklist(tx, plan.organizationId);
     areaIds = [await hvacSystemArea(tx, plan)];
   } else {
-    areaIds = plan.scopedAreas.map((area) => area.id);
+    /**
+     * An occupied visit walks ordinary rooms, so it resolves its areas exactly
+     * as every other type does — only the questions differ. The list is written
+     * here rather than at floor-plan approval because it is not a property's
+     * list: it belongs to the organization, and a property that has never had an
+     * occupied inspection has no reason to carry a copy.
+     */
+    if (checklistKindFor(plan.inspectionType) === 'OCCUPIED')
+      await ensureOccupiedChecklist(tx, plan.organizationId);
+    /**
+     * A visit that walks rooms, at a property with no rooms recorded.
+     *
+     * Only when the scope is CHOSEN and the plan resolved to nothing — an
+     * office selection that came back empty is a property with no approved
+     * layout, which is currently every property in this portfolio. Move-in and
+     * move-out are excluded on purpose; see `ensureStandardLayout`.
+     *
+     * After the checklist above, and independent of it: an occupied visit at a
+     * property nobody has laid out needs both, and neither reads the other.
+     */
+    areaIds =
+      areaScopeFor(plan.inspectionType) === AreaScope.CHOSEN && !plan.scopedAreas.length
+        ? (await ensureStandardLayout(tx, plan)).map((area) => area.id)
+        : plan.scopedAreas.map((area) => area.id);
   }
   try {
     return await tx.inspection.create({

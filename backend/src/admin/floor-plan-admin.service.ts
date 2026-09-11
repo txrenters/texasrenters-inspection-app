@@ -6,7 +6,7 @@ import {
   classifyAreaByName,
   keywordsFromLabel,
 } from '@texasrenters/shared';
-import { FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
+import { AreaChecklistItemKind, FloorPlanStatus, PropertyAreaStatus } from '@prisma/client';
 import type { AreaCategory, AreaEnvironment, Prisma } from '@prisma/client';
 import type { AdminFloorPlanExtractionSummary } from '@texasrenters/shared';
 
@@ -1301,6 +1301,33 @@ export class FloorPlanAdminService {
       where: { propertyAreaId: areaId, archivedAt: null },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
       select: { id: true, label: true, keywords: true, sortOrder: true },
+    });
+  }
+
+  /**
+   * The two questions an occupied visit asks about every room.
+   *
+   * Organization-wide, `propertyAreaId: null` — the same question in a kitchen
+   * and in a hallway, so there is nothing per-area about it. That is why
+   * `areaChecklist` above cannot return it: it matches on `propertyAreaId`, and
+   * these rows have none.
+   *
+   * Returns an empty list rather than an error when the organization has never
+   * created an occupied inspection. `ensureOccupiedChecklist` writes these at
+   * inspection creation, so a portfolio whose occupied visits all predate that
+   * genuinely has none yet — and the console should say so plainly rather than
+   * fail, because "not created yet" is a real and temporary state.
+   */
+  async occupiedChecklist(user: AuthenticatedUser) {
+    return this.prisma.areaChecklistItem.findMany({
+      where: {
+        organizationId: user.organizationId,
+        propertyAreaId: null,
+        kind: AreaChecklistItemKind.OCCUPIED,
+        archivedAt: null,
+      },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, label: true, responseType: true, choices: true, sortOrder: true },
     });
   }
 
