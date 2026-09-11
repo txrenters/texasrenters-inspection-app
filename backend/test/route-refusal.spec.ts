@@ -76,6 +76,9 @@ describe('a start OSRM will not accept', () => {
     const route = await new RouteService(
       prismaStub([{ id: 'mist-ln', at: HOUSTON }], PHILIPPINES),
       osrm as never,
+      // Google unconfigured, so these keep exercising the OSRM path they were
+      // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     expect(route.originOutsideServiceArea).toBe(true);
@@ -112,6 +115,9 @@ describe('a start OSRM will not accept', () => {
     const route = await new RouteService(
       prismaStub([{ id: 'mist-ln', at: HOUSTON }], PHILIPPINES),
       osrm as never,
+      // Google unconfigured, so these keep exercising the OSRM path they were
+      // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     // Distance is a fact about the Earth. A duration would need airports,
@@ -133,6 +139,9 @@ describe('a start OSRM will not accept', () => {
     const route = await new RouteService(
       prismaStub([{ id: 'mist-ln', at: HOUSTON }], HOUSTON),
       osrm as never,
+      // Google unconfigured, so these keep exercising the OSRM path they were
+      // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     expect(route.originOutsideServiceArea).toBe(false);
@@ -174,6 +183,9 @@ describe('a stop OSRM will not accept', () => {
         HOUSTON,
       ),
       osrm as never,
+      // Google unconfigured, so these keep exercising the OSRM path they were
+      // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     expect(matrixCalls).toBe(2);
@@ -204,6 +216,9 @@ describe('a stop OSRM will not accept', () => {
     const route = await new RouteService(
       prismaStub([{ id: 'in-the-gulf', at: { latitude: 27.5, longitude: -93.0 } }], HOUSTON),
       osrm as never,
+      // Google unconfigured, so these keep exercising the OSRM path they were
+      // written for -- the teleport guard is specific to it.
+      { configured: false } as never,
     ).planDay('org', 'tech', DAY);
 
     expect(route.stops).toEqual([]);

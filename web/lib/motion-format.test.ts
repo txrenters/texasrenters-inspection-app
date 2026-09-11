@@ -41,11 +41,12 @@ describe('a bearing, as a direction', () => {
   });
 });
 
-describe('a ground speed, as the road signs give it', () => {
-  it('converts metres per second to miles per hour', () => {
-    // 13.4 m/s is 30 mph, which is what a residential street is posted at.
-    expect(formatSpeed(13.4)).toBe('30 mph');
-    expect(formatSpeed(0)).toBe('0 mph');
+describe('a ground speed, in the units the office reads', () => {
+  it('converts metres per second to kilometres per hour', () => {
+    // Metric, not miles. The console is read by the office, who work in km/h;
+    // the technician driving past the mph road sign is not the one looking.
+    expect(formatSpeed(13.4)).toBe('48 km/h');
+    expect(formatSpeed(0)).toBe('0 km/h');
   });
 
   it('does not claim a decimal place the sensor has not got', () => {

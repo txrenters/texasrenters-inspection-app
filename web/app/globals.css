@@ -186,7 +186,9 @@
   /* The recommended drive. A blue that belongs to neither the properties nor
      the technicians, so the line reads as a third thing rather than as either
      of the two it connects. */
-  --map-route: oklch(0.52 0.18 258);
+  /* Orange: the route has to carry over satellite and hybrid imagery,
+     where a blue line disappears into water and roofs. */
+  --map-route: oklch(0.68 0.19 52);
   /* Air travel. Deliberately not the route blue: this is a journey nobody
      drove and nobody planned, and it must not be mistaken for the road line. */
   --map-air: oklch(0.55 0.16 25);

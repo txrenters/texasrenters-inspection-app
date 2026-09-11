@@ -10,6 +10,8 @@ import {
 } from '@texasrenters/shared';
 
 import { PrismaService } from '../common/prisma.service';
+import { GoogleRoutesClient } from './google-routes.client';
+import type { GeoPoint } from './osrm.client';
 import { OsrmClient } from './osrm.client';
 
 /**
@@ -76,7 +78,36 @@ export class RouteService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OsrmClient) private readonly osrm: OsrmClient,
+    @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
   ) {}
+
+  /**
+   * Travel times between every pair, from whichever router is configured.
+   *
+   * Google first. Not a preference for the paid service for its own sake --
+   * OSRM has never been configured on this deployment, so `planDay` returned
+   * its empty shape for every technician on every day: no line on the map, no
+   * distance, no leg times, and no error to explain any of it. Google also
+   * answers with traffic, which OSRM cannot.
+   */
+  private async durationsFor(points: readonly GeoPoint[]): Promise<number[][] | null> {
+    if (this.google.configured) {
+      const matrix = await this.google.matrix(points, new Date());
+      if (matrix) return matrix.durations;
+      // Falling through rather than failing: a quota or an outage should drop
+      // to the free router, not to no route.
+    }
+    return this.osrm.durations(points);
+  }
+
+  /** The drawn line and its legs, from whichever router is configured. */
+  private async driveFor(points: readonly GeoPoint[]) {
+    if (this.google.configured) {
+      const drive = await this.google.route(points);
+      if (drive) return drive;
+    }
+    return this.osrm.route(points);
+  }
 
   /**
    * Everyone with work today, and which properties it is at.
@@ -298,7 +329,7 @@ export class RouteService {
     if (!origin || !routable.length) return empty;
 
     let stops = routable;
-    let matrix = await this.osrm.durations([origin, ...stops]);
+    let matrix = await this.durationsFor([origin, ...stops]);
 
     if (!matrix) {
       // The matrix refuses the whole request when any one point is off the
@@ -346,14 +377,14 @@ export class RouteService {
       if (!kept.length) return { ...empty, stops: [], unroutable };
 
       stops = kept;
-      matrix = await this.osrm.durations([origin, ...stops]);
+      matrix = await this.durationsFor([origin, ...stops]);
       if (!matrix) return { ...empty, stops, unroutable };
     }
 
     const order = shortestRouteOrder(matrix);
     const ordered = order.map((index) => stops[index - 1]).filter(Boolean) as RouteStop[];
 
-    const drive = await this.osrm.route([origin, ...ordered]);
+    const drive = await this.driveFor([origin, ...ordered]);
     if (!drive) return { ...empty, stops: ordered, unroutable };
 
     // OSRM returns one leg per consecutive pair, so leg `i` arrives at stop

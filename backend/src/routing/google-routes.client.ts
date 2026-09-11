@@ -24,6 +24,34 @@ import type { GeoPoint } from './osrm.client';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const MATRIX_URL = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
+const ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
+
+/**
+ * One server key, unless somebody splits them later.
+ *
+ * `GOOGLE_SERVER_API_KEY` is the key restricted to this host's IP addresses,
+ * with Geocoding and Routes enabled on it. The older `GOOGLE_ROUTES_API_KEY`
+ * still wins where it is set, so splitting the two is a deployment change
+ * rather than a code one.
+ *
+ * Never the browser key. A key carries exactly one application restriction:
+ * the browser key is restricted by HTTP referrer, and a server sends none, so
+ * Google refuses it outright for these APIs.
+ */
+function apiKey(): string {
+  return process.env.GOOGLE_ROUTES_API_KEY ?? process.env.GOOGLE_SERVER_API_KEY ?? '';
+}
+
+/**
+ * The line on the map, plus a duration per leg.
+ *
+ * `legs.duration` rather than `staticDuration`: the first accounts for traffic
+ * at the departure time and the second does not, and the difference is the
+ * entire reason to be calling Google rather than a free-flow router.
+ */
+const ROUTE_FIELD_MASK =
+  'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,' +
+  'routes.legs.duration,routes.legs.distanceMeters';
 
 /**
  * Google bills per element, and an element is one origin-destination pair.
@@ -125,6 +153,94 @@ function waypoint(point: GeoPoint) {
   };
 }
 
+/**
+ * Google's encoded polyline, as `[longitude, latitude]` pairs.
+ *
+ * **The order is deliberate and it is not Google's.** The algorithm yields
+ * latitude first; OSRM returns GeoJSON, which is `[lon, lat]`; and
+ * `RouteService` hands whichever it got to one `toLatLngPath`. Emitting
+ * Google's native order here would put every route in the Indian Ocean while
+ * both clients looked individually correct -- the same axis trap the Census
+ * geocoder set, where `x` is the longitude.
+ *
+ * The format itself: base64-ish chunks of five bits, each value a delta from
+ * the previous point, zig-zag encoded so negatives survive.
+ */
+export function decodePolyline(encoded: unknown): [number, number][] {
+  if (typeof encoded !== 'string' || !encoded) return [];
+
+  const path: [number, number][] = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte: number;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+    result = 0;
+    shift = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+
+    // Longitude first. See above.
+    path.push([lng / 1e5, lat / 1e5]);
+  }
+  return path;
+}
+
+/**
+ * Reads a computeRoutes response without trusting it. Exported for tests.
+ *
+ * An empty `routes` array is Google saying it could not connect the points,
+ * which is a fact the caller must be able to act on -- not an error and not a
+ * zero-length route.
+ */
+export function parseComputedRoute(body: unknown): GoogleRoute | null {
+  const route = (body as { routes?: unknown[] } | null)?.routes?.[0] as
+    | {
+        duration?: unknown;
+        distanceMeters?: unknown;
+        polyline?: { encodedPolyline?: unknown };
+        legs?: { duration?: unknown; distanceMeters?: unknown }[];
+      }
+    | undefined;
+  if (!route) return null;
+
+  const durationSeconds = parseDuration(route.duration);
+  if (durationSeconds === null) return null;
+
+  return {
+    durationSeconds,
+    distanceMeters: typeof route.distanceMeters === 'number' ? route.distanceMeters : 0,
+    legs: (route.legs ?? []).map((leg) => ({
+      durationSeconds: parseDuration(leg?.duration) ?? 0,
+      distanceMeters: typeof leg?.distanceMeters === 'number' ? leg.distanceMeters : 0,
+    })),
+    geometry: decodePolyline(route.polyline?.encodedPolyline),
+  };
+}
+
+export interface GoogleRoute {
+  distanceMeters: number;
+  durationSeconds: number;
+  legs: { distanceMeters: number; durationSeconds: number }[];
+  /** GeoJSON order, `[lon, lat]`, matching what OSRM returns. */
+  geometry: [number, number][];
+}
+
 @Injectable()
 export class GoogleRoutesClient {
   private readonly logger = new Logger(GoogleRoutesClient.name);
@@ -136,7 +252,7 @@ export class GoogleRoutesClient {
    * here anyway.
    */
   get configured() {
-    return Boolean(process.env.GOOGLE_ROUTES_API_KEY);
+    return Boolean(apiKey());
   }
 
   /**
@@ -165,7 +281,7 @@ export class GoogleRoutesClient {
     // quarter has started would otherwise fail every remaining day at once.
     const departure = departureTime.getTime() > Date.now() ? departureTime : new Date(Date.now() + 60_000);
 
-    const body = await this.post({
+    const body = await this.post(MATRIX_URL, MATRIX_FIELD_MASK, {
       origins: points.map(waypoint),
       destinations: points.map(waypoint),
       travelMode: 'DRIVE',
@@ -175,9 +291,48 @@ export class GoogleRoutesClient {
     return body === null ? null : parseRouteMatrix(body, points.length);
   }
 
-  private async post(payload: unknown): Promise<unknown | null> {
+  /**
+   * The drive through these points in the order given, with traffic.
+   *
+   * Ordering is the caller's job and happens against the matrix first; this
+   * only draws and times the order it is handed. Intermediates are **not**
+   * optimised by Google here for that reason -- asking it to reorder would
+   * silently discard a sequence the service chose from the technician's
+   * current position.
+   *
+   * `TRAFFIC_AWARE` rather than `TRAFFIC_AWARE_OPTIMAL`: the first is the
+   * cheaper tier and accurate enough for a day's plan, and the second is billed
+   * higher for a difference measured in a minute or two.
+   */
+  async route(points: readonly GeoPoint[], departureTime?: Date): Promise<GoogleRoute | null> {
+    if (!this.configured || points.length < 2) return null;
+
+    // Google refuses a departure in the past, and "now" is what a live route
+    // wants anyway -- this is the drive the technician is about to make.
+    const departure =
+      departureTime && departureTime.getTime() > Date.now()
+        ? departureTime
+        : new Date(Date.now() + 60_000);
+
+    const body = await this.post(ROUTES_URL, ROUTE_FIELD_MASK, {
+      origin: waypoint(points[0]).waypoint,
+      destination: waypoint(points[points.length - 1]).waypoint,
+      intermediates: points.slice(1, -1).map((point) => waypoint(point).waypoint),
+      travelMode: 'DRIVE',
+      routingPreference: 'TRAFFIC_AWARE',
+      polylineEncoding: 'ENCODED_POLYLINE',
+      departureTime: departure.toISOString(),
+    });
+    return body === null ? null : parseComputedRoute(body);
+  }
+
+  private async post(
+    url: string,
+    fieldMask: string,
+    payload: unknown,
+  ): Promise<unknown | null> {
     try {
-      const response = await fetch(MATRIX_URL, {
+      const response = await fetch(url, {
         method: 'POST',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: {
@@ -185,8 +340,8 @@ export class GoogleRoutesClient {
           accept: 'application/json',
           // Header, never a query parameter. A key in a URL lands in access
           // logs, proxy logs and error reports.
-          'X-Goog-Api-Key': process.env.GOOGLE_ROUTES_API_KEY ?? '',
-          'X-Goog-FieldMask': MATRIX_FIELD_MASK,
+          'X-Goog-Api-Key': apiKey(),
+          'X-Goog-FieldMask': fieldMask,
         },
         body: JSON.stringify(payload),
       });

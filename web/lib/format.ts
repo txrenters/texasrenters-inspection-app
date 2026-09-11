@@ -133,11 +133,17 @@ export function formatDuration(seconds?: number | null) {
   return rest ? `${hours} hr ${rest} min` : `${hours} hr`;
 }
 
-/** Distance in miles, which is what everybody here reads. */
+/**
+ * Distance in kilometres.
+ *
+ * Miles first, on the reasoning that Texas road signs use them. Wrong reader:
+ * the people reading this console are the office, who work in metric, and the
+ * technician in the field is not the one looking at it.
+ */
 export function formatDistance(meters?: number | null) {
   if (meters === null || meters === undefined || !Number.isFinite(meters)) return EMPTY;
-  const miles = meters / 1609.344;
-  return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`;
+  const km = meters / 1000;
+  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
 }
 
 /**
@@ -162,11 +168,11 @@ export function formatCompass(degrees?: number | null) {
 }
 
 /**
- * Ground speed in miles per hour, which is what the road signs say.
+ * Ground speed in kilometres per hour.
  *
- * Rounded to whole miles: the underlying figure is a Doppler estimate that
- * moves by a mile or two between fixes, and a decimal place would be claiming
- * precision the sensor does not have.
+ * Rounded to whole units: the underlying figure is a Doppler estimate that
+ * moves by a couple of units between fixes, and a decimal place would be
+ * claiming precision the sensor does not have.
  */
 export function formatSpeed(metersPerSecond?: number | null) {
   if (
@@ -175,5 +181,5 @@ export function formatSpeed(metersPerSecond?: number | null) {
     !Number.isFinite(metersPerSecond)
   )
     return EMPTY;
-  return `${Math.round(metersPerSecond * 2.236936)} mph`;
+  return `${Math.round(metersPerSecond * 3.6)} km/h`;
 }
