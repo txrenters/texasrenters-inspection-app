@@ -154,13 +154,13 @@ export class ComparisonService {
         'This comparison has been approved; reject it before regenerating.',
       );
 
-    const [moveOutAreas, moveInAreas, moveOutDamage, moveInDamage, moveOutMedia] =
+    const [moveOutAreas, moveInAreas, moveOutDamage, moveInDamage, moveOutEvidence] =
       await Promise.all([
         this.loadAreas(moveOut.id),
         this.loadAreas(moveIn.id),
         this.loadDamageCounts(moveOut.id),
         this.loadDamageCounts(moveIn.id),
-        this.loadAreaMediaCounts(moveOut.id),
+        this.loadAreaEvidenceCounts(moveOut.id),
       ]);
 
     const areaResults = this.buildAreaComparisons(
@@ -168,7 +168,7 @@ export class ComparisonService {
       moveInAreas,
       moveOutDamage,
       moveInDamage,
-      moveOutMedia,
+      moveOutEvidence,
     );
     const requiresReviewCount = areaResults.filter((a) => a.requiresReview).length;
     const overallCondition = this.overallCondition(areaResults);
@@ -434,28 +434,73 @@ export class ComparisonService {
     }));
   }
 
-  /** New-damage finding count per property area (excludes room summaries). */
+  /**
+   * Recorded damage per property area, from both places this system records it.
+   *
+   * AI analysis of a recording produces `InspectionFinding` rows. A graded
+   * checklist produces failed `InspectionAreaChecklistResponse` rows, and that
+   * is the *only* damage an imported inspection has: `InspectionFinding`
+   * requires an `inspectionMediaId`, so the Inspect & Cloud importer writes no
+   * findings at all and records every defect the PDF graded as a failed
+   * response instead.
+   *
+   * Reading findings alone therefore scored an imported area zero. On its own
+   * that was invisible, because such an area was rejected earlier for having no
+   * recording; once photographs count as evidence it would have become a
+   * confident UNCHANGED -- "no new damage detected" printed over a room the
+   * report had graded damaged. A missed charge is the expensive direction of
+   * that mistake, so both sources are counted.
+   *
+   * `false` is a failed grade and `null` is an item nobody graded; the
+   * distinction is the same one `buildReportView` draws.
+   */
   private async loadDamageCounts(inspectionId: string): Promise<Map<string, number>> {
-    const rows = await this.prisma.inspectionFinding.findMany({
-      where: {
-        inspectionId,
-        NOT: { ...ROOM_SUMMARY_WHERE },
-        OR: [{ findingType: 'POSSIBLE_NEW_DAMAGE' }, { comparisonResult: 'POSSIBLE_NEW_DAMAGE' }],
-      },
-      select: { propertyAreaId: true },
-    });
+    const [findings, failedChecklistItems] = await Promise.all([
+      this.prisma.inspectionFinding.findMany({
+        where: {
+          inspectionId,
+          NOT: { ...ROOM_SUMMARY_WHERE },
+          OR: [{ findingType: 'POSSIBLE_NEW_DAMAGE' }, { comparisonResult: 'POSSIBLE_NEW_DAMAGE' }],
+        },
+        select: { propertyAreaId: true },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.findMany({
+        where: {
+          inspectionArea: { inspectionId },
+          OR: [{ isClean: false }, { isUndamaged: false }, { isWorking: false }],
+        },
+        select: { inspectionArea: { select: { propertyAreaId: true } } },
+      }),
+    ]);
     const counts = new Map<string, number>();
-    for (const row of rows)
-      counts.set(row.propertyAreaId, (counts.get(row.propertyAreaId) ?? 0) + 1);
+    const add = (propertyAreaId: string) =>
+      counts.set(propertyAreaId, (counts.get(propertyAreaId) ?? 0) + 1);
+    for (const row of findings) add(row.propertyAreaId);
+    for (const row of failedChecklistItems) add(row.inspectionArea.propertyAreaId);
     return counts;
   }
 
-  private async loadAreaMediaCounts(inspectionId: string): Promise<Map<string, number>> {
+  /**
+   * Captured evidence per property area, counting photographs as well as
+   * recordings.
+   *
+   * An area's evidence is a video *or* a set of stills. `AreaEvidenceService`
+   * -- the screen a reviewer actually opens -- reads both, and two ordinary
+   * cases produce an area with stills and no recording at all: an inspection
+   * imported from an Inspect & Cloud PDF, whose importer writes
+   * `InspectionPhoto` and never `InspectionMedia`, and a walkthrough where the
+   * technician photographed a room instead of filming it.
+   *
+   * Counting `media` alone classified every such area MISSING_MOVE_OUT_EVIDENCE
+   * however well it had matched, and regenerating could never clear it: the
+   * count it re-read was empty by construction.
+   */
+  private async loadAreaEvidenceCounts(inspectionId: string): Promise<Map<string, number>> {
     const areas = await this.prisma.inspectionArea.findMany({
       where: { inspectionId },
-      select: { propertyAreaId: true, _count: { select: { media: true } } },
+      select: { propertyAreaId: true, _count: { select: { media: true, photos: true } } },
     });
-    return new Map(areas.map((a) => [a.propertyAreaId, a._count.media]));
+    return new Map(areas.map((a) => [a.propertyAreaId, a._count.media + a._count.photos]));
   }
 
   private buildAreaComparisons(
@@ -463,7 +508,7 @@ export class ComparisonService {
     moveInAreas: AreaRow[],
     moveOutDamage: Map<string, number>,
     moveInDamage: Map<string, number>,
-    moveOutMedia: Map<string, number>,
+    moveOutEvidence: Map<string, number>,
   ): AreaResult[] {
     const usedMoveIn = new Set<string>();
     const results: AreaResult[] = [];
@@ -473,8 +518,8 @@ export class ComparisonService {
       if (match) usedMoveIn.add(match.area.propertyAreaId);
       const moDamage = moveOutDamage.get(mo.propertyAreaId) ?? 0;
       const miDamage = match ? (moveInDamage.get(match.area.propertyAreaId) ?? 0) : 0;
-      const moMedia = moveOutMedia.get(mo.propertyAreaId) ?? 0;
-      const { classification, requiresReview } = this.classify(match, moDamage, miDamage, moMedia);
+      const moEvidence = moveOutEvidence.get(mo.propertyAreaId) ?? 0;
+      const { classification, requiresReview } = this.classify(match, moDamage, miDamage, moEvidence);
       results.push({
         moveInPropertyAreaId: match?.area.propertyAreaId ?? null,
         moveOutPropertyAreaId: mo.propertyAreaId,
@@ -543,11 +588,11 @@ export class ComparisonService {
     match: AreaMatch | null,
     moDamage: number,
     miDamage: number,
-    moMedia: number,
+    moEvidence: number,
   ): { classification: ComparisonClassification; requiresReview: boolean } {
     if (!match)
       return { classification: ComparisonClassification.MISSING_BASELINE, requiresReview: true };
-    if (moMedia === 0)
+    if (moEvidence === 0)
       return {
         classification: ComparisonClassification.MISSING_MOVE_OUT_EVIDENCE,
         requiresReview: true,
