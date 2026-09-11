@@ -50,7 +50,22 @@ export class TechnicianLocationService {
 
     if (usable.length)
       await this.prisma.technicianLocationPing.createMany({
+        /**
+         * What makes a retried upload harmless.
+         *
+         * A batch whose response was lost is sent again by the queue, and
+         * until now that wrote every fix a second time: production holds
+         * positions stored twice, and one stored three times, each from a
+         * separate upload with identical coordinates. The device has always
+         * carried an id for exactly this; the server simply never took it.
+         *
+         * Rows from a handset that sends no id keep a null one, and Postgres
+         * treats NULLs as distinct, so those are unaffected in both
+         * directions -- they are neither deduplicated nor refused.
+         */
+        skipDuplicates: true,
         data: usable.map((fix) => ({
+          deviceFixId: fix.deviceFixId ?? null,
           organizationId: user.organizationId,
           technicianId: user.id,
           latitude: fix.latitude,

@@ -36,6 +36,17 @@ export const MAX_CLOCK_SKEW_MS = 2 * 60_000;
 export const MAX_USEFUL_ACCURACY_M = 500;
 
 export interface TechnicianLocationFix {
+  /**
+   * The handset's own id for this fix, so a retried upload is recognisable.
+   *
+   * The queue has always generated one; it simply never left the device. A
+   * batch whose response was lost was sent again and **written** again --
+   * production holds fixes stored twice, and one stored three times.
+   *
+   * Optional on the wire because a queue written by an older build has none,
+   * and refusing those would strand every fix a handset was already holding.
+   */
+  deviceFixId?: string | null;
   latitude: number;
   longitude: number;
   /** ISO 8601, taken from the handset's clock when the fix was made. */
