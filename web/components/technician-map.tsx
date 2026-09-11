@@ -5,7 +5,7 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
-import { isMoving } from '@texasrenters/shared';
+import { isMoving, ONLINE_WITHIN_MS } from '@texasrenters/shared';
 import {
   AdvancedMarker,
   APIProvider,
@@ -72,7 +72,12 @@ const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
 
 /** Past this, a position is history rather than an answer to "where are they". */
-const STALE_AFTER_MS = 30 * 60_000;
+/**
+ * Kept as a re-export so this file reads the same as it did, but the number
+ * now lives in `shared` -- the roster list asks the same question, and two
+ * thresholds would let the list say online while the pin said otherwise.
+ */
+const STALE_AFTER_MS = ONLINE_WITHIN_MS;
 
 /**
  * The view the map opens with, before any data has arrived.
@@ -178,14 +183,27 @@ const TechnicianPin = memo(function TechnicianPin({
   heading?: number | null;
 }) {
   const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
-  // Only for someone reporting now, and only when they are not dimmed. A stale
-  // position is the opposite of live, so animating it would say the wrong
-  // thing; a dimmed marker belongs to somebody who was not selected, and a
-  // pulse is the loudest thing on the map.
-  const live = !stale && !dim;
+  /**
+   * Whether this person is reporting now -- and nothing else.
+   *
+   * This used to be `!stale && !dim`, which conflated two unrelated facts.
+   * `stale` is about the technician: they have not reported for half an hour.
+   * `dim` is about the *reader*: somebody else is selected. Suppressing the
+   * pulse for the second reason made selecting one technician appear to take
+   * everybody else offline -- reported as a bug, and it was one: the map was
+   * answering "is this person out there" with "did you click on them".
+   *
+   * De-emphasis is the `opacity` below, which fades the pulse along with the
+   * rest of the marker. That is what dimming should do: make something quieter
+   * without changing what it says.
+   */
+  const live = !stale;
 
   return (
-    <svg height="44" opacity={dim ? 0.3 : 1} viewBox="0 0 44 44" width="44">
+    /* 0.45 rather than 0.3. At 0.3 an online marker's colour was too faint to
+       separate from the stale one, so the dimming was itself reading as
+       offline -- the same bug by a different route. */
+    <svg height="44" opacity={dim ? 0.45 : 1} viewBox="0 0 44 44" width="44">
       <MarkerShadow />
       {live ? (
         <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11" />

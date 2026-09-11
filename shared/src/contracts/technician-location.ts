@@ -184,6 +184,41 @@ export interface TechnicianPosition {
 }
 
 /**
+ * How recently a handset must have reported to count as out there now.
+ *
+ * Thirty minutes, because a technician inside a house with thick walls goes
+ * quiet for a while and has not stopped working. Short enough that somebody who
+ * finished hours ago is not still shown as live.
+ *
+ * Here rather than in the map component because two views answer the same
+ * question -- the roster list and the markers -- and two thresholds would let
+ * the list say online while the pin said otherwise.
+ */
+export const ONLINE_WITHIN_MS = 30 * 60_000;
+
+export type TechnicianPresence = 'ONLINE' | 'OFFLINE';
+
+/**
+ * Whether a technician is reporting now.
+ *
+ * A missing position is OFFLINE rather than a third state. Somebody assigned
+ * work who has never opened the app and somebody who reported this morning and
+ * stopped are different stories, but neither is out there now, and a filter
+ * offering three answers to a two-answer question is harder to use than the
+ * question deserves. The difference is still visible in the row itself, which
+ * says "no position reported" rather than a time.
+ */
+export function presenceOf(
+  position: { recordedAt: string } | null | undefined,
+  now = Date.now(),
+): TechnicianPresence {
+  if (!position) return 'OFFLINE';
+  const at = Date.parse(position.recordedAt);
+  if (Number.isNaN(at)) return 'OFFLINE';
+  return now - at <= ONLINE_WITHIN_MS ? 'ONLINE' : 'OFFLINE';
+}
+
+/**
  * Fold a freshly reported position into the list the console is holding.
  *
  * The list is latest-per-technician, so an arriving position **replaces** that
