@@ -22,7 +22,7 @@
  * Needs GOOGLE_SERVER_API_KEY. Without it this refuses rather than quietly
  * re-asking the geocoder that produced the coordinates in the first place.
  */
-import { geocodableAddress } from '@texasrenters/shared';
+import { geocodableAddress, isWorthReplacing } from '@texasrenters/shared';
 
 import { ownerPrismaClient } from './owner-prisma.mjs';
 
@@ -87,6 +87,7 @@ async function main() {
         postalCode: true,
         latitude: true,
         longitude: true,
+        geocodePrecision: true,
       },
       orderBy: { name: 'asc' },
       take: LIMIT,
@@ -100,6 +101,9 @@ async function main() {
   let improved = 0;
   let unchanged = 0;
   let missed = 0;
+  // Named rather than merely counted: a refusal identifies an address no
+  // automatic pass can improve, which is a list somebody should read.
+  const refused = [];
 
   for (const row of rows) {
     const address = geocodableAddress({
@@ -115,6 +119,20 @@ async function main() {
     // from the map is a worse outcome than one placed approximately.
     if (!answer || answer.source !== 'GOOGLE') {
       missed += 1;
+      continue;
+    }
+
+    /**
+     * Never write a worse answer over a better one.
+     *
+     * This is here because it happened. Google could not find
+     * `3623 Rock Ledge Dr, Richmond` and returned the *area centroid*; this
+     * script wrote it, moving the pin 7.2km off a good Census match on the
+     * right street. `TRUSTWORTHY_PRECISIONS` refuses to draw a CENTROID, so
+     * the property would have left the map altogether.
+     */
+    if (!isWorthReplacing(answer.precision, row.geocodePrecision)) {
+      refused.push({ name: row.name, precision: answer.precision });
       continue;
     }
 
@@ -155,8 +173,15 @@ async function main() {
   const median = moved.length
     ? moved[Math.floor(moved.length / 2)].distance.toFixed(0)
     : '0';
+  if (refused.length) {
+    console.log(`
+Refused ${refused.length} answer(s) as worse than what is stored:`);
+    for (const row of refused) console.log(`  ${row.precision.padEnd(12)} ${row.name}`);
+  }
+
   console.log(
-    `\n${improved} rooftop, ${unchanged} still interpolated, ${missed} not placed by Google.` +
+    `\n${improved} rooftop, ${unchanged} still interpolated, ${missed} not placed by Google,` +
+      ` ${refused.length} refused as a downgrade.` +
       `\nMedian move ${median} m.` +
       (APPLY ? '\nWritten.' : '\nDry run — pass --apply to write.'),
   );
