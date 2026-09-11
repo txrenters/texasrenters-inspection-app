@@ -169,11 +169,47 @@ export class TechnicianLocationService {
       orderBy: { recordedAt: 'desc' },
     });
 
+    /**
+     * One row per technician, whatever the database returned.
+     *
+     * The query above asks for the rows matching `(technicianId, newest
+     * recordedAt)`, and **that pair is not unique**. Handsets here produce two
+     * fixes bearing the identical millisecond in roughly two per cent of
+     * reports -- genuinely different readings, twenty metres and a few metres
+     * of accuracy apart, arriving in the same batch. When the tie lands on a
+     * technician's most recent fix, both rows come back and the map draws two
+     * markers, each with its own accuracy ring, for one person.
+     *
+     * Reported from the console as "the technician marker duplicates".
+     *
+     * The tie is broken on **accuracy**: if two fixes claim the same instant,
+     * the more precise one is the better answer about where somebody is. The
+     * id is a final tie-break so the choice is stable between requests rather
+     * than flickering between two positions on every poll.
+     */
+    const newestPerTechnician = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const held = newestPerTechnician.get(row.technicianId);
+      if (!held) {
+        newestPerTechnician.set(row.technicianId, row);
+        continue;
+      }
+      // `rows` is already ordered newest first, so anything reaching here ties
+      // on `recordedAt` with what is held.
+      const better =
+        (row.accuracyMeters ?? Number.POSITIVE_INFINITY) <
+          (held.accuracyMeters ?? Number.POSITIVE_INFINITY) ||
+        ((row.accuracyMeters ?? Number.POSITIVE_INFINITY) ===
+          (held.accuracyMeters ?? Number.POSITIVE_INFINITY) &&
+          row.id < held.id);
+      if (better) newestPerTechnician.set(row.technicianId, row);
+    }
+
     // Numbers, not Prisma `Decimal`s. A Decimal serialises to a *string*
     // through JSON, so the map would receive "-97.7431" and either plot
     // nothing or silently coerce it somewhere far away. Converting at the
     // edge keeps that out of every consumer.
-    return rows.map((row) => ({
+    return [...newestPerTechnician.values()].map((row) => ({
       ...row,
       latitude: row.latitude.toNumber(),
       longitude: row.longitude.toNumber(),
