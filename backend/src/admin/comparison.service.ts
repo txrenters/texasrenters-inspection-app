@@ -2,7 +2,9 @@ import { Inject, Injectable } from '@nestjs/common';
 import {
   ComparisonClassification,
   ComparisonMatchMethod,
+  ComparisonResult,
   ComparisonStatus,
+  FindingType,
   InspectionStatus,
   InspectionType,
 } from '@prisma/client';
@@ -72,6 +74,15 @@ type AreaRow = {
 };
 
 type AreaMatch = { area: AreaRow; method: ComparisonMatchMethod; confidence: number };
+
+/**
+ * What one inspection recorded about each of its areas.
+ *
+ * `damage` counts the defects. `graded` is the wider question of whether the
+ * area was assessed *at all*, which is not the same as being assessed and found
+ * clean -- and the difference decides whether "new" is a claim this can make.
+ */
+type ConditionSignals = { damage: Map<string, number>; graded: Set<string> };
 
 type AreaResult = {
   moveInPropertyAreaId: string | null;
@@ -154,20 +165,20 @@ export class ComparisonService {
         'This comparison has been approved; reject it before regenerating.',
       );
 
-    const [moveOutAreas, moveInAreas, moveOutDamage, moveInDamage, moveOutEvidence] =
+    const [moveOutAreas, moveInAreas, moveOutCondition, moveInCondition, moveOutEvidence] =
       await Promise.all([
         this.loadAreas(moveOut.id),
         this.loadAreas(moveIn.id),
-        this.loadDamageCounts(moveOut.id),
-        this.loadDamageCounts(moveIn.id),
+        this.loadConditionSignals(moveOut.id),
+        this.loadConditionSignals(moveIn.id),
         this.loadAreaEvidenceCounts(moveOut.id),
       ]);
 
     const areaResults = this.buildAreaComparisons(
       moveOutAreas,
       moveInAreas,
-      moveOutDamage,
-      moveInDamage,
+      moveOutCondition,
+      moveInCondition,
       moveOutEvidence,
     );
     const requiresReviewCount = areaResults.filter((a) => a.requiresReview).length;
@@ -435,49 +446,69 @@ export class ComparisonService {
   }
 
   /**
-   * Recorded damage per property area, from both places this system records it.
+   * What an inspection recorded about each area: the defects, and whether the
+   * area was assessed at all.
    *
-   * AI analysis of a recording produces `InspectionFinding` rows. A graded
-   * checklist produces failed `InspectionAreaChecklistResponse` rows, and that
-   * is the *only* damage an imported inspection has: `InspectionFinding`
-   * requires an `inspectionMediaId`, so the Inspect & Cloud importer writes no
-   * findings at all and records every defect the PDF graded as a failed
-   * response instead.
+   * Damage comes from two places. AI analysis of a recording produces
+   * `InspectionFinding` rows. A graded checklist produces failed
+   * `InspectionAreaChecklistResponse` rows, and that is the *only* damage an
+   * imported inspection has, since `InspectionFinding` requires an
+   * `inspectionMediaId` the Inspect & Cloud importer cannot supply.
    *
-   * Reading findings alone therefore scored an imported area zero. On its own
-   * that was invisible, because such an area was rejected earlier for having no
-   * recording; once photographs count as evidence it would have become a
-   * confident UNCHANGED -- "no new damage detected" printed over a room the
-   * report had graded damaged. A missed charge is the expensive direction of
-   * that mistake, so both sources are counted.
+   * **`isClean` is deliberately not damage.** A move-out is expected to come
+   * back dirty — that is the tenant's cleaning obligation, not harm to the
+   * property — and counting it here put one "not clean" item's worth of
+   * NEW_DAMAGE on every room that had one. Damage is `isUndamaged` and
+   * `isWorking`; cleanliness is a separate charge, read off the checklist.
    *
-   * `false` is a failed grade and `null` is an item nobody graded; the
-   * distinction is the same one `buildReportView` draws.
+   * `graded` answers a different question from `damage` being zero: an area
+   * nobody assessed and an area assessed and found sound both score zero
+   * defects, and only one of those supports calling a later defect *new*.
+   * `false` is a failed grade; `null` is an item nobody graded.
    */
-  private async loadDamageCounts(inspectionId: string): Promise<Map<string, number>> {
-    const [findings, failedChecklistItems] = await Promise.all([
+  private async loadConditionSignals(inspectionId: string): Promise<ConditionSignals> {
+    const [findings, responses] = await Promise.all([
       this.prisma.inspectionFinding.findMany({
-        where: {
-          inspectionId,
-          NOT: { ...ROOM_SUMMARY_WHERE },
-          OR: [{ findingType: 'POSSIBLE_NEW_DAMAGE' }, { comparisonResult: 'POSSIBLE_NEW_DAMAGE' }],
-        },
-        select: { propertyAreaId: true },
+        where: { inspectionId, NOT: { ...ROOM_SUMMARY_WHERE } },
+        select: { propertyAreaId: true, findingType: true, comparisonResult: true },
       }),
       this.prisma.inspectionAreaChecklistResponse.findMany({
         where: {
           inspectionArea: { inspectionId },
-          OR: [{ isClean: false }, { isUndamaged: false }, { isWorking: false }],
+          OR: [
+            { isClean: { not: null } },
+            { isUndamaged: { not: null } },
+            { isWorking: { not: null } },
+          ],
         },
-        select: { inspectionArea: { select: { propertyAreaId: true } } },
+        select: {
+          isUndamaged: true,
+          isWorking: true,
+          inspectionArea: { select: { propertyAreaId: true } },
+        },
       }),
     ]);
-    const counts = new Map<string, number>();
-    const add = (propertyAreaId: string) =>
-      counts.set(propertyAreaId, (counts.get(propertyAreaId) ?? 0) + 1);
-    for (const row of findings) add(row.propertyAreaId);
-    for (const row of failedChecklistItems) add(row.inspectionArea.propertyAreaId);
-    return counts;
+
+    const damage = new Map<string, number>();
+    const graded = new Set<string>();
+    const addDamage = (propertyAreaId: string) =>
+      damage.set(propertyAreaId, (damage.get(propertyAreaId) ?? 0) + 1);
+
+    for (const row of findings) {
+      // A finding of any type means somebody assessed this area.
+      graded.add(row.propertyAreaId);
+      if (
+        row.findingType === FindingType.POSSIBLE_NEW_DAMAGE ||
+        row.comparisonResult === ComparisonResult.POSSIBLE_NEW_DAMAGE
+      )
+        addDamage(row.propertyAreaId);
+    }
+    for (const row of responses) {
+      const propertyAreaId = row.inspectionArea.propertyAreaId;
+      graded.add(propertyAreaId);
+      if (row.isUndamaged === false || row.isWorking === false) addDamage(propertyAreaId);
+    }
+    return { damage, graded };
   }
 
   /**
@@ -506,8 +537,8 @@ export class ComparisonService {
   private buildAreaComparisons(
     moveOutAreas: AreaRow[],
     moveInAreas: AreaRow[],
-    moveOutDamage: Map<string, number>,
-    moveInDamage: Map<string, number>,
+    moveOutCondition: ConditionSignals,
+    moveInCondition: ConditionSignals,
     moveOutEvidence: Map<string, number>,
   ): AreaResult[] {
     const usedMoveIn = new Set<string>();
@@ -516,10 +547,17 @@ export class ComparisonService {
     for (const mo of moveOutAreas) {
       const match = this.matchArea(mo, moveInAreas, usedMoveIn);
       if (match) usedMoveIn.add(match.area.propertyAreaId);
-      const moDamage = moveOutDamage.get(mo.propertyAreaId) ?? 0;
-      const miDamage = match ? (moveInDamage.get(match.area.propertyAreaId) ?? 0) : 0;
+      const moDamage = moveOutCondition.damage.get(mo.propertyAreaId) ?? 0;
+      const miDamage = match ? (moveInCondition.damage.get(match.area.propertyAreaId) ?? 0) : 0;
       const moEvidence = moveOutEvidence.get(mo.propertyAreaId) ?? 0;
-      const { classification, requiresReview } = this.classify(match, moDamage, miDamage, moEvidence);
+      const baselineGraded = match ? moveInCondition.graded.has(match.area.propertyAreaId) : false;
+      const { classification, requiresReview, summary } = this.classify(
+        match,
+        moDamage,
+        miDamage,
+        moEvidence,
+        baselineGraded,
+      );
       results.push({
         moveInPropertyAreaId: match?.area.propertyAreaId ?? null,
         moveOutPropertyAreaId: mo.propertyAreaId,
@@ -529,7 +567,7 @@ export class ComparisonService {
         matchMethod: match?.method ?? ComparisonMatchMethod.UNMATCHED,
         matchConfidence: match?.confidence ?? 0,
         requiresReview,
-        summary: this.areaSummary(classification),
+        summary,
       });
     }
 
@@ -589,25 +627,38 @@ export class ComparisonService {
     moDamage: number,
     miDamage: number,
     moEvidence: number,
-  ): { classification: ComparisonClassification; requiresReview: boolean } {
-    if (!match)
-      return { classification: ComparisonClassification.MISSING_BASELINE, requiresReview: true };
-    if (moEvidence === 0)
-      return {
-        classification: ComparisonClassification.MISSING_MOVE_OUT_EVIDENCE,
-        requiresReview: true,
-      };
+    baselineGraded: boolean,
+  ): { classification: ComparisonClassification; requiresReview: boolean; summary: string } {
+    const verdict = (classification: ComparisonClassification, requiresReview: boolean) => ({
+      classification,
+      requiresReview,
+      summary: this.areaSummary(classification),
+    });
+
+    if (!match) return verdict(ComparisonClassification.MISSING_BASELINE, true);
+    if (moEvidence === 0) return verdict(ComparisonClassification.MISSING_MOVE_OUT_EVIDENCE, true);
     // Any move-out damage is a charge-relevant call → always human-reviewed.
-    if (moDamage > 0 && miDamage === 0)
-      return { classification: ComparisonClassification.NEW_DAMAGE, requiresReview: true };
-    if (moDamage > 0 && miDamage > 0)
-      return { classification: ComparisonClassification.REQUIRES_REVIEW, requiresReview: true };
-    if (moDamage === 0 && miDamage > 0)
-      return { classification: ComparisonClassification.RESOLVED, requiresReview: true };
+    if (moDamage > 0 && miDamage === 0) {
+      // A baseline that graded nothing here scores zero for the same reason a
+      // spotless one does, and the two mean opposite things. Calling the defect
+      // *new* on that basis invents a baseline nobody recorded, and it is the
+      // tenant's deposit that pays for the guess — so say what is actually
+      // known and let a reviewer decide.
+      if (!baselineGraded)
+        return {
+          classification: ComparisonClassification.REQUIRES_REVIEW,
+          requiresReview: true,
+          summary:
+            'Flagged at move-out, but the move-in baseline recorded no condition for this area — whether it is new cannot be determined from the record.',
+        };
+      return verdict(ComparisonClassification.NEW_DAMAGE, true);
+    }
+    if (moDamage > 0 && miDamage > 0) return verdict(ComparisonClassification.REQUIRES_REVIEW, true);
+    if (moDamage === 0 && miDamage > 0) return verdict(ComparisonClassification.RESOLVED, true);
     // No damage either side; a weak (category-only) match still deserves a look.
     if (match.method === ComparisonMatchMethod.AREA_CATEGORY)
-      return { classification: ComparisonClassification.REQUIRES_REVIEW, requiresReview: true };
-    return { classification: ComparisonClassification.UNCHANGED, requiresReview: false };
+      return verdict(ComparisonClassification.REQUIRES_REVIEW, true);
+    return verdict(ComparisonClassification.UNCHANGED, false);
   }
 
   private overallCondition(

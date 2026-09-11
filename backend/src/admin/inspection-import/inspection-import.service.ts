@@ -13,10 +13,13 @@
  * built around AI analysis of a video, which an imported report does not have.
  * The defects are not lost — each one is the comment and the failed grades on
  * its checklist response, which is where the web review screen already reads
- * condition from. `ComparisonService.loadDamageCounts` reads those failed
- * grades as well as findings, so damage from an import does reach a
- * comparison's tally; that turned out not to need `inspectionMediaId` to become
- * nullable after all, and this table stays untouched.
+ * condition from. `ComparisonService.loadConditionSignals` reads those grades as
+ * well as findings, so an import does reach a comparison; that turned out not to
+ * need `inspectionMediaId` to become nullable after all, and this table stays
+ * untouched. Note it reads them for two separate things: `isUndamaged` and
+ * `isWorking` are damage, while `isClean` is not — a dirty move-out is a
+ * cleaning charge — and *any* graded item marks the area as assessed, which is
+ * what lets a later move-out call a defect new rather than merely unexplained.
  */
 import { createHash } from 'node:crypto';
 

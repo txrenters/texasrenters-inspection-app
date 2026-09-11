@@ -36,9 +36,44 @@ function mediaRow(propertyAreaId: string, count: number, photos = 0) {
   return { propertyAreaId, _count: { media: count, photos } };
 }
 
-/** A checklist item a technician or an imported report graded as failed. */
+type FindingRow = {
+  propertyAreaId: string;
+  findingType: string;
+  comparisonResult: string | null;
+};
+type ResponseRow = {
+  isUndamaged: boolean | null;
+  isWorking: boolean | null;
+  inspectionArea: { propertyAreaId: string };
+};
+
+/** A finding row, shaped as `loadConditionSignals` selects it. */
+function damageFinding(propertyAreaId: string) {
+  return { propertyAreaId, findingType: 'POSSIBLE_NEW_DAMAGE', comparisonResult: null };
+}
+
+/** An area the AI assessed and found unremarkable: graded, but not damage. */
+function soundFinding(propertyAreaId: string) {
+  return { propertyAreaId, findingType: 'NO_CHANGE', comparisonResult: null };
+}
+
+/** A checklist item graded damaged or not working. */
 function failedItem(propertyAreaId: string) {
-  return { inspectionArea: { propertyAreaId } };
+  return { isUndamaged: false, isWorking: null, inspectionArea: { propertyAreaId } };
+}
+
+/** A checklist item graded and found sound — the area was assessed. */
+function soundItem(propertyAreaId: string) {
+  return { isUndamaged: true, isWorking: true, inspectionArea: { propertyAreaId } };
+}
+
+/**
+ * An item where only cleanliness was graded. The query returns it because
+ * `isClean` is non-null, but the select carries no `isClean`, so both damage
+ * grades read null — which is exactly the point: being dirty is not damage.
+ */
+function dirtyItem(propertyAreaId: string) {
+  return { isUndamaged: null, isWorking: null, inspectionArea: { propertyAreaId } };
 }
 
 /**
@@ -55,11 +90,11 @@ function generatePrisma(opts: {
   moveOutAreas: ReturnType<typeof area>[];
   moveInAreas: ReturnType<typeof area>[];
   moveOutMedia: ReturnType<typeof mediaRow>[];
-  moveOutDamage: Array<{ propertyAreaId: string }>;
-  moveInDamage: Array<{ propertyAreaId: string }>;
-  // Default empty: the recording-based fixtures record damage as findings.
-  moveOutFailedItems?: ReturnType<typeof failedItem>[];
-  moveInFailedItems?: ReturnType<typeof failedItem>[];
+  moveOutFindings: FindingRow[];
+  moveInFindings: FindingRow[];
+  // Default empty: the recording-based fixtures record condition as findings.
+  moveOutResponses?: ResponseRow[];
+  moveInResponses?: ResponseRow[];
 }) {
   const created: { data?: Record<string, unknown> } = {};
   const areaCreateMany = { data: [] as Array<Record<string, unknown>> };
@@ -117,14 +152,14 @@ function generatePrisma(opts: {
     inspectionFinding: {
       findMany: jest
         .fn()
-        .mockResolvedValueOnce(opts.moveOutDamage)
-        .mockResolvedValueOnce(opts.moveInDamage),
+        .mockResolvedValueOnce(opts.moveOutFindings)
+        .mockResolvedValueOnce(opts.moveInFindings),
     },
     inspectionAreaChecklistResponse: {
       findMany: jest
         .fn()
-        .mockResolvedValueOnce(opts.moveOutFailedItems ?? [])
-        .mockResolvedValueOnce(opts.moveInFailedItems ?? []),
+        .mockResolvedValueOnce(opts.moveOutResponses ?? [])
+        .mockResolvedValueOnce(opts.moveInResponses ?? []),
     },
     userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
@@ -151,8 +186,10 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
       moveInAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
       moveOutMedia: [mediaRow('pa-kitchen', 1), mediaRow('pa-bed', 1)],
-      moveOutDamage: [{ propertyAreaId: 'pa-kitchen' }],
-      moveInDamage: [],
+      moveOutFindings: [damageFinding('pa-kitchen')],
+      // The baseline assessed both rooms and found them sound. Without that,
+      // "new" would be unsupported and the area would go to review instead.
+      moveInFindings: [soundFinding('pa-kitchen'), soundFinding('pa-bed')],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -193,8 +230,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveInAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
       // No recordings at all; the kitchen was photographed, the bedroom was not.
       moveOutMedia: [mediaRow('pa-kitchen', 0, 12), mediaRow('pa-bed', 0, 0)],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -230,11 +267,12 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveInAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
       moveOutMedia: [mediaRow('pa-kitchen', 0, 8), mediaRow('pa-bed', 0, 5)],
       // No findings on either side, as an imported pair of inspections has none.
-      moveOutDamage: [],
-      moveInDamage: [],
-      // The move-out report graded the kitchen damaged; the move-in did not.
-      moveOutFailedItems: [failedItem('pa-kitchen')],
-      moveInFailedItems: [],
+      moveOutFindings: [],
+      moveInFindings: [],
+      // The move-out report graded the kitchen damaged; the move-in graded both
+      // rooms and found them sound, which is what makes the kitchen's defect new.
+      moveOutResponses: [failedItem('pa-kitchen')],
+      moveInResponses: [soundItem('pa-kitchen'), soundItem('pa-bed')],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -248,6 +286,67 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     expect(byArea['pa-bed']).toMatchObject({ classification: 'UNCHANGED' });
   });
 
+  /**
+   * A move-out is expected to come back dirty; that is the tenant's cleaning
+   * obligation, not harm to the property. Counting `isClean === false` as
+   * damage put a NEW_DAMAGE badge on every room with one smudged item, which
+   * on a real report meant thirteen of thirteen rooms.
+   */
+  it('treats a not-clean item as a cleaning matter rather than damage', async () => {
+    const { prisma, areaCreateMany, created } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 0, 6)],
+      moveOutFindings: [],
+      moveInFindings: [],
+      // Graded dirty, and nothing else.
+      moveOutResponses: [dirtyItem('pa-kitchen')],
+      moveInResponses: [soundItem('pa-kitchen')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      classification: 'UNCHANGED',
+      requiresReview: false,
+    });
+    expect(created.data).toMatchObject({ requiresReviewCount: 0 });
+  });
+
+  /**
+   * An area the baseline never graded scores zero defects for the same reason a
+   * spotless one does, and the two mean opposite things. Calling the defect new
+   * on that basis invents a baseline nobody recorded, and it is the tenant's
+   * deposit that pays for the guess.
+   */
+  it('will not call a defect new when the baseline graded nothing there', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen')],
+      moveOutMedia: [mediaRow('pa-kitchen', 0, 9)],
+      moveOutFindings: [],
+      moveInFindings: [],
+      moveOutResponses: [failedItem('pa-kitchen')],
+      // The baseline recorded no condition for this area at all.
+      moveInResponses: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      classification: 'REQUIRES_REVIEW',
+      requiresReview: true,
+    });
+    expect(areaCreateMany.data[0]?.summary).toContain('recorded no condition for this area');
+    expect(areaCreateMany.data[0]?.classification).not.toBe('NEW_DAMAGE');
+  });
+
   it('marks unmatched areas as MISSING_BASELINE / MISSING_MOVE_OUT_EVIDENCE', async () => {
     const { prisma, areaCreateMany } = generatePrisma({
       moveOut,
@@ -256,8 +355,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [area('pa-garage', 'Garage', 'GARAGE')],
       moveInAreas: [area('pa-kitchen', 'Kitchen', 'INDOOR_ROOM')],
       moveOutMedia: [mediaRow('pa-garage', 1)],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -278,8 +377,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [moveOutArea],
       moveInAreas: [moveInArea],
       moveOutMedia: [mediaRow('pa-den', 1)],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -300,8 +399,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [],
       moveInAreas: [],
       moveOutMedia: [],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -318,8 +417,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [area('pa-kitchen', 'Kitchen')],
       moveInAreas: [area('pa-kitchen', 'Kitchen')],
       moveOutMedia: [mediaRow('pa-kitchen', 1)],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -334,8 +433,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [],
       moveInAreas: [],
       moveOutMedia: [],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
@@ -351,8 +450,8 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       moveOutAreas: [],
       moveInAreas: [],
       moveOutMedia: [],
-      moveOutDamage: [],
-      moveInDamage: [],
+      moveOutFindings: [],
+      moveInFindings: [],
     });
     const service = new ComparisonService(prisma as never);
 
