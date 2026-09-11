@@ -145,7 +145,9 @@ export function ImportReportDialog({
       </DialogTrigger>
       <DialogContent className="sm:max-w-3xl" ref={content}>
         <DialogHeader>
-          <DialogTitle>{replacing ? 'Replace this inspection’s evidence' : 'Import an inspection report'}</DialogTitle>
+          <DialogTitle>
+            {replacing ? 'Import a report over this inspection' : 'Import an inspection report'}
+          </DialogTitle>
           <DialogDescription>
             {/* Two different things to say, and the difference matters more
                 than the wording of either. On an empty record this explains why
@@ -157,9 +159,11 @@ export function ImportReportDialog({
                 for doing the right thing. */}
             {replacing ? (
               <>
-                Reading the Inspect &amp; Cloud report will <strong>replace</strong> what is recorded
-                against this {kind}: its photos, its checklist answers, and any room the new report
-                does not cover. Recordings are kept, and so is anything filed against them.
+                This {kind} already has evidence recorded against it. Once the report has been
+                read you choose what to do with it: <strong>replace</strong> what is here — its
+                photos, its checklist answers, and any room the new report does not cover — or{' '}
+                <strong>add</strong> the rooms this report covers and leave the rest alone.
+                Recordings are kept either way, and so is anything filed against them.
               </>
             ) : (
               <>
@@ -465,11 +469,21 @@ function ImportProgress({
   onDiscard: () => void;
 }) {
   // Before the early returns: a hook cannot sit behind one.
-  const existingAreas = evidence?.areas ?? 0;
-  const existingPhotos = evidence?.photos ?? 0;
-  // Only a question when there is something to lose. An empty inspection has
-  // nothing to replace, and asking anyway is a decision with one right answer.
-  const needsChoice = existingAreas > 0 || existingPhotos > 0;
+  const existingAreas = evidence?.areas;
+  const existingPhotos = evidence?.photos;
+  /*
+   * Absent counts mean "ask", never "nothing at stake".
+   *
+   * The inspection *detail* endpoint does not send `evidence` -- only the list
+   * does -- so reading a missing count as zero hid the choice entirely on the
+   * one page imports are started from, and every import silently replaced. The
+   * same trap `hasEvidence` on that page is written to avoid, walked into from
+   * the other side.
+   *
+   * The question is skipped only when the record is *known* to hold nothing.
+   */
+  const knownEmpty = evidence ? evidence.areas === 0 && evidence.photos === 0 : false;
+  const needsChoice = !knownEmpty;
   const [mode, setMode] = useState<'REPLACE' | 'ADD' | null>(needsChoice ? null : 'REPLACE');
 
   if (!job)
@@ -637,11 +651,14 @@ function ImportProgress({
               Replace this inspection
               <span className="text-muted-foreground block text-xs">
                 This report becomes the inspection&apos;s evidence.{' '}
-                {existingPhotos > 0
+                {existingPhotos !== undefined && existingPhotos > 0
                   ? `The ${existingPhotos} photograph${existingPhotos === 1 ? '' : 's'} and checklist answers already here are removed, `
-                  : 'The checklist answers already here are removed, '}
-                along with any of the {existingAreas} area{existingAreas === 1 ? '' : 's'} this
-                report does not cover. Recordings are kept.
+                  : 'The photographs and checklist answers already here are removed, '}
+                along with{' '}
+                {existingAreas !== undefined
+                  ? `any of the ${existingAreas} area${existingAreas === 1 ? '' : 's'}`
+                  : 'any area'}{' '}
+                this report does not cover. Recordings are kept.
               </span>
             </span>
           </label>
@@ -658,8 +675,11 @@ function ImportProgress({
               Add to this inspection
               <span className="text-muted-foreground block text-xs">
                 For a follow-up report covering areas the first one missed. Only the areas above are
-                written. The {existingAreas} area{existingAreas === 1 ? '' : 's'} already here
-                {existingAreas === 1 ? ' is' : ' are'} left alone, photographs included.
+                written;{' '}
+                {existingAreas !== undefined
+                  ? `the ${existingAreas} area${existingAreas === 1 ? '' : 's'} already here ${existingAreas === 1 ? 'is' : 'are'}`
+                  : 'everything else already on this inspection is'}{' '}
+                left alone, photographs included.
               </span>
             </span>
           </label>
