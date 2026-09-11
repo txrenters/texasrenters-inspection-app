@@ -26,6 +26,9 @@ describe('parseCensusResponse', () => {
       longitude: -95.18234,
       precision: 'INTERPOLATED',
       matchedAddress: '10054 COPPER HOLLOW LN, HOUSTON, TX, 77044',
+      // Which geocoder answered is now stored, because it is what tells a row
+      // that has already been offered a rooftop lookup from one that has not.
+      source: 'CENSUS',
     });
   });
 

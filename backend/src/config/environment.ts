@@ -45,6 +45,23 @@ const environmentSchema = z
     CORS_ORIGINS: z.string().optional(),
     MOBILE_APP_ORIGIN: z.string().url().optional(),
     WEB_APP_ORIGIN: z.string().url().optional(),
+    /**
+     * One key, used from the server only, for Google's Geocoding API (and the
+     * Routes API when that lands).
+     *
+     * Deliberately *not* the browser key the map loads with. A key carries
+     * exactly one application restriction: the browser key is restricted by
+     * HTTP referrer, and Google refuses a referrer-restricted key outright for
+     * these APIs -- "API keys with referer restrictions cannot be used with
+     * this API" -- because a server sends no referrer. Making one key serve
+     * both would mean removing that restriction from a key which is printed in
+     * every page's JavaScript bundle, so anybody who opened devtools could
+     * spend it.
+     *
+     * Optional: without it geocoding falls back to the US Census, which needs
+     * no key. Nothing fails to boot for want of it.
+     */
+    GOOGLE_SERVER_API_KEY: z.string().optional(),
     MICROSOFT_GRAPH_TENANT_ID: z.string().optional(),
     MICROSOFT_GRAPH_CLIENT_ID: z.string().optional(),
     MICROSOFT_GRAPH_CLIENT_SECRET: z.string().optional(),
