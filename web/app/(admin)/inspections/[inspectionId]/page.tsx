@@ -452,6 +452,13 @@ function InspectionDetail() {
                   : `This ${humanize(item.inspectionType).toLowerCase()} inspection has no evidence recorded against it. Import the report if the walkthrough was done outside this app.`}
               </span>
               <ImportReportDialog
+                // What is standing here, so each option can say what it does to
+                // it in real numbers rather than in the abstract.
+                evidence={
+                  item.evidence
+                    ? { areas: item.evidence.areas, photos: item.evidence.photos }
+                    : undefined
+                }
                 inspectionId={id}
                 inspectionType={item.inspectionType}
                 replacing={hasEvidence(item)}

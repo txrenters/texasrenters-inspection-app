@@ -152,16 +152,52 @@ describe('importing an inspection report', () => {
    */
   it('writes an additional report without replacing the inspection', async () => {
     job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
-    render(<InspectionReportImport resumeJobId="job-1" />);
+    render(<InspectionReportImport evidence={{ areas: 16, photos: 571 }} resumeJobId="job-1" />);
 
-    // Replace is the default, so an import nobody thinks about behaves as it always did.
-    const replace = await screen.findByRole('radio', { name: /replace this inspection/i });
-    expect((replace as HTMLInputElement).checked).toBe(true);
-
-    fireEvent.click(screen.getByRole('radio', { name: /add to this inspection/i }));
+    fireEvent.click(await screen.findByRole('radio', { name: /add to this inspection/i }));
     fireEvent.click(screen.getByRole('button', { name: /add these areas/i }));
 
     await waitFor(() => expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'ADD' }));
+  });
+
+  /**
+   * The failure this exists for. A move-out holding sixteen areas and 571
+   * photographs was reduced to one area by a report covering a single garage,
+   * because Replace was pre-selected and the choice sat below a table of parsed
+   * areas somebody had just scrolled past. Nothing may be written until the
+   * question is answered.
+   */
+  it('will not import anything until the choice is made', async () => {
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
+    render(<InspectionReportImport evidence={{ areas: 16, photos: 571 }} resumeJobId="job-1" />);
+
+    const button = await screen.findByRole('button', { name: /choose how to write/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+
+    // Neither option is pre-selected: the destructive one cannot be chosen by
+    // not reading.
+    expect((screen.getByRole('radio', { name: /replace this inspection/i }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('radio', { name: /add to this inspection/i }) as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(button);
+    expect(commitImport).not.toHaveBeenCalled();
+  });
+
+  it('says what replacing will actually remove', async () => {
+    // In the numbers on this inspection, not in the abstract.
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
+    render(<InspectionReportImport evidence={{ areas: 16, photos: 571 }} resumeJobId="job-1" />);
+
+    expect(await screen.findByText(/571 photographs/i)).toBeTruthy();
+    expect(screen.getByText(/16 areas this report does not cover/i)).toBeTruthy();
+  });
+
+  it('asks nothing when the inspection holds nothing to lose', async () => {
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
+    render(<InspectionReportImport evidence={{ areas: 0, photos: 0 }} resumeJobId="job-1" />);
+
+    await screen.findByRole('button', { name: /^import as .* inspection$/i });
+    expect(screen.queryByRole('radio', { name: /add to this inspection/i })).toBeNull();
   });
 
   it('keeps showing progress while the server is still writing', async () => {

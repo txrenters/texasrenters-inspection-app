@@ -48,13 +48,22 @@ import {
  * permanent block on a page people read repeatedly costs more attention than
  * it earns.
  */
+/** What is already on the inspection, so each option can say what it will do to it. */
+export interface ImportTargetEvidence {
+  areas: number;
+  photos: number;
+}
+
 export function ImportReportDialog({
   inspectionId,
   inspectionType,
   propertyLabel,
   replacing = false,
+  evidence,
 }: {
   inspectionId: string;
+  /** What the inspection already holds; absent means nothing is at stake. */
+  evidence?: ImportTargetEvidence;
   /** Named in the drawer while it uploads, so a row is not just a spinner. */
   propertyLabel?: string | null;
   /** Only shapes the wording. Every type is importable; the one rule that
@@ -164,6 +173,7 @@ export function ImportReportDialog({
           </DialogDescription>
         </DialogHeader>
         <InspectionReportImport
+          evidence={evidence}
           inspectionType={inspectionType}
           onHandOff={handOff}
           resumeJobId={active.data && !active.data.committedAt ? active.data.id : null}
@@ -193,10 +203,13 @@ function isRunning(job: ImportJob | null | undefined) {
  * evidence behind a charge.
  */
 export function InspectionReportImport({
+  evidence,
   inspectionType,
   resumeJobId = null,
   onHandOff,
 }: {
+  /** What the inspection already holds, so the choice below can be concrete. */
+  evidence?: ImportTargetEvidence;
   /** Wording only. Emptiness and having a property decide importability, not
    * the type. */
   inspectionType?: string | null;
@@ -412,6 +425,7 @@ export function InspectionReportImport({
         </div>
       ) : (
         <ImportProgress
+          evidence={evidence}
           inspectionType={inspectionType}
           committing={
             // In flight in this tab, or accepted and still being written on the
@@ -441,16 +455,22 @@ function ImportProgress({
   job,
   onCommit,
   onDiscard,
+  evidence,
 }: {
   committing: boolean;
+  evidence?: ImportTargetEvidence;
   inspectionType?: string | null;
   job: ImportJob | undefined;
   onCommit: (mode: 'REPLACE' | 'ADD') => void;
   onDiscard: () => void;
 }) {
-  // Before the early returns: a hook cannot sit behind one. Defaults to the
-  // historical behaviour, so an import nobody thinks about writes as it always did.
-  const [mode, setMode] = useState<'REPLACE' | 'ADD'>('REPLACE');
+  // Before the early returns: a hook cannot sit behind one.
+  const existingAreas = evidence?.areas ?? 0;
+  const existingPhotos = evidence?.photos ?? 0;
+  // Only a question when there is something to lose. An empty inspection has
+  // nothing to replace, and asking anyway is a decision with one right answer.
+  const needsChoice = existingAreas > 0 || existingPhotos > 0;
+  const [mode, setMode] = useState<'REPLACE' | 'ADD' | null>(needsChoice ? null : 'REPLACE');
 
   if (!job)
     return (
@@ -590,56 +610,72 @@ function ImportProgress({
 
       {/*
         An agent who submits an incomplete walkthrough issues a second report
-        covering what was missed. Importing that the usual way would keep only
-        the areas it names and drop the rest, so the choice is made here, with
-        the parsed areas visible above, rather than assumed.
+        covering what was missed, and importing that the usual way keeps only
+        the areas it names and drops the rest.
+
+        There is deliberately no default once an inspection holds anything. A
+        pre-selected Replace is the destructive option chosen by not reading,
+        and it sits below a table of parsed areas somebody has just scrolled
+        past -- which is exactly how a move-out lost fifteen areas and 555
+        photographs to a report covering one garage. Both options state what
+        they will do to what is actually there, in the numbers on this
+        inspection, so neither can be picked by accident.
       */}
-      <fieldset className="space-y-2">
-        <legend className="text-sm font-medium">How should this be written?</legend>
-        <label className="flex items-start gap-2 text-sm">
-          <input
-            checked={mode === 'REPLACE'}
-            className="mt-1"
-            name="import-mode"
-            onChange={() => setMode('REPLACE')}
-            type="radio"
-            value="REPLACE"
-          />
-          <span>
-            Replace this inspection
-            <span className="text-muted-foreground block text-xs">
-              The report becomes the inspection&apos;s evidence. Areas it does not mention are
-              removed.
+      {needsChoice ? (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">How should this be written?</legend>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              checked={mode === 'REPLACE'}
+              className="mt-1"
+              name="import-mode"
+              onChange={() => setMode('REPLACE')}
+              type="radio"
+              value="REPLACE"
+            />
+            <span>
+              Replace this inspection
+              <span className="text-muted-foreground block text-xs">
+                This report becomes the inspection&apos;s evidence.{' '}
+                {existingPhotos > 0
+                  ? `The ${existingPhotos} photograph${existingPhotos === 1 ? '' : 's'} and checklist answers already here are removed, `
+                  : 'The checklist answers already here are removed, '}
+                along with any of the {existingAreas} area{existingAreas === 1 ? '' : 's'} this
+                report does not cover. Recordings are kept.
+              </span>
             </span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2 text-sm">
-          <input
-            checked={mode === 'ADD'}
-            className="mt-1"
-            name="import-mode"
-            onChange={() => setMode('ADD')}
-            type="radio"
-            value="ADD"
-          />
-          <span>
-            Add to this inspection
-            <span className="text-muted-foreground block text-xs">
-              For a follow-up report covering areas the first one missed. Areas above are written;
-              everything else already on the inspection is left alone.
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              checked={mode === 'ADD'}
+              className="mt-1"
+              name="import-mode"
+              onChange={() => setMode('ADD')}
+              type="radio"
+              value="ADD"
+            />
+            <span>
+              Add to this inspection
+              <span className="text-muted-foreground block text-xs">
+                For a follow-up report covering areas the first one missed. Only the areas above are
+                written. The {existingAreas} area{existingAreas === 1 ? '' : 's'} already here
+                {existingAreas === 1 ? ' is' : ' are'} left alone, photographs included.
+              </span>
             </span>
-          </span>
-        </label>
-      </fieldset>
+          </label>
+        </fieldset>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={committing} onClick={() => onCommit(mode)}>
+        <Button disabled={committing || mode === null} onClick={() => mode && onCommit(mode)}>
           {committing ? <Spinner /> : <FileTextIcon />}
           {committing
             ? 'Importing…'
-            : mode === 'ADD'
-              ? 'Add these areas to the inspection'
-              : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
+            : mode === null
+              ? 'Choose how to write this report'
+              : mode === 'ADD'
+                ? 'Add these areas to the inspection'
+                : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
         </Button>
         <Button disabled={committing} onClick={onDiscard} variant="outline">
           Cancel
