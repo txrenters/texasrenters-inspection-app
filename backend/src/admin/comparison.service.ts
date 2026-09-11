@@ -157,12 +157,21 @@ export class ComparisonService {
       where: { moveOutInspectionId },
       select: { id: true, status: true, version: true },
     });
-    // Never silently overwrite a human-approved comparison.
-    if (existing?.status === ComparisonStatus.APPROVED)
+    // A person may regenerate an approved comparison. The approval is theirs to
+    // supersede, and nothing is lost quietly: the rewrite below sets the record
+    // back to DRAFT and clears the reviewer, so the new draft never inherits a
+    // decision nobody made about it, and the audit row records what it replaced.
+    //
+    // The automatic trigger may not. It fires whenever a move-out becomes ready
+    // for review, and letting a background job discard a human decision is the
+    // silent overwrite this guard existed to prevent -- the reviewer would never
+    // learn their approval had gone.
+    const supersedesApproval = existing?.status === ComparisonStatus.APPROVED;
+    if (supersedesApproval && !actor)
       throw new ApplicationError(
         409,
         'COMPARISON_ALREADY_APPROVED',
-        'This comparison has been approved; reject it before regenerating.',
+        'This comparison has been approved; only a reviewer can regenerate over it.',
       );
 
     const [moveOutAreas, moveInAreas, moveOutCondition, moveInCondition, moveOutEvidence] =
@@ -245,6 +254,8 @@ export class ComparisonService {
         overallCondition,
         requiresReviewCount,
         system: !actor,
+        // What this replaced, so an approval that vanished has a trail.
+        supersededApproval: supersedesApproval,
       });
     });
 
