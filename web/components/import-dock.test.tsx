@@ -227,6 +227,55 @@ describe('announcing what happened', () => {
     const action = success.mock.calls[0][1].action as { label: string; onClick: () => void };
     expect(action.label).toBe('Open');
     action.onClick();
-    expect(push).toHaveBeenCalledWith('/inspections/inspection-1');
+    expect(push).toHaveBeenCalledWith('/inspections/inspection-1?import=job-1');
+  });
+});
+
+/**
+ * A row has to land on the decision, not near it.
+ *
+ * It used to link at the inspection and stop there, leaving the reader to find
+ * the button that opens the review. On the page they were already on, clicking
+ * navigated to the same URL and nothing visibly happened at all — which is what
+ * eleven un-imported reports looked like from the outside.
+ */
+describe('where a row takes you', () => {
+  it('links to the review, not just the inspection', () => {
+    imports = [job({ id: 'job-7', inspectionId: 'inspection-9', awaitingReview: true })];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    // The dock starts collapsed now — the button is always on screen and the
+    // rows are behind it — so it has to be opened before there are any rows to
+    // ask about. These three were written before that change.
+    fireEvent.click(screen.getByRole('button', { name: /show .*import/i }));
+    expect(screen.getByRole('link').getAttribute('href')).toBe(
+      '/inspections/inspection-9?import=job-7',
+    );
+  });
+
+  it('carries the job id, so the right report is opened', () => {
+    // Two reports can be waiting on one inspection — two of the eleven were.
+    // Linking at the inspection alone could not say which.
+    imports = [
+      job({ id: 'first', inspectionId: 'same', awaitingReview: true, address: 'A' }),
+      job({ id: 'second', inspectionId: 'same', awaitingReview: true, address: 'B' }),
+    ];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    // The dock starts collapsed now — the button is always on screen and the
+    // rows are behind it — so it has to be opened before there are any rows to
+    // ask about. These three were written before that change.
+    fireEvent.click(screen.getByRole('button', { name: /show .*import/i }));
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('/inspections/same?import=first');
+    expect(hrefs).toContain('/inspections/same?import=second');
+  });
+
+  it('does not invent a link for a job with no inspection', () => {
+    imports = [job({ inspectionId: null, awaitingReview: true })];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    // The dock starts collapsed now — the button is always on screen and the
+    // rows are behind it — so it has to be opened before there are any rows to
+    // ask about. These three were written before that change.
+    fireEvent.click(screen.getByRole('button', { name: /show .*import/i }));
+    expect(screen.getByRole('link').getAttribute('href')).toBe('#');
   });
 });

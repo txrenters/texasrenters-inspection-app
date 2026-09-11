@@ -233,8 +233,21 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
     for (const job of imports) {
       if (job.state === 'READING' || announced.current.has(job.id)) continue;
       announced.current.add(job.id);
+      /**
+       * `?import=` is this branch's whole point: the row opens the *review* for
+       * that job rather than the inspection page it happens to sit near.
+       *
+       * Kept on top of main's success/failure split rather than instead of it.
+       * The two changes answer different questions -- which page the link goes
+       * to, and whether the notice says the import worked -- and taking either
+       * side whole would silently drop the other.
+       */
       const open = job.inspectionId
-        ? { label: 'Open', onClick: () => router.push(`/inspections/${job.inspectionId}`) }
+        ? {
+            label: 'Open',
+            onClick: () =>
+              router.push(`/inspections/${job.inspectionId}?import=${job.id}`),
+          }
         : undefined;
 
       if (job.state === 'IMPORTED')
@@ -430,7 +443,11 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
                 'bg-background border-border flex items-center gap-3 rounded-lg border p-3',
                 'hover:bg-accent transition-colors',
               )}
-              href={job.inspectionId ? `/inspections/${job.inspectionId}` : '#'}
+              /* Straight to the review, not to the page that contains it.
+                 Landing on the inspection left the reader hunting for the
+                 button — and on the page they were already on, clicking did
+                 nothing visible whatsoever. */
+              href={job.inspectionId ? `/inspections/${job.inspectionId}?import=${job.id}` : '#'}
               key={job.id}
             >
               {job.awaitingReview ? (
