@@ -174,6 +174,33 @@ const environmentSchema = z
     JOBBER_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
     JOBBER_MAX_RETRIES: z.coerce.number().int().min(1).max(8).default(4),
     JOBBER_SYNC_ENABLED: z.enum(['true', 'false']).default('false'),
+    /** Quarterly benefit-package planning. Fail closed: a planner that ran by
+     * default would book a quarter of work in any deployment that merely
+     * happens to have the code. */
+    TBP_PLANNING_ENABLED: z.enum(['true', 'false']).default('false'),
+    TBP_PLANNING_ORGANIZATION_ID: z.string().uuid().optional(),
+    /** Daily by default, because cron cannot express "fourteen days before the
+     * first of January, April, July and October" -- the lead time moves the
+     * date across two different months. The job asks whether today falls in a
+     * planning window and does nothing on the days it does not. */
+    TBP_PLAN_CRON: z.string().optional(),
+    TBP_PLANNING_LEAD_DAYS: z.coerce.number().int().min(1).max(90).default(14),
+    /** Comma-separated YYYY-MM-DD days the office is closed. Configuration
+     * rather than a derived calendar: a hardcoded list of US federal holidays
+     * would be wrong for the days this office actually closes and right for
+     * days it does not. */
+    TBP_PLANNING_HOLIDAYS: z.string().optional(),
+
+    /** Read directly by `OsrmClient`, and previously absent from this schema
+     * entirely -- so a typo in it produced no error anywhere, just routing that
+     * silently reported every stop unordered. */
+    OSRM_URL: z.string().url().optional(),
+    /** Google Routes, used only for the quarterly forecast -- OSRM stays the
+     * default for ordering a day, where free-flow and traffic-aware give the
+     * same answer. SERVER-SIDE ONLY: this is not the browser key, it carries no
+     * referrer restriction, and anything holding it can spend money. It must
+     * never gain a NEXT_PUBLIC_ or EXPO_PUBLIC_ prefix. */
+    GOOGLE_ROUTES_API_KEY: z.string().optional(),
     JOBBER_LOCAL_ORGANIZATION_ID: z.string().uuid().optional(),
     JOBBER_INCREMENTAL_SYNC_CRON: z.string().optional(),
     JOBBER_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().max(365).default(7),
@@ -255,6 +282,15 @@ const environmentSchema = z
         message:
           'Jobber sync requires JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET, and JOBBER_OAUTH_REDIRECT_URI.',
         path: ['JOBBER_SYNC_ENABLED'],
+      });
+    // Same reasoning as the Jobber block above: a deployment with planning
+    // switched on and no organization to plan for should fail at boot, not at
+    // 4am on the day a quarter needed booking.
+    if (config.TBP_PLANNING_ENABLED === 'true' && !config.TBP_PLANNING_ORGANIZATION_ID)
+      context.addIssue({
+        code: 'custom',
+        message: 'Quarterly planning requires TBP_PLANNING_ORGANIZATION_ID.',
+        path: ['TBP_PLANNING_ENABLED'],
       });
     if (
       config.JOBBER_TOKEN_ENCRYPTION_KEY &&

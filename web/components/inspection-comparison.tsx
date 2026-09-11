@@ -1,11 +1,17 @@
 'use client';
 
 import type { AdminAreaComparison, ComparisonClassification } from '@texasrenters/shared';
+import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 
 import { PageSkeleton } from '@/components/states';
 import { ErrorState } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
+import {
+  CLASSIFICATIONS,
+  CLASSIFICATION_VARIANT,
+  classLabel,
+} from '@/lib/comparison-classification';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -32,40 +38,6 @@ import { usePermissions } from '@/lib/auth';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAdminMutations, useInspectionComparison } from '@/lib/queries';
 
-const CLASSIFICATIONS: ReadonlyArray<{ value: ComparisonClassification; label: string }> = [
-  { value: 'UNCHANGED', label: 'Unchanged' },
-  { value: 'IMPROVED', label: 'Improved' },
-  { value: 'NEW_DAMAGE', label: 'New damage' },
-  { value: 'WORSENED', label: 'Worsened' },
-  { value: 'RESOLVED', label: 'Resolved' },
-  { value: 'MISSING_BASELINE', label: 'Missing baseline' },
-  { value: 'MISSING_MOVE_OUT_EVIDENCE', label: 'Missing move-out evidence' },
-  { value: 'NOT_COMPARABLE', label: 'Not comparable' },
-  { value: 'REQUIRES_REVIEW', label: 'Requires review' },
-];
-
-function classLabel(value: string) {
-  return CLASSIFICATIONS.find((option) => option.value === value)?.label ?? humanize(value);
-}
-
-/**
- * What each classification means for the tenancy, expressed as a tone.
- *
- * The old app carried nine `.comparison-chip--*` CSS rules for this. Grouping
- * them by consequence is the point: "new damage" and "worsened" are the two that
- * cost someone money, and they should not look like "improved".
- */
-const CLASSIFICATION_VARIANT: Record<string, 'success' | 'destructive' | 'warning' | 'secondary'> = {
-  UNCHANGED: 'secondary',
-  IMPROVED: 'success',
-  RESOLVED: 'success',
-  NEW_DAMAGE: 'destructive',
-  WORSENED: 'destructive',
-  MISSING_BASELINE: 'warning',
-  MISSING_MOVE_OUT_EVIDENCE: 'warning',
-  NOT_COMPARABLE: 'secondary',
-  REQUIRES_REVIEW: 'warning',
-};
 
 /**
  * Move-in vs move-out comparison (spec §12). The draft is machine-generated; a
@@ -242,6 +214,12 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   {mutations.generateComparison.isPending ? 'Regenerating…' : 'Regenerate'}
                 </Button>
               ) : null}
+              {/* The same verdicts as a document: both inspections side by side. */}
+              <Button asChild type="button" variant="outline">
+                <Link href={`/inspections/${inspectionId}/comparison-report`}>
+                  Comparison report
+                </Link>
+              </Button>
             </div>
 
             {mutations.reviewComparison.error ? (

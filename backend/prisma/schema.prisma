@@ -370,6 +370,10 @@ model Organization {
   technicianSkills                TechnicianSkill[]
   technicianSkillGrants           TechnicianSkillGrant[]
   inspectionTypeSkillRequirements InspectionTypeSkillRequirement[]
+  tbpQuarterPlans                 TbpQuarterPlan[]
+  tbpQuarterPlanStops             TbpQuarterPlanStop[]
+  tbpQuarterPlanDays              TbpQuarterPlanDay[]
+  technicianPlanningProfiles      TechnicianPlanningProfile[]
 }
 
 /// Fully admin-defined RBAC role. Not seeded — an organization composes any
@@ -478,6 +482,10 @@ model UserProfile {
   skillGrants          TechnicianSkillGrant[]   @relation("TechnicianSkillHolder")
   skillGrantsIssued    TechnicianSkillGrant[]   @relation("TechnicianSkillGrantedBy")
   skillGrantsRevoked   TechnicianSkillGrant[]   @relation("TechnicianSkillRevokedBy")
+  tbpPlansPublished    TbpQuarterPlan[]         @relation("TbpPlanPublishedBy")
+  tbpPlanStops         TbpQuarterPlanStop[]     @relation("TbpStopTechnician")
+  tbpPlanDays          TbpQuarterPlanDay[]      @relation("TbpPlanDayTechnician")
+  planningProfile      TechnicianPlanningProfile? @relation("TechnicianPlanningProfile")
 }
 
 /// Sign-in credentials, replacing Supabase's `auth.users`.
@@ -1238,6 +1246,7 @@ model Inspection {
   @@index([parentInspectionId])
   @@index([organizationId, propertywareBuildingId, propertywareUnitId, propertywareLeaseId, inspectionType, scheduledAt])
   jobberOutboundTasks        JobberOutboundTask[]
+  tbpPlanStop                TbpQuarterPlanStop?     @relation("TbpStopInspection")
 }
 
 model PropertywarePortfolio {
@@ -1307,6 +1316,7 @@ model PropertywarePortfolioOwner {
 }
 
 model PropertywareBuilding {
+  tbpPlanStops TbpQuarterPlanStop[]
   id                  String                 @id @default(uuid()) @db.Uuid
   organizationId      String                 @db.Uuid
   externalId          String
@@ -1377,6 +1387,7 @@ model PropertywareBuilding {
 }
 
 model PropertywareUnit {
+  tbpPlanStops TbpQuarterPlanStop[]
   id                  String                @id @default(uuid()) @db.Uuid
   organizationId      String                @db.Uuid
   externalId          String
@@ -1425,6 +1436,7 @@ model PropertywareUnit {
 }
 
 model PropertywareLease {
+  tbpPlanStops TbpQuarterPlanStop[]
   id                   String                @id @default(uuid()) @db.Uuid
   organizationId       String                @db.Uuid
   externalId           String
@@ -2448,6 +2460,12 @@ model JobberVisitImport {
 /// one is foreseeable and a boolean column would have to be migrated away.
 enum JobberOutboundKind {
   VISIT_COMPLETED
+  /// Book a benefit-package visit in Jobber for a published quarter plan.
+  ///
+  /// The only kind that has no `jobberVisitId` when it is enqueued -- it is
+  /// creating the visit, so the id comes back from Jobber and is written on
+  /// success. That is why the column below is nullable.
+  TBP_VISIT_CREATE
 }
 
 enum JobberOutboundStatus {
@@ -2472,7 +2490,11 @@ model JobberOutboundTask {
   id             String               @id @default(uuid()) @db.Uuid
   organizationId String               @db.Uuid
   inspectionId   String               @db.Uuid
-  jobberVisitId  String
+  /// Null only for TBP_VISIT_CREATE before it has been sent: that task is
+  /// creating the visit, so Jobber supplies the id and this is written back
+  /// on success. Identity is (organization, inspection, kind), so nothing
+  /// depends on this being populated.
+  jobberVisitId  String?
   jobberJobId    String?
   kind           JobberOutboundKind
   status         JobberOutboundStatus @default(PENDING)
@@ -2597,6 +2619,7 @@ enum ClientErrorSource {
 /// with the same normalizer the Jobber integration uses, so a tenancy and a
 /// visit resolve to the same building or to neither.
 model PropertywareTenant {
+  tbpPlanStops TbpQuarterPlanStop[]
   id             String @id @default(uuid()) @db.Uuid
   organizationId String @db.Uuid
 
@@ -2758,4 +2781,304 @@ model InspectionTypeSkillRequirement {
 
   @@unique([organizationId, inspectionType, skillId])
   @@index([organizationId, inspectionType])
+}
+
+/// Where a quarter's plan is in its life.
+///
+/// `PUBLISHING` is also the lock. There is no general job lock in this system
+/// -- `PropertywareSyncLock` is bound to the Propertyware store -- so publish
+/// claims a plan with a conditional update from DRAFT and asserts it changed
+/// exactly one row. A second publisher finds nothing to claim.
+enum TbpPlanStatus {
+  DRAFT
+  PUBLISHING
+  PUBLISHED
+  PUBLISH_FAILED
+  CANCELLED
+}
+
+enum TbpStopStatus {
+  PLANNED
+  /// Something is wrong that a person has to fix -- most often an unresolvable
+  /// unit. The stop stays in the plan and publish refuses while any remain,
+  /// because a tenancy dropped quietly is one nobody inspects for a year.
+  BLOCKED
+  /// A coordinator decided this tenancy is not in this quarter, with a reason.
+  EXCLUDED
+  PUBLISHED
+  FAILED
+}
+
+/// Where a stop's position in the queue came from.
+enum TbpOrderSource {
+  PRIOR_QUARTER
+  /// Carried from further back, because last quarter's stop never happened.
+  /// The tenancy keeps its place rather than being punished for a data problem.
+  CARRIED_SKIP
+  NEW_ENROLLMENT
+}
+
+/// Which rung of the ladder found the unit, or that none did.
+///
+/// Recorded rather than inferred: `SOLE_UNIT` and `LEASE_MATCH` are the same
+/// answer arrived at with very different confidence, and when a technician is
+/// sent to the wrong door that difference is the first thing worth knowing.
+enum TbpUnitResolution {
+  NO_UNITS
+  LEASE_MATCH
+  SOLE_UNIT
+  PRIOR_INSPECTION
+  MANUAL
+  UNRESOLVED
+}
+
+/// One quarter's worth of benefit-package inspections, before they are real.
+///
+/// A draft cannot be several hundred `Inspection` rows. `InspectionStatus` has
+/// no draft state, `SCHEDULED` means "booked" to the technician's handset, and
+/// `Inspection_scheduled_booking_key` -- the partial unique index in migration
+/// 202608310006 -- rejects two SCHEDULED rows for the same unit on the same
+/// day, which every re-solve that moves a stop would hit.
+model TbpQuarterPlan {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  quarterYear    Int
+  /// 1-4.
+  quarterNumber  Int
+  quarterStartsOn DateTime     @db.Date
+  status         TbpPlanStatus @default(DRAFT)
+
+  /// A fresh uuid each time the cron regenerates, stamped on the stops it
+  /// touched. Without it a regeneration that half-failed is indistinguishable
+  /// from one that decided those stops were already right.
+  generationRunId String
+  /// The k-means++ seed. Stored because "deterministic" is otherwise a claim
+  /// nobody can check: same inputs and same seed must give the same plan.
+  randomSeed      Int
+  /// Which version of the planner produced this. A plan explained by a
+  /// different algorithm than the one that built it is worse than unexplained.
+  plannerVersion  Int           @default(1)
+
+  generatedAt DateTime @default(now())
+
+  stopCount      Int @default(0)
+  blockedCount   Int @default(0)
+  publishedCount Int @default(0)
+  /// Tenancies whose enrolment Propertyware records as `Not Verified`. They get
+  /// no stop, but they are counted here rather than vanishing -- "nobody has
+  /// checked" is a different fact from "not enrolled".
+  unverifiedEnrollmentCount Int @default(0)
+
+  publishStartedAt DateTime?
+  publishedAt      DateTime?
+  publishedById    String?   @db.Uuid
+  lastError        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  publishedBy  UserProfile?         @relation("TbpPlanPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+  stops        TbpQuarterPlanStop[]
+  days         TbpQuarterPlanDay[]
+
+  @@unique([organizationId, quarterYear, quarterNumber])
+  @@index([organizationId, status])
+}
+
+/// One tenancy's place in one quarter.
+model TbpQuarterPlanStop {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  planId         String @db.Uuid
+
+  propertywareTenantId String @db.Uuid
+  /// The tenancy's own hash key, frozen at generation.
+  ///
+  /// `PropertywareTenant` rows are deactivated and recreated by the nightly
+  /// report sync, so the uuid above can go away underneath a published plan.
+  /// This survives it, and it is what the next quarter's rotation matches on.
+  tenantExternalId     String
+
+  /// Position in the queue, 1..N and contiguous.
+  ///
+  /// Deliberately NOT uniquely indexed. Postgres checks a non-deferrable unique
+  /// per row, so reordering two stops in one statement -- which is what a drag
+  /// in the console is -- would fail on the swap. Contiguity is asserted in
+  /// application code at publish instead.
+  sequence         Int
+  previousSequence Int?
+  orderSource      TbpOrderSource
+  zone             String?
+
+  propertywareBuildingId String?           @db.Uuid
+  propertywareUnitId     String?           @db.Uuid
+  propertywareLeaseId    String?           @db.Uuid
+  unitResolution         TbpUnitResolution @default(UNRESOLVED)
+
+  scheduledOn          DateTime? @db.Date
+  assignedTechnicianId String?   @db.Uuid
+  driveSecondsForecast Int?
+  /// 1-based position within that technician’s day, from the sequencing pass.
+  /// Null until the plan has been routed.
+  positionInDay        Int?
+
+  status         TbpStopStatus @default(PLANNED)
+  /// Why a person has to look at this one: UNIT_REQUIRED, NO_BUILDING,
+  /// NO_JOBBER_LINK, NO_APPROVED_AREAS, DUPLICATE_INSPECTION, NO_COORDINATES,
+  /// JOBBER_SCOPE_MISSING. Free text rather than an enum because most of these
+  /// are `ApplicationError.code` values copied straight from
+  /// `resolveInspectionPlan`, and re-declaring that list here would let the two
+  /// drift with nothing to notice.
+  blockedCode    String?
+  blockedMessage String?
+
+  /// Set when the stop is published.
+  ///
+  /// Unique, so a retried publish can never mint a second inspection for the
+  /// same stop. Nulls do not collide in Postgres, so every unpublished stop in
+  /// every quarter coexists happily -- which is what lets publish resume by
+  /// selecting `inspectionId IS NULL`.
+  inspectionId String? @unique @db.Uuid
+  jobberVisitId String?
+  jobberJobId   String?
+
+  /// Frozen at generation so the console shows, and Jobber receives, exactly
+  /// what was reviewed -- not whatever the tenant report says on publish day.
+  hvacFilterSizes String[] @default([])
+  visitTitle      String?
+  visitDetails    String?
+
+  /// A coordinator touched this field, so regeneration must leave it alone.
+  /// Without these the fortnightly cron would quietly undo every manual fix.
+  sequenceOverriddenAt   DateTime?
+  scheduleOverriddenAt   DateTime?
+  technicianOverriddenAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                 TbpQuarterPlan        @relation(fields: [planId], references: [id], onDelete: Cascade)
+  tenant               PropertywareTenant    @relation(fields: [propertywareTenantId], references: [id], onDelete: Cascade)
+  propertywareBuilding PropertywareBuilding? @relation(fields: [propertywareBuildingId], references: [id], onDelete: SetNull)
+  propertywareUnit     PropertywareUnit?     @relation(fields: [propertywareUnitId], references: [id], onDelete: SetNull)
+  propertywareLease    PropertywareLease?    @relation(fields: [propertywareLeaseId], references: [id], onDelete: SetNull)
+  assignedTechnician   UserProfile?          @relation("TbpStopTechnician", fields: [assignedTechnicianId], references: [id], onDelete: SetNull)
+  /// SetNull, not Cascade: `inspections:delete` hard-deletes an inspection, and
+  /// that must not also erase the record that this quarter planned it.
+  inspection           Inspection?           @relation("TbpStopInspection", fields: [inspectionId], references: [id], onDelete: SetNull)
+
+  /// One stop per tenancy per plan. This is what makes a regeneration a diff
+  /// rather than a second copy of the quarter.
+  @@unique([planId, propertywareTenantId])
+  @@index([planId, sequence])
+  @@index([planId, status])
+  @@index([organizationId, scheduledOn, assignedTechnicianId])
+}
+
+/// Where a technician's planned day is measured from.
+enum PlanOriginKind {
+  /// A home or depot somebody confirmed.
+  HOME
+  /// Inferred from where their handset usually starts the day. Shown to a
+  /// coordinator as a suggestion, never silently trusted.
+  INFERRED
+  /// No origin at all, so the day is measured from the middle of its own stops.
+  /// Honest, and useless for "when will they arrive at the first one".
+  CLUSTER_CENTROID
+}
+
+/// Where a forecast's numbers came from.
+///
+/// Stored per day rather than assumed, because the three are not comparable and
+/// a report that mixed them without saying so would be worse than one with
+/// gaps. Free-flow is optimistic in traffic in a way that is structurally
+/// biased; straight-line is not a drive time at all.
+enum DriveTimeSource {
+  GOOGLE_TRAFFIC_AWARE
+  OSRM_FREE_FLOW
+  HAVERSINE
+}
+
+/// What scheduling needs to know about a technician that the account does not
+/// already say.
+///
+/// Separate from `UserProfile` because it is planning policy rather than
+/// identity: a coordinator sets it, it changes without the person changing, and
+/// a technician with no row here is still a perfectly valid technician -- they
+/// simply take the defaults.
+model TechnicianPlanningProfile {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  technicianId   String @unique @db.Uuid
+
+  /// Where their day starts. Null means it is unknown, which the planner
+  /// reports rather than guessing around.
+  homeLatitude  Decimal? @db.Decimal(9, 6)
+  homeLongitude Decimal? @db.Decimal(9, 6)
+  /// The address these coordinates were derived from, so a move is detectable.
+  /// Mirrors `PropertywareBuilding.geocodedFor`, and for the same reason: a
+  /// stale coordinate is invisible without the address it came from.
+  homeGeocodedFor String?
+  homeOriginKind  PlanOriginKind @default(HOME)
+
+  /// How many benefit-package stops this person takes in a day.
+  ///
+  /// Ten, not the seven that would keep every day inside `MAX_EXACT_STOPS`
+  /// where `shortestRouteOrder` solves exactly. The office's own calendar runs
+  /// five to twelve, and booking a day they would never book is a worse error
+  /// than ordering ten stops heuristically.
+  dailyStopCap Int @default(10)
+
+  /// Off means "do not plan work for this person" -- long leave, a supervisor
+  /// who only covers, somebody mid-onboarding. Distinct from deactivating the
+  /// account, which would also take away their handset.
+  isPlannable Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("TechnicianPlanningProfile", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, isPlannable])
+}
+
+/// One technician's day in a published plan, and what it was forecast to cost.
+///
+/// Frozen at publish and never recomputed. A forecast you can recompute is not
+/// a forecast -- comparing it against what happened would only ever compare
+/// today's traffic model with itself.
+model TbpQuarterPlanDay {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  planId         String @db.Uuid
+  technicianId   String @db.Uuid
+  date           DateTime @db.Date
+
+  stopCount            Int
+  totalDriveSeconds    Int?
+  totalDriveMeters     Int?
+
+  originLatitude  Decimal?       @db.Decimal(9, 6)
+  originLongitude Decimal?       @db.Decimal(9, 6)
+  originKind      PlanOriginKind @default(CLUSTER_CENTROID)
+
+  /// Null when no routing was available at all, which is a different fact from
+  /// a drive of zero seconds and must stay distinguishable from it.
+  durationSource DriveTimeSource?
+  /// The clock time the traffic model was asked about. A Tuesday morning and a
+  /// Friday evening are different roads, and a forecast that does not record
+  /// which it assumed cannot be argued with later.
+  departureAssumedAt DateTime?
+
+  computedAt DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         TbpQuarterPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  technician   UserProfile    @relation("TbpPlanDayTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, technicianId, date])
+  @@index([organizationId, date])
 }
