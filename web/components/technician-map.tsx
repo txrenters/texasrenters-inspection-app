@@ -22,6 +22,7 @@ import { pointsToFit } from '@/components/map-bounds';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
 import { clusterByGrid, zoomToIsolate } from '@/components/map-clusters';
 import { formatRelative } from '@/lib/format';
+import { MapSettings, useMapPreferences } from '@/components/map-settings';
 
 /**
  * Where every technician was when their handset last reported, over the
@@ -62,25 +63,6 @@ const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
  * under Map Management.
  */
 const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
-
-/**
- * Satellite imagery with the roads and labels drawn over it.
- *
- * The office reads this map to recognise a property, not to navigate to it —
- * a roof, a driveway and a pool say "that one" faster than a street name does.
- * Hybrid keeps the labels, so it does not lose the thing a plain satellite view
- * gives up.
- *
- * Available on a vector map, unlike `terrain`, which is raster-only and would
- * have cost the `AdvancedMarker` pins and the dark styling together. The
- * imagery ignores `colorScheme` — it is photography — but the controls and any
- * roadmap the reader switches to still follow the console's theme.
- *
- * `mapTypeControl` is left on for this — the only Google control that is —
- * because imagery is a preference, and a reader who wants plain roads should
- * not need a deploy to get them.
- */
-const DEFAULT_MAP_TYPE = 'hybrid';
 
 /** Past this, a position is history rather than an answer to "where are they". */
 const STALE_AFTER_MS = 30 * 60_000;
@@ -857,6 +839,16 @@ export function TechnicianMap({
   const { resolvedTheme } = useTheme();
   const colorScheme = resolvedTheme === 'dark' ? ColorScheme.DARK : ColorScheme.LIGHT;
 
+  /**
+   * Imagery and tilt, chosen by the reader and remembered per browser.
+   *
+   * Google's own `mapTypeControl` was briefly used and does most of this, but
+   * it forgets the choice between visits and has no notion of tilt — so "3D"
+   * was unreachable through it. Ours is off to the left, clear of Google's own
+   * controls in the other three corners.
+   */
+  const [mapPreferences, setMapPreferences] = useMapPreferences();
+
   // Fit to everything, technicians and properties alike, rather than centring
   // on a fixed point: this office works one metropolitan area today, but a
   // hard-coded centre is the kind of thing that silently stops making sense
@@ -908,8 +900,9 @@ export function TechnicianMap({
     );
 
   return (
-    <APIProvider apiKey={API_KEY}>
-      <MapOrReason>
+    <div className="relative h-full w-full">
+      <APIProvider apiKey={API_KEY}>
+        <MapOrReason>
         <GoogleMap
           className="h-full w-full rounded-lg"
           colorScheme={colorScheme}
@@ -918,13 +911,19 @@ export function TechnicianMap({
           disableDefaultUI={false}
           gestureHandling="greedy"
           mapId={MAP_ID}
-          mapTypeControl
-          mapTypeId={DEFAULT_MAP_TYPE}
+          // Ours instead, which remembers the choice and can also tilt.
+          mapTypeControl={false}
+          mapTypeId={mapPreferences.mapType}
           // One world. Google repeats the map horizontally when zoomed out, so
           // without this a technician can appear in two places at once and the
           // properties are drawn three times over.
           restriction={{ latLngBounds: WORLD_BOUNDS, strictBounds: false }}
           streetViewControl={false}
+          /* 45° is what Google's own 3D control gives, and the only angle the
+             vector basemap has buildings modelled for. Raster imagery ignores
+             it rather than refusing, so the setting is harmless where it does
+             nothing. */
+          tilt={mapPreferences.tilted ? 45 : 0}
         >
           <FitToData
             fitKey={fitKey}
@@ -988,7 +987,13 @@ export function TechnicianMap({
             );
           })}
         </GoogleMap>
-      </MapOrReason>
-    </APIProvider>
+        </MapOrReason>
+      </APIProvider>
+      {/* Outside `APIProvider` on purpose: the settings still open, and still
+          remember, when Google will not load at all. */}
+      <div className="absolute top-3 left-3 z-10">
+        <MapSettings onChange={setMapPreferences} preferences={mapPreferences} />
+      </div>
+    </div>
   );
 }
