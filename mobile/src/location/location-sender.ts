@@ -1,3 +1,5 @@
+import { normaliseMotion } from '@texasrenters/shared';
+
 import { requestJson } from '../repositories/api/repositories';
 import { deferFixes, fixesToSend, unsendableFixes } from './location-queue';
 import { readLocationQueue, removeLocationFixes, writeLocationQueue } from './location-storage';
@@ -26,13 +28,26 @@ export async function drainLocationQueue(): Promise<{ sent: number; remaining: n
     await requestJson('/api/v1/technician/locations', {
       method: 'POST',
       body: JSON.stringify({
-        fixes: batch.map(({ latitude, longitude, recordedAt, accuracyMeters, batteryPercent }) => ({
-          latitude,
-          longitude,
-          recordedAt,
-          ...(accuracyMeters === null || accuracyMeters === undefined ? {} : { accuracyMeters }),
-          ...(batteryPercent === null || batteryPercent === undefined ? {} : { batteryPercent }),
-        })),
+        fixes: batch.map((fix) => {
+          // Omitted rather than sent as null: the DTO marks them `@IsOptional`,
+          // and a queue written by an older build has neither key at all.
+          const motion = normaliseMotion(fix);
+          return {
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            recordedAt: fix.recordedAt,
+            ...(fix.accuracyMeters === null || fix.accuracyMeters === undefined
+              ? {}
+              : { accuracyMeters: fix.accuracyMeters }),
+            ...(fix.batteryPercent === null || fix.batteryPercent === undefined
+              ? {}
+              : { batteryPercent: fix.batteryPercent }),
+            ...(motion.headingDegrees === null ? {} : { headingDegrees: motion.headingDegrees }),
+            ...(motion.speedMetersPerSecond === null
+              ? {}
+              : { speedMetersPerSecond: motion.speedMetersPerSecond }),
+          };
+        }),
       }),
     });
     await removeLocationFixes(batch.map((fix) => fix.id));

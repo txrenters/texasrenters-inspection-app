@@ -2137,6 +2137,25 @@ model TechnicianLocationPing {
   /// more when you can see the battery was nearly flat when it did.
   batteryPercent Int?
 
+  /// Course over ground, degrees clockwise from true north.
+  ///
+  /// The direction of travel, not the direction the handset is pointed: a
+  /// phone face-up on a passenger seat still reports the car's course. Null
+  /// whenever the device had no answer, which is most of the time a technician
+  /// is standing in a house -- the platforms signal that with `-1`, and
+  /// `normaliseMotion` turns it into null before it reaches here, because a
+  /// stored -1 would draw an arrow on somebody who is not moving.
+  headingDegrees Int?
+
+  /// Ground speed in metres per second.
+  ///
+  /// `Float`, not the `Decimal` the coordinates use. A Decimal serialises to a
+  /// *string* through JSON and has to be converted at every edge; a coordinate
+  /// earns that because six decimal places of latitude is a real place, while
+  /// a speed is a sensor reading good to about one significant figure. Making
+  /// it a double removes a third opportunity to forget `.toNumber()`.
+  speedMetersPerSecond Float?
+
   /// When the handset took the fix, which is not when the API heard about it.
   /// The same split `InspectionMedia.recordedAt` exists for: a point captured
   /// in a basement arrives whenever signal returns, sometimes hours later, and

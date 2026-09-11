@@ -381,6 +381,19 @@ export class TechnicianLocationFixDto {
   @IsISO8601() recordedAt!: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100000) accuracyMeters?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) batteryPercent?: number;
+  /**
+   * Course over ground, 0-360 clockwise from true north.
+   *
+   * 360 is accepted as well as 0 because devices report both for north, and
+   * refusing one of them would drop the heading on a fix that is otherwise
+   * perfectly good.
+   */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(360) headingDegrees?: number;
+  /**
+   * Ground speed in metres per second. Not an integer: walking pace is under
+   * 1.5 m/s, and rounding it would quantise the whole useful range to nothing.
+   */
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(1000) speedMetersPerSecond?: number;
 }
 
 /**
