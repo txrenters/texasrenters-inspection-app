@@ -141,7 +141,13 @@ function database(seed: { areas?: AreaRow[] } = {}) {
         Promise.resolve(
           rows.areas
             .filter((row) => row.propertyId === where.propertyId && row.archivedAt === null)
-            .map((row) => ({ id: row.id, name: row.name })),
+            // `aliases` travels with every room, as Prisma's select returns
+            // it: the importer consults the names a person merged away before
+            // it decides this is a room the property has never heard of.
+            // `aliases` travels with every room, as Prisma's select returns it.
+            // Empty here: these cases are about attaching rooms, and the names a
+            // person merged away are covered next door.
+            .map((row) => ({ id: row.id, name: row.name, aliases: [] as Array<{ alias: string }> })),
         ),
       ),
       create: jest.fn(({ data }: { data: { propertyId: string; name: string } }) => {

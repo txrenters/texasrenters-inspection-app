@@ -1257,11 +1257,35 @@ export class InspectionImportService {
   /**
    * The property's area of this name, created if the property does not have it.
    *
-   * Matched on a normalised name rather than exactly, because the report writes
-   * "BEDROOM 1" where the console holds "Bedroom 1". Anything it does not
-   * recognise is added rather than dropped: the report is evidence that the
-   * room was walked, and an inspection missing a room it covered would read as
-   * incomplete work.
+   * Three steps, narrowest first, because each one after the first is a weaker
+   * claim and the cost of being wrong is the same either way: a report's
+   * photographs written onto a room it did not describe.
+   *
+   * 1. The normalised name. The report writes "BEDROOM 1" where the console
+   *    holds "Bedroom 1".
+   * 2. An **approved alias**. Merging two rooms in the console records the name
+   *    that was merged away as an alias of the survivor, and the comparison
+   *    matcher already honours those. Until now the importer ignored them, so a
+   *    merge held for exactly as long as it took to import the next report,
+   *    which then created the variant room all over again. Consulting them here
+   *    is what makes a person's decision stick.
+   * 3. **The same name written differently**, when exactly one room matches:
+   *    word order, punctuation, numbering and filler words like "area" and
+   *    "room". "Living Room" reaches "Living Area"; "Bedroom Closet" does not
+   *    reach "Bedroom 2".
+   *
+   * Step 3 refuses to choose when more than one room fits. A report saying
+   * "Dining Area" against a property holding "Dining 1" and "Dining 2" is not a
+   * naming variant -- it is one room where the property knows two, and nothing
+   * in either name says which. Picking the closer-looking one would write that
+   * report's evidence into a room nobody chose, permanently and silently, which
+   * is the failure the comparison's own area matching was just corrected for.
+   * Such a report adds its room, and a person merges it once; step 2 then makes
+   * that answer permanent.
+   *
+   * Anything unrecognised is added rather than dropped: the report is evidence
+   * that the room was walked, and an inspection missing a room it covered would
+   * read as incomplete work.
    */
   private async resolveArea(
     tx: Prisma.TransactionClient,
@@ -1271,10 +1295,36 @@ export class InspectionImportService {
   ) {
     const areas = await tx.propertyArea.findMany({
       where: { propertyId, archivedAt: null },
-      select: { id: true, name: true },
+      select: { id: true, name: true, aliases: { select: { alias: true } } },
     });
-    const match = areas.find((area) => normalise(area.name) === normalise(name));
+    const wanted = normalise(name);
+
+    const match = areas.find((area) => normalise(area.name) === wanted);
     if (match) return match;
+
+    const aliased = areas.find((area) =>
+      area.aliases.some((entry) => normalise(entry.alias) === wanted),
+    );
+    if (aliased) return aliased;
+
+    const near = areas.filter((area) => namesAreOneRoomWrittenDifferently(area.name, name));
+    // Exactly one, or none. See above: a tie is not a near miss, it is a
+    // different question that a person has to answer.
+    if (near.length === 1) {
+      const area = near[0];
+      // Written down so the next import matches at step 2 rather than repeating
+      // this inference, and so the join is visible to whoever reviews the room
+      // later rather than living only in this function.
+      const existing = await tx.propertyAreaAlias.findFirst({
+        where: { propertyAreaId: area.id, alias: name },
+        select: { id: true },
+      });
+      if (!existing)
+        await tx.propertyAreaAlias.create({
+          data: { propertyAreaId: area.id, alias: name, createdById },
+        });
+      return area;
+    }
 
     const classification = classifyAreaByName(name);
     const order = areas.length + 1;
@@ -1399,6 +1449,49 @@ function importNote(report: ImportedReport, fingerprint: string) {
     `Source fingerprint: ${fingerprint.slice(0, 16)}.`,
   ];
   return parts.filter((part): part is string => part !== null).join(' ');
+}
+
+/**
+ * Words that carry no room identity of their own.
+ *
+ * The office writes "Dining 1", "Dining Area" and "Dining" for the same table,
+ * and "Living Room" where a later report says "Living Area". Dropping these,
+ * and bare numerals, is what makes those one name.
+ *
+ * Deliberately tiny. Every word added here is a word two different rooms are
+ * allowed to disagree about, and the cost of adding the wrong one is a report's
+ * photographs written into a room it never described.
+ */
+const ROOM_FILLER_WORDS = new Set(['area', 'areas', 'room', 'rooms']);
+
+/**
+ * Whether two room names are the same name written differently.
+ *
+ * Equality after dropping bare numerals and filler words -- **not** containment.
+ * Containment reads well ("Garage" is surely "Garage/Carport") and is wrong in
+ * the cases that matter: once the numeral goes, "Bedroom 2" reduces to
+ * "bedroom", which is contained in "Bedroom Closet", and a closet would inherit
+ * a bedroom's evidence. A rule that cannot tell a synonym from a sub-space must
+ * not be trusted to try.
+ *
+ * So this catches word order, punctuation, numbering and filler -- "Living
+ * Room" and "Living Area", "Master Bedroom" and "Bedroom Master" -- and nothing
+ * cleverer. A genuinely different wording, like "Garage" against
+ * "Garage/Carport", is merged once by a person and matched by alias thereafter.
+ */
+function namesAreOneRoomWrittenDifferently(left: string, right: string) {
+  const identity = (value: string) =>
+    new Set(
+      normalise(value)
+        .split(' ')
+        .filter((word) => word && !/^\d+$/.test(word) && !ROOM_FILLER_WORDS.has(word)),
+    );
+  const a = identity(left);
+  const b = identity(right);
+  // An empty identity means the name was nothing but filler and numbers; it
+  // identifies no room and must not match another one that reduced the same way.
+  if (!a.size || a.size !== b.size) return false;
+  return [...a].every((word) => b.has(word));
 }
 
 const normalise = (value: string) =>
