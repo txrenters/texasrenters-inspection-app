@@ -435,6 +435,10 @@ export class ComparisonService {
   private async loadAreas(inspectionId: string): Promise<AreaRow[]> {
     const areas = await this.prisma.inspectionArea.findMany({
       where: { inspectionId },
+      // Ordered, because the matcher walks this list and the weak fallback used
+      // to take whichever row the database happened to return first -- so the
+      // same two inspections could pair differently from one run to the next.
+      orderBy: { propertyArea: { inspectionOrder: 'asc' } },
       select: {
         propertyAreaId: true,
         propertyArea: {
@@ -622,13 +626,29 @@ export class ComparisonService {
     const nameHit = candidates.find((mi) => normalizeName(mi.name) === moNorm);
     if (nameHit)
       return { area: nameHit, method: ComparisonMatchMethod.NORMALIZED_NAME, confidence: 0.8 };
-    // 4. Same category + floor (weak — flagged for review).
+    /*
+     * 4. Same category and floor -- but only when there is exactly one.
+     *
+     * This used to take the first candidate that matched, which on a house with
+     * four bedrooms meant the move-out Kitchen could pair with a move-in
+     * Bedroom: both are INDOOR_ROOM on floor 1, and the list was unordered. The
+     * badge honestly read 50%, but the report then showed that other room's
+     * photographs under the Kitchen, and nothing on the page said so. On a
+     * document used to justify a charge that is worse than admitting no match.
+     *
+     * One candidate is an inference. Several is a guess, and a guess here is
+     * indistinguishable from evidence once it is printed.
+     */
     if (mo.category) {
-      const categoryHit = candidates.find(
+      const sameCategory = candidates.filter(
         (mi) => mi.category === mo.category && (mi.floorName ?? '') === (mo.floorName ?? ''),
       );
-      if (categoryHit)
-        return { area: categoryHit, method: ComparisonMatchMethod.AREA_CATEGORY, confidence: 0.5 };
+      if (sameCategory.length === 1)
+        return {
+          area: sameCategory[0],
+          method: ComparisonMatchMethod.AREA_CATEGORY,
+          confidence: 0.5,
+        };
     }
     return null;
   }

@@ -367,6 +367,67 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     expect(areaCreateMany.data.every((a) => a.requiresReview)).toBe(true);
   });
 
+  /**
+   * The weak fallback, when there is genuinely only one candidate. A single
+   * indoor room on the floor is an inference worth drawing, flagged at 50% and
+   * sent to review.
+   */
+  it('pairs by category when exactly one candidate shares it', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      // Differently named, so only category can pair them.
+      moveInAreas: [area('pa-kitchen-old', 'Kitchen / Breakfast')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [],
+      moveInFindings: [soundFinding('pa-kitchen-old')],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(areaCreateMany.data[0]).toMatchObject({
+      matchMethod: 'AREA_CATEGORY',
+      moveInPropertyAreaId: 'pa-kitchen-old',
+    });
+  });
+
+  /**
+   * The bug this exists for. The fallback took the *first* candidate sharing a
+   * category and floor, from an unordered query -- so a move-out Kitchen could
+   * pair with a move-in Bedroom, and the report then showed that bedroom's
+   * photographs under the Kitchen. The badge read 50% and nothing else said so.
+   *
+   * Several candidates is a guess, and a guess is indistinguishable from
+   * evidence once it is printed on the document that justifies a charge. No
+   * match is the honest answer.
+   */
+  it('refuses to pair when several candidates share the category and floor', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen')],
+      // Two indoor rooms on the same floor, neither named like the kitchen.
+      moveInAreas: [area('pa-bed-1', 'Bedroom 1'), area('pa-bed-2', 'Bedroom 2')],
+      moveOutMedia: [mediaRow('pa-kitchen', 1)],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    const kitchen = areaCreateMany.data.find((a) => a.moveOutPropertyAreaId === 'pa-kitchen');
+    expect(kitchen).toMatchObject({
+      classification: 'MISSING_BASELINE',
+      matchMethod: 'UNMATCHED',
+      moveInPropertyAreaId: null,
+    });
+    // And it never silently borrowed one of the bedrooms.
+    expect(kitchen?.matchConfidence).toBe(0);
+  });
+
   it('matches a renamed room through an approved alias', async () => {
     const moveOutArea = area('pa-den', 'Den');
     const moveInArea = area('pa-office', 'Office');

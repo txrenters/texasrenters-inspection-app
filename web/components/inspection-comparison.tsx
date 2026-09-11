@@ -62,7 +62,15 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             approves it.
           </CardDescription>
         </div>
-        {data ? <StatusBadge value={data.overallCondition} /> : null}
+        <div className="flex items-center gap-2">
+          {/* The same verdicts as a document: both inspections side by side. */}
+          {data ? (
+            <Button asChild size="sm" type="button" variant="outline">
+              <Link href={`/inspections/${inspectionId}/comparison-report`}>Comparison report</Link>
+            </Button>
+          ) : null}
+          {data ? <StatusBadge value={data.overallCondition} /> : null}
+        </div>
       </CardHeader>
 
       <CardContent className="space-y-4">
@@ -203,7 +211,13 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   </Button>
                 </>
               ) : null}
-              {canManage && data.status !== 'APPROVED' ? (
+              {/*
+                Offered on an approved comparison too. The approval is the
+                reviewer's to supersede: regenerating returns the record to
+                draft and clears the reviewer, so nothing inherits a decision
+                nobody made about it. Only the automatic trigger is refused.
+              */}
+              {canManage ? (
                 <Button
                   disabled={mutations.generateComparison.isPending}
                   onClick={() => mutations.generateComparison.mutate({ id: inspectionId })}
@@ -214,12 +228,6 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   {mutations.generateComparison.isPending ? 'Regenerating…' : 'Regenerate'}
                 </Button>
               ) : null}
-              {/* The same verdicts as a document: both inspections side by side. */}
-              <Button asChild type="button" variant="outline">
-                <Link href={`/inspections/${inspectionId}/comparison-report`}>
-                  Comparison report
-                </Link>
-              </Button>
             </div>
 
             {mutations.reviewComparison.error ? (
