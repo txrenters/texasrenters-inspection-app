@@ -27,15 +27,26 @@ function area(propertyAreaId: string, name: string, category = 'INDOOR_ROOM', fl
   };
 }
 
-function mediaRow(propertyAreaId: string, count: number) {
-  return { propertyAreaId, _count: { media: count } };
+/**
+ * An area's captured evidence. `photos` defaults to 0 so the recording-only
+ * fixtures below read unchanged; pass it to describe an area documented with
+ * stills instead of a video, which is what a PDF import produces.
+ */
+function mediaRow(propertyAreaId: string, count: number, photos = 0) {
+  return { propertyAreaId, _count: { media: count, photos } };
+}
+
+/** A checklist item a technician or an imported report graded as failed. */
+function failedItem(propertyAreaId: string) {
+  return { inspectionArea: { propertyAreaId } };
 }
 
 /**
  * Build a prisma double for ComparisonService.generate. The three
  * inspectionArea.findMany calls fire in this order: move-out areas, move-in
- * areas, move-out media counts; inspectionFinding.findMany fires for move-out
- * then move-in damage.
+ * areas, move-out evidence counts; inspectionFinding.findMany and
+ * inspectionAreaChecklistResponse.findMany each fire for move-out then move-in
+ * damage.
  */
 function generatePrisma(opts: {
   moveOut: Record<string, unknown>;
@@ -46,6 +57,9 @@ function generatePrisma(opts: {
   moveOutMedia: ReturnType<typeof mediaRow>[];
   moveOutDamage: Array<{ propertyAreaId: string }>;
   moveInDamage: Array<{ propertyAreaId: string }>;
+  // Default empty: the recording-based fixtures record damage as findings.
+  moveOutFailedItems?: ReturnType<typeof failedItem>[];
+  moveInFailedItems?: ReturnType<typeof failedItem>[];
 }) {
   const created: { data?: Record<string, unknown> } = {};
   const areaCreateMany = { data: [] as Array<Record<string, unknown>> };
@@ -106,6 +120,12 @@ function generatePrisma(opts: {
         .mockResolvedValueOnce(opts.moveOutDamage)
         .mockResolvedValueOnce(opts.moveInDamage),
     },
+    inspectionAreaChecklistResponse: {
+      findMany: jest
+        .fn()
+        .mockResolvedValueOnce(opts.moveOutFailedItems ?? [])
+        .mockResolvedValueOnce(opts.moveInFailedItems ?? []),
+    },
     userProfile: { findUnique: jest.fn().mockResolvedValue(null) },
     $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
   };
@@ -154,6 +174,78 @@ describe('move-in vs move-out comparison (spec §12)', () => {
       requiresReviewCount: 1,
       version: 1,
     });
+  });
+
+  /**
+   * An area whose evidence is photographs rather than a recording. Every
+   * inspection imported from an Inspect & Cloud PDF is this shape -- the
+   * importer writes `InspectionPhoto` and never `InspectionMedia` -- as is any
+   * room a technician photographed instead of filming. Counting recordings
+   * alone reported a perfectly matched area as MISSING_MOVE_OUT_EVIDENCE, and
+   * because the empty count was recomputed identically on every run,
+   * regenerating or rejecting and regenerating never cleared it.
+   */
+  it('treats photographs as move-out evidence when an area has no recording', async () => {
+    const { prisma, areaCreateMany, created } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
+      // No recordings at all; the kitchen was photographed, the bedroom was not.
+      moveOutMedia: [mediaRow('pa-kitchen', 0, 12), mediaRow('pa-bed', 0, 0)],
+      moveOutDamage: [],
+      moveInDamage: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    const byArea = Object.fromEntries(areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]));
+    expect(byArea['pa-kitchen']).toMatchObject({
+      classification: 'UNCHANGED',
+      matchMethod: 'LOCAL_AREA_ID',
+      requiresReview: false,
+    });
+    // An area with neither a recording nor a photograph is still unevidenced.
+    expect(byArea['pa-bed']).toMatchObject({
+      classification: 'MISSING_MOVE_OUT_EVIDENCE',
+      requiresReview: true,
+    });
+    expect(created.data).toMatchObject({ requiresReviewCount: 1 });
+  });
+
+  /**
+   * An imported inspection has no `InspectionFinding` rows at all -- that table
+   * requires an `inspectionMediaId` and an imported report has no recording --
+   * so every defect it records lives on a failed checklist response. Counting
+   * findings alone scored these areas zero, which once photographs began
+   * counting as evidence would have printed "no new damage detected" over a
+   * room the report graded damaged.
+   */
+  it('counts a failed checklist grade as damage when an import has no findings', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
+      moveInAreas: [area('pa-kitchen', 'Kitchen'), area('pa-bed', 'Bedroom')],
+      moveOutMedia: [mediaRow('pa-kitchen', 0, 8), mediaRow('pa-bed', 0, 5)],
+      // No findings on either side, as an imported pair of inspections has none.
+      moveOutDamage: [],
+      moveInDamage: [],
+      // The move-out report graded the kitchen damaged; the move-in did not.
+      moveOutFailedItems: [failedItem('pa-kitchen')],
+      moveInFailedItems: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    const byArea = Object.fromEntries(areaCreateMany.data.map((a) => [a.moveOutPropertyAreaId, a]));
+    expect(byArea['pa-kitchen']).toMatchObject({
+      classification: 'NEW_DAMAGE',
+      requiresReview: true,
+    });
+    expect(byArea['pa-bed']).toMatchObject({ classification: 'UNCHANGED' });
   });
 
   it('marks unmatched areas as MISSING_BASELINE / MISSING_MOVE_OUT_EVIDENCE', async () => {
