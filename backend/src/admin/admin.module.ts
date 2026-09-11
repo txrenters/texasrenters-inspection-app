@@ -31,6 +31,7 @@ import { MediaModule } from '../media/media.module';
 import { LocalIdentityProvider } from '../auth/local-identity.provider';
 import { IDENTITY_PROVIDER } from './identity-provider';
 import { TechnicianProvisioningService } from './technician-provisioning.service';
+import { TechnicianSkillsService } from './technician-skills.service';
 
 @Module({
   // AuthModule for LocalIdentityProvider, so provisioning and the password
@@ -63,6 +64,7 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
     ProfileDeletionService,
     ReportShareService,
     TechnicianProvisioningService,
+    TechnicianSkillsService,
     // One implementation now that Supabase is gone; the token remains so
     // call sites stay decoupled from whichever store is behind it.
     { provide: IDENTITY_PROVIDER, useExisting: LocalIdentityProvider },
@@ -74,6 +76,11 @@ import { TechnicianProvisioningService } from './technician-provisioning.service
   // `InspectionImportService` is exported for the Propertyware document
   // backfill, which finds the reports and hands them here rather than growing a
   // second importer beside this one.
-  exports: [AdminService, PropertyGeocodingService, InspectionImportService],
+  exports: [
+    AdminService,
+    PropertyGeocodingService,
+    InspectionImportService,
+    TechnicianSkillsService,
+  ],
 })
 export class AdminModule {}
