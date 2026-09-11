@@ -349,6 +349,18 @@ export class CreateReportShareDto {
   @IsOptional() @IsEmail() @MaxLength(320) recipientEmail?: string;
 }
 
+/**
+ * How an imported report is written onto its inspection.
+ *
+ * Defaults to REPLACE, which is what every existing client sends by omitting
+ * it. ADD is for the second report an agent issues when the first walkthrough
+ * was incomplete: it writes the areas that report covers and leaves the rest of
+ * the inspection alone.
+ */
+export class CommitInspectionImportDto {
+  @IsOptional() @IsIn(['REPLACE', 'ADD']) mode?: 'REPLACE' | 'ADD';
+}
+
 export class TestMailDto {
   @IsEmail() @MaxLength(320) recipientEmail!: string;
 }

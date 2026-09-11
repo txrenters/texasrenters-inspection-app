@@ -32,9 +32,7 @@ const SERVICE = readFileSync(
  * `indexOf` for that found an earlier one and sliced this to nothing — six
  * assertions passing against an empty string.
  */
-const COMMIT_START = SERVICE.indexOf(
-  'const superseded = await this.prisma.inspectionPhoto.findMany(',
-);
+const COMMIT_START = SERVICE.indexOf('const superseded: Array<{ storageKey: string }> =');
 const COMMIT = SERVICE.slice(
   COMMIT_START,
   SERVICE.indexOf("event: 'inspection_report_imported'", COMMIT_START),
@@ -81,7 +79,7 @@ describe('an import over an inspection that already holds evidence', () => {
     // office saying that room is not part of this walkthrough. Without this the
     // test areas survive every import and stay undeletable.
     expect(COMMIT).toContain('touched.add(inspectionArea.id)');
-    const stale = COMMIT.slice(COMMIT.indexOf('const stale = await tx.inspectionArea.findMany('));
+    const stale = COMMIT.slice(COMMIT.indexOf('const stale ='));
     expect(stale).toContain('id: { notIn: [...touched] }');
   });
 
@@ -95,7 +93,7 @@ describe('an import over an inspection that already holds evidence', () => {
      * import with it — a room with a recording would fail every future import
      * of that inspection rather than being skipped.
      */
-    const stale = COMMIT.slice(COMMIT.indexOf('const stale = await tx.inspectionArea.findMany('));
+    const stale = COMMIT.slice(COMMIT.indexOf('const stale ='));
     expect(stale.slice(0, 400)).toContain('media: { none: {} }');
   });
 
@@ -119,7 +117,7 @@ describe('an import over an inspection that already holds evidence', () => {
     // not. An orphaned object costs storage, while deleting one for a
     // transaction that then rolled back destroys a photograph nothing replaced.
     // Same order `TechnicianService.deletePhoto` uses.
-    const read = SERVICE.indexOf('const superseded = await this.prisma.inspectionPhoto.findMany(');
+    const read = SERVICE.indexOf('const superseded: Array<{ storageKey: string }> =');
     const commit = SERVICE.indexOf('const inspectionId = await this.prisma.$transaction(');
     const purge = SERVICE.indexOf('superseded.map((photo) => this.storage.delete(');
     expect(read).toBeGreaterThan(-1);
@@ -146,5 +144,62 @@ describe('an import over an inspection that already holds evidence', () => {
     // The guard this replaced. Left as an assertion because re-adding it would
     // silently restore the block the office asked to have removed.
     expect(SERVICE).not.toContain('INSPECTION_NOT_EMPTY');
+  });
+});
+
+/**
+ * The second report.
+ *
+ * An agent who submits an incomplete walkthrough issues another PDF covering
+ * what was missed. Under REPLACE that file would delete every area the first
+ * one established and keep only the garage, so ADD exists -- and because it
+ * shares this destructive commit, what it must *not* do is the part worth
+ * pinning down.
+ */
+describe('an additional report, imported with ADD', () => {
+  const tx = COMMIT.slice(COMMIT.indexOf('$transaction'));
+
+  it('does not clear the whole inspection', () => {
+    // The bulk clears belong to REPLACE. Under ADD an area this report never
+    // mentions keeps the evidence the first report gave it.
+    expect(tx).toContain("mode === 'REPLACE'");
+    const bulkPhotos = tx.indexOf('tx.inspectionPhoto.deleteMany({ where: { inspectionId:');
+    expect(bulkPhotos).toBeGreaterThan(-1);
+    expect(tx.slice(0, bulkPhotos)).toContain("mode === 'REPLACE'");
+  });
+
+  it('drops no area it simply does not mention', () => {
+    // The stale sweep is what would delete the kitchen when the second report
+    // only covers the garage. Its silence about a room says nothing about it.
+    const stale = tx.slice(tx.indexOf('const stale ='));
+    expect(stale).toContain("mode === 'REPLACE'");
+    expect(stale).toContain(': [];');
+  });
+
+  it('replaces only the areas it does cover, per area', () => {
+    const perArea = tx.slice(tx.indexOf("if (mode === 'ADD')"));
+    expect(perArea).toContain('tx.inspectionAreaChecklistResponse.deleteMany');
+    expect(perArea).toContain('inspectionAreaId: inspectionArea.id');
+  });
+
+  /**
+   * The trap. Storage objects are deleted after the commit, and under ADD most
+   * of them belong to areas being kept — removing those files while their rows
+   * survive leaves the first report's areas pointing at nothing, which reads as
+   * corrupt evidence rather than a missing file.
+   */
+  it('supersedes only the storage objects it actually replaced', () => {
+    const perArea = tx.slice(tx.indexOf("if (mode === 'ADD')"));
+    const collect = perArea.indexOf('superseded.push(');
+    const remove = perArea.indexOf('tx.inspectionPhoto.deleteMany');
+    expect(collect).toBeGreaterThan(-1);
+    // Read before the delete, or there is nothing left to read.
+    expect(perArea.indexOf('tx.inspectionPhoto.findMany')).toBeLessThan(remove);
+    expect(perArea).toContain('inspectionAreaId: inspectionArea.id');
+  });
+
+  it('records which way the report was written', () => {
+    // "replaced.areas: 0" means something different under each mode.
+    expect(COMMIT).toContain('mode,');
   });
 });

@@ -250,14 +250,14 @@ export function InspectionReportImport({
     onHandOff?.(file);
   }
 
-  async function commit() {
+  async function commit(mode: 'REPLACE' | 'ADD') {
     if (!jobId) return;
     try {
       setWriting(true);
       // Returns as soon as the write has started. Writing 376 photographs takes
       // longer than the server will hold a socket open, so the job reports the
       // outcome and the poll below follows it.
-      await commitInspectionImport.mutateAsync(jobId);
+      await commitInspectionImport.mutateAsync({ jobId, mode });
     } catch {
       setWriting(false);
       // Rendered below from the mutation's own error.
@@ -401,7 +401,7 @@ export function InspectionReportImport({
             (writing && !job.data?.committedAt && !job.data?.errorCode)
           }
           job={job.data}
-          onCommit={() => void commit()}
+          onCommit={(mode) => void commit(mode)}
           onDiscard={() => {
             // Both, because the job may have come from the inspection rather
             // than from this session. Clearing only what this session started
@@ -426,9 +426,13 @@ function ImportProgress({
   committing: boolean;
   inspectionType?: string | null;
   job: ImportJob | undefined;
-  onCommit: () => void;
+  onCommit: (mode: 'REPLACE' | 'ADD') => void;
   onDiscard: () => void;
 }) {
+  // Before the early returns: a hook cannot sit behind one. Defaults to the
+  // historical behaviour, so an import nobody thinks about writes as it always did.
+  const [mode, setMode] = useState<'REPLACE' | 'ADD'>('REPLACE');
+
   if (!job)
     return (
       <p className="text-muted-foreground flex items-center gap-2 text-sm">
@@ -565,12 +569,58 @@ function ImportProgress({
         </TableBody>
       </Table>
 
+      {/*
+        An agent who submits an incomplete walkthrough issues a second report
+        covering what was missed. Importing that the usual way would keep only
+        the areas it names and drop the rest, so the choice is made here, with
+        the parsed areas visible above, rather than assumed.
+      */}
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium">How should this be written?</legend>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            checked={mode === 'REPLACE'}
+            className="mt-1"
+            name="import-mode"
+            onChange={() => setMode('REPLACE')}
+            type="radio"
+            value="REPLACE"
+          />
+          <span>
+            Replace this inspection
+            <span className="text-muted-foreground block text-xs">
+              The report becomes the inspection&apos;s evidence. Areas it does not mention are
+              removed.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            checked={mode === 'ADD'}
+            className="mt-1"
+            name="import-mode"
+            onChange={() => setMode('ADD')}
+            type="radio"
+            value="ADD"
+          />
+          <span>
+            Add to this inspection
+            <span className="text-muted-foreground block text-xs">
+              For a follow-up report covering areas the first one missed. Areas above are written;
+              everything else already on the inspection is left alone.
+            </span>
+          </span>
+        </label>
+      </fieldset>
+
       <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={committing} onClick={onCommit}>
+        <Button disabled={committing} onClick={() => onCommit(mode)}>
           {committing ? <Spinner /> : <FileTextIcon />}
           {committing
             ? 'Importing…'
-            : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
+            : mode === 'ADD'
+              ? 'Add these areas to the inspection'
+              : `Import as ${inspectionType ? `a ${humanize(inspectionType).toLowerCase()}` : 'an'} inspection`}
         </Button>
         <Button disabled={committing} onClick={onDiscard} variant="outline">
           Cancel

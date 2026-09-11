@@ -51,6 +51,7 @@ import {
   ChargeReviewDto,
   ChargeRuleDto,
   ComparisonReviewDto,
+  CommitInspectionImportDto,
   CreateAdminInspectionDto,
   AdminChecklistAssessmentDto,
   CreateAreaChecklistItemDto,
@@ -319,8 +320,12 @@ export class AdminController {
   @Post('inspection-imports/:jobId/commit')
   @ApiTags(INSPECTION_IMPORT_TAG)
   @RequirePermissions('inspections:manage')
-  commitInspectionImport(@Req() request: AuthenticatedRequest, @Param('jobId') id: string) {
-    return this.inspectionImports.commit(request.user, id);
+  commitInspectionImport(
+    @Req() request: AuthenticatedRequest,
+    @Param('jobId') id: string,
+    @Body() body: CommitInspectionImportDto,
+  ) {
+    return this.inspectionImports.commit(request.user, id, body.mode);
   }
 
   @Get('floor-plans/:floorPlanId/content')
