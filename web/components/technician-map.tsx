@@ -417,6 +417,30 @@ function useZoom() {
  * without being removed leaves the old one on the map, and a route redrawn
  * every few seconds turns into a thicket.
  */
+/**
+ * Which computed property actually carries the line's colour.
+ *
+ * `stroke` first. The map's line classes set `stroke`, because under Leaflet
+ * the class landed on an SVG path, where that is the property that paints.
+ * After the port to Google this read `color` instead — which on a bare `span`
+ * inherits the body's text colour — so every line was drawn in near-black, the
+ * white casing included, and changing the design token moved nothing at all.
+ *
+ * `color` is kept as a fallback for any class that legitimately sets it, and
+ * the literal behind that is for a class that sets neither.
+ */
+export function strokeFrom(computed: {
+  stroke?: string | null;
+  color?: string | null;
+}): string {
+  // `stroke` computes to "none" on an element no rule has touched. That is not
+  // a colour and must not reach Google as one -- it draws an invisible line,
+  // which looks exactly like a route that failed to load.
+  const painted =
+    computed.stroke && computed.stroke !== 'none' ? computed.stroke : '';
+  return painted || computed.color || '#2563eb';
+}
+
 function Line({
   path,
   className,
@@ -442,14 +466,21 @@ function Line({
      * Google styles its overlays through options rather than CSS classes, so
      * the design-system tokens these lines are drawn in — `map-route-line`,
      * `map-air-line` — cannot simply be handed over as a class name. Reading
-     * the computed colour keeps one source of truth: change the token and the
+     * the computed value keeps one source of truth: change the token and the
      * line follows, exactly as it did under Leaflet.
+     *
+     * **`stroke`, not `color`.** Those classes set `stroke`, because under
+     * Leaflet the class landed on an SVG path where that is the property that
+     * paints. This read `color` after the port, which on a bare span inherits
+     * the body's text colour — so every line was drawn in near-black, the
+     * casing included, and changing the token moved nothing. `color` stays as
+     * a fallback for any class that does set it.
      */
     const probe = document.createElement('span');
     probe.className = className;
     probe.style.display = 'none';
     document.body.append(probe);
-    const stroke = getComputedStyle(probe).color || '#2563eb';
+    const stroke = strokeFrom(getComputedStyle(probe));
     probe.remove();
 
     const line = new google.maps.Polyline({
