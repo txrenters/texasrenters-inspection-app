@@ -75,3 +75,4 @@ export * from './quarter-assignment.js';
 export * from './quarter-plan.js';
 export * from './route-plan.js';
 export * from './technician-location.js';
+export * from './technician-timeline.js';
