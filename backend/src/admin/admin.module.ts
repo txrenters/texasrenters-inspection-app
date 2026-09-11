@@ -12,6 +12,7 @@ import { AdminService } from './admin.service';
 import { RoutingModule } from '../routing/routing.module';
 import { PropertyGeocodeScheduler } from './property-geocode.scheduler';
 import { PropertyGeocodingService } from './property-geocoding.service';
+import { TechnicianTimelineService } from '../technician/technician-timeline.service';
 import { AiProviderSettingsService } from './ai-provider-settings.service';
 import { ChargeService } from './charge.service';
 import { ComparisonReportService } from './comparison-report.service';
@@ -47,6 +48,7 @@ import { TechnicianSkillsService } from './technician-skills.service';
   providers: [
     AdminService,
     PropertyGeocodingService,
+    TechnicianTimelineService,
     PropertyGeocodeScheduler,
     AccessService,
     AreaEvidenceService,

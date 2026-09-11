@@ -36,6 +36,7 @@ import { InspectionImportService } from './inspection-import/inspection-import.s
 import type { UploadedReport } from './inspection-import/inspection-import.service';
 import { AccessService } from './access.service';
 import { RouteService } from '../routing/route.service';
+import { TechnicianTimelineService } from '../technician/technician-timeline.service';
 import { PropertyGeocodingService } from './property-geocoding.service';
 import { TechnicianLocationService } from '../technician/technician-location.service';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
@@ -154,6 +155,7 @@ export class AdminController {
     private readonly passwordResets: PasswordResetService,
     private readonly inspectionImports: InspectionImportService,
     private readonly routes: RouteService,
+    private readonly timelines: TechnicianTimelineService,
     private readonly areaEvidence: AreaEvidenceService,
     private readonly charges: ChargeService,
     private readonly mailer: MailService,
@@ -1061,6 +1063,32 @@ export class AdminController {
     const day = date ? new Date(date) : new Date();
     return this.routes.assignmentsByTechnician(
       request.user.organizationId,
+      Number.isNaN(day.getTime()) ? new Date() : day,
+    );
+  }
+
+  /**
+   * What a technician's day actually came to, read off their location trail.
+   *
+   * `technicians:locate`, the same key as the map and the route. This is the
+   * strongest reading of a named person's movements in the system -- where they
+   * were, for how long, and how long they drove between -- so it sits behind
+   * the key that already governs looking at somebody's position rather than
+   * behind the weaker `technicians:read`.
+   *
+   * `date` defaults to today, bounded in Texas rather than UTC.
+   */
+  @Get('technicians/:technicianId/timeline')
+  @RequirePermissions('technicians:locate')
+  technicianTimeline(
+    @Req() request: AuthenticatedRequest,
+    @Param('technicianId') id: string,
+    @Query('date') date?: string,
+  ) {
+    const day = date ? new Date(date) : new Date();
+    return this.timelines.dayFor(
+      request.user,
+      id,
       Number.isNaN(day.getTime()) ? new Date() : day,
     );
   }

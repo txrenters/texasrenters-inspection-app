@@ -8,6 +8,7 @@ import type {
   AdminAssignmentListItem,
   PropertyPosition,
   TechnicianAssignments,
+  TechnicianDayTimeline,
   TechnicianRoute,
   TechnicianPosition,
   AdminAuditEvent,
@@ -141,6 +142,8 @@ export const keys = {
   technicianLocations: ['technician-locations'] as const,
   propertyLocations: ['property-locations'] as const,
   technicianRoute: (id: string, date: string) => ['technician-route', id, date] as const,
+  technicianTimeline: (id: string, date: string) =>
+    ['technician-timeline', id, date] as const,
   mapAssignments: (date: string) => ['map-assignments', date] as const,
   assignmentsRoot: ['admin', 'assignments'] as const,
   assignments: (query: object) => ['admin', 'assignments', query] as const,
@@ -511,6 +514,25 @@ export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
     queryFn: ({ signal }) =>
       api<TechnicianRoute>(
         `/api/v1/admin/technicians/${id}/route${queryString({ date })}`,
+        { signal },
+      ),
+    refetchInterval: 2 * 60_000,
+    enabled,
+  });
+/**
+ * What a technician's day has actually come to, so far.
+ *
+ * Two minutes, matching the route beside it. Faster would be spending requests
+ * to watch a number that moves in minutes: the visit somebody is inside of is
+ * still happening, and refreshing it every few seconds only makes the figure
+ * jitter while it climbs.
+ */
+export const useTechnicianTimeline = (id: string, date: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.technicianTimeline(id, date),
+    queryFn: ({ signal }) =>
+      api<TechnicianDayTimeline>(
+        `/api/v1/admin/technicians/${id}/timeline${queryString({ date })}`,
         { signal },
       ),
     refetchInterval: 2 * 60_000,
