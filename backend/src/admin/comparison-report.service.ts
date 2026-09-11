@@ -53,7 +53,16 @@ export class ComparisonReportService {
   async report(user: AuthenticatedUser, moveOutInspectionId: string): Promise<ComparisonReport> {
     const comparison = await this.prisma.inspectionComparison.findFirst({
       where: { moveOutInspectionId, organizationId: user.organizationId },
-      include: { areaComparisons: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        areaComparisons: {
+          // Position, because `createdAt` cannot order these: one `createMany`
+          // in one transaction gives every row the same `CURRENT_TIMESTAMP`, so
+          // ordering on it is a tie the database may break differently on every
+          // read -- which on this document meant the areas shuffled between
+          // loads of the same comparison.
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        },
+      },
     });
     // Scoped by organization as well as inspection, so a comparison belonging to
     // another organization reads as absent rather than forbidden.
