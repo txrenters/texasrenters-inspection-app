@@ -435,13 +435,20 @@ function InspectionDetail() {
             and any room the new report does not mention. That is destructive,
             and the warning below is the only thing standing between a
             replacement and an accident -- which is why it is worded from what
-            is actually there rather than from the type of the inspection. */}
+            is actually there rather than from the type of the inspection.
+
+            It names the default and the alternative both, because replacing is
+            no longer the only outcome: a second report covering rooms the first
+            one missed can be added instead. Saying only "replaces" was true
+            until that existed, and afterwards read as a warning that the
+            destructive path was the only path -- at the exact moment somebody
+            decides whether to click. */}
         {permissions.has('inspections:manage') ? (
           <Alert variant={hasEvidence(item) ? 'warning' : undefined}>
             <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
               <span>
                 {hasEvidence(item)
-                  ? 'Importing a report replaces the evidence on this inspection — its photos, its checklist answers, and any room the new report does not cover. Recordings are kept.'
+                  ? 'Importing a report replaces the evidence on this inspection by default — its photos, its checklist answers, and any room the new report does not cover. Recordings are kept. A follow-up report covering rooms the first one missed can be added instead, without touching the rest; the choice is made once the report has been read.'
                   : `This ${humanize(item.inspectionType).toLowerCase()} inspection has no evidence recorded against it. Import the report if the walkthrough was done outside this app.`}
               </span>
               <ImportReportDialog
