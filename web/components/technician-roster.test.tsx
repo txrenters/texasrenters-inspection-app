@@ -9,7 +9,7 @@ import { TechnicianRoster, type RosterEntry } from './technician-roster';
  *
  * The bug these exist for: the planner correctly refused to route a technician
  * whose position was off the road network, and the panel printed the refusal
- * *and* "1 min driving - 0.0 mi - suggested order" directly beneath it, with
+ * *and* "1 min driving - 0.0 km - suggested order" directly beneath it, with
  * the stop numbered. Two contradictory statements, one of them invented.
  *
  * The cause was reading `route.stops` as "a route exists". Stops are the day's
@@ -138,7 +138,7 @@ describe('a route the planner refused', () => {
     const text = container.textContent ?? '';
     expect(text).toMatch(/no suggested order/i);
     expect(text).not.toMatch(/1 min/);
-    expect(text).not.toMatch(/0\.0 mi/);
+    expect(text).not.toMatch(/0\.0 km/);
   });
 });
 

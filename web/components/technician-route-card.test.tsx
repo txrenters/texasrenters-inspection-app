@@ -9,7 +9,7 @@ import { TechnicianRouteCard } from './technician-route-card';
  *
  * This is the same defect the map roster had, in a component that was missed
  * when the roster was fixed: it gated on `route.stops.length`, which is present
- * whether or not anything was routed. Production showed "1 min driving · 0.0 mi
+ * whether or not anything was routed. Production showed "1 min driving · 0.0 km
  * · 1 stops" for a route the planner had correctly refused -- and unlike the
  * roster, offered no explanation at all.
  *
@@ -48,7 +48,7 @@ describe('a route the planner refused', () => {
 
     // The exact strings from the production screenshot.
     expect(text).not.toMatch(/1 min/);
-    expect(text).not.toMatch(/0\.0 mi/);
+    expect(text).not.toMatch(/0\.0 km/);
     expect(text).not.toMatch(/driving/);
     expect(text).not.toMatch(/free-flow/);
   });
