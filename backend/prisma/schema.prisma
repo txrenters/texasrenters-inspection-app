@@ -1945,6 +1945,14 @@ model InspectionComparison {
 /// trail (originalClassification + overriddenBy).
 model InspectionAreaComparison {
   id                     String                    @id @default(uuid()) @db.Uuid
+  /// Where this area sits in the comparison, from the order it was generated in.
+  ///
+  /// Stored because it cannot be recovered afterwards. Every row of one
+  /// comparison is written by a single `createMany` inside one transaction, and
+  /// `CURRENT_TIMESTAMP` is transaction start time -- so they all share a
+  /// `createdAt` to the millisecond, and ordering by it is a tie the database
+  /// may break differently on every read.
+  position               Int                       @default(0)
   comparisonId           String                    @db.Uuid
   moveInPropertyAreaId   String?                   @db.Uuid
   moveOutPropertyAreaId  String?                   @db.Uuid

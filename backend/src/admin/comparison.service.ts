@@ -245,7 +245,10 @@ export class ComparisonService {
       }
       if (areaResults.length)
         await tx.inspectionAreaComparison.createMany({
-          data: areaResults.map((a) => ({ ...a, comparisonId })),
+          // The index is the order the areas were built in -- the move-out's
+          // own area order, then anything documented only at move-in. Written
+          // down because nothing else on the row records it.
+          data: areaResults.map((a, position) => ({ ...a, comparisonId, position })),
         });
       await this.audit(tx, moveOut.organizationId, actor?.userId ?? null, 'INSPECTION_COMPARISON_GENERATED', comparisonId, {
         moveOutInspectionId: moveOut.id,
@@ -756,7 +759,16 @@ export class ComparisonService {
   private async load(organizationId: string, moveOutInspectionId: string) {
     const record = await this.prisma.inspectionComparison.findFirst({
       where: { moveOutInspectionId, organizationId },
-      include: { areaComparisons: { orderBy: { createdAt: 'asc' } } },
+      include: {
+        areaComparisons: {
+          // Position, because `createdAt` cannot order these: one `createMany`
+          // in one transaction gives every row the same `CURRENT_TIMESTAMP`, and
+          // ordering on a tie lets the database return them differently on every
+          // read. `id` breaks the remaining tie so a comparison written before
+          // the column existed is at least stable rather than shuffling.
+          orderBy: [{ position: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        },
+      },
     });
     if (!record) return null;
     const reviewer = record.reviewedById

@@ -347,6 +347,54 @@ describe('move-in vs move-out comparison (spec §12)', () => {
     expect(areaCreateMany.data[0]?.classification).not.toBe('NEW_DAMAGE');
   });
 
+  /**
+   * The order of the areas is stored, because it cannot be recovered.
+   *
+   * Every row is written by one `createMany` inside one transaction, and
+   * `CURRENT_TIMESTAMP` is transaction start time -- so they all share a
+   * `createdAt` to the millisecond and ordering by it is a tie. A tie is
+   * unspecified in SQL, so the rows came back in whatever order the scan
+   * yielded: stable only while the heap happened to hold insertion order, and
+   * shuffled the moment an import rewrote the comparison.
+   */
+  it('writes down where each area sits, in the order it built them', async () => {
+    const { prisma, areaCreateMany } = generatePrisma({
+      moveOut,
+      moveIn: { id: 'move-in-1' },
+      moveOutAreas: [
+        area('pa-entrance', 'Entrance'),
+        area('pa-kitchen', 'Kitchen'),
+        area('pa-bed', 'Bedroom'),
+      ],
+      moveInAreas: [
+        area('pa-entrance', 'Entrance'),
+        area('pa-kitchen', 'Kitchen'),
+        // Documented at move-in and never revisited: appended after the
+        // move-out's own areas, and its position has to say so.
+        area('pa-garage', 'Garage', 'GARAGE'),
+      ],
+      moveOutMedia: [
+        mediaRow('pa-entrance', 1),
+        mediaRow('pa-kitchen', 1),
+        mediaRow('pa-bed', 1),
+      ],
+      moveOutFindings: [],
+      moveInFindings: [],
+    });
+    const service = new ComparisonService(prisma as never);
+
+    await service.generate('move-out-1', { organizationId: user.organizationId, userId: user.id });
+
+    expect(areaCreateMany.data.map((a) => a.position)).toEqual([0, 1, 2, 3]);
+    // And position follows the build order rather than the area name.
+    expect(areaCreateMany.data.map((a) => a.areaName)).toEqual([
+      'Entrance',
+      'Kitchen',
+      'Bedroom',
+      'Garage',
+    ]);
+  });
+
   it('marks unmatched areas as MISSING_BASELINE / MISSING_MOVE_OUT_EVIDENCE', async () => {
     const { prisma, areaCreateMany } = generatePrisma({
       moveOut,
