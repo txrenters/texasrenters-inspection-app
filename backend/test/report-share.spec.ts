@@ -3,6 +3,14 @@ import { UserRole } from '@texasrenters/shared';
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ReportShareService } from '../src/admin/report-share.service';
 
+/**
+ * The comparison-report builder, which none of these cases reaches. It is a
+ * constructor dependency because a comparison share serves a document this
+ * service does not itself assemble; the inspection-report paths below never
+ * call it.
+ */
+const comparisonReports = { reportForShare: jest.fn() };
+
 const admin: AuthenticatedUser = {
   id: '10000000-0000-4000-8000-000000000002',
   authUserId: 'auth-admin',
@@ -32,7 +40,7 @@ describe('inspection report shares', () => {
       inspection: { findFirst: jest.fn().mockResolvedValue({ id: 'inspection-1' }) },
       $transaction: jest.fn(async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx)),
     };
-    const service = new ReportShareService(prisma as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never);
 
     const share = await service.createShare(admin, 'inspection-1', 'Owner@Example.com ');
 
@@ -56,7 +64,7 @@ describe('inspection report shares', () => {
       inspection: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     };
-    const service = new ReportShareService(prisma as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never);
 
     await expect(service.createShare(admin, 'foreign-inspection')).rejects.toMatchObject({
       status: 404,
@@ -82,7 +90,7 @@ describe('inspection report shares', () => {
       },
       inspection: { findUnique: jest.fn() },
     };
-    const service = new ReportShareService(prisma as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never);
 
     await expect(service.publicReport('revoked-token')).rejects.toMatchObject({
       code: 'REPORT_NOT_AVAILABLE',
@@ -165,7 +173,7 @@ describe('inspection report shares', () => {
         }),
       },
     };
-    const service = new ReportShareService(prisma as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never);
 
     const report = await service.publicReport('valid-token');
 
@@ -226,7 +234,7 @@ describe('inspection report shares', () => {
         }),
       },
     };
-    const service = new ReportShareService(prisma as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never);
 
     await service.publicReport('valid-token');
 
@@ -266,7 +274,7 @@ describe('inspection report shares', () => {
       },
     };
     const storage = { get: jest.fn().mockResolvedValue(Buffer.from('jpeg-bytes')) };
-    const service = new ReportShareService(prisma as never, undefined, storage as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never, undefined, storage as never);
 
     const photo = await service.publicPhoto('valid-token', 'photo-1');
 
@@ -275,7 +283,10 @@ describe('inspection report shares', () => {
       expect.objectContaining({
         where: {
           id: 'photo-1',
-          inspectionId: 'inspection-1',
+          // A list because a comparison link covers two inspections. An
+          // inspection link still narrows to exactly one, which is the point:
+          // the scope widened, it did not open.
+          inspectionId: { in: ['inspection-1'] },
           AND: { OR: [{ findingId: null }, { finding: { reviewStatus: 'APPROVED' } }] },
         },
       }),
@@ -297,7 +308,7 @@ describe('inspection report shares', () => {
       inspectionPhoto: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const storage = { get: jest.fn() };
-    const service = new ReportShareService(prisma as never, undefined, storage as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never, undefined, storage as never);
 
     await expect(service.publicPhoto('valid-token', 'foreign-photo')).rejects.toMatchObject({
       status: 404,
@@ -320,7 +331,7 @@ describe('inspection report shares', () => {
       inspectionReportShare: { findFirst: jest.fn().mockResolvedValue(share) },
       $transaction: jest.fn(),
     };
-    const service = new ReportShareService(prisma as never);
+    const service = new ReportShareService(prisma as never, comparisonReports as never);
 
     await expect(service.revokeShare(admin, 'share-1')).resolves.toMatchObject({
       id: 'share-1',

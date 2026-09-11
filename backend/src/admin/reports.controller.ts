@@ -17,6 +17,16 @@ import { ReportShareService } from './report-share.service';
 export class ReportsController {
   constructor(private readonly shares: ReportShareService) {}
 
+  /**
+   * Declared before `:token` so the literal segment wins the match regardless of
+   * how the router orders same-length patterns.
+   */
+  @Get('comparison/:token')
+  @Header('Cache-Control', 'private, no-store')
+  comparisonReport(@Param('token') token: string) {
+    return this.shares.publicComparisonReport(token);
+  }
+
   @Get(':token')
   @Header('Cache-Control', 'private, no-store')
   report(@Param('token') token: string) {

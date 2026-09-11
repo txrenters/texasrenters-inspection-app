@@ -41,6 +41,13 @@ const REPORT_VISIBLE_PHOTO: Prisma.InspectionPhotoWhereInput = {
   OR: [{ findingId: null }, { finding: { reviewStatus: FindingReviewStatus.APPROVED } }],
 };
 
+/** How a photograph is addressed, which is all that differs between the two copies. */
+type PhotoPath = (photoId: string) => string;
+
+const adminPhotoPath: PhotoPath = (photoId) => `/api/v1/admin/photos/${photoId}/content`;
+const sharePhotoPath = (token: string, photoId: string) =>
+  `/api/v1/reports/${encodeURIComponent(token)}/photos/${photoId}`;
+
 const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
   MOVE_IN: process.env.REPORT_TEMPLATE_LABEL_MOVE_IN ?? 'Entry Inspection',
   MOVE_OUT: process.env.REPORT_TEMPLATE_LABEL_MOVE_OUT ?? 'Exit Inspection',
@@ -50,9 +57,35 @@ const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
 export class ComparisonReportService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
+  /** The console's copy: photographs come from the authenticated admin route. */
   async report(user: AuthenticatedUser, moveOutInspectionId: string): Promise<ComparisonReport> {
+    return this.build(user.organizationId, moveOutInspectionId, adminPhotoPath);
+  }
+
+  /**
+   * The shared copy, for a link a client may open.
+   *
+   * Photographs are addressed through the share token, which is the viewer's
+   * only credential -- the same route the shared inspection report uses, so an
+   * expired or revoked link fails identically for the page and its images.
+   */
+  async reportForShare(
+    organizationId: string,
+    moveOutInspectionId: string,
+    token: string,
+  ): Promise<ComparisonReport> {
+    return this.build(organizationId, moveOutInspectionId, (photoId) =>
+      sharePhotoPath(token, photoId),
+    );
+  }
+
+  private async build(
+    organizationId: string,
+    moveOutInspectionId: string,
+    photoPath: PhotoPath,
+  ): Promise<ComparisonReport> {
     const comparison = await this.prisma.inspectionComparison.findFirst({
-      where: { moveOutInspectionId, organizationId: user.organizationId },
+      where: { moveOutInspectionId, organizationId },
       include: { areaComparisons: { orderBy: { createdAt: 'asc' } } },
     });
     // Scoped by organization as well as inspection, so a comparison belonging to
@@ -65,8 +98,8 @@ export class ComparisonReportService {
       );
 
     const [moveIn, moveOut, reviewer] = await Promise.all([
-      this.loadSide(comparison.moveInInspectionId),
-      this.loadSide(comparison.moveOutInspectionId),
+      this.loadSide(comparison.moveInInspectionId, photoPath),
+      this.loadSide(comparison.moveOutInspectionId, photoPath),
       comparison.reviewedById
         ? this.prisma.userProfile.findUnique({
             where: { id: comparison.reviewedById },
@@ -127,7 +160,7 @@ export class ComparisonReportService {
    * is what `InspectionAreaComparison` stores on each side, and it is the only
    * identifier the two inspections share.
    */
-  private async loadSide(inspectionId: string) {
+  private async loadSide(inspectionId: string, photoPath: PhotoPath) {
     const inspection = await this.prisma.inspection.findUnique({
       where: { id: inspectionId },
       select: {
@@ -251,9 +284,9 @@ export class ComparisonReportService {
           capturedAt: photo.capturedAt.toISOString(),
           width: photo.width,
           height: photo.height,
-          // The authenticated console route. This is the only field a share-link
-          // version of this document would need to change.
-          contentPath: `/api/v1/admin/photos/${photo.id}/content`,
+          // The one environment-specific field: the console's authenticated
+          // route, or the share token's, depending on who is reading.
+          contentPath: photoPath(photo.id),
         })),
       });
     }

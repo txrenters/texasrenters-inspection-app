@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { FindingReviewStatus, type Prisma } from '@prisma/client';
+import { ComparisonStatus, FindingReviewStatus, ReportShareKind, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -9,6 +9,7 @@ import { withSystemTenant, withTenant } from '../database/tenant-context';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
+import { ComparisonReportService } from './comparison-report.service';
 import { InspectionMediaStorageService } from '../technician/inspection-media-storage.service';
 import { MailService } from '../mail/mail.service';
 
@@ -58,23 +59,62 @@ const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
   AC_FILTER_DELIVERY: process.env.REPORT_TEMPLATE_LABEL_AC_FILTER_DELIVERY ?? 'AC Filter Delivery',
 };
 
+/** Where each kind of link lives in the web app. */
+function sharePathFor(kind: ReportShareKind, token: string) {
+  return kind === ReportShareKind.COMPARISON ? `/comparison-report/${token}` : `/report/${token}`;
+}
+
 @Injectable()
 export class ReportShareService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ComparisonReportService)
+    private readonly comparisonReport: ComparisonReportService,
     @Optional() @Inject(MailService) private readonly mailer?: MailService,
     @Optional()
     @Inject(InspectionMediaStorageService)
     private readonly mediaStorage?: InspectionMediaStorageService,
   ) {}
 
-  async createShare(user: AuthenticatedUser, inspectionId: string, recipientEmail?: string) {
+  async createShare(
+    user: AuthenticatedUser,
+    inspectionId: string,
+    recipientEmail?: string,
+    kind: ReportShareKind = ReportShareKind.INSPECTION,
+  ) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId: user.organizationId },
       select: { id: true },
     });
     if (!inspection)
       throw new ApplicationError(404, 'INSPECTION_NOT_FOUND', 'Inspection was not found.');
+    /*
+     * A comparison may only be shared once a reviewer has approved it.
+     *
+     * The document says which areas carry new damage, and that is the basis for
+     * money coming out of a deposit. A draft is the deterministic pass before
+     * anybody has checked it -- sending one to a client publishes a verdict no
+     * human has stood behind, which is the boundary the review step exists to
+     * hold.
+     */
+    if (kind === ReportShareKind.COMPARISON) {
+      const comparison = await this.prisma.inspectionComparison.findFirst({
+        where: { moveOutInspectionId: inspectionId, organizationId: user.organizationId },
+        select: { status: true },
+      });
+      if (!comparison)
+        throw new ApplicationError(
+          404,
+          'COMPARISON_NOT_FOUND',
+          'No comparison has been generated for this inspection yet.',
+        );
+      if (comparison.status !== ComparisonStatus.APPROVED)
+        throw new ApplicationError(
+          409,
+          'COMPARISON_NOT_APPROVED',
+          'Approve the comparison before sharing it.',
+        );
+    }
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + SHARE_LIFETIME_DAYS * 24 * 60 * 60 * 1000);
     const share = await this.prisma.$transaction(async (tx) => {
@@ -84,6 +124,7 @@ export class ReportShareService {
           inspectionId,
           createdById: user.id,
           token,
+          kind,
           recipientEmail: recipientEmail?.trim().toLowerCase() || null,
           expiresAt,
         },
@@ -107,7 +148,7 @@ export class ReportShareService {
     const delivery = share.recipientEmail
       ? await this.mailer?.sendReportShare({
           to: share.recipientEmail,
-          reportUrl: this.reportUrl(share.token),
+          reportUrl: this.reportUrl(share.token, kind),
           expiresAt: share.expiresAt,
         })
       : undefined;
@@ -172,6 +213,30 @@ export class ReportShareService {
     // available." Wrapping the reads keeps the scope open across them.
     return withTenant(share.organizationId, () =>
       this.buildPublicReport(share.inspectionId, token, share.createdBy.displayName),
+    );
+  }
+
+  /**
+   * Public, unauthenticated comparison report.
+   *
+   * The token is the only credential, exactly as for the inspection report, and
+   * the same `resolveShare` decides whether it is live. A token issued for an
+   * inspection report cannot read this: the two documents are different
+   * material and a link should serve what it was created for.
+   */
+  async publicComparisonReport(token: string) {
+    const share = await this.resolveShare(token);
+    if (share.kind !== ReportShareKind.COMPARISON)
+      throw new ApplicationError(
+        404,
+        'REPORT_NOT_AVAILABLE',
+        'This report link is invalid, expired, or has been revoked.',
+      );
+    // `withTenant` for the same reason the inspection report uses it: the share
+    // lookup runs as the system tenant, and without re-entering the tenant here
+    // every read below is made under an unset one and fails closed.
+    return withTenant(share.organizationId, () =>
+      this.comparisonReport.reportForShare(share.organizationId, share.inspectionId, token),
     );
   }
 
@@ -396,14 +461,41 @@ export class ReportShareService {
    * the same visibility rule — a valid token for one inspection must never read
    * another's evidence, and must never reach an unapproved finding's photo.
    */
+  /**
+   * Photograph bytes for a shared report.
+   *
+   * Deliberately the same route for both kinds of link rather than a second
+   * `@Res()` handler. This is the only streamed route in the backend, and it
+   * once took the whole API down on every request; keeping the crash surface at
+   * one already-hardened place is worth more than a tidier URL.
+   *
+   * A comparison link may legitimately ask for a photograph from *either*
+   * inspection, so the scope widens to both -- and no further: a token still
+   * cannot read a photograph from an inspection it has nothing to do with.
+   */
   async publicPhoto(token: string, photoId: string, width?: number) {
     const share = await this.resolveShare(token);
-    return withTenant(share.organizationId, () =>
-      this.loadPublicPhoto(share.inspectionId, photoId, width),
-    );
+    return withTenant(share.organizationId, async () => {
+      const inspectionIds =
+        share.kind === ReportShareKind.COMPARISON
+          ? await this.comparisonInspectionIds(share.inspectionId)
+          : [share.inspectionId];
+      return this.loadPublicPhoto(inspectionIds, photoId, width);
+    });
   }
 
-  private async loadPublicPhoto(inspectionId: string, photoId: string, width?: number) {
+  /** Both inspections a comparison link covers. */
+  private async comparisonInspectionIds(moveOutInspectionId: string) {
+    const comparison = await this.prisma.inspectionComparison.findFirst({
+      where: { moveOutInspectionId },
+      select: { moveInInspectionId: true, moveOutInspectionId: true },
+    });
+    if (!comparison)
+      throw new ApplicationError(404, 'REPORT_PHOTO_NOT_FOUND', 'This photo is not available.');
+    return [comparison.moveInInspectionId, comparison.moveOutInspectionId];
+  }
+
+  private async loadPublicPhoto(inspectionIds: string[], photoId: string, width?: number) {
     if (!this.mediaStorage)
       throw new ApplicationError(
         503,
@@ -411,7 +503,7 @@ export class ReportShareService {
         'Inspection media storage is not configured.',
       );
     const photo = await this.prisma.inspectionPhoto.findFirst({
-      where: { id: photoId, inspectionId, AND: HOMEOWNER_VISIBLE_PHOTO },
+      where: { id: photoId, inspectionId: { in: inspectionIds }, AND: HOMEOWNER_VISIBLE_PHOTO },
       select: { id: true, storageKey: true, mimeType: true },
     });
     if (!photo)
@@ -458,6 +550,7 @@ export class ReportShareService {
         select: {
           inspectionId: true,
           organizationId: true,
+          kind: true,
           expiresAt: true,
           revokedAt: true,
           // Whoever issued this link — the logged-in account at the moment the
@@ -490,6 +583,7 @@ export class ReportShareService {
     id: string;
     inspectionId: string;
     token: string;
+    kind?: ReportShareKind;
     recipientEmail: string | null;
     expiresAt: Date;
     revokedAt: Date | null;
@@ -499,7 +593,8 @@ export class ReportShareService {
       id: share.id,
       inspectionId: share.inspectionId,
       token: share.token,
-      sharePath: `/report/${share.token}`,
+      kind: share.kind ?? ReportShareKind.INSPECTION,
+      sharePath: sharePathFor(share.kind ?? ReportShareKind.INSPECTION, share.token),
       recipientEmail: share.recipientEmail,
       expiresAt: share.expiresAt,
       revokedAt: share.revokedAt,
@@ -507,8 +602,8 @@ export class ReportShareService {
     };
   }
 
-  private reportUrl(token: string) {
+  private reportUrl(token: string, kind: ReportShareKind = ReportShareKind.INSPECTION) {
     const origin = (process.env.WEB_APP_ORIGIN ?? 'http://localhost:5454').replace(/\/$/, '');
-    return `${origin}/report/${token}`;
+    return `${origin}${sharePathFor(kind, token)}`;
   }
 }

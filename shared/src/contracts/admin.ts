@@ -724,6 +724,8 @@ export interface AdminReportShare {
   id: string;
   inspectionId: string;
   token: string;
+  /** Which document this link serves; `sharePath` follows from it. */
+  kind: 'INSPECTION' | 'COMPARISON';
   sharePath: string;
   recipientEmail?: string | null;
   expiresAt: string;

@@ -6,6 +6,7 @@ import { useState, type FormEvent } from 'react';
 
 import { PageSkeleton } from '@/components/states';
 import { ErrorState } from '@/components/states';
+import { ReportShareDialog } from '@/components/report-share-dialog';
 import { StatusBadge } from '@/components/status-badge';
 import {
   CLASSIFICATIONS,
@@ -48,6 +49,7 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
   const comparison = useInspectionComparison(inspectionId);
   const mutations = useAdminMutations();
   const [overrideArea, setOverrideArea] = useState<AdminAreaComparison | null>(null);
+  const [sharing, setSharing] = useState(false);
   const canManage = permissions.has('inspections:manage');
   const canReview = permissions.has('comparisons:review');
   const data = comparison.data;
@@ -62,7 +64,25 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
             approves it.
           </CardDescription>
         </div>
-        {data ? <StatusBadge value={data.overallCondition} /> : null}
+        <div className="flex items-center gap-2">
+          {/* The same verdicts as a document: both inspections side by side. */}
+          {data ? (
+            <Button asChild size="sm" type="button" variant="outline">
+              <Link href={`/inspections/${inspectionId}/comparison-report`}>Comparison report</Link>
+            </Button>
+          ) : null}
+          {/*
+            Sharing is offered only once a reviewer has approved. The document
+            says which areas carry new damage, and that is the basis for money
+            coming out of a deposit -- a draft has nobody standing behind it.
+          */}
+          {data && canManage && data.status === 'APPROVED' ? (
+            <Button onClick={() => setSharing(true)} size="sm" type="button" variant="outline">
+              Share
+            </Button>
+          ) : null}
+          {data ? <StatusBadge value={data.overallCondition} /> : null}
+        </div>
       </CardHeader>
 
       <CardContent className="space-y-4">
@@ -203,7 +223,13 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   </Button>
                 </>
               ) : null}
-              {canManage && data.status !== 'APPROVED' ? (
+              {/*
+                Offered on an approved comparison too. The approval is the
+                reviewer's to supersede: regenerating returns the record to
+                draft and clears the reviewer, so nothing inherits a decision
+                nobody made about it. Only the automatic trigger is refused.
+              */}
+              {canManage ? (
                 <Button
                   disabled={mutations.generateComparison.isPending}
                   onClick={() => mutations.generateComparison.mutate({ id: inspectionId })}
@@ -214,12 +240,6 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
                   {mutations.generateComparison.isPending ? 'Regenerating…' : 'Regenerate'}
                 </Button>
               ) : null}
-              {/* The same verdicts as a document: both inspections side by side. */}
-              <Button asChild type="button" variant="outline">
-                <Link href={`/inspections/${inspectionId}/comparison-report`}>
-                  Comparison report
-                </Link>
-              </Button>
             </div>
 
             {mutations.reviewComparison.error ? (
@@ -236,6 +256,13 @@ export function InspectionComparisonPanel({ inspectionId }: { inspectionId: stri
           area={overrideArea}
           inspectionId={inspectionId}
           onClose={() => setOverrideArea(null)}
+        />
+      ) : null}
+      {sharing ? (
+        <ReportShareDialog
+          inspectionId={inspectionId}
+          kind="COMPARISON"
+          onClose={() => setSharing(false)}
         />
       ) : null}
     </Card>

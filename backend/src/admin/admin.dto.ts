@@ -341,6 +341,13 @@ export class FindingReviewDto {
 
 export class CreateReportShareDto {
   @IsOptional() @IsEmail() @MaxLength(320) recipientEmail?: string;
+  /**
+   * Which document the link serves. Defaults to the inspection report, so a
+   * client that predates comparison sharing keeps issuing what it always did.
+   */
+  @IsOptional()
+  @IsIn(['INSPECTION', 'COMPARISON'])
+  kind?: 'INSPECTION' | 'COMPARISON';
 }
 
 export class TestMailDto {

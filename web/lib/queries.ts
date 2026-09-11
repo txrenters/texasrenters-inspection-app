@@ -2130,13 +2130,18 @@ export function useAdminMutations() {
       mutationFn: ({
         inspectionId,
         recipientEmail,
+        kind,
       }: {
         inspectionId: string;
         recipientEmail?: string;
+        kind?: 'INSPECTION' | 'COMPARISON';
       }) =>
         api<AdminReportShare>(`/api/v1/admin/inspections/${inspectionId}/report-shares`, {
           method: 'POST',
-          body: JSON.stringify(recipientEmail ? { recipientEmail } : {}),
+          body: JSON.stringify({
+            ...(recipientEmail ? { recipientEmail } : {}),
+            ...(kind ? { kind } : {}),
+          }),
         }),
       onSuccess: (data, variables) => {
         mergeAuthoritativeEntity(client, keys.all, data);

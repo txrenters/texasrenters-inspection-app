@@ -102,10 +102,14 @@ function ShareRow({ share, inspectionId }: { share: AdminReportShare; inspection
 export function ReportShareDialog({
   inspectionId,
   onClose,
+  kind = 'INSPECTION',
 }: {
   inspectionId: string;
   onClose: () => void;
+  /** Which document the link serves. A comparison must be approved first. */
+  kind?: 'INSPECTION' | 'COMPARISON';
 }) {
+  const comparison = kind === 'COMPARISON';
   const [email, setEmail] = useState('');
   const shares = useReportShares(inspectionId);
   const { createReportShare } = useAdminMutations();
@@ -116,6 +120,7 @@ export function ReportShareDialog({
       await createReportShare.mutateAsync({
         inspectionId,
         recipientEmail: email.trim() || undefined,
+        kind,
       });
       setEmail('');
     } catch {
@@ -127,11 +132,11 @@ export function ReportShareDialog({
     <Sheet onOpenChange={(next) => (next ? undefined : onClose())} open>
       <SheetContent className="w-full sm:max-w-lg" side="right">
         <SheetHeader>
-          <SheetTitle>Share inspection report</SheetTitle>
+          <SheetTitle>{comparison ? 'Share comparison report' : 'Share inspection report'}</SheetTitle>
           <SheetDescription>
-            Anyone with a link can view a read-only report of this inspection: room status and
-            findings that a reviewer approved. Internal notes and pending AI output are never
-            included. Links expire after 30 days and can be revoked at any time.
+            {comparison
+              ? 'Anyone with a link can view the move-in and move-out inspections side by side, with the condition, approved findings and photographs for each area. The comparison must be approved before it can be shared. Links expire after 30 days and can be revoked at any time.'
+              : 'Anyone with a link can view a read-only report of this inspection: room status and findings that a reviewer approved. Internal notes and pending AI output are never included. Links expire after 30 days and can be revoked at any time.'}
           </SheetDescription>
         </SheetHeader>
 

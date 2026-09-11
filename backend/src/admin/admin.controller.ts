@@ -597,7 +597,7 @@ export class AdminController {
     @Param('inspectionId') id: string,
     @Body() body: CreateReportShareDto,
   ) {
-    return this.reportShares.createShare(request.user, id, body.recipientEmail);
+    return this.reportShares.createShare(request.user, id, body.recipientEmail, body.kind);
   }
   @Get('inspections/:inspectionId/report-shares')
   @RequirePermissions('reports:share')
