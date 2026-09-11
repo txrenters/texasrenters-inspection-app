@@ -42,6 +42,73 @@ export interface TechnicianLocationFix {
   recordedAt: string;
   accuracyMeters?: number | null;
   batteryPercent?: number | null;
+  /**
+   * Degrees clockwise from true north, or null when the device will not say.
+   *
+   * The direction of *travel*, not the direction the handset is pointed --
+   * a phone face-up on a passenger seat still reports the car's course. It is
+   * only meaningful while moving; a stationary device reports whatever it last
+   * saw, or nothing.
+   */
+  headingDegrees?: number | null;
+  /** Metres per second over the ground, or null when the device will not say. */
+  speedMetersPerSecond?: number | null;
+}
+
+/**
+ * What a platform reports when it has no answer, which is not the same as zero.
+ *
+ * iOS and Android both return `-1` from `coords.heading` and `coords.speed`
+ * when the fix carries no course or speed -- a phone standing still, or one
+ * whose first fix came from a cell tower. Stored literally that would be a
+ * heading of minus one degree and a speed of minus one metre per second: the
+ * map would draw an arrow pointing very slightly west of north on somebody
+ * sitting in a kitchen, and the trail would say they were reversing.
+ *
+ * Normalised at both ends. The handset does it before queueing, and the server
+ * does it again on arrival, because a queue can hold points written by a build
+ * that predates this function.
+ */
+export function normaliseMotion(fix: {
+  headingDegrees?: number | null;
+  speedMetersPerSecond?: number | null;
+}): { headingDegrees: number | null; speedMetersPerSecond: number | null } {
+  const heading = fix.headingDegrees;
+  const speed = fix.speedMetersPerSecond;
+
+  return {
+    // 360 is north and so is 0; the modulo keeps a device that reports the
+    // former from failing a `< 360` bound.
+    headingDegrees:
+      typeof heading === 'number' && Number.isFinite(heading) && heading >= 0
+        ? Math.round(heading % 360)
+        : null,
+    speedMetersPerSecond:
+      typeof speed === 'number' && Number.isFinite(speed) && speed >= 0 ? speed : null,
+  };
+}
+
+/**
+ * Below this, a technician is standing still rather than travelling slowly.
+ *
+ * 0.5 m/s is a shade over one mile per hour. GPS jitter alone moves a
+ * stationary phone by a few metres between fixes, which reads as a low speed
+ * in a random direction -- so without a floor the heading arrow on a parked
+ * marker spins, which looks like a bug and is worse than showing nothing.
+ */
+export const MOVING_SPEED_MS = 0.5;
+
+/** Whether this position should be drawn as travelling. */
+export function isMoving(position: {
+  speedMetersPerSecond?: number | null;
+  headingDegrees?: number | null;
+}): boolean {
+  const { headingDegrees, speedMetersPerSecond } = normaliseMotion(position);
+  return (
+    headingDegrees !== null &&
+    speedMetersPerSecond !== null &&
+    speedMetersPerSecond >= MOVING_SPEED_MS
+  );
 }
 
 export type LocationFixRejection =
@@ -109,6 +176,9 @@ export interface TechnicianPosition {
   longitude: number;
   accuracyMeters: number | null;
   batteryPercent: number | null;
+  /** See `TechnicianLocationFix`. Null whenever the handset had no course. */
+  headingDegrees: number | null;
+  speedMetersPerSecond: number | null;
   recordedAt: string;
   technician: { id: string; displayName: string } | null;
 }

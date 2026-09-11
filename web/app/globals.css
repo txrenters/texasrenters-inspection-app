@@ -371,3 +371,71 @@
 .map-air-line {
   stroke: var(--map-air);
 }
+
+/* Google's info window, made to follow the theme.
+ *
+ * `InfoWindow` does not render our markup into our own DOM -- Google builds the
+ * bubble, the tail and the close button itself and paints every one of them a
+ * hard-coded white. Only the *content* is ours, so it inherits `--foreground`,
+ * which in dark mode is near-white. The result was white text on a white
+ * bubble: the dialogue was still there, still correctly positioned, and
+ * completely unreadable.
+ *
+ * Styled through Google's own class names because there is no other handle on
+ * them. They are undocumented and have changed before, which is why the
+ * content also carries explicit colours of its own -- if one of these names
+ * changes, the text stays legible against whatever Google paints and only the
+ * bubble reverts to white.
+ *
+ * `--popover` rather than `--card`: this is a transient thing floating above
+ * the page, which is the token for exactly that. */
+.gm-style .gm-style-iw-c {
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 2px 10px oklch(0 0 0 / 0.25);
+  /* Google sizes the bubble from its content and then imposes a minimum width
+     wide enough for a paragraph, which makes a two-line position readout look
+     like a rendering fault. */
+  min-width: 0 !important;
+  padding: 10px 12px;
+}
+
+/* The inner scroll container paints its own background over the one above. */
+.gm-style .gm-style-iw-d {
+  background: transparent;
+  color: var(--popover-foreground);
+  overflow: visible !important;
+}
+
+/* The tail under the bubble is a separately coloured rotated square. Left
+   white it reads as a bright notch hanging off a dark bubble. */
+.gm-style .gm-style-iw-tc::after {
+  background: var(--popover);
+}
+
+/* The close button is Google's own glyph, and all but invisible on a dark
+   bubble. Recent Maps builds draw it as a masked `span`, which takes a colour;
+   older ones use an `img`, which does not, so that one is inverted instead.
+   Both are covered because the version is Google's to change, not ours. */
+.gm-style .gm-style-iw-c button.gm-ui-hover-effect > span {
+  background-color: var(--muted-foreground);
+}
+
+:root[data-theme='dark'] .gm-style .gm-style-iw-c button.gm-ui-hover-effect > img {
+  filter: invert(1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light'])
+    .gm-style
+    .gm-style-iw-c
+    button.gm-ui-hover-effect
+    > img {
+    filter: invert(1);
+  }
+}
+
+/* Google reserves room above the content for a title it is not being given. */
+.gm-style .gm-style-iw-ch {
+  padding-top: 0;
+}

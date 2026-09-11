@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { normaliseMotion } from '@texasrenters/shared';
 
 import { appendLocationFixes } from './location-storage';
 import type { QueuedFix } from './location-queue';
@@ -95,6 +96,14 @@ function toQueuedFix(location: Location.LocationObject): QueuedFix {
       location.coords.accuracy === null || location.coords.accuracy === undefined
         ? null
         : Math.round(location.coords.accuracy),
+    // Course and ground speed, which both platforms already put in every fix.
+    // `normaliseMotion` is doing real work here rather than tidying types:
+    // iOS and Android report `-1` for "no answer", and a -1 stored as a heading
+    // draws an arrow on a technician standing in a kitchen.
+    ...normaliseMotion({
+      headingDegrees: location.coords.heading,
+      speedMetersPerSecond: location.coords.speed,
+    }),
   };
 }
 

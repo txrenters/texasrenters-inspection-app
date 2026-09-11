@@ -5,6 +5,7 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
+import { isMoving } from '@texasrenters/shared';
 import {
   AdvancedMarker,
   APIProvider,
@@ -21,7 +22,13 @@ import { useTheme } from 'next-themes';
 import { pointsToFit } from '@/components/map-bounds';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
 import { clusterByGrid, zoomToIsolate } from '@/components/map-clusters';
-import { formatRelative } from '@/lib/format';
+import {
+  formatCompass,
+  formatDistance,
+  formatDuration,
+  formatRelative,
+  formatSpeed,
+} from '@/lib/format';
 import { MapSettings, useMapPreferences } from '@/components/map-settings';
 
 /**
@@ -152,7 +159,24 @@ const PropertyPin = memo(function PropertyPin({ dim = false }: { dim?: boolean }
  * were the fix. React reconciles this instead — the `<circle>` survives a
  * re-render, and so does its animation.
  */
-const TechnicianPin = memo(function TechnicianPin({ stale, dim = false }: { stale: boolean; dim?: boolean }) {
+const TechnicianPin = memo(function TechnicianPin({
+  stale,
+  dim = false,
+  heading = null,
+}: {
+  stale: boolean;
+  dim?: boolean;
+  /**
+   * Course over ground, or null to draw no arrow at all.
+   *
+   * Null is the common case and it matters that it stays empty: a technician
+   * standing in a kitchen has no course, and an arrow left over from the drive
+   * in would keep asserting a direction they stopped travelling ten minutes
+   * ago. The caller decides, via `isMoving`, rather than this component
+   * guessing from a speed it was not given.
+   */
+  heading?: number | null;
+}) {
   const fill = stale ? 'fill-map-technician-stale' : 'fill-map-technician';
   // Only for someone reporting now, and only when they are not dimmed. A stale
   // position is the opposite of live, so animating it would say the wrong
@@ -166,6 +190,25 @@ const TechnicianPin = memo(function TechnicianPin({ stale, dim = false }: { stal
       {live ? (
         <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11" />
       ) : null}
+      {/* Rotated about the marker's own centre, which is also the coordinate
+          the marker is anchored at -- so the arrow swings around the person
+          rather than orbiting some other point.
+
+          Screen-up is north because the map is never rotated: tilt changes the
+          camera's pitch, not its bearing, so 0 degrees keeps pointing at the
+          top of the window even in the 3D view. If a rotation control is ever
+          added this must subtract the map's heading. */}
+      {heading === null ? null : (
+        <g transform={`rotate(${heading} 22 22)`}>
+          <path
+            className={fill}
+            d="M22 1.5 L26.6 10.5 L22 8.4 L17.4 10.5 Z"
+            stroke="#fff"
+            strokeLinejoin="round"
+            strokeWidth="1.5"
+          />
+        </g>
+      )}
       <g transform="translate(8,8)">
         <circle
           className={fill}
@@ -609,6 +652,17 @@ const RouteLayer = memo(function RouteLayer({ route }: { route: TechnicianRoute 
       <Line className="map-route-line" opacity={1} path={route.geometry} weight={4} zIndex={3} />
       {route.stops.map((stop, index) => {
         const position = { lat: stop.latitude, lng: stop.longitude };
+        // Legs run parallel to stops -- leg[i] is the drive that *arrives* at
+        // stop[i], so the first one starts from the technician rather than
+        // from another stop. That is also why `fromStopId` is nullable.
+        const leg = route.legs[index];
+        // Driving only. It deliberately excludes time spent inside the
+        // properties before this one, because nothing here knows that yet --
+        // so it is labelled as driving rather than presented as an arrival
+        // time, which would be wrong by however long the day's work takes.
+        const drivingSoFar = route.legs
+          .slice(0, index + 1)
+          .reduce((total, each) => total + each.durationSeconds, 0);
         return (
           <Fragment key={stop.inspectionId}>
             {/* Above the property pin it sits on, and above the technician,
@@ -623,12 +677,36 @@ const RouteLayer = memo(function RouteLayer({ route }: { route: TechnicianRoute 
             </AdvancedMarker>
             {openStop === stop.inspectionId ? (
               <InfoWindow onCloseClick={() => setOpenStop(null)} position={position}>
-                <span className="font-medium">
-                  {index + 1}. {stop.propertyName}
-                </span>
-                <br />
-                {stop.addressLine1}
-                {stop.city ? `, ${stop.city}` : null}
+                {/* Explicit colours for the same reason as the technician
+                    bubble: the theme fix in `globals.css` hangs off one of
+                    Google's undocumented class names, and this does not. */}
+                <div className="text-popover-foreground text-xs leading-relaxed">
+                  <div className="text-sm font-medium">
+                    {index + 1}. {stop.propertyName}
+                  </div>
+                  <div className="text-muted-foreground">
+                    {stop.addressLine1}
+                    {stop.city ? `, ${stop.city}` : null}
+                  </div>
+                  {leg ? (
+                    <div className="mt-1">
+                      <div>
+                        {formatDuration(leg.durationSeconds)} · {formatDistance(leg.distanceMeters)}{' '}
+                        <span className="text-muted-foreground">
+                          {leg.fromStopId === null ? 'from the technician' : 'from the last stop'}
+                        </span>
+                      </div>
+                      {/* Only once there is something to accumulate. On the
+                          first stop the running total and the leg are the same
+                          number, and printing it twice reads as an error. */}
+                      {index > 0 ? (
+                        <div className="text-muted-foreground">
+                          {formatDuration(drivingSoFar)} driving so far
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </InfoWindow>
             ) : null}
           </Fragment>
@@ -953,6 +1031,10 @@ export function TechnicianMap({
             const dim =
               Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
             const at = { lat: position.latitude, lng: position.longitude };
+            // A stale position's heading is the direction they were travelling
+            // whenever that fix was taken, which may be hours ago. Drawing it
+            // would be the map asserting a present fact from stale evidence.
+            const moving = !stale && isMoving(position);
             return (
               <Fragment key={position.id}>
                 {position.accuracyMeters && position.accuracyMeters > 25 ? (
@@ -968,19 +1050,42 @@ export function TechnicianMap({
                   title={position.technician?.displayName ?? 'Unknown technician'}
                   zIndex={500}
                 >
-                  <TechnicianPin dim={dim} stale={stale} />
+                  <TechnicianPin
+                    dim={dim}
+                    heading={moving ? position.headingDegrees : null}
+                    stale={stale}
+                  />
                 </AdvancedMarker>
                 {openTechnician === position.id ? (
                   <InfoWindow onCloseClick={() => setOpenTechnician(null)} position={at}>
-                    <span className="font-medium">
-                      {position.technician?.displayName ?? 'Unknown technician'}
-                    </span>
-                    <br />
-                    {formatRelative(position.recordedAt)}
-                    {position.accuracyMeters === null ? null : <> · ±{position.accuracyMeters}m</>}
-                    {position.batteryPercent === null ? null : (
-                      <> · {position.batteryPercent}% battery</>
-                    )}
+                    {/* The colours are set here as well as on Google's own
+                        bubble in `globals.css`. That rule depends on an
+                        undocumented class name; this one does not, so if
+                        Google renames it the text stays readable and only the
+                        background reverts. */}
+                    <div className="text-popover-foreground text-xs leading-relaxed">
+                      <div className="text-sm font-medium">
+                        {position.technician?.displayName ?? 'Unknown technician'}
+                      </div>
+                      <div className="text-muted-foreground">
+                        {formatRelative(position.recordedAt)}
+                        {position.accuracyMeters === null ? null : (
+                          <> · ±{position.accuracyMeters}m</>
+                        )}
+                        {position.batteryPercent === null ? null : (
+                          <> · {position.batteryPercent}% battery</>
+                        )}
+                      </div>
+                      {/* Only while they are actually travelling. "Stationary"
+                          on every parked marker is noise, and a speed of zero
+                          next to a heading nobody can trust is worse. */}
+                      {moving ? (
+                        <div className="text-popover-foreground">
+                          {formatSpeed(position.speedMetersPerSecond)} ·{' '}
+                          {formatCompass(position.headingDegrees)}
+                        </div>
+                      ) : null}
+                    </div>
                   </InfoWindow>
                 ) : null}
               </Fragment>
