@@ -177,17 +177,21 @@
 
      Strong and far apart in hue, because these are read at a glance over busy
      cartography — a muted palette that works in a data table disappears on top
-     of roads, parks and rivers. Green reads as a fixed place, red as a person
-     to attend to; the stale grey deliberately drains the urgency out of a
-     position nobody should still be acting on. */
-  --map-property: oklch(0.52 0.16 152);
-  --map-technician: oklch(0.55 0.22 27);
+     of roads, parks and rivers. Blue reads as a fixed place, green as a person
+     who is out there now; the stale grey deliberately drains the urgency out
+     of a position nobody should still be acting on.
+
+     Property and technician were the other way round until somebody who uses
+     this map every day asked for them swapped. */
+  --map-property: oklch(0.55 0.17 255);
+  --map-technician: oklch(0.58 0.17 152);
   --map-technician-stale: oklch(0.55 0.02 260);
-  /* The recommended drive. A blue that belongs to neither the properties nor
-     the technicians, so the line reads as a third thing rather than as either
-     of the two it connects. */
-  /* Orange: the route has to carry over satellite and hybrid imagery,
-     where a blue line disappears into water and roofs. */
+  /* The recommended drive, in orange.
+     
+     It belongs to neither the properties nor the technicians, so the line
+     reads as a third thing rather than as either of the two it connects — and
+     it has to carry over satellite and hybrid imagery, which is what the map
+     is mostly used in and where a blue line disappears into water and roofs. */
   --map-route: oklch(0.68 0.19 52);
   /* Air travel. Deliberately not the route blue: this is a journey nobody
      drove and nobody planned, and it must not be mistaken for the road line. */
