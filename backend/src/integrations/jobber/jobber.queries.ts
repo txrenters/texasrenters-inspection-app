@@ -158,14 +158,11 @@ export const VISIT_COMPLETE_MUTATION = `
  * GraphQL permits a `T!` variable wherever `T` is accepted, and being stricter
  * here means a missing id fails locally rather than at Jobber.
  *
- * **This is not sufficient for the quarterly planner on its own.** Every one of
- * the 115 benefit-package visits in the live table belongs to its own job —
- * 115 visits, 115 distinct jobs — so the office creates a job per visit rather
- * than adding visits to a recurring one. Booking a new quarter therefore needs
- * `jobCreate` first, whose `invoicing` argument is required and carries two
- * enums (`BillingStrategy`, `BillingFrequencyEnum`) that decide how the office
- * bills. That is a business decision, not a technical one, and it is why the
- * outbound worker still refuses TBP_VISIT_CREATE.
+ * **This is not sufficient on its own**, because it needs a job to hang the
+ * visit on. Every one of the 115 benefit-package visits in the live table
+ * belongs to its own job — 115 visits, 115 distinct jobs — so the office
+ * creates a job per visit rather than adding visits to a recurring one.
+ * `JOB_CREATE_MUTATION` below is the other half.
  */
 export const VISIT_CREATE_MUTATION = `
   mutation CreateVisit($jobId: EncodedId!, $input: VisitCreateInput!) {
@@ -182,6 +179,60 @@ export const VISIT_CREATE_MUTATION = `
     }
   }
 `;
+
+/**
+ * The one-off job a benefit-package visit hangs on.
+ *
+ * Verified against the live schema, and — more usefully — against the office's
+ * **own existing jobs**, so this copies what they already do rather than
+ * choosing on their behalf. Three of the jobs behind live TBP visits read:
+ *
+ *   jobType ONE_OFF, billingType FIXED_PRICE, billingFrequency ON_COMPLETION
+ *   title "Zone 1 - Q3 2026 Tenant Benefit Package"
+ *
+ * `invoicing` is a required argument carrying two enums that decide how a
+ * client is billed, which is not a decision this code should invent. Reading it
+ * off their existing jobs is why `TBP_JOB_INVOICING` below is a fact rather
+ * than a default.
+ *
+ * Note the **job** title carries no address while the **visit** title does —
+ * `19803 Bolton Bridge Ln - Zone 1 - Q3 2026 Tenant Benefit Package`. That is
+ * the office's own convention and the visit title is the one
+ * `resolveVisitType` reads, so the two are built separately rather than one
+ * being derived from the other.
+ *
+ * Scheduling is deliberately omitted here. `JobSchedulingAttributes.createVisits`
+ * would have Jobber mint the visit itself, and then the visit's title and
+ * instructions are whatever Jobber derives — including the
+ * "+ Occupied Inspection" phrase the importer depends on. Creating the job bare
+ * and then calling `visitCreate` keeps both strings under our control.
+ */
+export const JOB_CREATE_MUTATION = `
+  mutation CreateJob($input: JobCreateAttributes!) {
+    jobCreate(input: $input) {
+      job {
+        id
+        jobNumber
+      }
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
+ * How the office bills a benefit-package job, read from their own jobs.
+ *
+ * Not a default and not a guess: three live TBP jobs were inspected and all
+ * three carry exactly this. If the office changes how they bill the programme,
+ * this is the line that has to change with it.
+ */
+export const TBP_JOB_INVOICING = {
+  invoicingType: 'FIXED_PRICE',
+  invoicingSchedule: 'ON_COMPLETION',
+} as const;
 
 /**
  * Attaches a note to the job the visit belongs to.
