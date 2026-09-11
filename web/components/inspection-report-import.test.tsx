@@ -136,8 +136,9 @@ describe('importing an inspection report', () => {
 
   it('does not import until somebody presses the button', async () => {
     job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
-    render(<InspectionReportImport resumeJobId="job-1" />);
+    render(<InspectionReportImport evidence={{ areas: 0, photos: 0 }} resumeJobId="job-1" />);
 
+    // Known-empty, so there is nothing to choose between and the button is live.
     await screen.findByRole('button', { name: /^import as .* inspection$/i });
     expect(commitImport).not.toHaveBeenCalled();
 
@@ -192,6 +193,28 @@ describe('importing an inspection report', () => {
     expect(screen.getByText(/16 areas this report does not cover/i)).toBeTruthy();
   });
 
+  /**
+   * The regression this exists for.
+   *
+   * The inspection *detail* endpoint does not send evidence counts -- only the
+   * list does -- so reading a missing count as zero hid the choice entirely on
+   * the one page imports are started from, and every import silently replaced.
+   * Not knowing is not the same as knowing there is nothing there.
+   */
+  it('still asks when the counts are unknown', async () => {
+    job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
+    render(<InspectionReportImport resumeJobId="job-1" />);
+
+    const button = await screen.findByRole('button', { name: /choose how to write/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('radio', { name: /add to this inspection/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: /add to this inspection/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add these areas/i }));
+
+    await waitFor(() => expect(commitImport).toHaveBeenCalledWith({ jobId: 'job-1', mode: 'ADD' }));
+  });
+
   it('asks nothing when the inspection holds nothing to lose', async () => {
     job = { id: 'job-1', status: 'COMPLETED', method: 'DETERMINISTIC', provider: null, errorCode: null, inspectionId: null, committedAt: null, summary: summary() };
     render(<InspectionReportImport evidence={{ areas: 0, photos: 0 }} resumeJobId="job-1" />);
@@ -215,7 +238,9 @@ describe('importing an inspection report', () => {
       committedAt: null,
       summary: summary(),
     };
-    render(<InspectionReportImport resumeJobId="job-1" />);
+    // Known-empty: this case is about what the screen says while the server
+    // writes, not about which way the report is written.
+    render(<InspectionReportImport evidence={{ areas: 0, photos: 0 }} resumeJobId="job-1" />);
 
     const button = await screen.findByRole('button', { name: /^import as .* inspection$/i });
     // Wrapped: `commit` sets its flag in an async continuation, which the click
