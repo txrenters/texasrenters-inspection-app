@@ -13,9 +13,11 @@ import {
   usePropertyLocations,
   useTechnicianLocations,
   useTechnicianRoute,
+  useTechnicianTimeline,
 } from '@/lib/queries';
 import { PropertyList } from '@/components/property-list';
 import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
+import { TechnicianDaySummary } from '@/components/technician-day-summary';
 import { DatePicker } from '@/components/ui/date-picker';
 import { businessToday } from '@/lib/clock';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -151,6 +153,15 @@ export default function TechnicianMapPage() {
   // person, so doing it for the whole roster to draw one line would be paying
   // for five answers to use one.
   const route = useTechnicianRoute(selectedId ?? '', date, Boolean(selectedId));
+
+  /**
+   * Only for the selected technician, and only for the day being looked at.
+   *
+   * Segmenting a trail is cheap but it is one query per person, and the roster
+   * is a list somebody scans rather than reads -- fetching a day for everyone
+   * on it would spend a dozen requests to fill in numbers nobody asked for yet.
+   */
+  const timeline = useTechnicianTimeline(selectedId ?? '', date, Boolean(selectedId));
 
   /**
    * Which technicians to show: everybody, only those reporting now, or only
@@ -335,6 +346,13 @@ export default function TechnicianMapPage() {
                 />
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
+                {/* Above the list, because it describes the person whose row
+                    is open rather than any one stop in it. Only when somebody
+                    is selected: there is no such thing as the roster's day. */}
+                {selectedId && timeline.data ? (
+                  <TechnicianDaySummary timeline={timeline.data} />
+                ) : null}
+
                 <TechnicianRoster
                   entries={visibleRoster}
                   onSelect={selectTechnician}

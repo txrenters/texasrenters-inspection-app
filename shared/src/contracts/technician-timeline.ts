@@ -371,3 +371,31 @@ export function projectRemainder(
     basis: measured === null ? 'ESTIMATED' : 'MEASURED',
   };
 }
+
+/**
+ * A technician's day as the console receives it.
+ *
+ * Here rather than beside the service that builds it, for the same reason every
+ * other response shape is: the web app cannot import from the backend, and a
+ * second hand-written copy of this on the client is how the two drift.
+ */
+export interface TechnicianDayTimeline {
+  technicianId: string;
+  segments: TimelineSegment[];
+  totals: DayTotals;
+  projection: RemainderProjection;
+  stops: {
+    /**
+     * Keyed by building, not by inspection. Two inspections at one address on
+     * one day are one visit, and timing them separately reports the same
+     * minutes twice.
+     */
+    buildingId: string;
+    propertyName: string;
+    inspectionIds: string[];
+    onSiteSeconds: number;
+    driveToSeconds: number | null;
+  }[];
+  /** Assigned, but with no coordinate to time them against. */
+  untimedInspectionIds: string[];
+}

@@ -5,10 +5,8 @@ import {
   projectRemainder,
   secondsAtPlace,
   segmentDay,
-  type DayTotals,
-  type RemainderProjection,
+  type TechnicianDayTimeline,
   type TimelinePlace,
-  type TimelineSegment,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -185,19 +183,4 @@ export class TechnicianTimelineService {
       untimedInspectionIds: unplaceable,
     } satisfies TechnicianDayTimeline;
   }
-}
-
-export interface TechnicianDayTimeline {
-  technicianId: string;
-  segments: TimelineSegment[];
-  totals: DayTotals;
-  projection: RemainderProjection;
-  stops: {
-    buildingId: string;
-    propertyName: string;
-    inspectionIds: string[];
-    onSiteSeconds: number;
-    driveToSeconds: number | null;
-  }[];
-  untimedInspectionIds: string[];
 }
