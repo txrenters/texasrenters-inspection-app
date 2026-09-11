@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   type GeocodePrecision,
   geocodableAddress,
+  isWorthReplacing,
   needsGeocoding,
   type PropertyPosition,
 } from '@texasrenters/shared';
@@ -336,6 +337,7 @@ export class PropertyGeocodingService {
           longitude: true,
           geocodedFor: true,
           geocodeSource: true,
+          geocodePrecision: true,
         },
         take: limit,
       });
@@ -375,6 +377,25 @@ export class PropertyGeocodingService {
         const answer = await this.geocodeAddress(address);
         if (!answer) {
           failed += 1;
+          continue;
+        }
+
+        /**
+         * Never write a worse answer over a better one.
+         *
+         * Only reachable on the upgrade path, where the row already has a
+         * coordinate. Google answering an address it cannot find with the area
+         * centroid moved one building 7.2km off a good Census match before this
+         * existed; `TRUSTWORTHY_PRECISIONS` would then refuse to draw it at all,
+         * so the property would leave the map entirely.
+         */
+        if (!isWorthReplacing(answer.precision, building.geocodePrecision as GeocodePrecision)) {
+          this.logger.warn({
+            event: 'geocode_downgrade_refused',
+            buildingId: building.id,
+            stored: building.geocodePrecision,
+            offered: answer.precision,
+          });
           continue;
         }
 
