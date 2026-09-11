@@ -7,12 +7,24 @@
  *   Uncaught (in promise) Error: One of the `NSLocation*UsageDescription` keys
  *   must be present in Info.plist to be able to use geolocation.
  */
-import { startShiftTracking, stopShiftTracking } from '../src/location/shift-tracking';
+import {
+  ensureShiftTracking,
+  isShiftTrackingActive,
+  startShiftTracking,
+  stopShiftTracking,
+} from '../src/location/shift-tracking';
 
 const mockHasServices = jest.fn();
 const mockRequestForeground = jest.fn();
 const mockRequestBackground = jest.fn();
 const mockStartUpdates = jest.fn();
+// Defaults at declaration, not only in `beforeEach`: that hook calls
+// `stopShiftTracking()` on its first line, before any of the assignments
+// below have run, so a mock with no implementation returns undefined and the
+// `.catch` on it throws before a single test starts.
+const mockHasStarted = jest.fn().mockResolvedValue(false);
+const mockStopUpdates = jest.fn().mockResolvedValue(undefined);
+const mockIsRegistered = jest.fn().mockResolvedValue(false);
 const mockWatchPosition = jest.fn();
 const mockAppendFixes = jest.fn();
 
@@ -22,14 +34,17 @@ jest.mock('expo-location', () => ({
   requestBackgroundPermissionsAsync: () => mockRequestBackground(),
   startLocationUpdatesAsync: (...args: unknown[]) => mockStartUpdates(...args),
   watchPositionAsync: (...args: unknown[]) => mockWatchPosition(...args),
-  stopLocationUpdatesAsync: jest.fn(),
+  stopLocationUpdatesAsync: (...args: unknown[]) => mockStopUpdates(...args),
+  // The question that distinguishes a task which is *delivering* from one that
+  // is merely registered. Its absence here is what the bug looked like.
+  hasStartedLocationUpdatesAsync: (...args: unknown[]) => mockHasStarted(...args),
   Accuracy: { Balanced: 3 },
   ActivityType: { Other: 1 },
 }));
 
 jest.mock('expo-task-manager', () => ({
   defineTask: jest.fn(),
-  isTaskRegisteredAsync: jest.fn().mockResolvedValue(false),
+  isTaskRegisteredAsync: (...args: unknown[]) => mockIsRegistered(...args),
 }));
 
 jest.mock('../src/location/location-storage', () => ({
@@ -48,6 +63,9 @@ beforeEach(async () => {
   mockRequestBackground.mockResolvedValue({ granted: true });
   mockStartUpdates.mockResolvedValue(undefined);
   mockWatchPosition.mockResolvedValue({ remove: jest.fn() });
+  mockHasStarted.mockResolvedValue(false);
+  mockStopUpdates.mockResolvedValue(undefined);
+  mockIsRegistered.mockResolvedValue(false);
   mockAppendFixes.mockResolvedValue(undefined);
 });
 
@@ -170,9 +188,93 @@ describe('startShiftTracking', () => {
       mockRequestBackground.mockResolvedValue({ granted: true });
       mockStartUpdates.mockResolvedValue(undefined);
       mockWatchPosition.mockResolvedValue({ remove: jest.fn() });
+  mockHasStarted.mockResolvedValue(false);
+  mockStopUpdates.mockResolvedValue(undefined);
+  mockIsRegistered.mockResolvedValue(false);
       boom.mockRejectedValue(new Error('native failure'));
 
       await expect(startShiftTracking()).resolves.toBeDefined();
     }
+  });
+});
+
+/**
+ * The hour-long holes in a technician's trail.
+ *
+ * Moses reported that tracking stopped while he was still working with the app
+ * open. His trail bore it out: dense fixes with 4-100m accuracy, then nothing
+ * for 30 to 60 minutes, repeatedly, recovering on its own. Not the network --
+ * the gaps are in `recordedAt`, the handset's own clock, so the fixes were
+ * never collected. Not the retry backoff either, which caps at ten minutes.
+ *
+ * An Android battery manager reclaiming the location service, or iOS
+ * terminating it, leaves the task **registered**. The guard asked whether it
+ * was registered, said yes, and returned early -- so nothing ever restarted
+ * the updates, and the only recovery was relaunching the app.
+ */
+describe('a background task the OS has stopped', () => {
+  it('is not treated as already running', async () => {
+    mockIsRegistered.mockResolvedValue(true);
+    mockHasStarted.mockResolvedValue(false);
+
+    await startShiftTracking();
+
+    expect(mockStartUpdates).toHaveBeenCalled();
+  });
+
+  it('is cleared out before being started again', async () => {
+    // `startLocationUpdatesAsync` on a task that is still registered has
+    // nothing to do, so without this the stall survives the restart.
+    mockIsRegistered.mockResolvedValue(true);
+    mockHasStarted.mockResolvedValue(false);
+
+    await startShiftTracking();
+
+    expect(mockStopUpdates).toHaveBeenCalled();
+  });
+
+  it('is not reported as active tracking', async () => {
+    // Settings said "recording your location" while nothing had been sent for
+    // an hour, because it asked the same wrong question.
+    mockIsRegistered.mockResolvedValue(true);
+    mockHasStarted.mockResolvedValue(false);
+
+    expect(await isShiftTrackingActive()).toBe(false);
+  });
+});
+
+describe('re-arming tracking', () => {
+  it('restarts updates that have stopped', async () => {
+    mockHasStarted.mockResolvedValue(false);
+
+    const result = await ensureShiftTracking();
+
+    expect(result).toEqual({ started: true, mode: 'BACKGROUND' });
+    expect(mockStartUpdates).toHaveBeenCalled();
+  });
+
+  it('does nothing at all when updates are already running', async () => {
+    /**
+     * This runs on every foreground and every two minutes while the app is
+     * open. Restarting a healthy watcher would drop the OS's accumulated fix
+     * state and cost battery for nothing, so the ordinary case must be one
+     * question and no action.
+     */
+    mockHasStarted.mockResolvedValue(true);
+
+    const result = await ensureShiftTracking();
+
+    expect(result).toBeNull();
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('never throws, whatever the OS says', async () => {
+    // It is called from a timer and an AppState listener, neither of which has
+    // anywhere to put an error.
+    mockHasStarted.mockRejectedValue(new Error('no location services'));
+    mockRequestForeground.mockRejectedValue(new Error('no Info.plist keys'));
+
+    await expect(ensureShiftTracking()).resolves.toBeDefined();
   });
 });
