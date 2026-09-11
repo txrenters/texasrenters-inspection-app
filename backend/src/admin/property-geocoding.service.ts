@@ -9,6 +9,7 @@ import {
 import type { AuthenticatedUser } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
+import { GOOGLE_GEOCODE_SOURCE, GoogleGeocodingClient } from './google-geocoding.client';
 
 /**
  * Turns property addresses into points on a map.
@@ -51,6 +52,15 @@ export interface GeocodeAnswer {
   longitude: number;
   precision: GeocodePrecision;
   matchedAddress: string | null;
+  /**
+   * Which geocoder answered.
+   *
+   * Stored rather than assumed, because it is the only way to tell a row that
+   * has already been offered a rooftop lookup from one that has not -- which
+   * is what stops the backfill re-asking Google about the same addresses for
+   * ever.
+   */
+  source: string;
 }
 
 /**
@@ -81,6 +91,7 @@ export function parseCensusResponse(body: unknown): GeocodeAnswer | null {
     longitude,
     precision: 'INTERPOLATED',
     matchedAddress: typeof match.matchedAddress === 'string' ? match.matchedAddress : null,
+    source: GEOCODE_SOURCE,
   };
 }
 
@@ -88,10 +99,39 @@ export function parseCensusResponse(body: unknown): GeocodeAnswer | null {
 export class PropertyGeocodingService {
   private readonly logger = new Logger(PropertyGeocodingService.name);
 
+  /**
+   * Read from the environment rather than injected, so that every existing
+   * caller and test that constructs this with a Prisma double keeps working.
+   * Without a key it reports `configured: false` and this class behaves
+   * exactly as it did before.
+   */
+  private readonly google = new GoogleGeocodingClient(process.env.GOOGLE_SERVER_API_KEY);
+
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
-  /** One address, one lookup. Returns null when the service cannot place it. */
+  /**
+   * One address, one lookup. Returns null when nothing can place it.
+   *
+   * Google first, Census second. Not because Census is unreliable -- it places
+   * these addresses perfectly well -- but because it interpolates along the
+   * street, and measured against Google on four live properties it was 18, 18,
+   * 61 and 75 metres from the roof. Seventy-five metres is several houses.
+   *
+   * The fallback is the point of keeping both. A missing key, an exhausted
+   * quota or a Google outage degrades to a slightly worse coordinate rather
+   * than to none, and no property stops appearing on the map because of a
+   * billing problem.
+   */
   async geocodeAddress(address: string): Promise<GeocodeAnswer | null> {
+    if (this.google.configured) {
+      const answer = await this.google.geocode(address);
+      if (answer) return { ...answer, source: GOOGLE_GEOCODE_SOURCE };
+    }
+    return this.geocodeWithCensus(address);
+  }
+
+  /** The keyless fallback, and the only geocoder this used to have. */
+  private async geocodeWithCensus(address: string): Promise<GeocodeAnswer | null> {
     const url = new URL(CENSUS_ENDPOINT);
     url.searchParams.set('address', address);
     url.searchParams.set('benchmark', BENCHMARK);
@@ -182,7 +222,7 @@ export class PropertyGeocodingService {
             // would make every row look permanently stale.
             geocodedFor: address,
             geocodedAt: new Date(),
-            geocodeSource: GEOCODE_SOURCE,
+            geocodeSource: answer.source,
             geocodePrecision: answer.precision,
           },
         });
@@ -259,13 +299,32 @@ export class PropertyGeocodingService {
    * crosses organizations, and without the system tenant the row-level
    * policies match nothing and it reports "nothing to do" for ever.
    */
-  async geocodePendingBuildings(limit: number) {
+  async geocodePendingBuildings(limit: number, options: { upgradeCensus?: boolean } = {}) {
+    /**
+     * `upgradeCensus` re-asks about rows that already have a coordinate.
+     *
+     * Off by default and never set by the scheduler, deliberately. A row that
+     * Google declines to place falls back to Census and keeps its CENSUS
+     * source, so it would match again on the next pass -- harmless when a
+     * person runs a bounded backfill, an endless loop if a cron does it.
+     *
+     * Pointless without a key, so it is ignored when there is none rather than
+     * re-geocoding six hundred addresses with the geocoder that already
+     * answered them.
+     */
+    const upgrading = Boolean(options.upgradeCensus) && this.google.configured;
+
     return withSystemTenant(async () => {
       const candidates = await this.prisma.propertywareBuilding.findMany({
         where: {
           isActive: true,
           addressLine1: { not: null },
-          OR: [{ latitude: null }, { longitude: null }, { geocodedFor: null }],
+          OR: [
+            { latitude: null },
+            { longitude: null },
+            { geocodedFor: null },
+            ...(upgrading ? [{ geocodeSource: GEOCODE_SOURCE }] : []),
+          ],
         },
         select: {
           id: true,
@@ -276,18 +335,25 @@ export class PropertyGeocodingService {
           latitude: true,
           longitude: true,
           geocodedFor: true,
+          geocodeSource: true,
         },
         take: limit,
       });
 
-      const pending = candidates.filter((building) =>
-        needsGeocoding({
-          addressLine1: building.addressLine1 ?? '',
-          city: building.city ?? '',
-          state: building.state ?? '',
-          postalCode: building.postalCode ?? '',
-          latitude: building.latitude?.toNumber() ?? null,
-          longitude: building.longitude?.toNumber() ?? null,
+      const pending = candidates.filter(
+        (building) =>
+          // An upgrade candidate has a perfectly good coordinate, so
+          // `needsGeocoding` says no about it -- correctly, for the question it
+          // is answering. This is a different question: not "is this placed"
+          // but "is this placed as well as it could be".
+          (upgrading && building.geocodeSource === GEOCODE_SOURCE) ||
+          needsGeocoding({
+            addressLine1: building.addressLine1 ?? '',
+            city: building.city ?? '',
+            state: building.state ?? '',
+            postalCode: building.postalCode ?? '',
+            latitude: building.latitude?.toNumber() ?? null,
+            longitude: building.longitude?.toNumber() ?? null,
           geocodedFor: building.geocodedFor,
         }),
       );
@@ -319,7 +385,7 @@ export class PropertyGeocodingService {
             longitude: answer.longitude,
             geocodedFor: address,
             geocodedAt: new Date(),
-            geocodeSource: GEOCODE_SOURCE,
+            geocodeSource: answer.source,
             geocodePrecision: answer.precision,
           },
         });
