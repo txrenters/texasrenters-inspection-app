@@ -861,6 +861,106 @@ export interface PublicInspectionReport {
   generatedAt: string;
 }
 
+/**
+ * One inspection as it appears on one side of a comparison report.
+ *
+ * The header line the office reads: when the visit happened and who carried it
+ * out. `inspector` joins every current assignee, for the same reason the
+ * inspection report does -- a job can carry more than one technician, and a
+ * superseded assignment names whoever *used* to hold it.
+ */
+export interface ComparisonReportSide {
+  inspectionId: string;
+  type: string;
+  status: string;
+  scheduledAt: string;
+  completedAt?: string | null;
+  inspector?: string | null;
+  templateLabel?: string | null;
+}
+
+/** One area's evidence on one side of the pairing. Null when that side has no such area. */
+export interface ComparisonReportAreaSide {
+  roomId: string;
+  name: string;
+  floorName?: string | null;
+  completionStatus: string;
+  skipReason?: string | null;
+  checklist: PublicReportChecklistItem[];
+  findings: Array<{
+    id: string;
+    title: string;
+    description: string;
+    category: string;
+    severity: string;
+  }>;
+  photos: PublicReportPhoto[];
+}
+
+/**
+ * One row of the comparison: the same area on both sides, with the verdict.
+ *
+ * The pairing is **not** recomputed here. `InspectionAreaComparison` already
+ * records which move-in area a move-out area was matched to, how confidently,
+ * and what a reviewer decided -- so the report prints the verdict that was
+ * actually reviewed rather than a second opinion that could disagree with the
+ * console.
+ *
+ * Either side may be null: an area documented at move-in and never revisited,
+ * or one that only exists at move-out. Those rows are the point of the
+ * document, so they are never dropped.
+ */
+export interface ComparisonReportArea {
+  id: string;
+  areaName: string;
+  floorName?: string | null;
+  classification: string;
+  /** Set when a reviewer overrode the deterministic verdict; null otherwise. */
+  originalClassification?: string | null;
+  overrideReason?: string | null;
+  matchMethod: string;
+  matchConfidence: number;
+  requiresReview: boolean;
+  summary: string;
+  moveIn: ComparisonReportAreaSide | null;
+  moveOut: ComparisonReportAreaSide | null;
+}
+
+/**
+ * Move-in beside move-out, for one move-out inspection.
+ *
+ * `photos[].contentPath` is the only environment-specific field: the console
+ * serves it from the authenticated admin route, and a future share link would
+ * serve the same structure through a token route. Nothing else here needs to
+ * change to publish this document.
+ */
+export interface ComparisonReport {
+  brand: PublicReportBrand;
+  property: {
+    name: string;
+    addressLine1: string;
+    unitName?: string | null;
+    city: string;
+    state: string;
+    postalCode: string;
+  };
+  comparison: {
+    id: string;
+    status: string;
+    version: number;
+    overallCondition: string;
+    requiresReviewCount: number;
+    summary: string;
+    generatedAt: string;
+    reviewedByName?: string | null;
+    reviewedAt?: string | null;
+  };
+  moveIn: ComparisonReportSide;
+  moveOut: ComparisonReportSide;
+  areas: ComparisonReportArea[];
+  generatedAt: string;
+}
+
 export interface AdminInspectionPhoto {
   id: string;
   roomId: string;
