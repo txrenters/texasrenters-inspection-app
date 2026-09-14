@@ -75,3 +75,54 @@ function names(entries: { propertyName: string }[]) {
 export function pluralStops(count: number) {
   return `${count} ${count === 1 ? 'stop' : 'stops'}`;
 }
+
+/**
+ * Where a route starts, in words.
+ *
+ * A route from somebody's house and a route from where they are standing are
+ * different claims. Drawn identically, a dispatcher reading "34 min driving" at
+ * nine in the morning cannot tell whether that is the day ahead of somebody who
+ * has not left home or of somebody already halfway through it.
+ *
+ * The last-seen time is in Texas, where the work is, rather than wherever the
+ * reader happens to be -- the office is frequently in Manila.
+ */
+export function describeOrigin(route: TechnicianRoute): string | null {
+  switch (route.originKind) {
+    case 'LIVE':
+      return 'from their live position';
+    case 'HOME':
+      return 'from home';
+    case 'LAST_KNOWN': {
+      const at = route.origin?.recordedAt ? new Date(route.origin.recordedAt) : null;
+      if (!at || Number.isNaN(at.getTime())) return 'from where they were last seen';
+      const time = at.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'America/Chicago',
+      });
+      return `from where they were last seen at ${time}`;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * A stop's expected arrival as a time of day in Texas, or null if it has none.
+ *
+ * Null for a stop already behind the technician, which the route leaves out of
+ * its arrivals rather than dating in the past -- a panel would otherwise print
+ * a time that has already gone as though it were a forecast.
+ */
+export function arrivalTime(route: TechnicianRoute, inspectionId: string): string | null {
+  const arrival = route.arrivals?.find((entry) => entry.inspectionId === inspectionId);
+  if (!arrival) return null;
+  const at = new Date(arrival.arriveAt);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/Chicago',
+  });
+}

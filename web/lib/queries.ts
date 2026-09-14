@@ -508,6 +508,16 @@ export const useMapAssignments = (date: string, enabled = true) =>
     refetchInterval: 5 * 60_000,
     enabled,
   });
+/**
+ * A technician's route, refreshed every thirty seconds.
+ *
+ * That was every two minutes, and each refresh redrew the route through Google
+ * -- two billed requests -- whether anything had changed or not. The server now
+ * keeps the drawn route and redraws only on a material change, so a refresh
+ * that finds nothing new costs nothing, and the arrival times it returns move
+ * with the technician. Polling faster is what buys the live feel; the cost is
+ * capped where it is decided.
+ */
 export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
   useQuery({
     queryKey: keys.technicianRoute(id, date),
@@ -516,7 +526,7 @@ export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
         `/api/v1/admin/technicians/${id}/route${queryString({ date })}`,
         { signal },
       ),
-    refetchInterval: 2 * 60_000,
+    refetchInterval: 30_000,
     enabled,
   });
 /**
