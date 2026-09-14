@@ -471,3 +471,24 @@ describe('choosing a stop', () => {
     expect(screen.getByText(/Move in/)).toBeTruthy();
   });
 });
+
+describe('a technician working with a stalled location', () => {
+  it('reads as the app open with the location paused, not as a last report hours ago', () => {
+    // 16:02 UTC is 11:02 AM in Texas. Two and a half hours of submitted
+    // inspections later, the row used to say only "2 hours ago".
+    const working: RosterEntry = {
+      ...entries([STOP])[0],
+      position: {
+        technicianId: 'tech-1',
+        latitude: 29.9,
+        longitude: -95.5,
+        recordedAt: '2026-09-14T16:02:19.000Z',
+        app: { connected: true, lastSeenAt: new Date().toISOString() },
+      } as RosterEntry['position'],
+    };
+
+    render(<TechnicianRoster entries={[working]} onSelect={() => {}} selectedId={null} />);
+
+    expect(screen.getByText(/App open · location paused since 11:02 AM/)).toBeInTheDocument();
+  });
+});

@@ -5,7 +5,7 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
-import { isMoving, ONLINE_WITHIN_MS } from '@texasrenters/shared';
+import { isLocationPaused, isMoving, ONLINE_WITHIN_MS } from '@texasrenters/shared';
 import {
   AdvancedMarker,
   APIProvider,
@@ -1226,6 +1226,13 @@ export function TechnicianMap({
                       <div className="text-sm font-medium">
                         {position.technician?.displayName ?? 'Unknown technician'}
                       </div>
+                      {/* The pin is where they were: said so when the app is
+                          open and the location has stopped updating. */}
+                      {isLocationPaused(position) ? (
+                        <div className="text-popover-foreground">
+                          App open · location paused
+                        </div>
+                      ) : null}
                       <div className="text-muted-foreground">
                         {formatRelative(position.recordedAt)}
                         {position.accuracyMeters === null ? null : (

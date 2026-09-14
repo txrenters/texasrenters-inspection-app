@@ -82,3 +82,16 @@ describe('mergeLatestPosition', () => {
     expect(merged).not.toBe(original);
   });
 });
+
+describe('a fix pushed over the socket', () => {
+  it('keeps what the last full read said about the app', () => {
+    // The socket push carries only the fix. Dropping `app` would flip a
+    // technician with the app open back to offline until the next poll.
+    const held = position({ app: { connected: true, lastSeenAt: '2026-08-27T10:00:00.000Z' } });
+    const [merged] = mergeLatestPosition(
+      [held],
+      position({ id: 'ping-2', recordedAt: '2026-08-27T10:05:00.000Z' }),
+    );
+    expect(merged.app).toEqual({ connected: true, lastSeenAt: '2026-08-27T10:00:00.000Z' });
+  });
+});

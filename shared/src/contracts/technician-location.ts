@@ -192,6 +192,17 @@ export interface TechnicianPosition {
   speedMetersPerSecond: number | null;
   recordedAt: string;
   technician: { id: string; displayName: string } | null;
+  /**
+   * Whether the technician's app is open right now, by its live connection to
+   * the server, and when it was last seen.
+   *
+   * Separate from the fix because the two stop independently. On 14 September
+   * Moses's phone stopped recording location at 11:02 while he went on
+   * starting and submitting inspections for two and a half hours, and the map
+   * called him offline the whole time. Absent on a position pushed over the
+   * socket, which says nothing about the app; see `mergeLatestPosition`.
+   */
+  app?: { connected: boolean; lastSeenAt: string | null } | null;
 }
 
 /**
@@ -220,13 +231,42 @@ export type TechnicianPresence = 'ONLINE' | 'OFFLINE';
  * says "no position reported" rather than a time.
  */
 export function presenceOf(
-  position: { recordedAt: string } | null | undefined,
+  position: { recordedAt: string; app?: { connected: boolean } | null } | null | undefined,
   now = Date.now(),
 ): TechnicianPresence {
   if (!position) return 'OFFLINE';
+  // The app being open is the stronger evidence. Location recording stops on
+  // its own often enough -- the phone kills the task, permissions change --
+  // and a technician visibly working is not offline because of it.
+  if (position.app?.connected) return 'ONLINE';
   const at = Date.parse(position.recordedAt);
   if (Number.isNaN(at)) return 'OFFLINE';
   return now - at <= ONLINE_WITHIN_MS ? 'ONLINE' : 'OFFLINE';
+}
+
+/**
+ * How long a connected app may go without a location before it is called out.
+ *
+ * Ten minutes. A handset reports every few seconds while moving and at least
+ * every few minutes standing still, so ten quiet minutes with the app open is
+ * not a pause between fixes -- recording has stopped, and the pin on the map
+ * is where they were, not where they are.
+ */
+export const LOCATION_PAUSED_AFTER_MS = 10 * 60_000;
+
+/**
+ * Whether the app is open but the location has stopped coming.
+ *
+ * The case the map has to say out loud: the technician reads as online, and
+ * their pin is somewhere they may have left hours ago.
+ */
+export function isLocationPaused(
+  position: { recordedAt: string; app?: { connected: boolean } | null } | null | undefined,
+  now = Date.now(),
+): boolean {
+  if (!position?.app?.connected) return false;
+  const at = Date.parse(position.recordedAt);
+  return Number.isFinite(at) && now - at > LOCATION_PAUSED_AFTER_MS;
 }
 
 /**
@@ -251,7 +291,9 @@ export function mergeLatestPosition(
     return [...positions];
 
   return [
-    incoming,
+    // A fix pushed over the socket carries no word about the app; keep what
+    // the last full read said rather than forgetting it until the next poll.
+    { ...incoming, app: incoming.app ?? existing?.app ?? null },
     ...positions.filter((position) => position.technicianId !== incoming.technicianId),
   ];
 }

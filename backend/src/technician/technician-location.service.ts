@@ -3,6 +3,7 @@ import { normaliseMotion, rejectLocationFix, usableLocationFixes } from '@texasr
 
 import type { AuthenticatedUser } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
+import { PresenceService } from '../realtime/presence.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
 import type { TechnicianLocationBatchDto } from './technician.dto';
 
@@ -22,6 +23,9 @@ export class TechnicianLocationService {
     @Optional()
     @Inject(TechnicianEventsGateway)
     private readonly events?: TechnicianEventsGateway,
+    @Optional()
+    @Inject(PresenceService)
+    private readonly presence?: PresenceService,
   ) {}
 
   /**
@@ -224,11 +228,19 @@ export class TechnicianLocationService {
     // through JSON, so the map would receive "-97.7431" and either plot
     // nothing or silently coerce it somewhere far away. Converting at the
     // edge keeps that out of every consumer.
-    return [...newestPerTechnician.values()].map((row) => ({
-      ...row,
-      latitude: row.latitude.toNumber(),
-      longitude: row.longitude.toNumber(),
-      recordedAt: row.recordedAt.toISOString(),
-    }));
+    //
+    // With whether each app is open: the live connection is the same one the
+    // technician directory reads, and it keeps someone working with a stalled
+    // location from reading as offline.
+    return [...newestPerTechnician.values()].map((row) => {
+      const presence = this.presence?.presenceFor(row.technicianId);
+      return {
+        ...row,
+        latitude: row.latitude.toNumber(),
+        longitude: row.longitude.toNumber(),
+        recordedAt: row.recordedAt.toISOString(),
+        app: presence ? { connected: presence.isOnline, lastSeenAt: presence.lastSeenAt } : null,
+      };
+    });
   }
 }

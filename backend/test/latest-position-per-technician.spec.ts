@@ -50,6 +50,25 @@ function build(rows: ReturnType<typeof ping>[]) {
   return new TechnicianLocationService(prisma as never);
 }
 
+/** The same, with a presence service saying who has the app open. */
+function buildWithPresence(rows: ReturnType<typeof ping>[], connected: string[]) {
+  const prisma = {
+    technicianLocationPing: {
+      groupBy: jest
+        .fn()
+        .mockResolvedValue([{ technicianId: 'tech-1', _max: { recordedAt: rows[0].recordedAt } }]),
+      findMany: jest.fn().mockResolvedValue(rows),
+    },
+  };
+  const presence = {
+    presenceFor: (id: string) => ({
+      isOnline: connected.includes(id),
+      lastSeenAt: connected.includes(id) ? '2026-09-14T18:25:00.000Z' : null,
+    }),
+  };
+  return new TechnicianLocationService(prisma as never, undefined, presence as never);
+}
+
 describe('the latest position of each technician', () => {
   it('is one row even when two fixes claim the same instant', async () => {
     // The exact pair from production, twenty-two metres apart.
@@ -104,5 +123,22 @@ describe('the latest position of each technician', () => {
     const positions = await service.latestPositions(user);
 
     expect(positions.map((row) => row.technicianId).sort()).toEqual(['tech-1', 'tech-2']);
+  });
+});
+
+describe('whether the app is open', () => {
+  /**
+   * The map called Moses offline for two and a half hours on 14 September
+   * while he submitted inspections: his location had stopped, and location
+   * was all the map had to go on.
+   */
+  it('travels with each position', async () => {
+    const [position] = await buildWithPresence([ping({ id: 'ping-a' })], ['tech-1']).latestPositions(user);
+    expect(position.app).toEqual({ connected: true, lastSeenAt: '2026-09-14T18:25:00.000Z' });
+  });
+
+  it('says closed for a technician with no live connection', async () => {
+    const [position] = await buildWithPresence([ping({ id: 'ping-a' })], []).latestPositions(user);
+    expect(position.app).toEqual({ connected: false, lastSeenAt: null });
   });
 });
