@@ -7,7 +7,7 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
-import { isFinishedStatus } from '@texasrenters/shared';
+import { isFinishedStatus, isLocationPaused } from '@texasrenters/shared';
 import { CheckIcon, MapPinIcon } from 'lucide-react';
 
 import { businessTimeOfDay } from '@/lib/clock';
@@ -109,6 +109,10 @@ export function buildRoster(
 }
 
 function Dot({ position }: { position: TechnicianPosition | null }) {
+  // Open in the app counts as live, whatever the location is doing.
+  if (position?.app?.connected)
+    return <span aria-hidden="true" className="bg-map-technician block size-2.5 shrink-0 rounded-full" />;
+
   if (!position)
     return (
       <span
@@ -215,9 +219,15 @@ export function TechnicianRoster({
                   {here ? (
                     <span className="text-foreground">At {here.stop.propertyName} · </span>
                   ) : null}
-                  {entry.position
-                    ? formatRelative(entry.position.recordedAt)
-                    : 'No position reported'}
+                  {/* Said when the app is open but the location has stopped, so
+                      nobody takes the pin for where they are now. */}
+                  {entry.position && isLocationPaused(entry.position)
+                    ? `App open · location paused since ${
+                        businessTimeOfDay(entry.position.recordedAt) ?? formatRelative(entry.position.recordedAt)
+                      }`
+                    : entry.position
+                      ? formatRelative(entry.position.recordedAt)
+                      : 'No position reported'}
                 </span>
               </span>
               <span className="text-muted-foreground shrink-0 text-xs tabular-nums">

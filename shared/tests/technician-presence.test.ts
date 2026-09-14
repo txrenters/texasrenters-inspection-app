@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isLocationPaused,
+  LOCATION_PAUSED_AFTER_MS,
   ONLINE_WITHIN_MS,
   presenceOf,
 } from '../src/contracts/technician-location.js';
@@ -49,5 +51,38 @@ describe('is this technician reporting now', () => {
     // by luck of NaN comparison rules. Asserted so a later refactor cannot
     // turn a broken clock into a permanently online technician.
     expect(presenceOf({ recordedAt: 'not a date' }, NOW)).toBe('OFFLINE');
+  });
+});
+
+describe('a technician working with a stalled location', () => {
+  /**
+   * 14 September: Moses's phone stopped recording location at 11:02 and he
+   * went on starting and submitting inspections for two and a half hours. The
+   * map called him offline the whole time.
+   */
+  const twoHoursAgo = agoMs(2 * 60 * 60_000);
+  const appOpen = { connected: true, lastSeenAt: new Date(NOW).toISOString() };
+
+  it('is online while the app is open, however old the location', () => {
+    expect(presenceOf({ ...twoHoursAgo, app: appOpen }, NOW)).toBe('ONLINE');
+  });
+
+  it('says the location has stopped, so the old pin is not taken for where they are', () => {
+    expect(isLocationPaused({ ...twoHoursAgo, app: appOpen }, NOW)).toBe(true);
+  });
+
+  it('does not call a location paused between ordinary fixes', () => {
+    expect(isLocationPaused({ ...agoMs(LOCATION_PAUSED_AFTER_MS - 1000), app: appOpen }, NOW)).toBe(false);
+  });
+
+  it('is still offline with the app closed and no recent location', () => {
+    const closed = { connected: false, lastSeenAt: null };
+    expect(presenceOf({ ...twoHoursAgo, app: closed }, NOW)).toBe('OFFLINE');
+    expect(isLocationPaused({ ...twoHoursAgo, app: closed }, NOW)).toBe(false);
+  });
+
+  it('falls back to the location alone when nothing is known about the app', () => {
+    expect(presenceOf({ ...twoHoursAgo, app: null }, NOW)).toBe('OFFLINE');
+    expect(presenceOf({ ...agoMs(60_000) }, NOW)).toBe('ONLINE');
   });
 });
