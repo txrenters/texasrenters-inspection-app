@@ -19,25 +19,25 @@
  *   --limit 25              stop after this many reports
  *   --fingerprint <sha256>  just this report
  *
- * Runs against the built application, so the parser is the one the importer
- * uses. Inside the API container `dist` is already there; copy this file in with
- * `docker cp` and run it from /app/backend. A report whose photographs no longer
- * line up with how it reads today is left untouched and listed at the end.
+ * Uses the built application's own parser and importer, so the rules live in
+ * one place -- but constructs only those, never the whole application. Booting
+ * AppModule in a second process would start its schedulers and startup sweeps
+ * beside the live API: a second Jobber sync every five minutes, and recordings
+ * still being processed re-queued as if interrupted.
+ *
+ * Inside the API container `dist` is already there: `docker cp` this file and
+ * `owner-prisma.mjs` into /app/backend/scripts and run it from /app/backend. A
+ * report whose photographs no longer line up with how it reads today is left
+ * untouched and listed at the end.
  */
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ownerPrismaClient } from './owner-prisma.mjs';
 
-const require = createRequire(import.meta.url);
-const dist = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
-
-const { NestFactory } = require('@nestjs/core');
-const { AppModule } = require(join(dist, 'app.module.js'));
-const { PrismaService } = require(join(dist, 'common', 'prisma.service.js'));
-const {
-  InspectionImportService,
-} = require(join(dist, 'admin', 'inspection-import', 'inspection-import.service.js'));
-const { withSystemTenant } = require(join(dist, 'database', 'tenant-context.js'));
+const { InspectionMediaStorageService } = await import(
+  '../dist/technician/inspection-media-storage.service.js'
+);
+const { InspectionImportService } = await import(
+  '../dist/admin/inspection-import/inspection-import.service.js'
+);
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes(`--${name}`);
@@ -53,18 +53,20 @@ const ONLY = value('fingerprint');
 /** A courtesy to storage: reports run to 80 MB and there are hundreds. */
 const pause = () => new Promise((resolve) => setTimeout(resolve, 250));
 
-async function main() {
-  const app = await NestFactory.createApplicationContext(AppModule, { logger: ['warn', 'error'] });
-  const prisma = app.get(PrismaService);
-  const imports = app.get(InspectionImportService);
+// Owner connection: deliberately cross-organization, and the application role is
+// subject to the tenant-isolation policies, which would hide every row and let the
+// run report that there was nothing to do.
+const prisma = ownerPrismaClient();
+const storage = new InspectionMediaStorageService();
+// The model reader is never reached: a correction reads the report's own layout.
+const imports = new InspectionImportService(prisma, storage, {});
 
+async function main() {
   /**
    * Reports with at least one photograph still unconfirmed.
    *
-   * From the import jobs, through the model API. Not raw SQL: the tenant scope
-   * is applied to model queries, and a query it does not cover can come back
-   * empty and read as "nothing to do". Oldest import first, so a run stopped
-   * part-way has done the backlog in the order it arrived.
+   * From the import jobs, oldest first, so a run stopped part-way has done the
+   * backlog in the order it arrived.
    */
   const jobs = await prisma.inspectionImportJob.findMany({
     where: { committedAt: { not: null }, ...(ONLY ? { fingerprint: ONLY } : {}) },
@@ -117,10 +119,13 @@ async function main() {
     for (const result of leftAlone) console.log(`  ${result.fingerprint}  ${result.status}`);
   }
   if (!APPLY) console.log('\ndry run — pass --apply to write');
-  await app.close();
 }
 
-withSystemTenant(main).catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
   process.exitCode = 1;
-});
+} finally {
+  await prisma.$disconnect();
+}
