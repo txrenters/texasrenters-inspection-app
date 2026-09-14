@@ -12,6 +12,7 @@ import {
   PlayCircleIcon,
   PlusIcon,
   Settings2Icon,
+  VideoIcon,
 } from 'lucide-react-native';
 import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,6 +26,10 @@ import { formatVisitWindow } from '@/src/utils/visit-window';
 import { applyAreaOrder, loadAreaOrder, saveAreaOrder } from '@/src/areas/area-order';
 import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
+import { BottomSheet } from '@/src/components/BottomSheet';
+import { Button } from '@/src/components/ui';
+import { useDemoStore } from '@/src/stores/demo.store';
+import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { HomeButton } from '@/src/components/HomeButton';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
@@ -53,6 +58,7 @@ registerIcons(
   PlayCircleIcon,
   PlusIcon,
   Settings2Icon,
+  VideoIcon,
 );
 
 function isRoomDone(room: InspectionRoom) {
@@ -190,6 +196,16 @@ export default function InspectionOverviewScreen() {
   const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
+  /**
+   * Photos or video, asked when an occupied inspection is started.
+   *
+   * Suggested from the office after the field asked for the photo button to be
+   * the big one on occupied visits: most are photographs only, some are
+   * walkthroughs, and the technician knows which before they reach the camera.
+   * The camera reads the answer; see `primaryCapture`.
+   */
+  const [captureChoiceOpen, setCaptureChoiceOpen] = useState(false);
+  const setCaptureMode = useDemoStore((state) => state.setCaptureMode);
 
   /**
    * The technician's own sequence for this inspection, if they have set one.
@@ -242,6 +258,17 @@ export default function InspectionOverviewScreen() {
   // uploads and ready-to-complete areas ahead of untouched required work.
   const nextRoom = pickUpNextArea(roomList);
   const completedRooms = roomList.filter(isRoomDone).length;
+  const startInspection = () =>
+    actions.start.mutate(undefined, {
+      onSuccess: () => {
+        if (nextRoom) router.push(`/areas/${nextRoom.id}`);
+      },
+    });
+  const startWith = (mode: 'PHOTO' | 'VIDEO') => {
+    setCaptureMode(id, mode);
+    setCaptureChoiceOpen(false);
+    startInspection();
+  };
   const progress = roomList.length ? Math.round((completedRooms / roomList.length) * 100) : 0;
   const pendingUploads = roomList.filter((room) =>
     ['PENDING', 'UPLOADING', 'PAUSED', 'FAILED'].includes(room.uploadStatus),
@@ -566,11 +593,10 @@ export default function InspectionOverviewScreen() {
             className="min-h-12 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
             disabled={actions.start.isPending}
             onPress={() =>
-              actions.start.mutate(undefined, {
-                onSuccess: () => {
-                  if (nextRoom) router.push(`/areas/${nextRoom.id}`);
-                },
-              })
+              // Only a visit that need not be filmed has a choice to make.
+              inspectionRequiresAreaRecording(item.type)
+                ? startInspection()
+                : setCaptureChoiceOpen(true)
             }
           >
             <View className="flex-row items-center gap-2">
@@ -654,6 +680,33 @@ export default function InspectionOverviewScreen() {
         // recording without waiting on anyone.
         onAdded={(roomId) => router.push(`/areas/${roomId}`)}
       />
+
+      <BottomSheet
+        accessibilityRole="alert"
+        animationType="fade"
+        onClose={() => setCaptureChoiceOpen(false)}
+        visible={captureChoiceOpen}
+      >
+        <Text className="text-xl font-bold text-foreground">How will you capture this one?</Text>
+        <Text className="mt-2 text-sm leading-5 text-muted-foreground">
+          The camera&apos;s big button takes whichever you choose. The other stays one tap away.
+        </Text>
+        <View className="mt-5 gap-3">
+          <Button
+            accessibilityHint="Starts the inspection with the photo button as the big button"
+            icon={<CameraIcon size={18} className="text-primary-foreground" />}
+            label="Photos"
+            onPress={() => startWith('PHOTO')}
+          />
+          <Button
+            accessibilityHint="Starts the inspection with recording as the big button"
+            icon={<VideoIcon size={18} className="text-foreground" />}
+            label="Video walkthrough"
+            onPress={() => startWith('VIDEO')}
+            variant="secondary"
+          />
+        </View>
+      </BottomSheet>
     </SafeAreaView>
   );
 }

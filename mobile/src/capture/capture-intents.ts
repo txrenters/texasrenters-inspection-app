@@ -48,6 +48,28 @@ export function initialCameraMode(requiresRecording: boolean): 'picture' | 'vide
   return requiresRecording ? 'video' : 'picture';
 }
 
+/** What the big red button takes on the camera screen. */
+export type CapturePreference = 'PHOTO' | 'VIDEO';
+
+/**
+ * Which capture gets the big red button.
+ *
+ * A visit that has to be filmed always records first -- its areas cannot be
+ * finished without a walkthrough. One that need not be, an occupied visit,
+ * follows the technician's choice when they started it, and photographs when
+ * they made none: the photo button is the one an occupied visit uses most, and
+ * it used to be the small one beside a record button that was rarely pressed.
+ *
+ * The other capture is never taken away. It moves to the small button.
+ */
+export function primaryCapture(
+  requiresRecording: boolean,
+  chosen: CapturePreference | undefined,
+): CapturePreference {
+  if (requiresRecording) return 'VIDEO';
+  return chosen ?? 'PHOTO';
+}
+
 /**
  * What a tap on either stop control should do.
  *

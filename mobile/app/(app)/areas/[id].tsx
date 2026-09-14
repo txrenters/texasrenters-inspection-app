@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   CameraIcon,
@@ -89,7 +89,7 @@ const STATUS_BADGE_TONE: Record<AreaStatusDescriptor['tone'], BadgeTone> = {
 };
 
 export default function AreaDetailScreen() {
-  const { id = '' } = useLocalSearchParams<{ id: string }>();
+  const { id = '', focus } = useLocalSearchParams<{ id: string; focus?: string }>();
   const room = useRoom(id);
   const inspectionId = room.data?.inspectionId ?? '';
   const media = useRoomMedia(id);
@@ -173,6 +173,28 @@ export default function AreaDetailScreen() {
   const [editedName, setEditedName] = useState('');
   const [skipOpen, setSkipOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+
+  /**
+   * Where the camera's "Done" lands: the condition questions and "Finish this
+   * area", scrolled into view.
+   *
+   * Arrives as `focus=condition`. The camera returns with `dismissTo`, which
+   * hands this screen new params rather than opening a second one, so the
+   * scroll runs when the param changes as well as when the section first lays
+   * out. Cleared once used, so pulling to refresh does not scroll again.
+   */
+  const scrollRef = useRef<ScrollView>(null);
+  const finishSectionY = useRef<number | null>(null);
+  const scrollToFinish = useCallback(() => {
+    const y = finishSectionY.current;
+    if (focus !== 'condition' || y === null) return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 16), animated: true });
+    router.setParams({ focus: undefined });
+  }, [focus]);
+  // A new focus scrolls; the section's own layout calls it for a fresh screen.
+  useEffect(() => {
+    scrollToFinish();
+  }, [scrollToFinish]);
 
   if (room.isLoading || !room.data) {
     return (
@@ -267,6 +289,7 @@ export default function AreaDetailScreen() {
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <ScrollView
+        ref={scrollRef}
         className="flex-1"
         contentContainerStyle={{ paddingBottom: 150 }}
         showsVerticalScrollIndicator={false}
@@ -554,82 +577,91 @@ export default function AreaDetailScreen() {
             whether or not the area is finished, because an answer is still
             worth correcting after the fact — unlike the submit control, which
             has nothing left to do. */}
-        {asksOccupiedCondition ? (
-          <OccupiedConditionCard
-            assessments={conditionAssessments}
-            items={conditionItems.data ?? []}
-            onRecord={(itemId, patch) => {
-              const current = conditionAssessments.get(itemId);
-              recordCondition.mutate({
-                itemId,
-                assessment: {
-                  // The whole assessment every time: the API takes a complete
-                  // record, so sending one field would clear the others.
-                  isClean: current?.isClean ?? null,
-                  isUndamaged: current?.isUndamaged ?? null,
-                  isWorking: current?.isWorking ?? null,
-                  comment: current?.comment ?? null,
-                  numericValue: current?.numericValue ?? null,
-                  textValue: current?.textValue ?? null,
-                  ...patch,
-                  // Nothing is being filmed on this screen, so there is no
-                  // moment in a recording to point the reviewer at.
-                  videoTimestampSeconds: null,
-                },
-              });
-            }}
-          />
-        ) : null}
+        {/* One measured block, so the camera's "Done" can scroll to the
+            questions about the room and the submit control together. */}
+        <View
+          onLayout={(event) => {
+            finishSectionY.current = event.nativeEvent.layout.y;
+            scrollToFinish();
+          }}
+        >
+          {asksOccupiedCondition ? (
+            <OccupiedConditionCard
+              assessments={conditionAssessments}
+              items={conditionItems.data ?? []}
+              onRecord={(itemId, patch) => {
+                const current = conditionAssessments.get(itemId);
+                recordCondition.mutate({
+                  itemId,
+                  assessment: {
+                    // The whole assessment every time: the API takes a complete
+                    // record, so sending one field would clear the others.
+                    isClean: current?.isClean ?? null,
+                    isUndamaged: current?.isUndamaged ?? null,
+                    isWorking: current?.isWorking ?? null,
+                    comment: current?.comment ?? null,
+                    numericValue: current?.numericValue ?? null,
+                    textValue: current?.textValue ?? null,
+                    ...patch,
+                    // Nothing is being filmed on this screen, so there is no
+                    // moment in a recording to point the reviewer at.
+                    videoTimestampSeconds: null,
+                  },
+                });
+              }}
+            />
+          ) : null}
 
-        {alreadyFinished || !hasAnyEvidence ? null : (
-          <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
-            <Text className="text-base font-bold text-foreground">Finish this area</Text>
-            <Text
-              className="mt-1 text-sm leading-5 text-muted-foreground"
-              nativeID="area-note-label"
-            >
-              Anything the office should know about this room. Optional — findings and photographs
-              carry most of it.
-            </Text>
-            <TextInput
-              accessibilityLabel="Notes about this area, optional"
-              accessibilityLabelledBy="area-note-label"
-              className="mt-3 min-h-20 rounded-xl border border-border bg-background px-4 py-3 text-foreground"
-              defaultValue={item.note ?? ''}
-              multiline
-              /* Saved on blur rather than per keystroke: the same choice the
-                 checklist's own text fields make, and the whole note is sent
-                 each time so there is nothing to merge. */
-              onEndEditing={(event) => updates.note.mutate(event.nativeEvent.text.trim())}
-              placeholder="Tenant reported the window sticks…"
-              placeholderTextColor={theme.mutedForeground}
-              textAlignVertical="top"
-            />
-            {updates.complete.isError ? (
-              <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
-                {updates.complete.error instanceof Error
-                  ? updates.complete.error.message
-                  : 'This area could not be submitted.'}
+          {alreadyFinished || !hasAnyEvidence ? null : (
+            <View className="mx-5 mt-4 rounded-xl border border-border bg-card p-4">
+              <Text className="text-base font-bold text-foreground">Finish this area</Text>
+              <Text
+                className="mt-1 text-sm leading-5 text-muted-foreground"
+                nativeID="area-note-label"
+              >
+                Anything the office should know about this room. Optional — findings and photographs
+                carry most of it.
               </Text>
-            ) : null}
-            <Button
-              accessibilityHint={
-                gate.canComplete
-                  ? 'Marks this area finished and returns to the inspection'
-                  : gate.reason
-              }
-              busy={updates.complete.isPending}
-              busyLabel="Submitting…"
-              className="mt-4"
-              /* Disabled rather than hidden, with the reason above it in the
-                 checklist: a control that vanishes tells a technician nothing
-                 about what is missing. */
-              disabled={!gate.canComplete}
-              label="Submit Evidence"
-              onPress={() => updates.complete.mutate(undefined, { onSuccess: () => goBack() })}
-            />
-          </View>
-        )}
+              <TextInput
+                accessibilityLabel="Notes about this area, optional"
+                accessibilityLabelledBy="area-note-label"
+                className="mt-3 min-h-20 rounded-xl border border-border bg-background px-4 py-3 text-foreground"
+                defaultValue={item.note ?? ''}
+                multiline
+                /* Saved on blur rather than per keystroke: the same choice the
+                   checklist's own text fields make, and the whole note is sent
+                   each time so there is nothing to merge. */
+                onEndEditing={(event) => updates.note.mutate(event.nativeEvent.text.trim())}
+                placeholder="Tenant reported the window sticks…"
+                placeholderTextColor={theme.mutedForeground}
+                textAlignVertical="top"
+              />
+              {updates.complete.isError ? (
+                <Text accessibilityRole="alert" className="mt-3 text-sm text-destructive">
+                  {updates.complete.error instanceof Error
+                    ? updates.complete.error.message
+                    : 'This area could not be submitted.'}
+                </Text>
+              ) : null}
+              <Button
+                accessibilityHint={
+                  gate.canComplete
+                    ? 'Marks this area finished and returns to the inspection'
+                    : gate.reason
+                }
+                busy={updates.complete.isPending}
+                busyLabel="Submitting…"
+                className="mt-4"
+                /* Disabled rather than hidden, with the reason above it in the
+                   checklist: a control that vanishes tells a technician nothing
+                   about what is missing. */
+                disabled={!gate.canComplete}
+                label="Submit Evidence"
+                onPress={() => updates.complete.mutate(undefined, { onSuccess: () => goBack() })}
+              />
+            </View>
+          )}
+        </View>
 
         {/* The Clean / Undamaged / Working checklist used to sit here. It is now
             scored by the office during review, against the same items: the
