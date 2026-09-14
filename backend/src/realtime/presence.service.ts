@@ -41,24 +41,29 @@ export class PresenceService {
    * One person can hold several sockets at once — a console in two tabs, or a
    * phone reconnecting before the old socket has timed out. A boolean would let
    * the first disconnect mark them offline while they are still connected.
+   *
+   * Returns true when this was the account's first open socket: the moment it
+   * arrived, and the only one worth telling anybody about.
    */
   connected(userId: string) {
     const existing = this.accounts.get(userId);
-    this.accounts.set(userId, {
-      sockets: (existing?.sockets ?? 0) + 1,
-      lastSeenAt: new Date(),
-    });
+    const sockets = (existing?.sockets ?? 0) + 1;
+    this.accounts.set(userId, { sockets, lastSeenAt: new Date() });
+    return sockets === 1;
   }
 
+  /** True when this closed the account's last socket: it just left. */
   disconnected(userId: string) {
     const existing = this.accounts.get(userId);
-    if (!existing) return;
+    if (!existing) return false;
+    const sockets = Math.max(0, existing.sockets - 1);
     this.accounts.set(userId, {
-      sockets: Math.max(0, existing.sockets - 1),
+      sockets,
       // Stamped on the way out, so "last seen" is when they stopped listening
       // rather than when they started.
       lastSeenAt: new Date(),
     });
+    return existing.sockets > 0 && sockets === 0;
   }
 
   presenceFor(userId: string): Presence {

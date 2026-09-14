@@ -21,6 +21,17 @@ function accessToken(authUserId: string) {
   return `${header}.${payload}.${signature}`;
 }
 
+const technicianProfile = {
+  id: 'technician-profile',
+  authUserId: 'auth-tech',
+  displayName: 'Field Technician',
+  isActive: true,
+  memberships: [{ organizationId: 'organization-1', role: UserRole.INSPECTION_TECHNICIAN }],
+};
+
+/** Lets the stored-notification write resolve and the emit after it run. */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 describe('technician realtime authorization', () => {
   beforeEach(() => {
     process.env.AUTH_JWT_ISSUER = 'https://api.texasrenters.com/auth';
@@ -174,10 +185,130 @@ describe('technician realtime authorization', () => {
     expect(client.disconnect).toHaveBeenCalledWith(true);
   });
 
-  it('broadcasts an added area to the organization, not to any technician', () => {
+  it('tells the consoles watching the map when a technician opens the app', async () => {
+    const prisma = { userProfile: { findUnique: jest.fn().mockResolvedValue(technicianProfile) } };
     const emit = jest.fn();
     const to = jest.fn().mockReturnValue({ emit });
-    const gateway = new TechnicianEventsGateway({} as never, new PresenceService());
+    const gateway = new TechnicianEventsGateway(prisma as never, new PresenceService());
+    (gateway as unknown as { server: unknown }).server = { to };
+    const connect = () =>
+      gateway.handleConnection({
+        handshake: { auth: { accessToken: accessToken('auth-tech') } },
+        data: {},
+        join: jest.fn().mockResolvedValue(undefined),
+        emit: jest.fn(),
+        disconnect: jest.fn(),
+      } as never);
+
+    await connect();
+    // To the room joined on `technicians:locate`, the grant the map endpoint
+    // serving the same fact requires.
+    expect(to).toHaveBeenCalledWith('organization:organization-1:locations');
+    expect(emit).toHaveBeenCalledWith('technician:presence', {
+      technicianId: 'technician-profile',
+      connected: true,
+      lastSeenAt: expect.any(String),
+    });
+
+    // A second connection from the same phone is not arriving again.
+    await connect();
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a socket that closed while it was being authenticated', async () => {
+    const client: Record<string, unknown> = {
+      handshake: { auth: { accessToken: accessToken('auth-tech') } },
+      data: {},
+      disconnected: false,
+      join: jest.fn(),
+      emit: jest.fn(),
+      disconnect: jest.fn(),
+    };
+    const prisma = {
+      userProfile: {
+        findUnique: jest.fn().mockImplementation(async () => {
+          // Its disconnect ran with no user attached and counted nothing, so
+          // counting it now would leave this technician online until a restart.
+          client.disconnected = true;
+          return technicianProfile;
+        }),
+      },
+    };
+    const presence = new PresenceService();
+
+    await new TechnicianEventsGateway(prisma as never, presence).handleConnection(client as never);
+
+    expect(presence.presenceFor('technician-profile').isOnline).toBe(false);
+    expect(client.join).not.toHaveBeenCalled();
+  });
+
+  it('stores a notification before sending it, so every console account holds the same one', async () => {
+    const emit = jest.fn();
+    const to = jest.fn().mockReturnValue({ emit });
+    const create = jest
+      .fn()
+      .mockResolvedValue({ id: 'notification-7', createdAt: new Date('2026-09-15T15:00:00.000Z') });
+    const gateway = new TechnicianEventsGateway(
+      { organizationNotification: { create } } as never,
+      new PresenceService(),
+    );
+    (gateway as unknown as { server: unknown }).server = { to };
+
+    const sent = await gateway.publishOrganizationNotification('organization-1', {
+      kind: 'INSPECTION_SUBMITTED',
+      title: 'Inspection submitted',
+      body: '4226 Oak Shadows · Submitted by Moses',
+      inspectionId: 'inspection-1',
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'organization-1',
+        kind: 'INSPECTION_SUBMITTED',
+        title: 'Inspection submitted',
+        body: '4226 Oak Shadows · Submitted by Moses',
+        inspectionId: 'inspection-1',
+      },
+      select: { id: true, createdAt: true },
+    });
+    // The id the open consoles hear is the stored row's, which is what every
+    // other account loads, so no bell counts it twice.
+    expect(sent).toMatchObject({ id: 'notification-7', occurredAt: '2026-09-15T15:00:00.000Z' });
+    expect(to).toHaveBeenCalledWith('organization:organization-1');
+    expect(emit).toHaveBeenCalledWith('notification', sent);
+  });
+
+  it('still tells the open consoles when a notification cannot be stored', async () => {
+    const emit = jest.fn();
+    const to = jest.fn().mockReturnValue({ emit });
+    const create = jest.fn().mockRejectedValue(new Error('database unavailable'));
+    const gateway = new TechnicianEventsGateway(
+      { organizationNotification: { create } } as never,
+      new PresenceService(),
+    );
+    (gateway as unknown as { server: unknown }).server = { to };
+
+    const sent = await gateway.publishOrganizationNotification('organization-1', {
+      kind: 'INSPECTION_SUBMITTED',
+      title: 'Inspection submitted',
+      body: 'Submitted by Moses',
+      inspectionId: 'inspection-1',
+    });
+
+    expect(sent.id).toEqual(expect.any(String));
+    expect(emit).toHaveBeenCalledWith('notification', sent);
+  });
+
+  it('broadcasts an added area to the organization, not to any technician', async () => {
+    const emit = jest.fn();
+    const to = jest.fn().mockReturnValue({ emit });
+    const create = jest
+      .fn()
+      .mockResolvedValue({ id: 'notification-8', createdAt: new Date('2026-09-15T15:00:00.000Z') });
+    const gateway = new TechnicianEventsGateway(
+      { organizationNotification: { create } } as never,
+      new PresenceService(),
+    );
     (gateway as unknown as { server: unknown }).server = { to };
 
     gateway.publishAreaAdded('organization-1', {
@@ -189,8 +320,6 @@ describe('technician realtime authorization', () => {
       technicianName: 'Field Technician',
     });
 
-    expect(to).toHaveBeenCalledWith('organization:organization-1');
-    expect(to).toHaveBeenCalledTimes(1);
     const [event, payload] = emit.mock.calls[0]!;
     expect(event).toBe('area:added');
     // Enough to render the notification without a follow-up fetch — a toast
@@ -201,6 +330,29 @@ describe('technician realtime authorization', () => {
       technicianName: 'Field Technician',
     });
     expect(payload.occurredAt).toEqual(expect.any(String));
+
+    // The bell's copy is stored, so an account that was not connected sees it too.
+    await settle();
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          organizationId: 'organization-1',
+          kind: 'AREA_ADDED',
+          title: 'New area: Utility Room',
+          body: '1458 Oak Ridge Drive · Ground Floor · Added by Field Technician',
+          inspectionId: 'inspection-1',
+        }),
+      }),
+    );
+    expect(emit).toHaveBeenLastCalledWith(
+      'notification',
+      expect.objectContaining({ id: 'notification-8', kind: 'AREA_ADDED' }),
+    );
+    // Both to the organization's administrators, never a technician's room.
+    expect(to.mock.calls.map(([room]) => room)).toEqual([
+      'organization:organization-1',
+      'organization:organization-1',
+    ]);
   });
 
   it('hands every event to push delivery, which decides what is worth sending', () => {

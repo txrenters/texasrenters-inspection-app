@@ -638,22 +638,27 @@ export class TechnicianService {
       });
       return row;
     });
-    // If every recording finished processing before submission, the
-    // inspection is immediately ready for human review.
-    await this.mediaProcessing.advanceInspection(id);
-    this.notifyInspectionChanged(user, id);
-    // Tell the office. notifyInspectionChanged above addresses the technician's
-    // own devices; nothing reached the administrators, so a submitted
-    // inspection sat in the queue until somebody happened to reload.
-    const property = updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name ?? null;
-    this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
-      kind: 'INSPECTION_SUBMITTED',
-      title: 'Inspection submitted',
-      // Middot, not an em-dash: this string is rendered verbatim in the console
-      // toast, the notification bell and the operating system's own alert.
-      body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' · '),
-      inspectionId: id,
-    });
+    try {
+      // If every recording finished processing before submission, the
+      // inspection is immediately ready for human review.
+      await this.mediaProcessing.advanceInspection(id);
+    } finally {
+      // Whatever advancing did, the submission is committed — so the
+      // technician's devices and the office both hear about it.
+      this.notifyInspectionChanged(user, id);
+      // Tell the office. notifyInspectionChanged above addresses the technician's
+      // own devices; nothing reached the administrators, so a submitted
+      // inspection sat in the queue until somebody happened to reload.
+      const property = updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name ?? null;
+      void this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
+        kind: 'INSPECTION_SUBMITTED',
+        title: 'Inspection submitted',
+        // Middot, not an em-dash: this string is rendered verbatim in the console
+        // toast, the notification bell and the operating system's own alert.
+        body: [property, `Submitted by ${user.displayName}`].filter(Boolean).join(' · '),
+        inspectionId: id,
+      });
+    }
     return this.mapInspection(updated, user.id);
   }
 

@@ -977,6 +977,18 @@ export class AdminController {
   }
 
   /**
+   * The organization's recent notifications, the same for every account.
+   *
+   * The same permission the realtime room is joined on, so the list cannot
+   * show an account more than the live feed would have.
+   */
+  @Get('notifications')
+  @RequirePermissions('inspections:read')
+  notifications(@Req() request: AuthenticatedRequest) {
+    return this.service.organizationNotifications(request.user);
+  }
+
+  /**
    * Every property that has been placed on the map.
    *
    * Behind `properties:read`, the same grant that lists them anywhere else: a
