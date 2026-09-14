@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CameraView,
   type CameraMode,
@@ -14,9 +14,8 @@ import {
   CheckIcon,
   FocusIcon,
   ImageIcon,
-  ListChecksIcon,
   RotateCcwIcon,
-  SquareIcon,
+  VideoIcon,
   ZapIcon,
   ZapOffIcon,
 } from 'lucide-react-native';
@@ -40,9 +39,6 @@ import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { goBack } from '@/src/lib/navigation';
 import { HomeButton } from '@/src/components/HomeButton';
-import { AreaChecklistSheet } from '@/src/capture/AreaChecklistSheet';
-import { checklistProgress } from '@/src/capture/area-checklist';
-import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
 import { StopRecordingSheet } from '@/src/capture/StopRecordingSheet';
@@ -52,6 +48,7 @@ import {
   snapshotMode,
   stopRequestOutcome,
 } from '@/src/capture/capture-intents';
+import { RECORDING_RED, captureControlLook } from '@/src/capture/capture-controls';
 import { cameraZoomFor, pickBackLenses, pinchLevel, type BackLenses } from '@/src/capture/camera-zoom';
 import { useIconRotation } from '@/src/capture/use-icon-rotation';
 import {
@@ -62,18 +59,10 @@ import {
   rotationProgress,
   type GuidedCaptureSummary,
 } from '@/src/capture/guided-capture';
-import { ConditionPromptSheet } from '@/src/capture/ConditionPromptSheet';
-import { conditionPromptItems, withAxes } from '@/src/capture/condition-answers';
 import { SweepPromptSheet } from '@/src/capture/SweepPromptSheet';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
-import {
-  useInspection,
-  useInspectionActions,
-  useRecordChecklistItem,
-  useRoom,
-  useRoomChecklist,
-} from '@/src/features/queries';
+import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
 import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
@@ -93,9 +82,8 @@ registerIcons(
   CheckIcon,
   FocusIcon,
   ImageIcon,
-  ListChecksIcon,
   RotateCcwIcon,
-  SquareIcon,
+  VideoIcon,
   ZapIcon,
   ZapOffIcon,
 );
@@ -111,11 +99,6 @@ const MAX_RECORDING_SECONDS = 10 * 60;
  * again after a mode change is the native module's business, not a promise.
  */
 const CAMERA_REBIND_TIMEOUT_MS = 1_500;
-
-// A stable empty array: returning a fresh [] from the selector would give
-// zustand a new reference every render and loop on "getSnapshot should be
-// cached".
-const EMPTY_CHECKED: string[] = [];
 
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
@@ -188,17 +171,16 @@ export default function RoomCameraScreen() {
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
   /**
-   * Whether the condition prompt has already been offered for this sweep.
+   * Whether this sweep's completion has already been announced.
    *
    * The change-guard above dedupes on the raw guidance state, but the branch
-   * that opens the prompt accepts COMPLETE *or* LIKELY_COMPLETE. A sweep
+   * that announces completion accepts COMPLETE *or* LIKELY_COMPLETE. A sweep
    * hovering around the finish oscillates between the two, and each oscillation
-   * is a genuine state change landing in the same branch — so the sheet reopened
-   * itself moments after the technician dismissed it with "Later", and the
-   * completion announcement replayed with it. Latched per sweep instead, and
-   * reset when the next recording starts.
+   * is a genuine state change landing in the same branch — so the announcement
+   * and its haptic replayed every time. Latched per sweep instead, and reset
+   * when the next recording starts.
    */
-  const conditionPromptedRef = useRef(false);
+  const sweepAnnouncedRef = useRef(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
   const [ready, setReady] = useState(false);
@@ -217,11 +199,12 @@ export default function RoomCameraScreen() {
    */
   const requiresRecording = inspectionRequiresAreaRecording(room.data?.inspectionType);
   /**
-   * Photos or video on the big red button -- see `primaryCapture`. Chosen when
-   * an occupied inspection is started; an occupied visit reached any other way
+   * Photos or video on the big button -- see `primaryCapture`. Chosen for this
+   * area on the area screen, the first time its camera is opened
+   * (`asksCaptureChoice`); an occupied area reached without an answer
    * photographs first, and a visit that must be filmed always records.
    */
-  const chosenCapture = useDemoStore((state) => state.captureModeByInspection[inspectionId]);
+  const chosenCapture = useDemoStore((state) => state.captureModeByArea[areaId]);
   const primary = primaryCapture(requiresRecording, chosenCapture);
   const restingMode = initialCameraMode(primary === 'VIDEO');
   const [cameraMode, setCameraMode] = useState<CameraMode>(() => restingMode);
@@ -268,47 +251,26 @@ export default function RoomCameraScreen() {
   // A count, not a flag: two shutter taps in a row have to be distinguishable
   // or the second renders the same value and nothing flashes.
   const [flashTrigger, setFlashTrigger] = useState(0);
-  const [checklistOpen, setChecklistOpen] = useState(false);
-  const [conditionOpen, setConditionOpen] = useState(false);
   const [sweepPromptOpen, setSweepPromptOpen] = useState(false);
   const [confirmStopOpen, setConfirmStopOpen] = useState(false);
 
-  /**
-   * Authored items only, straight from `useRoomChecklist`.
+  /*
+   * There is no checklist on this screen any more.
    *
-   * `useAreaChecklist` falls back to a *generated* list for areas nobody has
-   * configured, and those synthetic ids do not exist on the server — scoring
-   * one would 404. Only authored items can be assessed, so only those are asked.
+   * It carried two: a yes/no prompt that opened itself when the sweep
+   * completed, and the full list behind a button beside the shutter. Demoed to
+   * the product owner, both read as a second copy of the checklist on the area
+   * screen -- on an occupied visit the list was exactly that, the same two
+   * questions in two places. The checklist now lives on the area screen alone:
+   * the occupied condition questions, or the full list for every other kind of
+   * visit. "Done" below returns there already scrolled to it. This screen
+   * captures.
    */
-  const conditionItems = useRoomChecklist(areaId);
-  const recordCondition = useRecordChecklistItem(areaId);
-  const conditionAssessments = useMemo(
-    () => new Map((conditionItems.data ?? []).map((item) => [item.id, item])),
-    [conditionItems.data],
-  );
-  /**
-   * The items the yes/no prompt may ask: clean / undamaged / working ones.
-   *
-   * It asked every authored item that way, so on an occupied visit it put
-   * "Is it clean?" to "Room condition" and saved the answer over the choice
-   * made on the area screen. A room whose questions are all choices or
-   * readings has nothing here, and its checklist opens as the full sheet,
-   * which renders each kind of question properly.
-   */
-  const promptItems = useMemo(
-    () => conditionPromptItems(conditionItems.data ?? []),
-    [conditionItems.data],
-  );
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
   const removeSnapshots = useDemoStore((state) => state.removeSnapshots);
   const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
-  // Persisted per area rather than held on this screen: coverage used to be
-  // component state, so stepping out to review a recording and coming back lost
-  // every tick the technician had made.
-  const checkedItems = useDemoStore((state) => state.areaChecklist[areaId]) ?? EMPTY_CHECKED;
-  const toggleChecklistItem = useDemoStore((state) => state.toggleChecklistItem);
   const isAdditional = recordingType === 'ADDITIONAL_ISSUE';
   /**
    * No rotation target on this capture.
@@ -385,16 +347,6 @@ export default function RoomCameraScreen() {
     }),
   ).current;
   const guidedSensor = useGuidedCaptureSensor(recording && !skipsRoomSweep);
-  const checklist = useAreaChecklist(areaId, {
-    name: room.data?.name,
-    environment: room.data?.environment,
-    // Was dropped on the way in, so the device-side fallback ignored the
-    // category an administrator had set and could disagree with the
-    // server-generated list for the same area.
-    category: room.data?.category,
-    inspectionType: room.data?.inspectionType,
-  });
-  const checklistCoverage = checklistProgress(checklist, checkedItems);
   const guidanceState = guidedCaptureState({
     tracker: guidedSensor.tracker,
     recording,
@@ -480,29 +432,24 @@ export default function RoomCameraScreen() {
     } else if (guidanceState === 'COMPLETE' || guidanceState === 'LIKELY_COMPLETE') {
       // Both states, not COMPLETE alone. A sweep that reaches 92% and returns
       // to the start settles on LIKELY_COMPLETE and never advances, so gating
-      // on COMPLETE left the prompt unopened for a large share of real
-      // walkthroughs — the room had been filmed and nothing happened.
+      // on COMPLETE left a large share of real walkthroughs unacknowledged —
+      // the room had been filmed and nothing happened.
       //
-      // The sensor confirming the sweep is the cue to move on: the next thing
-      // is assessing what was just filmed, while the technician is still
-      // standing in it. Only prompted when there is something to ask — an
-      // unconfigured area would open an empty sheet.
-      // Once per sweep. Dismissing the prompt is a decision the technician is
-      // allowed to make and have stick — they may want to film a detail before
-      // answering — and the checklist button reopens it whenever they choose.
-      if (conditionPromptedRef.current) return;
-      conditionPromptedRef.current = true;
-      announce('Walkthrough complete. Start the detailed checklist.');
-      if (promptItems.length) setConditionOpen(true);
+      // Said and felt, and nothing opens. The sweep confirming used to open
+      // the condition prompt over the camera; the questions are the area
+      // screen's now, answered once the take is reviewed.
+      if (sweepAnnouncedRef.current) return;
+      sweepAnnouncedRef.current = true;
+      announce('Walkthrough complete. Stop and review when you are ready.');
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
         () => undefined,
       );
     }
-  }, [promptItems, guidanceState, recording, skipsRoomSweep]);
+  }, [guidanceState, recording, skipsRoomSweep]);
 
-  // A new recording is a new sweep, so the prompt is owed again.
+  // A new recording is a new sweep, so its completion is owed again.
   useEffect(() => {
-    if (recording) conditionPromptedRef.current = false;
+    if (recording) sweepAnnouncedRef.current = false;
   }, [recording]);
 
   useEffect(() => {
@@ -811,7 +758,9 @@ export default function RoomCameraScreen() {
    * Asked for from the field. Finishing meant the back arrow, then a sheet
    * asking whether to continue, then scrolling the area screen to find the
    * condition questions. This returns to the area already scrolled to them --
-   * the occupied condition card, or "Finish this area" where there is none.
+   * the occupied condition card, or the area's checklist on any other visit,
+   * with "Finish this area" beneath. The only checklist there is, now that this
+   * screen carries none.
    *
    * `dismissTo` rather than `push`: the area screen is already underneath, and
    * pushing a second copy would leave the back arrow returning to the camera.
@@ -876,85 +825,93 @@ export default function RoomCameraScreen() {
   };
 
   /**
-   * The photo control, large and red when it leads, a ring when it does not.
+   * The photo control: a white shutter when it leads, a ring when it does not.
    *
    * Written once and placed by `primary`, so the two layouts cannot drift apart
-   * in what the button says or does -- only in how big it is.
+   * in what the button says or does -- only in how big it is. Never red; see
+   * `captureControlLook`.
    */
-  const renderPhotoControl = (large: boolean) => (
-    <>
-      <Pressable
-        accessibilityHint={
-          captureType === 'AREA_OVERVIEW'
-            ? 'Captures a wide shot of the area'
-            : 'Captures a close-up for a finding'
-        }
-        accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
-        accessibilityRole="button"
-        accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
-        className={
-          large
-            ? `h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500 ${PRESS_SURFACE}`
-            : `h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10 ${PRESS_SURFACE}`
-        }
-        onPress={() => void takeSnapshot()}
-        disabled={!ready || capturingPhoto}
-      >
-        {capturingPhoto ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Animated.View style={iconTurn}>
-            <CameraIcon size={large ? 30 : 24} className="text-white" />
-          </Animated.View>
-        )}
-      </Pressable>
-      {/* One accessible node, or VoiceOver reads the count and the word
-          "photos" as two separate stops. */}
-      <Text
-        accessible
-        accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
-        className={`mt-2 text-xs ${large ? 'font-semibold text-white' : 'font-medium text-white/70'}`}
-      >
-        {photoCount} photo{photoCount === 1 ? '' : 's'}
-      </Text>
-    </>
-  );
+  const renderPhotoControl = (large: boolean) => {
+    const look = captureControlLook({ large, stopControl: false });
+    const tone = look.glyph ?? undefined;
+    const glyph = capturingPhoto ? (
+      <ActivityIndicator className={tone} />
+    ) : (
+      <Animated.View style={iconTurn}>
+        <CameraIcon size={large ? 26 : 24} className={tone} />
+      </Animated.View>
+    );
+    return (
+      <>
+        <Pressable
+          accessibilityHint={
+            captureType === 'AREA_OVERVIEW'
+              ? 'Captures a wide shot of the area'
+              : 'Captures a close-up for a finding'
+          }
+          accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
+          accessibilityRole="button"
+          accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
+          className={look.ring}
+          onPress={() => void takeSnapshot()}
+          disabled={!ready || capturingPhoto}
+        >
+          {look.disc ? <View className={look.disc}>{glyph}</View> : glyph}
+        </Pressable>
+        {/* One accessible node, or VoiceOver reads the count and the word
+            "photos" as two separate stops. */}
+        <Text
+          accessible
+          accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
+          className={`mt-2 text-xs ${large ? 'font-semibold text-white' : 'font-medium text-white/70'}`}
+        >
+          {photoCount} photo{photoCount === 1 ? '' : 's'}
+        </Text>
+      </>
+    );
+  };
 
-  /** The record control, large and red when it leads, a ring with a red dot when it does not. */
-  const renderRecordControl = (large: boolean) => (
-    <>
-      <Pressable
-        accessibilityHint={recording ? 'Ends the take and opens the review screen' : undefined}
-        accessibilityLabel={
-          stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
-        }
-        accessibilityRole="button"
-        accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
-        className={
-          large
-            ? 'h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500'
-            : 'h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10'
-        }
-        disabled={!ready || stopping}
-        onPress={recording ? requestStopRecording : () => void beginRecording()}
-      >
-        {recording ? (
-          <SquareIcon size={large ? 26 : 20} className="text-white" />
-        ) : (
-          <View className={`rounded-full bg-red-500 ${large ? 'h-14 w-14' : 'h-6 w-6'}`} />
-        )}
-      </Pressable>
-      {/* importantForAccessibility="no": the button above already says this,
-          and leaving it focusable makes the technician swipe past a duplicate
-          of the control they just heard. */}
-      <Text
-        importantForAccessibility="no"
-        className={`mt-2 text-xs ${large ? 'font-semibold text-white' : 'font-medium text-white/70'}`}
-      >
-        {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
-      </Text>
-    </>
-  );
+  /**
+   * The record control: a white shutter when it leads, a ring when it does not.
+   *
+   * While its take runs it becomes the stop control, a red square in the same
+   * ring -- the only red on the capture controls, and the conventional sign
+   * that a camera is recording. Idle, it is as neutral as the photo shutter.
+   */
+  const renderRecordControl = (large: boolean) => {
+    const look = captureControlLook({ large, stopControl: recording });
+    const glyph = look.glyph ? (
+      <Animated.View style={iconTurn}>
+        <VideoIcon size={large ? 26 : 22} className={look.glyph} />
+      </Animated.View>
+    ) : null;
+    return (
+      <>
+        <Pressable
+          accessibilityHint={recording ? 'Ends the take and opens the review screen' : undefined}
+          accessibilityLabel={
+            stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
+          }
+          accessibilityRole="button"
+          accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
+          className={look.ring}
+          disabled={!ready || stopping}
+          onPress={recording ? requestStopRecording : () => void beginRecording()}
+        >
+          {look.disc ? <View className={look.disc}>{glyph}</View> : glyph}
+        </Pressable>
+        {/* importantForAccessibility="no": the button above already says this,
+            and leaving it focusable makes the technician swipe past a duplicate
+            of the control they just heard. */}
+        <Text
+          importantForAccessibility="no"
+          className={`mt-2 text-xs ${large ? 'font-semibold text-white' : 'font-medium text-white/70'}`}
+        >
+          {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
+        </Text>
+      </>
+    );
+  };
 
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
@@ -1227,8 +1184,11 @@ export default function RoomCameraScreen() {
                 recording ? `Recording, ${formatDuration(seconds)} elapsed` : 'Ready to record'
               }
               accessibilityRole="timer"
-              className="mb-6 rounded-full bg-black/65 px-5 py-2"
+              className="mb-6 flex-row items-center gap-2 rounded-full bg-black/65 px-5 py-2"
             >
+              {/* The recording dot, only while a take runs. Red here says what
+                  it says on every camera, which is why the shutter is not. */}
+              {recording ? <View className={`h-2.5 w-2.5 rounded-full ${RECORDING_RED}`} /> : null}
               <Text className="text-lg font-bold text-white">
                 {formatDuration(seconds)} {recording ? 'REC' : 'READY'}
               </Text>
@@ -1391,9 +1351,9 @@ export default function RoomCameraScreen() {
             </Pressable>
           ) : null}
 
-          {/* Photo and record swap places with the capture this visit leads
-              with: the big red button is whichever gets pressed most. Neither
-              is ever taken away. */}
+          {/* Photo and record swap places with the capture this area leads
+              with: the big button is whichever gets pressed most. Neither is
+              ever taken away. */}
           <View className="w-full flex-row items-start justify-between">
             <View className="flex-1 items-center">
               {primary === 'PHOTO' ? renderRecordControl(false) : renderPhotoControl(false)}
@@ -1403,40 +1363,10 @@ export default function RoomCameraScreen() {
               {primary === 'PHOTO' ? renderPhotoControl(true) : renderRecordControl(true)}
             </View>
 
-            <View className="flex-1 items-center">
-              {/* Long press opens the condition prompts by hand.
-                  The sensor cue must never be the only route: a device with no
-                  gyroscope reports SENSOR_UNAVAILABLE and reaches no complete
-                  state at all, and a technician who dismissed the prompt with
-                  "Later" would otherwise have no way back to it. */}
-              <Pressable
-                accessibilityHint="Opens the condition questions, which can be browsed in either direction without answering. Long press to see the whole checklist."
-                accessibilityLabel={`Area checklist, ${checklistCoverage.covered} of ${checklistCoverage.total} covered`}
-                accessibilityRole="button"
-                className="h-14 w-14 items-center justify-center rounded-full border border-white/25 bg-black/30"
-                // Tap asks the next question; long press opens the full list to
-                // review or correct. The prompt is the fast path, so it gets the
-                // tap — an area with no authored items falls back to the list,
-                // which explains itself rather than opening an empty prompt.
-                onLongPress={() => setChecklistOpen(true)}
-                onPress={() =>
-                  promptItems.length ? setConditionOpen(true) : setChecklistOpen(true)
-                }
-              >
-                <Animated.View style={iconTurn}>
-                  <ListChecksIcon size={22} className="text-white" />
-                </Animated.View>
-              </Pressable>
-              {/* The count is the point: a technician glancing down should see
-                  how much of the area they still have to cover without opening
-                  anything. */}
-              <Text
-                importantForAccessibility="no"
-                className="mt-2 text-xs font-medium text-white/70"
-              >
-                {checklistCoverage.covered}/{checklistCoverage.total} list
-              </Text>
-            </View>
+            {/* Empty on purpose. The checklist button sat here; the checklist
+                is the area screen's now. The third keeps the shutter centred,
+                where a thumb expects it, rather than sliding it right. */}
+            <View className="flex-1" />
           </View>
 
           {photoCount > 0 && !recording && !stopping ? (
@@ -1459,85 +1389,6 @@ export default function RoomCameraScreen() {
       {/* Above the chrome so the blink covers the whole frame, below the sheets
           so it never fires over a question. */}
       <ShutterFlash trigger={flashTrigger} />
-
-      <AreaChecklistSheet
-        areaName={room.data?.name ?? 'Area'}
-        // Keyed by item id so a row can read its own answers without scanning
-        // the list once per render.
-        assessments={conditionAssessments}
-        checkedIds={checkedItems}
-        items={checklist}
-        onAssess={(itemId, axis, next) => {
-          const current = conditionAssessments.get(itemId);
-          recordCondition.mutate({
-            itemId,
-            // The whole assessment every time: the API takes a complete record,
-            // so sending one axis would clear the other two -- and the reading,
-            // text and choice, which this used to leave out.
-            assessment: withAxes(
-              current,
-              {
-                isClean: current?.isClean ?? null,
-                isUndamaged: current?.isUndamaged ?? null,
-                isWorking: current?.isWorking ?? null,
-                [axis]: next,
-              },
-              // Where in the recording it was answered, so the reviewer can
-              // jump to the moment instead of scrubbing.
-              recording ? secondsRef.current : null,
-            ),
-          });
-        }}
-        onClose={() => setChecklistOpen(false)}
-        /**
-         * A measurement, a line of text, or a chosen option.
-         *
-         * The whole assessment goes every time, exactly as `onAssess` does:
-         * the API takes a complete record, so sending only the changed field
-         * would clear everything else already answered about the item.
-         */
-        onRecord={(itemId, patch) => {
-          const current = conditionAssessments.get(itemId);
-          recordCondition.mutate({
-            itemId,
-            assessment: {
-              isClean: current?.isClean ?? null,
-              isUndamaged: current?.isUndamaged ?? null,
-              isWorking: current?.isWorking ?? null,
-              comment: current?.comment ?? null,
-              numericValue: current?.numericValue ?? null,
-              textValue: current?.textValue ?? null,
-              ...patch,
-              videoTimestampSeconds: recording ? secondsRef.current : null,
-            },
-          });
-        }}
-        onToggle={(id) => toggleChecklistItem(areaId, id)}
-        recording={recording}
-        visible={checklistOpen}
-      />
-
-      <ConditionPromptSheet
-        items={promptItems}
-        onClose={() => setConditionOpen(false)}
-        onRecord={(itemId, assessment) => {
-          recordCondition.mutate({
-            itemId,
-            // Only the three answers come from the prompt; the rest is what is
-            // already stored, so answering an item no longer blanks its comment.
-            // The moment is read from the ref, not the `seconds` state, which
-            // lags the timer by up to a second -- and only while filming, since
-            // the prompt can be opened from the button with nothing recording.
-            assessment: withAxes(
-              conditionAssessments.get(itemId),
-              assessment,
-              recording ? secondsRef.current : null,
-            ),
-          });
-        }}
-        saving={recordCondition.isPending}
-        visible={conditionOpen}
-      />
 
       <SweepPromptSheet
         areaName={room.data?.name ?? 'this area'}

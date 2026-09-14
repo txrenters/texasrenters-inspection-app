@@ -131,6 +131,47 @@ describe.each([
     });
   });
 
+  /**
+   * The single-choice list the checklist questions are answered with: a ring on
+   * every option, filled with a tick on the chosen one, whose row takes a 10%
+   * primary wash. The tick itself is `primary-foreground on primary`, above.
+   *
+   * The list sits on a card, or on the 10% `chart-3` wash the checklist sheet
+   * gives an item marked covered, so both surfaces are asserted.
+   */
+  describe('single-choice lists', () => {
+    const surfaces = () => [
+      ['card', t('--card')],
+      ['a covered item', composite(t('--chart-3'), t('--card'), 0.1)],
+    ] as const;
+
+    it('keeps the chosen option legible on its 10% primary tint', () => {
+      for (const [, surface] of surfaces()) {
+        const row = composite(t('--primary'), surface, 0.1);
+        expect(contrast(t('--foreground'), row)).toBeGreaterThanOrEqual(AA_TEXT);
+      }
+    });
+
+    it('draws an empty radio ring that can be seen', () => {
+      // The ring is what identifies the control, so it carries WCAG 1.4.11's
+      // 3:1. `--input` reaches that on a card and not on a covered item's wash,
+      // which is why the ring is `muted-foreground`.
+      for (const [label, surface] of surfaces()) {
+        expect([label, contrast(t('--muted-foreground'), surface) >= AA_NON_TEXT]).toEqual([
+          label,
+          true,
+        ]);
+      }
+    });
+
+    it('draws the chosen radio as a fill that can be seen on its tinted row', () => {
+      for (const [, surface] of surfaces()) {
+        const row = composite(t('--primary'), surface, 0.1);
+        expect(contrast(t('--primary'), row)).toBeGreaterThanOrEqual(AA_NON_TEXT);
+      }
+    });
+  });
+
   it('carries a legible label on the solid chart-4 tab badge', () => {
     // Light mode's chart-4 is a dark ochre and dark mode's is a light amber, so
     // the badge label takes the opposing surface. A fixed white sat at 2.2:1 on

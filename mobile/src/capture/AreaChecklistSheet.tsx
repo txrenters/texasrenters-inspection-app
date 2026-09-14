@@ -1,4 +1,4 @@
-import { CheckIcon, CircleIcon, MicIcon } from 'lucide-react-native';
+import { CheckIcon, CircleIcon } from 'lucide-react-native';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 
 import { BottomSheet } from '../components/BottomSheet';
@@ -9,19 +9,25 @@ import { choiceInvitesComment } from '@texasrenters/shared';
 
 import { CommentField, ChoiceField, ReadingField, TextField, isAnswered } from './ChecklistAnswerFields';
 
-registerIcons(CheckIcon, CircleIcon, MicIcon);
+registerIcons(CheckIcon, CircleIcon);
 
 /**
- * The area's coverage checklist, opened from the camera's guide control.
+ * The area's checklist, opened from the area screen.
  *
  * Replaces a static "Room capture guide" alert that said the same three
- * sentences in every room. This is specific to the area being recorded, and
- * doubles as a record of what the technician actually covered.
+ * sentences in every room. This is specific to the area, and doubles as a
+ * record of what the technician actually covered.
+ *
+ * It was opened from a button beside the camera's shutter until the product
+ * owner, demoing #221, read it as a second copy of the questions on the area
+ * screen. The camera carries no checklist now; this is the one place it is
+ * answered on the handset, for every visit whose questions are not the
+ * occupied pair `OccupiedConditionCard` asks inline.
  *
  * Ticking is manual here. Items are also ticked automatically when the
- * technician says them aloud — see `matchChecklistMentions` — but a mention is
- * only evidence that something was talked about, so the technician stays able
- * to correct it either way.
+ * recording's summary mentions them — see `matchChecklistMentions` — but a
+ * mention is only evidence that something was talked about, so the technician
+ * stays able to correct it either way.
  */
 /** The three axes the printed report scores, in the order it prints them. */
 const AXES = [
@@ -167,6 +173,34 @@ function renderAnswer(
   }
 }
 
+/**
+ * Coverage counts an assessed item as covered.
+ *
+ * There are two records over the same list: a coverage tick, set by tapping a
+ * row or by the transcript mentioning it, and a condition assessment written
+ * to the server. The header only ever counted the first, so a technician who
+ * answered Clean / Undamaged / Working on every item was still told 0 of 7 —
+ * the work was done and the screen said none of it was.
+ *
+ * Answered counts as covered, for every shape of answer. This used to look
+ * only at the three yes/no axes, so on an HVAC checklist a technician could
+ * fill in all eight measurements and still be told nothing was covered.
+ *
+ * The union, not a replacement: spoken coverage still ticks items nobody
+ * answered by hand. One definition, so the sheet's header and the area
+ * screen's entry to it cannot disagree about the same list.
+ */
+export function checklistCoverage(
+  items: ChecklistItem[],
+  checkedIds: readonly string[],
+  assessments?: Map<string, ChecklistAssessment>,
+) {
+  const assessedIds = items
+    .filter((item) => isAnswered(item, assessments?.get(item.id)))
+    .map((item) => item.id);
+  return checklistProgress(items, [...new Set([...checkedIds, ...assessedIds])]);
+}
+
 export function AreaChecklistSheet({
   areaName,
   assessments,
@@ -177,7 +211,6 @@ export function AreaChecklistSheet({
   onToggle,
   visible,
   onClose,
-  recording,
 }: {
   areaName: string;
   items: ChecklistItem[];
@@ -196,35 +229,8 @@ export function AreaChecklistSheet({
   onToggle: (id: string) => void;
   visible: boolean;
   onClose: () => void;
-  /** Drives the "listening" hint; the sheet itself never touches the microphone. */
-  recording: boolean;
 }) {
-  /**
-   * Coverage counts an assessed item as covered.
-   *
-   * There are two records over the same list: a coverage tick, set by tapping a
-   * row or by the transcript mentioning it, and a condition assessment written
-   * to the server. The header only ever counted the first, so a technician who
-   * answered Clean / Undamaged / Working on every item was still told 0 of 7 —
-   * the work was done and the screen said none of it was.
-   *
-   * Answering three axes about an item is not something you can do without
-   * having looked at it, so it counts. The union, not a replacement: spoken
-   * coverage still ticks items nobody answered by hand.
-   */
-  /**
-   * Answered counts as covered, for every shape of answer.
-   *
-   * This used to look only at the three yes/no axes, so on an HVAC checklist a
-   * technician could fill in all eight measurements and still be told nothing
-   * was covered.
-   */
-  const assessedIds = items
-    .filter((item) => isAnswered(item, assessments?.get(item.id)))
-    .map((item) => item.id);
-  const { covered, total } = checklistProgress(items, [
-    ...new Set([...checkedIds, ...assessedIds]),
-  ]);
+  const { covered, total } = checklistCoverage(items, checkedIds, assessments);
   const checked = new Set(checkedIds);
 
   return (
@@ -264,15 +270,6 @@ export function AreaChecklistSheet({
         Optional. Nothing here has to be answered to finish this area — it is a guide, and a record
         of what you covered.
       </Text>
-
-      {recording ? (
-        <View className="mt-3 flex-row items-center gap-2 rounded-xl bg-primary/10 px-3 py-2.5">
-          <MicIcon size={15} className="text-primary" />
-          <Text className="min-w-0 flex-1 text-xs leading-4 text-primary">
-            Items tick themselves when you mention them out loud. Tap any item to set it yourself.
-          </Text>
-        </View>
-      ) : null}
 
       <ScrollView className="mt-4" showsVerticalScrollIndicator={false}>
         {items.map((item, index) => {
@@ -317,9 +314,8 @@ export function AreaChecklistSheet({
               </Text>
               </Pressable>
               {/* The condition answers sit in the same card as the item they
-                  are about. This is the checklist the technician already opens
-                  from the camera; asking them to score somewhere else is the
-                  extra step this workflow exists to remove. */}
+                  are about, so scoring an item never means finding it again
+                  somewhere else. */}
               {onAssess ? renderAnswer(item, assessments?.get(item.id), onAssess, onRecord) : null}
             </View>
             </View>

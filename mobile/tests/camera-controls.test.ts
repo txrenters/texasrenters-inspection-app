@@ -1,12 +1,23 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { cameraZoomFor, pickBackLenses, pinchLevel } from '../src/capture/camera-zoom';
-import { primaryCapture } from '../src/capture/capture-intents';
+import { RECORDING_RED, captureControlLook } from '../src/capture/capture-controls';
+import { asksCaptureChoice, primaryCapture } from '../src/capture/capture-intents';
 import { iconRotationFor } from '../src/capture/icon-rotation';
 
 /**
  * The capture screen, as asked for from the field on 11 September:
  * the controls should turn when the phone does, zoom should reach the 0.5x
- * lens, and on an occupied visit the big red button should take photographs.
+ * lens, and on an occupied visit the big button should take photographs.
+ *
+ * And as the product owner asked when that was demoed: photos or video chosen
+ * for each area rather than once per inspection, a shutter that is not red, and
+ * no checklist on the camera.
  */
+
+const read = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8');
+const CAMERA_SCREEN = 'app/(app)/camera/[inspectionId]/[areaId].tsx';
 
 describe('turning the controls with the phone', () => {
   it('keeps them upright in portrait', () => {
@@ -97,15 +108,112 @@ describe('pinch to zoom', () => {
   });
 });
 
-describe('which capture gets the big red button', () => {
+describe('which capture gets the big button', () => {
   it('always records first on a visit that has to be filmed', () => {
     expect(primaryCapture(true, undefined)).toBe('VIDEO');
     expect(primaryCapture(true, 'PHOTO')).toBe('VIDEO');
   });
 
-  it('photographs first on an occupied visit unless the technician chose video', () => {
+  it('photographs first on an occupied area unless the technician chose video for it', () => {
     expect(primaryCapture(false, undefined)).toBe('PHOTO');
     expect(primaryCapture(false, 'PHOTO')).toBe('PHOTO');
     expect(primaryCapture(false, 'VIDEO')).toBe('VIDEO');
+  });
+
+  it('reads the answer given for the area on screen, not one for the whole inspection', () => {
+    expect(read(CAMERA_SCREEN)).toContain('state.captureModeByArea[areaId]');
+  });
+});
+
+describe('whether opening the camera on an area asks photos or video first', () => {
+  const unanswered = {
+    requiresRecording: false,
+    chosen: undefined,
+    additionalClip: false,
+  } as const;
+
+  it('asks on an occupied area that has no answer yet', () => {
+    expect(asksCaptureChoice(unanswered)).toBe(true);
+  });
+
+  it('does not ask again once the area has an answer, whichever it was', () => {
+    // Reopening the camera on the same room goes straight in.
+    expect(asksCaptureChoice({ ...unanswered, chosen: 'PHOTO' })).toBe(false);
+    expect(asksCaptureChoice({ ...unanswered, chosen: 'VIDEO' })).toBe(false);
+  });
+
+  it('never asks on a visit that has to be filmed, so its walkthrough stays first', () => {
+    // A move-in or move-out owes one walkthrough per approved room. Offering
+    // photographs there would be offering a way around that.
+    expect(asksCaptureChoice({ ...unanswered, requiresRecording: true })).toBe(false);
+    expect(asksCaptureChoice({ ...unanswered, requiresRecording: true, chosen: 'PHOTO' })).toBe(
+      false,
+    );
+  });
+
+  it('does not ask on the way to an additional clip, whose button already said video', () => {
+    expect(asksCaptureChoice({ ...unanswered, additionalClip: true })).toBe(false);
+  });
+
+  it('is asked on the area screen, and no longer when the inspection is started', () => {
+    expect(read('app/(app)/areas/[id].tsx')).toContain('<CaptureChoiceSheet');
+    expect(read('app/(app)/inspections/[id].tsx')).not.toMatch(/setCaptureMode|CaptureChoiceSheet/);
+  });
+});
+
+describe('how the capture controls are drawn', () => {
+  const classesOf = (look: ReturnType<typeof captureControlLook>) =>
+    [look.ring, look.disc ?? '', look.glyph ?? ''].join(' ');
+
+  it('draws the big shutter as a white ring around a white disc, with no red in it', () => {
+    const look = captureControlLook({ large: true, stopControl: false });
+    expect(look.ring).toContain('border-white');
+    expect(look.disc).toContain('bg-white');
+    expect(classesOf(look)).not.toMatch(/red/);
+  });
+
+  it('keeps the small control a neutral outline', () => {
+    expect(classesOf(captureControlLook({ large: false, stopControl: false }))).not.toMatch(/red/);
+  });
+
+  it('turns red only as the stop control of a take that is running', () => {
+    for (const large of [true, false]) {
+      const look = captureControlLook({ large, stopControl: true });
+      expect(look.disc).toContain(RECORDING_RED);
+      // A plain stop square: nothing drawn over it.
+      expect(look.glyph).toBeNull();
+    }
+  });
+
+  it('does not change the ring when a take starts, only what is inside it', () => {
+    // The control a thumb is resting on must not move or resize mid-recording.
+    for (const large of [true, false]) {
+      expect(captureControlLook({ large, stopControl: true }).ring).toBe(
+        captureControlLook({ large, stopControl: false }).ring,
+      );
+    }
+  });
+
+  it('leaves no red of its own on the camera screen controls', () => {
+    // Every red on the controls comes from `captureControlLook`. The screen's
+    // error banner is red on purpose and uses different shades.
+    expect(read(CAMERA_SCREEN)).not.toContain('bg-red-500');
+  });
+});
+
+describe('where the checklist lives', () => {
+  const camera = read(CAMERA_SCREEN);
+  const area = read('app/(app)/areas/[id].tsx');
+
+  it('is not on the camera screen, as a prompt or as a sheet', () => {
+    expect(camera).not.toMatch(/<ConditionPromptSheet|<AreaChecklistSheet/);
+    expect(camera).not.toMatch(/from '@\/src\/capture\/(ConditionPromptSheet|AreaChecklistSheet)'/);
+    expect(existsSync(join(__dirname, '..', 'src/capture/ConditionPromptSheet.tsx'))).toBe(false);
+  });
+
+  it('is on the area screen, where the camera’s Done still lands on the questions', () => {
+    expect(area).toContain('<OccupiedConditionCard');
+    expect(area).toContain('<AreaChecklistSheet');
+    expect(camera).toContain("params: { id: areaId, focus: 'condition' }");
   });
 });
