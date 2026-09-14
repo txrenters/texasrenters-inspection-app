@@ -11,6 +11,45 @@ import { RouteService } from '../src/routing/route.service';
  * the same bounds, so the positions have to be that day's too.
  */
 
+describe("a stop's actual times", () => {
+  it('carries when the inspection was started and submitted in the app', async () => {
+    const prisma = {
+      inspectionAssignment: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            technicianId: 'tech',
+            technician: { displayName: 'Moses Rodriguez' },
+            inspection: {
+              id: 'inspection-1',
+              propertywareBuildingId: 'building-1',
+              inspectionType: 'OCCUPIED',
+              status: 'TECHNICIAN_SUBMITTED',
+              startedAt: new Date('2026-09-14T14:55:00.000Z'),
+              submittedAt: new Date('2026-09-14T15:24:00.000Z'),
+              completedAt: null,
+              propertywareBuilding: { name: '4226 Oak Shadows' },
+              property: null,
+            },
+          },
+        ]),
+      },
+    };
+    const service = new RouteService(prisma as never, {} as never, {} as never);
+
+    const [entry] = await service.assignmentsByTechnician('org', businessDayFromQuery('2026-09-14'));
+
+    expect(entry!.stops[0]).toMatchObject({
+      startedAt: '2026-09-14T14:55:00.000Z',
+      submittedAt: '2026-09-14T15:24:00.000Z',
+      finishedAt: '2026-09-14T15:24:00.000Z',
+    });
+    expect(prisma.inspectionAssignment.findMany.mock.calls[0][0].select.inspection.select).toMatchObject({
+      startedAt: true,
+      submittedAt: true,
+    });
+  });
+});
+
 describe('the day a map date asks for', () => {
   function capturing() {
     const seen: { stops: unknown[]; positions: unknown[] } = { stops: [], positions: [] };

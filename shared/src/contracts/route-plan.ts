@@ -354,6 +354,18 @@ export interface AssignedStop {
    * still to do. Orders the day's history.
    */
   finishedAt: string | null;
+  /**
+   * ISO 8601. When the technician started the inspection in the app, and when
+   * they submitted it. Null when that has not happened -- or never happened in
+   * the app, for an inspection Jobber closed.
+   *
+   * The actual time of a visit, which the location trail can only estimate:
+   * it goes quiet whenever a phone stops reporting, and on 14 September it
+   * called a day of ten visits "1 min driving". Optional so a console built
+   * before this still reads the response.
+   */
+  startedAt?: string | null;
+  submittedAt?: string | null;
 }
 
 export interface TechnicianAssignments {

@@ -362,7 +362,10 @@ export default function TechnicianMapPage() {
                     is open rather than any one stop in it. Only when somebody
                     is selected: there is no such thing as the roster's day. */}
                 {selectedId && timeline.data ? (
-                  <TechnicianDaySummary timeline={timeline.data} />
+                  <TechnicianDaySummary
+                    stops={assignments.data?.find((entry) => entry.technicianId === selectedId)?.stops}
+                    timeline={timeline.data}
+                  />
                 ) : null}
 
                 <TechnicianRoster

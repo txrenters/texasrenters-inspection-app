@@ -15,6 +15,8 @@ import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/
 import {
   arrivalTime,
   describeOrigin,
+  actualDayTotals,
+  actualVisits,
   historyTotals,
   isPlanned,
   listDay,
@@ -197,6 +199,9 @@ export function TechnicianRoster({
         const here = listings.find((listing) => listing.role === 'CURRENT');
         const finishedCount = entry.stops.filter((stop) => isFinishedStatus(stop.status)).length;
         const totals = historyTotals(timeline, listings);
+        // The day as the inspections recorded it, preferred wherever it exists.
+        const actual = selected ? actualVisits(entry.stops) : new Map<string, never>();
+        const actualTotals = actualDayTotals(actual);
         return (
           <li key={entry.technicianId}>
             <button
@@ -275,11 +280,20 @@ export function TechnicianRoster({
                       </p>
                     ) : null}
 
-                    {/* The finished part of the day, added up from the
-                        location trail: the time it took, the driving, and
-                        the time inside. Only what the trail measured -- a
-                        visit it never saw is counted but adds no time. */}
-                    {totals.finished ? (
+                    {/* The day so far from the inspections themselves: time on
+                        site from Start to Submit, driving from one submission
+                        to the next start. The location trail is the fallback
+                        for a day nobody started in the app. */}
+                    {actualTotals ? (
+                      <p className="text-muted-foreground mb-2 text-xs">
+                        <span className="text-foreground font-medium">
+                          {actualTotals.submitted} done
+                        </span>{' '}
+                        · {formatDuration(actualTotals.onSiteSeconds)} on site ·{' '}
+                        {formatDuration(actualTotals.driveSeconds)} driving ·{' '}
+                        {formatDuration(actualTotals.totalSeconds)} total
+                      </p>
+                    ) : totals.finished ? (
                       <p className="text-muted-foreground mb-2 text-xs">
                         <span className="text-foreground font-medium">
                           {totals.finished} done
@@ -305,6 +319,7 @@ export function TechnicianRoster({
                         const onSite = onSiteSeconds(projection, stop.inspectionId);
                         const arrival = arrivalTime(projection, stop.inspectionId);
                         const took = finished ? visitTimes(timeline, stop.inspectionId) : null;
+                        const visit = actual.get(stop.inspectionId);
                         const offNetwork = refused.has(stop.inspectionId);
                         // Only a stop with a building can be shown on a map, so
                         // only that one becomes a control. The rest already say
@@ -392,8 +407,20 @@ export function TechnicianRoster({
                                     means the address geocoded badly. */}
                                 {offNetwork ? ' · off the road network' : null}
                               </span>
-                              {/* How the finished visit went, from the trail. */}
-                              {took ? (
+                              {/* How the visit went, from its own start and
+                                  submission; the trail's estimate otherwise. */}
+                              {visit ? (
+                                <span className="text-muted-foreground block tabular-nums">
+                                  {visit.driveSeconds !== null
+                                    ? `${formatDuration(visit.driveSeconds)} drive${
+                                        visit.fromPropertyName ? ` from ${visit.fromPropertyName}` : ''
+                                      } · `
+                                    : ''}
+                                  {visit.onSiteSeconds !== null
+                                    ? `${formatDuration(visit.onSiteSeconds)} on site${visit.inProgress ? ' so far' : ''}`
+                                    : ''}
+                                </span>
+                              ) : took ? (
                                 <span className="text-muted-foreground block tabular-nums">
                                   {took.driveSeconds !== null
                                     ? `${formatDuration(took.driveSeconds)} drive · `
@@ -408,6 +435,14 @@ export function TechnicianRoster({
                                 {businessTimeOfDay(stop.finishedAt)
                                   ? `Done ${businessTimeOfDay(stop.finishedAt)}`
                                   : 'Done'}
+                                {/* In Texas time, like every clock on the map. */}
+                                {visit ? (
+                                  <span className="block">Started {businessTimeOfDay(visit.startedAt)}</span>
+                                ) : null}
+                              </span>
+                            ) : visit?.inProgress ? (
+                              <span className="text-foreground shrink-0 text-right tabular-nums">
+                                Started {businessTimeOfDay(visit.startedAt)}
                               </span>
                             ) : onSite !== null ? (
                               /* The stop they are at has no drive left and no
@@ -436,6 +471,12 @@ export function TechnicianRoster({
                     {/* What the times are, from whichever router drew them:
                         Google's include traffic, the fallback's describe an
                         empty road. Only beside times that exist. */}
+                    {actualTotals ? (
+                      <p className="text-muted-foreground mt-2 text-[11px]">
+                        Times on site run from Start to Submit in the app; driving from one
+                        submission to the next start. Texas time.
+                      </p>
+                    ) : null}
                     {planned && timingNote(route) ? (
                       <p className="text-muted-foreground mt-2 text-[11px]">{timingNote(route)}</p>
                     ) : null}

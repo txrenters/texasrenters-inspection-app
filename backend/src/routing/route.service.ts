@@ -236,6 +236,8 @@ export class RouteService {
             propertywareBuildingId: true,
             inspectionType: true,
             status: true,
+            // The visit's actual start and end, as the app recorded them.
+            startedAt: true,
             submittedAt: true,
             completedAt: true,
             // Both, for the same reason the route planner reads both: a real
@@ -274,6 +276,8 @@ export class RouteService {
               return at === null ? null : new Date(at).toISOString();
             })()
           : null,
+        startedAt: inspection.startedAt?.toISOString() ?? null,
+        submittedAt: inspection.submittedAt?.toISOString() ?? null,
       });
 
       byTechnician.set(assignment.technicianId, existing);

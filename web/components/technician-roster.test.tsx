@@ -277,6 +277,46 @@ describe('a route the planner produced', () => {
     expect(text.indexOf('Tulane Oak')).toBeLessThan(text.indexOf('Mariposa'));
   });
 
+  it('shows each visit as the app recorded it: Start to Submit, and the drive between', () => {
+    // 14:55Z is 9:55 AM in Texas. The trail would have estimated these; the
+    // office asked for the inspections' own times.
+    const OAK: AssignedStop = {
+      inspectionId: 'inspection-oak',
+      buildingId: 'building-oak',
+      propertyName: '4226 Oak Shadows',
+      inspectionType: 'OCCUPIED',
+      status: 'TECHNICIAN_SUBMITTED',
+      finishedAt: '2026-09-14T15:24:00.000Z',
+      startedAt: '2026-09-14T14:55:00.000Z',
+      submittedAt: '2026-09-14T15:24:00.000Z',
+    };
+    const CHAMBOARD: AssignedStop = {
+      ...OAK,
+      inspectionId: 'inspection-chamboard',
+      buildingId: 'building-chamboard',
+      propertyName: '1150 chamboard',
+      finishedAt: '2026-09-14T15:42:00.000Z',
+      startedAt: '2026-09-14T15:32:00.000Z',
+      submittedAt: '2026-09-14T15:42:00.000Z',
+    };
+    const { container } = render(
+      <TechnicianRoster
+        entries={entries([OAK, CHAMBOARD, STOP])}
+        onSelect={() => {}}
+        route={PLANNED}
+        selectedId="tech-1"
+        timeline={timelineOf(projection({}))}
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/Done 10:24 AMStarted 9:55 AM/);
+    expect(text).toMatch(/8 min drive from 4226 Oak Shadows · 10 min on site/);
+    expect(text).toMatch(/2 done · 39 min on site · 8 min driving · 47 min total/);
+    expect(text).toMatch(/Start to Submit in the app/);
+    expect(text).toMatch(/Texas time/);
+  });
+
   it('marks the next stop, and says where the technician is', () => {
     render(
       <TechnicianRoster
