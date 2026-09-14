@@ -732,11 +732,20 @@ model InspectionImportJob {
   /// The parsed report, for the preview the console shows before committing.
   output         Json?
   errorCode      String?
-  /// The inspection this report is being read for. Set when the job starts,
-  /// because a report is always imported *into* an existing record — Jobber
-  /// creates the move-in when the visit completes, and the walkthrough itself
-  /// happened in another system.
+  /// The inspection this report is written into. Set when the job starts,
+  /// because a report is imported *into* a record — Jobber creates the
+  /// move-in when the visit completes, and the walkthrough itself happened in
+  /// another system. The commit moves it when the report's own date belongs to
+  /// a different walkthrough; see `requestedInspectionId`.
   inspectionId   String?             @db.Uuid
+  /// The inspection the import was started from.
+  ///
+  /// The same as `inspectionId` unless the report is dated more than a
+  /// fortnight from that inspection's schedule. It then describes another
+  /// walkthrough and is written into that walkthrough's own inspection, found
+  /// or created, and this is what lets the console say it went somewhere else.
+  /// Null on jobs from before it existed, all of which stayed where they began.
+  requestedInspectionId String?      @db.Uuid
   /// Set once the evidence has actually been written, so a finished reading and
   /// a finished import are never confused for each other.
   committedAt    DateTime?

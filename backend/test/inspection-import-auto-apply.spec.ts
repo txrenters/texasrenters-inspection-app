@@ -82,13 +82,27 @@ describe('applying a report without being asked', () => {
     // Scoped to the write itself rather than the file — `finalizedAt` appears
     // twice in prose explaining why it is left alone, and a whole-file search
     // matches the explanation instead of the behaviour.
-    const write = SERVICE.slice(
-      SERVICE.indexOf('await tx.inspection.update({'),
-      SERVICE.indexOf('const inspection = { id: target.id };'),
-    );
+    const update = SERVICE.indexOf('await tx.inspection.update({');
+    const write = SERVICE.slice(update, SERVICE.indexOf('});', update));
+    expect(update).toBeGreaterThan(-1);
     expect(write).toContain('source: InspectionSource.IMPORTED_REPORT');
     expect(write).not.toContain('finalizedAt');
+    // An inspection that exists keeps its status and its schedule.
     expect(write).not.toContain('status:');
+    expect(write).not.toContain('scheduledAt');
+  });
+
+  it('creates an inspection for another walkthrough completed, never finalized', () => {
+    // A report dated weeks from the inspection it was started on gets its own
+    // record. The walk happened, so COMPLETED, as the Propertyware backfill
+    // does it; nobody here has signed it off, so not finalized.
+    const create = SERVICE.indexOf('await tx.inspection.create({');
+    const write = SERVICE.slice(create, SERVICE.indexOf('select: { id: true }', create));
+    expect(create).toBeGreaterThan(-1);
+    expect(write).toContain('status: InspectionStatus.COMPLETED');
+    expect(write).toContain('source: InspectionSource.IMPORTED_REPORT');
+    expect(write).not.toContain('finalizedAt');
+    expect(write).not.toContain('jobberVisitId');
   });
 
   it('tells the console nothing is waiting on a person', () => {

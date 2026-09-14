@@ -425,7 +425,13 @@ function build(db: ReturnType<typeof database>, areas: ImportedArea[]) {
       findFirst: jest.fn().mockResolvedValue({
         id: INSPECTION_ID,
         inspectionType: InspectionType.MOVE_IN,
+        // The day `reportOf` was walked, so the report is this inspection's
+        // own walkthrough; where a report from another one goes is
+        // `inspection-import-report-date.spec.ts`.
+        scheduledAt: new Date('2026-01-02T00:00:00.000Z'),
         propertywareBuildingId: building.id,
+        propertywareUnitId: null,
+        propertywareLeaseId: null,
         propertywareBuilding: building,
         // What the check sees. A room attached after this answer is the case
         // the upsert exists for, and `db.attach` is when that happens.

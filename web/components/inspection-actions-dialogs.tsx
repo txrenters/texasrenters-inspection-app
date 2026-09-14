@@ -107,10 +107,23 @@ export function InspectionEditDialog({
           <Field>
             <FieldLabel htmlFor="edit-inspection-schedule">Scheduled date</FieldLabel>
             {/* Date only, matching the DATE column. The hour this used to collect
-                was never used by the schedule it claims to control. */}
-            <DatePicker id="edit-inspection-schedule" onChange={setScheduledAt} value={scheduledAt} />
+                was never used by the schedule it claims to control.
+
+                Locked on a Jobber visit: the sync puts Jobber's date back on
+                its next pass, so a date changed here would not stay changed,
+                and the API refuses it. The description says where to go. */}
+            <DatePicker
+              disabled={inspection.scheduledInJobber}
+              id="edit-inspection-schedule"
+              onChange={setScheduledAt}
+              value={scheduledAt}
+            />
             <FieldDescription>
-              Controls when this inspection appears in the technician&rsquo;s schedule.
+              {inspection.scheduledInJobber ? (
+                <>Scheduled in Jobber. Change the date there and it updates here.</>
+              ) : (
+                <>Controls when this inspection appears in the technician&rsquo;s schedule.</>
+              )}
             </FieldDescription>
           </Field>
 

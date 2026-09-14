@@ -763,6 +763,17 @@ export interface RunningImport {
   awaitingReview: boolean;
   address: string | null;
   inspectionType: string | null;
+  /**
+   * The inspection the import was started from.
+   *
+   * Differs from `inspectionId` when the report's own date is more than a
+   * fortnight from that inspection's schedule: the report describes another
+   * walkthrough and was written into that one's inspection instead. Null on
+   * imports from before this was recorded.
+   */
+  requestedInspectionId: string | null;
+  /** The scheduled day of the inspection the report was written into. */
+  scheduledAt: string | null;
 }
 
 /**

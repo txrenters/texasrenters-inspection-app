@@ -5,7 +5,11 @@ import { InspectionSource, InspectionStatus } from '@prisma/client';
 import type { InspectionType, Prisma } from '@prisma/client';
 
 import { InspectionImportService } from '../../admin/inspection-import/inspection-import.service';
-import { parseReport } from '../../admin/inspection-import/inspect-cloud-report';
+import {
+  parseReport,
+  REPORT_MATCH_WINDOW_DAYS,
+  reportWalkedOn,
+} from '../../admin/inspection-import/inspect-cloud-report';
 import { readPages } from '../../admin/inspection-import/inspect-cloud-pdf';
 import type { ImportedReport } from '../../admin/inspection-import/inspect-cloud-report';
 import type { AuthenticatedUser } from '../../common/auth';
@@ -43,23 +47,6 @@ import {
 
 /** Paced, not parallel. See {@link PACING_MS}. */
 const PACING_MS = 120;
-
-/**
- * How near a report's date has to be to an existing inspection to be *that*
- * inspection.
- *
- * Jobber schedules a visit and the walk happens within a few days; the report
- * is written the same day it is walked but uploaded to Propertyware whenever
- * somebody got to it. So the match is against the inspection's schedule, with a
- * fortnight either side, and the report's own date is what is compared.
- *
- * Wider than it sounds because the alternative is worse in one direction only:
- * too narrow creates a duplicate inspection beside a real one, and a duplicate
- * move-in silently becomes the baseline every future move-out is judged
- * against. Too wide attaches evidence to a scheduled visit that is, at worst,
- * the same walkthrough a fortnight out.
- */
-const MATCH_WINDOW_DAYS = 14;
 
 interface DiscoverOptions {
   organizationId: string;
@@ -334,8 +321,10 @@ export class PropertywareInspectionDocsService {
     report: ImportedReport;
     actorId: string;
   }) {
-    const walkedAt = reportDate(input.report.reportDate);
-    const window = MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    // The same window the console's import places a report with, so the two
+    // cannot disagree about which inspection a report belongs to.
+    const walkedAt = reportWalkedOn(input.report.reportDate);
+    const window = REPORT_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
     const existing = await this.prisma.inspection.findFirst({
       where: {
@@ -392,23 +381,6 @@ export class PropertywareInspectionDocsService {
       data: { status, ...data },
     });
   }
-}
-
-/**
- * The report's own date, which is the one that counts.
- *
- * Inspect & Cloud writes it as `DEC-21-2023` in the page header. Not the
- * document's Propertyware timestamp: reports are uploaded whenever somebody got
- * to it, and one at 7306 Cypress Prairie was filed eight months after the walk.
- */
-function reportDate(value: string | null | undefined): Date | null {
-  const match = /^([A-Z]{3})-(\d{1,2})-(\d{4})$/i.exec((value ?? '').trim());
-  if (!match) return null;
-  const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-  const month = months.indexOf(match[1].toLowerCase());
-  if (month < 0) return null;
-  const parsed = new Date(Date.UTC(Number(match[3]), month, Number(match[2])));
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /** A courtesy to Propertyware, which rate-limits and which nobody else is using. */
