@@ -26,6 +26,24 @@ const AXES = [
 
 type AxisKey = (typeof AXES)[number]['key'];
 
+/** A reading, a line of text or a chosen option: one answer rather than three verdicts. */
+const isAnswerItem = (item: AreaChecklistEntry) =>
+  Boolean(item.responseType && item.responseType !== 'STATUS');
+
+/**
+ * Answered counts as assessed, whatever shape the answer takes.
+ *
+ * Exported because the area's tab label counts the same thing, and the two
+ * copies had drifted: the tab still looked only at the three axes, so an
+ * occupied room with both questions answered read "Condition (0/2)" above a
+ * panel saying "2 of 2 assessed".
+ */
+export function isChecklistItemAssessed(item: AreaChecklistEntry) {
+  return isAnswerItem(item)
+    ? item.numericValue != null || Boolean(item.textValue)
+    : item.isClean !== null || item.isUndamaged !== null || item.isWorking !== null;
+}
+
 /** Seconds as m:ss, the form a video scrubber shows. */
 function timecode(total: number) {
   const minutes = Math.floor(total / 60);
@@ -135,11 +153,10 @@ export function AreaConditionChecklist({
    * single choices alongside its forty-seven ticks. Counting only the three
    * axes reported a fully completed HVAC inspection as nothing assessed.
    */
-  const assessed = checklist.filter((item) =>
-    item.responseType && item.responseType !== 'STATUS'
-      ? item.numericValue != null || Boolean(item.textValue)
-      : item.isClean !== null || item.isUndamaged !== null || item.isWorking !== null,
-  ).length;
+  const assessed = checklist.filter(isChecklistItemAssessed).length;
+  // Every item answered once -- the occupied pair. Three verdict columns over a
+  // single centred answer is what put "Clean" under "Undamaged".
+  const answersOnly = checklist.length > 0 && checklist.every(isAnswerItem);
 
   if (!checklist.length)
     return (
@@ -175,11 +192,17 @@ export function AreaConditionChecklist({
             <TableHeader className="lg:static">
               <TableRow className="hover:bg-transparent">
                 <TableHead>Item</TableHead>
-                {AXES.map((axis) => (
-                  <TableHead className="w-24 text-center" key={axis.key} scope="col">
-                    {axis.label}
+                {answersOnly ? (
+                  <TableHead className="text-center" colSpan={AXES.length} scope="col">
+                    Answer
                   </TableHead>
-                ))}
+                ) : (
+                  AXES.map((axis) => (
+                    <TableHead className="w-24 text-center" key={axis.key} scope="col">
+                      {axis.label}
+                    </TableHead>
+                  ))
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>

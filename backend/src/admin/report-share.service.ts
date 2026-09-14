@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import { FindingReviewStatus, type Prisma } from '@prisma/client';
+import { AreaChecklistItemKind, FindingReviewStatus, type Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -239,12 +239,17 @@ export class ReportShareService {
                 isUndamaged: true,
                 isWorking: true,
                 comment: true,
+                // An occupied room's answer ("Clean", "Good") lives here, with
+                // all three axes null.
+                textValue: true,
                 // `keywords` travels with the row so the report can attach the
                 // finding that explains a failed axis. They already exist to
                 // recognise the item in a transcript ("wall", "ceiling"), and
                 // that is precisely the vocabulary an AI-authored finding
                 // categorises itself with.
-                checklistItem: { select: { id: true, label: true, keywords: true } },
+                checklistItem: {
+                  select: { id: true, label: true, keywords: true, kind: true, responseType: true },
+                },
               },
             },
             photos: {
@@ -357,6 +362,17 @@ export class ReportShareService {
           isUndamaged: response.isUndamaged,
           isWorking: response.isWorking,
           comment: response.comment,
+          /*
+           * The answer, for an occupied room's questions.
+           *
+           * Scoped to occupied items so every other report is byte-for-byte
+           * what it was: room checklists are all three-axis verdicts, and HVAC
+           * answers -- readings, free text -- have never been printed on a
+           * report and are not published by this.
+           */
+          ...(response.checklistItem.kind === AreaChecklistItemKind.OCCUPIED
+            ? { responseType: response.checklistItem.responseType, textValue: response.textValue }
+            : {}),
         })),
       })),
       findings: inspection.findings.map((finding) => ({

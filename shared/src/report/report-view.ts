@@ -164,6 +164,14 @@ export interface ReportFindingView {
 export interface ReportChecklistRowView {
   id: string;
   label: string;
+  /**
+   * How the row is printed. AXES is the clean / undamaged / working verdict;
+   * ANSWER is one recorded answer -- an occupied room's "Clean" or "Good" --
+   * printed across the three verdict columns instead of leaving them blank.
+   */
+  kind: 'AXES' | 'ANSWER';
+  /** The recorded answer, for an ANSWER row. Empty when nothing was chosen. */
+  answer: string;
   clean: string;
   undamaged: string;
   working: string;
@@ -393,9 +401,14 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         : [];
       // The reviewer's own words lead; the findings follow rather than being
       // replaced by it, so writing one note never hides the rest.
+      // Anything but a three-axis verdict is one answer. Only occupied items
+      // carry one on a report today; see `PublicReportChecklistItem`.
+      const kind = item.responseType && item.responseType !== 'STATUS' ? 'ANSWER' : 'AXES';
       return {
         id: item.id,
         label: item.label,
+        kind,
+        answer: kind === 'ANSWER' ? item.textValue?.trim() || '' : '',
         clean: axisCell(item.isClean),
         undamaged: axisCell(item.isUndamaged),
         working: axisCell(item.isWorking),
