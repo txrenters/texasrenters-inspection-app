@@ -2,19 +2,25 @@
 
 import type {
   AssignedStop,
-  RemainderProjection,
   TechnicianAssignments,
+  TechnicianDayTimeline,
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
+import { isFinishedStatus } from '@texasrenters/shared';
+import { CheckIcon, MapPinIcon } from 'lucide-react';
 
+import { businessTimeOfDay } from '@/lib/clock';
 import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/format';
 import {
   arrivalTime,
   describeOrigin,
+  historyTotals,
   isPlanned,
+  listDay,
   offRoadNetwork,
   onSiteSeconds,
+  visitTimes,
 } from '@/lib/route-plan';
 
 /**
@@ -101,29 +107,6 @@ export function buildRoster(
   );
 }
 
-/**
- * The stops in the order they should be driven, when that is known.
- *
- * The route only carries stops it could place, so anything it dropped is
- * appended rather than lost -- a property with no coordinate is still work,
- * and a list that quietly held fewer inspections than the count above it
- * would be the worse failure.
- */
-function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undefined) {
-  // Guarded on the same predicate as everything else: a refused plan still
-  // carries stops, in whatever order the database returned them, and quietly
-  // reordering the panel to match would present that as a recommendation.
-  if (!isPlanned(route)) return stops;
-
-  const byInspection = new Map(stops.map((stop) => [stop.inspectionId, stop]));
-  const ordered = route.stops
-    .map((stop) => byInspection.get(stop.inspectionId))
-    .filter((stop): stop is AssignedStop => Boolean(stop));
-
-  const seen = new Set(ordered.map((stop) => stop.inspectionId));
-  return [...ordered, ...stops.filter((stop) => !seen.has(stop.inspectionId))];
-}
-
 function Dot({ position }: { position: TechnicianPosition | null }) {
   if (!position)
     return (
@@ -148,10 +131,10 @@ export function TechnicianRoster({
   entries,
   onSelect,
   onSelectStop,
-  projection = null,
   route,
   selectedId,
   selectedStopBuildingId = null,
+  timeline = null,
 }: {
   entries: RosterEntry[];
   onSelect: (technicianId: string | null) => void;
@@ -165,11 +148,12 @@ export function TechnicianRoster({
    */
   onSelectStop?: (buildingId: string | null) => void;
   /**
-   * The selected technician's day from here: when each stop ahead is reached,
-   * and the visit under way. From the timeline rather than the route, because
-   * only the timeline knows how long they have already been where they are.
+   * The selected technician's day as their location trail read it: the visit
+   * under way, when each stop ahead is reached, and how long each finished
+   * visit took. From the timeline rather than the route, because only the
+   * trail knows where they have actually been.
    */
-  projection?: RemainderProjection | null;
+  timeline?: TechnicianDayTimeline | null;
   /**
    * The selected technician's drive, once it has been worked out.
    *
@@ -187,6 +171,7 @@ export function TechnicianRoster({
   // and rebuilding it inside the list would make it O(stops x refusals).
   const refused = offRoadNetwork(route);
   const planned = isPlanned(route);
+  const projection = timeline?.projection ?? null;
 
   if (!entries.length)
     return (
@@ -199,6 +184,14 @@ export function TechnicianRoster({
     <ul className="divide-border divide-y">
       {entries.map((entry) => {
         const selected = entry.technicianId === selectedId;
+        // Only the selected person's day is read closely enough to know where
+        // they are; everyone else is a name and a count.
+        const listings = selected
+          ? listDay(entry.stops, route, projection?.current?.inspectionIds)
+          : [];
+        const here = listings.find((listing) => listing.role === 'CURRENT');
+        const finishedCount = entry.stops.filter((stop) => isFinishedStatus(stop.status)).length;
+        const totals = historyTotals(timeline, listings);
         return (
           <li key={entry.technicianId}>
             <button
@@ -215,6 +208,12 @@ export function TechnicianRoster({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium">{entry.displayName}</span>
                 <span className="text-muted-foreground block truncate text-xs">
+                  {/* Where they are, when the trail puts them at one of the
+                      day's properties -- the question somebody opening this
+                      row is usually asking. */}
+                  {here ? (
+                    <span className="text-foreground">At {here.stop.propertyName} · </span>
+                  ) : null}
                   {entry.position
                     ? formatRelative(entry.position.recordedAt)
                     : 'No position reported'}
@@ -223,7 +222,9 @@ export function TechnicianRoster({
               <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                 {entry.stops.length === 0
                   ? '—'
-                  : `${entry.stops.length} ${entry.stops.length === 1 ? 'stop' : 'stops'}`}
+                  : finishedCount
+                    ? `${finishedCount}/${entry.stops.length} done`
+                    : `${entry.stops.length} ${entry.stops.length === 1 ? 'stop' : 'stops'}`}
               </span>
             </button>
 
@@ -263,11 +264,36 @@ export function TechnicianRoster({
                       </p>
                     ) : null}
 
+                    {/* The finished part of the day, added up from the
+                        location trail: the time it took, the driving, and
+                        the time inside. Only what the trail measured -- a
+                        visit it never saw is counted but adds no time. */}
+                    {totals.finished ? (
+                      <p className="text-muted-foreground mb-2 text-xs">
+                        <span className="text-foreground font-medium">
+                          {totals.finished} done
+                        </span>
+                        {totals.measured ? (
+                          <>
+                            {' '}
+                            · {formatDuration(totals.totalSeconds)} total ·{' '}
+                            {formatDuration(totals.driveSeconds)} driving ·{' '}
+                            {formatDuration(totals.onSiteSeconds)} on site
+                          </>
+                        ) : (
+                          ' · no time measured'
+                        )}
+                      </p>
+                    ) : null}
+
                     <ol className="space-y-1.5">
-                      {orderStops(entry.stops, route).map((stop, index) => {
-                        const leg = planned ? route?.legs[index] : undefined;
+                      {listings.map(({ stop, role, routeIndex }) => {
+                        const finished = role === 'FINISHED';
+                        const leg =
+                          planned && routeIndex !== null ? route?.legs[routeIndex] : undefined;
                         const onSite = onSiteSeconds(projection, stop.inspectionId);
                         const arrival = arrivalTime(projection, stop.inspectionId);
+                        const took = finished ? visitTimes(timeline, stop.inspectionId) : null;
                         const offNetwork = refused.has(stop.inspectionId);
                         // Only a stop with a building can be shown on a map, so
                         // only that one becomes a control. The rest already say
@@ -282,13 +308,22 @@ export function TechnicianRoster({
                         // between the two cases.
                         const Row = mappable ? 'button' : 'span';
                         return (
-                          <li className="flex gap-2 text-xs leading-snug" key={stop.inspectionId}>
-                            {/* Numbered only when there is a route to number
-                                against. A bare list with numbers on it would
-                                read as an order somebody chose. */}
-                            {planned ? (
+                          <li
+                            className={`flex gap-2 text-xs leading-snug ${finished ? 'opacity-60' : ''}`}
+                            key={stop.inspectionId}
+                          >
+                            {/* A tick for what is done, the route's number for
+                                what is left. Numbers only where there is a
+                                route: a bare list with numbers on it would read
+                                as an order somebody chose. */}
+                            {finished ? (
+                              <CheckIcon
+                                aria-label="Done"
+                                className="text-muted-foreground mt-0.5 size-3 shrink-0"
+                              />
+                            ) : planned ? (
                               <span className="text-muted-foreground w-3 shrink-0 tabular-nums">
-                                {index + 1}
+                                {routeIndex !== null ? routeIndex + 1 : ''}
                               </span>
                             ) : null}
                             <Row
@@ -306,17 +341,33 @@ export function TechnicianRoster({
                                   : ''
                               }`}
                             >
+                              {/* Green is the next stop, on the list and on the
+                                  map. The stop the map is showing is underlined
+                                  rather than coloured, so the two never read as
+                                  the same thing. */}
                               <span
-                                className={`block font-medium ${focused ? 'text-map-technician' : ''}`}
+                                className={`flex items-center gap-1 font-medium ${
+                                  role === 'NEXT' ? 'text-map-technician' : ''
+                                } ${finished ? 'text-muted-foreground' : ''} ${
+                                  focused ? 'underline underline-offset-2' : ''
+                                }`}
                               >
-                                {stop.propertyName}
+                                {role === 'CURRENT' ? (
+                                  <MapPinIcon aria-label="Here now" className="size-3 shrink-0" />
+                                ) : null}
+                                <span className="min-w-0 truncate">{stop.propertyName}</span>
+                                {role === 'NEXT' ? (
+                                  <span className="text-[10px] font-semibold tracking-wide uppercase">
+                                    Next
+                                  </span>
+                                ) : null}
                               </span>
                               <span className="text-muted-foreground block">
                                 {/* The type carries more weight than the status
                                     it sits beside: it is what separates two
                                     visits to the same address, and at the same
                                     colour the pair read as one grey blob. */}
-                                <span className="text-foreground">
+                                <span className={finished ? '' : 'text-foreground'}>
                                   {humanize(stop.inspectionType)}
                                 </span>{' '}
                                 · {humanize(stop.status)}
@@ -330,12 +381,28 @@ export function TechnicianRoster({
                                     means the address geocoded badly. */}
                                 {offNetwork ? ' · off the road network' : null}
                               </span>
+                              {/* How the finished visit went, from the trail. */}
+                              {took ? (
+                                <span className="text-muted-foreground block tabular-nums">
+                                  {took.driveSeconds !== null
+                                    ? `${formatDuration(took.driveSeconds)} drive · `
+                                    : ''}
+                                  {formatDuration(took.onSiteSeconds)} on site ·{' '}
+                                  {formatDuration(took.totalSeconds)} total
+                                </span>
+                              ) : null}
                             </Row>
-                            {/* The stop they are at has no drive left and no
-                                arrival to wait for -- only how long they have
-                                been there, which is what the times after it
-                                are counted from. */}
-                            {onSite !== null ? (
+                            {finished ? (
+                              <span className="text-muted-foreground shrink-0 text-right tabular-nums">
+                                {businessTimeOfDay(stop.finishedAt)
+                                  ? `Done ${businessTimeOfDay(stop.finishedAt)}`
+                                  : 'Done'}
+                              </span>
+                            ) : onSite !== null ? (
+                              /* The stop they are at has no drive left and no
+                                 arrival to wait for -- only how long they have
+                                 been there, which is what the times after it
+                                 are counted from. */
                               <span className="text-foreground shrink-0 text-right tabular-nums">
                                 on site {formatDuration(onSite)}
                               </span>

@@ -37,6 +37,7 @@ const REFUSED: TechnicianRoute = {
   totalDurationSeconds: 0,
   unroutable: [],
   geometry: [],
+  history: { stops: [], geometry: [] },
   originOutsideServiceArea: true,
   airTravel: null,
   estimated: true,

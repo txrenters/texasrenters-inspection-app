@@ -1,4 +1,10 @@
-import type { RemainderProjection, TechnicianRoute } from '@texasrenters/shared';
+import {
+  isFinishedStatus,
+  type AssignedStop,
+  type RemainderProjection,
+  type TechnicianDayTimeline,
+  type TechnicianRoute,
+} from '@texasrenters/shared';
 
 import { businessTimeOfDay } from './clock';
 
@@ -128,4 +134,160 @@ export function onSiteSeconds(
 ): number | null {
   const current = projection?.current;
   return current?.inspectionIds.includes(inspectionId) ? current.onSiteSeconds : null;
+}
+
+/**
+ * The stops in the order they should be driven, when that is known.
+ *
+ * The route only carries stops it could place, so anything it dropped is
+ * appended rather than lost -- a property with no coordinate is still work,
+ * and a list that quietly held fewer inspections than the count above it
+ * would be the worse failure.
+ */
+export function orderStops(stops: AssignedStop[], route: TechnicianRoute | null | undefined) {
+  // Guarded on the same predicate as everything else: a refused plan still
+  // carries stops, in whatever order the database returned them, and quietly
+  // reordering the panel to match would present that as a recommendation.
+  if (!isPlanned(route)) return stops;
+
+  const byInspection = new Map(stops.map((stop) => [stop.inspectionId, stop]));
+  const ordered = route.stops
+    .map((stop) => byInspection.get(stop.inspectionId))
+    .filter((stop): stop is AssignedStop => Boolean(stop));
+
+  const seen = new Set(ordered.map((stop) => stop.inspectionId));
+  return [...ordered, ...stops.filter((stop) => !seen.has(stop.inspectionId))];
+}
+
+/**
+ * What a stop is to the day so far.
+ *
+ * - `FINISHED` -- handed in. Greyed out, kept as the day's history.
+ * - `CURRENT` -- where the technician is now, by their location trail.
+ * - `NEXT` -- the first stop still ahead of them. Green on the list and the map.
+ * - `AHEAD` -- everything after it.
+ */
+export type DayStopRole = 'FINISHED' | 'CURRENT' | 'NEXT' | 'AHEAD';
+
+export interface DayStopListing {
+  stop: AssignedStop;
+  role: DayStopRole;
+  /** Where the stop sits in the drawn route -- its number and its leg. Null when it is not in it. */
+  routeIndex: number | null;
+}
+
+const finishedTime = (iso: string | null) => {
+  const at = iso ? Date.parse(iso) : Number.NaN;
+  return Number.isFinite(at) ? at : Number.POSITIVE_INFINITY;
+};
+
+/**
+ * A technician's day as the list shows it.
+ *
+ * Finished stops first, in the order they were handed in: they used to vanish
+ * the moment they were submitted, so by the afternoon the panel showed only
+ * what was left and nothing of what had been done. Then what is left, in the
+ * order the route drives it.
+ *
+ * `NEXT` only exists where there is a route. Without one the remaining stops
+ * are in no order at all, and calling one of them next would be a
+ * recommendation nobody made.
+ */
+export function listDay(
+  stops: AssignedStop[],
+  route: TechnicianRoute | null | undefined,
+  currentInspectionIds: readonly string[] | null | undefined,
+): DayStopListing[] {
+  const current = new Set(currentInspectionIds ?? []);
+  const finished = stops
+    .filter((stop) => isFinishedStatus(stop.status))
+    .sort((left, right) => finishedTime(left.finishedAt) - finishedTime(right.finishedAt));
+  const remaining = orderStops(
+    stops.filter((stop) => !isFinishedStatus(stop.status)),
+    route,
+  );
+  const planned = isPlanned(route) ? route : null;
+  const nextId = planned
+    ? remaining.find(
+        (stop) =>
+          !current.has(stop.inspectionId) &&
+          planned.stops.some((entry) => entry.inspectionId === stop.inspectionId),
+      )?.inspectionId
+    : undefined;
+
+  return [
+    ...finished.map((stop) => ({ stop, role: 'FINISHED' as const, routeIndex: null })),
+    ...remaining.map((stop) => {
+      const index = planned
+        ? planned.stops.findIndex((entry) => entry.inspectionId === stop.inspectionId)
+        : -1;
+      const role: DayStopRole = current.has(stop.inspectionId)
+        ? 'CURRENT'
+        : stop.inspectionId === nextId
+          ? 'NEXT'
+          : 'AHEAD';
+      return { stop, role, routeIndex: index === -1 ? null : index };
+    }),
+  ];
+}
+
+/** How long one visit took: the drive that reached it, the time there, and both. */
+export interface VisitTimes {
+  driveSeconds: number | null;
+  onSiteSeconds: number;
+  totalSeconds: number;
+}
+
+/**
+ * The measured time of a visit, from the day's location trail.
+ *
+ * Null when the trail never put the technician at the place -- a handset that
+ * was not reporting, or a stop handed in from somewhere else. Nothing is
+ * inferred from when the paperwork was opened and submitted, which describes
+ * the form rather than the visit.
+ */
+export function visitTimes(
+  timeline: TechnicianDayTimeline | null | undefined,
+  inspectionId: string,
+): VisitTimes | null {
+  const place = timeline?.stops.find((entry) => entry.inspectionIds.includes(inspectionId));
+  if (!place || place.onSiteSeconds <= 0) return null;
+  return {
+    driveSeconds: place.driveToSeconds,
+    onSiteSeconds: place.onSiteSeconds,
+    totalSeconds: place.onSiteSeconds + (place.driveToSeconds ?? 0),
+  };
+}
+
+/**
+ * The finished part of the day, added up.
+ *
+ * Each place counted once, however many inspections were handed in at it: two
+ * inspections at one address are one visit on the trail, and adding its time
+ * twice would inflate exactly the figure this exists to report.
+ */
+export function historyTotals(
+  timeline: TechnicianDayTimeline | null | undefined,
+  listings: readonly DayStopListing[],
+) {
+  const finished = listings.filter((listing) => listing.role === 'FINISHED');
+  const places = new Map<string, VisitTimes>();
+  for (const { stop } of finished) {
+    const place = timeline?.stops.find((entry) => entry.inspectionIds.includes(stop.inspectionId));
+    const times = visitTimes(timeline, stop.inspectionId);
+    if (place && times) places.set(place.buildingId, times);
+  }
+  let driveSeconds = 0;
+  let onSiteSeconds = 0;
+  for (const times of places.values()) {
+    driveSeconds += times.driveSeconds ?? 0;
+    onSiteSeconds += times.onSiteSeconds;
+  }
+  return {
+    finished: finished.length,
+    measured: places.size,
+    driveSeconds,
+    onSiteSeconds,
+    totalSeconds: driveSeconds + onSiteSeconds,
+  };
 }

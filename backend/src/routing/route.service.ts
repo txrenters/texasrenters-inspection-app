@@ -55,6 +55,36 @@ const VISITABLE: InspectionStatus[] = [
 ];
 
 /**
+ * Work already done that day, read alongside what is left.
+ *
+ * Not routed to -- see `VISITABLE` -- but no longer dropped either: the map
+ * lists it greyed out as the day's history, and draws the drive through it.
+ * Cancelled work is neither, and stays out.
+ */
+const FINISHED: InspectionStatus[] = [
+  InspectionStatus.TECHNICIAN_SUBMITTED,
+  InspectionStatus.PROCESSING,
+  InspectionStatus.REVIEW_REQUIRED,
+  InspectionStatus.UNDER_REVIEW,
+  InspectionStatus.TBD,
+  InspectionStatus.COMPLETED,
+];
+
+/**
+ * Whether a stop is finished work. Tolerates a missing status, which reads as
+ * work still to do -- the conservative answer for a route.
+ */
+function isFinished(status: InspectionStatus | null | undefined) {
+  return Boolean(status && FINISHED.includes(status));
+}
+
+/** When a finished inspection was handed in, as epoch ms, or null. */
+function finishedAtOf(inspection: { submittedAt?: Date | null; completedAt?: Date | null }) {
+  const at = inspection.submittedAt ?? inspection.completedAt ?? null;
+  return at ? at.getTime() : null;
+}
+
+/**
  * OSRM's `[lon, lat]` path as `[lat, lng]`, which is what draws a map.
  *
  * Exported for its test. This is the third place in this codebase where the
@@ -110,6 +140,17 @@ export class RouteService {
    * one answer, on exactly the occasions a redraw happens.
    */
   private readonly inFlight = new Map<string, Promise<TechnicianRoute>>();
+
+  /**
+   * Drives already drawn through a day's finished stops, keyed by exactly what
+   * they join.
+   *
+   * A day's history only changes when another stop is finished -- a handful of
+   * times a day -- so the map can poll every thirty seconds without asking
+   * Google again each time.
+   */
+  private readonly histories = new Map<string, [number, number][]>();
+  private readonly historiesInFlight = new Map<string, Promise<[number, number][]>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -171,7 +212,7 @@ export class RouteService {
         isCurrent: true,
         inspection: {
           organizationId,
-          status: { in: VISITABLE },
+          status: { in: [...VISITABLE, ...FINISHED] },
           scheduledAt: { gte: dayStart, lt: dayEnd },
         },
       },
@@ -184,6 +225,8 @@ export class RouteService {
             propertywareBuildingId: true,
             inspectionType: true,
             status: true,
+            submittedAt: true,
+            completedAt: true,
             // Both, for the same reason the route planner reads both: a real
             // inspection names a synced building, and `Property` exists only
             // where the inspection workflow happened to create one.
@@ -214,6 +257,12 @@ export class RouteService {
           'Unknown property',
         inspectionType: inspection.inspectionType,
         status: inspection.status,
+        finishedAt: isFinished(inspection.status)
+          ? (() => {
+              const at = finishedAtOf(inspection);
+              return at === null ? null : new Date(at).toISOString();
+            })()
+          : null,
       });
 
       byTechnician.set(assignment.technicianId, existing);
@@ -258,7 +307,7 @@ export class RouteService {
         isCurrent: true,
         inspection: {
           organizationId,
-          status: { in: VISITABLE },
+          status: { in: [...VISITABLE, ...FINISHED] },
           scheduledAt: { gte: dayStart, lt: dayEnd },
         },
       },
@@ -266,6 +315,9 @@ export class RouteService {
         inspection: {
           select: {
             id: true,
+            status: true,
+            submittedAt: true,
+            completedAt: true,
             // Both, and the building first.
             //
             // A real inspection carries `propertywareBuildingId` and leaves
@@ -305,8 +357,10 @@ export class RouteService {
 
     const routable: RouteStop[] = [];
     const unroutable: TechnicianRoute['unroutable'] = [];
+    const finished: { stop: RouteStop; finishedAt: number | null }[] = [];
 
     for (const { inspection } of assignments) {
+      const done = isFinished(inspection.status);
       // The synced building is the truth for where a property is; the
       // `Property` row is a fallback for the handful of inspections created
       // through the floor-plan or technician paths.
@@ -315,6 +369,9 @@ export class RouteService {
       // to, and quietly omitting it turns "you have five inspections" into a
       // route of four with nothing to explain the difference.
       if (!property?.latitude || !property.longitude) {
+        // A finished stop with no coordinate is simply not drawn. It is not
+        // somewhere left to go, so it is no concern of `unroutable`.
+        if (done) continue;
         unroutable.push({
           inspectionId: inspection.id,
           propertyName: property?.name ?? 'Unknown property',
@@ -322,7 +379,7 @@ export class RouteService {
         });
         continue;
       }
-      routable.push({
+      const stop: RouteStop = {
         inspectionId: inspection.id,
         propertyId: property.id,
         propertyName: property.name,
@@ -333,8 +390,19 @@ export class RouteService {
         city: property.city ?? '',
         latitude: property.latitude.toNumber(),
         longitude: property.longitude.toNumber(),
-      });
+      };
+      if (done) finished.push({ stop, finishedAt: finishedAtOf(inspection) });
+      else routable.push(stop);
     }
+
+    // In the order they were handed in. One with no time sorts last rather
+    // than being guessed into the middle of the day.
+    const finishedStops = finished
+      .sort(
+        (left, right) =>
+          (left.finishedAt ?? Number.POSITIVE_INFINITY) - (right.finishedAt ?? Number.POSITIVE_INFINITY),
+      )
+      .map((entry) => entry.stop);
 
     const now = Date.now();
     const [position, profile] = await Promise.all([
@@ -380,6 +448,15 @@ export class RouteService {
     const origin = chosen?.point ?? null;
     const originKind = chosen?.kind ?? null;
 
+    const key = `${organizationId}:${technicianId}:${dayStart.toISOString()}`;
+    const history = await this.historyFor(
+      key,
+      profile?.homeLatitude && profile.homeLongitude
+        ? { latitude: profile.homeLatitude.toNumber(), longitude: profile.homeLongitude.toNumber() }
+        : null,
+      finishedStops,
+    );
+
     const empty: TechnicianRoute = {
       technicianId,
       origin,
@@ -390,6 +467,7 @@ export class RouteService {
       totalDurationSeconds: 0,
       unroutable,
       geometry: [],
+      history,
       originOutsideServiceArea: false,
       airTravel: null,
       estimated: true,
@@ -410,7 +488,6 @@ export class RouteService {
      * line can still be timed from where somebody now stands -- which costs
      * nothing, and is the timeline's job.
      */
-    const key = `${organizationId}:${technicianId}:${dayStart.toISOString()}`;
     const stopIds = routable.map((stop) => stop.inspectionId);
     const cached = this.drawn.get(key);
     const decision = needsReroute(
@@ -419,7 +496,8 @@ export class RouteService {
       now,
     );
     if (!decision.reroute && cached)
-      return { ...cached.route, origin, originKind };
+      // The history is the fresh one: it is read every call and cached on its own.
+      return { ...cached.route, origin, originKind, history };
 
     /**
      * Callers share a draw only when they are asking for the same one.
@@ -462,6 +540,50 @@ export class RouteService {
     }
 
     return route;
+  }
+
+  /**
+   * The drive through a day's finished stops, from home when it is known.
+   *
+   * Drawn in the order the stops were handed in, which is the order they were
+   * driven -- close enough for a line that says "this part of the day is done".
+   * Nothing to join (fewer than two points) or nothing drawn leaves the line
+   * empty and the stops still marked; a failed draw is not remembered, for the
+   * same reason as the route's.
+   */
+  private async historyFor(
+    dayKey: string,
+    home: GeoPoint | null,
+    stops: RouteStop[],
+  ): Promise<TechnicianRoute['history']> {
+    const points: GeoPoint[] = [...(home ? [home] : []), ...stops];
+    if (points.length < 2) return { stops, geometry: [] };
+
+    const cacheKey = [
+      dayKey,
+      home ? `${home.latitude},${home.longitude}` : 'no-home',
+      ...stops.map((stop) => stop.inspectionId),
+    ].join('|');
+    const cached = this.histories.get(cacheKey);
+    if (cached) return { stops, geometry: cached };
+
+    const pending =
+      this.historiesInFlight.get(cacheKey) ??
+      this.driveFor(points)
+        .then((drive) => (drive?.legs.length ? toLatLngPath(drive.geometry) : []))
+        .catch(() => [] as [number, number][])
+        .finally(() => this.historiesInFlight.delete(cacheKey));
+    this.historiesInFlight.set(cacheKey, pending);
+    const geometry = await pending;
+
+    if (geometry.length) {
+      this.histories.set(cacheKey, geometry);
+      for (const oldest of this.histories.keys()) {
+        if (this.histories.size <= MAX_DRAWN_ROUTES) break;
+        this.histories.delete(oldest);
+      }
+    }
+    return { stops, geometry };
   }
 
   /** Orders and draws the route through Google or OSRM. The expensive part. */
@@ -551,6 +673,7 @@ export class RouteService {
       totalDurationSeconds: Math.round(drive.durationSeconds),
       unroutable,
       geometry: toLatLngPath(drive.geometry),
+      history: empty.history,
       // False by construction: getting here means the origin snapped to a road.
       originOutsideServiceArea: false,
       airTravel: null,
