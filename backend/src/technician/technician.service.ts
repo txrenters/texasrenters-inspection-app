@@ -352,8 +352,14 @@ export class TechnicianService {
    *
    * The socket room is keyed per technician, not per device, so every session
    * signed in as this user receives it — including the one that just made the
-   * change, which is harmless and keeps the originating device honest if its
-   * optimistic update was wrong.
+   * change, which keeps the originating device honest if its optimistic update
+   * was wrong.
+   *
+   * `SYNCED`, not `UPDATED`. It was `UPDATED`, the kind the office uses when it
+   * adds an area, and that kind is a notification: every checklist tap, submit
+   * and skip pushed "The office added an area to one of your inspections" to
+   * the phone that had just made the change. Nobody needs telling what they
+   * just did.
    *
    * Until now the only publisher in the codebase was admin assignment, so a
    * technician working on two devices saw nothing of their own activity cross
@@ -365,7 +371,7 @@ export class TechnicianService {
    */
   private notifyInspectionChanged(user: AuthenticatedUser, inspectionId: string) {
     try {
-      this.technicianEvents?.publish(user.id, inspectionId, 'UPDATED');
+      this.technicianEvents?.publish(user.id, inspectionId, 'SYNCED');
     } catch {
       // Best effort. The client still has its poll and pull-to-refresh.
     }

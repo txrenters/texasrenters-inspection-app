@@ -69,6 +69,21 @@ describe('technician push delivery', () => {
     }
   });
 
+  it('never pushes a technician their own change', async () => {
+    /**
+     * Their own checklist taps, submits and skips went out as UPDATED, so the
+     * phone in their hand was told "The office added an area" after nearly every
+     * button. SYNCED exists so those reach their other devices silently.
+     */
+    const fetchMock = respondWith({ data: [] });
+    const { prisma, service } = build();
+
+    await service.send('SYNCED', TECH, 'insp-1');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(prisma.mobilePushDevice.findMany).not.toHaveBeenCalled();
+  });
+
   it('sends nothing when the technician has no registered device', async () => {
     const fetchMock = respondWith({ data: [] });
     const { service } = build([]);

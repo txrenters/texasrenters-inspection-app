@@ -11,6 +11,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
   CameraIcon,
+  CheckIcon,
   FocusIcon,
   ImageIcon,
   ListChecksIcon,
@@ -21,9 +22,11 @@ import {
 } from 'lucide-react-native';
 import {
   ActivityIndicator,
+  Animated,
   BackHandler,
   Image,
   Linking,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -43,7 +46,14 @@ import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
 import { StopRecordingSheet } from '@/src/capture/StopRecordingSheet';
-import { initialCameraMode, snapshotMode, stopRequestOutcome } from '@/src/capture/capture-intents';
+import {
+  initialCameraMode,
+  primaryCapture,
+  snapshotMode,
+  stopRequestOutcome,
+} from '@/src/capture/capture-intents';
+import { cameraZoomFor, pickBackLenses, pinchLevel, type BackLenses } from '@/src/capture/camera-zoom';
+import { useIconRotation } from '@/src/capture/use-icon-rotation';
 import {
   GUIDED_CAPTURE_POLICY,
   clampRotationDegrees,
@@ -53,6 +63,7 @@ import {
   type GuidedCaptureSummary,
 } from '@/src/capture/guided-capture';
 import { ConditionPromptSheet } from '@/src/capture/ConditionPromptSheet';
+import { conditionPromptItems, withAxes } from '@/src/capture/condition-answers';
 import { SweepPromptSheet } from '@/src/capture/SweepPromptSheet';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
@@ -79,6 +90,7 @@ import { registerIcons } from '@/src/lib/icons';
 
 registerIcons(
   CameraIcon,
+  CheckIcon,
   FocusIcon,
   ImageIcon,
   ListChecksIcon,
@@ -204,9 +216,15 @@ export default function RoomCameraScreen() {
    * technician does first. `bindCamera` moves between them.
    */
   const requiresRecording = inspectionRequiresAreaRecording(room.data?.inspectionType);
-  const [cameraMode, setCameraMode] = useState<CameraMode>(() =>
-    initialCameraMode(requiresRecording),
-  );
+  /**
+   * Photos or video on the big red button -- see `primaryCapture`. Chosen when
+   * an occupied inspection is started; an occupied visit reached any other way
+   * photographs first, and a visit that must be filmed always records.
+   */
+  const chosenCapture = useDemoStore((state) => state.captureModeByInspection[inspectionId]);
+  const primary = primaryCapture(requiresRecording, chosenCapture);
+  const restingMode = initialCameraMode(primary === 'VIDEO');
+  const [cameraMode, setCameraMode] = useState<CameraMode>(() => restingMode);
   // Read inside async work, where the state value would be the one captured
   // when the callback was created.
   const cameraModeRef = useRef(cameraMode);
@@ -268,6 +286,19 @@ export default function RoomCameraScreen() {
     () => new Map((conditionItems.data ?? []).map((item) => [item.id, item])),
     [conditionItems.data],
   );
+  /**
+   * The items the yes/no prompt may ask: clean / undamaged / working ones.
+   *
+   * It asked every authored item that way, so on an occupied visit it put
+   * "Is it clean?" to "Room condition" and saved the answer over the choice
+   * made on the area screen. A room whose questions are all choices or
+   * readings has nothing here, and its checklist opens as the full sheet,
+   * which renders each kind of question properly.
+   */
+  const promptItems = useMemo(
+    () => conditionPromptItems(conditionItems.data ?? []),
+    [conditionItems.data],
+  );
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
@@ -289,6 +320,70 @@ export default function RoomCameraScreen() {
    */
   const skipsRoomSweep = isAdditional || room.data?.inspectionType === 'HVAC';
   const hasPermissions = Boolean(cameraPermission?.granted && microphonePermission?.granted);
+  /** Icons turn to face the technician when the phone is held sideways; see `useIconRotation`. */
+  const { style: iconTurn } = useIconRotation(hasPermissions);
+
+  /**
+   * Zoom, as a pinch level from 0 to 1, and the ultra-wide lens behind 0.5x.
+   *
+   * See `camera-zoom.ts` for why the pinch is a level rather than a labelled
+   * factor, and why 0.5x exists only where iOS names an ultra-wide lens.
+   */
+  const [zoomLevel, setZoomLevel] = useState(0);
+  const zoomLevelRef = useRef(0);
+  zoomLevelRef.current = zoomLevel;
+  const [backLenses, setBackLenses] = useState<BackLenses>({});
+  const [ultraWide, setUltraWide] = useState(false);
+  /**
+   * Whether a lens chip has been used on this screen.
+   *
+   * Until then no lens is passed at all, so the camera opens exactly as it
+   * always has. Choosing a lens reconfigures the capture session, and doing it
+   * unasked as the screen opened could land on top of a recording that had
+   * just started.
+   */
+  const [lensChosen, setLensChosen] = useState(false);
+  const selectedLens =
+    Platform.OS === 'ios' && facing === 'back' && lensChosen
+      ? ultraWide
+        ? backLenses.ultraWide
+        : backLenses.main
+      : undefined;
+
+  const chooseLens = (wide: boolean) => {
+    if (recording || stopping) return;
+    setLensChosen(true);
+    setUltraWide(wide);
+    setZoomLevel(0);
+  };
+
+  /** Two fingers zoom; one finger is left alone for every control on the screen. */
+  const pinchStart = useRef<{ distance: number; level: number } | null>(null);
+  const pinch = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
+      onMoveShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
+      onPanResponderGrant: () => {
+        pinchStart.current = null;
+      },
+      onPanResponderMove: (event) => {
+        const [first, second] = event.nativeEvent.touches;
+        if (!first || !second || event.nativeEvent.touches.length !== 2) return;
+        const distance = Math.hypot(first.pageX - second.pageX, first.pageY - second.pageY);
+        if (!pinchStart.current) {
+          pinchStart.current = { distance, level: zoomLevelRef.current };
+          return;
+        }
+        setZoomLevel(pinchLevel(pinchStart.current.level, distance / pinchStart.current.distance));
+      },
+      onPanResponderRelease: () => {
+        pinchStart.current = null;
+      },
+      onPanResponderTerminate: () => {
+        pinchStart.current = null;
+      },
+    }),
+  ).current;
   const guidedSensor = useGuidedCaptureSensor(recording && !skipsRoomSweep);
   const checklist = useAreaChecklist(areaId, {
     name: room.data?.name,
@@ -398,12 +493,12 @@ export default function RoomCameraScreen() {
       if (conditionPromptedRef.current) return;
       conditionPromptedRef.current = true;
       announce('Walkthrough complete. Start the detailed checklist.');
-      if (conditionItems.data?.length) setConditionOpen(true);
+      if (promptItems.length) setConditionOpen(true);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
         () => undefined,
       );
     }
-  }, [conditionItems.data, guidanceState, recording, skipsRoomSweep]);
+  }, [promptItems, guidanceState, recording, skipsRoomSweep]);
 
   // A new recording is a new sweep, so the prompt is owed again.
   useEffect(() => {
@@ -472,6 +567,27 @@ export default function RoomCameraScreen() {
     };
   };
 
+  /**
+   * Which back lenses this iPhone has, asked once the camera is up.
+   *
+   * Only decides whether the 0.5x chip is offered; nothing about the camera
+   * changes until a chip is pressed.
+   */
+  const lensesAskedRef = useRef(false);
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !ready || !camera || facing !== 'back') return;
+    // Once per screen. A phone whose lens names match nothing would otherwise
+    // ask again on every render, since each answer is a fresh object.
+    if (lensesAskedRef.current) return;
+    lensesAskedRef.current = true;
+    void camera
+      .getAvailableLensesAsync()
+      .then((names) => {
+        if (mountedRef.current) setBackLenses(pickBackLenses(names));
+      })
+      .catch(() => undefined);
+  }, [camera, facing, ready]);
+
   /** The camera has finished configuring — release anything waiting on it. */
   const markCameraReady = () => {
     setReady(true);
@@ -506,6 +622,23 @@ export default function RoomCameraScreen() {
         resolve();
       });
     });
+
+  /**
+   * Settles the camera on the right mode once the room is known.
+   *
+   * The initial state is computed on the first render, and until the room has
+   * loaded an unknown type counts as one that must be filmed -- so an occupied
+   * visit opened before its room was cached came up bound to video, and stayed
+   * that way. Settled once, when the type arrives, and never mid-take.
+   */
+  const modeSettledRef = useRef(false);
+  useEffect(() => {
+    if (!room.data || modeSettledRef.current || recording || stopping) return;
+    modeSettledRef.current = true;
+    if (cameraModeRef.current !== restingMode) void bindCamera(restingMode);
+    // bindCamera is left out on purpose: it is recreated every render and
+    // reads only refs and setters.
+  }, [room.data, restingMode, recording, stopping]);
 
   const beginRecording = async () => {
     if (!(await requestPermissions())) return;
@@ -624,7 +757,7 @@ export default function RoomCameraScreen() {
        * the room they came to photograph. That would turn one failed recording
        * into an area they cannot finish at all.
        */
-      if (mountedRef.current) void bindCamera(initialCameraMode(requiresRecording));
+      if (mountedRef.current) void bindCamera(restingMode);
     } finally {
       if (mountedRef.current) {
         setRecording(false);
@@ -670,6 +803,22 @@ export default function RoomCameraScreen() {
     if (recording) return requestStopRecording();
     if (photoCount > 0) return setExitOpen(true);
     goBack();
+  };
+
+  /**
+   * Done photographing: straight to the questions about the room.
+   *
+   * Asked for from the field. Finishing meant the back arrow, then a sheet
+   * asking whether to continue, then scrolling the area screen to find the
+   * condition questions. This returns to the area already scrolled to them --
+   * the occupied condition card, or "Finish this area" where there is none.
+   *
+   * `dismissTo` rather than `push`: the area screen is already underneath, and
+   * pushing a second copy would leave the back arrow returning to the camera.
+   */
+  const finishPhotos = () => {
+    setExitOpen(false);
+    router.dismissTo({ pathname: '/(app)/areas/[id]', params: { id: areaId, focus: 'condition' } });
   };
 
   /**
@@ -725,6 +874,87 @@ export default function RoomCameraScreen() {
     if (last >= 0) types.splice(last, 1);
     announce('Photo discarded.');
   };
+
+  /**
+   * The photo control, large and red when it leads, a ring when it does not.
+   *
+   * Written once and placed by `primary`, so the two layouts cannot drift apart
+   * in what the button says or does -- only in how big it is.
+   */
+  const renderPhotoControl = (large: boolean) => (
+    <>
+      <Pressable
+        accessibilityHint={
+          captureType === 'AREA_OVERVIEW'
+            ? 'Captures a wide shot of the area'
+            : 'Captures a close-up for a finding'
+        }
+        accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
+        accessibilityRole="button"
+        accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
+        className={
+          large
+            ? `h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500 ${PRESS_SURFACE}`
+            : `h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10 ${PRESS_SURFACE}`
+        }
+        onPress={() => void takeSnapshot()}
+        disabled={!ready || capturingPhoto}
+      >
+        {capturingPhoto ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Animated.View style={iconTurn}>
+            <CameraIcon size={large ? 30 : 24} className="text-white" />
+          </Animated.View>
+        )}
+      </Pressable>
+      {/* One accessible node, or VoiceOver reads the count and the word
+          "photos" as two separate stops. */}
+      <Text
+        accessible
+        accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
+        className={`mt-2 text-xs ${large ? 'font-semibold text-white' : 'font-medium text-white/70'}`}
+      >
+        {photoCount} photo{photoCount === 1 ? '' : 's'}
+      </Text>
+    </>
+  );
+
+  /** The record control, large and red when it leads, a ring with a red dot when it does not. */
+  const renderRecordControl = (large: boolean) => (
+    <>
+      <Pressable
+        accessibilityHint={recording ? 'Ends the take and opens the review screen' : undefined}
+        accessibilityLabel={
+          stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
+        }
+        accessibilityRole="button"
+        accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
+        className={
+          large
+            ? 'h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500'
+            : 'h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10'
+        }
+        disabled={!ready || stopping}
+        onPress={recording ? requestStopRecording : () => void beginRecording()}
+      >
+        {recording ? (
+          <SquareIcon size={large ? 26 : 20} className="text-white" />
+        ) : (
+          <View className={`rounded-full bg-red-500 ${large ? 'h-14 w-14' : 'h-6 w-6'}`} />
+        )}
+      </Pressable>
+      {/* importantForAccessibility="no": the button above already says this,
+          and leaving it focusable makes the technician swipe past a duplicate
+          of the control they just heard. */}
+      <Text
+        importantForAccessibility="no"
+        className={`mt-2 text-xs ${large ? 'font-semibold text-white' : 'font-medium text-white/70'}`}
+      >
+        {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
+      </Text>
+    </>
+  );
 
   const takeSnapshot = async () => {
     if (!camera || !ready || !hasPermissions || capturingPhoto) return;
@@ -856,7 +1086,7 @@ export default function RoomCameraScreen() {
   }
 
   return (
-    <View className="flex-1 bg-black">
+    <View className="flex-1 bg-black" {...pinch.panHandlers}>
       <StatusBar style="light" />
       <CameraView
         ref={setCamera}
@@ -864,6 +1094,14 @@ export default function RoomCameraScreen() {
         facing={facing}
         enableTorch={torch && facing === 'back'}
         mode={cameraMode}
+        zoom={cameraZoomFor(zoomLevel, Platform.OS)}
+        selectedLens={selectedLens}
+        /**
+         * Photographs follow how the phone is held even with iOS rotation lock
+         * on. Without it a locked phone turned sideways saved a portrait photo
+         * of a landscape room.
+         */
+        responsiveOrientationWhenOrientationLocked
         mute={false}
         videoQuality="720p"
         /**
@@ -921,7 +1159,11 @@ export default function RoomCameraScreen() {
                 {room.data?.name ?? 'Room'}
               </Text>
               <Text className="text-xs text-white/70">
-                {isAdditional ? 'Additional evidence clip' : 'Primary room walkthrough'}
+                {isAdditional
+                  ? 'Additional evidence clip'
+                  : primary === 'PHOTO'
+                    ? 'Room photos'
+                    : 'Primary room walkthrough'}
               </Text>
             </View>
             {/* Hidden mid-take: a technician one turn into a walkthrough must not
@@ -936,11 +1178,13 @@ export default function RoomCameraScreen() {
               hitSlop={8}
               onPress={() => setTorch((value) => !value)}
             >
-              {torch ? (
-                <ZapIcon size={20} className="text-white" />
-              ) : (
-                <ZapOffIcon size={20} className="text-white" />
-              )}
+              <Animated.View style={iconTurn}>
+                {torch ? (
+                  <ZapIcon size={20} className="text-white" />
+                ) : (
+                  <ZapOffIcon size={20} className="text-white" />
+                )}
+              </Animated.View>
             </Pressable>
             <Pressable
               accessibilityLabel={
@@ -951,7 +1195,9 @@ export default function RoomCameraScreen() {
               hitSlop={8}
               onPress={() => setFacing((value) => (value === 'back' ? 'front' : 'back'))}
             >
-              <RotateCcwIcon size={20} className="text-white" />
+              <Animated.View style={iconTurn}>
+                <RotateCcwIcon size={20} className="text-white" />
+              </Animated.View>
             </Pressable>
           </View>
 
@@ -973,17 +1219,21 @@ export default function RoomCameraScreen() {
           {/* Elapsed time is the only signal that recording is actually running.
               Kept below the guidance banner: the coaching is what changes
               moment to moment, the clock is reassurance. */}
-          <View
-            accessibilityLabel={
-              recording ? `Recording, ${formatDuration(seconds)} elapsed` : 'Ready to record'
-            }
-            accessibilityRole="timer"
-            className="mb-6 rounded-full bg-black/65 px-5 py-2"
-          >
-            <Text className="text-lg font-bold text-white">
-              {formatDuration(seconds)} {recording ? 'REC' : 'READY'}
-            </Text>
-          </View>
+          {/* Not on a screen that photographs first: "00:00 READY" over a photo
+              camera reads as though it were waiting to film. */}
+          {recording || primary === 'VIDEO' ? (
+            <View
+              accessibilityLabel={
+                recording ? `Recording, ${formatDuration(seconds)} elapsed` : 'Ready to record'
+              }
+              accessibilityRole="timer"
+              className="mb-6 rounded-full bg-black/65 px-5 py-2"
+            >
+              <Text className="text-lg font-bold text-white">
+                {formatDuration(seconds)} {recording ? 'REC' : 'READY'}
+              </Text>
+            </View>
+          ) : null}
           <View className="mb-6 w-full">
             <View className="mb-2.5 flex-row items-end justify-between">
               <View>
@@ -1096,67 +1346,61 @@ export default function RoomCameraScreen() {
             </View>
           ) : null}
 
+          {/* Zoom. 0.5x switches to the ultra-wide lens, on an iPhone that has
+              one; pinching zooms in on whichever lens is showing. Lens chips
+              are held still mid-take: changing lens rebuilds the capture
+              session, which would end the recording. */}
+          {backLenses.ultraWide && facing === 'back' ? (
+            <View accessibilityRole="radiogroup" className="mb-3 flex-row items-center gap-2">
+              {([true, false] as const).map((wide) => {
+                const selected = ultraWide === wide;
+                return (
+                  <Pressable
+                    accessibilityLabel={wide ? 'Ultra wide, 0.5 times' : 'Standard, 1 times'}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected, disabled: recording || stopping }}
+                    className={`h-9 min-w-12 items-center justify-center rounded-full px-3 ${
+                      selected ? 'bg-white' : 'border border-white/25 bg-black/30'
+                    }`}
+                    disabled={recording || stopping}
+                    key={String(wide)}
+                    onPress={() => chooseLens(wide)}
+                  >
+                    <Animated.View style={iconTurn}>
+                      <Text className={`text-xs font-bold ${selected ? 'text-black' : 'text-white'}`}>
+                        {wide ? '0.5×' : '1×'}
+                      </Text>
+                    </Animated.View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          {zoomLevel > 0 ? (
+            <Pressable
+              accessibilityHint="Resets the zoom"
+              accessibilityLabel={`Zoomed in, ${Math.round(zoomLevel * 100)} percent`}
+              accessibilityRole="button"
+              className="mb-3 h-8 w-32 flex-row items-center gap-2 rounded-full bg-black/55 px-3"
+              onPress={() => setZoomLevel(0)}
+            >
+              <Text className="text-[11px] font-bold text-white">Zoom</Text>
+              <View className="h-1 flex-1 overflow-hidden rounded-full bg-white/25">
+                <View className="h-1 rounded-full bg-white" style={{ width: `${zoomLevel * 100}%` }} />
+              </View>
+            </Pressable>
+          ) : null}
+
+          {/* Photo and record swap places with the capture this visit leads
+              with: the big red button is whichever gets pressed most. Neither
+              is ever taken away. */}
           <View className="w-full flex-row items-start justify-between">
             <View className="flex-1 items-center">
-              <Pressable
-                accessibilityHint={
-                  captureType === 'AREA_OVERVIEW'
-                    ? 'Captures a wide shot of the area'
-                    : 'Captures a close-up for a finding'
-                }
-                accessibilityLabel={capturingPhoto ? 'Saving photo' : 'Take photo'}
-                accessibilityRole="button"
-                accessibilityState={{ busy: capturingPhoto, disabled: !ready || capturingPhoto }}
-                className={`h-14 w-14 items-center justify-center rounded-full border-2 border-white/80 bg-white/10 ${PRESS_SURFACE}`}
-                onPress={() => void takeSnapshot()}
-                disabled={!ready || capturingPhoto}
-              >
-                {capturingPhoto ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <CameraIcon size={24} className="text-white" />
-                )}
-              </Pressable>
-              {/* One accessible node, or VoiceOver reads the count and the word
-                  "photos" as two separate stops. */}
-              <Text
-                accessible
-                accessibilityLabel={`${photoCount} photo${photoCount === 1 ? '' : 's'} captured`}
-                className="mt-2 text-xs font-medium text-white/70"
-              >
-                {photoCount} photo{photoCount === 1 ? '' : 's'}
-              </Text>
+              {primary === 'PHOTO' ? renderRecordControl(false) : renderPhotoControl(false)}
             </View>
 
             <View className="flex-1 items-center">
-              <Pressable
-                accessibilityHint={
-                  recording ? 'Ends the take and opens the review screen' : undefined
-                }
-                accessibilityLabel={
-                  stopping ? 'Saving recording' : recording ? 'Stop recording' : 'Start recording'
-                }
-                accessibilityRole="button"
-                accessibilityState={{ busy: stopping, disabled: !ready || stopping }}
-                className="h-[72px] w-[72px] items-center justify-center rounded-full border-4 border-white bg-red-500"
-                disabled={!ready || stopping}
-                onPress={recording ? requestStopRecording : () => void beginRecording()}
-              >
-                {recording ? (
-                  <SquareIcon size={26} className="text-white" />
-                ) : (
-                  <View className="h-14 w-14 rounded-full bg-red-500" />
-                )}
-              </Pressable>
-              {/* importantForAccessibility="no": the button above already says
-                  this, and leaving it focusable makes the technician swipe past
-                  a duplicate of the control they just heard. */}
-              <Text
-                importantForAccessibility="no"
-                className="mt-2 text-xs font-semibold text-white"
-              >
-                {stopping ? 'Saving…' : recording ? 'Stop & review' : 'Record'}
-              </Text>
+              {primary === 'PHOTO' ? renderPhotoControl(true) : renderRecordControl(true)}
             </View>
 
             <View className="flex-1 items-center">
@@ -1176,10 +1420,12 @@ export default function RoomCameraScreen() {
                 // which explains itself rather than opening an empty prompt.
                 onLongPress={() => setChecklistOpen(true)}
                 onPress={() =>
-                  conditionItems.data?.length ? setConditionOpen(true) : setChecklistOpen(true)
+                  promptItems.length ? setConditionOpen(true) : setChecklistOpen(true)
                 }
               >
-                <ListChecksIcon size={22} className="text-white" />
+                <Animated.View style={iconTurn}>
+                  <ListChecksIcon size={22} className="text-white" />
+                </Animated.View>
               </Pressable>
               {/* The count is the point: a technician glancing down should see
                   how much of the area they still have to cover without opening
@@ -1192,6 +1438,21 @@ export default function RoomCameraScreen() {
               </Text>
             </View>
           </View>
+
+          {photoCount > 0 && !recording && !stopping ? (
+            <Pressable
+              accessibilityHint="Returns to the area to answer its condition questions and submit"
+              accessibilityLabel="Done taking photos"
+              accessibilityRole="button"
+              className={`mt-4 min-h-12 w-full flex-row items-center justify-center gap-2 rounded-xl bg-white px-4 ${PRESS_SURFACE}`}
+              onPress={finishPhotos}
+            >
+              <CheckIcon size={18} className="text-black" />
+              <Text className="text-sm font-bold text-black">
+                {primary === 'PHOTO' ? 'Done — rate the room' : 'Done'}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -1210,18 +1471,21 @@ export default function RoomCameraScreen() {
           const current = conditionAssessments.get(itemId);
           recordCondition.mutate({
             itemId,
-            assessment: {
-              isClean: current?.isClean ?? null,
-              isUndamaged: current?.isUndamaged ?? null,
-              isWorking: current?.isWorking ?? null,
-              comment: current?.comment ?? null,
-              // The whole assessment every time: the API takes a complete
-              // record, so sending one axis would clear the other two.
-              [axis]: next,
+            // The whole assessment every time: the API takes a complete record,
+            // so sending one axis would clear the other two -- and the reading,
+            // text and choice, which this used to leave out.
+            assessment: withAxes(
+              current,
+              {
+                isClean: current?.isClean ?? null,
+                isUndamaged: current?.isUndamaged ?? null,
+                isWorking: current?.isWorking ?? null,
+                [axis]: next,
+              },
               // Where in the recording it was answered, so the reviewer can
               // jump to the moment instead of scrubbing.
-              videoTimestampSeconds: recording ? secondsRef.current : null,
-            },
+              recording ? secondsRef.current : null,
+            ),
           });
         }}
         onClose={() => setChecklistOpen(false)}
@@ -1254,15 +1518,21 @@ export default function RoomCameraScreen() {
       />
 
       <ConditionPromptSheet
-        items={conditionItems.data ?? []}
+        items={promptItems}
         onClose={() => setConditionOpen(false)}
         onRecord={(itemId, assessment) => {
           recordCondition.mutate({
-            // Read from the ref, not the `seconds` state: the state lags by up
-            // to a second behind the timer, and the whole point is the moment
-            // the technician actually answered.
             itemId,
-            assessment: { ...assessment, videoTimestampSeconds: secondsRef.current },
+            // Only the three answers come from the prompt; the rest is what is
+            // already stored, so answering an item no longer blanks its comment.
+            // The moment is read from the ref, not the `seconds` state, which
+            // lags the timer by up to a second -- and only while filming, since
+            // the prompt can be opened from the button with nothing recording.
+            assessment: withAxes(
+              conditionAssessments.get(itemId),
+              assessment,
+              recording ? secondsRef.current : null,
+            ),
           });
         }}
         saving={recordCondition.isPending}
@@ -1318,10 +1588,7 @@ export default function RoomCameraScreen() {
           <Button
             accessibilityHint="Opens the area, where you can review the media, add a note and submit"
             label="Continue & Review"
-            onPress={() => {
-              setExitOpen(false);
-              goBack();
-            }}
+            onPress={finishPhotos}
             variant="secondary"
           />
         </View>

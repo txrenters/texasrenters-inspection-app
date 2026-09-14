@@ -13,7 +13,7 @@ import { queryKeys } from '../features/queries';
 import { reportError } from '../lib/error-log';
 import { verifyQueries } from '../features/state-consistency';
 import { requestJson } from '../repositories/api/repositories';
-import { areNotificationsEnabled } from '../stores/preferences.store';
+import { areNotificationsEnabled, usePreferencesStore } from '../stores/preferences.store';
 import { loadNotifications, shouldNotifyLocally } from './notifications';
 import { pushDeviceStorage } from './push-device-storage';
 
@@ -21,7 +21,16 @@ type NotificationsModule = typeof ExpoNotifications;
 
 interface InspectionChangedEvent {
   inspectionId: string;
-  kind: 'ASSIGNED' | 'REASSIGNED' | 'UNASSIGNED' | 'CANCELLED' | 'UPDATED';
+  kind:
+    | 'ASSIGNED'
+    | 'REASSIGNED'
+    | 'UNASSIGNED'
+    | 'CANCELLED'
+    | 'UPDATED'
+    | 'REOPENED'
+    | 'EVIDENCE_REQUESTED'
+    /** This technician's own change, reaching their other devices. Never notified. */
+    | 'SYNCED';
   occurredAt: string;
 }
 
@@ -47,6 +56,9 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       if (!registeredPushToken) {
         registeredPushToken = await registerRemotePushDevice();
       }
+      // A switch-off that could not reach the server is finished here, on the
+      // next connection, rather than leaving the device registered for good.
+      if (!areNotificationsEnabled()) void unregisterRemotePushDevice();
       socket?.disconnect();
       socket = io(`${baseUrl}/technician-events`, {
         auth: { accessToken: session.accessToken },
@@ -87,6 +99,24 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
     });
     // The socket authenticates with a token captured at connect, so it has to
     // be rebuilt when the session changes and torn down when it goes.
+    /**
+     * The Settings toggle, followed while the app runs.
+     *
+     * Off used to stop only what this app raises itself. The device stayed
+     * registered, so the server kept pushing, and a push is shown whether the
+     * app is open or not. Off now removes the registration; on restores it.
+     */
+    const unsubscribePreference = usePreferencesStore.subscribe((state, previous) => {
+      if (state.notificationsEnabled === previous.notificationsEnabled) return;
+      if (!state.notificationsEnabled) {
+        registeredPushToken = undefined;
+        void unregisterRemotePushDevice();
+        return;
+      }
+      void registerRemotePushDevice().then((token) => {
+        if (!disposed) registeredPushToken = token;
+      });
+    });
     const unsubscribeSession = onSessionChange((session) => {
       if (session) connectSafely();
       else {
@@ -110,6 +140,7 @@ export function TechnicianRealtimeProvider({ children }: PropsWithChildren) {
       disposed = true;
       socket?.disconnect();
       appState.remove();
+      unsubscribePreference();
       unsubscribeSession();
       notificationResponse?.remove();
     };
@@ -163,6 +194,29 @@ async function registerRemotePushDevice() {
 }
 
 /**
+ * Stops the server pushing to this device, for a technician who switched
+ * notifications off.
+ *
+ * The stored token is forgotten only once the server has agreed. Offline, it is
+ * kept, and the next connection tries again -- clearing it first would leave
+ * the server pushing to a phone that no longer knows it is registered.
+ */
+async function unregisterRemotePushDevice() {
+  if (!['ios', 'android'].includes(Platform.OS)) return;
+  const token = await pushDeviceStorage.get().catch(() => null);
+  if (!token) return;
+  try {
+    await requestJson('/api/v1/technician/notification-devices', {
+      method: 'DELETE',
+      body: JSON.stringify({ expoPushToken: token }),
+    });
+    await pushDeviceStorage.clear();
+  } catch (error) {
+    void reportError(error, { source: 'push-unregistration' });
+  }
+}
+
+/**
  * Records why this device will not receive pushes, then gives up quietly.
  *
  * Every failure here used to end at a bare `return undefined`, which is how
@@ -188,6 +242,10 @@ function pushUnavailable(reason: unknown) {
  * publishes it when the office adds an area to an inspection this technician is
  * already carrying. That is more rooms to walk, and someone who has finished and
  * left needs to hear about it before they drive away.
+ *
+ * SYNCED is deliberately absent. It is the technician's own change reaching
+ * their other devices; it used to arrive as UPDATED, and told them "The office
+ * added an area" after nearly every button they pressed.
  *
  * Mirrors MobilePushService.COPY on the server, which fires instead of this
  * whenever a push token is registered. The two lists must agree: a kind here and

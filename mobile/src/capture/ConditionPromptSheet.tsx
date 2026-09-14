@@ -5,6 +5,7 @@ import { PanResponder, Pressable, Text, View } from 'react-native';
 import { BottomSheet } from '../components/BottomSheet';
 import type { ChecklistAssessment, ChecklistItemWithAssessment } from '../domain/models';
 import { registerIcons } from '../lib/icons';
+import { conditionPromptItems } from './condition-answers';
 
 registerIcons(CheckIcon, ChevronLeftIcon, ChevronRightIcon, XIcon);
 
@@ -107,7 +108,7 @@ function AnswerRow({
  * recording interrupted by a call or a dead battery keeps what was assessed.
  */
 export function ConditionPromptSheet({
-  items,
+  items: allItems,
   onClose,
   onRecord,
   saving,
@@ -119,6 +120,11 @@ export function ConditionPromptSheet({
   saving: boolean;
   visible: boolean;
 }) {
+  // Clean / undamaged / working items only, whatever the caller passes. The
+  // three questions mean nothing for a choice or a reading, and answering them
+  // wrote blanks over what had been chosen -- see `conditionPromptItems`.
+  const items = useMemo(() => conditionPromptItems(allItems), [allItems]);
+
   /**
    * The item being shown, chosen once when the sheet first mounts.
    *

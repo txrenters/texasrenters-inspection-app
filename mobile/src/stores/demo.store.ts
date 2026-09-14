@@ -26,6 +26,12 @@ interface DemoState {
   findings: Record<string, Finding>;
   /** Checklist items the technician has marked covered, keyed by area id. */
   areaChecklist: Record<string, string[]>;
+  /**
+   * Photos or video, chosen when an occupied inspection is started, keyed by
+   * inspection id. Read by the camera to decide which capture gets the big
+   * button; see `primaryCapture`. Device state, not the office's business.
+   */
+  captureModeByInspection: Record<string, 'PHOTO' | 'VIDEO'>;
   draftRecording: LocalMedia | null;
   setHasHydrated: (value: boolean) => void;
   selectUser: (id: string) => void;
@@ -42,6 +48,7 @@ interface DemoState {
   updateSnapshot: (id: string, update: Partial<RoomSnapshot>) => void;
   removeSnapshots: (ids: readonly string[]) => void;
   toggleChecklistItem: (areaId: string, itemId: string) => void;
+  setCaptureMode: (inspectionId: string, mode: 'PHOTO' | 'VIDEO') => void;
   /** Marks items covered without unticking anything — used by transcript matching. */
   markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
   enqueueUpload: (item: UploadItem) => void;
@@ -77,6 +84,7 @@ const initialDemoData = () => ({
   uploads: seedUploads.map((item) => ({ ...item })),
   findings: findingRecord(),
   areaChecklist: {} as Record<string, string[]>,
+  captureModeByInspection: {} as Record<string, 'PHOTO' | 'VIDEO'>,
   draftRecording: null as LocalMedia | null,
 });
 
@@ -115,6 +123,10 @@ export const useDemoStore = create<DemoState>()(
         })),
       removeMedia: (id) =>
         set((state) => ({ media: state.media.filter((item) => item.id !== id) })),
+      setCaptureMode: (inspectionId, mode) =>
+        set((state) => ({
+          captureModeByInspection: { ...state.captureModeByInspection, [inspectionId]: mode },
+        })),
       toggleChecklistItem: (areaId, itemId) =>
         set((state) => {
           const current = state.areaChecklist[areaId] ?? [];
@@ -266,6 +278,10 @@ export const useDemoStore = create<DemoState>()(
         uploads: state.uploads,
         findings: state.findings,
         areaChecklist: state.areaChecklist,
+        // No store version bump: a missing key takes its initial value on the
+        // default shallow merge, and a version without `migrate` would discard
+        // every persisted recording and upload instead.
+        captureModeByInspection: state.captureModeByInspection,
         draftRecording: state.draftRecording,
       }),
       onRehydrateStorage: () => (state) => state?.setHasHydrated(true),
