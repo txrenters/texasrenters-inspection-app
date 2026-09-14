@@ -48,17 +48,17 @@ export function initialCameraMode(requiresRecording: boolean): 'picture' | 'vide
   return requiresRecording ? 'video' : 'picture';
 }
 
-/** What the big red button takes on the camera screen. */
+/** What the big button takes on the camera screen. */
 export type CapturePreference = 'PHOTO' | 'VIDEO';
 
 /**
- * Which capture gets the big red button.
+ * Which capture gets the big button.
  *
  * A visit that has to be filmed always records first -- its areas cannot be
  * finished without a walkthrough. One that need not be, an occupied visit,
- * follows the technician's choice when they started it, and photographs when
- * they made none: the photo button is the one an occupied visit uses most, and
- * it used to be the small one beside a record button that was rarely pressed.
+ * follows the technician's choice for this area, and photographs when they
+ * made none: the photo button is the one an occupied visit uses most, and it
+ * used to be the small one beside a record button that was rarely pressed.
  *
  * The other capture is never taken away. It moves to the small button.
  */
@@ -71,9 +71,36 @@ export function primaryCapture(
 }
 
 /**
+ * Whether opening the camera on an area should first ask photos or video.
+ *
+ * Asked per area. It was asked once, when the inspection was started, and that
+ * one answer then held for every room -- but an occupied visit photographs a
+ * room that is plainly fine and films the one that is not, and the technician
+ * only knows which once they are standing in it. Raised when #221 was demoed to
+ * the product owner.
+ *
+ * Not asked when there is nothing to choose: a visit that has to be filmed
+ * always leads with recording, and weakening that is not this question's
+ * business. Not asked again once the area has an answer, so reopening the
+ * camera on the same room goes straight in. And not asked for an additional
+ * clip, whose button already said "video".
+ */
+export function asksCaptureChoice({
+  requiresRecording,
+  chosen,
+  additionalClip,
+}: {
+  requiresRecording: boolean;
+  chosen: CapturePreference | undefined;
+  additionalClip: boolean;
+}): boolean {
+  return !requiresRecording && !additionalClip && chosen === undefined;
+}
+
+/**
  * What a tap on either stop control should do.
  *
- * Ending a take is reachable from two places — the red button and the header
+ * Ending a take is reachable from two places — the record button and the header
  * back arrow, which doubles as stop mid-recording — so the rule has to be one
  * thing both consult rather than a condition written twice.
  *

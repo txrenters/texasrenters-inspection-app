@@ -1,32 +1,13 @@
-import { conditionPromptItems, isStatusItem, withAxes } from '../src/capture/condition-answers';
+import { withAxes } from '../src/capture/condition-answers';
 
 /**
- * The camera's yes/no condition prompt, on items it has no business asking.
+ * Writing clean / undamaged / working without erasing the rest of the record.
  *
- * Found on an occupied visit: the prompt put "Is it clean?" to "Room condition",
- * a multiple choice, and its answer was written as a whole record -- so it
- * replaced the choice the technician had made on the area screen with blanks.
+ * Found on an occupied visit: the camera's yes/no prompt wrote its three answers
+ * as a whole record, so it replaced the choice the technician had made on the
+ * area screen with blanks. The prompt is gone, and the checklist is answered on
+ * the area screen alone, but every axis write still goes through this.
  */
-
-describe('which items the yes/no prompt may ask', () => {
-  const items = [
-    { id: 'walls', responseType: 'STATUS' },
-    { id: 'legacy' },
-    { id: 'room-condition', responseType: 'CHOICE' },
-    { id: 'supply-temp', responseType: 'READING' },
-    { id: 'notes', responseType: 'TEXT' },
-  ];
-
-  it('asks clean / undamaged / working items, including ones the server has not typed', () => {
-    expect(conditionPromptItems(items).map((item) => item.id)).toEqual(['walls', 'legacy']);
-  });
-
-  it('leaves a choice, a reading and free text to the controls built for them', () => {
-    expect(isStatusItem({ responseType: 'CHOICE' })).toBe(false);
-    expect(isStatusItem({ responseType: 'READING' })).toBe(false);
-    expect(isStatusItem({ responseType: 'TEXT' })).toBe(false);
-  });
-});
 
 describe('writing the three answers', () => {
   const axes = { isClean: true, isUndamaged: false, isWorking: true };

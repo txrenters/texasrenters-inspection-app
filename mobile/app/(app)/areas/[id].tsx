@@ -7,8 +7,10 @@ import {
   CircleIcon,
   Edit3Icon,
   FileTextIcon,
+  ListChecksIcon,
   PlayCircleIcon,
   RotateCwIcon,
+  VideoIcon,
 } from 'lucide-react-native';
 import {
   Image,
@@ -30,8 +32,12 @@ import { BaselineCard } from '@/src/areas/BaselineCard';
 import { WalkthroughGuideCard } from '@/src/areas/WalkthroughGuideCard';
 import { areaStage, deriveAreaStatus, type AreaStatusDescriptor } from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
-import { checklistKindFor } from '@texasrenters/shared';
+import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters/shared';
 
+import { AreaChecklistSheet, checklistCoverage } from '@/src/capture/AreaChecklistSheet';
+import { CaptureChoiceSheet } from '@/src/capture/CaptureChoiceSheet';
+import { asksCaptureChoice, type CapturePreference } from '@/src/capture/capture-intents';
+import { withAxes } from '@/src/capture/condition-answers';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
@@ -59,7 +65,7 @@ import { areaCompletionGate, deriveAreaRequirements } from '@/src/utils/area-req
 import { describeRecordingLocation } from '@/src/utils/upload-status';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
-import { Button } from '@/src/components/ui';
+import { Button, PRESS_ROW } from '@/src/components/ui';
 
 registerIcons(
   CameraIcon,
@@ -68,9 +74,16 @@ registerIcons(
   CircleIcon,
   Edit3Icon,
   FileTextIcon,
+  ListChecksIcon,
   PlayCircleIcon,
   RotateCwIcon,
+  VideoIcon,
 );
+
+// A stable empty array: returning a fresh [] from the selector would give
+// zustand a new reference every render and loop on "getSnapshot should be
+// cached".
+const EMPTY_CHECKED: string[] = [];
 
 /**
  * The status ramp this screen shares with the inspection list, expressed as the
@@ -116,6 +129,12 @@ export default function AreaDetailScreen() {
   const areaChecklist = useAreaChecklist(id, {
     name: room.data?.name,
     environment: room.data?.environment,
+    // The camera passed these and this screen did not, so for an area nobody
+    // had configured the two built different fallback lists -- and the summary
+    // ticked coverage against items the checklist sheet, then on the camera,
+    // never showed. The sheet is on this screen now; one list feeds both.
+    category: room.data?.category,
+    inspectionType: room.data?.inspectionType,
   });
   useChecklistFromSummary(id, areaChecklist, summaries.byRoomId.get(id));
   /**
@@ -132,6 +151,22 @@ export default function AreaDetailScreen() {
     () => new Map((conditionItems.data ?? []).map((entry) => [entry.id, entry])),
     [conditionItems.data],
   );
+  // Persisted per area rather than held on a screen: coverage used to be
+  // component state, so stepping out to review a recording and coming back lost
+  // every tick the technician had made.
+  const checkedItems = useDemoStore((state) => state.areaChecklist[id]) ?? EMPTY_CHECKED;
+  const toggleChecklistItem = useDemoStore((state) => state.toggleChecklistItem);
+  const [checklistOpen, setChecklistOpen] = useState(false);
+  /**
+   * Photos or video for this area, and the question that sets it.
+   *
+   * `open` when it was asked on the way into the camera, which then opens;
+   * `change` when the technician asked to change an answer already given,
+   * which does not. See `asksCaptureChoice`.
+   */
+  const chosenCapture = useDemoStore((state) => state.captureModeByArea[id]);
+  const setCaptureMode = useDemoStore((state) => state.setCaptureMode);
+  const [captureChoice, setCaptureChoice] = useState<'open' | 'change' | null>(null);
   // Scoped to this area: a request about the kitchen is not this room's problem,
   // and showing it here would send the technician to the wrong place.
   const uploadActions = useUploadActions();
@@ -285,13 +320,93 @@ export default function AreaDetailScreen() {
    */
   const hasAnyEvidence =
     hasEvidence || Boolean(photos.data?.length) || roomFindings.length > 0;
+  /** Whether this visit has a photos-or-video question to ask at all. */
+  const requiresRecording = inspectionRequiresAreaRecording(item.inspectionType);
+  /**
+   * Opens the camera on this area, asking photos or video first when an
+   * occupied area has no answer yet.
+   *
+   * Asked here, on the way in, rather than over the live camera: the camera
+   * then opens bound for the answer, with no rebind while it starts up, and
+   * the question is put while the technician can still see the room's
+   * briefing. Every way into capture from this screen comes through here.
+   * Once a recording exists the camera is for an additional clip, which has
+   * already said "video", so that is never asked.
+   */
+  const openCamera = () => {
+    const asks = asksCaptureChoice({
+      requiresRecording,
+      chosen: chosenCapture,
+      additionalClip: hasRecording,
+    });
+    if (asks) return setCaptureChoice('open');
+    router.push(
+      hasRecording
+        ? `/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`
+        : `/camera/${inspectionId}/${id}`,
+    );
+  };
+  const chooseCapture = (mode: CapturePreference) => {
+    const opening = captureChoice === 'open';
+    setCaptureMode(id, mode);
+    setCaptureChoice(null);
+    // Only asked on the way in when there is no recording, so this is always
+    // the primary capture.
+    if (opening) router.push(`/camera/${inspectionId}/${id}`);
+  };
+  /**
+   * Records one answer that is not a yes/no axis: a choice, a reading, a line
+   * of text, or a comment.
+   *
+   * The whole assessment every time: the API takes a complete record, so
+   * sending one field would clear the others. Nothing is being filmed on this
+   * screen, so there is no moment in a recording to point the reviewer at.
+   */
+  const recordAnswer = (
+    itemId: string,
+    patch: { numericValue?: number | null; textValue?: string | null; comment?: string | null },
+  ) => {
+    const current = conditionAssessments.get(itemId);
+    recordCondition.mutate({
+      itemId,
+      assessment: {
+        isClean: current?.isClean ?? null,
+        isUndamaged: current?.isUndamaged ?? null,
+        isWorking: current?.isWorking ?? null,
+        comment: current?.comment ?? null,
+        numericValue: current?.numericValue ?? null,
+        textValue: current?.textValue ?? null,
+        ...patch,
+        videoTimestampSeconds: null,
+      },
+    });
+  };
+  /**
+   * The area's checklist, behind an entry in the finish section.
+   *
+   * Every visit with items except an occupied one, whose two questions the card
+   * above asks inline. A visit with nothing to score -- a lockbox, a filter
+   * delivery -- has no items and shows no entry.
+   */
+  const offersChecklist = !asksOccupiedCondition && areaChecklist.length > 0;
+  const coverage = checklistCoverage(areaChecklist, checkedItems, conditionAssessments);
+  /**
+   * Whether the list on offer can be answered, or only ticked.
+   *
+   * Only authored items exist on the server. The generated fallback -- an area
+   * nobody configured, or a list not yet fetched -- would offer answers that
+   * are refused, so it is offered as a coverage list alone until the real items
+   * arrive.
+   */
+  const checklistAnswerable = Boolean(conditionItems.data?.length);
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <ScrollView
         ref={scrollRef}
         className="flex-1"
-        contentContainerStyle={{ paddingBottom: 150 }}
+        // Clears the footer, which grows by the capture line when it shows.
+        contentContainerStyle={{ paddingBottom: !requiresRecording && chosenCapture ? 196 : 150 }}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -526,7 +641,7 @@ export default function AreaDetailScreen() {
                 accessibilityLabel="No recording saved yet. Start the primary room walkthrough."
                 accessibilityRole="button"
                 className="min-h-14 flex-row items-center gap-3 rounded-xl bg-muted p-4 active:scale-[0.98]"
-                onPress={() => router.push(`/camera/${inspectionId}/${id}`)}
+                onPress={openCamera}
               >
                 <View className="h-9 w-9 items-center justify-center rounded-full bg-primary/10">
                   <CameraIcon size={18} className="text-primary" />
@@ -589,27 +704,36 @@ export default function AreaDetailScreen() {
             <OccupiedConditionCard
               assessments={conditionAssessments}
               items={conditionItems.data ?? []}
-              onRecord={(itemId, patch) => {
-                const current = conditionAssessments.get(itemId);
-                recordCondition.mutate({
-                  itemId,
-                  assessment: {
-                    // The whole assessment every time: the API takes a complete
-                    // record, so sending one field would clear the others.
-                    isClean: current?.isClean ?? null,
-                    isUndamaged: current?.isUndamaged ?? null,
-                    isWorking: current?.isWorking ?? null,
-                    comment: current?.comment ?? null,
-                    numericValue: current?.numericValue ?? null,
-                    textValue: current?.textValue ?? null,
-                    ...patch,
-                    // Nothing is being filmed on this screen, so there is no
-                    // moment in a recording to point the reviewer at.
-                    videoTimestampSeconds: null,
-                  },
-                });
-              }}
+              onRecord={recordAnswer}
             />
+          ) : null}
+
+          {/* The checklist for every other visit, one tap away rather than
+              inline: a move-in room runs to a dozen items and an HVAC form to
+              sixty. It opened from beside the camera's shutter until the
+              product owner, demoing #221, read that as a second copy of this
+              screen's questions — so it is here, where "Done" lands, and
+              nowhere else. Shown whether or not the area is finished, for the
+              same reason as the card above. */}
+          {offersChecklist ? (
+            <Pressable
+              accessibilityHint="Opens this area's checklist. Optional."
+              accessibilityLabel={`Area checklist, ${coverage.covered} of ${coverage.total} covered`}
+              accessibilityRole="button"
+              className="mx-5 mt-4 min-h-14 flex-row items-center gap-3 rounded-xl border border-border bg-card p-4 active:scale-[0.98]"
+              onPress={() => setChecklistOpen(true)}
+            >
+              <View className="h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+                <ListChecksIcon size={18} className="text-primary" />
+              </View>
+              <View className="min-w-0 flex-1">
+                <Text className="text-base font-bold text-foreground">Area checklist</Text>
+                <Text className="mt-0.5 text-xs text-muted-foreground">
+                  {coverage.covered} of {coverage.total} covered · Optional
+                </Text>
+              </View>
+              <ChevronRightIcon size={16} className="text-muted-foreground" />
+            </Pressable>
           ) : null}
 
           {alreadyFinished || !hasAnyEvidence ? null : (
@@ -663,16 +787,17 @@ export default function AreaDetailScreen() {
           )}
         </View>
 
-        {/* The Clean / Undamaged / Working checklist used to sit here. It is now
-            scored by the office during review, against the same items: the
-            reviewer is the one reading the recording and the photographs, and
-            each axis is a judgement about that evidence. The technician's job on
-            site is to capture it.
+        {/* The Clean / Undamaged / Working checklist used to sit here, inline.
+            The office scores it during review, against the same items: the
+            reviewer is the one reading the recording and the photographs. The
+            technician's copy moved into the camera, and has now come back to
+            this screen as the entry above rather than as a wall of rows —
+            both write the same answers, and neither replaces the other.
 
-            The occupied condition card above is not that checklist coming back.
-            Those two questions are a judgement about the room rather than about
-            the evidence, and only the person standing in it can answer them —
-            see `OccupiedConditionCard` for why the two are separated. */}
+            The occupied condition card above is a different thing. Those two
+            questions are a judgement about the room rather than about the
+            evidence, and only the person standing in it can answer them — see
+            `OccupiedConditionCard` for why the two are separated. */}
 
         {/* One card for the analysis and its findings. They are the same
             subject at two moments and were never both on screen, so the second
@@ -767,6 +892,33 @@ export default function AreaDetailScreen() {
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
+        {/*
+          What the camera leads with here, and the way to change it.
+
+          Only once an occupied area has an answer: before that, opening the
+          camera asks. Beside the button it affects rather than in the body,
+          so the answer is in view at the moment it matters and a wrong one
+          costs a tap rather than a hunt.
+        */}
+        {!requiresRecording && chosenCapture ? (
+          <Pressable
+            accessibilityHint="Choose whether the camera's big button takes photos or video in this area"
+            accessibilityLabel={`${chosenCapture === 'PHOTO' ? 'Photos' : 'Video'} first in this area. Change`}
+            accessibilityRole="button"
+            className={`mb-1 min-h-11 flex-row items-center justify-center gap-1.5 ${PRESS_ROW}`}
+            onPress={() => setCaptureChoice('change')}
+          >
+            {chosenCapture === 'PHOTO' ? (
+              <CameraIcon size={14} className="text-muted-foreground" />
+            ) : (
+              <VideoIcon size={14} className="text-muted-foreground" />
+            )}
+            <Text className="text-sm text-muted-foreground">
+              {chosenCapture === 'PHOTO' ? 'Photos first' : 'Video first'} ·{' '}
+              <Text className="font-semibold text-primary">Change</Text>
+            </Text>
+          </Pressable>
+        ) : null}
         {/* This carried no accessible label of its own, so a screen reader read
             the button's own text — which is right, but only by accident, and it
             said nothing about where the button goes. */}
@@ -820,13 +972,7 @@ export default function AreaDetailScreen() {
                   ? 'Continue Walkthrough'
                   : 'Begin Walkthrough'
           }
-          onPress={() =>
-            router.push(
-              hasRecording
-                ? `/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`
-                : `/camera/${inspectionId}/${id}`,
-            )
-          }
+          onPress={openCamera}
           variant={isSkipped ? 'secondary' : 'primary'}
         />
       </View>
@@ -1028,6 +1174,53 @@ export default function AreaDetailScreen() {
           />
         </View>
       </BottomSheet>
+
+      <CaptureChoiceSheet
+        areaName={item.name}
+        current={captureChoice === 'change' ? chosenCapture : undefined}
+        onChoose={chooseCapture}
+        onClose={() => setCaptureChoice(null)}
+        opensCamera={captureChoice === 'open'}
+        visible={captureChoice !== null}
+      />
+
+      {offersChecklist ? (
+        <AreaChecklistSheet
+          areaName={item.name}
+          // Keyed by item id so a row can read its own answers without scanning
+          // the list once per render.
+          assessments={conditionAssessments}
+          checkedIds={checkedItems}
+          items={areaChecklist}
+          onAssess={
+            checklistAnswerable
+              ? (itemId, axis, next) => {
+                  const current = conditionAssessments.get(itemId);
+                  recordCondition.mutate({
+                    itemId,
+                    // The whole assessment every time: the API takes a complete
+                    // record, so sending one axis would clear the other two --
+                    // and the reading, text and choice.
+                    assessment: withAxes(
+                      current,
+                      {
+                        isClean: current?.isClean ?? null,
+                        isUndamaged: current?.isUndamaged ?? null,
+                        isWorking: current?.isWorking ?? null,
+                        [axis]: next,
+                      },
+                      null,
+                    ),
+                  });
+                }
+              : undefined
+          }
+          onClose={() => setChecklistOpen(false)}
+          onRecord={checklistAnswerable ? recordAnswer : undefined}
+          onToggle={(itemId) => toggleChecklistItem(id, itemId)}
+          visible={checklistOpen}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }

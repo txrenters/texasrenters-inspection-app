@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+import type { CapturePreference } from '../capture/capture-intents';
 import type {
   Finding,
   InspectionRoom,
@@ -27,11 +28,17 @@ interface DemoState {
   /** Checklist items the technician has marked covered, keyed by area id. */
   areaChecklist: Record<string, string[]>;
   /**
-   * Photos or video, chosen when an occupied inspection is started, keyed by
-   * inspection id. Read by the camera to decide which capture gets the big
-   * button; see `primaryCapture`. Device state, not the office's business.
+   * Photos or video, chosen for each area of an occupied inspection, keyed by
+   * area id. Asked the first time the camera is opened on the area, and read by
+   * the camera to decide which capture gets the big button; see
+   * `asksCaptureChoice` and `primaryCapture`. Device state, not the office's
+   * business.
+   *
+   * Replaces a single choice per inspection. A handset that recorded one keeps
+   * it in storage until the next write drops it: nothing reads it, and an
+   * occupied area with no answer of its own is simply asked.
    */
-  captureModeByInspection: Record<string, 'PHOTO' | 'VIDEO'>;
+  captureModeByArea: Record<string, CapturePreference>;
   draftRecording: LocalMedia | null;
   setHasHydrated: (value: boolean) => void;
   selectUser: (id: string) => void;
@@ -48,7 +55,7 @@ interface DemoState {
   updateSnapshot: (id: string, update: Partial<RoomSnapshot>) => void;
   removeSnapshots: (ids: readonly string[]) => void;
   toggleChecklistItem: (areaId: string, itemId: string) => void;
-  setCaptureMode: (inspectionId: string, mode: 'PHOTO' | 'VIDEO') => void;
+  setCaptureMode: (areaId: string, mode: CapturePreference) => void;
   /** Marks items covered without unticking anything — used by transcript matching. */
   markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
   enqueueUpload: (item: UploadItem) => void;
@@ -84,7 +91,7 @@ const initialDemoData = () => ({
   uploads: seedUploads.map((item) => ({ ...item })),
   findings: findingRecord(),
   areaChecklist: {} as Record<string, string[]>,
-  captureModeByInspection: {} as Record<string, 'PHOTO' | 'VIDEO'>,
+  captureModeByArea: {} as Record<string, CapturePreference>,
   draftRecording: null as LocalMedia | null,
 });
 
@@ -123,9 +130,9 @@ export const useDemoStore = create<DemoState>()(
         })),
       removeMedia: (id) =>
         set((state) => ({ media: state.media.filter((item) => item.id !== id) })),
-      setCaptureMode: (inspectionId, mode) =>
+      setCaptureMode: (areaId, mode) =>
         set((state) => ({
-          captureModeByInspection: { ...state.captureModeByInspection, [inspectionId]: mode },
+          captureModeByArea: { ...state.captureModeByArea, [areaId]: mode },
         })),
       toggleChecklistItem: (areaId, itemId) =>
         set((state) => {
@@ -280,8 +287,9 @@ export const useDemoStore = create<DemoState>()(
         areaChecklist: state.areaChecklist,
         // No store version bump: a missing key takes its initial value on the
         // default shallow merge, and a version without `migrate` would discard
-        // every persisted recording and upload instead.
-        captureModeByInspection: state.captureModeByInspection,
+        // every persisted recording and upload instead. The per-inspection
+        // choice this replaced is simply no longer written.
+        captureModeByArea: state.captureModeByArea,
         draftRecording: state.draftRecording,
       }),
       onRehydrateStorage: () => (state) => state?.setHasHydrated(true),

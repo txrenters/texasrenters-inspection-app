@@ -1,7 +1,12 @@
+import { CheckIcon } from 'lucide-react-native';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
+import { PRESS_ROW } from '../components/ui/press';
 import type { ChecklistAssessment } from '../domain/models';
+import { registerIcons } from '../lib/icons';
 import type { ChecklistItem } from './area-checklist';
+
+registerIcons(CheckIcon);
 
 /**
  * The answer controls for the items a tick cannot express.
@@ -81,11 +86,28 @@ export function TextField({
 }
 
 /**
- * Exactly one option, or none.
+ * The answer a tap on one option leaves behind: that option, or none.
  *
- * Tapping the active option clears it, the same gesture the yes/no axes use, so
- * "not assessed" stays reachable — a form that cannot be un-answered records a
- * guess as a finding.
+ * One value, never a set. Choosing another option replaces the answer, so the
+ * selection moves rather than accumulating. Tapping the chosen option clears
+ * it, the same gesture the yes/no axes use, so "not assessed" stays reachable —
+ * a form that cannot be un-answered records a guess as a finding.
+ */
+export function choiceAfterTap(current: string | null, tapped: string): string | null {
+  return current === tapped ? null : tapped;
+}
+
+/**
+ * Exactly one option, or none, drawn as a radio list.
+ *
+ * One bordered group with a ring on every option and a tick in the chosen one.
+ * The options used to be separate bordered buttons, and demoed to the product
+ * owner they read as independent toggles — the occupied questions looked as
+ * though several answers could be picked at once. They never could: one value
+ * is stored, and `choiceAfterTap` is the whole rule.
+ *
+ * Rows inside the group dim on press rather than shrink, because they are
+ * divided by hairlines and have no edges of their own — see `PRESS_ROW`.
  */
 export function ChoiceField({
   item,
@@ -97,22 +119,43 @@ export function ChoiceField({
   onChange: (next: string | null) => void;
 }) {
   return (
-    <View className="mt-2 gap-1.5">
-      {(item.choices ?? []).map((choice) => {
+    <View
+      accessibilityLabel={item.label}
+      accessibilityRole="radiogroup"
+      className="mt-2 overflow-hidden rounded-xl border border-border"
+    >
+      {(item.choices ?? []).map((choice, index) => {
         const active = value === choice;
         return (
           <Pressable
+            // The state already says "selected"; the hint says what a second
+            // tap does, which nothing on screen does.
+            accessibilityHint={active ? 'Tap again to clear the answer' : undefined}
             accessibilityLabel={`${item.label}: ${choice}`}
             accessibilityRole="radio"
             accessibilityState={{ checked: active }}
-            className={`min-h-11 justify-center rounded-lg border px-3 ${
-              active ? 'border-primary bg-primary/15' : 'border-border bg-card'
-            }`}
+            className={`min-h-12 flex-row items-center gap-3 px-3 ${
+              index > 0 ? 'border-t border-border' : ''
+            } ${active ? 'bg-primary/10' : ''} ${PRESS_ROW}`}
             key={choice}
-            onPress={() => onChange(active ? null : choice)}
+            onPress={() => onChange(choiceAfterTap(value, choice))}
           >
+            {/* The radio: an empty ring, or filled with a tick. The ring is what
+                identifies the control, so it carries WCAG 1.4.11's 3:1 — and
+                `muted-foreground` rather than `input`, which drops below that
+                on the green wash of an item the checklist sheet shows as
+                covered. */}
+            <View
+              className={`h-5 w-5 items-center justify-center rounded-full ${
+                active ? 'bg-primary' : 'border-2 border-muted-foreground'
+              }`}
+            >
+              {active ? (
+                <CheckIcon size={13} strokeWidth={3} className="text-primary-foreground" />
+              ) : null}
+            </View>
             <Text
-              className={`text-sm ${active ? 'font-semibold text-primary' : 'text-foreground'}`}
+              className={`min-w-0 flex-1 text-sm text-foreground ${active ? 'font-semibold' : ''}`}
             >
               {choice}
             </Text>

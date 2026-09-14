@@ -452,8 +452,10 @@ export interface ChecklistAssessment {
   /**
    * Seconds into the area's recording when this was answered.
    *
-   * Set when the prompt is answered during capture, so a reviewer can jump to
-   * the moment rather than scrubbing. Null when scored outside a recording.
+   * Set when an item is scored against a playing recording, so a reviewer can
+   * jump to the moment rather than scrubbing. Null when scored outside one --
+   * which, since the camera stopped carrying the checklist, is every answer
+   * this app writes; the office's review can still set it.
    */
   videoTimestampSeconds?: number | null;
   /**

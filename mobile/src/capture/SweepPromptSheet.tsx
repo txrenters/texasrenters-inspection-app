@@ -10,9 +10,11 @@ registerIcons(RotateCwIcon);
  * The first instruction of an area: film the room before assessing it.
  *
  * Shown when the walkthrough starts, so the order is stated rather than assumed.
- * The condition questions come after, when the sensor confirms the sweep — a
- * technician who scores the room first ends up describing it from memory, which
- * is what the recording is meant to replace.
+ * The condition questions come after, on the area screen once the take is
+ * reviewed — a technician who scores the room first ends up describing it from
+ * memory, which is what the recording is meant to replace. They used to open
+ * over the camera when the sensor confirmed the sweep; the camera carries no
+ * checklist now, so this no longer promises that they will.
  *
  * Dismissible immediately: this is a reminder, not a gate. Someone on their
  * twentieth area of the day already knows, and blocking the camera behind an
@@ -36,8 +38,8 @@ export function SweepPromptSheet({
         <View className="min-w-0 flex-1">
           <Text className="text-lg font-bold text-foreground">Record a 360 of {areaName}</Text>
           <Text className="mt-0.5 text-sm leading-5 text-muted-foreground">
-            Turn slowly clockwise from where you are standing, back to where you started. The
-            checklist questions start on their own once the turn is complete.
+            Turn slowly clockwise from where you are standing, back to where you started. Then
+            stop and review; the room&apos;s questions are on the area screen.
           </Text>
         </View>
       </View>

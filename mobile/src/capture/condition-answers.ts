@@ -8,28 +8,9 @@ import type { ChecklistAssessment } from '../domain/models';
  * yes/no prompt did not: it sent clean / undamaged / working and nothing else,
  * which blanked the item's comment, its reading and its chosen option.
  *
- * It also asked every authored item those three questions. On an occupied visit
- * that put "Is it clean?" to "Room condition" -- a choice between Clean,
- * Acceptable, Damaged and Needs attention -- and saved the yes/no answers over
- * whatever the technician had chosen on the area screen.
+ * That prompt is gone -- the camera carries no checklist -- but the rule it
+ * broke is the rule every clean / undamaged / working write still has to keep.
  */
-
-/**
- * Whether an item is answered as clean / undamaged / working.
- *
- * An item the server has not typed is one: that is what every checklist was
- * before readings, text and choices existed.
- */
-export function isStatusItem(item: { responseType?: string | null }): boolean {
-  return (item.responseType ?? 'STATUS') === 'STATUS';
-}
-
-/** The items the camera's yes/no condition prompt may ask -- clean / undamaged / working ones only. */
-export function conditionPromptItems<T extends { responseType?: string | null }>(
-  items: readonly T[],
-): T[] {
-  return items.filter(isStatusItem);
-}
 
 /**
  * A complete assessment with only the three axes changed.

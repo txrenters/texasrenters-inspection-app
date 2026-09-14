@@ -18,11 +18,15 @@ import type { ChecklistAssessment } from '../domain/models';
  * standing in it — the office asked for exactly one answer per room, and only
  * the technician can give it.
  *
- * Until now the only way to reach them was a control inside the camera's guide
- * sheet: `AreaChecklistSheet` is imported by the camera screen and nowhere
- * else. On the one visit type built around photographs rather than filming, a
+ * They were first reachable only through a control inside the camera's guide
+ * sheet. On the one visit type built around photographs rather than filming, a
  * technician who photographed a room and backed out never saw them, so the
- * office got no condition data at all for that area.
+ * office got no condition data at all for that area. The camera carries no
+ * checklist at all now: demoed to the product owner, that sheet read as a
+ * duplicate of this card, so this card is the one place they are answered.
+ *
+ * Each question is a radio list — see `ChoiceField` — because the options,
+ * drawn as separate buttons, looked as though several could be picked.
  *
  * ── INLINE RATHER THAN BEHIND A BUTTON ───────────────────────────────────────
  *
