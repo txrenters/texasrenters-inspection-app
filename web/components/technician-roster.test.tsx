@@ -114,7 +114,7 @@ const REFUSED: TechnicianRoute = {
   history: { stops: [], geometry: [] },
   originOutsideServiceArea: true,
   airTravel: null,
-  estimated: true,
+  source: null,
 };
 
 describe('a route the planner refused', () => {
@@ -217,7 +217,8 @@ describe('a route the planner produced', () => {
     history: { stops: [], geometry: [] },
     originOutsideServiceArea: false,
     airTravel: null,
-    estimated: true,
+    // The free-flow fallback: the one kind of route the caveat is true of.
+    source: 'OSRM_FREE_FLOW',
   };
 
   it('shows the order, the total and the estimate caveat', () => {
@@ -301,6 +302,37 @@ describe('a route the planner produced', () => {
     expect(screen.getByText(/At 10103 Mariposa Green Ct/)).toBeInTheDocument();
     expect(screen.getByText('Next')).toBeInTheDocument();
     expect(screen.getByText('10342 Mist Ln').parentElement?.className).toMatch(/text-map-technician/);
+  });
+
+  it('says the times include traffic when Google drew the route', () => {
+    // The caveat sat under every route, including every one Google had timed
+    // against traffic -- which in production was all of them.
+    const { container } = render(
+      <TechnicianRoster
+        entries={entries([STOP, SECOND_STOP])}
+        onSelect={() => {}}
+        route={{ ...PLANNED, source: 'GOOGLE_TRAFFIC' }}
+        selectedId="tech-1"
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/drive times include traffic/i);
+    expect(text).not.toMatch(/speed limits/i);
+    expect(text).not.toMatch(/without traffic/i);
+  });
+
+  it('says nothing about the times when it cannot tell which router drew them', () => {
+    const { container } = render(
+      <TechnicianRoster
+        entries={entries([STOP, SECOND_STOP])}
+        onSelect={() => {}}
+        route={{ ...PLANNED, source: null }}
+        selectedId="tech-1"
+      />,
+    );
+
+    expect(container.textContent).not.toMatch(/traffic/i);
   });
 
   it('lists the stops in the order the route recommends, not alphabetically', () => {

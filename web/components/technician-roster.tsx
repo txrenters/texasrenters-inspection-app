@@ -20,6 +20,7 @@ import {
   listDay,
   offRoadNetwork,
   onSiteSeconds,
+  timingNote,
   visitTimes,
 } from '@/lib/route-plan';
 
@@ -422,10 +423,11 @@ export function TechnicianRoster({
                       })}
                     </ol>
 
-                    {planned ? (
-                      <p className="text-muted-foreground mt-2 text-[11px]">
-                        Estimated from speed limits, without traffic.
-                      </p>
+                    {/* What the times are, from whichever router drew them:
+                        Google's include traffic, the fallback's describe an
+                        empty road. Only beside times that exist. */}
+                    {planned && timingNote(route) ? (
+                      <p className="text-muted-foreground mt-2 text-[11px]">{timingNote(route)}</p>
                     ) : null}
                   </>
                 )}

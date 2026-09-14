@@ -40,7 +40,7 @@ const REFUSED: TechnicianRoute = {
   history: { stops: [], geometry: [] },
   originOutsideServiceArea: true,
   airTravel: null,
-  estimated: true,
+  source: null,
 };
 
 describe('a route the planner refused', () => {
@@ -52,7 +52,7 @@ describe('a route the planner refused', () => {
     expect(text).not.toMatch(/1 min/);
     expect(text).not.toMatch(/0\.0 km/);
     expect(text).not.toMatch(/driving/);
-    expect(text).not.toMatch(/free-flow/);
+    expect(text).not.toMatch(/traffic/i);
   });
 
   it('says why instead', () => {
@@ -80,6 +80,8 @@ describe('a route the planner produced', () => {
     totalDistanceMeters: 20000,
     totalDurationSeconds: 1200,
     originOutsideServiceArea: false,
+    // The free-flow fallback: the one kind of route the caveat is true of.
+    source: 'OSRM_FREE_FLOW',
   };
 
   it('shows the drive, and says one stop is one stop', () => {
@@ -94,7 +96,39 @@ describe('a route the planner produced', () => {
     // what pins the plural.
     expect(text).toMatch(/1 stop/);
     expect(text).not.toMatch(/1 stops/);
-    expect(text).toMatch(/free-flow/);
+    expect(text).toMatch(/without traffic/i);
+  });
+
+  it('says the times include traffic when Google drew them', () => {
+    const { container } = render(
+      <TechnicianRouteCard displayName="Ernie" route={{ ...PLANNED, source: 'GOOGLE_TRAFFIC' }} />,
+    );
+    const text = container.textContent ?? '';
+
+    expect(text).toMatch(/drive times include traffic/i);
+    expect(text).not.toMatch(/without traffic/i);
+  });
+
+  it('says a route from home was measured from home', () => {
+    /**
+     * It gave the age of the position instead, which a route from home does
+     * not have -- so the card read "Measured from —".
+     */
+    const { container } = render(
+      <TechnicianRouteCard
+        displayName="Ernie"
+        route={{
+          ...PLANNED,
+          source: 'GOOGLE_TRAFFIC',
+          originKind: 'HOME',
+          origin: { latitude: 29.95, longitude: -95.55, recordedAt: null },
+        }}
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    expect(text).toMatch(/measured from home/i);
+    expect(text).not.toMatch(/measured from —/i);
   });
 });
 

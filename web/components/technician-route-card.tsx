@@ -3,8 +3,14 @@
 import type { TechnicianRoute } from '@texasrenters/shared';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { formatDistance, formatDuration, formatRelative } from '@/lib/format';
-import { describeUnroutable, isPlanned, pluralStops } from '@/lib/route-plan';
+import { formatDistance, formatDuration } from '@/lib/format';
+import {
+  describeOrigin,
+  describeUnroutable,
+  isPlanned,
+  pluralStops,
+  timingNote,
+} from '@/lib/route-plan';
 
 /**
  * The order a technician's remaining day should be driven in.
@@ -88,17 +94,21 @@ export function TechnicianRouteCard({
               </div>
             ) : null}
 
-            {/* Said plainly rather than in a tooltip. These times come from a
-                routing engine with no traffic data, so they describe an empty
-                road — and somebody planning a day around them should know that
-                before they are late, not after.
+            {/* Said plainly rather than in a tooltip, and only what is true.
+                Google's times include traffic; the fallback router's describe
+                an empty road, and somebody planning a day around those should
+                know before they are late, not after.
+
+                Where it was measured from is said in words. It used to be the
+                age of the position, which a route from home does not have --
+                it printed "Measured from —".
 
                 Only alongside times that exist: without a route there is
                 nothing being estimated, and the caveat read as a claim. */}
-            {planned && route.origin ? (
+            {planned && route.origin && timingNote(route) ? (
               <Note>
-                Estimated from free-flow speeds, without traffic. Measured from{' '}
-                {formatRelative(route.origin.recordedAt)}.
+                {timingNote(route)}
+                {describeOrigin(route) ? <> Measured {describeOrigin(route)}.</> : null}
               </Note>
             ) : null}
 

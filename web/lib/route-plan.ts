@@ -80,6 +80,25 @@ function names(entries: { propertyName: string }[]) {
 }
 
 /** "1 stop", not "1 stops". */
+/**
+ * What the drive times are, in one sentence, or null when nothing was timed.
+ *
+ * Said only where it is true. This was a fixed "estimated from speed limits,
+ * without traffic" under every route -- written when OSRM was the only router,
+ * and false on every route once Google, which times against traffic, became
+ * the one answering.
+ */
+export function timingNote(route: TechnicianRoute | null | undefined): string | null {
+  switch (route?.source) {
+    case 'GOOGLE_TRAFFIC':
+      return 'Drive times include traffic.';
+    case 'OSRM_FREE_FLOW':
+      return 'Estimated from speed limits, without traffic.';
+    default:
+      return null;
+  }
+}
+
 export function pluralStops(count: number) {
   return `${count} ${count === 1 ? 'stop' : 'stops'}`;
 }

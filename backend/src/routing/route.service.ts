@@ -7,6 +7,7 @@ import {
   needsReroute,
   type RouteLeg,
   type RouteStop,
+  type RouteTimingSource,
   shortestRouteOrder,
   type TechnicianAssignments,
   type TechnicianRoute,
@@ -14,8 +15,8 @@ import {
 
 import { PrismaService } from '../common/prisma.service';
 import { businessDayBounds } from '../common/business-day';
-import { GoogleRoutesClient } from './google-routes.client';
-import type { GeoPoint } from './osrm.client';
+import { GoogleRoutesClient, type GoogleRoute } from './google-routes.client';
+import type { GeoPoint, OsrmRoute } from './osrm.client';
 import { OsrmClient } from './osrm.client';
 
 /**
@@ -177,13 +178,23 @@ export class RouteService {
     return this.osrm.durations(points);
   }
 
-  /** The drawn line and its legs, from whichever router is configured. */
-  private async driveFor(points: readonly GeoPoint[]) {
+  /**
+   * The drawn line and its legs, and which router drew them.
+   *
+   * The source travels with the route because the two answer different
+   * questions: Google's times include traffic, and OSRM's are an empty road at
+   * the speed limit. The console used to describe every route as the second,
+   * whichever had answered.
+   */
+  private async driveFor(
+    points: readonly GeoPoint[],
+  ): Promise<{ drive: GoogleRoute | OsrmRoute; source: RouteTimingSource } | null> {
     if (this.google.configured) {
       const drive = await this.google.route(points);
-      if (drive) return drive;
+      if (drive) return { drive, source: 'GOOGLE_TRAFFIC' };
     }
-    return this.osrm.route(points);
+    const drive = await this.osrm.route(points);
+    return drive ? { drive, source: 'OSRM_FREE_FLOW' } : null;
   }
 
   /**
@@ -470,7 +481,8 @@ export class RouteService {
       history,
       originOutsideServiceArea: false,
       airTravel: null,
-      estimated: true,
+      // Nothing drawn, so nothing was timed.
+      source: null,
     };
 
     // Without a position there is no starting point, and without at least one
@@ -570,7 +582,7 @@ export class RouteService {
     const pending =
       this.historiesInFlight.get(cacheKey) ??
       this.driveFor(points)
-        .then((drive) => (drive?.legs.length ? toLatLngPath(drive.geometry) : []))
+        .then((timed) => (timed?.drive.legs.length ? toLatLngPath(timed.drive.geometry) : []))
         .catch(() => [] as [number, number][])
         .finally(() => this.historiesInFlight.delete(cacheKey));
     this.historiesInFlight.set(cacheKey, pending);
@@ -651,8 +663,9 @@ export class RouteService {
     const order = shortestRouteOrder(matrix);
     const ordered = order.map((index) => stops[index - 1]).filter(Boolean) as RouteStop[];
 
-    const drive = await this.driveFor([origin, ...ordered]);
-    if (!drive) return { ...empty, stops: ordered, unroutable };
+    const timed = await this.driveFor([origin, ...ordered]);
+    if (!timed) return { ...empty, stops: ordered, unroutable };
+    const { drive, source } = timed;
 
     // OSRM returns one leg per consecutive pair, so leg `i` arrives at stop
     // `i`. The first has no `fromStopId` because it starts at the technician.
@@ -677,7 +690,7 @@ export class RouteService {
       // False by construction: getting here means the origin snapped to a road.
       originOutsideServiceArea: false,
       airTravel: null,
-      estimated: true,
+      source,
     };
   }
 }

@@ -213,6 +213,9 @@ export interface RouteLeg {
   durationSeconds: number;
 }
 
+/** Which router timed a drawn route. See `TechnicianRoute.source`. */
+export type RouteTimingSource = 'GOOGLE_TRAFFIC' | 'OSRM_FREE_FLOW';
+
 /**
  * A technician's day, in the order it should be driven.
  *
@@ -303,11 +306,19 @@ export interface TechnicianRoute {
    */
   history: { stops: RouteStop[]; geometry: [number, number][] };
   /**
-   * Free-flow, from the road network's speed limits. OSRM has no traffic data,
-   * so this is optimistic in Houston at five o'clock and both surfaces must say
-   * "estimate" rather than implying an arrival time.
+   * Which router timed the drive, or null when nothing was drawn.
+   *
+   * `GOOGLE_TRAFFIC` is timed against the traffic on the roads when the route
+   * was drawn. `OSRM_FREE_FLOW` is the fallback, used when Google is not
+   * configured or does not answer: the road network's speed limits with no
+   * traffic data, which is optimistic in Houston at five o'clock -- so every
+   * surface that shows those times must say so.
+   *
+   * This replaced `estimated: true`, which described the free-flow router on
+   * every route long after Google had become the one answering. The caveat it
+   * drove, "without traffic", was false on every route production drew.
    */
-  estimated: true;
+  source: RouteTimingSource | null;
 }
 
 /**

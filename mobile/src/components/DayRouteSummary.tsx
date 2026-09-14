@@ -2,6 +2,7 @@ import { Text, View } from 'react-native';
 
 import type { TechnicianDayRoute } from '@/src/repositories/contracts';
 import { SectionHeader } from '@/src/components/ui';
+import { routeTimingNote } from '@/src/lib/route-timing';
 
 /**
  * The technician's remaining stops, in the order worth driving them.
@@ -12,7 +13,7 @@ import { SectionHeader } from '@/src/components/ui';
  * anybody out of compliance with a plan they never agreed to.
  */
 
-/** Minutes, or hours and minutes. Never seconds — see `estimated` below. */
+/** Minutes, or hours and minutes. Never seconds — these are estimates either way. */
 function drive(seconds: number) {
   const minutes = Math.max(1, Math.round(seconds / 60));
   if (minutes < 60) return `${minutes} min`;
@@ -51,12 +52,14 @@ export function DayRouteSummary({ route }: { route?: TechnicianDayRoute }) {
           </Text>
         </View>
 
-        {/* Said out loud, because somebody is going to plan a day around it.
-            The routing engine has no traffic data, so these times describe an
-            empty road at the speed limit. */}
-        <Text className="mt-1 text-xs text-muted-foreground">
-          Estimate. Does not account for traffic.
-        </Text>
+        {/* Said out loud, because somebody is going to plan a day around it --
+            and only what is true. Google's times include traffic; the fallback
+            router's describe an empty road at the speed limit. This used to
+            say "does not account for traffic" under every route, including
+            all of the ones Google had timed with it. */}
+        {routeTimingNote(route.source) ? (
+          <Text className="mt-1 text-xs text-muted-foreground">{routeTimingNote(route.source)}</Text>
+        ) : null}
 
         <View className="mt-3">
           {route.stops.map((stop, index) => {

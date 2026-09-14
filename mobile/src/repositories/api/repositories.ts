@@ -39,6 +39,7 @@ import type {
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
+import { technicianRouteSchema } from './technician-route-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
@@ -469,45 +470,6 @@ const reportSchema = z.object({
     pendingReviewCount: z.number(),
   }),
 });
-/**
- * The technician's own day, ordered from where they are.
- *
- * Deliberately **not** cached for offline use, unlike the endpoints around it.
- * A route is a statement about where somebody is right now; served from a cache
- * an hour later it is not stale data, it is wrong data, and it would send
- * somebody to the stop they have already finished. No signal means no route,
- * which is honest.
- */
-const routeStopSchema = z.object({
-  inspectionId: z.string(),
-  propertyId: z.string(),
-  propertyName: z.string(),
-  addressLine1: z.string(),
-  city: z.string(),
-  latitude: z.number(),
-  longitude: z.number(),
-});
-
-const technicianRouteSchema = z.object({
-  technicianId: z.string(),
-  origin: z
-    .object({ latitude: z.number(), longitude: z.number(), recordedAt: z.string() })
-    .nullable(),
-  stops: z.array(routeStopSchema),
-  legs: z.array(
-    z.object({
-      fromStopId: z.string().nullable(),
-      toStopId: z.string(),
-      distanceMeters: z.number(),
-      durationSeconds: z.number(),
-    }),
-  ),
-  totalDistanceMeters: z.number(),
-  totalDurationSeconds: z.number(),
-  unroutable: z.array(z.object({ inspectionId: z.string(), propertyName: z.string() })),
-});
-
-
 const dashboardSchema = z.object({
   today: z.number(),
   inProgress: z.number(),
