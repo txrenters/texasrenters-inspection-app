@@ -70,6 +70,27 @@ const answered = (id: string, label: string, textValue: string): PublicReportChe
 
 afterEach(cleanup);
 
+describe('a photograph on the shared report', () => {
+  it('carries its capture time, in Texas time with the zone', async () => {
+    report = {
+      ...reportWith([]),
+      photos: [
+        {
+          id: 'photo-1',
+          roomId: 'area-1',
+          label: 'Front door',
+          capturedAt: '2026-09-14T18:22:07.000Z',
+          captureTimeSource: 'DEVICE_CLOCK',
+          contentPath: '/api/v1/reports/token/photos/photo-1',
+        },
+      ],
+    };
+    render(<ReportPage />);
+
+    expect(await screen.findByText('Sep 14, 2026, 1:22:07 PM CDT')).toBeTruthy();
+  });
+});
+
 describe("an occupied room on the shared report", () => {
   it('shows each answer under a Condition heading', async () => {
     report = reportWith([

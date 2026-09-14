@@ -472,6 +472,11 @@ export class AreaEvidenceService {
           width: true,
           height: true,
           capturedAt: true,
+          captureTimeSource: true,
+          // Received, and the fingerprint of the file as received: what a
+          // reviewer needs to say where a photograph's time and bytes came from.
+          createdAt: true,
+          sha256: true,
           findingId: true,
           capturedBy: { select: { displayName: true } },
         },
@@ -593,6 +598,9 @@ export class AreaEvidenceService {
       width: photo.width,
       height: photo.height,
       capturedAt: photo.capturedAt.toISOString(),
+      captureTimeSource: photo.captureTimeSource,
+      receivedAt: photo.createdAt.toISOString(),
+      sha256: photo.sha256,
       capturedByName: photo.capturedBy.displayName,
       findingId: photo.findingId,
       contentPath: `/api/v1/admin/photos/${photo.id}/content`,

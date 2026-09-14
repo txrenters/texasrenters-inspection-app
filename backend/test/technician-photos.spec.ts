@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
@@ -15,7 +19,12 @@ const technician: AuthenticatedUser = {
   principalType: 'USER',
 };
 
-const area = { id: 'area-1', inspectionId: 'insp-1', propertyAreaId: 'pa-1' };
+const area = {
+  id: 'area-1',
+  inspectionId: 'insp-1',
+  propertyAreaId: 'pa-1',
+  inspection: { inspectionType: 'MOVE_IN', createdAt: new Date('2026-07-01T00:00:00.000Z') },
+};
 
 function photoRecord(overrides: Record<string, unknown> = {}) {
   return {
@@ -66,7 +75,15 @@ function build(overrides: Record<string, unknown> = {}) {
   return { service, prisma, mediaStorage };
 }
 
-const jpeg = { path: '/tmp/nope.jpg', mimetype: 'image/jpeg', size: 12345, originalname: 'p.jpg' };
+/**
+ * A real file each time: the upload fingerprints the bytes it received before
+ * storing them, and removes its temporary file when it is done.
+ */
+const jpeg = () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'technician-photo-')), 'p.jpg');
+  writeFileSync(path, Buffer.from('not really a jpeg; just bytes to hash'));
+  return { path, mimetype: 'image/jpeg', size: 12345, originalname: 'p.jpg' };
+};
 
 describe('technician photo evidence', () => {
   it('stores a photo with its capture type and never touches the video pipeline', async () => {
@@ -78,7 +95,7 @@ describe('technician photo evidence', () => {
         idempotencyKey: 'photo-key-abc123',
         captureType: 'FINDING_DETAIL' as never,
       },
-      jpeg,
+      jpeg(),
     );
 
     expect(mediaStorage.putFromFile).toHaveBeenCalledTimes(1);
@@ -113,7 +130,7 @@ describe('technician photo evidence', () => {
         captureSource: 'VIDEO_FRAME_EXTRACTION',
         sequenceNumber: 2,
       },
-      jpeg,
+      jpeg(),
     );
 
     expect(prisma.inspectionPhoto.create).toHaveBeenCalledWith(
@@ -144,7 +161,7 @@ describe('technician photo evidence', () => {
         idempotencyKey: 'photo-key-abc123',
         captureType: 'AREA_OVERVIEW' as never,
       },
-      jpeg,
+      jpeg(),
     );
     expect(result).toMatchObject({ id: 'photo-1' });
     expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
@@ -161,7 +178,7 @@ describe('technician photo evidence', () => {
           idempotencyKey: 'photo-key-abc123',
           captureType: 'AREA_OVERVIEW' as never,
         },
-        { ...jpeg, mimetype: 'application/pdf' },
+        { ...jpeg(), mimetype: 'application/pdf' },
       ),
     ).rejects.toMatchObject({ status: 415, code: 'PHOTO_TYPE_UNSUPPORTED' });
   });
@@ -181,7 +198,7 @@ describe('technician photo evidence', () => {
           captureType: 'FINDING_DETAIL' as never,
           findingId: '10000000-0000-4000-8000-0000000000ff',
         },
-        jpeg,
+        jpeg(),
       ),
     ).rejects.toMatchObject({ status: 422, code: 'FINDING_NOT_IN_AREA' });
   });

@@ -284,6 +284,17 @@ export class TechnicianPhotoUploadDto {
   @IsOptional()
   @IsIn(['NATIVE_STILL_DURING_VIDEO', 'VIDEO_FRAME_EXTRACTION', 'SEPARATE_PHOTO_CAPTURE'])
   captureSource?: string;
+  /**
+   * When the shutter was pressed, by the phone's clock.
+   *
+   * Optional so builds from before it keep uploading; their photographs are
+   * stamped with the server's receipt, labelled as such.
+   */
+  @IsOptional() @IsISO8601({ strict: true }) capturedAt?: string;
+  /** The phone's zone at capture ("America/Chicago"). */
+  @IsOptional() @IsString() @MaxLength(64) @Matches(/^[A-Za-z0-9_+\-/]+$/) captureTimeZone?: string;
+  /** The phone's offset from UTC at capture, in minutes. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(-840) @Max(840) captureUtcOffsetMinutes?: number;
 }
 
 /**

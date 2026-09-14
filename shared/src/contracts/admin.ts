@@ -1,4 +1,5 @@
 import type { InspectionType } from '../enums/index.js';
+import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
 
 export interface Paginated<T> {
   items: T[];
@@ -770,6 +771,11 @@ export interface PublicReportPhoto {
   checklistItem?: string | null;
   notes?: string | null;
   capturedAt: string;
+  /**
+   * What `capturedAt` rests on. The stamp is only printed when this is known;
+   * absent on a report from a backend that predates it.
+   */
+  captureTimeSource?: PhotoCaptureTimeSource | null;
   width?: number | null;
   height?: number | null;
   contentPath: string;

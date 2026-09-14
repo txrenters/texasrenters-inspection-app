@@ -384,6 +384,23 @@ describe('a long report', () => {
   }, 120_000);
 });
 
+describe('the capture time on a photograph', () => {
+  it('prints it on the photo in Texas time, and not for a time nobody has confirmed', async () => {
+    mockPhotoFetch();
+    const confirmed = { ...REPORT.photos[0]!, id: 'photo-1', captureTimeSource: 'DEVICE_CLOCK' as const };
+    const unconfirmed = { ...REPORT.photos[0]!, id: 'photo-2', captureTimeSource: null };
+
+    const pdf = await renderReportPdf(
+      { ...REPORT, findings: [], photos: [confirmed, unconfirmed] },
+      { apiOrigin: 'http://x' },
+    );
+
+    const text = (await pageTexts(pdf)).flat();
+    // 16:12:17 UTC in July is 11:12:17 AM in Houston; it used to print 4:12 PM.
+    expect(text.filter((line) => line === 'Jul 23, 2026, 11:12:17 AM CDT')).toHaveLength(1);
+  }, 60_000);
+});
+
 describe("an occupied room's answers", () => {
   it('prints them under a Condition heading instead of three empty verdict columns', async () => {
     mockPhotoFetch();

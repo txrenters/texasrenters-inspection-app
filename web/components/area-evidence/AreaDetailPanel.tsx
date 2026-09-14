@@ -1,6 +1,13 @@
 'use client';
 
-import type { AreaChecklistEntry, AreaFinding, AreaRecording } from '@texasrenters/shared';
+import {
+  describePhotoCaptureTime,
+  formatPhotoStamp,
+  type AreaChecklistEntry,
+  type AreaFinding,
+  type AreaPhoto,
+  type AreaRecording,
+} from '@texasrenters/shared';
 import { Maximize2Icon, PlayIcon } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -22,6 +29,24 @@ import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { RecordingMarkers } from './RecordingMarkers';
 import { RecordingSurface } from './RecordingSurface';
+
+/**
+ * Where a photograph's time and bytes come from, for the reviewer.
+ *
+ * The stamp on the photo says when; this says how that is known, when the
+ * server received the file, and the start of its SHA-256 -- enough to match
+ * against the original if the photograph is ever challenged.
+ */
+function photoProvenance(photo: AreaPhoto) {
+  const received = photo.receivedAt ? formatPhotoStamp(photo.receivedAt, 'DEVICE_CLOCK') : null;
+  return [
+    describePhotoCaptureTime(photo.captureTimeSource),
+    received && photo.captureTimeSource !== 'SERVER_RECEIPT' ? `received ${received}` : null,
+    photo.sha256 ? `SHA-256 ${photo.sha256.slice(0, 12)}…` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 /** A section heading with an optional count. */
 function SectionHeading({ children, count }: { children: string; count?: number }) {
@@ -408,7 +433,9 @@ export function AreaDetailPanel({
           kind: 'photo' as const,
           contentPath: photo.contentPath,
           title: photo.label || captureLabel(photo.captureType),
-          caption: `${bundle.area.name} · ${group.label}`,
+          caption: `${bundle.area.name} · ${group.label} · ${photoProvenance(photo)}`,
+          capturedAt: photo.capturedAt,
+          captureTimeSource: photo.captureTimeSource,
         })),
       ),
     ];

@@ -30,6 +30,7 @@ import type { FindingReviewStatus, Prisma } from '@prisma/client';
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { businessDayBounds } from '../common/business-day';
+import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
@@ -144,6 +145,7 @@ const photoSelect = {
   width: true,
   height: true,
   capturedAt: true,
+  captureTimeSource: true,
   capturedBy: { select: { displayName: true } },
 } satisfies Prisma.InspectionPhotoSelect;
 
@@ -2051,8 +2053,9 @@ export class TechnicianService {
           id: true,
           inspectionId: true,
           propertyAreaId: true,
-          // Decides where a tagged checklist item is stored, below.
-          inspection: { select: { inspectionType: true } },
+          // Decides where a tagged checklist item is stored, below; and no
+          // photograph of it can have been taken before it existed.
+          inspection: { select: { inspectionType: true, createdAt: true } },
         },
       });
       if (!area)
@@ -2129,6 +2132,17 @@ export class TechnicianService {
 
       const id = randomUUID();
       const storageKey = `${user.organizationId}/${area.inspectionId}/${area.id}/photos/${id}${imageExtension(file.mimetype)}`;
+      // Fingerprinted before it is stored: the hash has to describe the file as
+      // it arrived, which is the claim a court would be asked to rely on.
+      const sha256 = await sha256OfFile(file.path);
+      const captureTime = captureTimeForUpload({
+        claimed: dto.capturedAt,
+        receivedAt: new Date(),
+        earliest: area.inspection.createdAt,
+        // A still cut from a recording is timed from the recording, not the
+        // shutter; the app works that moment out and sends it as the capture.
+        fromRecording: dto.captureSource === 'VIDEO_FRAME_EXTRACTION',
+      });
       await this.mediaStorage.putFromFile(storageKey, file.path, file.mimetype);
       let record: TechnicianPhotoRecord;
       try {
@@ -2152,6 +2166,12 @@ export class TechnicianService {
             height: dto.height ?? null,
             sizeBytes: file.size,
             idempotencyKey: dto.idempotencyKey,
+            sha256,
+            capturedAt: captureTime.capturedAt,
+            captureTimeSource: captureTime.captureTimeSource,
+            deviceCapturedAt: captureTime.deviceCapturedAt,
+            captureTimeZone: dto.captureTimeZone ?? null,
+            captureUtcOffsetMinutes: dto.captureUtcOffsetMinutes ?? null,
             metadata:
               dto.recordingSessionId || dto.videoTimestampMs !== undefined || dto.captureSource
                 ? {
@@ -2263,6 +2283,7 @@ export class TechnicianService {
       height: record.height,
       capturedByName: record.capturedBy?.displayName ?? null,
       capturedAt: record.capturedAt.toISOString(),
+      captureTimeSource: record.captureTimeSource,
       contentPath: `/api/v1/technician/photos/${record.id}/content`,
     };
   }

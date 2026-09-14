@@ -1,10 +1,13 @@
 'use client';
 
+import type { PhotoCaptureTimeSource } from '@texasrenters/shared';
 import { ChevronLeft, ChevronRight, Download, Loader2, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
+import { PhotoStamp } from '@/components/photo-stamp';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { apiBlob } from '@/lib/api';
+
 import { RecordingSurface } from './RecordingSurface';
 
 /** Controls sit on a near-black backdrop, where the themed surfaces vanish. */
@@ -29,6 +32,9 @@ export type EvidenceViewerItem = {
   startSeconds?: number | null;
   /** Poster frame, already a usable URL, for recordings only. */
   posterUrl?: string | null;
+  /** A photograph's capture time and what it rests on, drawn on the photo. */
+  capturedAt?: string | null;
+  captureTimeSource?: PhotoCaptureTimeSource | null;
 };
 
 /**
@@ -216,12 +222,17 @@ export function EvidenceViewer({
             />
           </div>
         ) : objectUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            alt={item.title}
-            className="max-h-full max-w-full rounded-lg object-contain"
-            src={objectUrl}
-          />
+          // Wrapped so the stamp sits on the photograph itself, not on the
+          // letterboxing around it.
+          <span className="relative inline-flex max-h-full max-w-full">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              alt={item.title}
+              className="max-h-full max-w-full rounded-lg object-contain"
+              src={objectUrl}
+            />
+            <PhotoStamp capturedAt={item.capturedAt} size="md" source={item.captureTimeSource} />
+          </span>
         ) : null}
 
         {count > 1 ? (

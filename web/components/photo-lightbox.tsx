@@ -1,6 +1,6 @@
 'use client';
 
-import type { PublicReportPhoto } from '@texasrenters/shared';
+import { formatPhotoStamp, type PublicReportPhoto } from '@texasrenters/shared';
 import { DownloadIcon, XIcon, ZoomInIcon, ZoomOutIcon } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
@@ -276,7 +276,10 @@ export function PhotoLightbox({
             {areaName} · {sideLabel}
           </p>
           <p className="text-muted-foreground truncate text-xs">
-            {photo.label ?? 'Photograph'} · {current + 1} of {photos.length}
+            {[photo.label ?? 'Photograph', formatPhotoStamp(photo.capturedAt, photo.captureTimeSource)]
+              .filter(Boolean)
+              .join(' · ')}{' '}
+            · {current + 1} of {photos.length}
           </p>
         </div>
         <div className="flex items-center gap-1">

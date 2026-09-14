@@ -261,6 +261,8 @@ export class ReportShareService {
                 label: true,
                 notes: true,
                 capturedAt: true,
+                // A stamp is only printed on a time whose origin is known.
+                captureTimeSource: true,
                 width: true,
                 height: true,
                 // The caption the printed report uses. Every photograph in the
@@ -397,6 +399,7 @@ export class ReportShareService {
           checklistItem: photo.checklistItem?.label ?? null,
           notes: photo.notes,
           capturedAt: photo.capturedAt,
+          captureTimeSource: photo.captureTimeSource,
           width: photo.width,
           height: photo.height,
           contentPath: `/api/v1/reports/${encodeURIComponent(token)}/photos/${photo.id}`,

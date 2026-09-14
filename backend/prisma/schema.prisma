@@ -168,6 +168,16 @@ enum MediaProcessingStatus {
   FAILED
 }
 
+/// What a photograph's `capturedAt` rests on. See `photo-capture-time.ts` in
+/// shared for what each one means; the stamp printed on the photo says which.
+enum PhotoCaptureTimeSource {
+  DEVICE_CLOCK
+  DEVICE_UPLOAD_KEY
+  REPORT_STAMP
+  VIDEO_OFFSET
+  SERVER_RECEIPT
+}
+
 enum PhotoCaptureType {
   AREA_OVERVIEW
   WALL_OVERVIEW
@@ -1777,7 +1787,23 @@ model InspectionPhoto {
   idempotencyKey   String?            @unique
   localFileId      String?
   metadata         Json?
+  /// When the photograph was taken, as well as that is known; the stamp drawn
+  /// on every view of it. `captureTimeSource` says what it rests on, and
+  /// `createdAt` stays when the server received it.
   capturedAt       DateTime           @default(now())
+  /// Null only on photographs from before provenance was recorded whose time
+  /// has not been confirmed -- imported ones awaiting a re-read of their report.
+  captureTimeSource PhotoCaptureTimeSource?
+  /// The capture time the phone claimed, kept even when it was not believed.
+  deviceCapturedAt DateTime?
+  /// The zone the capture was made in ("America/Chicago"), as the phone
+  /// reported it or as an imported report implies it.
+  captureTimeZone  String?
+  /// That zone's offset from UTC at the moment of capture, in minutes.
+  captureUtcOffsetMinutes Int?
+  /// SHA-256 of the file exactly as received, in hex, so a photograph can be
+  /// shown to be unaltered. Null on photographs stored before this was kept.
+  sha256           String?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
   inspectionArea   InspectionArea     @relation(fields: [inspectionAreaId], references: [id], onDelete: Cascade)
