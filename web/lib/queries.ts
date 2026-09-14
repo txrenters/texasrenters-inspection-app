@@ -461,11 +461,13 @@ export const useTechnicianLocations = (enabled = true) =>
     queryKey: keys.technicianLocations,
     queryFn: ({ signal }) =>
       api<TechnicianPosition[]>('/api/v1/admin/technician-locations', { signal }),
-    // A safety net, not the mechanism. Positions arrive over the socket now
-    // (`technician:position`), so this exists only for the case the socket has
-    // quietly gone away — which looks identical to nobody moving, and would
-    // otherwise leave the map confidently wrong for as long as it stayed open.
-    refetchInterval: 5 * 60_000,
+    // A safety net, not the mechanism. Positions and whether each app is open
+    // arrive over the socket (`technician:position`, `technician:presence`), so
+    // this exists for the case the socket has quietly gone away — which looks
+    // identical to nobody moving. A minute rather than five: two consoles
+    // fetching five minutes apart showed one technician online on one and
+    // offline on the other.
+    refetchInterval: 60_000,
     enabled,
   });
 /**

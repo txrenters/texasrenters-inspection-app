@@ -245,6 +245,34 @@ export function presenceOf(
 }
 
 /**
+ * A technician's app opened its first connection, or closed its last.
+ *
+ * Pushed to every console watching the organization's map. Without it each
+ * console knew whether the app was open only from its own last poll, minutes
+ * apart and never in a hidden tab, so two accounts showed the same technician
+ * online and offline at once — and swapped as each polled again.
+ */
+export interface TechnicianPresenceEvent {
+  technicianId: string;
+  connected: boolean;
+  lastSeenAt: string | null;
+}
+
+/** Fold a presence change into the positions a console holds. */
+export function applyPresenceEvent(
+  positions: TechnicianPosition[],
+  event: TechnicianPresenceEvent,
+): TechnicianPosition[] {
+  let changed = false;
+  const next = positions.map((position) => {
+    if (position.technicianId !== event.technicianId) return position;
+    changed = true;
+    return { ...position, app: { connected: event.connected, lastSeenAt: event.lastSeenAt } };
+  });
+  return changed ? next : positions;
+}
+
+/**
  * How long a connected app may go without a location before it is called out.
  *
  * Ten minutes. A handset reports every few seconds while moving and at least

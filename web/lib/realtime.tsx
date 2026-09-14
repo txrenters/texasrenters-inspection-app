@@ -1,14 +1,21 @@
 'use client';
 
-import { mergeLatestPosition, type TechnicianPosition } from '@texasrenters/shared';
+import {
+  applyPresenceEvent,
+  mergeLatestPosition,
+  type TechnicianPosition,
+  type TechnicianPresenceEvent,
+} from '@texasrenters/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 
+import { api } from './api';
 import { useAuth } from './auth';
 import { useNotifications } from './notifications';
 import { keys } from './queries';
+import { getSession } from './session';
 
 /**
  * Anything the office should be told about. Mirrors `OrganizationNotification`
@@ -38,6 +45,19 @@ interface AreaAddedEvent {
 }
 
 /**
+ * How long to wait before connecting again after the server hung up.
+ *
+ * socket.io reconnects by itself after the network drops, but never after the
+ * server closes the connection, and the gateway does exactly that when it is
+ * offered a token that has expired. A laptop waking from sleep offered the
+ * token the page had loaded with, was refused, and the console stayed deaf
+ * until it was reloaded: no notifications, and every technician frozen at
+ * whatever the map had last fetched. Given up after the last delay, because
+ * an account the gateway refuses for good should not ask forever.
+ */
+const RECONNECT_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
+
+/**
  * Keeps the administrator workspace live.
  *
  * The gateway used to reject anyone without the technician role, so this side
@@ -59,6 +79,8 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
   // the connection down and rebuild it, dropping the next one.
   const pushRef = useRef(notifications?.push);
   pushRef.current = notifications?.push;
+  const mergeRef = useRef(notifications?.merge);
+  mergeRef.current = notifications?.merge;
   const accessToken = session?.accessToken ?? null;
   // Held in a ref so a re-render caused by the invalidations below cannot tear
   // down and rebuild the socket, which would drop events in a loop.
@@ -68,14 +90,47 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
     const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '');
     if (!accessToken || !baseUrl) return;
 
-    // The token is captured at connect, so the socket is rebuilt whenever it
-    // changes — a refreshed token must not leave an authenticated-as-nobody
-    // connection open.
+    // Rebuilt whenever the session's token changes, so a refreshed token never
+    // leaves an authenticated-as-nobody connection open.
     const socket = io(`${baseUrl}/technician-events`, {
       transports: ['websocket'],
-      auth: { accessToken },
+      // Asked for on every attempt rather than captured once: a reconnect an
+      // hour later must offer the token the session holds then, refreshed if
+      // it has expired, not the one this page happened to load with.
+      auth: (deliver) => {
+        void getSession()
+          .catch(() => null)
+          .then((current) => deliver({ accessToken: current?.accessToken ?? accessToken }));
+      },
     });
     socketRef.current = socket;
+    let attempts = 0;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Connected, or connected again: catch up on what this console missed.
+     *
+     * Every account loads the organization's stored notifications, so each one
+     * holds the same list whether or not it was open when they happened. And
+     * the map is refetched, because a technician may have opened or closed the
+     * app while nobody was listening here.
+     */
+    socket.on('technician:ready', () => {
+      attempts = 0;
+      void queryClient.invalidateQueries({ queryKey: keys.technicianLocations });
+      void api<OrganizationNotification[]>('/api/v1/admin/notifications')
+        .then((stored) => mergeRef.current?.(stored))
+        // An account that may not read inspections has no list to load; the
+        // bell simply stays as it is.
+        .catch(() => undefined);
+    });
+
+    socket.on('disconnect', (reason) => {
+      if (reason !== 'io server disconnect' || attempts >= RECONNECT_DELAYS_MS.length) return;
+      const delay = RECONNECT_DELAYS_MS[attempts];
+      attempts += 1;
+      retry = setTimeout(() => socket.connect(), delay);
+    });
 
     // The general channel: things the office should notice, kept in the bell so
     // they survive being missed. A toast alone is gone in four seconds, which is
@@ -108,23 +163,24 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
       );
     });
 
+    /**
+     * A technician's app opened or closed.
+     *
+     * Written into the positions every console holds, the moment it happens.
+     * Whether the app was open used to come only from each console's own last
+     * fetch, minutes apart, so two accounts showed the same technician online
+     * on one and offline on the other.
+     */
+    socket.on('technician:presence', (event: TechnicianPresenceEvent) => {
+      queryClient.setQueryData<TechnicianPosition[]>(keys.technicianLocations, (current) =>
+        current ? applyPresenceEvent(current, event) : current,
+      );
+    });
+
     socket.on('area:added', (event: AreaAddedEvent) => {
-      const where = [event.propertyName, event.floorName].filter(Boolean).join(' · ');
-      // Separated with a middot rather than an em-dash. The em-dash is banned in
-      // shipped copy (skill Section 9.G); it also reads as a sentence break here
-      // when the two halves are really just adjacent facts.
-      const description = [where, `Added by ${event.technicianName}`].filter(Boolean).join(' · ');
-      toast.info(`New area: ${event.areaName}`, { description });
-      pushRef.current?.({
-        // The gateway does not id this event, so it is keyed by what makes it
-        // unique: one area is added once.
-        id: `area:${event.areaId}`,
-        kind: 'AREA_ADDED',
-        title: `New area: ${event.areaName}`,
-        body: description,
-        inspectionId: event.inspectionId,
-        occurredAt: event.occurredAt,
-      });
+      // No toast and nothing for the bell here: the gateway sends this area as
+      // a stored `notification` too, which is the copy every account shares.
+      // Announcing it twice would read as two areas added.
       // The area lists, the evidence summary, and any list showing area counts.
       // Broad on purpose: an area appearing is rare, and a missed refresh is a
       // stale screen next to a toast that says it changed.
@@ -142,6 +198,7 @@ export function AdminRealtimeProvider({ children }: { children: React.ReactNode 
     socket.on('technician:error', () => undefined);
 
     return () => {
+      clearTimeout(retry);
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;

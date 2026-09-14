@@ -1392,6 +1392,24 @@ export class AdminService {
     return this.inspection(user, inspection.id);
   }
 
+  /** The last fifty notifications, newest first, as the bell shows them. */
+  async organizationNotifications(user: AuthenticatedUser) {
+    const rows = await this.prisma.organizationNotification.findMany({
+      where: { organizationId: user.organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: { id: true, kind: true, title: true, body: true, inspectionId: true, createdAt: true },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      title: row.title,
+      body: row.body,
+      inspectionId: row.inspectionId,
+      occurredAt: row.createdAt.toISOString(),
+    }));
+  }
+
   async updateInspection(user: AuthenticatedUser, id: string, input: UpdateAdminInspectionDto) {
     const existing = await this.requireInspection(user.organizationId, id);
     if (

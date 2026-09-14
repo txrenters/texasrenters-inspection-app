@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import type { OnGatewayConnection, OnGatewayDisconnect } from '@nestjs/websockets';
-import { UserRole, type TechnicianPosition } from '@texasrenters/shared';
+import {
+  UserRole,
+  type TechnicianPosition,
+  type TechnicianPresenceEvent,
+} from '@texasrenters/shared';
 import type { Server, Socket } from 'socket.io';
 
 import { authenticateApplicationUser, type AuthenticatedUser } from '../common/auth';
@@ -68,9 +72,10 @@ export interface TechnicianInspectionEvent {
  * inspection, most obviously — had no channel at all, so the console stayed
  * silent and the office found out by reloading.
  *
- * `id` is generated at the source so the console can deduplicate. A socket that
- * reconnects mid-flight can deliver the same event twice, and a notification
- * list that shows it twice reads as two inspections submitted.
+ * `id` is the stored row's, so a console can match the live copy against the
+ * list it loads on connecting. A socket that reconnects mid-flight can deliver
+ * the same event twice, and a notification list that shows it twice reads as
+ * two inspections submitted.
  */
 export interface OrganizationNotification {
   id: string;
@@ -139,11 +144,21 @@ export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDi
       if (!isTechnician && !watchesOrganization && !watchesLocations)
         throw new Error('No realtime audience.');
 
+      /**
+       * The socket may have closed while authentication was awaited.
+       *
+       * Its disconnect already ran, with no user on it, so it counted nothing;
+       * counting it now would leave this person present until the API restarts.
+       * A phone reconnecting on a refreshed token closes the socket it opened
+       * milliseconds earlier, so this is not hypothetical.
+       */
+      if (client.disconnected) return;
       client.data.user = user;
       // Recorded after authentication and before joining any room: an
       // unauthenticated socket is not a person, and a person is present whether
       // or not they qualified for a room.
-      this.presence.connected(user.id);
+      const arrived = this.presence.connected(user.id);
+      if (arrived && isTechnician) this.publishPresence(user, true);
       if (isTechnician) await client.join(this.technicianRoom(user.id));
       if (watchesOrganization) await client.join(this.organizationRoom(user.organizationId));
       if (watchesLocations) await client.join(this.locationRoom(user.organizationId));
@@ -165,7 +180,24 @@ export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDi
    */
   handleDisconnect(client: TechnicianSocket) {
     const user = client.data.user;
-    if (user) this.presence.disconnected(user.id);
+    if (!user) return;
+    const left = this.presence.disconnected(user.id);
+    if (left && user.roles.includes(UserRole.INSPECTION_TECHNICIAN)) this.publishPresence(user, false);
+  }
+
+  /**
+   * Tell every console watching the map that a technician's app opened or closed.
+   *
+   * Only on the first socket opening and the last one closing: a phone holding
+   * two connections is not "online twice". To the location room, because
+   * whether a named person has the app open belongs with where they are.
+   */
+  private publishPresence(user: AuthenticatedUser, connected: boolean) {
+    this.server?.to(this.locationRoom(user.organizationId)).emit('technician:presence', {
+      technicianId: user.id,
+      connected,
+      lastSeenAt: this.presence.presenceFor(user.id).lastSeenAt,
+    } satisfies TechnicianPresenceEvent);
   }
 
   publish(technicianId: string, inspectionId: string, kind: TechnicianInspectionEventKind) {
@@ -186,24 +218,62 @@ export class TechnicianEventsGateway implements OnGatewayConnection, OnGatewayDi
     this.server
       ?.to(this.organizationRoom(organizationId))
       .emit('area:added', { ...event, occurredAt: new Date().toISOString() } satisfies AreaAddedEvent);
+    // The bell's copy goes through the stored path like every other
+    // notification, so an account that was not connected still sees it.
+    const where = [event.propertyName, event.floorName].filter(Boolean).join(' · ');
+    void this.publishOrganizationNotification(organizationId, {
+      kind: 'AREA_ADDED',
+      title: `New area: ${event.areaName}`,
+      body: [where, `Added by ${event.technicianName}`].filter(Boolean).join(' · '),
+      inspectionId: event.inspectionId,
+    });
   }
 
   /**
-   * Broadcasts a notification to the organization's administrators.
+   * Tells the organization's administrators, and keeps it for those not listening.
    *
-   * Separate from publishAreaAdded, which stays as it is: that event also drives
-   * cache invalidation keyed to its own payload, and folding the two would make
-   * every notification carry fields only one of them uses.
+   * `publishAreaAdded` still sends its own event as well: that one drives cache
+   * invalidation keyed to its own payload, and folding the two would make every
+   * notification carry fields only one of them uses.
    */
   publishOrganizationNotification(
     organizationId: string,
     event: Omit<OrganizationNotification, 'id' | 'occurredAt'>,
   ) {
-    this.server?.to(this.organizationRoom(organizationId)).emit('notification', {
-      ...event,
-      id: randomUUID(),
-      occurredAt: new Date().toISOString(),
-    } satisfies OrganizationNotification);
+    // Stored first, so the id the open consoles receive is the one every other
+    // account loads later; the bell de-duplicates on it.
+    return this.recordNotification(organizationId, event).then((stored) => {
+      this.server?.to(this.organizationRoom(organizationId)).emit('notification', stored);
+      return stored;
+    });
+  }
+
+  /**
+   * Keep a notification for the accounts that were not connected.
+   *
+   * Never fails the caller: the inspection is already submitted and the area
+   * already saved, and the consoles that are open should still hear about it
+   * even if the row could not be written.
+   */
+  private async recordNotification(
+    organizationId: string,
+    event: Omit<OrganizationNotification, 'id' | 'occurredAt'>,
+  ): Promise<OrganizationNotification> {
+    try {
+      const row = await this.prisma.organizationNotification.create({
+        data: {
+          organizationId,
+          kind: event.kind,
+          title: event.title,
+          body: event.body,
+          inspectionId: event.inspectionId,
+        },
+        select: { id: true, createdAt: true },
+      });
+      return { ...event, id: row.id, occurredAt: row.createdAt.toISOString() };
+    } catch {
+      return { ...event, id: randomUUID(), occurredAt: new Date().toISOString() };
+    }
   }
 
   private accessToken(client: Socket) {

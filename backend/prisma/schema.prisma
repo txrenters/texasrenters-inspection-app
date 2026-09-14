@@ -354,6 +354,7 @@ model Organization {
   name                 String
   createdAt            DateTime                          @default(now())
   updatedAt            DateTime                          @updatedAt
+  notifications        OrganizationNotification[]
   members              OrganizationMember[]
   properties           Property[]
   inspections          Inspection[]
@@ -715,6 +716,28 @@ model PropertyFloorPlan {
   markedAreas    PropertyArea[]           @relation("AreaSourceFloorPlan")
 
   @@index([propertyId, unitId])
+}
+
+/// What the office was told, kept so every console account sees the same list.
+///
+/// Notifications were broadcast only to the consoles connected at that moment
+/// and remembered only in each browser, so two accounts saw different bells,
+/// and a console that was closed — or whose connection had quietly lapsed —
+/// never heard that an inspection was submitted.
+model OrganizationNotification {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  /// INSPECTION_SUBMITTED or AREA_ADDED.
+  kind           String
+  title          String
+  body           String
+  /// Where the console goes when it is opened. Not a foreign key: a
+  /// notification outlives a deleted inspection.
+  inspectionId   String       @db.Uuid
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt(sort: Desc)])
 }
 
 /// Reading an inspection report PDF, which outlives the request that asked for it.
