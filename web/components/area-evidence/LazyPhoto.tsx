@@ -1,7 +1,9 @@
 'use client';
 
+import type { PhotoCaptureTimeSource } from '@texasrenters/shared';
 import { useEffect, useRef, useState } from 'react';
 
+import { PhotoStamp } from '@/components/photo-stamp';
 import { apiBlob } from '@/lib/api';
 
 /**
@@ -50,7 +52,13 @@ export function LazyPhoto({
    * this component never reads would put three dead fields on every photo in a
    * document that can carry hundreds.
    */
-  photo: { contentPath: string; captureType?: string | null; label?: string | null };
+  photo: {
+    contentPath: string;
+    captureType?: string | null;
+    label?: string | null;
+    capturedAt?: string | null;
+    captureTimeSource?: PhotoCaptureTimeSource | null;
+  };
   areaName: string;
   onOpen?: () => void;
 }) {
@@ -109,7 +117,10 @@ export function LazyPhoto({
       ref={holder}
       type="button"
     >
-      <span className="bg-muted block aspect-square overflow-hidden rounded-lg border">
+      <span className="bg-muted relative block aspect-square overflow-hidden rounded-lg border">
+        {objectUrl ? (
+          <PhotoStamp capturedAt={photo.capturedAt} source={photo.captureTimeSource} />
+        ) : null}
         {objectUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img

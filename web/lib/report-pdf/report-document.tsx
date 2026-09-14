@@ -118,8 +118,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.border,
   },
+  photoFrame: { position: 'relative', width: 152, height: 114 },
   photoCaption: { fontSize: 7.5, fontFamily: 'Helvetica-Bold', marginTop: 3 },
-  photoStamp: { fontSize: 7, color: C.muted },
+  // On the photograph, bottom left, as the office's timestamp-camera reports
+  // print it -- inside the frame, so the crop to fill the cell never cuts it.
+  photoStamp: {
+    position: 'absolute',
+    left: 4,
+    bottom: 4,
+    fontSize: 6,
+    color: '#FFFFFF',
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    paddingHorizontal: 3,
+    paddingVertical: 1.5,
+    borderRadius: 2,
+  },
 
   findingRow: {
     flexDirection: 'row',
@@ -351,9 +364,11 @@ function Room({ room, images }: { room: ReportRoomView; images: ReportImages }) 
           <View style={styles.photoGrid}>
             {photos.map((photo) => (
               <View key={photo.id} style={styles.photoCell} wrap={false}>
-                <Image style={styles.photo} src={images.get(photo.id)!} />
+                <View style={styles.photoFrame}>
+                  <Image style={styles.photo} src={images.get(photo.id)!} />
+                  {photo.stamp ? <Text style={styles.photoStamp}>{photo.stamp}</Text> : null}
+                </View>
                 {photo.caption ? <Text style={styles.photoCaption}>{photo.caption}</Text> : null}
-                {photo.stamp ? <Text style={styles.photoStamp}>{photo.stamp}</Text> : null}
               </View>
             ))}
           </View>

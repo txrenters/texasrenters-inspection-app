@@ -30,9 +30,16 @@ import {
   type AreaCategory,
   type AreaEnvironment,
   InspectionSource,
-  InspectionStatus
+  InspectionStatus,
+  PhotoCaptureTimeSource,
 } from '@prisma/client';
-import { classifyAreaByName, keywordsFromLabel } from '@texasrenters/shared';
+import {
+  classifyAreaByName,
+  keywordsFromLabel,
+  parseReportPhotoStamp,
+  PHOTO_STAMP_TIME_ZONE,
+  utcOffsetMinutes,
+} from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../../common/auth';
 import { ApplicationError } from '../../common/errors';
@@ -1064,9 +1071,12 @@ export class InspectionImportService {
               height: bytesForPhoto.height,
               sizeBytes: bytesForPhoto.sizeBytes,
               label: photo.caption,
-              capturedAt: captureTime(photo.takenAt) ?? new Date(),
+              ...reportStampTime(photo.takenAt),
+              sha256: bytesForPhoto.sha256,
               idempotencyKey: bytesForPhoto.storageKey,
-              metadata: { importedFrom: fingerprint, page: photo.page },
+              // The stamp's words as the report printed them, kept beside the
+              // instant they were read as.
+              metadata: { importedFrom: fingerprint, page: photo.page, reportStamp: photo.takenAt },
             },
           });
         }
@@ -1241,6 +1251,87 @@ export class InspectionImportService {
       .update({ where: { id: jobId }, data: { errorCode: 'IMPORT_WRITE_FAILED' } })
       .catch(() => undefined);
    }
+  }
+
+  /**
+   * Re-read an imported report's photo stamps and put their times right.
+   *
+   * Imported photographs were stored with their stamp handed to `new Date()`,
+   * which reads it in the zone of the machine doing the import. Production runs
+   * UTC, so most are five or six hours early -- but the Propertyware backfill
+   * was run from more than one machine, and on 2026-09-14 eight whole reports
+   * sat at night, the signature of a stamp read in Manila or in Texas. No single
+   * shift is right for all of them, so each report is read again from the PDF
+   * the import kept.
+   *
+   * Nothing is written unless every photograph lines up with the report as it
+   * reads today -- same position, same caption, same page -- because the
+   * pairing is positional and the parser has improved since some of these were
+   * imported. A report that does not line up is left untouched and named in
+   * the result, rather than stamped with times that might belong to the photo
+   * beside it.
+   *
+   * Idempotent: a photograph already confirmed is recomputed to the same value.
+   */
+  async correctImportedPhotoTimes(
+    organizationId: string,
+    fingerprint: string,
+    options: { apply: boolean },
+  ) {
+    const photos = await this.prisma.inspectionPhoto.findMany({
+      where: { organizationId, metadata: { path: ['importedFrom'], equals: fingerprint } },
+      select: { id: true, storageKey: true, label: true, metadata: true, capturedAt: true },
+    });
+    const outcome = { fingerprint, photos: photos.length, corrected: 0, unreadable: 0, mismatched: 0 };
+    if (!photos.length) return { ...outcome, status: 'NO_PHOTOS' as const };
+
+    const bytes = await this.storage.get(sourceKey(organizationId, fingerprint)).catch(() => null);
+    if (!bytes) return { ...outcome, status: 'SOURCE_MISSING' as const };
+    let report: ImportedReport;
+    try {
+      report = parseReport(await readPages(bytes));
+    } catch {
+      return { ...outcome, status: 'SOURCE_UNREADABLE' as const };
+    }
+    const read = report.areas.flatMap((area) => area.photos);
+
+    const updates: Array<{
+      id: string;
+      metadata: Record<string, unknown>;
+      data: ReturnType<typeof reportStampTime>;
+      stamp: string | null;
+    }> = [];
+    for (const photo of photos) {
+      const index = storedIndex(photo.storageKey);
+      const source = index === null ? undefined : read[index];
+      const metadata = (photo.metadata ?? {}) as Record<string, unknown>;
+      if (!source || source.caption !== photo.label || source.page !== metadata.page) {
+        outcome.mismatched += 1;
+        continue;
+      }
+      const data = reportStampTime(source.takenAt);
+      if (data.captureTimeSource !== PhotoCaptureTimeSource.REPORT_STAMP) {
+        outcome.unreadable += 1;
+        continue;
+      }
+      updates.push({ id: photo.id, metadata, data, stamp: source.takenAt });
+    }
+    if (outcome.mismatched) return { ...outcome, status: 'MISMATCHED' as const };
+
+    if (options.apply && updates.length)
+      await this.prisma.$transaction(
+        updates.map((update) =>
+          this.prisma.inspectionPhoto.update({
+            where: { id: update.id },
+            data: {
+              ...update.data,
+              metadata: { ...update.metadata, reportStamp: update.stamp } as Prisma.InputJsonValue,
+            },
+          }),
+        ),
+      );
+    outcome.corrected = updates.length;
+    return { ...outcome, status: options.apply ? ('CORRECTED' as const) : ('WOULD_CORRECT' as const) };
   }
 
   private async read(file?: { buffer: Buffer }) {
@@ -1536,6 +1627,7 @@ export class InspectionImportService {
       width: number;
       height: number;
       sizeBytes: number;
+      sha256: string;
     }>(photos.length);
 
     /**
@@ -1553,7 +1645,8 @@ export class InspectionImportService {
         const photo = photos[index]!;
         // Keyed by the content, so re-running a failed import overwrites its own
         // objects rather than leaving a second copy of every photograph.
-        const digest = createHash('sha256').update(photo.bytes).digest('hex').slice(0, 32);
+        const sha256 = createHash('sha256').update(photo.bytes).digest('hex');
+        const digest = sha256.slice(0, 32);
         const storageKey = `${organizationId}/imported/${fingerprint.slice(0, 16)}/${String(index).padStart(4, '0')}-${digest}.jpg`;
         await this.storage.putBytes(storageKey, photo.bytes, 'image/jpeg');
         stored[index] = {
@@ -1561,6 +1654,7 @@ export class InspectionImportService {
           width: photo.width,
           height: photo.height,
           sizeBytes: photo.bytes.length,
+          sha256,
         };
       }
     };
@@ -1671,9 +1765,29 @@ const defectsIn = (area: ImportedArea) =>
  * the report's date, because there is no other schedule for it to have.
  */
 
-/** "Sep 02 2026 01:15:39 PM" as it was written, or null if it will not parse. */
-function captureTime(value: string | null) {
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.valueOf()) ? null : parsed;
+/**
+ * A report photo's capture time, from the stamp printed on it.
+ *
+ * Read as Texas wall-clock time -- the camera's -- rather than handed to
+ * `new Date()`, which read it in the zone of whichever machine ran the import:
+ * UTC in production, five or six hours early, and not the same everywhere the
+ * Propertyware backfill was run. A stamp that will not read leaves the time
+ * as the import's own, labelled as a receipt.
+ */
+function reportStampTime(text: string | null) {
+  const at = parseReportPhotoStamp(text);
+  return at
+    ? {
+        capturedAt: at,
+        captureTimeSource: PhotoCaptureTimeSource.REPORT_STAMP,
+        captureTimeZone: PHOTO_STAMP_TIME_ZONE,
+        captureUtcOffsetMinutes: utcOffsetMinutes(at),
+      }
+    : { capturedAt: new Date(), captureTimeSource: PhotoCaptureTimeSource.SERVER_RECEIPT };
+}
+
+/** The extraction index an imported photograph's object was stored under. */
+function storedIndex(storageKey: string) {
+  const match = /\/imported\/[0-9a-f]{16}\/(\d{4})-[0-9a-f]{32}\.jpg$/.exec(storageKey);
+  return match ? Number(match[1]) : null;
 }

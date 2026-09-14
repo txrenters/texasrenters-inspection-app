@@ -19,6 +19,8 @@
  * states and its findings' review states — never stored. A stored copy would
  * drift the moment a finding was approved or a video finished processing.
  */
+import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
+
 export type AreaReviewStatus =
   /** Nothing captured yet. */
   | 'NOT_STARTED'
@@ -145,6 +147,12 @@ export interface AreaPhoto {
   width?: number | null;
   height?: number | null;
   capturedAt: string;
+  /** What `capturedAt` rests on; see `PhotoCaptureTimeSource`. */
+  captureTimeSource?: PhotoCaptureTimeSource | null;
+  /** When the server received the file. */
+  receivedAt?: string;
+  /** SHA-256 of the file as received, when it was recorded. */
+  sha256?: string | null;
   capturedByName: string;
   /** Finding this photo evidences, when it documents a specific one. */
   findingId?: string | null;

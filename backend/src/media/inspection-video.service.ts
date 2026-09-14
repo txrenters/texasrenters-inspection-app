@@ -11,6 +11,7 @@ import {
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
+import { captureTimeForFrame } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import { enterTenant, withSystemTenant } from '../database/tenant-context';
 import { CloudflareStreamService } from './cloudflare-stream.service';
@@ -161,6 +162,8 @@ export class InspectionVideoService {
         streamUid: true,
         readyAt: true,
         durationSeconds: true,
+        // When the phone saved the take, which is where a frame's time comes from.
+        recordedAt: true,
         inspectionId: true,
         inspectionAreaId: true,
         inspectionArea: { select: { propertyAreaId: true } },
@@ -248,6 +251,8 @@ export class InspectionVideoService {
           mimeType: 'image/jpeg',
           sizeBytes: bytes.byteLength,
           idempotencyKey,
+          // The moment in the recording, not the moment a reviewer clicked.
+          ...captureTimeForFrame(media, atMs),
           // The moment is kept so the report can cite it, and so a reviewer can
           // jump back to it in the recording.
           metadata: { videoTimestampMs: atMs, captureSource: 'VIDEO_FRAME_EXTRACTION' },

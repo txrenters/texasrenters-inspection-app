@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { InspectionImportService } from '../src/admin/inspection-import/inspection-import.service';
 
 /**
@@ -59,7 +61,9 @@ const storePhotos = (service: InspectionImportService, photos: unknown[]) =>
         organizationId: string,
         fingerprint: string,
         photos: unknown[],
-      ) => Promise<Array<{ storageKey: string; width: number; height: number; sizeBytes: number }>>;
+      ) => Promise<
+        Array<{ storageKey: string; width: number; height: number; sizeBytes: number; sha256: string }>
+      >;
     }
   ).storePhotos(ORGANIZATION, FINGERPRINT, photos);
 
@@ -145,5 +149,14 @@ describe('storing a report’s photographs', () => {
     expect(first.map((entry) => entry.storageKey)).toEqual(
       second.map((entry) => entry.storageKey),
     );
+  });
+
+  it('fingerprints each photograph in full, so its bytes can be proven unaltered', async () => {
+    // The key carries only the first 32 characters; the record keeps all 64.
+    const { storage } = storageDouble();
+    const [stored] = await storePhotos(serviceWith(storage), [photo(7)]);
+
+    expect(stored!.sha256).toBe(createHash('sha256').update(photo(7).bytes).digest('hex'));
+    expect(stored!.storageKey).toContain(stored!.sha256.slice(0, 32));
   });
 });

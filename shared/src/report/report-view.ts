@@ -16,6 +16,7 @@ import type {
   PublicReportChecklistItem,
   PublicReportPhoto,
 } from '../contracts/admin.js';
+import { formatPhotoStamp } from '../contracts/photo-capture-time.js';
 
 export type ReportSeverity = 'HIGH' | 'MEDIUM' | 'LOW';
 
@@ -115,25 +116,17 @@ function formatDay(value?: string | null) {
   }).format(date);
 }
 
-/** Photo captions carry a capture time, matching the legacy report's stamps. */
-function formatStamp(value?: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'UTC',
-  }).format(date);
-}
-
 export interface ReportPhotoView {
   id: string;
   caption: string | null;
   notes: string | null;
+  /**
+   * The capture time drawn on the photograph, in Texas time with its zone.
+   *
+   * Null when the time's origin is not known: a stamp on evidence has to be
+   * right or absent. It used to print every photograph's time in UTC with no
+   * zone, which read five or six hours late in Houston.
+   */
   stamp: string | null;
   contentPath: string;
 }
@@ -313,7 +306,7 @@ function mapPhoto(photo: PublicReportPhoto): ReportPhotoView {
     id: photo.id,
     caption: photo.label?.trim() || null,
     notes: photo.notes?.trim() || null,
-    stamp: formatStamp(photo.capturedAt),
+    stamp: formatPhotoStamp(photo.capturedAt, photo.captureTimeSource),
     contentPath: photo.contentPath,
   };
 }

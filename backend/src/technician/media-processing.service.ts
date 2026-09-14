@@ -30,6 +30,7 @@ import {
   requestDeepgramTranscriptionFromUrl,
 } from './deepgram-transcription';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
+import { captureTimeForFrame } from '../common/photo-capture-time';
 
 const PROMPT_VERSION = '3';
 const SCHEMA_VERSION = '1';
@@ -236,6 +237,9 @@ export class MediaProcessingService implements OnModuleInit {
           processingStatus: true,
           // Needed to cut technician-marked frames out of the video below.
           captureSummary: true,
+          // And to say when each of those frames was: the take's end, less its
+          // length, plus the marker.
+          recordedAt: true,
           inspectionAreaId: true,
           technicianId: true,
           organizationId: true,
@@ -454,6 +458,7 @@ export class MediaProcessingService implements OnModuleInit {
       inspectionAreaId: string;
       technicianId: string;
       captureSummary: unknown;
+      recordedAt: Date | null;
     },
     organizationId: string,
   ) {
@@ -614,6 +619,7 @@ export class MediaProcessingService implements OnModuleInit {
       inspectionAreaId: string;
       technicianId: string;
       captureSummary: unknown;
+      recordedAt: Date | null;
     },
   ) {
     const markers = readFrameMarkers(media.captureSummary, media.durationSeconds);
@@ -686,6 +692,7 @@ export class MediaProcessingService implements OnModuleInit {
               mimeType: 'image/jpeg',
               sizeBytes: bytes.size,
               idempotencyKey,
+              ...captureTimeForFrame(media, atMs),
               metadata: {
                 captureSource: 'VIDEO_FRAME_EXTRACTION',
                 videoTimestampMs: atMs,

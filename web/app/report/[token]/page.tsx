@@ -217,7 +217,7 @@ function Room({ room }: { room: ReportRoomView }) {
           {room.photos.map((photo) => (
             <figure className="space-y-1.5 print:break-inside-avoid" key={photo.id}>
               <a
-                className="focus-visible:ring-ring/50 block overflow-hidden rounded-lg border focus-visible:ring-[3px] focus-visible:outline-none"
+                className="focus-visible:ring-ring/50 relative block overflow-hidden rounded-lg border focus-visible:ring-[3px] focus-visible:outline-none"
                 href={photoUrl(photo.contentPath, FULL_WIDTH)}
                 rel="noreferrer"
                 target="_blank"
@@ -230,13 +230,19 @@ function Room({ room }: { room: ReportRoomView }) {
                   loading="lazy"
                   src={photoUrl(photo.contentPath, THUMB_WIDTH)}
                 />
-              </a>
-              <figcaption className="space-y-0.5">
-                {photo.caption ? <p className="text-xs font-medium">{photo.caption}</p> : null}
+                {/* On the photograph, as the office's timestamp-camera reports
+                    print it, in Texas time with its zone. */}
                 {photo.stamp ? (
-                  <p className="text-muted-foreground text-xs">{photo.stamp}</p>
+                  <span className="pointer-events-none absolute bottom-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white tabular-nums">
+                    {photo.stamp}
+                  </span>
                 ) : null}
-              </figcaption>
+              </a>
+              {photo.caption ? (
+                <figcaption>
+                  <p className="text-xs font-medium">{photo.caption}</p>
+                </figcaption>
+              ) : null}
             </figure>
           ))}
         </div>

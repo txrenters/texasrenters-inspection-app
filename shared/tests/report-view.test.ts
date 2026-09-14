@@ -70,6 +70,7 @@ describe('inspection report view model', () => {
             label: 'Wall',
             notes: null,
             capturedAt: '2026-07-23T16:12:17.000Z',
+            captureTimeSource: 'DEVICE_CLOCK',
             width: 1200,
             height: 900,
             contentPath: '/api/v1/reports/tok/photos/photo-1',
@@ -81,7 +82,8 @@ describe('inspection report view model', () => {
     expect(view.rooms).toHaveLength(1);
     expect(view.rooms[0].findings.map((finding) => finding.id)).toEqual(['high', 'medium', 'low']);
     expect(view.rooms[0].photos[0].caption).toBe('Wall');
-    expect(view.rooms[0].photos[0].stamp).toBe('Jul 23, 2026, 4:12 PM');
+    // Texas time, to the second, with its zone -- not the UTC it used to print.
+    expect(view.rooms[0].photos[0].stamp).toBe('Jul 23, 2026, 11:12:17 AM CDT');
     expect(view.rooms[0].hasEvidence).toBe(true);
     expect(view.summary.headline).toBe('3 findings across 1 room');
     expect(view.summary.severityCounts.map((entry) => entry.count)).toEqual([1, 1, 1]);

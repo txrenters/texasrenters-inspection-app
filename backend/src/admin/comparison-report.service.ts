@@ -188,6 +188,7 @@ export class ComparisonReportService {
                 label: true,
                 notes: true,
                 capturedAt: true,
+                captureTimeSource: true,
                 width: true,
                 height: true,
                 checklistItem: { select: { label: true } },
@@ -258,6 +259,7 @@ export class ComparisonReportService {
           checklistItem: photo.checklistItem?.label ?? null,
           notes: photo.notes,
           capturedAt: photo.capturedAt.toISOString(),
+          captureTimeSource: photo.captureTimeSource,
           width: photo.width,
           height: photo.height,
           // The authenticated console route. This is the only field a share-link
