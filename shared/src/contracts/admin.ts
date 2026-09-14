@@ -791,6 +791,18 @@ export interface PublicReportChecklistItem {
   isUndamaged: boolean | null;
   isWorking: boolean | null;
   comment?: string | null;
+  /**
+   * How the item is answered, and the answer, when it is not a three-axis
+   * verdict.
+   *
+   * An occupied inspection asks two questions per room -- "Room condition",
+   * "Overall condition" -- and stores the chosen option here with all three
+   * axes null. Without it the report printed both rows empty. Sent only for
+   * occupied items; absent means a STATUS row, which is every report from
+   * before this.
+   */
+  responseType?: 'STATUS' | 'READING' | 'TEXT' | 'CHOICE';
+  textValue?: string | null;
 }
 
 export interface PublicInspectionReport {

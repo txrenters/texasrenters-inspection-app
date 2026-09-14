@@ -46,7 +46,27 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
     );
 
   const report = (await response.json()) as PublicInspectionReport;
-  const pdf = await renderReportPdf(report, { apiOrigin: origin, signal: request.signal });
+  /**
+   * A render that throws is logged with its stack and answered in words.
+   *
+   * Left to Next, it logged one line -- `[Error: unsupported number:
+   * -1.9064433873226668e+21]`, naming no file -- and the browser showed "This
+   * page isn't working". That is how every report past ten pages failed to
+   * download for as long as it did.
+   */
+  let pdf: Buffer;
+  try {
+    pdf = await renderReportPdf(report, { apiOrigin: origin, signal: request.signal });
+  } catch (error) {
+    console.error('report_pdf_render_failed', error);
+    return NextResponse.json(
+      {
+        code: 'REPORT_PDF_FAILED',
+        message: 'The PDF could not be generated. The report page itself can still be printed.',
+      },
+      { status: 500 },
+    );
+  }
 
   return new NextResponse(new Uint8Array(pdf), {
     headers: {

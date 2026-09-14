@@ -106,6 +106,9 @@ function AxisCell({ value }: { value: string }) {
 }
 
 function Room({ room }: { room: ReportRoomView }) {
+  // An occupied room answers each question once. Heading it with three verdict
+  // columns it never fills is what made its answers look missing.
+  const answersOnly = room.checklist.every((row) => row.kind === 'ANSWER');
   return (
     // `print:break-inside-avoid`: a page break between a room's verdicts and
     // the photographs proving them is what makes a printed report hard to read.
@@ -157,9 +160,17 @@ function Room({ room }: { room: ReportRoomView }) {
             <TableHeader className="bg-muted lg:static print:table-header-group">
               <TableRow className="hover:bg-transparent">
                 <TableHead scope="col">Room / item</TableHead>
-                <TableHead scope="col">Clean</TableHead>
-                <TableHead scope="col">Undamaged</TableHead>
-                <TableHead scope="col">Working</TableHead>
+                {answersOnly ? (
+                  <TableHead colSpan={3} scope="col">
+                    Condition
+                  </TableHead>
+                ) : (
+                  <>
+                    <TableHead scope="col">Clean</TableHead>
+                    <TableHead scope="col">Undamaged</TableHead>
+                    <TableHead scope="col">Working</TableHead>
+                  </>
+                )}
                 <TableHead scope="col">Comments</TableHead>
               </TableRow>
             </TableHeader>
@@ -178,9 +189,19 @@ function Room({ room }: { room: ReportRoomView }) {
                   {/* Spoken as "Not assessed" so a blank cell is not silence to a
                       screen reader — the distinction from "No" matters as much
                       aloud as it does in print. */}
-                  <AxisCell value={row.clean} />
-                  <AxisCell value={row.undamaged} />
-                  <AxisCell value={row.working} />
+                  {row.kind === 'ANSWER' ? (
+                    // One answer where the three verdicts would be, so the
+                    // Comments column still lines up down the page.
+                    <TableCell className="py-3 align-top font-semibold" colSpan={3}>
+                      {row.answer}
+                    </TableCell>
+                  ) : (
+                    <>
+                      <AxisCell value={row.clean} />
+                      <AxisCell value={row.undamaged} />
+                      <AxisCell value={row.working} />
+                    </>
+                  )}
                   <TableCell className="text-muted-foreground py-3 align-top text-xs leading-relaxed">
                     {row.comment}
                   </TableCell>

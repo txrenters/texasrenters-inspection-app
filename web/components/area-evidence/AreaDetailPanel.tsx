@@ -17,7 +17,7 @@ import { usePermissions } from '@/lib/auth';
 import { formatDateTime, humanize } from '@/lib/format';
 import { useAdminMutations, useAreaEvidence } from '@/lib/queries';
 
-import { AreaConditionChecklist } from './AreaConditionChecklist';
+import { AreaConditionChecklist, isChecklistItemAssessed } from './AreaConditionChecklist';
 import { EvidenceViewer, type EvidenceViewerItem } from './EvidenceViewer';
 import { LazyPhoto, captureLabel } from './LazyPhoto';
 import { RecordingMarkers } from './RecordingMarkers';
@@ -434,9 +434,9 @@ export function AreaDetailPanel({
   // An item counts as assessed once any one axis is answered. Requiring all
   // three would report real work as missing — the printed reports the office
   // issues contain exactly such partial rows.
-  const checklistAssessed = checklist.filter(
-    (item) => item.isClean !== null || item.isUndamaged !== null || item.isWorking !== null,
-  ).length;
+  // The panel's own rule, so the tab cannot disagree with it: an occupied
+  // room's answers are not axes, and counting only axes read "0/2" over "2 of 2".
+  const checklistAssessed = checklist.filter(isChecklistItemAssessed).length;
   // The required walkthrough, separated so it can be shown at full width. An
   // area should only ever have one; `find` takes the first if data says
   // otherwise rather than rendering two full-width players.

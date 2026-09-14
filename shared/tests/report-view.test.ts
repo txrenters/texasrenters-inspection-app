@@ -246,3 +246,49 @@ describe('explaining a failed checklist row', () => {
     expect(row.comment).toBe('No smoke alarm observed.');
   });
 });
+
+/**
+ * An occupied room answers two questions -- "Room condition", "Overall
+ * condition" -- with one chosen option each, and all three axes null.
+ *
+ * The report used to print both rows with every cell empty, which read as a
+ * room nobody assessed.
+ */
+describe('a checklist row answered with one choice', () => {
+  const rowsFor = (checklist: PublicInspectionReport['rooms'][number]['checklist']) =>
+    buildReportView(report({ rooms: [{ ...ROOM, checklist }] })).rooms[0].checklist;
+
+  const answered = (textValue: string | null) => ({
+    id: 'occ-1',
+    label: 'Room condition',
+    isClean: null,
+    isUndamaged: null,
+    isWorking: null,
+    comment: null,
+    responseType: 'CHOICE' as const,
+    textValue,
+  });
+
+  it('prints the answer in place of the three verdicts', () => {
+    expect(rowsFor([answered('Clean')])[0]).toMatchObject({
+      kind: 'ANSWER',
+      answer: 'Clean',
+      clean: '',
+      undamaged: '',
+      working: '',
+    });
+  });
+
+  it('prints nothing for a question left unanswered, rather than a guess', () => {
+    expect(rowsFor([answered(null)])[0]).toMatchObject({ kind: 'ANSWER', answer: '' });
+  });
+
+  it('keeps a three-axis row as it was, including one from a report with no response type', () => {
+    const [row] = rowsFor([
+      { id: 'item-1', label: 'Walls', isClean: true, isUndamaged: false, isWorking: null },
+    ]);
+    expect(row).toMatchObject({ kind: 'AXES', answer: '' });
+    expect(row.clean).not.toBe('');
+  });
+});
+

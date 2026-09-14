@@ -340,3 +340,88 @@ describe('inspection report PDF', () => {
     expect(reportFileName(REPORT)).toBe('302-watercrest-harbor-ln-inspection-report.pdf');
   });
 });
+
+/** Every page's text, in order, as a reader of the PDF would see it. */
+async function pageTexts(pdf: Buffer) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const document = await getDocument({ data: new Uint8Array(pdf) }).promise;
+  const pages: string[][] = [];
+  for (let number = 1; number <= document.numPages; number += 1) {
+    const content = await (await document.getPage(number)).getTextContent();
+    pages.push(content.items.map((item) => ('str' in item ? item.str : '')));
+  }
+  return pages;
+}
+
+describe('a long report', () => {
+  /**
+   * Every report past ten pages failed to download.
+   *
+   * The page-number footer inherited the page's unitless line height, which
+   * @react-pdf multiplied again on each relayout until its position passed
+   * pdfkit's 1e21 limit: `unsupported number: -1.9064433873226668e+21`, and
+   * "This page isn't working" in the browser. Shorter reports rendered, with
+   * the footer pushed off every page.
+   */
+  it('renders past ten pages and numbers every one of them', async () => {
+    mockPhotoFetch();
+    const rooms = Array.from({ length: 60 }, (_, index) => ({
+      ...REPORT.rooms[0]!,
+      id: `area-${index}`,
+      name: `Room ${index + 1}`,
+    }));
+
+    const pdf = await renderReportPdf(
+      { ...REPORT, rooms, findings: [], photos: [] },
+      { apiOrigin: 'http://x' },
+    );
+
+    const pages = await pageTexts(pdf);
+    expect(pages.length).toBeGreaterThan(11);
+    pages.forEach((text, index) => {
+      expect(text).toContain(`Page ${index + 1} of ${pages.length}`);
+    });
+  }, 120_000);
+});
+
+describe("an occupied room's answers", () => {
+  it('prints them under a Condition heading instead of three empty verdict columns', async () => {
+    mockPhotoFetch();
+    const answered = (id: string, label: string, textValue: string) => ({
+      id,
+      label,
+      isClean: null,
+      isUndamaged: null,
+      isWorking: null,
+      comment: null,
+      responseType: 'CHOICE' as const,
+      textValue,
+    });
+
+    const pdf = await renderReportPdf(
+      {
+        ...REPORT,
+        rooms: [
+          {
+            ...REPORT.rooms[0]!,
+            name: 'Entrance',
+            checklist: [
+              answered('occ-1', 'Room condition', 'Clean'),
+              answered('occ-2', 'Overall condition', 'Good'),
+            ],
+          },
+        ],
+        findings: [],
+        photos: [],
+      },
+      { apiOrigin: 'http://x' },
+    );
+
+    const text = (await pageTexts(pdf)).flat();
+    expect(text).toContain('Condition');
+    expect(text).toContain('Clean');
+    expect(text).toContain('Good');
+    // No verdict columns over rows that have no verdicts.
+    expect(text).not.toContain('Undam.');
+  }, 60_000);
+});

@@ -155,6 +155,9 @@ const styles = StyleSheet.create({
     fontSize: 7.5,
   },
   checklistAxis: { width: '11%', textAlign: 'center' },
+  // One answer where the three verdicts would be: the width of all three, so
+  // the Comments column still lines up with the rows above and below it.
+  checklistAnswer: { width: '33%', textAlign: 'center', fontWeight: 700 },
   checklistPass: { color: C.pass, fontWeight: 700 },
   checklistFail: { color: C.fail, fontWeight: 700 },
   checklistComment: { width: '35%', color: C.muted },
@@ -195,6 +198,23 @@ const styles = StyleSheet.create({
     paddingTop: 7,
     fontSize: 7.5,
     color: C.muted,
+    /**
+     * Never the page's line height.
+     *
+     * @react-pdf re-resolves a node's style on every relayout, and treats an
+     * already-resolved line height as unitless again, so it multiplies by the
+     * font size once more each pass. Ordinary text keeps its measured lines;
+     * this footer's page number is a `render` text, re-measured every time, so
+     * the inherited `lineHeight: 1.5` grew roughly 7.5-fold per pass. It was
+     * off the page from page one, which is why no PDF ever showed "Page N of
+     * M", and past pdfkit's 1e21 limit by page eleven: every report that long
+     * failed to download with `unsupported number: -1.9064433873226668e+21`.
+     * Upstream: diegomura/react-pdf#2988 and #3277, both open.
+     *
+     * An empty string is the stylesheet's "unset" -- text falls back to the
+     * font's own line height. A number or a point value here still grows.
+     */
+    lineHeight: '',
   },
 
   grow: { flexGrow: 1, flexBasis: 0 },
@@ -261,13 +281,22 @@ function axisTone(value: string) {
 
 function ChecklistTable({ room }: { room: ReportRoomView }) {
   if (!room.checklist.length) return null;
+  // An occupied room answers each question once. Heading it with three verdict
+  // columns it never fills is what made its answers look missing.
+  const answersOnly = room.checklist.every((row) => row.kind === 'ANSWER');
   return (
     <View style={styles.checklistTable}>
       <View style={styles.checklistHeadRow}>
         <Text style={[styles.checklistHeadCell, styles.checklistLabel]}>Room / item</Text>
-        <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Clean</Text>
-        <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Undam.</Text>
-        <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Working</Text>
+        {answersOnly ? (
+          <Text style={[styles.checklistHeadCell, styles.checklistAnswer]}>Condition</Text>
+        ) : (
+          <>
+            <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Clean</Text>
+            <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Undam.</Text>
+            <Text style={[styles.checklistHeadCell, styles.checklistAxis]}>Working</Text>
+          </>
+        )}
         <Text style={[styles.checklistHeadCell, styles.checklistComment]}>Comments</Text>
       </View>
       {room.checklist.map((row) => (
@@ -276,17 +305,23 @@ function ChecklistTable({ room }: { room: ReportRoomView }) {
         // move it — it clips it, losing the explanation the column exists for.
         <View key={row.id} style={styles.checklistRow}>
           <Text style={[styles.checklistCell, styles.checklistLabel]}>{row.label}</Text>
-          {/* Colour is an accent on the letter, never a substitute for it —
-              the table has to survive a monochrome print. */}
-          <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.clean)]}>
-            {row.clean}
-          </Text>
-          <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.undamaged)]}>
-            {row.undamaged}
-          </Text>
-          <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.working)]}>
-            {row.working}
-          </Text>
+          {row.kind === 'ANSWER' ? (
+            <Text style={[styles.checklistCell, styles.checklistAnswer]}>{row.answer}</Text>
+          ) : (
+            <>
+              {/* Colour is an accent on the letter, never a substitute for it —
+                  the table has to survive a monochrome print. */}
+              <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.clean)]}>
+                {row.clean}
+              </Text>
+              <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.undamaged)]}>
+                {row.undamaged}
+              </Text>
+              <Text style={[styles.checklistCell, styles.checklistAxis, axisTone(row.working)]}>
+                {row.working}
+              </Text>
+            </>
+          )}
           <Text style={[styles.checklistCell, styles.checklistComment]}>{row.comment}</Text>
         </View>
       ))}
