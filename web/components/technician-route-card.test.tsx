@@ -30,6 +30,8 @@ const STOP = {
 const REFUSED: TechnicianRoute = {
   technicianId: 'tech-1',
   origin: { latitude: 8.48164, longitude: 123.806345, recordedAt: new Date().toISOString() },
+  originKind: 'LIVE',
+  arrivals: [],
   stops: [STOP],
   legs: [],
   totalDistanceMeters: 0,
@@ -71,6 +73,8 @@ describe('a route the planner produced', () => {
   const PLANNED: TechnicianRoute = {
     ...REFUSED,
     origin: { latitude: 29.75, longitude: -95.37, recordedAt: new Date().toISOString() },
+    originKind: 'LIVE',
+  arrivals: [],
     legs: [
       { fromStopId: null, toStopId: 'inspection-1', distanceMeters: 20000, durationSeconds: 1200 },
     ],

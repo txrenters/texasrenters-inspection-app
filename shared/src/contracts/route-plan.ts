@@ -1,3 +1,4 @@
+import type { StopArrival } from './live-route.js';
 /**
  * Ordering a technician's day.
  *
@@ -202,8 +203,29 @@ export interface RouteLeg {
  */
 export interface TechnicianRoute {
   technicianId: string;
-  /** Where the technician was when this was calculated, and when that was. */
-  origin: { latitude: number; longitude: number; recordedAt: string } | null;
+  /**
+   * Where the route starts, and when that position was true.
+   *
+   * `recordedAt` is null for a home origin, which describes where somebody
+   * lives rather than where they were at a moment.
+   */
+  origin: { latitude: number; longitude: number; recordedAt: string | null } | null;
+  /**
+   * Which kind of starting point the route was drawn from.
+   *
+   * Carried so the console can say so. A route from somebody's house and a
+   * route from where they are standing are different claims, and drawing them
+   * identically invites a dispatcher to act on the wrong one.
+   */
+  originKind: RouteOriginKind | null;
+  /**
+   * When each stop still ahead is expected, recomputed on every read.
+   *
+   * Recomputed rather than stored with the drawn route, because it moves with
+   * the technician while the line itself only changes on a material change --
+   * and timing a drawn route from a new position costs nothing.
+   */
+  arrivals: StopArrival[];
   stops: RouteStop[];
   legs: RouteLeg[];
   totalDistanceMeters: number;
@@ -301,4 +323,68 @@ export interface TechnicianAssignments {
   technicianId: string;
   displayName: string;
   stops: AssignedStop[];
+}
+
+/**
+ * Where a day's route starts.
+ *
+ * - `LIVE` — the handset reported in the last few minutes, so this is where
+ *   they are.
+ * - `LAST_KNOWN` — they have reported today but gone quiet. They are out in the
+ *   field somewhere, most likely indoors at a property, and the last place they
+ *   were seen is a far better start than their house.
+ * - `HOME` — nothing today yet. They have not set off, so the day starts from
+ *   where they live.
+ */
+export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'HOME';
+
+/**
+ * How recent a fix must be to count as where somebody *is*.
+ *
+ * Five minutes. The tracker delivers every fifteen seconds while moving and the
+ * re-arm restores a stopped one within two, so a healthy handset is never quiet
+ * this long while travelling. Tighter would flap between live and last-known
+ * every time somebody stood still in a hallway; looser would route from a
+ * position that stopped being true a while ago.
+ */
+export const LIVE_POSITION_WITHIN_MS = 5 * 60_000;
+
+/**
+ * The starting point for a route, or null when there is none worth drawing.
+ *
+ * Not "the newest position, however old". That was the previous rule, and it
+ * started Monday's route from wherever a phone happened to be at four in the
+ * morning on Saturday.
+ *
+ * Only a fix from **today** can be a live or last-known origin: yesterday's
+ * last position describes yesterday. Before the first fix of the day the route
+ * starts from home, which is the only honest answer to "where does this day
+ * begin" for somebody who has not begun it.
+ *
+ * Never falls back from a position today to home. A technician whose phone has
+ * gone quiet mid-afternoon inside a property is not at home, and redrawing their
+ * remaining route from their front door would be confidently wrong.
+ */
+export function chooseRouteOrigin(
+  latestFix: { latitude: number; longitude: number; recordedAt: string } | null,
+  home: { latitude: number; longitude: number } | null,
+  dayStart: Date,
+  now: number = Date.now(),
+): { point: { latitude: number; longitude: number; recordedAt: string | null }; kind: RouteOriginKind } | null {
+  const fixAt = latestFix ? Date.parse(latestFix.recordedAt) : Number.NaN;
+  const fixToday = Number.isFinite(fixAt) && fixAt >= dayStart.getTime() && fixAt <= now;
+
+  if (latestFix && fixToday) {
+    return {
+      point: {
+        latitude: latestFix.latitude,
+        longitude: latestFix.longitude,
+        recordedAt: latestFix.recordedAt,
+      },
+      kind: now - fixAt <= LIVE_POSITION_WITHIN_MS ? 'LIVE' : 'LAST_KNOWN',
+    };
+  }
+
+  if (home) return { point: { ...home, recordedAt: null }, kind: 'HOME' };
+  return null;
 }

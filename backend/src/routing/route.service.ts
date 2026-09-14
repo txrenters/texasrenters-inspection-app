@@ -1,7 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InspectionStatus } from '@prisma/client';
 import {
+  ASSUMED_VISIT_SECONDS,
+  chooseRouteOrigin,
+  type DrawnRoute,
+  estimateArrivals,
   haversineMeters,
+  needsReroute,
+  OFF_ROUTE_M,
+  projectOntoPath,
   type RouteLeg,
   type RouteStop,
   shortestRouteOrder,
@@ -10,6 +17,7 @@ import {
 } from '@texasrenters/shared';
 
 import { PrismaService } from '../common/prisma.service';
+import { businessDayBounds } from '../common/business-day';
 import { GoogleRoutesClient } from './google-routes.client';
 import type { GeoPoint } from './osrm.client';
 import { OsrmClient } from './osrm.client';
@@ -21,8 +29,20 @@ import { OsrmClient } from './osrm.client';
  * is no `sequence` column, and adding one would assert that the technician is
  * expected to follow this, which is a dispatch policy nobody has set. And it
  * does not promise arrival times: `Inspection.scheduledAt` is a date with no
- * time of day, so no appointment exists to be early or late for.
+ * time of day, so no appointment exists to be early or late for. The arrivals
+ * it does give are estimates for the day in progress -- when somebody would get
+ * to each stop, driving on from where they are now -- and nothing more.
  */
+
+/**
+ * How many drawn routes are kept before the oldest is forgotten.
+ *
+ * One per technician per day anybody looked at. Unbounded, the cache only ever
+ * grew: every date opened on the map stayed in memory, geometry and all, until
+ * a deploy happened to restart the process. A hundred covers every technician's
+ * yesterday, today and tomorrow several times over.
+ */
+export const MAX_DRAWN_ROUTES = 100;
 
 /**
  * Work that is finished or abandoned is not somewhere to drive to.
@@ -73,8 +93,61 @@ function nearestByAir(
   return best;
 }
 
+/**
+ * How far down its drawn line a route's origin is, 0 to 1.
+ *
+ * A route is drawn once and reused for minutes, so its line starts where the
+ * technician *was*. Projecting where they are now onto it times the rest of the
+ * day from where they have since got to. A route from home has not been started.
+ * A position nowhere near the line counts as not started either, rather than as
+ * whichever point of the line happens to be closest to it.
+ */
+function progressAlong(route: TechnicianRoute): number {
+  if (route.originKind === 'HOME' || !route.origin || route.geometry.length < 2) return 0;
+  const projected = projectOntoPath(route.origin, route.geometry);
+  if (!projected || projected.totalMeters <= 0 || projected.offsetMeters > OFF_ROUTE_M) return 0;
+  return projected.alongMeters / projected.totalMeters;
+}
+
+/**
+ * The route with an arrival time for every stop still ahead.
+ *
+ * Only for the day in progress -- see `planDay`. On-site time is the assumed
+ * visit length rather than this technician's measured one: measuring it needs
+ * the day's trail, and the timeline service that reads the trail already
+ * depends on this one. The day summary shows the measured projection; these are
+ * the per-stop estimates along the line.
+ */
+function withArrivals(route: TechnicianRoute, inProgress: boolean): TechnicianRoute {
+  return {
+    ...route,
+    arrivals: inProgress
+      ? estimateArrivals(route, progressAlong(route), ASSUMED_VISIT_SECONDS)
+      : [],
+  };
+}
+
 @Injectable()
 export class RouteService {
+  /**
+   * Routes already drawn, per technician per day.
+   *
+   * In memory, because there is one backend process and a restart costs one
+   * redraw per technician. Held with what it was drawn *from* -- the origin kind
+   * and the stops -- which is what `needsReroute` compares against.
+   */
+  private readonly drawn = new Map<string, { route: TechnicianRoute; drawn: DrawnRoute }>();
+
+  /**
+   * Draws already under way, so two callers asking at once share one.
+   *
+   * The route panel and the day summary both read a technician's route, on
+   * their own timers. When those land together on a day that needs redrawing,
+   * each would otherwise start its own draw -- two billed Google requests for
+   * one answer, on exactly the occasions a redraw happens.
+   */
+  private readonly inFlight = new Map<string, Promise<TechnicianRoute>>();
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(OsrmClient) private readonly osrm: OsrmClient,
@@ -125,10 +198,10 @@ export class RouteService {
     organizationId: string,
     date: Date,
   ): Promise<TechnicianAssignments[]> {
-    const dayStart = new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-    );
-    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    // The same Texas day `planDay` reads. The list of who is on the day and
+    // the route drawn for each of them must never disagree about which stops
+    // that is -- the map now hides anybody this list has no stops for.
+    const { start: dayStart, end: dayEnd } = businessDayBounds(date);
 
     const assignments = await this.prisma.inspectionAssignment.findMany({
       where: {
@@ -206,10 +279,15 @@ export class RouteService {
     technicianId: string,
     date: Date,
   ): Promise<TechnicianRoute> {
-    const dayStart = new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-    );
-    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    /**
+     * The day in Texas, not in UTC.
+     *
+     * UTC midnight is 6 or 7pm Texas the previous evening, so from dinner time
+     * onward a UTC-bounded "today" held tomorrow's stops -- the same bug the
+     * technician dashboard had and lost in #196. It also decides which
+     * positions count as today's, which is now what picks the route's origin.
+     */
+    const { start: dayStart, end: dayEnd } = businessDayBounds(date);
 
     const assignments = await this.prisma.inspectionAssignment.findMany({
       where: {
@@ -295,23 +373,65 @@ export class RouteService {
       });
     }
 
-    const position = await this.prisma.technicianLocationPing.findFirst({
-      where: { organizationId, technicianId },
-      orderBy: { recordedAt: 'desc' },
-      select: { latitude: true, longitude: true, recordedAt: true },
-    });
+    const now = Date.now();
+    const [position, profile] = await Promise.all([
+      this.prisma.technicianLocationPing.findFirst({
+        // That day's newest position, not the newest there is. Opening last
+        // Tuesday must not start its route from wherever somebody is today.
+        where: { organizationId, technicianId, recordedAt: { gte: dayStart, lt: dayEnd } },
+        orderBy: { recordedAt: 'desc' },
+        select: { latitude: true, longitude: true, recordedAt: true },
+      }),
+      // Scoped to the organization like the position above. The admin route
+      // endpoint takes any technician id, and an empty day for somebody in
+      // another organization still returns its origin -- their home.
+      this.prisma.technicianPlanningProfile.findFirst({
+        where: { organizationId, technicianId },
+        select: { homeLatitude: true, homeLongitude: true },
+      }),
+    ]);
 
-    const origin = position
-      ? {
-          latitude: position.latitude.toNumber(),
-          longitude: position.longitude.toNumber(),
-          recordedAt: position.recordedAt.toISOString(),
-        }
-      : null;
+    /**
+     * Where the day starts -- see `chooseRouteOrigin`.
+     *
+     * This was "the newest position, however old", which started Monday's route
+     * from wherever a phone happened to be at four in the morning on Saturday.
+     */
+    const chosen = chooseRouteOrigin(
+      position
+        ? {
+            latitude: position.latitude.toNumber(),
+            longitude: position.longitude.toNumber(),
+            recordedAt: position.recordedAt.toISOString(),
+          }
+        : null,
+      profile?.homeLatitude && profile.homeLongitude
+        ? {
+            latitude: profile.homeLatitude.toNumber(),
+            longitude: profile.homeLongitude.toNumber(),
+          }
+        : null,
+      dayStart,
+      now,
+    );
+    const origin = chosen?.point ?? null;
+    const originKind = chosen?.kind ?? null;
+
+    /**
+     * Arrival times belong only to the day that is happening.
+     *
+     * They are counted from now. Opened on tomorrow, that printed this
+     * afternoon's clock times against tomorrow's stops -- and a forecast day has
+     * no departure time to count from instead. It keeps its drive times and
+     * gets no arrivals.
+     */
+    const inProgress = dayStart.getTime() <= now && now < dayEnd.getTime();
 
     const empty: TechnicianRoute = {
       technicianId,
       origin,
+      originKind,
+      arrivals: [],
       stops: routable,
       legs: [],
       totalDistanceMeters: 0,
@@ -326,8 +446,80 @@ export class RouteService {
     // Without a position there is no starting point, and without at least one
     // stop there is nothing to order. Both return the stops unordered rather
     // than an error: the day is still known, it simply has no route yet.
-    if (!origin || !routable.length) return empty;
+    if (!origin || !routable.length) return withArrivals(empty, inProgress);
 
+    /**
+     * Reuse the drawn route unless the day has changed enough to redraw it.
+     *
+     * Asking Google is a billed request, and the console used to make two of
+     * them every two minutes for as long as a technician was selected --
+     * whether or not anything about their day had moved. `needsReroute`
+     * decides; the arrival times are recomputed on every call regardless,
+     * because timing a drawn route from where somebody now stands is free.
+     */
+    const key = `${organizationId}:${technicianId}:${dayStart.toISOString()}`;
+    const stopIds = routable.map((stop) => stop.inspectionId);
+    const cached = this.drawn.get(key);
+    const decision = needsReroute(
+      cached?.drawn ?? null,
+      { originKind, stopIds, position: originKind === 'LIVE' ? origin : null },
+      now,
+    );
+    if (!decision.reroute && cached)
+      return withArrivals({ ...cached.route, origin, originKind }, inProgress);
+
+    /**
+     * Callers share a draw only when they are asking for the same one.
+     *
+     * Keyed by the day alone, a caller whose stop had just been finished could
+     * join a draw still under way for the old stops, get that route back, and
+     * remember it as drawn for the new ones -- after which nothing noticed the
+     * finished stop was still on it. A home route never redraws for age, so
+     * that lasted the rest of the day.
+     */
+    const flightKey = `${key}:${originKind}:${[...stopIds].sort().join(',')}`;
+    const pending =
+      this.inFlight.get(flightKey) ??
+      this.drawRoute(technicianId, origin, originKind, routable, unroutable, empty).finally(() =>
+        this.inFlight.delete(flightKey),
+      );
+    this.inFlight.set(flightKey, pending);
+    const route = await pending;
+
+    /**
+     * Only a route that actually drew is remembered.
+     *
+     * A draw that failed -- an outage, a quota, a position off the network --
+     * comes back with no legs. Caching that would pin an empty route in place
+     * for five minutes after the router recovered, which reads on the map
+     * exactly like routing being broken.
+     */
+    this.drawn.delete(key);
+    if (route.legs.length) {
+      // Deleted and re-added rather than overwritten, so the map stays in
+      // drawn order and the bound below forgets the longest-untouched day.
+      this.drawn.set(key, {
+        route,
+        drawn: { originKind, stopIds, geometry: route.geometry, computedAt: Date.now() },
+      });
+      for (const oldest of this.drawn.keys()) {
+        if (this.drawn.size <= MAX_DRAWN_ROUTES) break;
+        this.drawn.delete(oldest);
+      }
+    }
+
+    return withArrivals(route, inProgress);
+  }
+
+  /** Orders and draws the route through Google or OSRM. The expensive part. */
+  private async drawRoute(
+    technicianId: string,
+    origin: NonNullable<TechnicianRoute['origin']>,
+    originKind: TechnicianRoute['originKind'],
+    routable: RouteStop[],
+    unroutable: TechnicianRoute['unroutable'],
+    empty: TechnicianRoute,
+  ): Promise<TechnicianRoute> {
     let stops = routable;
     let matrix = await this.durationsFor([origin, ...stops]);
 
@@ -399,6 +591,8 @@ export class RouteService {
     return {
       technicianId,
       origin,
+      originKind,
+      arrivals: [],
       stops: ordered,
       legs,
       totalDistanceMeters: Math.round(drive.distanceMeters),
