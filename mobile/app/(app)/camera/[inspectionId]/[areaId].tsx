@@ -53,6 +53,7 @@ import {
   type GuidedCaptureSummary,
 } from '@/src/capture/guided-capture';
 import { ConditionPromptSheet } from '@/src/capture/ConditionPromptSheet';
+import { conditionPromptItems, withAxes } from '@/src/capture/condition-answers';
 import { SweepPromptSheet } from '@/src/capture/SweepPromptSheet';
 import { useGuidedCaptureSensor } from '@/src/capture/use-guided-capture';
 import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
@@ -268,6 +269,19 @@ export default function RoomCameraScreen() {
     () => new Map((conditionItems.data ?? []).map((item) => [item.id, item])),
     [conditionItems.data],
   );
+  /**
+   * The items the yes/no prompt may ask: clean / undamaged / working ones.
+   *
+   * It asked every authored item that way, so on an occupied visit it put
+   * "Is it clean?" to "Room condition" and saved the answer over the choice
+   * made on the area screen. A room whose questions are all choices or
+   * readings has nothing here, and its checklist opens as the full sheet,
+   * which renders each kind of question properly.
+   */
+  const promptItems = useMemo(
+    () => conditionPromptItems(conditionItems.data ?? []),
+    [conditionItems.data],
+  );
   const [error, setError] = useState<string | null>(null);
   const setDraft = useDemoStore((state) => state.setDraftRecording);
   const addSnapshot = useDemoStore((state) => state.addSnapshot);
@@ -398,12 +412,12 @@ export default function RoomCameraScreen() {
       if (conditionPromptedRef.current) return;
       conditionPromptedRef.current = true;
       announce('Walkthrough complete. Start the detailed checklist.');
-      if (conditionItems.data?.length) setConditionOpen(true);
+      if (promptItems.length) setConditionOpen(true);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
         () => undefined,
       );
     }
-  }, [conditionItems.data, guidanceState, recording, skipsRoomSweep]);
+  }, [promptItems, guidanceState, recording, skipsRoomSweep]);
 
   // A new recording is a new sweep, so the prompt is owed again.
   useEffect(() => {
@@ -1176,7 +1190,7 @@ export default function RoomCameraScreen() {
                 // which explains itself rather than opening an empty prompt.
                 onLongPress={() => setChecklistOpen(true)}
                 onPress={() =>
-                  conditionItems.data?.length ? setConditionOpen(true) : setChecklistOpen(true)
+                  promptItems.length ? setConditionOpen(true) : setChecklistOpen(true)
                 }
               >
                 <ListChecksIcon size={22} className="text-white" />
@@ -1210,18 +1224,21 @@ export default function RoomCameraScreen() {
           const current = conditionAssessments.get(itemId);
           recordCondition.mutate({
             itemId,
-            assessment: {
-              isClean: current?.isClean ?? null,
-              isUndamaged: current?.isUndamaged ?? null,
-              isWorking: current?.isWorking ?? null,
-              comment: current?.comment ?? null,
-              // The whole assessment every time: the API takes a complete
-              // record, so sending one axis would clear the other two.
-              [axis]: next,
+            // The whole assessment every time: the API takes a complete record,
+            // so sending one axis would clear the other two -- and the reading,
+            // text and choice, which this used to leave out.
+            assessment: withAxes(
+              current,
+              {
+                isClean: current?.isClean ?? null,
+                isUndamaged: current?.isUndamaged ?? null,
+                isWorking: current?.isWorking ?? null,
+                [axis]: next,
+              },
               // Where in the recording it was answered, so the reviewer can
               // jump to the moment instead of scrubbing.
-              videoTimestampSeconds: recording ? secondsRef.current : null,
-            },
+              recording ? secondsRef.current : null,
+            ),
           });
         }}
         onClose={() => setChecklistOpen(false)}
@@ -1254,15 +1271,21 @@ export default function RoomCameraScreen() {
       />
 
       <ConditionPromptSheet
-        items={conditionItems.data ?? []}
+        items={promptItems}
         onClose={() => setConditionOpen(false)}
         onRecord={(itemId, assessment) => {
           recordCondition.mutate({
-            // Read from the ref, not the `seconds` state: the state lags by up
-            // to a second behind the timer, and the whole point is the moment
-            // the technician actually answered.
             itemId,
-            assessment: { ...assessment, videoTimestampSeconds: secondsRef.current },
+            // Only the three answers come from the prompt; the rest is what is
+            // already stored, so answering an item no longer blanks its comment.
+            // The moment is read from the ref, not the `seconds` state, which
+            // lags the timer by up to a second -- and only while filming, since
+            // the prompt can be opened from the button with nothing recording.
+            assessment: withAxes(
+              conditionAssessments.get(itemId),
+              assessment,
+              recording ? secondsRef.current : null,
+            ),
           });
         }}
         saving={recordCondition.isPending}
