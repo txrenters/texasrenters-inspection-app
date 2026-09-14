@@ -58,6 +58,10 @@ function prismaStub(
             }
           : null,
     },
+    // No home set. These cases are about a position OSRM refuses, so the
+    // origin must come from the position -- a home here would quietly route
+    // around the very refusal each test exists to exercise.
+    technicianPlanningProfile: { findFirst: async () => null },
   } as never;
 }
 

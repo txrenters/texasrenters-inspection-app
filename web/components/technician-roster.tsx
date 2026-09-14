@@ -8,7 +8,7 @@ import type {
 } from '@texasrenters/shared';
 
 import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/format';
-import { isPlanned, offRoadNetwork } from '@/lib/route-plan';
+import { arrivalTime, describeOrigin, isPlanned, offRoadNetwork } from '@/lib/route-plan';
 
 /**
  * Who is out, where they were last, and how much work is theirs.
@@ -41,6 +41,24 @@ export interface RosterEntry {
  * work is out with nothing booked. Both are things a dispatcher needs to see,
  * and an inner join would hide exactly the two cases worth asking about.
  */
+/**
+ * Whether a technician belongs on the map for the day being looked at.
+ *
+ * Scheduled work decides it -- not whether their phone is reporting.
+ *
+ * Offline **with** stops stays. The forecast and the drawn route depend on
+ * seeing that technician, and somebody who has not started yet is exactly who a
+ * dispatcher is looking for at eight in the morning.
+ *
+ * Nothing scheduled leaves, online or not. Showing those rows was actively
+ * harmful: the map fits itself to every marker, so an office tester with no
+ * work and a last position in the Philippines dragged the whole view across the
+ * Pacific and away from every Texas stop.
+ */
+export function isOnTheDay(entry: RosterEntry): boolean {
+  return entry.stops.length > 0;
+}
+
 export function buildRoster(
   positions: readonly TechnicianPosition[],
   assignments: readonly TechnicianAssignments[],
@@ -227,6 +245,7 @@ export function TechnicianRoster({
                           {formatDuration(route.totalDurationSeconds)}
                         </span>{' '}
                         driving · {formatDistance(route.totalDistanceMeters)} · suggested order
+                        {describeOrigin(route) ? <> {describeOrigin(route)}</> : null}
                       </p>
                     ) : null}
 
@@ -297,8 +316,16 @@ export function TechnicianRoster({
                               </span>
                             </Row>
                             {leg ? (
-                              <span className="text-muted-foreground shrink-0 tabular-nums">
+                              <span className="text-muted-foreground shrink-0 text-right tabular-nums">
                                 {formatDuration(leg.durationSeconds)}
+                                {/* When they are expected there, recomputed from
+                                    where they are on every refresh. Absent for a
+                                    stop already behind them. */}
+                                {route && arrivalTime(route, stop.inspectionId) ? (
+                                  <span className="text-foreground block">
+                                    {arrivalTime(route, stop.inspectionId)}
+                                  </span>
+                                ) : null}
                               </span>
                             ) : null}
                           </li>

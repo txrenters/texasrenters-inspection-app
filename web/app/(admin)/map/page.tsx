@@ -16,7 +16,7 @@ import {
   useTechnicianTimeline,
 } from '@/lib/queries';
 import { PropertyList } from '@/components/property-list';
-import { buildRoster, TechnicianRoster } from '@/components/technician-roster';
+import { buildRoster, isOnTheDay, TechnicianRoster } from '@/components/technician-roster';
 import { TechnicianDaySummary } from '@/components/technician-day-summary';
 import { DatePicker } from '@/components/ui/date-picker';
 import { businessToday } from '@/lib/clock';
@@ -186,27 +186,39 @@ export default function TechnicianMapPage() {
    * usually opened to answer, and a number answers it without anyone having to
    * click the filter to find out it is empty.
    */
+  /**
+   * The people with work on this day -- see `isOnTheDay`. Everything below
+   * derives from this one set, so the counts on the filter, the rows in the
+   * list and the markers on the map cannot disagree about who is there.
+   */
+  const dayRoster = useMemo(() => roster.filter(isOnTheDay), [roster]);
+
   const presenceCounts = useMemo(() => {
     const now = Date.now();
     let online = 0;
-    for (const entry of roster) if (presenceOf(entry.position, now) === 'ONLINE') online += 1;
-    return { all: roster.length, online, offline: roster.length - online };
-  }, [roster]);
+    for (const entry of dayRoster) if (presenceOf(entry.position, now) === 'ONLINE') online += 1;
+    return { all: dayRoster.length, online, offline: dayRoster.length - online };
+  }, [dayRoster]);
 
   const visibleRoster = useMemo(
     () =>
       presence === 'ALL'
-        ? roster
-        : roster.filter((entry) => presenceOf(entry.position) === presence),
-    [roster, presence],
+        ? dayRoster
+        : dayRoster.filter((entry) => presenceOf(entry.position) === presence),
+    [dayRoster, presence],
   );
 
   // The markers follow the same rule, so the list and the map never disagree
-  // about who is being shown.
+  // about who is being shown -- and a marker for somebody who is offline with
+  // nothing scheduled can no longer pull the map's bounds halfway round the
+  // world.
   const visiblePositions = useMemo(() => {
-    const all = positions.data ?? [];
-    return presence === 'ALL' ? all : all.filter((row) => presenceOf(row) === presence);
-  }, [positions.data, presence]);
+    const onTheDay = new Set(dayRoster.map((entry) => entry.technicianId));
+    return (positions.data ?? []).filter(
+      (row) =>
+        onTheDay.has(row.technicianId) && (presence === 'ALL' || presenceOf(row) === presence),
+    );
+  }, [dayRoster, positions.data, presence]);
 
   // Null when nobody is selected, which the map reads as "show everything at
   // full strength". An empty set is different and means the selected person

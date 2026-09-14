@@ -62,6 +62,8 @@ function entries(stops: AssignedStop[]): RosterEntry[] {
 const REFUSED: TechnicianRoute = {
   technicianId: 'tech-1',
   origin: { latitude: 8.48164, longitude: 123.806345, recordedAt: new Date().toISOString() },
+  originKind: 'LIVE',
+  arrivals: [],
   stops: [
     {
       inspectionId: 'inspection-1',
@@ -146,6 +148,8 @@ describe('a route the planner produced', () => {
   const PLANNED: TechnicianRoute = {
     technicianId: 'tech-1',
     origin: { latitude: 29.75, longitude: -95.37, recordedAt: new Date().toISOString() },
+    originKind: 'LIVE',
+  arrivals: [],
     stops: [
       {
         inspectionId: 'inspection-2',

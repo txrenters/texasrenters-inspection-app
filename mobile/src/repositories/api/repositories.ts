@@ -22,19 +22,20 @@ import {
 } from '../../storage/offline-record-cache';
 import type {
   AddAreaInput,
-  UpdateAreaInput,
   AuthRepository,
   CatalogRepository,
   FindingKind,
   FindingRepository,
   FloorPlanRepository,
+  HomeRepository,
   InspectionListFilters,
   InspectionPage,
   InspectionRepository,
   MediaRepository,
   PropertyRepository,
-  UploadRepository,
   TechnicianDayRoute,
+  UpdateAreaInput,
+  UploadRepository,
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
@@ -1612,4 +1613,48 @@ export class ApiFindingRepository implements FindingRepository {
   edit = async () => unavailable('Technicians cannot edit AI findings.');
   reject = async () => unavailable('Technicians cannot reject AI findings.');
   requestReinspection = async () => unavailable('Technicians cannot request reinspection.');
+}
+
+const homeSchema = z.object({
+  address: z.string().nullable(),
+  matchedAddress: z.string().nullable().optional(),
+  latitude: z.number(),
+  longitude: z.number(),
+});
+
+/**
+ * The signed-in technician's own home. There is no id anywhere in these paths:
+ * the server reads whose home it is from the session, so one technician cannot
+ * ask about another's.
+ */
+export class ApiHomeRepository implements HomeRepository {
+  async get() {
+    const body = z
+      .object({ home: homeSchema.nullable() })
+      .parse(await requestJson('/api/v1/technician/home'));
+    return body.home;
+  }
+
+  /**
+   * Throws the server's own words when an address cannot be placed.
+   *
+   * A 400 surfaces as a plain `Error` carrying the API's message -- "could not
+   * be found precisely" -- and the screen shows it verbatim. An outage surfaces
+   * as `ApiConnectionError` instead, so a dropped connection is never reported
+   * as a problem with what the technician typed. Blaming the input for a
+   * network failure is the exact bug sign-in once had.
+   */
+  async set(address: string) {
+    const body = z.object({ home: homeSchema }).parse(
+      await requestJson('/api/v1/technician/home', {
+        method: 'PUT',
+        body: JSON.stringify({ address }),
+      }),
+    );
+    return body.home;
+  }
+
+  async clear() {
+    await requestJson('/api/v1/technician/home', { method: 'DELETE' });
+  }
 }

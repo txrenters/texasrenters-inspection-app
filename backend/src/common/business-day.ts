@@ -56,6 +56,27 @@ export function businessDayBounds(now: Date = new Date()): { start: Date; end: D
   return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
 }
 
+/**
+ * The day a `?date=` query asks for, as an instant inside that Texas day.
+ *
+ * The console sends `YYYY-MM-DD`, a calendar date in Texas. `new Date()` does
+ * not read it that way: a date-only string parses as **UTC midnight**, which is
+ * 6 or 7 p.m. in Texas the evening before, so `businessDayBounds` of it bounds
+ * the day *before* the one asked for. The timeline did exactly that -- opened
+ * on the 14th, it showed the 13th -- and the route would have too, the moment
+ * it moved onto Texas days.
+ *
+ * Noon UTC falls on the same calendar date in Texas all year round (6 or 7
+ * a.m.), so that is the instant a bare date becomes. Anything else parseable is
+ * the instant it names; absent or unparseable is now, as these endpoints have
+ * always treated it.
+ */
+export function businessDayFromQuery(value?: string, now: Date = new Date()): Date {
+  if (!value) return now;
+  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00.000Z` : value);
+  return Number.isNaN(parsed.getTime()) ? now : parsed;
+}
+
 /** The same instant, re-read as though the clock on the wall were UTC. */
 function zonedTime(instant: Date): Date {
   const parts = new Intl.DateTimeFormat('en-CA', {

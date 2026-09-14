@@ -30,6 +30,7 @@ import {
   RequirePermissions,
   type AuthenticatedRequest,
 } from '../common/auth';
+import { businessDayFromQuery } from '../common/business-day';
 import { CacheInvalidateDto, CacheNamespaceDto } from '../cache/cache-admin.dto';
 import { PasswordResetService } from '../auth/password-reset.service';
 import { InspectionImportService } from './inspection-import/inspection-import.service';
@@ -1060,10 +1061,9 @@ export class AdminController {
   @Get('map/assignments')
   @RequirePermissions('technicians:read')
   mapAssignments(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
-    const day = date ? new Date(date) : new Date();
     return this.routes.assignmentsByTechnician(
       request.user.organizationId,
-      Number.isNaN(day.getTime()) ? new Date() : day,
+      businessDayFromQuery(date),
     );
   }
 
@@ -1085,12 +1085,7 @@ export class AdminController {
     @Param('technicianId') id: string,
     @Query('date') date?: string,
   ) {
-    const day = date ? new Date(date) : new Date();
-    return this.timelines.dayFor(
-      request.user,
-      id,
-      Number.isNaN(day.getTime()) ? new Date() : day,
-    );
+    return this.timelines.dayFor(request.user, id, businessDayFromQuery(date));
   }
 
   @Get('technicians/:technicianId/route')
@@ -1100,12 +1095,7 @@ export class AdminController {
     @Param('technicianId') id: string,
     @Query('date') date?: string,
   ) {
-    const day = date ? new Date(date) : new Date();
-    return this.routes.planDay(
-      request.user.organizationId,
-      id,
-      Number.isNaN(day.getTime()) ? new Date() : day,
-    );
+    return this.routes.planDay(request.user.organizationId, id, businessDayFromQuery(date));
   }
 
   @Get('technicians/:technicianId')

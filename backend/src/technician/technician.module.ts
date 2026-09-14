@@ -13,6 +13,8 @@ import { MediaProcessingService } from './media-processing.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
 import { TechnicianController } from './technician.controller';
 import { LocationRetentionScheduler } from './location-retention.scheduler';
+import { PropertyGeocodingService } from '../admin/property-geocoding.service';
+import { TechnicianHomeService } from './technician-home.service';
 import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService } from './technician.service';
 
@@ -22,6 +24,10 @@ import { TechnicianService } from './technician.service';
   providers: [
     TechnicianService,
     TechnicianLocationService,
+    TechnicianHomeService,
+    // Its only dependency is Prisma. Provided here rather than importing the
+    // whole admin module into the technician one for a single geocoder.
+    PropertyGeocodingService,
     LocationRetentionScheduler,
     FloorPlanStorageService,
     InspectionMediaStorageService,

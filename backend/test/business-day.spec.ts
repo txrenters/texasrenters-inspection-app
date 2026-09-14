@@ -1,4 +1,4 @@
-import { businessDate, businessDayBounds } from '../src/common/business-day';
+import { businessDate, businessDayBounds, businessDayFromQuery } from '../src/common/business-day';
 
 /**
  * Which day it is, for people who are not where the server is.
@@ -57,5 +57,36 @@ describe('the business day', () => {
     const { start, end } = businessDayBounds(new Date('2026-06-15T12:00:00.000Z'));
 
     expect(end.getTime() - start.getTime()).toBe(24 * 60 * 60 * 1000);
+  });
+});
+
+describe('a date asked for in a query', () => {
+  it('is the Texas day it names, not the evening before', () => {
+    /**
+     * The bug. The console sends `?date=2026-09-14`, and `new Date()` reads a
+     * bare date as UTC midnight -- 7 p.m. on the 13th in Texas -- so the
+     * timeline opened on the 14th showed the 13th.
+     */
+    expect(businessDate(new Date('2026-09-14'))).toBe('2026-09-13');
+    expect(businessDate(businessDayFromQuery('2026-09-14'))).toBe('2026-09-14');
+  });
+
+  it.each(['2026-01-15', '2026-03-08', '2026-11-01'])(
+    'names the same day in winter and across the clock changes (%s)',
+    (date) => {
+      expect(businessDate(businessDayFromQuery(date))).toBe(date);
+    },
+  );
+
+  it('takes a full timestamp as the instant it names', () => {
+    const lateEvening = '2026-09-12T03:00:00.000Z';
+    expect(businessDayFromQuery(lateEvening).toISOString()).toBe(lateEvening);
+  });
+
+  it('means now when there is no date, or nothing that reads as one', () => {
+    const now = new Date('2026-09-14T17:00:00.000Z');
+    expect(businessDayFromQuery(undefined, now)).toBe(now);
+    expect(businessDayFromQuery('', now)).toBe(now);
+    expect(businessDayFromQuery('not-a-date', now)).toBe(now);
   });
 });

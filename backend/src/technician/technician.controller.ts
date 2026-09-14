@@ -27,6 +27,7 @@ import { diskStorage } from 'multer';
 import { ChargeService } from '../admin/charge.service';
 import { PetObservationDto } from '../admin/admin.dto';
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
+import { businessDayFromQuery } from '../common/business-day';
 import { MobilePushService } from '../realtime/mobile-push.service';
 import { MediaProcessingService } from './media-processing.service';
 import {
@@ -42,9 +43,11 @@ import {
   TechnicianPhotoUploadDto,
   TechnicianReasonDto,
   TechnicianUpdateAreaDto,
+  TechnicianHomeDto,
   TechnicianLocationBatchDto,
 } from './technician.dto';
 import { RouteService } from '../routing/route.service';
+import { TechnicianHomeService } from './technician-home.service';
 import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService, type UploadedRoomVideo } from './technician.service';
 
@@ -61,6 +64,7 @@ export class TechnicianController {
     private readonly routes: RouteService,
     private readonly mediaProcessing: MediaProcessingService,
     private readonly charges: ChargeService,
+    private readonly homes: TechnicianHomeService,
   ) {}
 
   /**
@@ -82,17 +86,36 @@ export class TechnicianController {
    */
   @Get('route')
   technicianRoute(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
-    const day = date ? new Date(date) : new Date();
     return this.routes.planDay(
       request.user.organizationId,
       request.user.id,
-      Number.isNaN(day.getTime()) ? new Date() : day,
+      businessDayFromQuery(date),
     );
   }
 
   @Post('locations')
   recordLocations(@Req() request: AuthenticatedRequest, @Body() body: TechnicianLocationBatchDto) {
     return this.locations.record(request.user, body);
+  }
+
+  /**
+   * The technician's own home, which is where their day's route starts before
+   * they set off. Their own only -- there is no id in the path, so one
+   * technician cannot read or change another's.
+   */
+  @Get('home')
+  home(@Req() request: AuthenticatedRequest) {
+    return this.homes.get(request.user);
+  }
+
+  @Put('home')
+  setHome(@Req() request: AuthenticatedRequest, @Body() body: TechnicianHomeDto) {
+    return this.homes.set(request.user, body.address);
+  }
+
+  @Delete('home')
+  clearHome(@Req() request: AuthenticatedRequest) {
+    return this.homes.clear(request.user);
   }
 
   @Post('notification-devices')
