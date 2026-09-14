@@ -250,6 +250,88 @@ export function listDay(
   ];
 }
 
+/**
+ * A visit's actual times, from the inspection itself.
+ *
+ * Started when the technician pressed Start in the app, finished when they
+ * submitted. The location trail can only estimate a visit, and it goes quiet
+ * whenever a phone stops reporting -- it called a day of ten visits "1 min
+ * driving". These are what the office asked to see.
+ */
+export interface ActualVisit {
+  startedAt: string;
+  submittedAt: string | null;
+  /** Submitted minus started; for a visit still under way, so far. */
+  onSiteSeconds: number | null;
+  inProgress: boolean;
+  /**
+   * From submitting the previous visit to starting this one: the drive from
+   * one property to the next, including whatever else happened on the way.
+   * Null for the first visit of the day, for a second inspection at the same
+   * property, and when the two visits overlapped.
+   */
+  driveSeconds: number | null;
+  /** The property that drive started from. */
+  fromPropertyName: string | null;
+}
+
+/** Every started visit of a day, keyed by inspection. */
+export function actualVisits(
+  stops: readonly AssignedStop[],
+  now: number = Date.now(),
+): Map<string, ActualVisit> {
+  const started = stops
+    .filter((stop) => stop.startedAt && Number.isFinite(Date.parse(stop.startedAt)))
+    .sort((left, right) => Date.parse(left.startedAt!) - Date.parse(right.startedAt!));
+  const visits = new Map<string, ActualVisit>();
+  for (const stop of started) {
+    const start = Date.parse(stop.startedAt!);
+    const submit = stop.submittedAt ? Date.parse(stop.submittedAt) : Number.NaN;
+    const submitted = Number.isFinite(submit) && submit >= start;
+    // The visit handed in most recently before this one began.
+    const previous = started
+      .filter((other) => other !== stop && other.submittedAt)
+      .map((other) => ({ other, at: Date.parse(other.submittedAt!) }))
+      .filter(({ at }) => Number.isFinite(at) && at <= start)
+      .sort((left, right) => right.at - left.at)[0];
+    const sameProperty = Boolean(
+      previous && stop.buildingId && previous.other.buildingId === stop.buildingId,
+    );
+    const drove = previous && !sameProperty ? previous : null;
+    visits.set(stop.inspectionId, {
+      startedAt: stop.startedAt!,
+      submittedAt: submitted ? stop.submittedAt! : null,
+      onSiteSeconds: submitted
+        ? Math.round((submit - start) / 1000)
+        : stop.submittedAt
+          ? null
+          : Math.max(0, Math.round((now - start) / 1000)),
+      inProgress: !stop.submittedAt,
+      driveSeconds: drove ? Math.round((start - drove.at) / 1000) : null,
+      fromPropertyName: drove ? drove.other.propertyName : null,
+    });
+  }
+  return visits;
+}
+
+/**
+ * The day's actual time, added up: on site across every visit started, and
+ * driving across every drive between them. Null when nothing was started in
+ * the app, so a caller can fall back to the location trail.
+ */
+export function actualDayTotals(visits: ReadonlyMap<string, ActualVisit>) {
+  if (!visits.size) return null;
+  let onSiteSeconds = 0;
+  let driveSeconds = 0;
+  let submitted = 0;
+  for (const visit of visits.values()) {
+    onSiteSeconds += visit.onSiteSeconds ?? 0;
+    driveSeconds += visit.driveSeconds ?? 0;
+    if (visit.submittedAt) submitted += 1;
+  }
+  return { visits: visits.size, submitted, onSiteSeconds, driveSeconds, totalSeconds: onSiteSeconds + driveSeconds };
+}
+
 /** How long one visit took: the drive that reached it, the time there, and both. */
 export interface VisitTimes {
   driveSeconds: number | null;

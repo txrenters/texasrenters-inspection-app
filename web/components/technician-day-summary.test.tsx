@@ -34,6 +34,43 @@ const timeline = (over: Record<string, unknown> = {}) =>
   }) as never;
 
 describe('a technician day summary', () => {
+  it("uses the inspections' own start and submit times where the app recorded them", () => {
+    // The trail said 3 hours on site and an hour unaccounted; the inspections
+    // say what actually happened, and the list below uses the same figures.
+    render(
+      <TechnicianDaySummary
+        stops={[
+          {
+            inspectionId: 'a',
+            buildingId: 'building-a',
+            propertyName: 'A',
+            inspectionType: 'OCCUPIED',
+            status: 'TECHNICIAN_SUBMITTED',
+            finishedAt: '2026-09-14T15:24:00.000Z',
+            startedAt: '2026-09-14T14:55:00.000Z',
+            submittedAt: '2026-09-14T15:24:00.000Z',
+          },
+          {
+            inspectionId: 'b',
+            buildingId: 'building-b',
+            propertyName: 'B',
+            inspectionType: 'OCCUPIED',
+            status: 'TECHNICIAN_SUBMITTED',
+            finishedAt: '2026-09-14T15:42:00.000Z',
+            startedAt: '2026-09-14T15:32:00.000Z',
+            submittedAt: '2026-09-14T15:42:00.000Z',
+          },
+        ]}
+        timeline={timeline()}
+      />,
+    );
+
+    expect(screen.getByText('39 min')).toBeInTheDocument();
+    expect(screen.getByText('8 min')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText(/unaccounted/i)).not.toBeInTheDocument();
+  });
+
   it('says nothing happened rather than showing zeroes', () => {
     // A card of zeroes reads as "they did nothing today". The truth is that
     // nobody has heard from them, which is a different thing to act on.

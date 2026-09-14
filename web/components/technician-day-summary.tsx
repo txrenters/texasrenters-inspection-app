@@ -1,9 +1,10 @@
 'use client';
 
-import type { TechnicianDayTimeline } from '@texasrenters/shared';
+import type { AssignedStop, TechnicianDayTimeline } from '@texasrenters/shared';
 
 import { businessTimeOfDay } from '@/lib/clock';
 import { formatDuration } from '@/lib/format';
+import { actualDayTotals, actualVisits } from '@/lib/route-plan';
 
 /**
  * What a technician's day has come to, and when it is likely to end.
@@ -29,12 +30,23 @@ function Figure({ label, value, muted }: { label: string; value: string; muted?:
   );
 }
 
-export function TechnicianDaySummary({ timeline }: { timeline: TechnicianDayTimeline }) {
+export function TechnicianDaySummary({
+  timeline,
+  stops = [],
+}: {
+  timeline: TechnicianDayTimeline;
+  /** The day's inspections, whose start and submit times are the actual day. */
+  stops?: readonly AssignedStop[];
+}) {
   const { totals, projection } = timeline;
+  // Preferred to the trail wherever the app recorded a start: the trail goes
+  // quiet when a phone stops reporting, and the figures above the list must
+  // agree with the ones in it.
+  const actual = actualDayTotals(actualVisits(stops));
 
   // Nothing reported means nothing to describe. An empty card of zeroes reads
   // as "they did nothing today" rather than "nobody has heard from them".
-  if (!totals.shiftSeconds)
+  if (!totals.shiftSeconds && !actual)
     return (
       <p className="text-muted-foreground px-3 py-2 text-xs">
         No position reported today, so there is nothing to measure.
@@ -64,15 +76,23 @@ export function TechnicianDaySummary({ timeline }: { timeline: TechnicianDayTime
   return (
     <div className="space-y-2 border-b px-3 py-3">
       <div className="grid grid-cols-3 gap-2">
-        <Figure label="On site" value={formatDuration(totals.onSiteSeconds)} />
-        <Figure label="Driving" value={formatDuration(totals.travellingSeconds)} />
         <Figure
-          label={totals.visits === 1 ? 'Visit' : 'Visits'}
-          value={String(totals.visits)}
+          label="On site"
+          value={formatDuration(actual ? actual.onSiteSeconds : totals.onSiteSeconds)}
+        />
+        <Figure
+          label="Driving"
+          value={formatDuration(actual ? actual.driveSeconds : totals.travellingSeconds)}
+        />
+        <Figure
+          label={(actual ? actual.visits : totals.visits) === 1 ? 'Visit' : 'Visits'}
+          value={String(actual ? actual.visits : totals.visits)}
         />
       </div>
 
-      {unaccounted > 60 ? (
+      {/* Only about the trail: with actual times there is nothing unaccounted
+          to explain. */}
+      {!actual && unaccounted > 60 ? (
         <p className="text-muted-foreground text-[11px]">
           {formatDuration(unaccounted)} unaccounted — the trail went quiet for longer than either a
           visit or a drive can explain.
