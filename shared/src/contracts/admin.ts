@@ -524,6 +524,14 @@ export interface AdminInspection {
    * cannot claim a baseline that `generate` would then refuse.
    */
   baselineMissing?: boolean;
+  /**
+   * A Jobber visit, whose date only Jobber changes.
+   *
+   * Present on the detail. The API refuses a new date for one, because the
+   * sync puts Jobber's date back on its next pass; the edit form says where
+   * the change has to be made instead of accepting one that will not last.
+   */
+  scheduledInJobber?: boolean;
   audit?: Array<{ id: string; action: string; metadata?: unknown; createdAt: string }>;
 }
 

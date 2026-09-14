@@ -9,8 +9,9 @@ import { AlertTriangleIcon, ChevronLeftIcon, ChevronRightIcon, FileTextIcon } fr
 
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
+import { formatScheduledDate, humanize } from '@/lib/format';
 import { cn } from '@/lib/utils';
-import { useAdminMutations, useRunningImports } from '@/lib/queries';
+import { useAdminMutations, useRunningImports, type RunningImport } from '@/lib/queries';
 
 /**
  * Where a minimized import goes.
@@ -33,6 +34,36 @@ interface DockUpload {
   /** 0 to 1, or null before the first progress event. */
   progress: number | null;
   error?: string;
+  /** Where the report already is, when that is why the upload was refused. */
+  existingInspectionId?: string;
+}
+
+/**
+ * The inspection an already-imported report is on, when that is the refusal.
+ *
+ * "This report has already been imported" names no place. 10118 Mariposa Green
+ * Ct's move-in report sat on the next tenant's visit, and every retry said only
+ * that, so nobody could see where it had gone. The API names the inspection;
+ * this is what reads it back out.
+ */
+function alreadyImportedOn(error: unknown) {
+  const refusal = error as { code?: unknown; details?: unknown } | null;
+  if (refusal?.code !== 'REPORT_ALREADY_IMPORTED' || !Array.isArray(refusal.details)) return undefined;
+  const [first] = refusal.details as Array<{ inspectionId?: unknown } | null | undefined>;
+  return typeof first?.inspectionId === 'string' ? first.inspectionId : undefined;
+}
+
+/**
+ * Whether the report went to a different inspection than it was started from.
+ *
+ * It does when the report's own date is more than a fortnight from that
+ * inspection's schedule. Said out loud, because the inspection somebody chose
+ * is left looking exactly as it was, which otherwise reads as a lost import.
+ */
+function placedElsewhere(job: RunningImport) {
+  return Boolean(
+    job.requestedInspectionId && job.inspectionId && job.requestedInspectionId !== job.inspectionId,
+  );
 }
 
 interface DockTarget {
@@ -110,6 +141,7 @@ export function ImportDockProvider({ children }: { children: ReactNode }) {
               address,
               progress: null,
               error: error instanceof Error ? error.message : 'The upload failed.',
+              existingInspectionId: alreadyImportedOn(error),
             },
           }));
         });
@@ -252,7 +284,9 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
 
       if (job.state === 'IMPORTED')
         toast.success(job.address ? `${job.address} imported` : 'Report imported', {
-          description: 'The areas, photographs and condition are on the inspection now.',
+          description: placedElsewhere(job)
+            ? `Saved as its own ${humanize(job.inspectionType).toLowerCase()} inspection dated ${formatScheduledDate(job.scheduledAt)}. The report's date is more than two weeks from the inspection it was imported into, which is unchanged.`
+            : 'The areas, photographs and condition are on the inspection now.',
           duration: 10_000,
           action: open,
         });
@@ -429,6 +463,14 @@ function ImportDock({ ref, uploads }: { ref: React.Ref<HTMLDivElement>; uploads:
                       ? 'Uploading…'
                       : `Uploading… ${Math.round(item.progress * 100)}%`)}
                 </p>
+                {item.existingInspectionId ? (
+                  <Link
+                    className="text-primary inline-flex items-center gap-1 text-xs underline-offset-4 hover:underline"
+                    href={`/inspections/${item.existingInspectionId}`}
+                  >
+                    Open the inspection it is on
+                  </Link>
+                ) : null}
                 {/* Only while bytes are moving. A full bar during the read
                     would claim progress that is not being made. */}
                 {!item.error && item.progress !== null ? (

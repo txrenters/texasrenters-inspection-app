@@ -1194,6 +1194,8 @@ export class AdminService {
       select: {
         id: true,
         status: true,
+        // Read only to answer whether the date is Jobber's; see the return.
+        jobberVisitId: true,
         inspectionType: true,
         baselineInspectionId: true,
         baselineInspection: {
@@ -1299,7 +1301,10 @@ export class AdminService {
           }))
         : undefined;
 
-    return { ...inspection, evidence, baselineMissing };
+    // Whether the date is Jobber's to change, rather than Jobber's identifier:
+    // the edit form needs the answer, and the visit id is nothing it can use.
+    const { jobberVisitId, ...detail } = inspection;
+    return { ...detail, evidence, baselineMissing, scheduledInJobber: Boolean(jobberVisitId) };
   }
 
   async inspectionAudit(user: AuthenticatedUser, id: string, query: AuditListQueryDto) {
@@ -1403,6 +1408,28 @@ export class AdminService {
         422,
         'CANCELLATION_REASON_REQUIRED',
         'Provide a cancellation reason.',
+      );
+    /**
+     * A Jobber visit is rescheduled in Jobber.
+     *
+     * Jobber is the scheduling source of record, and the sync copies its date
+     * over any visit still scheduled here whose date differs. A date changed
+     * here therefore did not stay changed: 10118 Mariposa Green Ct's move-in was
+     * re-dated at 1:28 PM and the sync restored Jobber's date at 1:30, with
+     * nothing on the page to say it would. Refused instead, naming where the
+     * change has to be made. The same day sent back is not a change — the edit
+     * form always sends the date.
+     */
+    if (
+      input.scheduledAt &&
+      existing.jobberVisitId &&
+      new Date(input.scheduledAt).toISOString().slice(0, 10) !==
+        existing.scheduledAt.toISOString().slice(0, 10)
+    )
+      throw new ApplicationError(
+        409,
+        'SCHEDULED_IN_JOBBER',
+        'This visit is scheduled in Jobber. Change its date in Jobber and it will update here.',
       );
     const updated = await this.prisma.$transaction(async (tx) => {
       if (input.scheduledAt) {
@@ -3645,6 +3672,9 @@ export class AdminService {
         // Needed by the reschedule clash check: two inspections are only the
         // same booking if they are the same kind of visit.
         inspectionType: true,
+        // A Jobber visit's date is Jobber's to change; see `updateInspection`.
+        scheduledAt: true,
+        jobberVisitId: true,
       },
     });
     if (!inspection)

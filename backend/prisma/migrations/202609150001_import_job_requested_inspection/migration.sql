@@ -1,0 +1,12 @@
+-- The inspection an import was started from, beside the one it was written into.
+--
+-- They were always the same until the import read the report's own date. A
+-- report dated more than a fortnight from the inspection it was started on
+-- describes a different walkthrough, and is now written into that
+-- walkthrough's inspection instead, found or created. `inspectionId` follows the
+-- evidence; this keeps what the office chose, so the console can say the report
+-- went somewhere else rather than leave the chosen inspection looking untouched.
+--
+-- Nullable and not backfilled: every existing job was written into the
+-- inspection it was started from, and the previous image ignores the column.
+ALTER TABLE "InspectionImportJob" ADD COLUMN "requestedInspectionId" UUID;

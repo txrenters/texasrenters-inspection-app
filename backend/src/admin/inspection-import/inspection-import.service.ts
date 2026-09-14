@@ -39,7 +39,14 @@ import { ApplicationError } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { InspectionMediaStorageService } from '../../technician/inspection-media-storage.service';
 import { InspectCloudAiService } from './inspect-cloud-ai.service';
-import { CONFIDENT_MATCH, parseReport, reportFingerprint } from './inspect-cloud-report';
+import {
+  CONFIDENT_MATCH,
+  isSameWalkthrough,
+  parseReport,
+  REPORT_MATCH_WINDOW_DAYS,
+  reportFingerprint,
+  reportWalkedOn,
+} from './inspect-cloud-report';
 import type { ImportedArea, ImportedReport } from './inspect-cloud-report';
 import { countPhotosPerPage, extractPhotos, readPages } from './inspect-cloud-pdf';
 import type { ExtractedPhoto } from './inspect-cloud-pdf';
@@ -222,6 +229,7 @@ export class InspectionImportService {
         organizationId: user.organizationId,
         buildingId: inspection.propertywareBuildingId ?? inspection.id,
         inspectionId: inspection.id,
+        requestedInspectionId: inspection.id,
         fingerprint,
         status: 'RUNNING',
         startedById: user.id,
@@ -305,6 +313,7 @@ export class InspectionImportService {
       select: {
         id: true,
         inspectionId: true,
+        requestedInspectionId: true,
         status: true,
         errorCode: true,
         committedAt: true,
@@ -318,6 +327,7 @@ export class InspectionImportService {
       select: {
         id: true,
         inspectionType: true,
+        scheduledAt: true,
         propertywareBuilding: { select: { addressLine1: true } },
       },
     });
@@ -348,6 +358,17 @@ export class InspectionImportService {
           : null,
         inspectionType: job.inspectionId
           ? (byInspection.get(job.inspectionId)?.inspectionType ?? null)
+          : null,
+        /**
+         * Where the report went, beside where it was started.
+         *
+         * They differ when the report's own date put it on a different
+         * walkthrough's inspection. The dock says so: otherwise the inspection
+         * somebody chose looks untouched, and the report looks lost.
+         */
+        requestedInspectionId: job.requestedInspectionId,
+        scheduledAt: job.inspectionId
+          ? (byInspection.get(job.inspectionId)?.scheduledAt ?? null)
           : null,
       }));
   }
@@ -663,6 +684,7 @@ export class InspectionImportService {
         organizationId: user.organizationId,
         buildingId: target.propertywareBuildingId ?? target.id,
         inspectionId: target.id,
+        requestedInspectionId: target.id,
         fingerprint,
         // COMPLETED, not RUNNING: the reading is already done and its result is
         // stored below. A RUNNING row with output would read as a job whose
@@ -688,11 +710,14 @@ export class InspectionImportService {
 
     const settled = await this.prisma.inspectionImportJob.findUnique({
       where: { id: job.id },
-      select: { committedAt: true, errorCode: true },
+      select: { committedAt: true, errorCode: true, inspectionId: true },
     });
     return {
       jobId: job.id,
-      inspectionId: target.id,
+      // Where the report landed, which is not always where it was aimed: the
+      // commit follows the report's own date. The backfill records this
+      // against the document, so it has to be the inspection holding it.
+      inspectionId: settled?.inspectionId ?? target.id,
       fingerprint,
       committed: Boolean(settled?.committedAt),
       errorCode: settled?.errorCode ?? null,
@@ -717,6 +742,56 @@ export class InspectionImportService {
   ) {
    try {
     const property = target.building;
+
+    /**
+     * Which inspection this report is the walkthrough of.
+     *
+     * Usually the one it was started from. But a report carries its own date,
+     * and one more than a fortnight from that inspection's schedule describes a
+     * different walkthrough. 10118 Mariposa Green Ct had its August 2023 move-in
+     * report written into the next tenant's October 2026 visit: the evidence
+     * was right, and it could still never be a baseline, because the comparison
+     * looks backwards from a move-out and the record holding it was dated after
+     * the move-out it existed for. Correcting the date by hand lasted two
+     * minutes — the visit is Jobber's, and the sync put Jobber's date back.
+     *
+     * So the report goes where its date says: the inspection that walkthrough
+     * already has, in the same scope, or a new one dated by the report. The new
+     * one is created inside the transaction below, so a failed import leaves
+     * nothing behind, and the inspection it was started from is left exactly as
+     * it was. The window is the Propertyware backfill's, so the two ways in
+     * cannot disagree about which inspection a report belongs to.
+     */
+    const walkedOn = reportWalkedOn(report.reportDate);
+    const elsewhere = walkedOn !== null && !isSameWalkthrough(walkedOn, target.scheduledAt);
+    const window = REPORT_MATCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const matched =
+      walkedOn && elsewhere
+        ? await this.prisma.inspection.findFirst({
+            where: {
+              organizationId: user.organizationId,
+              id: { not: target.id },
+              // Nulls match nulls, as the comparison's own scope does: a report
+              // started from a unit-less, lease-less inspection lands on one.
+              propertywareBuildingId: target.propertywareBuildingId,
+              propertywareUnitId: target.propertywareUnitId,
+              propertywareLeaseId: target.propertywareLeaseId,
+              inspectionType: target.inspectionType,
+              status: { not: InspectionStatus.CANCELLED },
+              scheduledAt: {
+                gte: new Date(walkedOn.getTime() - window),
+                lte: new Date(walkedOn.getTime() + window),
+              },
+            },
+            orderBy: { scheduledAt: 'desc' },
+            select: { id: true },
+          })
+        : null;
+    /** The day of the inspection to create, when the walkthrough has none. */
+    const createOn = elsewhere && !matched ? walkedOn : null;
+    /** The inspection written into, when one already exists. */
+    const placedId = matched?.id ?? target.id;
+
     const bytes = await this.storage.get(sourceKey(user.organizationId, fingerprint));
     const photos = extractPhotos(bytes);
     const perPage = await countPhotosPerPage(bytes);
@@ -741,9 +816,10 @@ export class InspectionImportService {
      * cleared, and only for the areas this report replaces.
      */
     const superseded: Array<{ storageKey: string }> =
-      mode === 'REPLACE'
+      // An inspection about to be created holds nothing to supersede.
+      mode === 'REPLACE' && !createOn
         ? await this.prisma.inspectionPhoto.findMany({
-            where: { inspectionId: target.id },
+            where: { inspectionId: placedId },
             select: { storageKey: true },
           })
         : [];
@@ -765,17 +841,44 @@ export class InspectionImportService {
         },
       });
 
-      // The inspection already exists; this fills it in. Its identity, its
-      // schedule and its place in Jobber are not ours to change -- only the
+      /**
+       * A walkthrough with no inspection here gets one.
+       *
+       * In the scope of the inspection the import was started from, dated by
+       * the report. COMPLETED and not finalized, exactly as the Propertyware
+       * backfill creates them: the walk happened, and nobody here has signed it
+       * off. No Jobber visit, so the sync has no schedule to put back.
+       */
+      const inspection = createOn
+        ? await tx.inspection.create({
+            data: {
+              organizationId: user.organizationId,
+              propertywareBuildingId: target.propertywareBuildingId,
+              propertywareUnitId: target.propertywareUnitId,
+              propertywareLeaseId: target.propertywareLeaseId,
+              inspectionType: target.inspectionType,
+              status: InspectionStatus.COMPLETED,
+              source: InspectionSource.IMPORTED_REPORT,
+              scheduledAt: createOn,
+              completedAt: createOn,
+              createdById: user.id,
+              internalNotes: importNote(report, fingerprint),
+            },
+            select: { id: true },
+          })
+        : { id: placedId };
+
+      // An inspection that exists is filled in, never re-dated. Its identity,
+      // its schedule and its place in Jobber are not ours to change -- only the
       // evidence it was always missing, plus a note saying where that came from.
-      await tx.inspection.update({
-        where: { id: target.id },
-        data: {
-          source: InspectionSource.IMPORTED_REPORT,
-          internalNotes: importNote(report, fingerprint),
-        },
-      });
-      const inspection = { id: target.id };
+      if (!createOn)
+        await tx.inspection.update({
+          where: { id: inspection.id },
+          data: {
+            source: InspectionSource.IMPORTED_REPORT,
+            internalNotes: importNote(report, fingerprint),
+          },
+        });
 
       /**
        * What was here before, cleared in one place before anything new lands.
@@ -1094,6 +1197,11 @@ export class InspectionImportService {
             // these. Written down because the import touched records nobody
             // named, and that should be answerable from the audit alone.
             sharedLayoutWith: sharing.length,
+            // Where the report went and why, when that was not the inspection
+            // it was started from: its own date is on the row with the answer.
+            requestedInspectionId: target.id,
+            placement: createOn ? 'CREATED' : placedId === target.id ? 'REQUESTED' : 'MATCHED',
+            reportDate: report.reportDate,
           },
         },
       });
@@ -1115,7 +1223,10 @@ export class InspectionImportService {
 
     await this.prisma.inspectionImportJob.update({
       where: { id: jobId },
-      data: { committedAt: new Date(), errorCode: null },
+      // The job follows the evidence, so the inspection holding the report is
+      // the one that shows this import; `requestedInspectionId` keeps where it
+      // was started.
+      data: { committedAt: new Date(), errorCode: null, inspectionId },
     });
     this.logger.log({ event: 'inspection_report_imported', inspectionId });
    } catch (error) {
@@ -1191,6 +1302,10 @@ export class InspectionImportService {
         // so the sharing below is scoped to the same unit — or to the same
         // whole property, when neither has one.
         propertywareUnitId: true,
+        // What a report's own date is measured against, and the scope an
+        // inspection created for a different walkthrough takes from this one.
+        scheduledAt: true,
+        propertywareLeaseId: true,
         propertywareBuilding: {
           select: {
             id: true,
@@ -1242,16 +1357,37 @@ export class InspectionImportService {
     return { ...inspection, building: inspection.propertywareBuilding };
   }
 
+  /**
+   * Where this file already is, if it is anywhere.
+   *
+   * The refusal is the point, and its answer is what lets the console link to
+   * the inspection holding the report. "Already imported" with no place was
+   * all 10118 Mariposa Green Ct's office got while its report sat on the wrong
+   * visit. A report moved off one inspection is followed to the next, because
+   * the row that imported it still names the inspection it left.
+   */
   private findPreviousImport(organizationId: string, fingerprint: string) {
-    return this.prisma.auditLog.findFirst({
-      where: {
-        organizationId,
-        action: 'INSPECTION_REPORT_IMPORTED',
-        metadata: { path: ['fingerprint'], equals: fingerprint },
-      },
-      select: { entityId: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-    }).then((row) => (row ? { inspectionId: row.entityId, importedAt: row.createdAt } : null));
+    return this.prisma.auditLog
+      .findFirst({
+        where: {
+          organizationId,
+          action: { in: ['INSPECTION_REPORT_IMPORTED', 'INSPECTION_REPORT_MOVED'] },
+          metadata: { path: ['fingerprint'], equals: fingerprint },
+        },
+        select: { action: true, entityId: true, metadata: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      })
+      .then((row) => {
+        if (!row) return null;
+        const movedTo = (row.metadata as { toInspectionId?: unknown } | null)?.toInspectionId;
+        return {
+          inspectionId:
+            row.action === 'INSPECTION_REPORT_MOVED' && typeof movedTo === 'string'
+              ? movedTo
+              : row.entityId,
+          importedAt: row.createdAt,
+        };
+      });
   }
 
   /**
@@ -1521,13 +1657,18 @@ const defectsIn = (area: ImportedArea) =>
   area.items.filter((item) => item.comment !== null || failedAxes(item).length > 0);
 
 /**
- * The report's own date is deliberately not written anywhere structural.
+ * The report's own date never overwrites an inspection's schedule.
  *
  * `scheduledAt` belongs to Jobber, which is the scheduling source of record,
  * and the comparison orders baselines by it — so overwriting it with a date
  * read out of a PDF would move which move-in a later move-out is judged
- * against. The date is kept in the inspection's notes for provenance and
- * nowhere else; `importNote` is where it lands.
+ * against. The date is kept in the inspection's notes for provenance;
+ * `importNote` is where it lands.
+ *
+ * What the date does decide is *which* inspection a report is written into:
+ * one dated more than a fortnight from the inspection it was started on is a
+ * different walkthrough (see `runCommit`). An inspection created for it takes
+ * the report's date, because there is no other schedule for it to have.
  */
 
 /** "Sep 02 2026 01:15:39 PM" as it was written, or null if it will not parse. */

@@ -184,6 +184,9 @@ describe('inspection status lifecycle (spec §11)', () => {
       ...detail,
       baselineMissing: undefined,
       evidence: { areas: 0, findings: 0, media: 0, photos: 0, responses: 0 },
+      // Whether the date is Jobber's to change: the edit form locks it when it
+      // is, because the sync would put Jobber's date back.
+      scheduledInJobber: false,
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({

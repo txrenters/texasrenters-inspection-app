@@ -30,6 +30,9 @@ const parsed = {
   unrecognised: [],
 };
 jest.mock('../src/admin/inspection-import/inspect-cloud-report', () => ({
+  // The real date rule: which inspection a report belongs to is what these
+  // tests are about, and a stand-in for it would only test the stand-in.
+  ...jest.requireActual('../src/admin/inspection-import/inspect-cloud-report'),
   parseReport: jest.fn(() => parsed),
   reportFingerprint: jest.fn(() => 'f'.repeat(64)),
   CONFIDENT_MATCH: 0.8,

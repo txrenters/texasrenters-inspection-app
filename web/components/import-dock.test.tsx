@@ -48,6 +48,8 @@ const job = (overrides: Partial<RunningImport> = {}): RunningImport => ({
   awaitingReview: false,
   address: '1547 Revolution Way',
   inspectionType: 'MOVE_IN',
+  requestedInspectionId: 'inspection-1',
+  scheduledAt: '2026-10-02T00:00:00.000Z',
   ...overrides,
 });
 
@@ -228,6 +230,76 @@ describe('announcing what happened', () => {
     expect(action.label).toBe('Open');
     action.onClick();
     expect(push).toHaveBeenCalledWith('/inspections/inspection-1?import=job-1');
+  });
+
+  it('says where a report went when its own date put it on another inspection', () => {
+    // 10118 Mariposa Green Ct: an August 2023 move-in report started from the
+    // next tenant's October 2026 visit. It lands on its own inspection, and the
+    // one it was started from is left untouched -- which, unannounced, reads
+    // as an import that went nowhere.
+    imports = [
+      job({
+        state: 'IMPORTED',
+        inspectionId: 'walked-2023',
+        requestedInspectionId: 'inspection-1',
+        scheduledAt: '2023-08-21T00:00:00.000Z',
+      }),
+    ];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+
+    const [, options] = success.mock.calls[0] as [string, { description: string; action: { onClick: () => void } }];
+    expect(options.description).toContain('Saved as its own move in inspection dated Aug 21, 2023');
+    expect(options.description).toContain('which is unchanged');
+    // Open goes to where the report is, not where it was started.
+    options.action.onClick();
+    expect(push).toHaveBeenCalledWith('/inspections/walked-2023?import=job-1');
+  });
+
+  it('keeps the ordinary message for an import from before the start was recorded', () => {
+    imports = [job({ state: 'IMPORTED', requestedInspectionId: null })];
+    render(<ImportDockProvider>page</ImportDockProvider>);
+    expect(success).toHaveBeenCalledWith(
+      '1547 Revolution Way imported',
+      expect.objectContaining({ description: expect.stringContaining('on the inspection now') }),
+    );
+  });
+});
+
+describe('a report that is already imported', () => {
+  it('links to the inspection it is on', async () => {
+    // "Already imported" alone gave the office no way to find a report that
+    // had gone into the wrong inspection.
+    startImport.mockReset().mockRejectedValue(
+      Object.assign(new Error('This report has already been imported.'), {
+        code: 'REPORT_ALREADY_IMPORTED',
+        details: [{ inspectionId: 'inspection-9', importedAt: '2026-09-14T18:30:40.000Z' }],
+      }),
+    );
+    render(
+      <ImportDockProvider>
+        <Hander />
+      </ImportDockProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /hand over/i }));
+
+    const link = await screen.findByRole('link', { name: /open the inspection it is on/i });
+    expect(link.getAttribute('href')).toBe('/inspections/inspection-9');
+    expect(screen.getByText('This report has already been imported.')).toBeTruthy();
+  });
+
+  it('offers no link for any other refusal', async () => {
+    startImport.mockReset().mockRejectedValue(
+      Object.assign(new Error('That file is not a PDF.'), { code: 'REPORT_NOT_A_PDF', details: [] }),
+    );
+    render(
+      <ImportDockProvider>
+        <Hander />
+      </ImportDockProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /hand over/i }));
+
+    expect(await screen.findByText('That file is not a PDF.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /open the inspection it is on/i })).toBeNull();
   });
 });
 

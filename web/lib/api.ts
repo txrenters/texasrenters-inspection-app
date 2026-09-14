@@ -25,6 +25,12 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly requestId?: string,
+    /**
+     * What the API attached to the refusal. Kept rather than dropped, because
+     * some refusals carry their own way out: an already-imported report says
+     * which inspection it is on.
+     */
+    readonly details: unknown[] = [],
   ) {
     super(message);
   }
@@ -65,6 +71,7 @@ export async function api<T>(
       error?.code ?? 'REQUEST_FAILED',
       error?.message ?? 'The request could not be completed.',
       error?.requestId ?? response.headers.get('x-request-id') ?? undefined,
+      Array.isArray(error?.details) ? error.details : [],
     );
   }
   if (response.status === 204) return undefined as T;
@@ -130,6 +137,7 @@ export async function apiUpload<T>(
       error?.code ?? 'REQUEST_FAILED',
       error?.message ?? 'The request could not be completed.',
       error?.requestId,
+      Array.isArray(error?.details) ? error.details : [],
     );
   };
 
@@ -199,6 +207,7 @@ export async function apiBlob(path: string, signal?: AbortSignal) {
       error?.code ?? 'REQUEST_FAILED',
       error?.message ?? 'The request could not be completed.',
       error?.requestId,
+      Array.isArray(error?.details) ? error.details : [],
     );
   }
   return response.blob();
