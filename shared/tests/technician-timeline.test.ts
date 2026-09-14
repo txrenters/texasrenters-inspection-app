@@ -8,6 +8,7 @@ import {
   MIN_VISIT_MS,
   placeOf,
   projectRemainder,
+  type RemainingWork,
   secondsAtPlace,
   segmentDay,
   type TimelineFix,
@@ -337,6 +338,24 @@ describe('the arrival radius', () => {
   });
 });
 
+/** Work as the route hands it over: stops in order, one leg to each, a kilometre a minute. */
+const inOrder = (
+  stops: [inspectionId: string, placeId: string | null, driveMinutes: number][],
+  progress = 0,
+): RemainingWork => ({
+  ordered: stops.map(([inspectionId, placeId]) => ({ inspectionId, placeId })),
+  legs: stops.map(([, , minutes]) => ({
+    durationSeconds: minutes * 60,
+    distanceMeters: minutes * 1000,
+  })),
+  progress,
+  unordered: [],
+});
+
+const NOTHING_LEFT: RemainingWork = { ordered: [], legs: [], progress: 0, unordered: [] };
+const plus = (iso: string, minutes: number) =>
+  new Date(Date.parse(iso) + minutes * 60_000).toISOString();
+
 describe('projecting what is left of the day', () => {
   /**
    * Not a comparison against a scheduled time, because there is no scheduled
@@ -362,7 +381,10 @@ describe('projecting what is left of the day', () => {
   it("uses this technician's own measured visits when it has them", () => {
     const projection = projectRemainder(
       dayWithTwoDoneVisits,
-      [{ driveSeconds: 600 }, { driveSeconds: 900 }],
+      inOrder([
+        ['c', 'c', 10],
+        ['d', 'd', 15],
+      ]),
       { now: NOW },
     );
 
@@ -374,6 +396,24 @@ describe('projecting what is left of the day', () => {
     expect(projection.projectedFinishAt).toBe(at('16:25'));
   });
 
+  it('times each stop with the same measured visit as the finish', () => {
+    /**
+     * The two used to disagree: the finish measured the day, the stops assumed
+     * forty minutes. After the first finished visit, the panel's times and its
+     * finish were answering with different visit lengths.
+     */
+    const projection = projectRemainder(
+      dayWithTwoDoneVisits,
+      inOrder([
+        ['c', 'c', 10],
+        ['d', 'd', 15],
+      ]),
+      { now: NOW },
+    );
+
+    expect(projection.arrivals.map((a) => a.arriveAt)).toEqual([at('14:10'), at('15:25')]);
+  });
+
   it('says so when it is guessing', () => {
     // Nothing finished yet, so there is nothing to measure. The number is a
     // placeholder and the caller is told, rather than being handed a figure
@@ -382,7 +422,7 @@ describe('projecting what is left of the day', () => {
       [fix(ROAD, '09:00'), fix(HOUSE_A, '09:30'), fix(HOUSE_A, '09:50')],
       [HOUSE_A],
     );
-    const projection = projectRemainder(justArrived, [{ driveSeconds: 600 }], { now: NOW });
+    const projection = projectRemainder(justArrived, inOrder([['x', 'x', 10]]), { now: NOW });
 
     expect(projection.basis).toBe('ESTIMATED');
     expect(projection.perVisitSeconds).toBe(ASSUMED_VISIT_SECONDS);
@@ -407,7 +447,7 @@ describe('projecting what is left of the day', () => {
       [HOUSE_A, HOUSE_B],
     );
 
-    const projection = projectRemainder(midVisit, [{ driveSeconds: 0 }], { now: NOW });
+    const projection = projectRemainder(midVisit, NOTHING_LEFT, { now: NOW });
 
     // The finished visit was an hour; the five-minute one in progress is not
     // evidence about how long a visit takes.
@@ -415,20 +455,249 @@ describe('projecting what is left of the day', () => {
   });
 
   it('has nothing left to project when the day is done', () => {
-    const projection = projectRemainder(dayWithTwoDoneVisits, [], { now: NOW });
+    const projection = projectRemainder(dayWithTwoDoneVisits, NOTHING_LEFT, { now: NOW });
 
     expect(projection.stopsRemaining).toBe(0);
     expect(projection.remainingSeconds).toBe(0);
     expect(projection.projectedFinishAt).toBe(at('14:00'));
+    expect(projection.current).toBeNull();
   });
 
-  it('still counts a stop whose drive could not be routed', () => {
+  it('still counts a stop that has no place in the order', () => {
     // A property that never geocoded still has to be driven to. Treating the
-    // journey as instantaneous would quietly shorten the day.
-    const projection = projectRemainder(dayWithTwoDoneVisits, [{ driveSeconds: null }], {
-      now: NOW,
-    });
+    // journey as instantaneous would quietly shorten the day -- and it has no
+    // position in the drawn order, so it gets no arrival time either.
+    const projection = projectRemainder(
+      dayWithTwoDoneVisits,
+      { ...NOTHING_LEFT, unordered: [{ inspectionId: 'lost', placeId: null }] },
+      { now: NOW },
+    );
 
+    expect(projection.stopsRemaining).toBe(1);
     expect(projection.remainingSeconds).toBeGreaterThan(projection.perVisitSeconds);
+    expect(projection.arrivals).toEqual([]);
+  });
+});
+
+describe('the visit under way', () => {
+  /**
+   * The live map, 14 September: twenty-nine minutes into a visit at the first
+   * stop, the per-stop times charged it a whole forty more minutes -- every
+   * arrival after it half an hour late -- while the finish counted it as
+   * already done, so the two disagreed by a visit.
+   */
+  const NOW = Date.parse(at('10:07'));
+  const intoAVisit = segmentDay(
+    [fix(ROAD, '09:30'), fix(HOUSE_A, '09:38'), fix(HOUSE_A, '09:56')],
+    [HOUSE_A, HOUSE_B],
+  );
+  const theDay = inOrder([
+    ['at-a', 'a', 1],
+    ['at-b', 'b', 7],
+    ['at-c', 'c', 7],
+  ]);
+
+  it('counts only what is left of it', () => {
+    const projection = projectRemainder(intoAVisit, theDay, { now: NOW });
+
+    // Twenty-nine minutes to now, not to the last fix: indoors the handset
+    // stops reporting and the visit carries on.
+    expect(projection.current).toMatchObject({
+      placeId: 'a',
+      inspectionIds: ['at-a'],
+      onSiteSeconds: 29 * 60,
+      remainingSeconds: 11 * 60,
+    });
+    // Eleven minutes left there, then seven to drive.
+    expect(projection.arrivals[0]).toEqual({
+      inspectionId: 'at-b',
+      arriveAt: at('10:25'),
+      driveSeconds: 7 * 60,
+    });
+  });
+
+  it('gives the stop they are at no arrival and no drive', () => {
+    const projection = projectRemainder(intoAVisit, theDay, { now: NOW });
+
+    expect(projection.arrivals.map((a) => a.inspectionId)).toEqual(['at-b', 'at-c']);
+    expect(projection.stopsRemaining).toBe(2);
+  });
+
+  it('finishes one visit after the last arrival, so the two can never disagree', () => {
+    const projection = projectRemainder(intoAVisit, theDay, { now: NOW });
+    const lastArrival = projection.arrivals[projection.arrivals.length - 1].arriveAt;
+
+    expect(lastArrival).toBe(at('11:12'));
+    expect(projection.projectedFinishAt).toBe(plus(lastArrival, 40));
+  });
+
+  it('leaves nothing of a visit that has run long, and times the rest from now', () => {
+    // Fifty-five minutes in against a forty-minute visit: running late, and
+    // the next stop is simply the drive away from now.
+    const projection = projectRemainder(intoAVisit, theDay, { now: Date.parse(at('10:33')) });
+
+    expect(projection.current?.remainingSeconds).toBe(0);
+    expect(projection.arrivals[0].arriveAt).toBe(at('10:40'));
+  });
+
+  it('waits for nothing at a place no longer on the list', () => {
+    // Its inspection was submitted, so the route no longer holds it: they are
+    // packing up, not working.
+    const projection = projectRemainder(
+      intoAVisit,
+      inOrder([
+        ['at-b', 'b', 7],
+        ['at-c', 'c', 7],
+      ]),
+      { now: NOW },
+    );
+
+    expect(projection.current).toBeNull();
+    expect(projection.arrivals[0].arriveAt).toBe(at('10:14'));
+  });
+
+  it('counts an earlier stop they skipped as still to do, without an arrival', () => {
+    // At the second stop in the drawn order without having been to the first.
+    // The first still has to be done; the order has no place for it until the
+    // route is redrawn.
+    const projection = projectRemainder(
+      intoAVisit,
+      inOrder([
+        ['at-c', 'c', 3],
+        ['at-a', 'a', 4],
+        ['at-b', 'b', 7],
+      ]),
+      { now: NOW },
+    );
+
+    expect(projection.arrivals.map((a) => a.inspectionId)).toEqual(['at-b']);
+    expect(projection.stopsRemaining).toBe(2);
+  });
+});
+
+describe('stops that take no time', () => {
+  const NOW = Date.parse(at('14:00'));
+  const leftA = segmentDay(
+    [fix(HOUSE_A, '12:00'), fix(HOUSE_A, '12:45'), fix(ROAD, '13:50')],
+    [HOUSE_A, HOUSE_B],
+  );
+
+  it('adds no visit for a place already visited and left, whatever its paperwork says', () => {
+    // The inspection there is still open, so the route still holds it. The
+    // line passes through it, so its drive still counts toward the next stop.
+    const projection = projectRemainder(
+      leftA,
+      inOrder([
+        ['at-a', 'a', 5],
+        ['at-b', 'b', 10],
+      ]),
+      { now: NOW },
+    );
+
+    expect(projection.arrivals.map((a) => a.inspectionId)).toEqual(['at-b']);
+    expect(projection.stopsRemaining).toBe(1);
+    expect(projection.remainingSeconds).toBe(15 * 60 + 45 * 60);
+  });
+
+  it('counts two inspections at one address as one visit', () => {
+    const projection = projectRemainder(
+      [],
+      inOrder([
+        ['unit-1', 'b', 7],
+        ['unit-2', 'b', 0],
+        ['next', 'c', 5],
+      ]),
+      { now: NOW },
+    );
+
+    const [first, second, next] = projection.arrivals;
+    expect(second.arriveAt).toBe(first.arriveAt);
+    expect(next.arriveAt).toBe(at('14:52'));
+    expect(projection.stopsRemaining).toBe(2);
+  });
+});
+
+describe('where along the line they are', () => {
+  const NOW = Date.parse(at('14:00'));
+  const onTheWay = (progress: number) =>
+    projectRemainder(
+      [],
+      inOrder(
+        [
+          ['first', 'f', 10],
+          ['second', 's', 10],
+        ],
+        progress,
+      ),
+      { now: NOW },
+    );
+
+  it('pro-rates the leg they are part-way down', () => {
+    // A quarter of the way along twenty kilometres is halfway down the first leg.
+    const [first] = onTheWay(0.25).arrivals;
+    expect(first.driveSeconds).toBe(5 * 60);
+    expect(first.arriveAt).toBe(at('14:05'));
+  });
+
+  it('does not count pulling up outside a stop as having passed it', () => {
+    // Exactly at the first stop on the line: it is arriving, not behind them.
+    expect(onTheWay(0.5).arrivals.map((a) => a.inspectionId)).toEqual(['first', 'second']);
+  });
+
+  it('leaves a stop behind them out of the order but not out of the day', () => {
+    // Three quarters along: past the first stop without a visit to it.
+    const projection = onTheWay(0.75);
+
+    expect(projection.arrivals.map((a) => a.inspectionId)).toEqual(['second']);
+    expect(projection.arrivals[0].arriveAt).toBe(at('14:05'));
+    expect(projection.stopsRemaining).toBe(2);
+  });
+
+  it('does not divide by zero for a leg with no length', () => {
+    const projection = projectRemainder(
+      [],
+      {
+        ordered: [
+          { inspectionId: 'a', placeId: 'a' },
+          { inspectionId: 'b', placeId: 'b' },
+        ],
+        legs: [
+          { durationSeconds: 600, distanceMeters: 5000 },
+          { durationSeconds: 0, distanceMeters: 0 },
+        ],
+        progress: 0.1,
+        unordered: [],
+      },
+      { now: NOW },
+    );
+
+    expect(projection.arrivals.every((a) => Number.isFinite(Date.parse(a.arriveAt)))).toBe(true);
+  });
+});
+
+describe('a day that is not under way', () => {
+  it('has no arrivals, no visit under way and no finish time', () => {
+    /**
+     * Everything here counts from now. Opened on tomorrow, that printed this
+     * afternoon's clock times against tomorrow's stops.
+     */
+    const intoAVisit = segmentDay(
+      [fix(ROAD, '09:30'), fix(HOUSE_A, '09:38'), fix(HOUSE_A, '09:56')],
+      [HOUSE_A],
+    );
+    const projection = projectRemainder(
+      intoAVisit,
+      inOrder([
+        ['at-a', 'a', 1],
+        ['at-b', 'b', 7],
+      ]),
+      { now: Date.parse(at('10:07')), underway: false },
+    );
+
+    expect(projection.arrivals).toEqual([]);
+    expect(projection.current).toBeNull();
+    expect(projection.projectedFinishAt).toBeNull();
+    // The work itself is still known.
+    expect(projection.stopsRemaining).toBeGreaterThan(0);
   });
 });

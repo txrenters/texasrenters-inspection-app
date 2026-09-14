@@ -298,11 +298,48 @@ export function driveToPlace(
  * known from the route; remaining on-site time is the part that was
  * unknowable until this file could measure it. A dispatcher reading
  * "projected finish 18:40" at two in the afternoon can still move the work.
+ *
+ * The finish and the arrival at each stop are one calculation. They used to be
+ * two -- this one for the finish, and a separate estimate on the route for each
+ * stop -- and they disagreed about the visit under way: the finish counted it
+ * as already done, the stops as a whole visit still to come. On the live map
+ * that put every arrival half an hour late and the finish forty minutes before
+ * the last stop could be.
  */
-export interface RemainderProjection {
-  /** ISO 8601. When the last stop of the day is expected to be finished. */
-  projectedFinishAt: string;
+
+/** When a stop still ahead will be reached. */
+export interface StopArrival {
+  inspectionId: string;
+  /** ISO 8601. */
+  arriveAt: string;
+  /** Seconds of driving between now and this stop, visits excluded. */
+  driveSeconds: number;
+}
+
+/** The visit under way: the day's last segment, at one of the stops still to do. */
+export interface CurrentVisit {
+  placeId: string;
+  /** Every inspection at the place. Two at one address are one visit. */
+  inspectionIds: string[];
+  /** ISO 8601. When the trail first put them there. */
+  arrivedAt: string;
+  /** How long they have been there, to now. */
+  onSiteSeconds: number;
+  /** What is left of a visit by the per-visit figure. Never below zero. */
   remainingSeconds: number;
+}
+
+export interface RemainderProjection {
+  /**
+   * ISO 8601. When the last stop is expected to be finished.
+   *
+   * Null on a day that is not under way. Everything here counts from now, so
+   * for tomorrow or last Tuesday a finish time would be this afternoon's clock
+   * pinned to somebody else's day.
+   */
+  projectedFinishAt: string | null;
+  remainingSeconds: number;
+  /** Stops not yet started. The visit under way is `current`, not one of these. */
   stopsRemaining: number;
   /** Seconds per visit used for the projection. */
   perVisitSeconds: number;
@@ -315,6 +352,38 @@ export interface RemainderProjection {
    * A day with no completed visits yet has nothing to measure.
    */
   basis: 'MEASURED' | 'ESTIMATED';
+  /** The visit under way, or null when they are not at one of the stops left. */
+  current: CurrentVisit | null;
+  /**
+   * Every stop still ahead in the drawn order, with when it will be reached.
+   *
+   * Missing for a stop that has no place in that order -- no coordinate, no
+   * road to it, or already behind them on the line -- which still counts toward
+   * the finish. Empty on a day that is not under way.
+   */
+  arrivals: StopArrival[];
+}
+
+/** One inspection still to do, and the place on the trail it is at. */
+export interface WorkStop {
+  inspectionId: string;
+  /** Null for a stop with no coordinate, which the trail can never put anybody at. */
+  placeId: string | null;
+}
+
+/** The work still assigned for the day, as the route arranged it. */
+export interface RemainingWork {
+  /** In driving order. */
+  ordered: readonly WorkStop[];
+  /**
+   * `legs[i]` is the drive that reaches `ordered[i]`. Shorter than `ordered`,
+   * or empty, where routing was unavailable.
+   */
+  legs: readonly { durationSeconds: number; distanceMeters: number }[];
+  /** How far down the drawn line the technician already is, 0 to 1. */
+  progress: number;
+  /** Still to do but with no place in the order: no coordinate, or no road to it. */
+  unordered: readonly WorkStop[];
 }
 
 /**
@@ -327,13 +396,44 @@ export interface RemainderProjection {
  */
 export const ASSUMED_VISIT_SECONDS = 40 * 60;
 
+/**
+ * The rest of the day: the visit under way, when each stop ahead is reached,
+ * and when the last one is done.
+ *
+ * Walks the stops in the order the route drew them, from where the technician
+ * is. Each stop is one of four things:
+ *
+ * - **Where they are now.** Only what is left of a visit is still to come --
+ *   the per-visit figure less the time already there, never below zero. A
+ *   visit that has run long leaves nothing, and the times after it slide
+ *   forward with the clock, which is exactly what running late looks like.
+ * - **Visited and left.** Takes no more time, whatever its paperwork says -- an
+ *   inspection can sit unsubmitted for hours after the technician has driven
+ *   away. The line still passes through it, so its drive still counts toward
+ *   the next stop.
+ * - **Ahead.** The drive to it, then a visit.
+ * - **Still to do but not in the order** -- no coordinate, no road to it, or
+ *   behind them on the line. No arrival time, because the order has no place
+ *   for it, but it still has to be driven to and done, so it counts toward the
+ *   finish with the per-visit figure standing in for the drive it could not be
+ *   given. Crude, and much less wrong than counting the journey as nothing.
+ *
+ * Two inspections at one place are one visit: the second gets the first's
+ * arrival and adds no time.
+ */
 export function projectRemainder(
   segments: readonly TimelineSegment[],
-  remaining: { driveSeconds: number | null }[],
-  options: { now?: number; assumedVisitSeconds?: number } = {},
+  work: RemainingWork,
+  options: {
+    now?: number;
+    assumedVisitSeconds?: number;
+    /** Whether the day is the one happening now. Defaults to true. */
+    underway?: boolean;
+  } = {},
 ): RemainderProjection {
   const now = options.now ?? Date.now();
   const assumed = options.assumedVisitSeconds ?? ASSUMED_VISIT_SECONDS;
+  const underway = options.underway ?? true;
 
   /**
    * Measured from *completed* visits only.
@@ -354,21 +454,141 @@ export function projectRemainder(
     : null;
 
   const perVisitSeconds = measured ?? assumed;
-  const driving = remaining.reduce(
-    // A stop whose drive we could not route still has to be driven to. Falling
-    // back to the per-visit figure is crude, and it is much less wrong than
-    // counting the journey as instantaneous.
-    (total, stop) => total + (stop.driveSeconds ?? perVisitSeconds),
-    0,
-  );
 
-  const remainingSeconds = driving + remaining.length * perVisitSeconds;
+  const everyStop = [...work.ordered, ...work.unordered];
+
+  /**
+   * The visit under way is the day's last segment, when that is at a stop
+   * still to do.
+   *
+   * Timed to now rather than to the last fix: a handset indoors goes quiet for
+   * most of an inspection, and the visit carries on regardless. At a place that
+   * is no longer on the list -- its inspection already submitted -- nothing of
+   * it is left to wait for.
+   */
+  const here =
+    underway && last?.kind === 'AT_PLACE' && last.placeId !== null ? last : null;
+  const hereIds = here
+    ? everyStop.filter((stop) => stop.placeId === here.placeId).map((stop) => stop.inspectionId)
+    : [];
+  let current: CurrentVisit | null = null;
+  if (here?.placeId && hereIds.length) {
+    const onSiteSeconds = Math.max(0, Math.round((now - Date.parse(here.startedAt)) / 1000));
+    current = {
+      placeId: here.placeId,
+      inspectionIds: [...new Set(hereIds)],
+      arrivedAt: here.startedAt,
+      onSiteSeconds,
+      remainingSeconds: Math.max(0, perVisitSeconds - onSiteSeconds),
+    };
+  }
+
+  const visited = new Set(finished.map((segment) => segment.placeId));
+  if (current) visited.delete(current.placeId);
+
+  const isHere = (stop: WorkStop) => current !== null && stop.placeId === current.placeId;
+  const isVisited = (stop: WorkStop) => stop.placeId !== null && visited.has(stop.placeId);
+  const keyOf = (stop: WorkStop) => stop.placeId ?? `inspection:${stop.inspectionId}`;
+
+  /** Seconds from now, per place, at which a stop is reached. */
+  const reachedAt = new Map<string, number>();
+  const unplaced = new Set<string>();
+  const arrivals: StopArrival[] = [];
+
+  let clock = current?.remainingSeconds ?? 0;
+  let drivingTotal = 0;
+  /** Driving since the last stop that had work, carried to the next one that does. */
+  let drivingPending = 0;
+
+  /**
+   * Where along the drawn line the walk starts.
+   *
+   * At a stop, from that stop: everything before it in the order is behind
+   * them, whatever the line says. Otherwise from how far down the line their
+   * position projects, with the arrival radius as slack -- somebody pulling up
+   * outside a stop has not yet passed it.
+   */
+  let hereIndex = -1;
+  work.ordered.forEach((stop, index) => {
+    if (isHere(stop)) hereIndex = index;
+  });
+  const legs = work.legs.slice(0, work.ordered.length);
+  const totalDistance = legs.reduce((sum, leg) => sum + leg.distanceMeters, 0);
+  const progress = Number.isFinite(work.progress) ? Math.max(0, Math.min(1, work.progress)) : 0;
+  const along = progress * totalDistance;
+  let legStart = 0;
+
+  work.ordered.forEach((stop, index) => {
+    const leg = legs[index];
+    if (!leg) {
+      if (!isHere(stop) && !isVisited(stop)) unplaced.add(keyOf(stop));
+      return;
+    }
+    const legEnd = legStart + leg.distanceMeters;
+
+    let behind: boolean;
+    let drive: number;
+    if (hereIndex >= 0) {
+      behind = index <= hereIndex;
+      drive = behind ? 0 : leg.durationSeconds;
+    } else {
+      behind = legEnd + ARRIVAL_RADIUS_M <= along;
+      // A leg with no length -- two stops at one address -- has no drive left
+      // and must not divide by zero into NaN.
+      const left =
+        leg.distanceMeters > 0 ? (legEnd - Math.max(along, legStart)) / leg.distanceMeters : 0;
+      drive = behind ? 0 : leg.durationSeconds * Math.max(0, Math.min(1, left));
+    }
+    legStart = legEnd;
+
+    if (isHere(stop)) return;
+    if (isVisited(stop)) {
+      drivingPending += drive;
+      return;
+    }
+    const key = keyOf(stop);
+    if (behind) {
+      if (!reachedAt.has(key)) unplaced.add(key);
+      return;
+    }
+
+    drivingPending += drive;
+    const already = reachedAt.get(key);
+    if (already !== undefined) {
+      arrivals.push({
+        inspectionId: stop.inspectionId,
+        arriveAt: new Date(now + already * 1000).toISOString(),
+        driveSeconds: Math.round(drivingTotal),
+      });
+      return;
+    }
+
+    clock += drivingPending;
+    drivingTotal += drivingPending;
+    drivingPending = 0;
+    reachedAt.set(key, clock);
+    unplaced.delete(key);
+    arrivals.push({
+      inspectionId: stop.inspectionId,
+      arriveAt: new Date(now + clock * 1000).toISOString(),
+      driveSeconds: Math.round(drivingTotal),
+    });
+    clock += perVisitSeconds;
+  });
+
+  for (const stop of work.unordered)
+    if (!isHere(stop) && !isVisited(stop) && !reachedAt.has(keyOf(stop)))
+      unplaced.add(keyOf(stop));
+
+  const remainingSeconds = Math.round(clock + unplaced.size * perVisitSeconds * 2);
   return {
-    projectedFinishAt: new Date(now + remainingSeconds * 1000).toISOString(),
+    projectedFinishAt: underway ? new Date(now + remainingSeconds * 1000).toISOString() : null,
     remainingSeconds,
-    stopsRemaining: remaining.length,
+    stopsRemaining: reachedAt.size + unplaced.size,
     perVisitSeconds,
     basis: measured === null ? 'ESTIMATED' : 'MEASURED',
+    current,
+    arrivals: underway ? arrivals : [],
   };
 }
 

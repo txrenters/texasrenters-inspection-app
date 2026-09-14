@@ -3,10 +3,13 @@ import {
   dayTotals,
   driveToPlace,
   projectRemainder,
+  type RemainingWork,
+  routeProgress,
   secondsAtPlace,
   segmentDay,
   type TechnicianDayTimeline,
   type TimelinePlace,
+  type WorkStop,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -138,47 +141,63 @@ export class TechnicianTimelineService {
       .map((row) => row.inspection.id);
 
     /**
-     * A stop nobody has been to yet is one still to do.
-     *
-     * Read from the trail rather than from inspection status on purpose: an
-     * inspection can sit un-submitted for hours after the technician has driven
-     * away, and a projection built on paperwork would keep a finished property
-     * in the remaining work all afternoon.
-     */
-    const remainingIds = new Set(
-      stops.filter((stop) => stop.onSiteSeconds === 0).map((stop) => stop.buildingId),
-    );
-
-    /**
-     * Real drive times where the router can give them.
+     * Real drive times, in the order the route would drive them.
      *
      * `planDay` orders the remainder from where the technician is now, which is
      * the only ordering a projection should use -- the planned order stopped
-     * being the truth the moment they deviated from it. It never throws;
-     * routing being unavailable leaves the legs empty and each stop falls back
-     * to the per-visit figure, which the projection says it is doing.
+     * being the truth the moment they deviated from it. Routing being
+     * unavailable leaves the legs empty, and each stop falls back to the
+     * per-visit figure, which the projection says it is doing.
      */
     const route = await this.routes
       .planDay(user.organizationId, technicianId, date)
       .catch(() => null);
 
-    const driveByBuilding = new Map<string, number>();
-    route?.stops.forEach((stop, index) => {
-      const leg = route.legs[index];
-      const buildingId = inspectionToBuilding.get(stop.inspectionId);
-      if (leg && buildingId) driveByBuilding.set(buildingId, leg.durationSeconds);
+    const toWork = (inspectionId: string): WorkStop => ({
+      inspectionId,
+      placeId: inspectionToBuilding.get(inspectionId) ?? null,
     });
 
-    const remaining = [...remainingIds].map((buildingId) => ({
-      driveSeconds: driveByBuilding.get(buildingId) ?? null,
-    }));
+    /**
+     * The work still to do.
+     *
+     * The route holds only inspections that are still to visit, so it is the
+     * list; the trail then says which of those were visited already, inside
+     * `projectRemainder`. Read from the trail rather than from inspection status
+     * on purpose: an inspection can sit un-submitted for hours after the
+     * technician has driven away, and a projection built on paperwork would keep
+     * a finished property in the remaining work all afternoon.
+     *
+     * Without a route there is no list, and the day's places stand in for it,
+     * in no order -- the trail still takes out the ones already visited.
+     */
+    const work: RemainingWork = route
+      ? {
+          ordered: route.stops.map((stop) => toWork(stop.inspectionId)),
+          legs: route.legs,
+          progress: routeProgress(route),
+          unordered: route.unroutable.map((stop) => toWork(stop.inspectionId)),
+        }
+      : {
+          ordered: [],
+          legs: [],
+          progress: 0,
+          unordered: stops.flatMap((stop) => stop.inspectionIds.map(toWork)),
+        };
+
+    // Arrivals and a finish count from now, which only means something on the
+    // day that is actually happening.
+    const now = Date.now();
 
     return {
       technicianId,
       segments,
       totals: dayTotals(segments),
       stops,
-      projection: projectRemainder(segments, remaining),
+      projection: projectRemainder(segments, work, {
+        now,
+        underway: start.getTime() <= now && now < end.getTime(),
+      }),
       /** Assigned, but with no coordinate to time them against. */
       untimedInspectionIds: unplaceable,
     } satisfies TechnicianDayTimeline;

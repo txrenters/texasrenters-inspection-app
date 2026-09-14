@@ -2,13 +2,20 @@
 
 import type {
   AssignedStop,
+  RemainderProjection,
   TechnicianAssignments,
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
 
 import { formatDistance, formatDuration, formatRelative, humanize } from '@/lib/format';
-import { arrivalTime, describeOrigin, isPlanned, offRoadNetwork } from '@/lib/route-plan';
+import {
+  arrivalTime,
+  describeOrigin,
+  isPlanned,
+  offRoadNetwork,
+  onSiteSeconds,
+} from '@/lib/route-plan';
 
 /**
  * Who is out, where they were last, and how much work is theirs.
@@ -141,6 +148,7 @@ export function TechnicianRoster({
   entries,
   onSelect,
   onSelectStop,
+  projection = null,
   route,
   selectedId,
   selectedStopBuildingId = null,
@@ -156,6 +164,12 @@ export function TechnicianRoster({
    * the drawn route survive the click.
    */
   onSelectStop?: (buildingId: string | null) => void;
+  /**
+   * The selected technician's day from here: when each stop ahead is reached,
+   * and the visit under way. From the timeline rather than the route, because
+   * only the timeline knows how long they have already been where they are.
+   */
+  projection?: RemainderProjection | null;
   /**
    * The selected technician's drive, once it has been worked out.
    *
@@ -252,6 +266,8 @@ export function TechnicianRoster({
                     <ol className="space-y-1.5">
                       {orderStops(entry.stops, route).map((stop, index) => {
                         const leg = planned ? route?.legs[index] : undefined;
+                        const onSite = onSiteSeconds(projection, stop.inspectionId);
+                        const arrival = arrivalTime(projection, stop.inspectionId);
                         const offNetwork = refused.has(stop.inspectionId);
                         // Only a stop with a building can be shown on a map, so
                         // only that one becomes a control. The rest already say
@@ -315,16 +331,22 @@ export function TechnicianRoster({
                                 {offNetwork ? ' · off the road network' : null}
                               </span>
                             </Row>
-                            {leg ? (
+                            {/* The stop they are at has no drive left and no
+                                arrival to wait for -- only how long they have
+                                been there, which is what the times after it
+                                are counted from. */}
+                            {onSite !== null ? (
+                              <span className="text-foreground shrink-0 text-right tabular-nums">
+                                on site {formatDuration(onSite)}
+                              </span>
+                            ) : leg ? (
                               <span className="text-muted-foreground shrink-0 text-right tabular-nums">
                                 {formatDuration(leg.durationSeconds)}
                                 {/* When they are expected there, recomputed from
                                     where they are on every refresh. Absent for a
                                     stop already behind them. */}
-                                {route && arrivalTime(route, stop.inspectionId) ? (
-                                  <span className="text-foreground block">
-                                    {arrivalTime(route, stop.inspectionId)}
-                                  </span>
+                                {arrival ? (
+                                  <span className="text-foreground block">{arrival}</span>
                                 ) : null}
                               </span>
                             ) : null}

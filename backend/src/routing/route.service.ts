@@ -1,14 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InspectionStatus } from '@prisma/client';
 import {
-  ASSUMED_VISIT_SECONDS,
   chooseRouteOrigin,
   type DrawnRoute,
-  estimateArrivals,
   haversineMeters,
   needsReroute,
-  OFF_ROUTE_M,
-  projectOntoPath,
   type RouteLeg,
   type RouteStop,
   shortestRouteOrder,
@@ -29,9 +25,10 @@ import { OsrmClient } from './osrm.client';
  * is no `sequence` column, and adding one would assert that the technician is
  * expected to follow this, which is a dispatch policy nobody has set. And it
  * does not promise arrival times: `Inspection.scheduledAt` is a date with no
- * time of day, so no appointment exists to be early or late for. The arrivals
- * it does give are estimates for the day in progress -- when somebody would get
- * to each stop, driving on from where they are now -- and nothing more.
+ * time of day, so no appointment exists to be early or late for. The estimates
+ * of when each stop is reached belong to the day's timeline, which knows how
+ * long somebody has already been at the stop they are on -- see
+ * `projectRemainder`.
  */
 
 /**
@@ -91,40 +88,6 @@ function nearestByAir(
   }
 
   return best;
-}
-
-/**
- * How far down its drawn line a route's origin is, 0 to 1.
- *
- * A route is drawn once and reused for minutes, so its line starts where the
- * technician *was*. Projecting where they are now onto it times the rest of the
- * day from where they have since got to. A route from home has not been started.
- * A position nowhere near the line counts as not started either, rather than as
- * whichever point of the line happens to be closest to it.
- */
-function progressAlong(route: TechnicianRoute): number {
-  if (route.originKind === 'HOME' || !route.origin || route.geometry.length < 2) return 0;
-  const projected = projectOntoPath(route.origin, route.geometry);
-  if (!projected || projected.totalMeters <= 0 || projected.offsetMeters > OFF_ROUTE_M) return 0;
-  return projected.alongMeters / projected.totalMeters;
-}
-
-/**
- * The route with an arrival time for every stop still ahead.
- *
- * Only for the day in progress -- see `planDay`. On-site time is the assumed
- * visit length rather than this technician's measured one: measuring it needs
- * the day's trail, and the timeline service that reads the trail already
- * depends on this one. The day summary shows the measured projection; these are
- * the per-stop estimates along the line.
- */
-function withArrivals(route: TechnicianRoute, inProgress: boolean): TechnicianRoute {
-  return {
-    ...route,
-    arrivals: inProgress
-      ? estimateArrivals(route, progressAlong(route), ASSUMED_VISIT_SECONDS)
-      : [],
-  };
 }
 
 @Injectable()
@@ -417,21 +380,10 @@ export class RouteService {
     const origin = chosen?.point ?? null;
     const originKind = chosen?.kind ?? null;
 
-    /**
-     * Arrival times belong only to the day that is happening.
-     *
-     * They are counted from now. Opened on tomorrow, that printed this
-     * afternoon's clock times against tomorrow's stops -- and a forecast day has
-     * no departure time to count from instead. It keeps its drive times and
-     * gets no arrivals.
-     */
-    const inProgress = dayStart.getTime() <= now && now < dayEnd.getTime();
-
     const empty: TechnicianRoute = {
       technicianId,
       origin,
       originKind,
-      arrivals: [],
       stops: routable,
       legs: [],
       totalDistanceMeters: 0,
@@ -446,7 +398,7 @@ export class RouteService {
     // Without a position there is no starting point, and without at least one
     // stop there is nothing to order. Both return the stops unordered rather
     // than an error: the day is still known, it simply has no route yet.
-    if (!origin || !routable.length) return withArrivals(empty, inProgress);
+    if (!origin || !routable.length) return empty;
 
     /**
      * Reuse the drawn route unless the day has changed enough to redraw it.
@@ -454,8 +406,9 @@ export class RouteService {
      * Asking Google is a billed request, and the console used to make two of
      * them every two minutes for as long as a technician was selected --
      * whether or not anything about their day had moved. `needsReroute`
-     * decides; the arrival times are recomputed on every call regardless,
-     * because timing a drawn route from where somebody now stands is free.
+     * decides. The origin is refreshed on every call regardless, so a reused
+     * line can still be timed from where somebody now stands -- which costs
+     * nothing, and is the timeline's job.
      */
     const key = `${organizationId}:${technicianId}:${dayStart.toISOString()}`;
     const stopIds = routable.map((stop) => stop.inspectionId);
@@ -466,7 +419,7 @@ export class RouteService {
       now,
     );
     if (!decision.reroute && cached)
-      return withArrivals({ ...cached.route, origin, originKind }, inProgress);
+      return { ...cached.route, origin, originKind };
 
     /**
      * Callers share a draw only when they are asking for the same one.
@@ -508,7 +461,7 @@ export class RouteService {
       }
     }
 
-    return withArrivals(route, inProgress);
+    return route;
   }
 
   /** Orders and draws the route through Google or OSRM. The expensive part. */
@@ -592,7 +545,6 @@ export class RouteService {
       technicianId,
       origin,
       originKind,
-      arrivals: [],
       stops: ordered,
       legs,
       totalDistanceMeters: Math.round(drive.distanceMeters),

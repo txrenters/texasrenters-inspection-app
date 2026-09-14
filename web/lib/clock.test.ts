@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CLOCK_ZONES, msUntilNextMinute, readClock } from './clock';
+import { businessTimeOfDay, CLOCK_ZONES, msUntilNextMinute, readClock } from './clock';
 
 const manila = CLOCK_ZONES.find((zone) => zone.id === 'manila')!;
 const texas = CLOCK_ZONES.find((zone) => zone.id === 'texas')!;
@@ -78,5 +78,24 @@ describe('msUntilNextMinute', () => {
       expect(value).toBeGreaterThan(0);
       expect(value).toBeLessThanOrEqual(60_000);
     }
+  });
+});
+
+
+describe('businessTimeOfDay', () => {
+  it('prints a field time in Texas, whoever is reading', () => {
+    // 22:49 UTC on 14 September: 5:49 PM in Houston, 6:49 AM the next day in
+    // Manila -- which is what the day summary printed before it asked.
+    expect(businessTimeOfDay('2026-09-14T22:49:00.000Z')).toBe('5:49 PM');
+  });
+
+  it('follows Texas into winter time', () => {
+    expect(businessTimeOfDay('2026-01-15T18:00:00.000Z')).toBe('12:00 PM');
+  });
+
+  it('has nothing to print for no time or an unreadable one', () => {
+    expect(businessTimeOfDay(null)).toBeNull();
+    expect(businessTimeOfDay(undefined)).toBeNull();
+    expect(businessTimeOfDay('not a time')).toBeNull();
   });
 });

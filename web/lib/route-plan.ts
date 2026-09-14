@@ -1,4 +1,6 @@
-import type { TechnicianRoute } from '@texasrenters/shared';
+import type { RemainderProjection, TechnicianRoute } from '@texasrenters/shared';
+
+import { businessTimeOfDay } from './clock';
 
 /**
  * Reading a planned route apart from a refused one.
@@ -94,14 +96,8 @@ export function describeOrigin(route: TechnicianRoute): string | null {
     case 'HOME':
       return 'from home';
     case 'LAST_KNOWN': {
-      const at = route.origin?.recordedAt ? new Date(route.origin.recordedAt) : null;
-      if (!at || Number.isNaN(at.getTime())) return 'from where they were last seen';
-      const time = at.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        timeZone: 'America/Chicago',
-      });
-      return `from where they were last seen at ${time}`;
+      const time = businessTimeOfDay(route.origin?.recordedAt);
+      return time ? `from where they were last seen at ${time}` : 'from where they were last seen';
     }
     default:
       return null;
@@ -109,20 +105,27 @@ export function describeOrigin(route: TechnicianRoute): string | null {
 }
 
 /**
- * A stop's expected arrival as a time of day in Texas, or null if it has none.
+ * A stop's expected arrival, as a time of day in Texas, or null if it has none.
  *
- * Null for a stop already behind the technician, which the route leaves out of
- * its arrivals rather than dating in the past -- a panel would otherwise print
- * a time that has already gone as though it were a forecast.
+ * Read from the day's projection rather than from the route, because only the
+ * projection knows how long somebody has already been at the stop they are on.
+ * Null for that stop, for one already behind them, and on a day that is not
+ * under way -- a panel would otherwise print a time as though it were a
+ * forecast.
  */
-export function arrivalTime(route: TechnicianRoute, inspectionId: string): string | null {
-  const arrival = route.arrivals?.find((entry) => entry.inspectionId === inspectionId);
-  if (!arrival) return null;
-  const at = new Date(arrival.arriveAt);
-  if (Number.isNaN(at.getTime())) return null;
-  return at.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'America/Chicago',
-  });
+export function arrivalTime(
+  projection: RemainderProjection | null | undefined,
+  inspectionId: string,
+): string | null {
+  const arrival = projection?.arrivals.find((entry) => entry.inspectionId === inspectionId);
+  return businessTimeOfDay(arrival?.arriveAt);
+}
+
+/** How long they have been at this stop, if it is the visit under way; otherwise null. */
+export function onSiteSeconds(
+  projection: RemainderProjection | null | undefined,
+  inspectionId: string,
+): number | null {
+  const current = projection?.current;
+  return current?.inspectionIds.includes(inspectionId) ? current.onSiteSeconds : null;
 }

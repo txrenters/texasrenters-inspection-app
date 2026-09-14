@@ -191,19 +191,6 @@ describe('redrawing a route', () => {
     expect(route.origin?.latitude).toBe(HOME.latitude);
   });
 
-  it('gives every stop an arrival, even from a reused route', async () => {
-    // The line is reused; the times are recomputed on every read.
-    const { prisma } = day(['a', 'b']);
-    const { client } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
-
-    await service.planDay('org', 'tech', DAY);
-    const reused = await service.planDay('org', 'tech', DAY);
-
-    expect(reused.arrivals).toHaveLength(2);
-    expect(reused.arrivals.every((a) => Number.isFinite(Date.parse(a.arriveAt)))).toBe(true);
-  });
-
   it('keeps the live route while the handset is quiet', async () => {
     /**
      * Recalculated while somebody is online and sending, and not otherwise. A
@@ -225,21 +212,6 @@ describe('redrawing a route', () => {
 });
 
 describe('which day a route belongs to', () => {
-  it('gives a later day its drive times but no arrival times', async () => {
-    /**
-     * Arrivals are counted from now. On tomorrow's route that printed this
-     * afternoon's clock times against tomorrow's stops, as though forecast.
-     */
-    const { prisma } = day(['a', 'b']);
-    const { client } = google();
-    const service = new RouteService(prisma as never, osrmUnused, client as never);
-
-    const later = await service.planDay('org', 'tech', new Date(NOW + 2 * DAY_MS));
-
-    expect(later.legs.length).toBeGreaterThan(0);
-    expect(later.arrivals).toEqual([]);
-  });
-
   it('does not start an earlier day from where somebody is now', async () => {
     const { prisma, state } = day(['a', 'b']);
     const { client } = google();

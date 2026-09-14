@@ -105,4 +105,62 @@ describe('a technician day summary', () => {
     render(<TechnicianDaySummary timeline={timeline({ untimedInspectionIds: ['a', 'b'] })} />);
     expect(screen.getByText(/could not be timed/i)).toBeInTheDocument();
   });
+
+
+  it('gives the projected finish in Texas time, wherever it is read', () => {
+    // 22:40 UTC is 5:40 PM in Texas in September. Left to the browser it read
+    // 6:40 AM to the office in Manila, and 10:40 PM on a UTC machine.
+    render(<TechnicianDaySummary timeline={timeline()} />);
+    expect(screen.getByText('5:40 PM')).toBeInTheDocument();
+  });
+
+  it('calls a last stop still under way the last stop, not "0 stops left"', () => {
+    render(
+      <TechnicianDaySummary
+        timeline={timeline({
+          projection: {
+            projectedFinishAt: '2026-09-12T22:40:00.000Z',
+            remainingSeconds: 600,
+            stopsRemaining: 0,
+            perVisitSeconds: 2400,
+            basis: 'ESTIMATED',
+            current: {
+              placeId: 'building-a',
+              inspectionIds: ['a'],
+              arrivedAt: '2026-09-12T22:00:00.000Z',
+              onSiteSeconds: 1800,
+              remainingSeconds: 600,
+            },
+            arrivals: [],
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/on the last stop/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 stops left/)).not.toBeInTheDocument();
+  });
+
+  it('gives no finish time for a day that is not under way', () => {
+    // Everything in a projection counts from now, so for another day a finish
+    // would be this afternoon's clock pinned to it.
+    render(
+      <TechnicianDaySummary
+        timeline={timeline({
+          projection: {
+            projectedFinishAt: null,
+            remainingSeconds: 2 * 3600,
+            stopsRemaining: 2,
+            perVisitSeconds: 3600,
+            basis: 'MEASURED',
+            current: null,
+            arrivals: [],
+          },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText(/projected finish/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 stops left/)).toBeInTheDocument();
+  });
 });
