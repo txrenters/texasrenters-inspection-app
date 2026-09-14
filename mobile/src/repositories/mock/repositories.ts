@@ -4,11 +4,13 @@ import type {
   FindingKind,
   FindingRepository,
   FloorPlanRepository,
+  HomeRepository,
   InspectionListFilters,
   InspectionPage,
   InspectionRepository,
   MediaRepository,
   PropertyRepository,
+  TechnicianHome,
   UploadRepository,
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
@@ -497,5 +499,25 @@ export class MockFindingRepository implements FindingRepository {
       reviewStatus: 'REINSPECTION_REQUESTED',
       reviewerNotes: reason.trim(),
     });
+  }
+}
+
+/** In-memory, so the demo build can exercise the screen without an API. */
+export class MockHomeRepository implements HomeRepository {
+  private home: TechnicianHome | null = null;
+
+  async get() {
+    return this.home;
+  }
+
+  async set(address: string) {
+    const trimmed = address.trim();
+    if (!trimmed) throw new Error('Enter an address.');
+    this.home = { address: trimmed, matchedAddress: trimmed, latitude: 29.76, longitude: -95.37 };
+    return this.home;
+  }
+
+  async clear() {
+    this.home = null;
   }
 }

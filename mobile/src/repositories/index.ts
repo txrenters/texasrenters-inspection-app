@@ -5,6 +5,7 @@ import {
   ApiCatalogRepository,
   ApiFindingRepository,
   ApiFloorPlanRepository,
+  ApiHomeRepository,
   ApiInspectionRepository,
   ApiMediaRepository,
   ApiPropertyRepository,
@@ -14,6 +15,7 @@ import {
   MockAuthRepository,
   MockFindingRepository,
   MockFloorPlanRepository,
+  MockHomeRepository,
   MockInspectionRepository,
   MockMediaRepository,
   MockPropertyRepository,
@@ -37,6 +39,7 @@ const mockRepositories: Repositories = {
   media: new MockMediaRepository(),
   uploads: new MockUploadRepository(),
   findings: new MockFindingRepository(),
+  home: new MockHomeRepository(),
 };
 
 const apiRepositories: Repositories = {
@@ -48,6 +51,7 @@ const apiRepositories: Repositories = {
   media: new ApiMediaRepository(),
   uploads: new ApiUploadRepository(),
   findings: new ApiFindingRepository(),
+  home: new ApiHomeRepository(),
 };
 
 export const repositories = environment.dataSource === 'api' ? apiRepositories : mockRepositories;

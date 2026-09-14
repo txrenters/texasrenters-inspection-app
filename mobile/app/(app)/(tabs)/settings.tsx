@@ -8,6 +8,7 @@ import {
   DatabaseIcon,
   HardDriveIcon,
   HelpCircleIcon,
+  HomeIcon,
   InfoIcon,
   LogOutIcon,
   MoonIcon,
@@ -26,7 +27,12 @@ import {
   startShiftTracking,
   stopShiftTracking,
 } from '@/src/location/shift-tracking';
-import { useCurrentUser, useSignOut, useUploads } from '@/src/features/queries';
+import {
+  useCurrentUser,
+  useSignOut,
+  useTechnicianHome,
+  useUploads,
+} from '@/src/features/queries';
 import { clearLocalRecordings } from '@/src/media/local-recordings';
 import { clearLocalSnapshots } from '@/src/media/local-snapshots';
 import { useDemoStore } from '@/src/stores/demo.store';
@@ -42,6 +48,7 @@ registerIcons(
   DatabaseIcon,
   HardDriveIcon,
   HelpCircleIcon,
+  HomeIcon,
   InfoIcon,
   LogOutIcon,
   MapPinIcon,
@@ -59,6 +66,7 @@ export default function SettingsScreen() {
   // own notification, and a switch that disagreed with the notification would
   // be worse than no switch at all.
   const locationPaused = usePreferencesStore((state) => state.locationPaused);
+  const home = useTechnicianHome();
   const setLocationPaused = usePreferencesStore((state) => state.setLocationPaused);
   const [recording, setRecording] = useState(!locationPaused);
   const [shiftBusy, setShiftBusy] = useState(false);
@@ -244,9 +252,21 @@ export default function SettingsScreen() {
             iconBackground="bg-chart-2/15"
             title="Share my location"
             description="Records your location for dispatch while the app is open. Stops when you close the app."
-            last
             value={recording}
             onValueChange={(next) => void toggleShift(next)}
+          />
+          {/* Beside the location switch, because both answer the same
+              question for the office map: where your day starts, and where you
+              are once it has. Shows the stored address so a stale one is
+              visible without opening the screen. */}
+          <SettingLinkRow
+            icon={HomeIcon}
+            iconClassName="text-chart-1"
+            iconBackground="bg-chart-1/15"
+            title="Home address"
+            description={home.data?.address ?? 'Not set — your route starts from here each day'}
+            last
+            onPress={() => router.push('/home-address')}
           />
         </View>
 

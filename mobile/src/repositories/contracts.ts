@@ -263,6 +263,26 @@ export interface FindingRepository {
   requestReinspection(id: string, reason: string): Promise<Finding>;
 }
 
+/**
+ * Where a technician's day starts, as they entered it.
+ *
+ * `matchedAddress` is what the geocoder understood, and it is shown back so a
+ * wrong suburb is caught at the moment it is typed rather than on the first
+ * morning's route.
+ */
+export interface TechnicianHome {
+  address: string | null;
+  matchedAddress?: string | null;
+  latitude: number;
+  longitude: number;
+}
+
+export interface HomeRepository {
+  get(): Promise<TechnicianHome | null>;
+  set(address: string): Promise<TechnicianHome>;
+  clear(): Promise<void>;
+}
+
 export interface Repositories {
   auth: AuthRepository;
   properties: PropertyRepository;
@@ -272,4 +292,5 @@ export interface Repositories {
   media: MediaRepository;
   uploads: UploadRepository;
   findings: FindingRepository;
+  home: HomeRepository;
 }

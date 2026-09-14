@@ -56,6 +56,7 @@ export const queryKeys = {
   all: [] as const,
   demoUsers: ['demoUsers'] as const,
   currentUser: ['currentUser'] as const,
+  technicianHome: ['technicianHome'] as const,
   dashboard: ['dashboard'] as const,
   inspections: (filters: object = {}) => ['inspections', filters] as const,
   inspectionsRoot: ['inspections'] as const,
@@ -781,4 +782,35 @@ export function matchesInspectionFilter(status: InspectionStatus, filter: string
 }
 export function matchesFindingFilter(status: FindingStatus, filter: string) {
   return filter === 'ALL' || status === filter;
+}
+
+/** The technician's own home -- where their route starts before they set off. */
+export function useTechnicianHome() {
+  return useQuery({
+    queryKey: queryKeys.technicianHome,
+    queryFn: () => repositories.home.get(),
+  });
+}
+
+/**
+ * Saves a home and caches what the server geocoded it to.
+ *
+ * The cache is written from the response rather than invalidated, so the
+ * matched address the server read back appears the instant it is saved --
+ * which is the moment a wrong suburb is worth catching.
+ */
+export function useSetTechnicianHome() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (address: string) => repositories.home.set(address),
+    onSuccess: (home) => client.setQueryData(queryKeys.technicianHome, home),
+  });
+}
+
+export function useClearTechnicianHome() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => repositories.home.clear(),
+    onSuccess: () => client.setQueryData(queryKeys.technicianHome, null),
+  });
 }

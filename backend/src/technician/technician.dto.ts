@@ -416,3 +416,15 @@ export class TechnicianLocationBatchDto {
   @Type(() => TechnicianLocationFixDto)
   fixes!: TechnicianLocationFixDto[];
 }
+
+/**
+ * A technician's home, as they would write it on an envelope.
+ *
+ * One line rather than street, city and postcode fields: a technician types
+ * this once on a phone, and Google resolves free text as well as structured
+ * input. Bounded because it is geocoded, and an unbounded string sent to a paid
+ * API is an unbounded bill.
+ */
+export class TechnicianHomeDto {
+  @IsString() @MaxLength(200) address!: string;
+}

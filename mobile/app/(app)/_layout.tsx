@@ -53,6 +53,7 @@ export default function AppLayout() {
         <Stack.Screen name="recording-review/[inspectionId]/[areaId]" />
         <Stack.Screen name="review/[id]" />
         <Stack.Screen name="diagnostics" />
+        <Stack.Screen name="home-address" />
       </Stack>
     </>
   );
