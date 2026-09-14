@@ -57,6 +57,8 @@
   --color-map-technician: var(--map-technician);
   --color-map-technician-stale: var(--map-technician-stale);
   --color-map-route: var(--map-route);
+  --color-map-route-done: var(--map-route-done);
+  --color-map-route-next: var(--map-route-next);
   --color-map-air: var(--map-air);
   --color-warning: var(--warning);
   --color-info: var(--info);
@@ -193,6 +195,11 @@
      it has to carry over satellite and hybrid imagery, which is what the map
      is mostly used in and where a blue line disappears into water and roofs. */
   --map-route: oklch(0.68 0.19 52);
+  /* The part of the day already done: the same line drained to grey, so the
+     orange that is left stays the thing the eye follows. */
+  --map-route-done: oklch(0.6 0.01 260);
+  /* The next stop, in the technician's green -- where they are heading. */
+  --map-route-next: oklch(0.58 0.17 152);
   /* Air travel. Deliberately not the route blue: this is a journey nobody
      drove and nobody planned, and it must not be mistaken for the road line. */
   --map-air: oklch(0.55 0.16 25);
@@ -332,6 +339,10 @@
 
 .map-route-line {
   stroke: var(--map-route);
+}
+
+.map-route-done-line {
+  stroke: var(--map-route-done);
 }
 
 /* A technician who is reporting right now.

@@ -291,11 +291,23 @@ const ClusterPin = memo(function ClusterPin({ count, dim = false }: { count: num
   );
 });
 
-/** A numbered stop on the recommended route. */
-const StopPin = memo(function StopPin({ order }: { order: number }) {
+/**
+ * A numbered stop on the recommended route.
+ *
+ * Green for the next stop -- where the technician is heading -- and the route's
+ * orange for the rest.
+ */
+const StopPin = memo(function StopPin({ order, next = false }: { order: number; next?: boolean }) {
   return (
     <svg height="24" viewBox="0 0 24 24" width="24">
-      <circle className="fill-map-route" cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" />
+      <circle
+        className={next ? 'fill-map-route-next' : 'fill-map-route'}
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="#fff"
+        strokeWidth="2"
+      />
       <text
         dominantBaseline="central"
         fill="#fff"
@@ -308,6 +320,23 @@ const StopPin = memo(function StopPin({ order }: { order: number }) {
       >
         {order}
       </text>
+    </svg>
+  );
+});
+
+/** A stop already finished: grey and ticked, out of the way of what is left. */
+const DonePin = memo(function DonePin() {
+  return (
+    <svg height="20" viewBox="0 0 24 24" width="20">
+      <circle className="fill-map-route-done" cx="12" cy="12" r="10" stroke="#fff" strokeWidth="2" />
+      <path
+        d="M7.5 12.5l3 3 6-6.5"
+        fill="none"
+        stroke="#fff"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="2.4"
+      />
     </svg>
   );
 });
@@ -684,22 +713,88 @@ const PropertyLayer = memo(function PropertyLayer({
  * Two lines, not one: a wide casing under a narrow line is what keeps a route
  * legible over both pale suburb and dark motorway.
  */
-const RouteLayer = memo(function RouteLayer({ route }: { route: TechnicianRoute | null }) {
+const RouteLayer = memo(function RouteLayer({
+  currentInspectionIds,
+  route,
+}: {
+  /** The visit under way, from the location trail, so its stop can say so. */
+  currentInspectionIds: readonly string[] | null;
+  route: TechnicianRoute | null;
+}) {
   const [openStop, setOpenStop] = useState<string | null>(null);
 
-  if (!route?.geometry.length) return null;
+  if (!route) return null;
+
+  const current = new Set(currentInspectionIds ?? []);
+  // The first stop still ahead: not the one they are standing at.
+  const nextId = route.geometry.length
+    ? route.stops.find((stop) => !current.has(stop.inspectionId))?.inspectionId
+    : undefined;
 
   return (
     <>
-      <Line
-        className="map-route-casing"
-        opacity={0.9}
-        path={route.geometry}
-        weight={9}
-        zIndex={2}
-      />
-      <Line className="map-route-line" opacity={1} path={route.geometry} weight={4} zIndex={3} />
-      {route.stops.map((stop, index) => {
+      {/* The day so far, in grey and under the orange: the drive through the
+          stops already finished, and a tick on each. They used to disappear
+          from the map as they were submitted, so an afternoon showed only what
+          was left. */}
+      {route.history.geometry.length ? (
+        <>
+          <Line
+            className="map-route-casing"
+            opacity={0.6}
+            path={route.history.geometry}
+            weight={7}
+            zIndex={0}
+          />
+          <Line
+            className="map-route-done-line"
+            opacity={0.95}
+            path={route.history.geometry}
+            weight={4}
+            zIndex={1}
+          />
+        </>
+      ) : null}
+      {route.history.stops.map((stop) => {
+        const position = { lat: stop.latitude, lng: stop.longitude };
+        return (
+          <Fragment key={`done-${stop.inspectionId}`}>
+            <AdvancedMarker
+              onClick={() => setOpenStop(stop.inspectionId)}
+              position={position}
+              zIndex={700}
+            >
+              <DonePin />
+            </AdvancedMarker>
+            {openStop === stop.inspectionId ? (
+              <InfoWindow onCloseClick={() => setOpenStop(null)} position={position}>
+                <div className="text-popover-foreground text-xs leading-relaxed">
+                  <div className="text-sm font-medium">{stop.propertyName}</div>
+                  <div className="text-muted-foreground">
+                    {stop.addressLine1}
+                    {stop.city ? `, ${stop.city}` : null}
+                  </div>
+                  <div className="mt-1">Done</div>
+                </div>
+              </InfoWindow>
+            ) : null}
+          </Fragment>
+        );
+      })}
+
+      {route.geometry.length ? (
+        <>
+          <Line
+            className="map-route-casing"
+            opacity={0.9}
+            path={route.geometry}
+            weight={9}
+            zIndex={2}
+          />
+          <Line className="map-route-line" opacity={1} path={route.geometry} weight={4} zIndex={3} />
+        </>
+      ) : null}
+      {(route.geometry.length ? route.stops : []).map((stop, index) => {
         const position = { lat: stop.latitude, lng: stop.longitude };
         // Legs run parallel to stops -- leg[i] is the drive that *arrives* at
         // stop[i], so the first one starts from the technician rather than
@@ -722,7 +817,19 @@ const RouteLayer = memo(function RouteLayer({ route }: { route: TechnicianRoute 
               position={position}
               zIndex={800}
             >
-              <StopPin order={index + 1} />
+              {current.has(stop.inspectionId) ? (
+                // Where the technician is, labelled on the pin itself beside
+                // the marker that moves, so "which property" has an answer on
+                // the map as well as in the list.
+                <div className="flex flex-col items-center gap-0.5">
+                  <span className="bg-map-technician rounded-full px-1.5 py-px text-[10px] font-semibold whitespace-nowrap text-white shadow">
+                    Here now
+                  </span>
+                  <StopPin order={index + 1} />
+                </div>
+              ) : (
+                <StopPin next={stop.inspectionId === nextId} order={index + 1} />
+              )}
             </AdvancedMarker>
             {openStop === stop.inspectionId ? (
               <InfoWindow onCloseClick={() => setOpenStop(null)} position={position}>
@@ -933,6 +1040,7 @@ function MapOrReason({ children }: { children: React.ReactNode }) {
 }
 
 export function TechnicianMap({
+  currentInspectionIds = null,
   highlightedBuildingIds = null,
   positions,
   properties = [],
@@ -940,6 +1048,8 @@ export function TechnicianMap({
   selectedPropertyId = null,
   selectedTechnicianId = null,
 }: {
+  /** The selected technician's visit under way, by their location trail. */
+  currentInspectionIds?: readonly string[] | null;
   highlightedBuildingIds?: ReadonlySet<string> | null;
   positions: readonly TechnicianPosition[];
   properties?: readonly PropertyPosition[];
@@ -1066,7 +1176,7 @@ export function TechnicianMap({
 
           {/* Under the markers and over the properties: the route is context for
               the pins, not a thing to be read on its own. */}
-          <RouteLayer route={route} />
+          <RouteLayer currentInspectionIds={currentInspectionIds} route={route} />
           <AirTravelLayer route={route} />
 
           <PropertyLayer

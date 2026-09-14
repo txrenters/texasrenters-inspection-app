@@ -369,7 +369,7 @@ export default function TechnicianMapPage() {
                   entries={visibleRoster}
                   onSelect={selectTechnician}
                   onSelectStop={selectStop}
-                  projection={selectedId ? (timeline.data?.projection ?? null) : null}
+                  timeline={selectedId ? (timeline.data ?? null) : null}
                   route={selectedId ? (route.data ?? null) : null}
                   selectedId={selectedId}
                   selectedStopBuildingId={selectedPropertyId}
@@ -399,6 +399,9 @@ export default function TechnicianMapPage() {
                 layers correctly and stop escaping. */}
             <div className="relative isolate h-[70vh] w-full overflow-hidden rounded-lg border">
               <TechnicianMap
+                currentInspectionIds={
+                  selectedId ? (timeline.data?.projection.current?.inspectionIds ?? null) : null
+                }
                 highlightedBuildingIds={highlighted}
                 positions={visiblePositions}
                 properties={properties.data ?? []}

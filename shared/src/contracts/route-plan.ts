@@ -174,6 +174,27 @@ export function haversineMeters(
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/**
+ * Statuses that mean the technician has been and done the visit.
+ *
+ * Everything from submission on: the office's review states, and completion.
+ * Kept on the day rather than dropped, so the map's list reads as a history
+ * of the day and not only as what is left of it.
+ */
+export const FINISHED_INSPECTION_STATUSES = [
+  'TECHNICIAN_SUBMITTED',
+  'PROCESSING',
+  'REVIEW_REQUIRED',
+  'UNDER_REVIEW',
+  'TBD',
+  'COMPLETED',
+] as const;
+
+/** Whether a stop is one already finished. Unknown or missing status is not. */
+export function isFinishedStatus(status: string | null | undefined): boolean {
+  return (FINISHED_INSPECTION_STATUSES as readonly string[]).includes(status ?? '');
+}
+
 export interface RouteStop {
   inspectionId: string;
   propertyId: string;
@@ -273,6 +294,15 @@ export interface TechnicianRoute {
    */
   geometry: [number, number][];
   /**
+   * The day so far: the stops already finished, in the order they were
+   * finished, and the drive through them from home when it is known.
+   *
+   * `geometry` is empty with fewer than two points to join, or when it could
+   * not be drawn; the stops are still there to mark. The map draws this grey
+   * under the orange line of what is left.
+   */
+  history: { stops: RouteStop[]; geometry: [number, number][] };
+  /**
    * Free-flow, from the road network's speed limits. OSRM has no traffic data,
    * so this is optimistic in Houston at five o'clock and both surfaces must say
    * "estimate" rather than implying an arrival time.
@@ -308,6 +338,11 @@ export interface AssignedStop {
   propertyName: string;
   inspectionType: string;
   status: string;
+  /**
+   * ISO 8601. When a finished stop was submitted or completed; null for one
+   * still to do. Orders the day's history.
+   */
+  finishedAt: string | null;
 }
 
 export interface TechnicianAssignments {

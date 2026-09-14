@@ -1,4 +1,9 @@
-import type { AssignedStop, RemainderProjection, TechnicianRoute } from '@texasrenters/shared';
+import type {
+  AssignedStop,
+  RemainderProjection,
+  TechnicianDayTimeline,
+  TechnicianRoute,
+} from '@texasrenters/shared';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +30,7 @@ const STOP: AssignedStop = {
   propertyName: '10342 Mist Ln',
   inspectionType: 'MOVE_IN',
   status: 'SCHEDULED',
+  finishedAt: null,
 };
 
 const SECOND_STOP: AssignedStop = {
@@ -33,7 +39,21 @@ const SECOND_STOP: AssignedStop = {
   propertyName: '10103 Mariposa Green Ct',
   inspectionType: 'MOVE_OUT',
   status: 'SCHEDULED',
+  finishedAt: null,
 };
+
+/** A day's timeline around a projection, with nothing else in it but what a test sets. */
+const timelineOf = (
+  projectionValue: RemainderProjection,
+  stops: TechnicianDayTimeline['stops'] = [],
+): TechnicianDayTimeline => ({
+  technicianId: 'tech-1',
+  segments: [],
+  totals: { onSiteSeconds: 0, travellingSeconds: 0, shiftSeconds: 0, visits: 0 },
+  projection: projectionValue,
+  stops,
+  untimedInspectionIds: [],
+});
 
 /** A day's projection with nothing in it but what a test sets. */
 const projection = (over: Partial<RemainderProjection>): RemainderProjection => ({
@@ -91,6 +111,7 @@ const REFUSED: TechnicianRoute = {
   totalDurationSeconds: 0,
   unroutable: [],
   geometry: [],
+  history: { stops: [], geometry: [] },
   originOutsideServiceArea: true,
   airTravel: null,
   estimated: true,
@@ -193,6 +214,7 @@ describe('a route the planner produced', () => {
     totalDurationSeconds: 3671,
     unroutable: [],
     geometry: [[29.75, -95.37]],
+    history: { stops: [], geometry: [] },
     originOutsideServiceArea: false,
     airTravel: null,
     estimated: true,
@@ -213,6 +235,72 @@ describe('a route the planner produced', () => {
     expect(text).toMatch(/suggested order/);
     expect(text).toMatch(/estimated from speed limits/i);
     expect(text).not.toMatch(/no suggested order/i);
+  });
+
+  it('keeps a finished stop on the list, greyed, with when it was done and how long it took', () => {
+    const DONE: AssignedStop = {
+      inspectionId: 'inspection-done',
+      buildingId: 'building-done',
+      propertyName: '3925 Tulane Oak Drive',
+      inspectionType: 'OCCUPIED',
+      status: 'TECHNICIAN_SUBMITTED',
+      // 16:40 UTC is 11:40 AM in Texas.
+      finishedAt: '2026-09-14T16:40:00.000Z',
+    };
+    const { container } = render(
+      <TechnicianRoster
+        entries={entries([DONE, STOP, SECOND_STOP])}
+        onSelect={() => {}}
+        route={PLANNED}
+        selectedId="tech-1"
+        timeline={timelineOf(projection({}), [
+          {
+            buildingId: 'building-done',
+            propertyName: '3925 Tulane Oak Drive',
+            inspectionIds: ['inspection-done'],
+            onSiteSeconds: 42 * 60,
+            driveToSeconds: 12 * 60,
+          },
+        ])}
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/Done 11:40 AM/);
+    expect(text).toMatch(/12 min drive · 42 min on site · 54 min total/);
+    // The day's history, added up.
+    expect(text).toMatch(/1 done · 54 min total · 12 min driving · 42 min on site/);
+    // The person's row counts what is done out of the whole day.
+    expect(text).toMatch(/1\/3 done/);
+    // Listed first, before anything still to do.
+    expect(text.indexOf('Tulane Oak')).toBeLessThan(text.indexOf('Mariposa'));
+  });
+
+  it('marks the next stop, and says where the technician is', () => {
+    render(
+      <TechnicianRoster
+        entries={entries([STOP, SECOND_STOP])}
+        onSelect={() => {}}
+        route={PLANNED}
+        selectedId="tech-1"
+        timeline={timelineOf(
+          projection({
+            current: {
+              placeId: 'building-2',
+              inspectionIds: ['inspection-2'],
+              arrivedAt: '2026-09-14T14:38:00.000Z',
+              onSiteSeconds: 600,
+              remainingSeconds: 1800,
+            },
+          }),
+        )}
+      />,
+    );
+
+    // At the first stop in the route, so the second is next.
+    expect(screen.getByText(/At 10103 Mariposa Green Ct/)).toBeInTheDocument();
+    expect(screen.getByText('Next')).toBeInTheDocument();
+    expect(screen.getByText('10342 Mist Ln').parentElement?.className).toMatch(/text-map-technician/);
   });
 
   it('lists the stops in the order the route recommends, not alphabetically', () => {
@@ -240,7 +328,7 @@ describe('a route the planner produced', () => {
       <TechnicianRoster
         entries={entries([STOP, SECOND_STOP])}
         onSelect={() => {}}
-        projection={projection({
+        timeline={timelineOf(projection({
           current: {
             placeId: 'building-2',
             inspectionIds: ['inspection-2'],
@@ -248,7 +336,7 @@ describe('a route the planner produced', () => {
             onSiteSeconds: 29 * 60,
             remainingSeconds: 11 * 60,
           },
-        })}
+        }))}
         route={PLANNED}
         selectedId="tech-1"
       />,
@@ -265,11 +353,11 @@ describe('a route the planner produced', () => {
       <TechnicianRoster
         entries={entries([STOP, SECOND_STOP])}
         onSelect={() => {}}
-        projection={projection({
+        timeline={timelineOf(projection({
           arrivals: [
             { inspectionId: 'inspection-2', arriveAt: '2026-09-14T15:25:00.000Z', driveSeconds: 1200 },
           ],
-        })}
+        }))}
         route={PLANNED}
         selectedId="tech-1"
       />,
