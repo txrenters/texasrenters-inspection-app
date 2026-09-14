@@ -149,13 +149,16 @@ export interface DayRouteLeg {
 
 export interface TechnicianDayRoute {
   technicianId: string;
-  origin: { latitude: number; longitude: number; recordedAt: string } | null;
+  /** `recordedAt` is null for a route from home, which has no moment to date. */
+  origin: { latitude: number; longitude: number; recordedAt: string | null } | null;
   stops: DayRouteStop[];
   legs: DayRouteLeg[];
   totalDistanceMeters: number;
   totalDurationSeconds: number;
   /** Carried, not dropped: the inspection is still theirs, the address is not on a map. */
   unroutable: { inspectionId: string; propertyName: string }[];
+  /** Which router timed the drive; absent from a server too old to say. */
+  source?: 'GOOGLE_TRAFFIC' | 'OSRM_FREE_FLOW' | null;
 }
 
 export interface InspectionRepository {
