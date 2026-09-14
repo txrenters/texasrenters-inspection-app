@@ -27,6 +27,7 @@ import { diskStorage } from 'multer';
 import { ChargeService } from '../admin/charge.service';
 import { PetObservationDto } from '../admin/admin.dto';
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
+import { businessDayFromQuery } from '../common/business-day';
 import { MobilePushService } from '../realtime/mobile-push.service';
 import { MediaProcessingService } from './media-processing.service';
 import {
@@ -82,11 +83,10 @@ export class TechnicianController {
    */
   @Get('route')
   technicianRoute(@Req() request: AuthenticatedRequest, @Query('date') date?: string) {
-    const day = date ? new Date(date) : new Date();
     return this.routes.planDay(
       request.user.organizationId,
       request.user.id,
-      Number.isNaN(day.getTime()) ? new Date() : day,
+      businessDayFromQuery(date),
     );
   }
 
