@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  estimateArrivals,
   MAX_LIVE_ROUTE_AGE_MS,
   needsReroute,
   OFF_ROUTE_M,
   projectOntoPath,
+  routeProgress,
   type DrawnRoute,
 } from '../src/contracts/live-route.js';
 
@@ -183,63 +183,35 @@ describe('deciding whether to ask Google again', () => {
   });
 });
 
-describe('estimating arrivals from the drawn legs', () => {
-  const NOW = Date.parse('2026-09-14T15:00:00.000Z');
-  const route = {
-    stops: [{ inspectionId: 'first' }, { inspectionId: 'second' }],
-    legs: [
-      { durationSeconds: 600, distanceMeters: 5000 }, // 10 min to the first stop
-      { durationSeconds: 1200, distanceMeters: 5000 }, // 20 min between them
-    ],
-  };
-  const at = (seconds: number) => new Date(NOW + seconds * 1000).toISOString();
-
-  it('times every stop from the start before anybody has moved', () => {
-    const arrivals = estimateArrivals(route, 0, 3600, NOW);
-    expect(arrivals.map((a) => a.arriveAt)).toEqual([
-      at(600),
-      // Ten minutes driving, an hour inside the first stop, twenty more.
-      at(600 + 3600 + 1200),
-    ]);
+describe('how far down its line a route has got', () => {
+  /**
+   * The arrival times are timed from here. A route is drawn once and reused for
+   * minutes, so its line starts where the technician was when it was drawn.
+   */
+  const route = (over: Partial<Parameters<typeof routeProgress>[0]>) => ({
+    originKind: 'LIVE' as const,
+    origin: { latitude: 29.905, longitude: -95.5 },
+    geometry: ROAD,
+    ...over,
   });
 
-  it('pro-rates the leg they are part-way down', () => {
-    // A quarter of the way along the whole route is halfway down the first leg.
-    const [first] = estimateArrivals(route, 0.25, 3600, NOW);
-    expect(first.driveSeconds).toBe(300);
-    expect(first.arriveAt).toBe(at(300));
+  it('is how far along the line a live position is', () => {
+    expect(routeProgress(route({}))).toBeCloseTo(0.5, 2);
   });
 
-  it('leaves out a stop they have already passed rather than dating it in the past', () => {
-    // Three quarters along: past the first stop, halfway through the second leg.
-    const arrivals = estimateArrivals(route, 0.75, 3600, NOW);
-    expect(arrivals.map((a) => a.inspectionId)).toEqual(['second']);
-    expect(arrivals[0].driveSeconds).toBe(600);
+  it('has not started a route from home', () => {
+    // Home is the start of the line by definition; nothing has been driven.
+    expect(routeProgress(route({ originKind: 'HOME' }))).toBe(0);
   });
 
-  it('adds nothing for a stop already reached when timing the next', () => {
-    // Once the first stop is behind them its visit is not waiting ahead any more.
-    const [second] = estimateArrivals(route, 0.75, 3600, NOW);
-    expect(second.arriveAt).toBe(at(600));
+  it('counts a position nowhere near the line as not started', () => {
+    // ~290 m east of the road. The nearest point of the line says nothing
+    // about how far down it they are.
+    expect(routeProgress(route({ origin: { latitude: 29.905, longitude: -95.497 } }))).toBe(0);
   });
 
-  it('does not divide by zero for two stops at one address', () => {
-    const sameAddress = {
-      stops: [{ inspectionId: 'a' }, { inspectionId: 'b' }],
-      legs: [
-        { durationSeconds: 600, distanceMeters: 5000 },
-        { durationSeconds: 0, distanceMeters: 0 },
-      ],
-    };
-    const arrivals = estimateArrivals(sameAddress, 0.1, 1800, NOW);
-    expect(arrivals.every((a) => Number.isFinite(Date.parse(a.arriveAt)))).toBe(true);
-  });
-
-  it('has nothing to estimate without legs', () => {
-    expect(estimateArrivals({ stops: [{ inspectionId: 'a' }], legs: [] }, 0, 1800, NOW)).toEqual([]);
-  });
-
-  it('treats an unknown position as not yet started', () => {
-    expect(estimateArrivals(route, null, 3600, NOW)[0].arriveAt).toBe(at(600));
+  it('has nothing to measure without a line or a position', () => {
+    expect(routeProgress(route({ geometry: [] }))).toBe(0);
+    expect(routeProgress(route({ origin: null }))).toBe(0);
   });
 });

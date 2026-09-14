@@ -2,6 +2,7 @@
 
 import type { TechnicianDayTimeline } from '@texasrenters/shared';
 
+import { businessTimeOfDay } from '@/lib/clock';
 import { formatDuration } from '@/lib/format';
 
 /**
@@ -51,10 +52,14 @@ export function TechnicianDaySummary({ timeline }: { timeline: TechnicianDayTime
    */
   const unaccounted = Math.max(0, totals.shiftSeconds - totals.onSiteSeconds - totals.travellingSeconds);
 
-  const finishAt = new Date(projection.projectedFinishAt);
-  const finish = Number.isNaN(finishAt.getTime())
-    ? null
-    : finishAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  /**
+   * In Texas, whoever is reading.
+   *
+   * This was left to the browser, so the office in Manila read "6:49 AM" for a
+   * day due to end at 5:49 PM in Houston. Null on a day that is not under way,
+   * which has no finish to count toward from now.
+   */
+  const finish = businessTimeOfDay(projection.projectedFinishAt);
 
   return (
     <div className="space-y-2 border-b px-3 py-3">
@@ -74,18 +79,20 @@ export function TechnicianDaySummary({ timeline }: { timeline: TechnicianDayTime
         </p>
       ) : null}
 
-      {projection.stopsRemaining ? (
+      {projection.stopsRemaining || projection.current ? (
         <p className="text-xs">
           {finish ? (
             <>
               Projected finish <span className="tabular-nums">{finish}</span>
             </>
-          ) : (
-            'Projected finish unknown'
-          )}
+          ) : null}
           <span className="text-muted-foreground">
-            {' '}
-            · {projection.stopsRemaining} stop{projection.stopsRemaining === 1 ? '' : 's'} left
+            {finish ? ' · ' : null}
+            {/* The visit under way is not one of the stops left, so a last stop
+                still in progress says so rather than "0 stops left". */}
+            {projection.stopsRemaining
+              ? `${projection.stopsRemaining} stop${projection.stopsRemaining === 1 ? '' : 's'} left`
+              : 'on the last stop'}
             {/* Which number the projection leaned on. A day with nothing
                 finished has nothing to measure, and a placeholder presented as
                 derived is exactly the problem this feature exists to remove. */}

@@ -120,3 +120,21 @@ export const BUSINESS_TIME_ZONE = 'America/Chicago';
 export function businessToday(now: Date = new Date()): string {
   return now.toLocaleDateString('en-CA', { timeZone: BUSINESS_TIME_ZONE });
 }
+
+/**
+ * A moment as a time of day in Texas -- "2:14 PM" -- or null if it is not one.
+ *
+ * For every time the console prints about the field. Left to the browser, the
+ * zone is the reader's: the day summary's projected finish read "6:49 AM" to
+ * the office in Manila, for a day due to end at 5:49 PM in Houston.
+ */
+export function businessTimeOfDay(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: BUSINESS_TIME_ZONE,
+  });
+}

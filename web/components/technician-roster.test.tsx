@@ -1,4 +1,4 @@
-import type { AssignedStop, TechnicianRoute } from '@texasrenters/shared';
+import type { AssignedStop, RemainderProjection, TechnicianRoute } from '@texasrenters/shared';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -35,6 +35,18 @@ const SECOND_STOP: AssignedStop = {
   status: 'SCHEDULED',
 };
 
+/** A day's projection with nothing in it but what a test sets. */
+const projection = (over: Partial<RemainderProjection>): RemainderProjection => ({
+  projectedFinishAt: null,
+  remainingSeconds: 0,
+  stopsRemaining: 0,
+  perVisitSeconds: 40 * 60,
+  basis: 'ESTIMATED',
+  current: null,
+  arrivals: [],
+  ...over,
+});
+
 function entries(stops: AssignedStop[]): RosterEntry[] {
   return [
     {
@@ -63,7 +75,6 @@ const REFUSED: TechnicianRoute = {
   technicianId: 'tech-1',
   origin: { latitude: 8.48164, longitude: 123.806345, recordedAt: new Date().toISOString() },
   originKind: 'LIVE',
-  arrivals: [],
   stops: [
     {
       inspectionId: 'inspection-1',
@@ -149,7 +160,6 @@ describe('a route the planner produced', () => {
     technicianId: 'tech-1',
     origin: { latitude: 29.75, longitude: -95.37, recordedAt: new Date().toISOString() },
     originKind: 'LIVE',
-  arrivals: [],
     stops: [
       {
         inspectionId: 'inspection-2',
@@ -219,6 +229,54 @@ describe('a route the planner produced', () => {
 
     const text = container.textContent ?? '';
     expect(text.indexOf('Mariposa')).toBeLessThan(text.indexOf('Mist Ln'));
+  });
+
+  it('shows how long they have been at the stop under way, not a drive to it', () => {
+    /**
+     * The live map, 14 September: the stop Moses was twenty-nine minutes into
+     * showed a drive and an arrival time, as though he had yet to get there.
+     */
+    const { container } = render(
+      <TechnicianRoster
+        entries={entries([STOP, SECOND_STOP])}
+        onSelect={() => {}}
+        projection={projection({
+          current: {
+            placeId: 'building-2',
+            inspectionIds: ['inspection-2'],
+            arrivedAt: '2026-09-14T14:38:00.000Z',
+            onSiteSeconds: 29 * 60,
+            remainingSeconds: 11 * 60,
+          },
+        })}
+        route={PLANNED}
+        selectedId="tech-1"
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).toMatch(/on site 29 min/);
+    // Not the twenty minutes of driving the route drew to it.
+    expect(text).not.toMatch(/20 min/);
+  });
+
+  it('gives a stop ahead its arrival in Texas time', () => {
+    const { container } = render(
+      <TechnicianRoster
+        entries={entries([STOP, SECOND_STOP])}
+        onSelect={() => {}}
+        projection={projection({
+          arrivals: [
+            { inspectionId: 'inspection-2', arriveAt: '2026-09-14T15:25:00.000Z', driveSeconds: 1200 },
+          ],
+        })}
+        route={PLANNED}
+        selectedId="tech-1"
+      />,
+    );
+
+    // 15:25 UTC is 10:25 AM in Texas in September, whatever zone this runs in.
+    expect(container.textContent).toMatch(/10:25 AM/);
   });
 });
 

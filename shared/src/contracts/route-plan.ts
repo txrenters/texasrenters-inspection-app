@@ -1,4 +1,3 @@
-import type { StopArrival } from './live-route.js';
 /**
  * Ordering a technician's day.
  *
@@ -218,14 +217,6 @@ export interface TechnicianRoute {
    * identically invites a dispatcher to act on the wrong one.
    */
   originKind: RouteOriginKind | null;
-  /**
-   * When each stop still ahead is expected, recomputed on every read.
-   *
-   * Recomputed rather than stored with the drawn route, because it moves with
-   * the technician while the line itself only changes on a material change --
-   * and timing a drawn route from a new position costs nothing.
-   */
-  arrivals: StopArrival[];
   stops: RouteStop[];
   legs: RouteLeg[];
   totalDistanceMeters: number;

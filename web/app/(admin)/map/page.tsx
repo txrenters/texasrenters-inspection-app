@@ -369,6 +369,7 @@ export default function TechnicianMapPage() {
                   entries={visibleRoster}
                   onSelect={selectTechnician}
                   onSelectStop={selectStop}
+                  projection={selectedId ? (timeline.data?.projection ?? null) : null}
                   route={selectedId ? (route.data ?? null) : null}
                   selectedId={selectedId}
                   selectedStopBuildingId={selectedPropertyId}

@@ -514,9 +514,8 @@ export const useMapAssignments = (date: string, enabled = true) =>
  * That was every two minutes, and each refresh redrew the route through Google
  * -- two billed requests -- whether anything had changed or not. The server now
  * keeps the drawn route and redraws only on a material change, so a refresh
- * that finds nothing new costs nothing, and the arrival times it returns move
- * with the technician. Polling faster is what buys the live feel; the cost is
- * capped where it is decided.
+ * that finds nothing new costs nothing. Polling faster is what buys the live
+ * feel; the cost is capped where it is decided.
  */
 export const useTechnicianRoute = (id: string, date: string, enabled = true) =>
   useQuery({
@@ -545,7 +544,10 @@ export const useTechnicianTimeline = (id: string, date: string, enabled = true) 
         `/api/v1/admin/technicians/${id}/timeline${queryString({ date })}`,
         { signal },
       ),
-    refetchInterval: 2 * 60_000,
+    // As often as the route. The arrival at each stop and the time on site come
+    // from here now, and a forecast that moves every two minutes does not
+    // follow anybody.
+    refetchInterval: 30_000,
     enabled,
   });
 export const useAssignments = (query: Record<string, string | number | boolean | undefined>) =>

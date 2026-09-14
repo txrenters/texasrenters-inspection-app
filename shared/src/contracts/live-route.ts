@@ -9,9 +9,11 @@ import { haversineMeters, type RouteOriginKind } from './route-plan.js';
  * arithmetic on the legs Google already returned.
  *
  * So the route is redrawn only on a *material* change, and the arrival times
- * are recomputed on every read. Before this, the console asked Google for a
- * fresh route every two minutes for as long as a technician was selected, even
- * when nothing about their day had changed at all.
+ * are recomputed on every read -- by the day's timeline, which also knows how
+ * long somebody has been at the stop they are on (`projectRemainder`). Before
+ * this, the console asked Google for a fresh route every two minutes for as
+ * long as a technician was selected, even when nothing about their day had
+ * changed at all.
  */
 
 type LatLngPath = readonly (readonly [number, number])[];
@@ -161,80 +163,26 @@ export function needsReroute(
   return { reroute: false, reason: null };
 }
 
-/** A stop's expected arrival, and whether it is still ahead. */
-export interface StopArrival {
-  inspectionId: string;
-  /** ISO 8601. */
-  arriveAt: string;
-  /** Seconds of driving still between the technician and this stop. */
-  driveSeconds: number;
-}
-
 /**
- * When each stop still ahead will be reached.
+ * How far down its drawn line a route's origin is, 0 to 1.
  *
- * Driving time comes from the legs Google returned, pro-rated along the leg the
- * technician is part-way down -- so a leg of twenty minutes that is three
- * quarters driven has five left. Each stop reached before this one adds the
- * time spent inside it, because an arrival that ignores the work in between is
- * an arrival that never happens.
+ * A route is drawn once and reused for minutes, so its line starts where the
+ * technician *was*. Projecting where they are now onto it is what lets the rest
+ * of the day be timed from where they have since got to. A route from home has
+ * not been started. A position nowhere near the line counts as not started
+ * either, rather than as whichever point of the line happens to be closest.
  *
- * Stops already behind the technician are left out rather than given an
- * arrival in the past, which a panel would print as though it were a forecast.
- *
- * `progressFraction` is how far down the drawn line they are, 0 to 1. Taken as
- * a fraction rather than in metres because Google's polyline and its reported
- * leg distances are measured differently and never quite agree; a fraction of
- * one applies cleanly to the other.
+ * A fraction rather than metres because Google's polyline and its reported leg
+ * distances are measured differently and never quite agree; a fraction of one
+ * applies cleanly to the other.
  */
-export function estimateArrivals(
-  route: {
-    stops: readonly { inspectionId: string }[];
-    legs: readonly { durationSeconds: number; distanceMeters: number }[];
-  },
-  progressFraction: number | null,
-  onSiteSeconds: number,
-  now: number = Date.now(),
-): StopArrival[] {
-  const legs = route.legs.slice(0, route.stops.length);
-  if (!legs.length) return [];
-
-  const totalDistance = legs.reduce((sum, leg) => sum + leg.distanceMeters, 0);
-  const along =
-    progressFraction === null || !Number.isFinite(progressFraction)
-      ? 0
-      : Math.max(0, Math.min(1, progressFraction)) * totalDistance;
-
-  const arrivals: StopArrival[] = [];
-  let legStart = 0;
-  let drivingAhead = 0;
-  let stopsReachedFirst = 0;
-
-  legs.forEach((leg, index) => {
-    const legEnd = legStart + leg.distanceMeters;
-
-    if (legEnd <= along) {
-      // Entirely behind them: this stop has been passed.
-      legStart = legEnd;
-      return;
-    }
-
-    // The part of this leg still to drive. A leg with no distance -- two stops
-    // at one address -- has none, and must not divide by zero into NaN.
-    const remainingFraction =
-      leg.distanceMeters > 0 ? (legEnd - Math.max(along, legStart)) / leg.distanceMeters : 0;
-    drivingAhead += leg.durationSeconds * remainingFraction;
-
-    const seconds = drivingAhead + stopsReachedFirst * onSiteSeconds;
-    arrivals.push({
-      inspectionId: route.stops[index].inspectionId,
-      arriveAt: new Date(now + seconds * 1000).toISOString(),
-      driveSeconds: Math.round(drivingAhead),
-    });
-
-    stopsReachedFirst += 1;
-    legStart = legEnd;
-  });
-
-  return arrivals;
+export function routeProgress(route: {
+  originKind: RouteOriginKind | null;
+  origin: { latitude: number; longitude: number } | null;
+  geometry: LatLngPath;
+}): number {
+  if (route.originKind === 'HOME' || !route.origin || route.geometry.length < 2) return 0;
+  const projected = projectOntoPath(route.origin, route.geometry);
+  if (!projected || projected.totalMeters <= 0 || projected.offsetMeters > OFF_ROUTE_M) return 0;
+  return projected.alongMeters / projected.totalMeters;
 }
