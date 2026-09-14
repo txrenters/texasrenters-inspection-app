@@ -2,6 +2,8 @@ import Constants from 'expo-constants';
 import type * as ExpoNotifications from 'expo-notifications';
 import { Platform, type AppStateStatus } from 'react-native';
 
+import { areNotificationsEnabled } from '../stores/preferences.store';
+
 let notificationHandlerConfigured = false;
 
 /**
@@ -16,16 +18,27 @@ export async function loadNotifications(): Promise<typeof ExpoNotifications | nu
   const Notifications = await import('expo-notifications');
   if (!notificationHandlerConfigured) {
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-        shouldShowBanner: true,
-        shouldShowList: true,
-      }),
+      handleNotification: async () => notificationPresentation(areNotificationsEnabled()),
     });
     notificationHandlerConfigured = true;
   }
   return Notifications;
+}
+
+/**
+ * How a notification arriving while the app is open is shown.
+ *
+ * Follows the Settings toggle. It asked for a banner and a sound regardless, so
+ * with notifications turned off the app stopped raising its own alerts while a
+ * push from the server still dropped a banner over the screen being used.
+ */
+export function notificationPresentation(enabled: boolean) {
+  return {
+    shouldPlaySound: enabled,
+    shouldSetBadge: enabled,
+    shouldShowBanner: enabled,
+    shouldShowList: enabled,
+  };
 }
 
 /**

@@ -15,7 +15,21 @@ export type TechnicianInspectionEventKind =
   | 'REASSIGNED'
   | 'UNASSIGNED'
   | 'CANCELLED'
+  /** The office changed an inspection this technician is carrying -- more areas to walk. */
   | 'UPDATED'
+  /**
+   * The technician changed one of their own inspections.
+   *
+   * Sent so their other devices catch up, and never a notification. Their own
+   * checklist taps, submits and skips used to go out as `UPDATED`, which pushed
+   * "The office added an area to one of your inspections" back to the phone in
+   * their hand after nearly every button they pressed.
+   *
+   * A kind of its own rather than a flag on `UPDATED` because the apps already
+   * installed decide what to show by kind alone: they have no copy for this
+   * one, so they refresh and stay silent without needing an update.
+   */
+  | 'SYNCED'
   /**
    * The office sent a submitted or finalized inspection back to this
    * technician, with a reason they need to read.

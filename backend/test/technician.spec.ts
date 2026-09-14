@@ -329,7 +329,10 @@ describe('technician mobile data boundary', () => {
 
     await service.completeRoom(technician, 'room-1');
 
-    expect(events.publish).toHaveBeenCalledWith(technician.id, 'inspection-1', 'UPDATED');
+    // SYNCED, so the other devices refresh -- and not UPDATED, which is the
+    // office's "an area was added" and notifies the phone that made the change.
+    expect(events.publish).toHaveBeenCalledWith(technician.id, 'inspection-1', 'SYNCED');
+    expect(events.publish).not.toHaveBeenCalledWith(technician.id, 'inspection-1', 'UPDATED');
   });
 
   it('does not fail a committed write when realtime is unavailable', async () => {

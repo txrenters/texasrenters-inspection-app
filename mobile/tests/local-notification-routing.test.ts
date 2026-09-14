@@ -1,4 +1,4 @@
-import { shouldNotifyLocally } from '../src/realtime/notifications';
+import { notificationPresentation, shouldNotifyLocally } from '../src/realtime/notifications';
 
 describe('who raises the notification for a socket event', () => {
   /**
@@ -22,5 +22,30 @@ describe('who raises the notification for a socket event', () => {
     expect(shouldNotifyLocally(false, 'active')).toBe(true);
     expect(shouldNotifyLocally(false, 'background')).toBe(true);
     expect(shouldNotifyLocally(false, 'inactive')).toBe(true);
+  });
+});
+
+describe('a notification arriving while the app is open', () => {
+  /**
+   * Turning notifications off in Settings stopped the app's own alerts, but a
+   * push from the server still came up as a banner with a sound, because the
+   * handler asked for both whatever the toggle said.
+   */
+  it('shows nothing, and makes no sound, with notifications turned off', () => {
+    expect(notificationPresentation(false)).toEqual({
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+      shouldShowBanner: false,
+      shouldShowList: false,
+    });
+  });
+
+  it('shows the banner and plays the sound with them on', () => {
+    expect(notificationPresentation(true)).toEqual({
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    });
   });
 });
