@@ -46,16 +46,35 @@ export type PhotoCaptureTimeSource = (typeof PHOTO_CAPTURE_TIME_SOURCES)[number]
  */
 export const MAX_CAPTURE_CLOCK_AHEAD_MS = 2 * 60_000;
 
-const STAMP = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-  second: '2-digit',
-  timeZone: PHOTO_STAMP_TIME_ZONE,
-  timeZoneName: 'short',
-});
+let stampFormat: Intl.DateTimeFormat | null | undefined;
+
+/**
+ * The stamp's formatter, built on first use and never at import.
+ *
+ * The mobile app bundles every module of this package, and its JavaScript
+ * engine is not guaranteed to accept a named zone. A formatter built at import
+ * that threw there would stop the app starting over a stamp it never draws;
+ * built here, the worst case is a photograph with no stamp.
+ */
+function stampFormatter() {
+  if (stampFormat === undefined) {
+    try {
+      stampFormat = new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: PHOTO_STAMP_TIME_ZONE,
+        timeZoneName: 'short',
+      });
+    } catch {
+      stampFormat = null;
+    }
+  }
+  return stampFormat;
+}
 
 /**
  * The stamp drawn on a photograph: "Sep 14, 2026, 1:22:07 PM CDT".
@@ -72,8 +91,9 @@ export function formatPhotoStamp(
 ): string | null {
   if (!capturedAt || !source) return null;
   const date = new Date(capturedAt);
-  if (Number.isNaN(date.getTime())) return null;
-  const stamp = STAMP.format(date);
+  const format = stampFormatter();
+  if (Number.isNaN(date.getTime()) || !format) return null;
+  const stamp = format.format(date);
   return source === 'SERVER_RECEIPT' ? `Received ${stamp}` : stamp;
 }
 
