@@ -1,3 +1,4 @@
+import { answerAfterToggle, choicesInAnswer } from '@texasrenters/shared';
 import { CheckIcon } from 'lucide-react-native';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
@@ -147,6 +148,67 @@ export function ChoiceField({
                 covered. */}
             <View
               className={`h-5 w-5 items-center justify-center rounded-full ${
+                active ? 'bg-primary' : 'border-2 border-muted-foreground'
+              }`}
+            >
+              {active ? (
+                <CheckIcon size={13} strokeWidth={3} className="text-primary-foreground" />
+              ) : null}
+            </View>
+            <Text
+              className={`min-w-0 flex-1 text-sm text-foreground ${active ? 'font-semibold' : ''}`}
+            >
+              {choice}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * Any number of options, drawn as checkboxes.
+ *
+ * The occupied condition questions, since 2026-09-15: the office asked for
+ * checkboxes, because a room can be clean and still need attention. Every
+ * ticked option is stored in the one answer, in the order the question offers
+ * them (`answerAfterToggle`), and printed on the report as written.
+ *
+ * Square boxes rather than the radio list's rings, so the control says what it
+ * does: the rings were introduced when the separate buttons read as though
+ * several could be picked and only one could. Now several can.
+ */
+export function ChoicesField({
+  item,
+  value,
+  onChange,
+}: {
+  item: ChecklistItem;
+  value: string | null;
+  onChange: (next: string | null) => void;
+}) {
+  const picked = new Set(choicesInAnswer(value));
+  const offered = item.choices ?? [];
+  return (
+    <View accessibilityLabel={item.label} className="mt-2 overflow-hidden rounded-xl border border-border">
+      {offered.map((choice, index) => {
+        const active = picked.has(choice);
+        return (
+          <Pressable
+            accessibilityLabel={`${item.label}: ${choice}`}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: active }}
+            className={`min-h-12 flex-row items-center gap-3 px-3 ${
+              index > 0 ? 'border-t border-border' : ''
+            } ${active ? 'bg-primary/10' : ''} ${PRESS_ROW}`}
+            key={choice}
+            onPress={() => onChange(answerAfterToggle(value, choice, offered))}
+          >
+            {/* The box: empty, or filled with a tick. Its edge carries WCAG
+                1.4.11's 3:1, `muted-foreground` for the same reason as above. */}
+            <View
+              className={`h-5 w-5 items-center justify-center rounded-md ${
                 active ? 'bg-primary' : 'border-2 border-muted-foreground'
               }`}
             >

@@ -1,6 +1,8 @@
 import {
+  answerWithChoices,
   checklistKindFor,
   checklistTemplateFor,
+  choicesInAnswer,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
   STANDARD_LAYOUT_SOURCE,
@@ -1257,20 +1259,33 @@ export class TechnicianService {
       );
 
     /**
-     * A choice has to be one of the offered ones.
+     * A choice has to be one of the offered ones -- each of them, where several
+     * can be ticked.
      *
      * Cheap to check and expensive to skip: the value is printed on the report
      * verbatim, so anything accepted here is something a reader will later
      * believe. Every other field is free-form by design and is not policed.
+     *
+     * The occupied condition questions are checkboxes since 2026-09-15 ("Clean,
+     * Needs attention"), stored in the order the question offers them; every
+     * other choice is still exactly one option.
      */
-    const textValue = input.textValue?.trim() || null;
-    if (item.responseType === 'CHOICE' && textValue && !item.choices.includes(textValue))
+    const answered = input.textValue?.trim() || null;
+    const ticksSeveral = item.responseType === 'CHOICE' && kind === 'OCCUPIED';
+    const picked =
+      item.responseType === 'CHOICE' && answered
+        ? ticksSeveral
+          ? choicesInAnswer(answered)
+          : [answered]
+        : [];
+    if (picked.some((choice) => !item.choices.includes(choice)))
       throw new ApplicationError(
         422,
         'CHECKLIST_CHOICE_INVALID',
         'That is not one of the options for this checklist item.',
         [{ offered: item.choices }],
       );
+    const textValue = ticksSeveral ? answerWithChoices(picked, item.choices) : answered;
 
     const comment = input.comment?.trim() || null;
     const values = {

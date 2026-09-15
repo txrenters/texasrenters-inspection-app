@@ -290,4 +290,65 @@ describe('recording against an organization-wide HVAC item', () => {
     const [[write]] = prisma.inspectionAreaChecklistResponse.upsert.mock.calls;
     expect(write.create.textValue).toBe('Dirty');
   });
+
+  describe('the occupied condition questions, which tick several', () => {
+    const occupied = {
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        inspection: { inspectionType: 'OCCUPIED' },
+      },
+      item: {
+        id: ITEM_ID,
+        responseType: 'CHOICE',
+        choices: ['Clean', 'Acceptable', 'Damaged', 'Needs attention'],
+      },
+    };
+
+    it('stores every ticked option, in the order the question offers them', async () => {
+      const { service, prisma } = build(occupied);
+
+      await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, {
+        textValue: 'Needs attention, Clean',
+      });
+
+      const [[write]] = prisma.inspectionAreaChecklistResponse.upsert.mock.calls;
+      expect(write.create.textValue).toBe('Clean, Needs attention');
+      expect(write.update.textValue).toBe('Clean, Needs attention');
+    });
+
+    it('refuses the whole answer when any tick is not on offer', async () => {
+      const { service } = build(occupied);
+      await expect(
+        service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { textValue: 'Clean, Spotless' }),
+      ).rejects.toMatchObject({ status: 422, code: 'CHECKLIST_CHOICE_INVALID' });
+    });
+
+    it('still takes one option on a back-to-market, walked the same way', async () => {
+      const { service, prisma } = build({
+        ...occupied,
+        room: { ...occupied.room, inspection: { inspectionType: 'BACK_TO_MARKET' } },
+      });
+      await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { textValue: 'Damaged' });
+      const [[write]] = prisma.inspectionAreaChecklistResponse.upsert.mock.calls;
+      expect(write.create.textValue).toBe('Damaged');
+    });
+  });
+
+  it('keeps every other choice to exactly one option', async () => {
+    const { service } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'CHOICE', choices: ['Clean', 'Dirty'] },
+    });
+
+    await expect(
+      service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { textValue: 'Clean, Dirty' }),
+    ).rejects.toMatchObject({ status: 422, code: 'CHECKLIST_CHOICE_INVALID' });
+  });
 });
