@@ -61,6 +61,8 @@ const build = (
     technicians?: { technicianId: string; isPlannable: boolean; homeLatitude?: number | null; homeLongitude?: number | null }[];
     qualified?: string[];
     qualifiedFor?: Partial<Record<InspectionType, string[]>>;
+    /** Inspections Jobber gave each technician, per kind. Unless given, every technician one of each. */
+    jobber?: Partial<Record<InspectionType, Record<string, number>>>;
     /** Seconds between two points, as Google would say. Null: Google is not configured. */
     googleSeconds?: ((from: Point, to: Point) => number) | null;
     osrmDurations?: number[][] | null;
@@ -68,6 +70,21 @@ const build = (
 ) => {
   const technicians = options.technicians ?? [{ technicianId: 'tech-1', isPlannable: true }];
   const qualified = options.qualified ?? technicians.map((row) => row.technicianId);
+  const jobber =
+    options.jobber ??
+    Object.fromEntries(
+      [InspectionType.OCCUPIED, InspectionType.HVAC].map((type) => [
+        type,
+        Object.fromEntries(technicians.map((row) => [row.technicianId, 1])),
+      ]),
+    );
+  const assignmentFindMany = jest.fn().mockResolvedValue(
+    Object.entries(jobber).flatMap(([inspectionType, counts]) =>
+      Object.entries(counts ?? {}).flatMap(([technicianId, count]) =>
+        Array.from({ length: count }, () => ({ technicianId, inspection: { inspectionType } })),
+      ),
+    ),
+  );
 
   const dayCreate = jest.fn().mockResolvedValue({});
   const stopUpdate = jest.fn().mockResolvedValue({});
@@ -103,6 +120,7 @@ const build = (
       ),
     },
     tbpQuarterPlanDay: { deleteMany: dayDeleteMany, create: dayCreate },
+    inspectionAssignment: { findMany: assignmentFindMany },
   };
 
   const prisma = {
@@ -155,6 +173,7 @@ const build = (
     google,
     osrm,
     skills,
+    assignmentFindMany,
   };
 };
 
@@ -474,7 +493,7 @@ describe('who a planned day goes to', () => {
     expect(updateFor(stopUpdate, 's1')?.assignedTechnicianId).toBe('tech-hvac');
   });
 
-  it('sends the technician who took the tenancies last quarter', async () => {
+  it('between technicians given a kind alike, sends the one who took the tenancies last quarter', async () => {
     const { service, stopUpdate } = build(
       [stop('s1', 1, 0, { previousTechnicianId: 'tech-2' }), stop('s2', 2, 1, { previousTechnicianId: 'tech-2' })],
       {
@@ -489,6 +508,64 @@ describe('who a planned day goes to', () => {
 
     expect(updateFor(stopUpdate, 's1')?.assignedTechnicianId).toBe('tech-2');
     expect(updateFor(stopUpdate, 's2')?.assignedTechnicianId).toBe('tech-2');
+  });
+
+  /**
+   * The office's rule (2026-09-16): a quarter is assigned the way Jobber is.
+   * Occupied inspections go to the technician who takes nearly all of them and
+   * HVAC inspections to whoever takes those, whoever saw the tenancy last.
+   */
+  it('gives each kind of visit to the technician the office gives it to in Jobber', async () => {
+    const { service, stopUpdate } = build(
+      [
+        stop('occupied', 1, 0, { previousTechnicianId: 'tech-kevin' }),
+        stop('hvac', 2, 1, { inspectionType: InspectionType.HVAC, previousTechnicianId: 'tech-moses' }),
+      ],
+      {
+        technicians: [
+          { technicianId: 'tech-moses', isPlannable: true },
+          { technicianId: 'tech-kevin', isPlannable: true },
+        ],
+        jobber: { OCCUPIED: { 'tech-moses': 323, 'tech-kevin': 10 }, HVAC: { 'tech-kevin': 1 } },
+      },
+    );
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect(updateFor(stopUpdate, 'occupied')?.assignedTechnicianId).toBe('tech-moses');
+    expect(updateFor(stopUpdate, 'hvac')?.assignedTechnicianId).toBe('tech-kevin');
+  });
+
+  it('blocks a kind of visit nobody is given in Jobber, rather than sending whoever is free', async () => {
+    const { service, stopUpdate } = build([stop('occupied', 1), stop('hvac', 2, 1, { inspectionType: InspectionType.HVAC })], {
+      jobber: { OCCUPIED: { 'tech-1': 12 } },
+    });
+
+    const summary = await service.route('org-1', 'plan-1');
+
+    expect(summary.unplaced).toEqual([{ stopId: 'hvac', reason: 'NO_QUALIFIED_TECHNICIAN' }]);
+    expect(updateFor(stopUpdate, 'occupied')?.assignedTechnicianId).toBe('tech-1');
+  });
+
+  it('counts the inspections booked in Jobber over the year to the quarter’s end, by who has them now', async () => {
+    const { service, assignmentFindMany } = build([stop('s1', 1)]);
+
+    await service.route('org-1', 'plan-1');
+
+    expect(assignmentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          isCurrent: true,
+          inspection: {
+            organizationId: 'org-1',
+            inspectionType: { in: [InspectionType.OCCUPIED, InspectionType.HVAC] },
+            jobberVisitId: { not: null },
+            status: { not: 'CANCELLED' },
+            scheduledAt: { gte: new Date('2026-01-01T00:00:00.000Z'), lt: new Date('2027-01-01T00:00:00.000Z') },
+          },
+        },
+      }),
+    );
   });
 
   /** The drive from home is not counted, but it is driven: between equal orders, start near home. */

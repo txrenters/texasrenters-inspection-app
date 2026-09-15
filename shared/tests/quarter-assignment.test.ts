@@ -8,6 +8,7 @@ import {
   assignQuarter,
   crewKey,
   estimatedDriveMinutes,
+  mainTechnicians,
   nearestNeighbourOrder,
 } from '../src/contracts/quarter-assignment.js';
 
@@ -44,6 +45,22 @@ const sameBuilding = (count: number, extra: Partial<PlannableStop> = {}) =>
   Array.from({ length: count }, (_, index) => at(`b${index + 1}`, index + 1, 29.76, -95.37, extra));
 
 const dayOf = (placed: { stopId: string; date: string }[]) => new Map(placed.map((stop) => [stop.stopId, stop.date]));
+
+describe('who takes a kind of visit', () => {
+  /** Q3 2026 in Jobber: 323 occupied visits to one technician, ten to another, one to a third. */
+  it('is the technician the office gives it to, not one who covered a few days', () => {
+    expect(mainTechnicians(new Map([['kevin', 10], ['moses', 323], ['amy', 1]]))).toEqual(['moses']);
+  });
+
+  it('is both technicians when the office shares it between them, most first', () => {
+    expect(mainTechnicians(new Map([['a', 60], ['b', 100], ['c', 20]]))).toEqual(['b', 'a']);
+  });
+
+  it('is nobody when the office has given it to nobody', () => {
+    expect(mainTechnicians(new Map([['a', 0]]))).toEqual([]);
+    expect(mainTechnicians(new Map())).toEqual([]);
+  });
+});
 
 describe('spreading a quarter across its working days', () => {
   /**
@@ -206,6 +223,17 @@ describe('choosing who goes out', () => {
     });
 
     expect(placed.every((stop) => stop.technicianId === 't3')).toBe(true);
+  });
+
+  it('ranks technicians by the kind of visit being sent', () => {
+    const technicianRank = (technicianId: string, inspectionType: string) =>
+      (inspectionType === 'HVAC') === (technicianId === 't2') ? 0 : 1;
+
+    const occupied = assignQuarter(stopsInRotation(1), days(1, ['t1', 't2']), { technicianRank });
+    const hvac = assignQuarter(stopsInRotation(1, { inspectionType: 'HVAC' }), days(1, ['t1', 't2']), { technicianRank });
+
+    expect(occupied.placed[0]?.technicianId).toBe('t1');
+    expect(hvac.placed[0]?.technicianId).toBe('t2');
   });
 
   /**

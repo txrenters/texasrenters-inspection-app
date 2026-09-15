@@ -65,6 +65,32 @@ export interface PlannableDay {
   qualified?: Readonly<Record<string, readonly string[]>>;
 }
 
+/**
+ * Who takes a kind of visit: the technicians the office gives it to most, in
+ * the order it gives it to them.
+ *
+ * The office's rule, stated on 2026-09-16: a quarter is assigned the way the
+ * office already assigns in Jobber. Occupied inspections go to the technician
+ * who takes nearly all of them (Moses Rodriguez, 323 of Q3 2026's 338), HVAC
+ * inspections to whoever takes those -- under the same day limits as anyone.
+ *
+ * "Most" is at least half as many as the technician given the most. So two
+ * technicians who share a kind both take it, and one who covered a handful of
+ * days -- ten occupied visits beside those 323 -- is not sent in the main
+ * technician's place. Nobody given none is ever returned: a kind the office has
+ * not given anybody is nobody's, and is left for a person to decide.
+ *
+ * Counts in, technician ids out. Ties keep the order they arrived in.
+ */
+export function mainTechnicians(assigned: ReadonlyMap<string, number>): string[] {
+  const most = Math.max(0, ...assigned.values());
+  if (most === 0) return [];
+  return [...assigned.entries()]
+    .filter(([, count]) => count > 0 && count * 2 >= most)
+    .sort((left, right) => right[1] - left[1])
+    .map(([technicianId]) => technicianId);
+}
+
 export interface DayLimits {
   /** Time spent inspecting in one technician-day. */
   maxOnSiteMinutes: number;
@@ -147,8 +173,11 @@ export function estimatedDriveMinutes(from: Point, to: Point): number {
 export interface AssignmentOptions {
   limits?: DayLimits;
   driveMinutes?: DriveEstimate;
-  /** Lower is preferred when a technician is sent out on a day. */
-  technicianRank?: (technicianId: string) => number;
+  /**
+   * Lower is preferred when a technician is sent out on a day for a visit of
+   * this kind: the office gives each kind to its own technicians.
+   */
+  technicianRank?: (technicianId: string, inspectionType: string) => number;
   /**
    * Each stop's place in the whole quarter's rotation, when only some of the
    * quarter's stops are being placed -- a repair pass placing the stops a
@@ -262,12 +291,13 @@ export function assignQuarter(
     );
     if (candidates.length === 0) return false;
     // Last quarter's technician first, so the tenant sees the same face; then
-    // whoever the office sends most; then whoever has the least so far.
+    // whoever the office sends most on this kind of visit; then whoever has
+    // the least so far.
     // The day's own order ends it, so the choice is total and repeatable.
     const technicianId = [...candidates].sort(
       (left, right) =>
         Number(right === stop.previousTechnicianId) - Number(left === stop.previousTechnicianId) ||
-        rank(left) - rank(right) ||
+        rank(left, stop.inspectionType) - rank(right, stop.inspectionType) ||
         (load.get(left) ?? 0) - (load.get(right) ?? 0) ||
         day.technicianIds.indexOf(left) - day.technicianIds.indexOf(right),
     )[0]!;
