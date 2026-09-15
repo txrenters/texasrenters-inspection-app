@@ -58,6 +58,11 @@ export function getJobberConfig(env: NodeJS.ProcessEnv = process.env): JobberCon
     // On unless switched off: the office asked for it, and it replaces a note
     // technicians were typing into Jobber by hand.
     pushServicesNote: env.JOBBER_PUSH_SERVICES_NOTE !== 'false',
+    // Both off unless exactly "true": these are the only paths that create
+    // work in somebody else's calendar. Two switches, because they are two
+    // decisions -- one visit a coordinator asked for, or a whole quarter.
+    bookingEnabled: env.JOBBER_BOOKING_ENABLED === 'true',
+    tbpBookingEnabled: env.JOBBER_TBP_WRITE_ENABLED === 'true',
   };
   if (config.redirectUri) {
     const redirect = new URL(config.redirectUri);

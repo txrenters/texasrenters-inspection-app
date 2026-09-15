@@ -419,6 +419,7 @@ function InspectionDetail() {
         inspectionType={item.inspectionType}
         servicesReport={item.servicesReport}
         servicesReportedAt={item.servicesReportedAt}
+        booking={item.jobberBooking}
       />
 
       {/* Area-first: recordings, photos, condition summaries and findings are

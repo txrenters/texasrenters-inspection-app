@@ -1,7 +1,13 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { AreaScope, InspectionType, areaScopeFor, type AdminProperty } from '@texasrenters/shared';
+import {
+  AreaScope,
+  InspectionType,
+  areaScopeFor,
+  jobberBookingProblems,
+  type AdminProperty,
+} from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -9,6 +15,7 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 
+import { JobberBookingCard } from '@/components/jobber-booking-card';
 import { PageHeader } from '@/components/page-header';
 import { SearchableSelect } from '@/components/searchable-select';
 import { PageSkeleton } from '@/components/states';
@@ -37,6 +44,7 @@ import {
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError } from '@/lib/api';
+import { bookingForm, bookingFromForm, bookingUnavailableReason } from '@/lib/jobber-booking';
 import { propertyOptionLabel } from '@/lib/property-label';
 import {
   useAdminMutations,
@@ -45,6 +53,7 @@ import {
   useProperty,
   usePropertyAreas,
   usePropertyOptions,
+  useJobberBookingContext,
   useTechnicians,
   useUnits,
 } from '@/lib/queries';
@@ -215,6 +224,50 @@ function CreateInspectionForm() {
   const mutation = mutations.createInspection;
   const fallbackArea = mutations.createFallbackPropertyArea;
 
+  const leaseId = watch('leaseId');
+  const technicianId = watch('technicianId');
+  const scheduledAt = watch('scheduledAt');
+  /**
+   * The Jobber booking, offered for an occupied inspection.
+   *
+   * Started from the tenant report once per property, unit and lease, and not
+   * again for the same one: choosing a technician refetches whether they can be
+   * put on the visit, and must not wipe what the coordinator typed.
+   */
+  const occupied = inspectionType === InspectionType.OCCUPIED;
+  const bookingContext = useJobberBookingContext(
+    {
+      propertyId,
+      unitId: unitId || undefined,
+      leaseId: leaseId || undefined,
+      technicianId: technicianId || undefined,
+    },
+    occupied,
+  );
+  const [bookInJobber, setBookInJobber] = useState(true);
+  const [bookingFormState, setBookingFormState] = useState(() => bookingForm(null));
+  const [prefilledFor, setPrefilledFor] = useState('');
+  const bookingPlace = [propertyId, unitId ?? '', leaseId ?? ''].join('|');
+  useEffect(() => {
+    // Placeholder data is the previous property's answer, not this one's.
+    if (!bookingContext.data || bookingContext.isPlaceholderData || prefilledFor === bookingPlace) return;
+    setBookingFormState(bookingForm(bookingContext.data.prefill));
+    setPrefilledFor(bookingPlace);
+  }, [bookingContext.data, bookingContext.isPlaceholderData, bookingPlace, prefilledFor]);
+  // The answer for this property, unit and lease. A kept placeholder stands in
+  // only while the technician alone changed; for another property it is wrong.
+  const bookingContextHere =
+    bookingContext.data && (!bookingContext.isPlaceholderData || prefilledFor === bookingPlace)
+      ? bookingContext.data
+      : undefined;
+  const bookingPending = occupied && Boolean(propertyId) && !bookingContextHere && !bookingContext.error;
+  const bookingActive =
+    occupied &&
+    bookInJobber &&
+    bookingContextHere !== undefined &&
+    bookingUnavailableReason(bookingContextHere) === null;
+  const bookingProblems = bookingActive ? jobberBookingProblems(bookingFromForm(bookingFormState)) : [];
+
   const approvedAreas =
     propertyAreas.data?.filter(
       (area) =>
@@ -308,6 +361,7 @@ function CreateInspectionForm() {
         // is only offered there — but sent as chosen rather than re-derived, so
         // the record says what was decided.
         allowTechnicianAreaCapture: technicianWillCapture || undefined,
+        jobberBooking: bookingActive ? bookingFromForm(bookingFormState) : undefined,
         // Only when it is genuinely a subset. Sending every id would be
         // refused for a move-in or move-out, and says nothing extra otherwise.
         areaIds:
@@ -682,6 +736,19 @@ function CreateInspectionForm() {
           </CardContent>
         </Card>
 
+        {occupied ? (
+          <JobberBookingCard
+            book={bookInJobber}
+            context={bookingContextHere}
+            error={bookingContext.error}
+            form={bookingFormState}
+            loading={bookingPending}
+            onBookChange={setBookInJobber}
+            onChange={setBookingFormState}
+            scheduledOn={scheduledAt}
+          />
+        ) : null}
+
         {/* Scope, for the types that inspect part of a property. Hidden rather
             than disabled for move-in and move-out: they always cover the whole
             layout, so there is no decision to present. */}
@@ -893,7 +960,11 @@ function CreateInspectionForm() {
               (scopeIsChoosable && selectedAreas.length === 0) ||
               (needsAreaSetup && !technicianWillCapture) ||
               units.isLoading ||
-              (requiresUnit && !unitId)
+              (requiresUnit && !unitId) ||
+              // Not created while it is still unknown whether it will be booked,
+              // or while the booking it would send is one the server refuses.
+              bookingPending ||
+              bookingProblems.length > 0
             }
             type="submit"
           >

@@ -55,6 +55,7 @@ import {
   ComparisonReviewDto,
   CommitInspectionImportDto,
   CreateAdminInspectionDto,
+  JobberBookingContextQueryDto,
   AdminChecklistAssessmentDto,
   CreateAreaChecklistItemDto,
   CreateChargeDto,
@@ -529,6 +530,12 @@ export class AdminController {
   @RequirePermissions('inspections:manage')
   createInspection(@Req() request: AuthenticatedRequest, @Body() body: CreateAdminInspectionDto) {
     return this.service.createInspection(request.user, body);
+  }
+  /** What a Jobber booking can start from. Declared before `:inspectionId`, which would swallow it. */
+  @Get('inspections/jobber-booking-context')
+  @RequirePermissions('inspections:manage')
+  jobberBookingContext(@Req() request: AuthenticatedRequest, @Query() query: JobberBookingContextQueryDto) {
+    return this.service.jobberBookingContext(request.user, query);
   }
   @Get('inspections/:inspectionId')
   @RequirePermissions('inspections:read')

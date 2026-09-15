@@ -2567,6 +2567,14 @@ enum JobberOutboundKind {
   /// creating the visit, so the id comes back from Jobber and is written on
   /// success. That is why the column below is nullable.
   TBP_VISIT_CREATE
+  /// Book an occupied inspection's visit in Jobber, asked for in the console
+  /// when the inspection was created.
+  ///
+  /// Like TBP_VISIT_CREATE it has no `jobberVisitId` until it is sent. The
+  /// visit's title and Details are the inspection's own `jobberVisitTitle` and
+  /// `jobberVisitDetails`, written when it was created, and `jobTitle` below
+  /// carries the rest.
+  VISIT_CREATE
 }
 
 enum JobberOutboundStatus {
@@ -2611,6 +2619,10 @@ model JobberOutboundTask {
   /// Its own column because the note is sent before the completion: a retry
   /// after the completion failed must not post the same note a second time.
   servicesNoteSentAt DateTime?
+  /// The title of the job a VISIT_CREATE books its visit on: "Zone 1 - Q3 2026
+  /// Tenant Benefit Package". The office's jobs carry no address; the visit
+  /// does. Null for every other kind.
+  jobTitle       String?
   /// Who signed the inspection off. The report share this task publishes is
   /// created in their name, because a share link needs an owner and this is the
   /// person whose sign-off produced it.

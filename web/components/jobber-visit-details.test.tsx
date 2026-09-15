@@ -116,6 +116,34 @@ describe('the Jobber visit on an inspection', () => {
     expect(within(reported).getByText('Return air grille was blocked.')).toBeInTheDocument();
   });
 
+  it('says when this console booked the visit, and when Jobber would not take it', () => {
+    const { rerender } = render(
+      <JobberVisitDetails
+        title={TITLE}
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        booking={{ status: 'SENT', attempts: 1, lastError: null, sentAt: '2026-10-01T15:00:00.000Z' }}
+      />,
+    );
+    expect(screen.getByText('Booked from this console')).toBeInTheDocument();
+
+    rerender(
+      <JobberVisitDetails
+        title={TITLE}
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        booking={{
+          status: 'ABANDONED',
+          attempts: 1,
+          lastError: 'The inspection was cancelled before its visit was booked in Jobber.',
+          sentAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText('This visit was not booked in Jobber')).toBeInTheDocument();
+    expect(screen.queryByText('Booked from this console')).not.toBeInTheDocument();
+  });
+
   it('shows nothing for an inspection that did not come from Jobber', () => {
     const { container } = render(<JobberVisitDetails inspectionType="MOVE_IN" />);
     expect(container).toBeEmptyDOMElement();
