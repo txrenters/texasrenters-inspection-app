@@ -1196,6 +1196,10 @@ export class AdminService {
         status: true,
         // Read only to answer whether the date is Jobber's; see the return.
         jobberVisitId: true,
+        // The visit as the coordinator wrote it, for the office. This select
+        // sits behind inspections:read; the public report builds its own.
+        jobberVisitTitle: true,
+        jobberVisitDetails: true,
         inspectionType: true,
         baselineInspectionId: true,
         baselineInspection: {

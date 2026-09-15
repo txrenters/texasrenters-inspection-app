@@ -252,6 +252,10 @@ const technicianInspectionSummarySelect = {
   status: true,
   priority: true,
   internalNotes: true,
+  // What the coordinator wrote on the Jobber visit. A technician only ever
+  // receives inspections assigned to them, which is who these are for.
+  jobberVisitTitle: true,
+  jobberVisitDetails: true,
   // Tells the app to ask the technician to survey the areas rather than treat
   // an empty list as an error.
   allowTechnicianAreaCapture: true,
@@ -2663,6 +2667,10 @@ export class TechnicianService {
       // there is something to read.
       reopenReason: record.reopenReason ?? undefined,
       propertyNotes: record.internalNotes ?? '',
+      // Null for anything booked here, so the app can tell "no Jobber visit"
+      // from a response built before the field existed.
+      visitTitle: record.jobberVisitTitle ?? null,
+      visitDetails: record.jobberVisitDetails ?? null,
       property: this.mapPropertySummary(record.propertywareBuilding, record.propertywareUnit?.name),
       progress: {
         completed: completedAreas.length,

@@ -267,6 +267,11 @@ export const JOB_NOTE_CREATE_MUTATION = `
  * confirmed member of `VisitFilterAttributes` and this reuses the node
  * selection the paged query already proved against the live schema. Inventing a
  * second shape here is how the last three defects got in.
+ *
+ * Asks for the Details too. It was left out while the field was unproven, and
+ * it no longer is -- every stored visit carries it -- but leaving it out meant a
+ * webhook replaced the stored visit with one that had no Details, and synced a
+ * benefit-package visit without the phrase that makes it an occupied inspection.
  */
 export const VISIT_BY_ID_QUERY = `
   query InspectionVisitById($ids: [EncodedId!]) {
@@ -274,6 +279,7 @@ export const VISIT_BY_ID_QUERY = `
       nodes {
         id
         title
+        ${VISIT_DETAILS_FIELD}
         startAt
         endAt
         completedAt

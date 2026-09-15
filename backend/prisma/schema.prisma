@@ -1179,6 +1179,16 @@ model Inspection {
   /// fires on the change this integration exists to propagate rather than on
   /// any edit. Drop this column when there is a reason to migrate anyway.
   jobberUpdatedAt            DateTime?
+  /// The Jobber visit's title, and the Details a coordinator wrote on it, as
+  /// the sync last read them.
+  ///
+  /// The Details are where the office puts what a technician needs for the
+  /// visit -- filter sizes, the tenant's phone, a gate code, the plan. The sync
+  /// used to read them only to decide the visit's type and then discard them,
+  /// so technicians opened Jobber for everything else. Context, not evidence,
+  /// and never on a shared report: they carry a tenant's number and a way in.
+  jobberVisitTitle           String?
+  jobberVisitDetails         String?
   inspectionType             InspectionType
   /// Which system booked this visit.
   ///

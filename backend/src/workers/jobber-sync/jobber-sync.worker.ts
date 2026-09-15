@@ -739,6 +739,8 @@ export class JobberSyncWorker {
           source: InspectionSource.JOBBER,
           jobberVisitId: visit.id,
           jobberJobId: visit.job?.id ?? null,
+          jobberVisitTitle: visit.title ?? null,
+          jobberVisitDetails: visitDetailsText(visit.instructions),
           // Only ever set for the recovered move-ins above: work Jobber had
           // already closed arrives finished, and must not read as scheduled.
           ...(isComplete
@@ -786,6 +788,31 @@ export class JobberSyncWorker {
   }
 
   /**
+   * Keeps the visit's title and Details on the inspection current.
+   *
+   * Before the completion and reschedule checks, because both return early and
+   * an edit to the Details is neither: a coordinator adding a gate code the day
+   * before is exactly the change a technician needs to see. A response that did
+   * not carry the field leaves the stored text alone -- a query that dropped it
+   * would otherwise wipe what the office wrote.
+   */
+  private async applyVisitText(
+    organizationId: string,
+    visit: JobberVisit,
+    inspection: { id: string; jobberVisitTitle: string | null; jobberVisitDetails: string | null },
+  ) {
+    const data: { jobberVisitTitle?: string | null; jobberVisitDetails?: string | null } = {};
+    if (visit.title !== undefined && (visit.title ?? null) !== inspection.jobberVisitTitle)
+      data.jobberVisitTitle = visit.title ?? null;
+    if (visit.instructions !== undefined) {
+      const details = visitDetailsText(visit.instructions);
+      if (details !== inspection.jobberVisitDetails) data.jobberVisitDetails = details;
+    }
+    if (!Object.keys(data).length) return;
+    await this.prisma.inspection.updateMany({ where: { id: inspection.id, organizationId }, data });
+  }
+
+  /**
    * Applies a Jobber-side change to an inspection we already created.
    *
    * The ownership split is enforced here: Jobber owns the schedule, and only
@@ -808,6 +835,8 @@ export class JobberSyncWorker {
         scheduledAt: true,
         scheduledStartAt: true,
         scheduledEndAt: true,
+        jobberVisitTitle: true,
+        jobberVisitDetails: true,
       },
     });
     if (!inspection) {
@@ -824,6 +853,7 @@ export class JobberSyncWorker {
      * creation would leave every one of those inspections unassigned for good.
      */
     await this.applyAssignment(organizationId, visit, inspectionId, result);
+    await this.applyVisitText(organizationId, visit, inspection);
 
     /**
      * Jobber says the visit is finished.
@@ -1113,4 +1143,9 @@ export class JobberSyncWorker {
     });
     result.skipped += 1;
   }
+}
+
+/** The Details as written, or null when there are none worth keeping. */
+export function visitDetailsText(instructions: string | null | undefined): string | null {
+  return instructions && instructions.trim() ? instructions : null;
 }

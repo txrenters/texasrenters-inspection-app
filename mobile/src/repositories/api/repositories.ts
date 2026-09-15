@@ -118,6 +118,10 @@ const inspectionSchema = z.object({
   // reopened, and an absent reason is not an error.
   reopenReason: z.string().optional(),
   propertyNotes: z.string(),
+  // The Jobber visit's title and Details. Optional, so a cached inspection from
+  // before these existed still parses; nullable, for one booked here.
+  visitTitle: z.string().nullable().optional(),
+  visitDetails: z.string().nullable().optional(),
   property: propertySchema.pick({ id: true, address: true, cityStateZip: true, imageTone: true }),
   progress: z.object({
     completed: z.number(),
