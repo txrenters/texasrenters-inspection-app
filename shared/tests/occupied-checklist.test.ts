@@ -17,18 +17,14 @@ import { InspectionType } from '../src/enums/index.js';
  * "occupied asks its own list" is satisfied by a list of eighty-three items too.
  */
 describe('an occupied inspection asks its own short list', () => {
-  it('routes only OCCUPIED to the short list', () => {
+  it('routes occupied, and back-to-market with it, to the short list', () => {
     expect(checklistKindFor(InspectionType.OCCUPIED)).toBe('OCCUPIED');
+    // Moved off the room list 2026-09-15, at the office's request: a
+    // back-to-market is walked the same way as an occupied inspection.
+    expect(checklistKindFor(InspectionType.BACK_TO_MARKET)).toBe('OCCUPIED');
   });
 
-  it.each([
-    // Back-to-market is the visit that decides what must be made good before the
-    // next tenancy, so its detail is the point of it. It stays on the room list
-    // deliberately, and this is the assertion that says so.
-    [InspectionType.BACK_TO_MARKET],
-    [InspectionType.MOVE_IN],
-    [InspectionType.MOVE_OUT],
-  ])('leaves %s on the full room list', (type) => {
+  it.each([[InspectionType.MOVE_IN], [InspectionType.MOVE_OUT]])('leaves %s on the full room list', (type) => {
     expect(checklistKindFor(type)).toBe('ROOM');
   });
 

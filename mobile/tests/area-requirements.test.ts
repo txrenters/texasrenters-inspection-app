@@ -190,6 +190,20 @@ describe('filming an occupied area', () => {
     expect(gate.canComplete).toBe(false);
   });
 
+  it('accepts a photograph on a back-to-market too, which the office walks the same way', () => {
+    // Reported 2026-09-15 from 418 Drennan: a back-to-market room could not be
+    // finished without filming it.
+    const gate = areaCompletionGate(
+      deriveAreaRequirements({ ...room(), inspectionType: 'BACK_TO_MARKET' } as ReturnType<typeof room>, {
+        ...evidence(),
+        hasPrimaryRecording: false,
+        photoCount: 2,
+        uploadSettled: false,
+      }),
+    );
+    expect(gate.canComplete).toBe(true);
+  });
+
   it('leaves a move-out demanding the walkthrough', () => {
     // The comparison is built from it. A photograph is not a substitute.
     const gate = areaCompletionGate(

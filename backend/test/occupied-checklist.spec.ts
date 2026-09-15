@@ -104,7 +104,16 @@ describe('the occupied checklist is written where the technician will look for i
     ]);
   });
 
-  it.each([[InspectionType.MOVE_OUT], [InspectionType.MOVE_IN], [InspectionType.BACK_TO_MARKET]])(
+  it('writes the same two questions for a back-to-market, which is walked the same way', async () => {
+    const { tx, createMany } = client();
+    await insertInspection(tx, plan(InspectionType.BACK_TO_MARKET), details);
+
+    expect(createMany).toHaveBeenCalledTimes(1);
+    const rows = createMany.mock.calls[0][0].data as { kind: AreaChecklistItemKind; propertyAreaId: string | null }[];
+    expect(rows.every((row) => row.kind === AreaChecklistItemKind.OCCUPIED && row.propertyAreaId === null)).toBe(true);
+  });
+
+  it.each([[InspectionType.MOVE_OUT], [InspectionType.MOVE_IN]])(
     'writes nothing extra for %s, which keeps the full room list',
     async (inspectionType) => {
       const { tx, createMany } = client();
