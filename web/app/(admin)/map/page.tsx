@@ -58,6 +58,16 @@ function TechnicianSwatch({ stale = false }: { stale?: boolean }) {
   );
 }
 
+/** The driving arrow, at the same scale. */
+function DrivingSwatch() {
+  return (
+    <svg aria-hidden="true" height="14" viewBox="0 0 28 28" width="14">
+      <circle cx="14" cy="14" fill="#fff" r="12.5" />
+      <path className="fill-map-technician" d="M14 3.5 L21 23 L14 18.8 L7 23 Z" />
+    </svg>
+  );
+}
+
 /** The property pin, at the same scale. */
 function PropertySwatch() {
   return (
@@ -406,6 +416,7 @@ export default function TechnicianMapPage() {
                   selectedId ? (timeline.data?.projection.current?.inspectionIds ?? null) : null
                 }
                 highlightedBuildingIds={highlighted}
+                onSelectTechnician={selectTechnician}
                 positions={visiblePositions}
                 properties={properties.data ?? []}
                 route={selectedId ? (route.data ?? null) : null}
@@ -448,6 +459,7 @@ export default function TechnicianMapPage() {
               they explain makes the reader do the translation twice. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             <LegendKey swatch={<TechnicianSwatch />}>Technician, reported recently</LegendKey>
+            <LegendKey swatch={<DrivingSwatch />}>Driving, pointing the way they are going</LegendKey>
             <LegendKey swatch={<TechnicianSwatch stale />}>
               Technician, over 30 minutes ago
             </LegendKey>

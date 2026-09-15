@@ -5,30 +5,31 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
-import { isLocationPaused, isMoving, ONLINE_WITHIN_MS } from '@texasrenters/shared';
+import { ONLINE_WITHIN_MS } from '@texasrenters/shared';
 import {
   AdvancedMarker,
   APIProvider,
   APILoadingStatus,
   ColorScheme,
+  ControlPosition,
   InfoWindow,
   Map as GoogleMap,
+  MapControl,
   useApiLoadingStatus,
   useMap,
 } from '@vis.gl/react-google-maps';
-import { Fragment, memo, useEffect, useMemo, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTheme } from 'next-themes';
 
+import { CameraDirector, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
+import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
 import { clusterByGrid, zoomToIsolate } from '@/components/map-clusters';
-import {
-  formatCompass,
-  formatDistance,
-  formatDuration,
-  formatRelative,
-  formatSpeed,
-} from '@/lib/format';
+import { formatDistance, formatDuration } from '@/lib/format';
+import { useContinuousRotation, useGlide } from '@/lib/map-animation';
+import { drawsAsDriving, motionOf, type Motion } from '@/lib/technician-motion';
+import { useMotionTracks } from '@/lib/use-motion-tracks';
 import { MapSettings, useMapPreferences } from '@/components/map-settings';
 
 /**
@@ -177,8 +178,9 @@ const TechnicianPin = memo(function TechnicianPin({
    * Null is the common case and it matters that it stays empty: a technician
    * standing in a kitchen has no course, and an arrow left over from the drive
    * in would keep asserting a direction they stopped travelling ten minutes
-   * ago. The caller decides, via `isMoving`, rather than this component
-   * guessing from a speed it was not given.
+   * ago. The caller decides, from `motionOf`, rather than this component
+   * guessing from a speed it was not given. A technician on the road gets
+   * `DrivingPin` instead; this tick is for somebody moving on foot.
    */
   heading?: number | null;
 }) {
@@ -240,6 +242,51 @@ const TechnicianPin = memo(function TechnicianPin({
         <circle cx="14" cy="11.1" fill="#fff" r="2.9" />
         <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff" />
       </g>
+    </svg>
+  );
+});
+
+/**
+ * A technician on the road: an arrow pointing the way they are driving.
+ *
+ * The navigation-app arrow rather than the person badge, because on a drive the
+ * question is which way, and a badge with a small tick on its rim answered it
+ * at a size nobody could read from across a desk. A white disc behind it keeps
+ * it legible on a dark basemap, a satellite image, and a green park alike.
+ *
+ * Turned with a CSS transition, the short way round, so a heading that moves
+ * from 350° to 10° is a slight right, not a spin. The pulse goes when they are
+ * stopped mid-drive: still on the road, but not going anywhere this second.
+ */
+const DrivingPin = memo(function DrivingPin({
+  dim = false,
+  heading,
+  stopped = false,
+}: {
+  dim?: boolean;
+  heading: number;
+  stopped?: boolean;
+}) {
+  const rotation = useContinuousRotation(heading);
+  return (
+    <svg height="44" opacity={dim ? 0.45 : 1} viewBox="0 0 44 44" width="44">
+      <MarkerShadow />
+      {stopped ? null : (
+        <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="13" />
+      )}
+      <circle cx="22" cy="22" fill="#fff" filter="url(#pin-shadow)" r="14.5" />
+      <path
+        className="fill-map-technician"
+        d="M22 9.5 L30 31.5 L22 26.8 L14 31.5 Z"
+        stroke="#fff"
+        strokeLinejoin="round"
+        strokeWidth="1"
+        style={{
+          transform: `rotate(${rotation}deg)`,
+          transformOrigin: '22px 22px',
+          transition: 'transform 700ms ease-out',
+        }}
+      />
     </svg>
   );
 });
@@ -353,55 +400,6 @@ const PlanePin = memo(function PlanePin() {
     </svg>
   );
 });
-
-/**
- * Fits the map to the data once it arrives.
- *
- * **Keyed on which entities are present, never on where they are.** Positions
- * arrive over the socket every few seconds, and refitting on coordinates would
- * drag the view back to a computed framing under the hands of whoever is
- * reading the map — the more often technicians moved, the less usable it would
- * become. So the map re-fits when somebody comes on shift or a property loads,
- * and holds still while people drive around.
- */
-function FitToData({
-  fitKey,
-  points,
-  suspended,
-}: {
-  fitKey: string;
-  points: [number, number][];
-  /**
-   * True while somebody is selected from the roster.
-   *
-   * Without this the two fits fight: a technician coming on shift changes the
-   * key, this re-frames the whole patch, and the view somebody deliberately
-   * focused is pulled away by a colleague opening their app. A deliberate
-   * choice outranks an automatic one.
-   */
-  suspended: boolean;
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!map || suspended || !points.length) return;
-    const bounds = new google.maps.LatLngBounds();
-    for (const [lat, lng] of points) bounds.extend({ lat, lng });
-    map.fitBounds(bounds, 48);
-    // A single point fits to the maximum zoom, which drops the reader onto a
-    // rooftop with no context. Pulled back to the same ceiling the Leaflet
-    // version used.
-    const listener = google.maps.event.addListenerOnce(map, 'idle', () => {
-      const zoom = map.getZoom();
-      if (zoom !== undefined && zoom > 15) map.setZoom(15);
-    });
-    return () => listener.remove();
-    // `points` is deliberately absent: it changes on every socket frame, and
-    // `fitKey` is the honest trigger — who is present, not where they are.
-  }, [map, fitKey, suspended, points]);
-
-  return null;
-}
 
 /**
  * The zoom, as state, so clustering can be computed from it.
@@ -918,79 +916,63 @@ const AirTravelLayer = memo(function AirTravelLayer({ route }: { route: Technici
 });
 
 /**
- * Takes the map to a property picked from the list.
+ * One technician on the map: where they are, and how they are moving.
  *
- * A separate component from `FocusSelected` rather than a branch inside it,
- * because the two are driven by different selections and must not race: the
- * page clears one when the other is set, so at most one of these ever has
- * something to do.
+ * The arrow while they are driving, the person badge otherwise. Slides from fix
+ * to fix instead of jumping, so a drive reads as a drive.
  *
- * Keyed on the id alone. Properties do not move, but the array they arrive in
- * is rebuilt whenever the query refetches, and depending on the object would
- * fly the map back to the same place every couple of minutes.
+ * Anchored at its centre: the coordinate is the middle of the badge or the
+ * arrow, which is also where the accuracy ring is drawn from. Google anchors a
+ * marker at its bottom edge unless told otherwise, and did here -- every
+ * technician sat half a badge above the point they reported.
  */
-function FocusProperty({
-  properties,
-  selectedPropertyId,
-}: {
-  properties: readonly PropertyPosition[];
-  selectedPropertyId: string | null;
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!map || !selectedPropertyId) return;
-    const property = properties.find((entry) => entry.id === selectedPropertyId);
-    if (!property) return;
-    map.panTo({ lat: property.latitude, lng: property.longitude });
-    // Past the clustering ceiling, so the property is drawn on its own rather
-    // than still folded into a badge when the reader arrives.
-    map.setZoom(18);
-    // `properties` is read but intentionally not depended on; see the
-    // docblock — the array is rebuilt on every refetch and would fly the map
-    // back to the same place every couple of minutes.
-  }, [map, selectedPropertyId, properties]);
-
-  return null;
-}
-
-/**
- * Takes the map to a technician picked from the roster.
- *
- * Falls back to their work when they have no position yet — a technician who
- * has not opened the app today still has stops, and framing those answers
- * "where is this person working" when "where are they" has no answer.
- */
-function FocusSelected({
-  fallback,
+const TechnicianMarker = memo(function TechnicianMarker({
+  dim,
+  motion,
+  onSelect,
   position,
-  selectedTechnicianId,
+  selected,
 }: {
-  fallback: [number, number][];
-  position: TechnicianPosition | null;
-  selectedTechnicianId: string | null;
+  dim: boolean;
+  motion: Motion | null;
+  onSelect: (technicianId: string) => void;
+  position: TechnicianPosition;
+  selected: boolean;
 }) {
-  const map = useMap();
+  const at = useGlide(position.latitude, position.longitude);
+  const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
+  // A stale fix's course is the direction they were travelling whenever it was
+  // taken, which may be hours ago. `motion.live` already refuses anything over
+  // a few minutes; `stale` is the half-hour line the rest of the map uses.
+  const driving = !stale && drawsAsDriving(motion);
 
-  useEffect(() => {
-    if (!map || !selectedTechnicianId) return;
-
-    if (position) {
-      map.panTo({ lat: position.latitude, lng: position.longitude });
-      map.setZoom(15);
-      return;
-    }
-
-    if (!fallback.length) return;
-    const bounds = new google.maps.LatLngBounds();
-    for (const [lat, lng] of fallback) bounds.extend({ lat, lng });
-    map.fitBounds(bounds, 64);
-    // `fallback` and `position` change shape on every refetch; the selection is
-    // the honest trigger.
-  }, [map, selectedTechnicianId, fallback, position]);
-
-  return null;
-}
+  return (
+    <AdvancedMarker
+      anchorLeft="-50%"
+      anchorTop="-50%"
+      onClick={() => onSelect(position.technicianId)}
+      position={at}
+      title={position.technician?.displayName ?? 'Unknown technician'}
+      zIndex={selected ? 520 : 500}
+    >
+      {driving && motion ? (
+        <DrivingPin
+          dim={dim}
+          heading={motion.headingDegrees ?? 0}
+          stopped={motion.state === 'STOPPED'}
+        />
+      ) : (
+        <TechnicianPin
+          dim={dim}
+          heading={
+            !stale && motion?.live && motion.state === 'ON_FOOT' ? motion.headingDegrees : null
+          }
+          stale={stale}
+        />
+      )}
+    </AdvancedMarker>
+  );
+});
 
 /** Said plainly, rather than rendering a grey rectangle nobody can diagnose. */
 function MapUnavailable({ children }: { children: React.ReactNode }) {
@@ -1042,6 +1024,7 @@ function MapOrReason({ children }: { children: React.ReactNode }) {
 export function TechnicianMap({
   currentInspectionIds = null,
   highlightedBuildingIds = null,
+  onSelectTechnician,
   positions,
   properties = [],
   route = null,
@@ -1051,6 +1034,8 @@ export function TechnicianMap({
   /** The selected technician's visit under way, by their location trail. */
   currentInspectionIds?: readonly string[] | null;
   highlightedBuildingIds?: ReadonlySet<string> | null;
+  /** A technician's marker was clicked: select them, which follows them. */
+  onSelectTechnician?: (technicianId: string) => void;
   positions: readonly TechnicianPosition[];
   properties?: readonly PropertyPosition[];
   /** The selected technician's drive, when one has been worked out. */
@@ -1059,8 +1044,6 @@ export function TechnicianMap({
   selectedPropertyId?: string | null;
   selectedTechnicianId?: string | null;
 }) {
-  const [openTechnician, setOpenTechnician] = useState<string | null>(null);
-
   /**
    * The map follows the console, not the operating system.
    *
@@ -1127,6 +1110,84 @@ export function TechnicianMap({
     [positions, properties],
   );
 
+  /** Every technician's last few minutes of fixes, for how they are moving. */
+  const tracks = useMotionTracks(positions);
+
+  /**
+   * What the camera is about, and whether the reader has taken it.
+   *
+   * The most recent pick wins: a technician, or a property -- including a stop
+   * picked inside the selected technician's day, which moves the map to that
+   * address while the technician stays selected. Letting go of the property
+   * goes back to following the technician.
+   */
+  const [focus, setFocus] = useState<CameraFocus>({ kind: 'OVERVIEW' });
+  const [readerMoved, setReaderMoved] = useState(false);
+  const [recenterRequest, setRecenterRequest] = useState(0);
+
+  useEffect(() => {
+    if (selectedTechnicianId) {
+      setFocus({ kind: 'TECHNICIAN', technicianId: selectedTechnicianId });
+      setReaderMoved(false);
+    } else {
+      setFocus(
+        selectedPropertyId
+          ? { kind: 'PROPERTY', propertyId: selectedPropertyId }
+          : { kind: 'OVERVIEW' },
+      );
+    }
+    // Runs for the technician pick; the property is read, not depended on.
+  }, [selectedTechnicianId]);
+
+  useEffect(() => {
+    if (selectedPropertyId) {
+      setFocus({ kind: 'PROPERTY', propertyId: selectedPropertyId });
+      setReaderMoved(false);
+    } else if (selectedTechnicianId) {
+      setFocus({ kind: 'TECHNICIAN', technicianId: selectedTechnicianId });
+      setReaderMoved(false);
+    } else {
+      setFocus({ kind: 'OVERVIEW' });
+    }
+    // As above, the other way round.
+  }, [selectedPropertyId]);
+
+  const readerMovedTheMap = useCallback(() => setReaderMoved(true), []);
+  const recenter = useCallback(() => {
+    setReaderMoved(false);
+    setRecenterRequest((count) => count + 1);
+  }, []);
+
+  /**
+   * A marker click picks that technician -- and on the one already picked,
+   * re-centres on them, rather than letting go of the person being watched.
+   */
+  const selectFromMap = useCallback(
+    (technicianId: string) => {
+      if (technicianId === selectedTechnicianId) recenter();
+      else onSelectTechnician?.(technicianId);
+    },
+    [onSelectTechnician, recenter, selectedTechnicianId],
+  );
+
+  // The first stop still ahead of them, by the same rule the route layer uses
+  // to colour its next stop.
+  const nextStop = useMemo(() => {
+    if (!route?.geometry.length) return null;
+    const current = new Set(currentInspectionIds ?? []);
+    const index = route.stops.findIndex((stop) => !current.has(stop.inspectionId));
+    const stop = route.stops[index];
+    if (!stop) return null;
+    return { name: stop.propertyName, driveSeconds: route.legs[index]?.durationSeconds ?? null };
+  }, [currentInspectionIds, route]);
+
+  const recenterSubject =
+    focus.kind === 'TECHNICIAN'
+      ? (selectedPosition?.technician?.displayName ?? 'the technician')
+      : focus.kind === 'PROPERTY'
+        ? 'the property'
+        : 'everyone';
+
   if (!API_KEY)
     return (
       <MapUnavailable>
@@ -1135,6 +1196,8 @@ export function TechnicianMap({
         Set <code className="font-mono">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> and rebuild.
       </MapUnavailable>
     );
+
+  const now = Date.now();
 
   return (
     <div className="relative h-full w-full">
@@ -1162,16 +1225,16 @@ export function TechnicianMap({
              nothing. */
           tilt={mapPreferences.tilted ? 45 : 0}
         >
-          <FitToData
-            fitKey={fitKey}
-            points={points}
-            suspended={Boolean(selectedTechnicianId) || Boolean(selectedPropertyId)}
-          />
-          <FocusProperty properties={properties} selectedPropertyId={selectedPropertyId} />
-          <FocusSelected
+          <CameraDirector
             fallback={selectedStops}
-            position={selectedPosition}
-            selectedTechnicianId={selectedTechnicianId}
+            fitKey={fitKey}
+            focus={focus}
+            followed={selectedPosition}
+            onReaderMoved={readerMovedTheMap}
+            points={points}
+            properties={properties}
+            readerMoved={readerMoved}
+            recenterRequest={recenterRequest}
           />
 
           {/* Under the markers and over the properties: the route is context for
@@ -1185,78 +1248,49 @@ export function TechnicianMap({
             selectedPropertyId={selectedPropertyId}
           />
 
-          {positions.map((position) => {
-            const stale = Date.now() - Date.parse(position.recordedAt) > STALE_AFTER_MS;
-            const dim =
-              Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId;
-            const at = { lat: position.latitude, lng: position.longitude };
-            // A stale position's heading is the direction they were travelling
-            // whenever that fix was taken, which may be hours ago. Drawing it
-            // would be the map asserting a present fact from stale evidence.
-            const moving = !stale && isMoving(position);
-            return (
-              <Fragment key={position.id}>
-                {position.accuracyMeters && position.accuracyMeters > 25 ? (
-                  <AccuracyRing
-                    latitude={position.latitude}
-                    longitude={position.longitude}
-                    radiusMeters={position.accuracyMeters}
-                  />
-                ) : null}
-                <AdvancedMarker
-                  onClick={() => setOpenTechnician(position.id)}
-                  position={at}
-                  title={position.technician?.displayName ?? 'Unknown technician'}
-                  zIndex={500}
-                >
-                  <TechnicianPin
-                    dim={dim}
-                    heading={moving ? position.headingDegrees : null}
-                    stale={stale}
-                  />
-                </AdvancedMarker>
-                {openTechnician === position.id ? (
-                  <InfoWindow onCloseClick={() => setOpenTechnician(null)} position={at}>
-                    {/* The colours are set here as well as on Google's own
-                        bubble in `globals.css`. That rule depends on an
-                        undocumented class name; this one does not, so if
-                        Google renames it the text stays readable and only the
-                        background reverts. */}
-                    <div className="text-popover-foreground text-xs leading-relaxed">
-                      <div className="text-sm font-medium">
-                        {position.technician?.displayName ?? 'Unknown technician'}
-                      </div>
-                      {/* The pin is where they were: said so when the app is
-                          open and the location has stopped updating. */}
-                      {isLocationPaused(position) ? (
-                        <div className="text-popover-foreground">
-                          App open · location paused
-                        </div>
-                      ) : null}
-                      <div className="text-muted-foreground">
-                        {formatRelative(position.recordedAt)}
-                        {position.accuracyMeters === null ? null : (
-                          <> · ±{position.accuracyMeters}m</>
-                        )}
-                        {position.batteryPercent === null ? null : (
-                          <> · {position.batteryPercent}% battery</>
-                        )}
-                      </div>
-                      {/* Only while they are actually travelling. "Stationary"
-                          on every parked marker is noise, and a speed of zero
-                          next to a heading nobody can trust is worse. */}
-                      {moving ? (
-                        <div className="text-popover-foreground">
-                          {formatSpeed(position.speedMetersPerSecond)} ·{' '}
-                          {formatCompass(position.headingDegrees)}
-                        </div>
-                      ) : null}
-                    </div>
-                  </InfoWindow>
-                ) : null}
-              </Fragment>
-            );
-          })}
+          {positions.map((position) => (
+            // Keyed on the technician, not the fix. The fix's id is new on
+            // every report, which remounted the marker each time -- so there
+            // was nothing to slide, only a marker destroyed and drawn again.
+            <Fragment key={position.technicianId}>
+              {position.accuracyMeters && position.accuracyMeters > 25 ? (
+                <AccuracyRing
+                  latitude={position.latitude}
+                  longitude={position.longitude}
+                  radiusMeters={position.accuracyMeters}
+                />
+              ) : null}
+              <TechnicianMarker
+                dim={
+                  Boolean(selectedTechnicianId) && position.technicianId !== selectedTechnicianId
+                }
+                motion={motionOf(tracks.get(position.technicianId) ?? [], now)}
+                onSelect={selectFromMap}
+                position={position}
+                selected={position.technicianId === selectedTechnicianId}
+              />
+            </Fragment>
+          ))}
+
+          {/* Controls inside the map rather than over it, so they stay on
+              screen in fullscreen and Google lays them out around its own. */}
+          <MapControl position={ControlPosition.RIGHT_BOTTOM}>
+            <RecenterControl
+              following={focus.kind === 'TECHNICIAN' && Boolean(selectedPosition)}
+              onRecenter={recenter}
+              readerMoved={readerMoved}
+              subject={recenterSubject}
+            />
+          </MapControl>
+          {selectedPosition ? (
+            <MapControl position={ControlPosition.BOTTOM_CENTER}>
+              <TechnicianHud
+                nextStop={nextStop}
+                position={selectedPosition}
+                track={tracks.get(selectedPosition.technicianId) ?? []}
+              />
+            </MapControl>
+          ) : null}
         </GoogleMap>
         </MapOrReason>
       </APIProvider>
