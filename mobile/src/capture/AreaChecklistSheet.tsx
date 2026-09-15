@@ -5,7 +5,7 @@ import { BottomSheet } from '../components/BottomSheet';
 import { registerIcons } from '../lib/icons';
 import type { ChecklistAssessment } from '../domain/models';
 import { checklistProgress, type ChecklistItem } from './area-checklist';
-import { choiceInvitesComment } from '@texasrenters/shared';
+import { HVAC_NOT_PRESENT, choiceInvitesComment, hvacItemAnswered } from '@texasrenters/shared';
 
 import { CommentField, ChoiceField, ReadingField, TextField, isAnswered } from './ChecklistAnswerFields';
 
@@ -37,6 +37,27 @@ const AXES = [
 ] as const;
 
 export type ChecklistAxisKey = (typeof AXES)[number]['key'];
+
+/** What one answer changes. Several fields at once when a row is marked not present. */
+export type ChecklistAnswerPatch = {
+  numericValue?: number | null;
+  textValue?: string | null;
+  comment?: string | null;
+  isClean?: boolean | null;
+  isUndamaged?: boolean | null;
+  isWorking?: boolean | null;
+};
+
+/**
+ * Whether a row is done: scored or said why not when answers are required, and
+ * answered at all otherwise. A reading is never required, so it is done when
+ * it has been taken.
+ */
+function rowDone(item: ChecklistItem, assessment: ChecklistAssessment | undefined, required: boolean) {
+  return required && (item.responseType ?? 'STATUS') === 'STATUS'
+    ? hvacItemAnswered(item, assessment)
+    : isAnswered(item, assessment);
+}
 
 /**
  * Clean / Undamaged / Working for one item, answered in place.
@@ -115,7 +136,8 @@ function renderAnswer(
   item: ChecklistItem,
   assessment: ChecklistAssessment | undefined,
   onAssess: (itemId: string, axis: ChecklistAxisKey, next: boolean | null) => void,
-  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null; comment?: string | null }) => void,
+  onRecord: ((itemId: string, patch: ChecklistAnswerPatch) => void) | undefined,
+  required: boolean,
 ) {
   switch (item.responseType ?? 'STATUS') {
     case 'READING':
@@ -162,14 +184,70 @@ function renderAnswer(
           ) : null}
         </>
       ) : null;
-    default:
+    default: {
+      if (!required || !onRecord)
+        return (
+          <AxisRow
+            assessment={assessment}
+            label={item.label}
+            onAnswer={(axis, next) => onAssess(item.id, axis, next)}
+          />
+        );
+      /**
+       * A row of the office's HVAC report: scored, or said why not, in its card.
+       *
+       * "Not present" is the report's own "Dont have" -- a media filter the
+       * property does not have is not a filter that failed -- and one tap
+       * rather than a sentence typed four times for Filters 2 to 4.
+       */
+      const notPresent = assessment?.comment === HVAC_NOT_PRESENT;
       return (
-        <AxisRow
-          assessment={assessment}
-          label={item.label}
-          onAnswer={(axis, next) => onAssess(item.id, axis, next)}
-        />
+        <>
+          <AxisRow
+            assessment={assessment}
+            label={item.label}
+            // Scoring a row that was marked not present takes the mark back, in
+            // the same write rather than a second one racing it.
+            onAnswer={(axis, next) =>
+              onRecord(item.id, { [axis]: next, ...(notPresent ? { comment: null } : {}) })
+            }
+          />
+          <Pressable
+            accessibilityLabel={`${item.label}: ${HVAC_NOT_PRESENT.toLowerCase()}`}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: notPresent }}
+            className={`mt-2 min-h-11 items-center justify-center rounded-lg border ${
+              notPresent ? 'border-primary bg-primary/10' : 'border-border bg-card'
+            }`}
+            onPress={() =>
+              onRecord(
+                item.id,
+                notPresent
+                  ? { comment: null }
+                  : { comment: HVAC_NOT_PRESENT, isClean: null, isUndamaged: null, isWorking: null },
+              )
+            }
+          >
+            <Text className={`text-xs font-bold ${notPresent ? 'text-primary' : 'text-muted-foreground'}`}>
+              {HVAC_NOT_PRESENT}
+            </Text>
+          </Pressable>
+          {notPresent ? null : (
+            <CommentField
+              hint="(or why it could not be scored)"
+              item={item}
+              // Keyed by the saved comment: the field is uncontrolled, so a
+              // comment written elsewhere has to remount it to show.
+              key={`${item.id}:${assessment?.comment ?? ''}`}
+              onChange={(comment) => onRecord(item.id, { comment })}
+              placeholder="R410A · Replaced today · Could not reach"
+              title="Comment"
+              value={assessment?.comment ?? null}
+            />
+          )}
+        </>
       );
+    }
   }
 }
 
@@ -209,10 +287,16 @@ export function AreaChecklistSheet({
   onAssess,
   onRecord,
   onToggle,
+  required = false,
   visible,
   onClose,
 }: {
   areaName: string;
+  /**
+   * Whether every row has to be answered before the area is submitted: a
+   * section of an HVAC inspection. Otherwise the list is a guide, and says so.
+   */
+  required?: boolean;
   items: ChecklistItem[];
   /** Current condition answers, keyed by checklist item id. */
   assessments?: Map<string, ChecklistAssessment>;
@@ -224,7 +308,7 @@ export function AreaChecklistSheet({
    * carry a value rather than a yes/no, and collapsing the two would make every
    * caller unpack a union to find out which it had.
    */
-  onRecord?: (itemId: string, patch: { numericValue?: number | null; textValue?: string | null; comment?: string | null }) => void;
+  onRecord?: (itemId: string, patch: ChecklistAnswerPatch) => void;
   checkedIds: readonly string[];
   onToggle: (id: string) => void;
   visible: boolean;
@@ -232,17 +316,20 @@ export function AreaChecklistSheet({
 }) {
   const { covered, total } = checklistCoverage(items, checkedIds, assessments);
   const checked = new Set(checkedIds);
+  // A required list counts its scored rows: the readings are never required.
+  const requiredRows = items.filter((item) => (item.responseType ?? 'STATUS') === 'STATUS');
+  const answeredRows = requiredRows.filter((item) => rowDone(item, assessments?.get(item.id), true)).length;
+  const progress = required
+    ? `${answeredRows} of ${requiredRows.length} answered`
+    : `${covered} of ${total} covered`;
 
   return (
     <BottomSheet className="max-h-[82%]" onClose={onClose} visible={visible}>
       <View className="flex-row items-start justify-between gap-3">
         <View className="min-w-0 flex-1">
           <Text className="text-xl font-bold text-foreground">{areaName} checklist</Text>
-          <Text
-            accessibilityLabel={`${covered} of ${total} items covered`}
-            className="mt-1 text-sm text-muted-foreground"
-          >
-            {covered} of {total} covered
+          <Text accessibilityLabel={`${progress}`} className="mt-1 text-sm text-muted-foreground">
+            {progress}
           </Text>
         </View>
         <Pressable
@@ -266,14 +353,27 @@ export function AreaChecklistSheet({
         `completeInspection`. What the screen did was imply otherwise, and an
         implication answered at the end is not answered at all.
       */}
-      <Text className="mt-3 text-xs leading-4 text-muted-foreground">
-        Optional. Nothing here has to be answered to finish this area — it is a guide, and a record
-        of what you covered.
-      </Text>
+      {required ? (
+        // The office's HVAC report is submitted with every row answered, so
+        // here -- unlike every other checklist -- the list is the job.
+        <Text className="mt-3 text-xs leading-4 text-muted-foreground">
+          Required. Score every row Clean, Undamaged and Working, mark it {HVAC_NOT_PRESENT}, or say in
+          its comment why it could not be scored. Readings are optional.
+        </Text>
+      ) : (
+        <Text className="mt-3 text-xs leading-4 text-muted-foreground">
+          Optional. Nothing here has to be answered to finish this area — it is a guide, and a record
+          of what you covered.
+        </Text>
+      )}
 
       <ScrollView className="mt-4" showsVerticalScrollIndicator={false}>
         {items.map((item, index) => {
-          const isChecked = checked.has(item.id);
+          // A required row shows whether it is answered; a guide's, whether it
+          // was covered -- ticked by hand, by the transcript, or by an answer.
+          const isChecked = required
+            ? rowDone(item, assessments?.get(item.id), true)
+            : checked.has(item.id);
           // Printed when it changes rather than by grouping into nested lists:
           // the form has eleven sections and a technician scrolls straight
           // through them in order.
@@ -293,11 +393,17 @@ export function AreaChecklistSheet({
               key={item.id}
             >
               <Pressable
-                accessibilityHint={isChecked ? 'Marks this as not covered' : 'Marks this covered'}
-                accessibilityLabel={item.label}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: isChecked }}
+                accessibilityHint={
+                  required ? undefined : isChecked ? 'Marks this as not covered' : 'Marks this covered'
+                }
+                accessibilityLabel={`${item.label}${item.unit ? `, ${item.unit}` : ''}${
+                  required ? (isChecked ? ', answered' : ', not answered') : ''
+                }`}
+                accessibilityRole={required ? 'text' : 'checkbox'}
+                accessibilityState={required ? undefined : { checked: isChecked }}
                 className="min-h-11 flex-row items-center gap-3"
+                // Answered, not ticked: a required row is done by its answer.
+                disabled={required}
                 onPress={() => onToggle(item.id)}
               >
               {isChecked ? (
@@ -316,7 +422,7 @@ export function AreaChecklistSheet({
               {/* The condition answers sit in the same card as the item they
                   are about, so scoring an item never means finding it again
                   somewhere else. */}
-              {onAssess ? renderAnswer(item, assessments?.get(item.id), onAssess, onRecord) : null}
+              {onAssess ? renderAnswer(item, assessments?.get(item.id), onAssess, onRecord, required) : null}
             </View>
             </View>
           );
@@ -324,9 +430,11 @@ export function AreaChecklistSheet({
         {/* The "does not block" half of this moved above the list, where it is
             read before the technician forms an impression rather than after.
             What is left is the part that is genuinely a footnote. */}
-        <Text className="mb-2 mt-1 px-1 text-xs leading-4 text-muted-foreground">
-          The checklist records coverage. It does not replace the walkthrough.
-        </Text>
+        {required ? null : (
+          <Text className="mb-2 mt-1 px-1 text-xs leading-4 text-muted-foreground">
+            The checklist records coverage. It does not replace the walkthrough.
+          </Text>
+        )}
       </ScrollView>
     </BottomSheet>
   );

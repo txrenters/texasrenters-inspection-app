@@ -33,7 +33,13 @@ function build({
     // The ownership check reads this: the HVAC checklist lives on the
     // organization with a null area, every other kind lives on the area.
     inspection: { inspectionType: 'MOVE_IN' },
-  },
+  } as {
+    id: string;
+    inspectionId: string;
+    propertyAreaId: string;
+    propertyArea?: { name: string };
+    inspection: { inspectionType: string };
+  } | null,
   item = { id: ITEM_ID, responseType: 'STATUS', choices: [] as string[] } as {
     id: string;
     responseType?: string;
@@ -42,7 +48,8 @@ function build({
   inspection = { status: 'IN_PROGRESS', finalizedAt: null } as Record<string, unknown> | null,
 } = {}) {
   const prisma = {
-    inspectionArea: { findFirst: jest.fn().mockResolvedValue(room) },
+    // An area is named, and an HVAC area's name is the report section it asks.
+    inspectionArea: { findFirst: jest.fn().mockResolvedValue(room && { propertyArea: { name: 'Kitchen' }, ...room }) },
     inspection: { findUnique: jest.fn().mockResolvedValue(inspection) },
     areaChecklistItem: { findFirst: jest.fn().mockResolvedValue(item) },
     inspectionAreaChecklistResponse: {
@@ -226,6 +233,43 @@ describe('recording against an organization-wide HVAC item', () => {
     const [[lookup]] = prisma.areaChecklistItem.findFirst.mock.calls;
     expect(lookup.where.propertyAreaId).toBeNull();
     expect(lookup.where.organizationId).toBe(technician.organizationId);
+  });
+
+  /** The office's report walks four sections, each an area asking its own rows (2026-09-16). */
+  it('asks a report section only its own items', async () => {
+    const { service, prisma } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        propertyArea: { name: 'Attic' },
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'STATUS', choices: [] },
+    });
+
+    await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { isWorking: true });
+
+    const [[lookup]] = prisma.areaChecklistItem.findFirst.mock.calls;
+    expect(lookup.where.section).toBe('Attic');
+  });
+
+  it('asks the single area of an HVAC inspection created before the sections every item', async () => {
+    const { service, prisma } = build({
+      room: {
+        id: ROOM_ID,
+        inspectionId: INSPECTION_ID,
+        propertyAreaId: PROPERTY_AREA_ID,
+        propertyArea: { name: 'HVAC System' },
+        inspection: { inspectionType: 'HVAC' },
+      },
+      item: { id: ITEM_ID, responseType: 'STATUS', choices: [] },
+    });
+
+    await service.recordRoomChecklistItem(technician, ROOM_ID, ITEM_ID, { isWorking: true });
+
+    const [[lookup]] = prisma.areaChecklistItem.findFirst.mock.calls;
+    expect(lookup.where.section).toBeUndefined();
   });
 
   it('still scopes a room checklist to its own area', async () => {

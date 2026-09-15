@@ -812,8 +812,9 @@ function CreateInspectionForm() {
             <CardHeader>
               <CardTitle>Which areas</CardTitle>
               <CardDescription>
-                None. An HVAC visit inspects the property&apos;s system against a standard
-                checklist, so it needs no floor plan and covers no rooms.
+                None to pick. An HVAC inspection is walked in the office&apos;s HVAC report&apos;s four
+                sections &mdash; Attic, Filters, A/C unit and Thermostat &mdash; each photographed with
+                every row answered, so it needs no floor plan and covers no rooms.
               </CardDescription>
             </CardHeader>
           </Card>

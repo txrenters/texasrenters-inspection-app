@@ -73,7 +73,8 @@ const INSPECTION_TYPE_LABEL: Record<string, string> = {
   MOVE_OUT: 'Move-out inspection',
   OCCUPIED: 'Occupied inspection',
   BACK_TO_MARKET: 'Back-to-market inspection',
-  HVAC: 'HVAC service visit',
+  // The office's own name for it, as its report is titled.
+  HVAC: 'HVAC inspection',
   ROOF: 'Roof inspection',
   SUPRA_LOCKBOX_PLACEMENT: 'Lockbox placement',
   SUPRA_LOCKBOX_REMOVAL: 'Lockbox removal',

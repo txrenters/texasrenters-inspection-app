@@ -244,24 +244,30 @@ export function CommentField({
   item,
   value,
   onChange,
+  title = 'What did you find?',
+  hint = '(optional)',
+  placeholder = 'Scuffed paint behind the door…',
 }: {
   item: ChecklistItem;
   value: string | null;
   onChange: (next: string | null) => void;
+  /** The heading. An HVAC row's comment is where it says why it could not be scored. */
+  title?: string;
+  hint?: string;
+  placeholder?: string;
 }) {
   return (
     <View className="mt-2">
       <Text className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        What did you find?{' '}
-        <Text className="font-normal normal-case tracking-normal">(optional)</Text>
+        {title} <Text className="font-normal normal-case tracking-normal">{hint}</Text>
       </Text>
       <TextInput
-        accessibilityLabel={`What did you find in ${item.label}, optional`}
+        accessibilityLabel={`${title} ${item.label}, ${hint.replace(/[()]/g, '')}`}
         className="min-h-11 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
         defaultValue={value ?? ''}
         multiline
         onEndEditing={(event) => onChange(event.nativeEvent.text.trim() || null)}
-        placeholder="Scuffed paint behind the door…"
+        placeholder={placeholder}
         placeholderTextColor="#9ca3af"
         textAlignVertical="top"
       />

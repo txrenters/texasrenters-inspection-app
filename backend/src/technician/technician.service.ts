@@ -1,6 +1,9 @@
 import {
   answerWithChoices,
   checklistKindFor,
+  hvacSectionOf,
+  hvacUnansweredItems,
+  hvacUnansweredMessage,
   checklistTemplateFor,
   choicesInAnswer,
   inspectionComparesToBaseline,
@@ -15,7 +18,11 @@ import {
   servicesReportProblems,
   type VisitServicesReport,
 } from '@texasrenters/shared';
-import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
+import {
+  checklistItemsAreOrganizationWide,
+  checklistKindWhere,
+  checklistSectionWhere,
+} from '../common/checklist-kind';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 
@@ -26,6 +33,7 @@ import {
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
   InspectionStatus,
+  InspectionType,
   MediaProcessingStatus,
   MediaUploadStatus,
   PropertyAreaStatus,
@@ -335,6 +343,23 @@ type TechnicianInspectionSummaryRecord = Prisma.InspectionGetPayload<{
 type TechnicianRoomRecord = Prisma.InspectionAreaGetPayload<{
   select: typeof technicianRoomSelect;
 }>;
+
+/**
+ * The closing block a submission carries, as columns to write.
+ *
+ * Only the fields the request sent: a phone that has not taken the update, or a
+ * visit where they were not asked, leaves whatever the office already wrote.
+ */
+function closingComments(input: TechnicianCompleteInspectionDto) {
+  const written = (value: string | undefined) => (value === undefined ? undefined : value.trim() || null);
+  return Object.fromEntries(
+    Object.entries({
+      nextInspectionAlert: written(input.nextInspectionAlert),
+      maintenanceComments: written(input.maintenanceComments),
+      generalComments: written(input.generalComments),
+    }).filter(([, value]) => value !== undefined),
+  ) as { nextInspectionAlert?: string | null; maintenanceComments?: string | null; generalComments?: string | null };
+}
 
 @Injectable()
 export class TechnicianService {
@@ -669,6 +694,9 @@ export class TechnicianService {
                 servicesReportedAt: new Date(),
               }
             : {}),
+          // The report's closing block, where the technician wrote one. Omitted
+          // leaves the office's, and an emptied field clears it.
+          ...closingComments(input),
           // Cleared on submission: by now the technician has acted on it, and a
           // reason left standing would reappear as an instruction on work they
           // have already redone.
@@ -1102,6 +1130,8 @@ export class TechnicianService {
           // `in` matches no rows — the same result as skipping the query,
           // without the caller having to handle a different shape back.
           ...checklistKindWhere(checklistKindFor(room.inspection.inspectionType)),
+          // An HVAC section asks its own section of the list, found by name.
+          ...checklistSectionWhere(checklistKindFor(room.inspection.inspectionType), room.propertyArea.name),
         },
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
         select: {
@@ -1211,7 +1241,12 @@ export class TechnicianService {
      */
     const kind = checklistKindFor(room.inspection.inspectionType);
     const scope = checklistItemsAreOrganizationWide(kind)
-      ? { organizationId: user.organizationId, propertyAreaId: null }
+      ? {
+          organizationId: user.organizationId,
+          propertyAreaId: null,
+          // An HVAC section answers its own items, not the Attic's in the Filters.
+          ...checklistSectionWhere(kind, room.propertyArea.name),
+        }
       : { propertyAreaId: room.propertyAreaId };
     /**
      * An answer given offline names the item by its label, not its id.
@@ -1781,6 +1816,7 @@ export class TechnicianService {
 
   async completeRoom(user: AuthenticatedUser, id: string) {
     const existing = await this.assignedRoom(user, id);
+    await this.assertHvacSectionAnswered(user, existing);
     const hasRecording = existing.media.some(
       (item) => item.uploadStatus === MediaUploadStatus.UPLOADED,
     );
@@ -1830,6 +1866,52 @@ export class TechnicianService {
     });
     this.notifyInspectionChanged(user, room.inspectionId);
     return this.mapRoom(room);
+  }
+
+  /**
+   * An HVAC section is finished with every item scored, or said why not.
+   *
+   * The office's rule for its HVAC report (2026-09-16): each row Clean,
+   * Undamaged and Working, or a comment where the property does not have the
+   * thing -- the report's own "Dont have". Readings are never required. The
+   * same shared rule gates the handset's Mark Complete, so the two cannot
+   * disagree about one area.
+   *
+   * Only for an area that is one of the report's sections. The single "HVAC
+   * System" area of an older inspection keeps finishing as it did.
+   */
+  private async assertHvacSectionAnswered(
+    user: AuthenticatedUser,
+    room: { id: string; inspection: { inspectionType: string }; propertyArea: { name: string } },
+  ) {
+    const section = room.inspection.inspectionType === InspectionType.HVAC ? hvacSectionOf(room.propertyArea.name) : null;
+    if (!section) return;
+    const [items, responses] = await Promise.all([
+      this.prisma.areaChecklistItem.findMany({
+        where: {
+          organizationId: user.organizationId,
+          propertyAreaId: null,
+          kind: AreaChecklistItemKind.AIR_CONDITIONING,
+          section,
+          archivedAt: null,
+        },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        select: { id: true, label: true, responseType: true },
+      }),
+      this.prisma.inspectionAreaChecklistResponse.findMany({
+        where: { inspectionAreaId: room.id },
+        select: { checklistItemId: true, isClean: true, isUndamaged: true, isWorking: true, comment: true },
+      }),
+    ]);
+    const byItem = new Map(responses.map((response) => [response.checklistItemId, response]));
+    const unanswered = hvacUnansweredItems(items, (item) => byItem.get(item.id));
+    if (unanswered.length)
+      throw new ApplicationError(
+        409,
+        'HVAC_CHECKLIST_INCOMPLETE',
+        hvacUnansweredMessage(unanswered.map((item) => item.label)),
+        [{ unanswered: unanswered.map((item) => item.label) }],
+      );
   }
 
   async media(user: AuthenticatedUser, roomId: string) {

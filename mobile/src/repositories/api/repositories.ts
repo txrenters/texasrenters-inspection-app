@@ -43,6 +43,7 @@ import { technicianRouteSchema } from './technician-route-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
+import type { ClosingComments } from '../../utils/closing-comments';
 import { resolveApiUrl } from '@texasrenters/shared';
 import type { InspectionType, VisitServicesReport } from '@texasrenters/shared';
 
@@ -730,13 +731,15 @@ export class ApiInspectionRepository implements InspectionRepository {
     ]);
     return inspection;
   }
-  async complete(id: string, servicesReport?: VisitServicesReport) {
+  async complete(id: string, servicesReport?: VisitServicesReport, closingComments?: Partial<ClosingComments>) {
+    // The closing comments sit beside the services report on the body, as the
+    // API reads them; neither is sent when there is nothing to say.
+    const body =
+      servicesReport || closingComments
+        ? { ...(servicesReport ? { servicesReport } : {}), ...closingComments }
+        : undefined;
     const inspection = inspectionSchema.parse(
-      await writeJson(
-        `/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`,
-        'POST',
-        servicesReport ? { servicesReport } : undefined,
-      ),
+      await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`, 'POST', body),
     );
     await Promise.all([
       storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),

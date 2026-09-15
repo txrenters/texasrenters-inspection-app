@@ -18,6 +18,7 @@
  * the finding, not the checklist.
  */
 
+import { HVAC_CHECKLIST, hvacItemsForArea } from './hvac-checklist.js';
 import { occupiedChecklistTemplate } from './occupied-checklist.js';
 
 /** Bumped when the tables below change, so regenerated lists can be told apart. */
@@ -70,35 +71,15 @@ const BASE_INDOOR = [
 ];
 
 /**
- * What an HVAC visit covers in an area that has a unit.
+ * What an HVAC visit covers.
  *
- * ── PROVENANCE, WHICH DIFFERS FROM EVERYTHING ELSE IN THIS FILE ──────────────
- * The room tables above are transcribed from the TexasRenters report for 17307
- * Nordway Dr. That report *is* the house standard, so those lists are a record
- * rather than a judgement.
- *
- * There is no equivalent source document for air conditioning. This list is
- * ordinary split-system service practice: the things a technician would walk in
- * the order they would walk them, indoor unit first, then the drain that causes
- * most of the callouts, then outside. It is a **starting draft awaiting the
- * office's sign-off**, not a transcription, and it should be replaced wholesale
- * the moment somebody produces the real standard.
- *
- * Condition still belongs to the finding, not the checklist — one tick per item,
- * the same rule as the rooms. "Air filter" records that the filter was covered,
- * not that it was clean.
+ * The office's own HVAC report, like the room tables above: every item of
+ * `HVAC_CHECKLIST`, the same list the server writes its rows from, so the list a
+ * handset shows with no signal and the one that arrives cannot disagree. It was
+ * a nine-item draft of ordinary service practice until the office's standard
+ * existed.
  */
-const BASE_AIR_CONDITIONING = [
-  'Thermostat and controls',
-  'Air filter',
-  'Indoor unit and coil',
-  'Condensate drain and tray',
-  'Supply air and vents',
-  'Return air grille',
-  'Outdoor condenser unit',
-  'Refrigerant lines and insulation',
-  'Noise and vibration in operation',
-];
+const BASE_AIR_CONDITIONING = HVAC_CHECKLIST.map((item) => item.label);
 
 /**
  * Outdoor areas replace the base rather than adding to it — a lawn has no
@@ -242,15 +223,14 @@ export function checklistTemplateFor(area: ChecklistTemplateArea): string[] {
 }
 
 /**
- * What an HVAC visit asks about an area, whatever kind of room it is.
+ * What an HVAC visit asks in one of its areas.
  *
- * Unlike the room template this does not vary: a split system in a bedroom is
- * serviced the same way as one in a hall, and the room's category says nothing
- * about the equipment hanging in it. The area only qualifies for this list at
- * all because somebody marked it as having a unit.
+ * The area is a section of the office's report -- Attic, Filters, A/C unit,
+ * Thermostat -- and asks that section's items. An area that is not one, the
+ * single "HVAC System" area older inspections carry, asks the whole list.
  */
-export function airConditioningChecklistTemplate(): string[] {
-  return [...BASE_AIR_CONDITIONING];
+export function airConditioningChecklistTemplate(areaName?: string | null): string[] {
+  return areaName === undefined ? [...BASE_AIR_CONDITIONING] : hvacItemsForArea(areaName).map((item) => item.label);
 }
 
 /**
@@ -270,7 +250,7 @@ export function checklistTemplateForKind(
   area: ChecklistTemplateArea,
   kind: 'ROOM' | 'AIR_CONDITIONING' | 'OCCUPIED',
 ): string[] {
-  if (kind === 'AIR_CONDITIONING') return airConditioningChecklistTemplate();
+  if (kind === 'AIR_CONDITIONING') return airConditioningChecklistTemplate(area.name ?? null);
   if (kind === 'OCCUPIED') return occupiedChecklistTemplate();
   return checklistTemplateFor(area);
 }
