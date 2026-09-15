@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PlanningPage from './page';
@@ -18,6 +18,7 @@ vi.mock('@/lib/url-state', () => ({ useUrlState: () => [{ quarter: '2026-4', tab
 vi.mock('@/components/planning/plan-day-map', () => ({ PlanDayMap: () => <div data-testid="plan-day-map" /> }));
 
 const idle = { mutate: vi.fn(), isPending: false };
+const build = { mutate: vi.fn(), isPending: false };
 
 const PLAN = {
   id: 'plan-1',
@@ -96,8 +97,7 @@ function mount({ plans = [PLAN], stops = [stop('s1'), stop('s2', { inspectionTyp
   hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [DAY] : [] });
   hooks.usePlanDayRoute.mockReturnValue({ isSuccess: true, data: { source: 'GOOGLE_TRAFFIC_AWARE', geometry: [[29.7, -95.7], [29.72, -95.7]], legs: [] } });
   hooks.usePlanningMutations.mockReturnValue({
-    build: idle,
-    route: idle,
+    build,
     importOfficeDetails: idle,
     setType: idle,
     exclude: idle,
@@ -114,6 +114,37 @@ describe('the benefit package plan page', () => {
 
     expect(screen.getByText('No plan for Q4 2026 yet')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Build the Q4 2026 plan/ })).toBeTruthy();
+  });
+
+  /** The office found a form of visit minutes and closed days confusing (2026-09-16): building asks nothing. */
+  it('builds a quarter in one click, with nothing to fill in', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+
+    expect(build.mutate).toHaveBeenCalledWith({ year: 2026, quarter: 4 }, expect.anything());
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('rebuilds a draft in one click', () => {
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+
+    expect(build.mutate).toHaveBeenCalledWith({ year: 2026, quarter: 4 }, expect.anything());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
+  });
+
+  it('states the working days and the day limits in plain words', () => {
+    mount();
+
+    // The quarter's US holidays, found by the planner rather than typed in.
+    expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
+    expect(screen.getByText('Up to 6 hr inspecting and 90 min driving a day')).toBeTruthy();
+    expect(screen.queryByText(/360/)).toBeNull();
+    // Thanksgiving is on the plan as well, and is a holiday rather than another closed day.
+    expect(screen.queryByText('Also closed')).toBeNull();
   });
 
   it('shows a day against the office’s limits, with its clock', async () => {

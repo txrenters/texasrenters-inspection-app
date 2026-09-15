@@ -1,12 +1,12 @@
 'use client';
 
-import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon, Settings2Icon } from 'lucide-react';
+import { closedDaysOfQuarter, type Quarter } from '@texasrenters/shared';
+import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
 import { PlanDays } from '@/components/planning/plan-days';
-import { DEFAULT_PLAN_SETTINGS, PlanSettingsDialog } from '@/components/planning/plan-settings-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
 import { Stat, StatGroup, StatStrip, StatStripItem } from '@/components/stat-card';
@@ -28,15 +28,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
-import { formatRelative, formatScheduledDate } from '@/lib/format';
-import { formatMinutes, quarterChoices, quarterKey, quarterName } from '@/lib/planning';
+import { formatRelative } from '@/lib/format';
+import { formatMinutes, formatShortDay, quarterChoices, quarterKey, quarterName } from '@/lib/planning';
 import {
   usePlanDays,
   usePlanQuarters,
   usePlanStops,
   usePlanningMutations,
   type PlanDay,
-  type PlanQuarter,
   type PlanSettings,
   type PlanStatus,
 } from '@/lib/planning-queries';
@@ -47,11 +46,13 @@ import { useUrlState } from '@/lib/url-state';
  *
  * The office's rules, as the planner applies them: whoever was first last
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
- * on the HVAC plan; and a technician-day is at most six hours on site and
- * ninety minutes driving between its properties. This page is where a
- * coordinator checks the days against those rules, fixes what the tenant report
- * could not settle, and publishes -- which creates the inspections and queues
- * their visits for Jobber.
+ * on the HVAC plan; visits go on weekdays that are not US holidays; and a
+ * technician-day is at most six hours inspecting and ninety minutes driving
+ * between its properties. Building a quarter applies all of it and asks the
+ * coordinator nothing (the office found a form of minutes and closed days
+ * confusing, 2026-09-16). This page is where a coordinator checks the days,
+ * fixes what the tenant report could not settle, and publishes -- which creates
+ * the inspections and queues their visits for Jobber.
  */
 
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
@@ -62,20 +63,9 @@ const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' 
   CANCELLED: { label: 'Cancelled', variant: 'outline' },
 };
 
-const settingsOf = (plan: PlanQuarter | null): PlanSettings =>
-  plan
-    ? {
-        occupiedVisitMinutes: plan.occupiedVisitMinutes,
-        hvacVisitMinutes: plan.hvacVisitMinutes,
-        maxOnSiteMinutes: plan.maxOnSiteMinutes,
-        maxDriveMinutes: plan.maxDriveMinutes,
-        holidays: plan.holidays,
-      }
-    : DEFAULT_PLAN_SETTINGS;
-
-const overLimit = (day: PlanDay, settings: PlanSettings) =>
-  day.onSiteMinutes > settings.maxOnSiteMinutes ||
-  (day.totalDriveSeconds !== null && day.totalDriveSeconds > settings.maxDriveMinutes * 60);
+const overLimit = (day: PlanDay, limits: PlanSettings) =>
+  day.onSiteMinutes > limits.maxOnSiteMinutes ||
+  (day.totalDriveSeconds !== null && day.totalDriveSeconds > limits.maxDriveMinutes * 60);
 
 export default function PlanningPage() {
   const { has } = usePermissions();
@@ -89,26 +79,30 @@ export default function PlanningPage() {
   const stops = usePlanStops(plan?.id);
   const days = usePlanDays(plan?.id);
   const mutations = usePlanningMutations();
-  const settings = useMemo(() => settingsOf(plan), [plan]);
-  const [settingsFor, setSettingsFor] = useState<'build' | 'route' | null>(null);
   const [publishing, setPublishing] = useState(false);
 
   const draft = plan?.status === 'DRAFT';
+  const building = mutations.build.isPending;
   const attention = (stops.data ?? []).filter((stop) => stop.status === 'BLOCKED' || stop.status === 'FAILED');
   const review = (stops.data ?? []).filter(
     (stop) => stop.inspectionTypeNeedsReview && stop.status !== 'EXCLUDED' && stop.status !== 'PUBLISHED',
   );
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
-  const overLimitDays = (days.data ?? []).filter((day) => overLimit(day, settings));
+  const overLimitDays = plan ? (days.data ?? []).filter((day) => overLimit(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
 
-  const build = (values: PlanSettings) => {
+  // The weekdays the planner skipped: the quarter's US holidays, and any other
+  // day closed on the plan, listed apart so a holiday is never mislabelled.
+  const quarter: Quarter = { year: choice.year, quarter: choice.quarter as Quarter['quarter'] };
+  const holidays = closedDaysOfQuarter(quarter);
+  const alsoClosed = closedDaysOfQuarter(quarter, plan?.holidays ?? []).filter((day) => !holidays.includes(day));
+
+  const build = () => {
     mutations.build.mutate(
-      { year: choice.year, quarter: choice.quarter, ...values },
+      { year: choice.year, quarter: choice.quarter },
       {
         onSuccess: (result) => {
-          setSettingsFor(null);
           toast.success(`${choice.label} is planned`, {
             description: `${result.routing.placed.toLocaleString()} visits over ${result.routing.days.toLocaleString()} technician-days${
               result.routing.unplaced.length ? `; ${result.routing.unplaced.length} need attention` : ''
@@ -116,24 +110,6 @@ export default function PlanningPage() {
           });
         },
         onError: (error) => toast.error(`${choice.label} could not be planned`, { description: error.message }),
-      },
-    );
-  };
-
-  const route = (values: PlanSettings) => {
-    if (!plan) return;
-    mutations.route.mutate(
-      { planId: plan.id, ...values },
-      {
-        onSuccess: (result) => {
-          setSettingsFor(null);
-          toast.success('The days are laid out again', {
-            description: `${result.placed.toLocaleString()} visits over ${result.days.toLocaleString()} technician-days${
-              result.repaired ? `; ${result.repaired} moved off days that measured over the drive limit` : ''
-            }.`,
-          });
-        },
-        onError: (error) => toast.error('The days could not be laid out', { description: error.message }),
       },
     );
   };
@@ -172,16 +148,18 @@ export default function PlanningPage() {
           {canChange && draft && plan ? (
             <>
               <OfficeSheetImport planId={plan.id} />
-              <Button onClick={() => setSettingsFor('build')} size="sm" variant="outline">
-                <RefreshCwIcon />
+              <Button
+                disabled={building}
+                onClick={build}
+                size="sm"
+                title="Reads the tenant report again and lays the days out again. Every kind of visit a coordinator chose is kept."
+                variant="outline"
+              >
+                {building ? <Spinner /> : <RefreshCwIcon />}
                 Rebuild
               </Button>
-              <Button onClick={() => setSettingsFor('route')} size="sm" variant="outline">
-                <Settings2Icon />
-                Lay out days
-              </Button>
               <Button
-                disabled={attention.length > 0 || planned.length === 0}
+                disabled={building || attention.length > 0 || planned.length === 0}
                 onClick={() => setPublishing(true)}
                 size="sm"
                 title={attention.length ? 'Resolve or leave out every visit that needs attention first.' : undefined}
@@ -200,7 +178,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order, laid out over technician-days of at most six hours on site and ninety minutes driving between properties."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order, on weekdays that are not US holidays. Whether a visit is an HVAC or an occupied inspection comes from the tenancy's plan, and a technician's day is up to 6 hours inspecting and 90 minutes driving between properties."
       title="Benefit package plan"
     />
   );
@@ -234,8 +212,8 @@ export default function PlanningPage() {
           title={`No plan for ${choice.label} yet`}
         >
           {canChange ? (
-            <Button onClick={() => setSettingsFor('build')}>
-              <RouteIcon />
+            <Button disabled={building} onClick={build}>
+              {building ? <Spinner /> : <RouteIcon />}
               Build the {choice.label} plan
             </Button>
           ) : null}
@@ -267,7 +245,7 @@ export default function PlanningPage() {
               value={attention.length.toLocaleString()}
             />
             <Stat
-              detail={`Limits: ${formatMinutes(settings.maxOnSiteMinutes)} on site, ${settings.maxDriveMinutes} min driving`}
+              detail={`Up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting and ${plan.maxDriveMinutes} min driving a day`}
               label="Days over the limits"
               tone={overLimitDays.length ? 'destructive' : 'success'}
               value={overLimitDays.length.toLocaleString()}
@@ -275,12 +253,13 @@ export default function PlanningPage() {
           </StatGroup>
 
           <StatStrip>
-            <StatStripItem label="Occupied visit" value={`${settings.occupiedVisitMinutes} min`} />
-            <StatStripItem label="HVAC visit" value={`${settings.hvacVisitMinutes} min`} />
             <StatStripItem
-              label="Closed"
-              value={settings.holidays.length ? settings.holidays.map((day) => formatScheduledDate(day)).join(', ') : 'weekends only'}
+              label="Working days"
+              value={`Weekdays except US holidays${holidays.length ? `: ${holidays.map(formatShortDay).join(', ')}` : ''}`}
             />
+            {alsoClosed.length ? (
+              <StatStripItem label="Also closed" value={alsoClosed.map(formatShortDay).join(', ')} />
+            ) : null}
             <StatStripItem
               label="Details"
               value={plan.officeDetailsImportedAt ? `office sheet, ${formatRelative(plan.officeDetailsImportedAt)}` : 'from the tenant report'}
@@ -302,7 +281,7 @@ export default function PlanningPage() {
                 <ErrorState error={days.error} retry={() => void days.refetch()} />
               ) : !days.data?.length ? (
                 <EmptyState
-                  description="No visit has a day yet. Lay the days out to place them."
+                  description="No visit has a day yet. Rebuild the plan to place them."
                   icon={CalendarRangeIcon}
                   title="No technician-days"
                 />
@@ -312,7 +291,7 @@ export default function PlanningPage() {
                   onSelect={(day) => setState({ day })}
                   planId={plan.id}
                   selectedDayId={state.day}
-                  settings={settings}
+                  settings={plan}
                 />
               )}
             </TabsContent>
@@ -345,29 +324,6 @@ export default function PlanningPage() {
           </Tabs>
         </div>
       )}
-
-      <PlanSettingsDialog
-        description={
-          settingsFor === 'build'
-            ? plan
-              ? 'Reads the tenant report again — who is enrolled, their plans and filter sizes — keeps every kind of visit a coordinator chose, and lays the days out again.'
-              : `Builds ${choice.label} from the tenant report and lays its days out. Nothing is booked until it is published.`
-            : 'Lays every visit out again with these numbers. Days a coordinator chose are kept.'
-        }
-        initial={settings}
-        onOpenChange={(open) => !open && setSettingsFor(null)}
-        onSubmit={settingsFor === 'build' ? build : route}
-        open={settingsFor !== null}
-        pending={mutations.build.isPending || mutations.route.isPending}
-        submitLabel={settingsFor === 'build' ? (plan ? 'Rebuild' : `Build ${choice.label}`) : 'Lay out days'}
-        title={
-          settingsFor === 'build'
-            ? plan
-              ? `Rebuild ${choice.label} from the tenant report`
-              : `Build the ${choice.label} plan`
-            : `Lay out ${choice.label}`
-        }
-      />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>
         <AlertDialogContent>

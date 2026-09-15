@@ -4,6 +4,7 @@ import {
   dayClock,
   formatClock,
   formatMinutes,
+  formatShortDay,
   limitState,
   parseCsv,
   quarterChoices,
@@ -42,6 +43,11 @@ describe('writing times', () => {
     expect(formatMinutes(45)).toBe('45 min');
     expect(formatMinutes(360)).toBe('6 hr');
     expect(formatMinutes(330)).toBe('5 hr 30 min');
+  });
+
+  it('writes a calendar date as its month and day, whatever the time zone', () => {
+    expect(formatShortDay('2026-10-12')).toBe('Oct 12');
+    expect(formatShortDay('2026-12-25')).toBe('Dec 25');
   });
 });
 

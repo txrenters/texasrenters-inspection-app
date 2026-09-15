@@ -112,7 +112,7 @@ export function PlanDays({
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <Meter
-                      label="On site"
+                      label="Inspecting"
                       limit={settings.maxOnSiteMinutes}
                       text={formatMinutes(day.onSiteMinutes)}
                       value={day.onSiteMinutes}
@@ -153,7 +153,7 @@ function DayDetail({ planId, day, settings }: { planId: string; day: PlanDay; se
         </div>
         <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-3">
           <div className="flex items-baseline gap-2">
-            <dt className="text-muted-foreground">On site</dt>
+            <dt className="text-muted-foreground">Inspecting</dt>
             <dd className={cn('font-mono tabular-nums', toneOf(onSite))}>
               {formatMinutes(day.onSiteMinutes)} of {formatMinutes(settings.maxOnSiteMinutes)}
             </dd>
