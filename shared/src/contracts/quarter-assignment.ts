@@ -185,8 +185,9 @@ export const crewKey = (date: string, technicianId: string) => `${date}|${techni
  * 1. a technician already out on its day, if the stop fits their day;
  * 2. a technician sent out on its day, if nobody is out on it yet;
  * 3. a technician out within `NEARBY_DAYS`, rather than a second one on its day;
- * 4. a second technician on its day;
- * 5. the nearest day, either side, that can take it at all.
+ * 4. a technician sent out the next day, if nobody is out on it yet;
+ * 5. a second technician on its day;
+ * 6. the nearest day, either side, that can take it at all.
  */
 export function assignQuarter(
   stops: readonly PlannableStop[],
@@ -281,6 +282,10 @@ export function assignQuarter(
     if (crewsByDay[target]!.length === 0 && open(stop, target)) return true;
     for (let offset = 1; offset <= NEARBY_DAYS; offset += 1)
       for (const index of [target - offset, target + offset]) if (inRange(index) && join(stop, index)) return true;
+    // Start the next day rather than send a second technician out today. Where
+    // the rotation crosses from one zone to the next, the stops of the new zone
+    // that were aimed at today would otherwise go out as a day of one or two.
+    if (inRange(target + 1) && crewsByDay[target + 1]!.length === 0 && open(stop, target + 1)) return true;
     if (open(stop, target)) return true;
     // Outward rather than only forward, so a full week does not push every
     // later stop back and cascade the whole quarter. Earlier wins a tie: a

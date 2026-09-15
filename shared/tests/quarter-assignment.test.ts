@@ -226,6 +226,27 @@ describe('choosing who goes out', () => {
   });
 });
 
+describe('where the rotation crosses from one zone to the next', () => {
+  /**
+   * Four stops across town aimed at day one would go out as a second
+   * technician's day of four. The next day is empty, so they start it instead,
+   * and the stops aimed at it join them.
+   */
+  it('starts the next day rather than sending a second technician out for a few stops', () => {
+    const west = Array.from({ length: 6 }, (_, index) => at(`w${index + 1}`, index + 1, 29.78 + index * 0.002, -95.75));
+    const east = Array.from({ length: 6 }, (_, index) => at(`e${index + 1}`, index + 7, 29.55 + index * 0.002, -95.15));
+    // West and the first half of east are aimed at day one; the rest of east at day two.
+    const position = new Map([...west, ...east].map((stop, index) => [stop.stopId, index < 9 ? 0 : 1]));
+    const { crews } = assignQuarter([...west, ...east], days(2, ['t1', 't2']), { rotation: { position, size: 2 } });
+
+    // One technician out each day, west on the first and east on the second.
+    expect(crews.map((crew) => [crew.date, crew.stops.map((stop) => stop.stopId[0]).join('')])).toEqual([
+      ['2026-10-01', 'wwwwww'],
+      ['2026-10-02', 'eeeeee'],
+    ]);
+  });
+});
+
 describe('repairing a day that measured over the limits', () => {
   it('keeps the days already laid out and places the rest around them', () => {
     const [first, second, third] = stopsInRotation(3);
