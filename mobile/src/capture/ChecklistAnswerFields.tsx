@@ -247,6 +247,7 @@ export function CommentField({
   title = 'What did you find?',
   hint = '(optional)',
   placeholder = 'Scuffed paint behind the door…',
+  accessibilityLabel = `What did you find in ${item.label}, optional`,
 }: {
   item: ChecklistItem;
   value: string | null;
@@ -255,6 +256,7 @@ export function CommentField({
   title?: string;
   hint?: string;
   placeholder?: string;
+  accessibilityLabel?: string;
 }) {
   return (
     <View className="mt-2">
@@ -262,7 +264,7 @@ export function CommentField({
         {title} <Text className="font-normal normal-case tracking-normal">{hint}</Text>
       </Text>
       <TextInput
-        accessibilityLabel={`${title} ${item.label}, ${hint.replace(/[()]/g, '')}`}
+        accessibilityLabel={accessibilityLabel}
         className="min-h-11 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
         defaultValue={value ?? ''}
         multiline

@@ -234,6 +234,7 @@ function renderAnswer(
           </Pressable>
           {notPresent ? null : (
             <CommentField
+              accessibilityLabel={`Comment on ${item.label}, or why it could not be scored`}
               hint="(or why it could not be scored)"
               item={item}
               // Keyed by the saved comment: the field is uncontrolled, so a
