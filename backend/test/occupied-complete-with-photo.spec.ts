@@ -40,6 +40,9 @@ function build({
   inspectionType = 'OCCUPIED',
   media = [] as { uploadStatus: string }[],
   photos = 0,
+  areaName = 'Kitchen',
+  items = [] as { id: string; label: string; responseType: string }[],
+  responses = [] as Record<string, unknown>[],
 } = {}) {
   const update = jest.fn().mockResolvedValue({
     id: ROOM_ID,
@@ -58,12 +61,15 @@ function build({
         propertyAreaId: 'area-1',
         completionStatus: 'PENDING',
         inspection: { inspectionType },
-        propertyArea: { baselineConditions: [] },
+        propertyArea: { name: areaName, baselineConditions: [] },
         media,
       }),
       update,
     },
     inspectionPhoto: { count },
+    // An HVAC section's items, and what the technician has answered in it.
+    areaChecklistItem: { findMany: jest.fn().mockResolvedValue(items) },
+    inspectionAreaChecklistResponse: { findMany: jest.fn().mockResolvedValue(responses) },
   };
   const service = new TechnicianService(prisma as never, {} as never, {} as never, {
     // `mediaProcessing` is untouched by this path; a bare object keeps the
@@ -124,7 +130,7 @@ describe('completing a back-to-market area', () => {
 });
 
 describe('completing an area of every other kind of visit', () => {
-  it.each([['MOVE_IN'], ['MOVE_OUT'], ['HVAC']])(
+  it.each([['MOVE_IN'], ['MOVE_OUT']])(
     'still requires a recording on %s',
     async (inspectionType) => {
       // A move-in and a move-out are the condition record a comparison is built
@@ -143,5 +149,68 @@ describe('completing an area of every other kind of visit', () => {
     const { service, update } = build({ inspectionType: 'MOVE_OUT', media: UPLOADED });
     await service.completeRoom(technician, ROOM_ID);
     expect(update).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The office's rule for its HVAC report (2026-09-16): every item and
+ * photographs, no video. A section is finished when each row is scored Clean,
+ * Undamaged and Working -- or has a comment saying why not -- and it has a
+ * photograph.
+ */
+describe('completing a section of an HVAC inspection', () => {
+  const attic = [
+    { id: 'float', label: 'Float switch', responseType: 'STATUS' },
+    { id: 'pan', label: 'Drip pan', responseType: 'STATUS' },
+  ];
+  const scored = { isClean: true, isUndamaged: true, isWorking: true, comment: null };
+
+  it('accepts photographs, with every row answered', async () => {
+    const { service, update } = build({
+      inspectionType: 'HVAC',
+      areaName: 'Attic',
+      photos: 3,
+      items: attic,
+      responses: [
+        { checklistItemId: 'float', ...scored },
+        { checklistItemId: 'pan', isClean: null, isUndamaged: null, isWorking: null, comment: 'Not present' },
+      ],
+    });
+
+    await service.completeRoom(technician, ROOM_ID);
+
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('refuses a section with a row left, and names it', async () => {
+    const { service, update } = build({
+      inspectionType: 'HVAC',
+      areaName: 'Attic',
+      photos: 3,
+      items: attic,
+      responses: [{ checklistItemId: 'float', ...scored }],
+    });
+
+    await expect(service.completeRoom(technician, ROOM_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'HVAC_CHECKLIST_INCOMPLETE',
+      message: expect.stringContaining('Drip pan'),
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('still needs a photograph', async () => {
+    const { service } = build({
+      inspectionType: 'HVAC',
+      areaName: 'Attic',
+      photos: 0,
+      items: attic,
+      responses: attic.map((item) => ({ checklistItemId: item.id, ...scored })),
+    });
+
+    await expect(service.completeRoom(technician, ROOM_ID)).rejects.toMatchObject({
+      status: 409,
+      code: 'ROOM_EVIDENCE_REQUIRED',
+    });
   });
 });

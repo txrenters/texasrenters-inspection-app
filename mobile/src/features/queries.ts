@@ -12,6 +12,7 @@ import type {
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
 import { QueuedOfflineError } from '../repositories/api/offline-writes';
+import type { ClosingComments } from '../utils/closing-comments';
 import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
 // import graph, and adding `useDemoStore` left the binding undefined at
@@ -329,10 +330,12 @@ export function useInspectionActions(id: string) {
   return {
     start: useMutation(action<void>('PROCESSING', () => repositories.inspections.start(id))),
     // The services report rides with the submission, so the note to Jobber and
-    // "submitted" are written by the same request.
+    // "submitted" are written by the same request -- and so do an HVAC
+    // report's closing comments.
     complete: useMutation(
-      action<VisitServicesReport | undefined>('PROCESSING', (servicesReport) =>
-        repositories.inspections.complete(id, servicesReport),
+      action<{ servicesReport?: VisitServicesReport; closingComments?: Partial<ClosingComments> } | undefined>(
+        'PROCESSING',
+        (input) => repositories.inspections.complete(id, input?.servicesReport, input?.closingComments),
       ),
     ),
   };

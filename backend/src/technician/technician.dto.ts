@@ -478,4 +478,16 @@ export class TechnicianServicesReportDto {
 export class TechnicianCompleteInspectionDto {
   @IsOptional() @ValidateNested() @Type(() => TechnicianServicesReportDto)
   servicesReport?: TechnicianServicesReportDto;
+
+  /**
+   * The report's closing block, as the technician writes it before submitting.
+   *
+   * The office's HVAC report ends on these three, filled in by whoever did the
+   * visit (the office, 2026-09-16); the office can still change them in the
+   * console before it signs the report off. Omitted leaves what is there, the
+   * same limits as the console's own form.
+   */
+  @IsOptional() @IsString() @MaxLength(1000) nextInspectionAlert?: string;
+  @IsOptional() @IsString() @MaxLength(4000) maintenanceComments?: string;
+  @IsOptional() @IsString() @MaxLength(4000) generalComments?: string;
 }

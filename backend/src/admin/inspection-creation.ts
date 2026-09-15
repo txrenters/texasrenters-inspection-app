@@ -12,6 +12,8 @@ import {
 import {
   AreaScope,
   HVAC_CHECKLIST,
+  HVAC_SECTIONS,
+  type HvacSection,
   OCCUPIED_CHECKLIST,
   STANDARD_LAYOUT_NOTE,
   STANDARD_LAYOUT_SOURCE,
@@ -538,42 +540,25 @@ export async function resolveInspectionPlan(
 }
 
 /**
- * The name every HVAC inspection's single area carries.
+ * The name of the single area HVAC inspections were given before 2026-09-16.
  *
- * Stable rather than generated, because it is the lookup key: one area per
- * property, reused by every HVAC visit that property ever has, so the checklist
- * responses and photos of successive visits stay attached to the same subject.
+ * Still the area a filter delivery hangs off, and still the area of every HVAC
+ * inspection created before the report's sections became areas -- an
+ * inspection's areas are a snapshot, so those keep it and answer the whole list
+ * in it.
  */
 export const HVAC_SYSTEM_AREA_NAME = 'HVAC System';
 
 /**
- * Finds or creates the one area an HVAC inspection hangs off.
+ * The `Property` row has to exist before an area can point at it.
  *
- * An HVAC visit inspects equipment, not rooms. It has no floor plan and the
- * technician is never shown an area — but `InspectionArea`, `InspectionPhoto`,
- * `InspectionAreaChecklistResponse` and `InspectionFinding` all require one, so
- * there has to be exactly one to point at.
- *
- * APPROVED on creation, and `source` records that nobody drew it. It is
- * deliberately NOT part of any floor plan: it has no marker, no floor, and it
- * must never appear in a room walk, which is why it is created here rather than
- * through the floor-plan admin path.
- *
- * `isRequired` is false. The completion gate counts required areas that are
- * neither complete nor skipped, and an HVAC technician answers a checklist
- * rather than marking an area complete — a required area would block every
- * submission on a step the app never shows them.
+ * `PropertyArea.propertyId` carries a *building* id but its foreign key
+ * references `Property`, a separate table that is populated lazily — the
+ * floor-plan admin calls the same upsert before every area it creates. Most
+ * buildings have never had one, so creating the area first violates
+ * `PropertyArea_propertyId_fkey` and takes the whole sync down with it.
  */
-async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan) {
-  /**
-   * The `Property` row has to exist before an area can point at it.
-   *
-   * `PropertyArea.propertyId` carries a *building* id but its foreign key
-   * references `Property`, a separate table that is populated lazily — the
-   * floor-plan admin calls the same upsert before every area it creates. Most
-   * buildings have never had one, so creating the area first violates
-   * `PropertyArea_propertyId_fkey` and takes the whole sync down with it.
-   */
+async function ensureAreaProperty(tx: InspectionCreationClient, plan: InspectionPlan) {
   await tx.property.upsert({
     where: { id: plan.property.id },
     update: {},
@@ -589,6 +574,22 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
       postalCode: plan.property.postalCode || 'Not provided',
     },
   });
+}
+
+/**
+ * Finds or creates the one area a filter delivery hangs off.
+ *
+ * A delivery inspects nothing, but `InspectionArea`, `InspectionPhoto`,
+ * `InspectionAreaChecklistResponse` and `InspectionFinding` all require an area,
+ * so there has to be exactly one to point at.
+ *
+ * APPROVED on creation, and `source` records that nobody drew it. It is
+ * deliberately NOT part of any floor plan: it has no marker and no floor, which
+ * is why it is created here rather than through the floor-plan admin path.
+ * `isRequired` is false: nothing on a delivery asks for it to be finished.
+ */
+async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan) {
+  await ensureAreaProperty(tx, plan);
 
   const where = {
     propertyId: plan.property.id,
@@ -614,13 +615,70 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
   return created.id;
 }
 
+/** Where each section of the report is, for the area it becomes. */
+const HVAC_SECTION_PLACE: Record<HvacSection, { category: AreaCategory; environment: AreaEnvironment }> = {
+  Attic: { category: AreaCategory.ATTIC, environment: AreaEnvironment.INDOOR },
+  Filters: { category: AreaCategory.UTILITY, environment: AreaEnvironment.INDOOR },
+  'A/C unit': { category: AreaCategory.UTILITY, environment: AreaEnvironment.OUTDOOR },
+  Thermostat: { category: AreaCategory.UTILITY, environment: AreaEnvironment.INDOOR },
+};
+
 /**
- * Makes sure the organization's HVAC checklist exists.
+ * Finds or creates the areas an HVAC inspection is walked in: the four sections
+ * of the office's report, in its order.
  *
- * One list for the whole organization, not one per property. The HVAC checklist
- * asks the same nine questions about every system in the portfolio, so copying
- * it onto ~570 properties would mean keeping ~570 copies in step every time a
- * line is reworded.
+ * One set per building and unit, reused by every HVAC visit there, so the
+ * photographs and answers of successive visits sit against the same Attic and
+ * the same A/C unit. Named exactly as the report's sections, because the name
+ * is what decides which items an area asks (`hvacSectionOf`).
+ *
+ * Required, where the old single area was not: the office's rule (2026-09-16)
+ * is that an HVAC inspection is submitted with every section's items answered
+ * and photographed, and a required area is how the completion gate asks. A
+ * section the property genuinely does not have is skipped with a reason, as a
+ * room is.
+ *
+ * Not part of any floor plan -- `source` SYSTEM, no floor -- so none of them is
+ * counted as a room layout. A property that already has an area of the same
+ * name at no floor keeps it and it is used, because the database allows only one.
+ */
+async function hvacSectionAreas(tx: InspectionCreationClient, plan: InspectionPlan) {
+  await ensureAreaProperty(tx, plan);
+
+  const ids: string[] = [];
+  for (const [index, section] of HVAC_SECTIONS.entries()) {
+    const where = { propertyId: plan.property.id, unitId: plan.unit?.id ?? null, floorId: null, name: section };
+    const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
+    const id =
+      existing?.id ??
+      (
+        await tx.propertyArea.create({
+          data: {
+            ...where,
+            inspectionOrder: index,
+            isRequired: true,
+            status: PropertyAreaStatus.APPROVED,
+            source: 'SYSTEM',
+            ...HVAC_SECTION_PLACE[section],
+            notes: 'Created automatically for HVAC inspections: a section of the office’s HVAC report. Not part of the floor plan.',
+          },
+          select: { id: true },
+        })
+      ).id;
+    ids.push(id);
+  }
+  return ids;
+}
+
+const sameList = (left: readonly string[], right: readonly string[]) =>
+  left.length === right.length && left.every((entry, index) => entry === right[index]);
+
+/**
+ * Makes sure the organization's HVAC checklist is the one in `HVAC_CHECKLIST`.
+ *
+ * One list for the whole organization, not one per property: the same items are
+ * asked of every system in the portfolio, so copying them onto ~570 properties
+ * would mean keeping ~570 copies in step every time a line is reworded.
  *
  * `skipDuplicates` rather than a count-then-insert: the partial unique index on
  * (organization, kind, label) where the area is null makes a re-run free, and
@@ -628,35 +686,85 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
  * already recorded against an item survive, because the row is reused rather
  * than replaced.
  *
- * Worth knowing: adding a line to the template reaches every organization at the
- * next HVAC inspection, but *removing* one does not — a row already inserted
- * stays until somebody archives it. That is the safe direction, since a live
- * item may already hold a technician's answers.
+ * And then kept in step, which it used not to be. A row once inserted was never
+ * touched again, so when the office's report replaced the sixty-item form, the
+ * old items would have gone on being asked beside the new ones, and a label the
+ * two share ("Temperature split") would have stayed in the old form's section,
+ * asked in no area at all. Now an item still in the list takes its section,
+ * type, unit and place from it, and one no longer in it is archived: it stops
+ * being asked, while every answer already given to it stays on its report.
+ * Only rows that differ are written, so after the first inspection this is a
+ * read.
  */
 async function ensureHvacChecklist(tx: InspectionCreationClient, organizationId: string) {
+  const rows = HVAC_CHECKLIST.map((item, index) => ({
+    label: item.label,
+    section: item.section as string,
+    responseType: item.responseType,
+    unit: item.unit ?? null,
+    choices: item.choices ?? [],
+    /**
+     * Keywords only for the items a spoken walkthrough can cover.
+     *
+     * A reading is a number the technician types; no phrasing in a transcript
+     * means "the split was 18 degrees", and pretending otherwise would tick a
+     * measurement nobody took.
+     */
+    keywords: item.responseType === 'STATUS' ? keywordsFromLabel(item.label) : [],
+    // The order of the report, which is the order it is walked.
+    sortOrder: index,
+  }));
+  const scope = { organizationId, propertyAreaId: null, kind: AreaChecklistItemKind.AIR_CONDITIONING };
+
   await tx.areaChecklistItem.createMany({
-    data: HVAC_CHECKLIST.map((item, index) => ({
-      organizationId,
-      propertyAreaId: null,
-      kind: AreaChecklistItemKind.AIR_CONDITIONING,
-      label: item.label,
-      section: item.section,
-      responseType: item.responseType,
-      unit: item.unit ?? null,
-      choices: item.choices ?? [],
-      /**
-       * Keywords only for the items a spoken walkthrough can cover.
-       *
-       * A reading is a number the technician types; no phrasing in a transcript
-       * means "the split was 18 degrees", and pretending otherwise would tick a
-       * measurement nobody took.
-       */
-      keywords: item.responseType === 'STATUS' ? keywordsFromLabel(item.label) : [],
-      // The order of the printed form, which is the order it is walked.
-      sortOrder: index,
-    })),
+    data: rows.map((row) => ({ ...scope, ...row })),
     skipDuplicates: true,
   });
+
+  await tx.areaChecklistItem.updateMany({
+    where: { ...scope, archivedAt: null, label: { notIn: rows.map((row) => row.label) } },
+    data: { archivedAt: new Date() },
+  });
+
+  const current = await tx.areaChecklistItem.findMany({
+    where: { ...scope, label: { in: rows.map((row) => row.label) } },
+    select: {
+      id: true,
+      label: true,
+      section: true,
+      responseType: true,
+      unit: true,
+      choices: true,
+      keywords: true,
+      sortOrder: true,
+      archivedAt: true,
+    },
+  });
+  const wanted = new Map(rows.map((row) => [row.label, row]));
+  for (const item of current) {
+    const row = wanted.get(item.label)!;
+    const inStep =
+      !item.archivedAt &&
+      item.section === row.section &&
+      item.responseType === row.responseType &&
+      item.unit === row.unit &&
+      item.sortOrder === row.sortOrder &&
+      sameList(item.choices, row.choices) &&
+      sameList(item.keywords, row.keywords);
+    if (inStep) continue;
+    await tx.areaChecklistItem.update({
+      where: { id: item.id },
+      data: {
+        section: row.section,
+        responseType: row.responseType,
+        unit: row.unit,
+        choices: row.choices,
+        keywords: row.keywords,
+        sortOrder: row.sortOrder,
+        archivedAt: null,
+      },
+    });
+  }
 }
 
 /**
@@ -845,7 +953,12 @@ export async function insertInspection(
   let areaIds: string[];
   if (areaScopeFor(plan.inspectionType) === AreaScope.HVAC_SYSTEM) {
     await ensureHvacChecklist(tx, plan.organizationId);
-    areaIds = [await hvacSystemArea(tx, plan)];
+    // An HVAC inspection is walked in the report's sections. A filter delivery,
+    // which shares the scope and asks nothing, keeps the one area it always had.
+    areaIds =
+      plan.inspectionType === InspectionType.HVAC
+        ? await hvacSectionAreas(tx, plan)
+        : [await hvacSystemArea(tx, plan)];
   } else {
     /**
      * An occupied visit walks ordinary rooms, so it resolves its areas exactly

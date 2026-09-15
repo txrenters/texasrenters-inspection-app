@@ -218,11 +218,16 @@ describe('which visits owe a video walkthrough of every area', () => {
     },
   );
 
-  it.each([
-    [InspectionType.MOVE_IN],
-    [InspectionType.MOVE_OUT],
-    [InspectionType.HVAC],
-  ])('still requires one on %s', (type) => {
+  /**
+   * The office's HVAC report is a table per section with photographs beneath,
+   * and its rule for the handset (2026-09-16) is every item and photographs,
+   * no video.
+   */
+  it('excuses HVAC, which is walked in its report’s items and photographs', () => {
+    expect(inspectionRequiresAreaRecording(InspectionType.HVAC)).toBe(false);
+  });
+
+  it.each([[InspectionType.MOVE_IN], [InspectionType.MOVE_OUT]])('still requires one on %s', (type) => {
     // A move-in and a move-out are the condition record a comparison is built
     // from, and the walkthrough is the evidence. Photographs do not replace it.
     expect(inspectionRequiresAreaRecording(type)).toBe(true);

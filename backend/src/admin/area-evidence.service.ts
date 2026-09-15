@@ -1,7 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { FindingReviewStatus, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
-import { checklistKindFor } from '@texasrenters/shared';
-import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
+import { FindingReviewStatus, InspectionType, PhotoCaptureType, VideoRecordingType } from '@prisma/client';
+import { checklistKindFor, hvacItemsForArea, hvacSectionOf } from '@texasrenters/shared';
+import {
+  checklistItemsAreOrganizationWide,
+  checklistKindWhere,
+  checklistSectionWhere,
+} from '../common/checklist-kind';
 import type {
   AreaEvidenceBundle,
   AreaEvidenceSummary,
@@ -201,7 +205,7 @@ export class AreaEvidenceService {
    * 4-area one.
    */
   async summary(user: AuthenticatedUser, inspectionId: string): Promise<AreaEvidenceSummary> {
-    await this.requireInspection(user.organizationId, inspectionId);
+    const inspection = await this.requireInspection(user.organizationId, inspectionId);
     const areas = await this.prisma.inspectionArea.findMany({
       where: { inspectionId },
       orderBy: { propertyArea: { inspectionOrder: 'asc' } },
@@ -337,7 +341,13 @@ export class AreaEvidenceService {
         isRequired: area.propertyArea.isRequired,
         // Optional-chained: not every select variant asks for the count, and a
         // missing badge is not worth crashing the whole evidence list over.
-        checklistItemCount: area.propertyArea._count?.checklistItems ?? 0,
+        // An HVAC section's items belong to the organization, not the area, so
+        // the area's own count is always nought; its section of the list is
+        // the number the technician was asked.
+        checklistItemCount:
+          inspection.inspectionType === InspectionType.HVAC && hvacSectionOf(area.propertyArea.name)
+            ? hvacItemsForArea(area.propertyArea.name).length
+            : (area.propertyArea._count?.checklistItems ?? 0),
         // How much of that checklist the technician actually scored. Counted
         // here rather than derived from the item count, because an area can
         // carry assessments against items an administrator has since archived
@@ -545,6 +555,9 @@ export class AreaEvidenceService {
           // `in` matches no rows — the same result as skipping the query,
           // without the caller having to handle a different shape back.
           ...checklistKindWhere(checklistKindFor(inspection.inspectionType)),
+          // An HVAC section shows the reviewer its own section, as the
+          // technician was asked it.
+          ...checklistSectionWhere(checklistKindFor(inspection.inspectionType), area.propertyArea.name),
         },
         orderBy: { sortOrder: 'asc' },
         select: {

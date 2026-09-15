@@ -28,6 +28,7 @@ import {
   bulkSkippableAreas,
   evaluateSubmissionGate,
 } from '@/src/utils/submission-gate';
+import { ClosingCommentsCard } from '@/src/components/ClosingCommentsCard';
 import { HomeButton } from '@/src/components/HomeButton';
 import { ServicesDoneCard } from '@/src/components/ServicesDoneCard';
 import {
@@ -38,6 +39,12 @@ import {
   type ServicesDraft,
 } from '@/src/utils/services-report';
 import { registerIcons } from '@/src/lib/icons';
+import {
+  asksClosingComments,
+  closingCommentsToSend,
+  EMPTY_CLOSING_COMMENTS,
+  type ClosingComments,
+} from '@/src/utils/closing-comments';
 import { formatVisitWindow } from '@/src/utils/visit-window';
 
 registerIcons(
@@ -155,6 +162,8 @@ export default function InspectionReviewScreen() {
   const [servicesDraft, setServicesDraft] = useState<ServicesDraft>(
     () => storedServicesDraft ?? EMPTY_SERVICES_DRAFT,
   );
+  // An HVAC report's closing comments, typed here just before submitting.
+  const [closingComments, setClosingComments] = useState<ClosingComments>(EMPTY_CLOSING_COMMENTS);
   useEffect(() => {
     if (servicesDraft === EMPTY_SERVICES_DRAFT) return;
     const timer = setTimeout(() => setStoredServicesDraft(id, servicesDraft), 500);
@@ -303,13 +312,21 @@ export default function InspectionReviewScreen() {
           text: 'Submit',
           onPress: () =>
             actions.complete.mutate(
-              servicesAsked.services.length ? reportFromDraft(servicesAsked, servicesDraft) : undefined,
+              {
+                servicesReport: servicesAsked.services.length
+                  ? reportFromDraft(servicesAsked, servicesDraft)
+                  : undefined,
+                closingComments: asksClosingComments(inspection.type)
+                  ? closingCommentsToSend(closingComments)
+                  : undefined,
+              },
               {
                 onSuccess: () => {
                   // Local state first, so the pending write-back is cancelled
                   // rather than putting the answers back after they are cleared.
                   setServicesDraft(EMPTY_SERVICES_DRAFT);
                   setStoredServicesDraft(id, null);
+                  setClosingComments(EMPTY_CLOSING_COMMENTS);
                   showSubmitted();
                 },
               },
@@ -504,6 +521,10 @@ export default function InspectionReviewScreen() {
             onChange={setServicesDraft}
             className="mx-5 mt-4"
           />
+        ) : null}
+
+        {inspection.status === 'IN_PROGRESS' && asksClosingComments(inspection.type) ? (
+          <ClosingCommentsCard className="mx-5 mt-4" draft={closingComments} onChange={setClosingComments} />
         ) : null}
 
         <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
