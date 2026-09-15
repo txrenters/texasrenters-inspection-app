@@ -18,6 +18,7 @@ import {
   LEASE_EXPIRING_SOON_DAYS,
   bookingFromTenancy,
   daysUntilLeaseEnd,
+  isBookableInspectionType,
   jobberBookingProblems,
   jobberBookingText,
   leaseExpiryStatus,
@@ -1442,11 +1443,14 @@ export class AdminService {
    * Whether this request may book its visit in Jobber, asked before anything is written.
    */
   private bookableRequest(input: CreateAdminInspectionDto): JobberBookingInput {
-    if (input.inspectionType !== InspectionType.OCCUPIED)
+    // Occupied, move-in, move-out, back-to-market and HVAC: the visits the
+    // office books in Jobber. A lockbox, a roof or a filter delivery has no
+    // Details format here to write.
+    if (!isBookableInspectionType(input.inspectionType))
       throw new ApplicationError(
         422,
-        'JOBBER_BOOKING_OCCUPIED_ONLY',
-        'Only an occupied inspection can be booked in Jobber from here.',
+        'JOBBER_BOOKING_TYPE_UNSUPPORTED',
+        'This kind of inspection cannot be booked in Jobber from here.',
       );
     if (!getJobberConfig().bookingEnabled)
       throw new ApplicationError(
@@ -1455,7 +1459,7 @@ export class AdminService {
         'Booking visits in Jobber is switched off on this server. Book the visit in Jobber instead.',
       );
     const booking = input.jobberBooking as JobberBookingInput;
-    const problems = jobberBookingProblems(booking);
+    const problems = jobberBookingProblems(booking, input.inspectionType);
     if (problems.length) throw new ApplicationError(422, 'JOBBER_BOOKING_INVALID', problems.join(' '));
     return booking;
   }
@@ -1507,7 +1511,9 @@ export class AdminService {
             'This property is not linked to a Jobber property yet. Link it on the Jobber page first.',
           );
 
+    const inspectionType = isBookableInspectionType(plan.inspectionType) ? plan.inspectionType : 'OCCUPIED';
     const text = jobberBookingText(booking, {
+      inspectionType,
       address: bookingAddress(plan.property, plan.unit),
       scheduledOn: plan.scheduledAt.toISOString().slice(0, 10),
       inspectionUrl: `${webOrigin()}/inspections/${inspectionId}`,
@@ -1530,10 +1536,14 @@ export class AdminService {
     // tenant's phone and a way in.
     await this.audit(tx, user, 'JOBBER_VISIT_BOOKING_QUEUED', inspectionId, {
       jobberPropertyId: link.jobberPropertyId,
-      benefitPackage: booking.benefitPackage,
-      services: Object.entries(booking.services)
-        .filter(([, booked]) => booked)
-        .map(([service]) => service),
+      inspectionType,
+      benefitPackage: inspectionType === 'OCCUPIED' && booking.benefitPackage,
+      services:
+        inspectionType === 'OCCUPIED'
+          ? Object.entries(booking.services)
+              .filter(([, booked]) => booked)
+              .map(([service]) => service)
+          : [],
     });
   }
 

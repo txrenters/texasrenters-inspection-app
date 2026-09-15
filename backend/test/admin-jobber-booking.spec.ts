@@ -136,6 +136,7 @@ describe('creating an occupied inspection booked in Jobber', () => {
       .find((entry) => entry.action === 'JOBBER_VISIT_BOOKING_QUEUED');
     expect(queued.metadata).toEqual({
       jobberPropertyId: 'jobber-property-1',
+      inspectionType: 'OCCUPIED',
       benefitPackage: true,
       services: ['filterChange', 'pestControl'],
     });
@@ -160,13 +161,30 @@ describe('creating an occupied inspection booked in Jobber', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('refuses a booking for anything but an occupied inspection', async () => {
+  it('refuses a booking for a kind of visit it has no Details format for', async () => {
     const { service, prisma } = build();
-    await expect(create(service, { inspectionType: 'MOVE_OUT' })).rejects.toMatchObject({
+    await expect(create(service, { inspectionType: 'SUPRA_LOCKBOX_PLACEMENT' })).rejects.toMatchObject({
       status: 422,
-      code: 'JOBBER_BOOKING_OCCUPIED_ONLY',
+      code: 'JOBBER_BOOKING_TYPE_UNSUPPORTED',
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("books a move-out in the office's move-out format, with no benefit-package services", async () => {
+    const { service, tx } = build();
+    // Sizes that would be refused on a benefit-package visit are not written here at all.
+    await create(service, { inspectionType: 'MOVE_OUT', jobberBooking: booking({ filters: [{ size: 'UPDATE' }] }) });
+
+    const written = tx.inspection.update.mock.calls[0][0].data;
+    expect(written.jobberVisitTitle).toBe('100 Main Street - Zone 3 - Move out inspection');
+    expect(written.jobberVisitDetails).toContain('• Conduct Move out inspection');
+    expect(written.jobberVisitDetails).not.toMatch(/occupied\s+insp|Filter Change|UPDATE/i);
+    expect(tx.jobberOutboundTask.create.mock.calls[0][0].data.jobTitle).toBe('Zone 3 - Move out inspection');
+
+    const queued = tx.auditLog.create.mock.calls
+      .map((call) => call[0].data)
+      .find((entry) => entry.action === 'JOBBER_VISIT_BOOKING_QUEUED');
+    expect(queued.metadata).toMatchObject({ inspectionType: 'MOVE_OUT', benefitPackage: false, services: [] });
   });
 
   it('says what is wrong with a filter size rather than booking it', async () => {

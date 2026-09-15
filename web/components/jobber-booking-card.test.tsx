@@ -41,9 +41,35 @@ const card = (props: Partial<Parameters<typeof JobberBookingCard>[0]> = {}) => {
       onChange={vi.fn()}
       scheduledOn="2026-10-06"
       {...props}
+      inspectionType={props.inspectionType ?? 'OCCUPIED'}
     />
   );
 };
+
+describe('booking the other kinds of inspection', () => {
+  it("asks no services on a move-out, and previews the office's move-out steps", () => {
+    render(card({ inspectionType: 'MOVE_OUT' }));
+
+    expect(screen.queryByText('Filter change')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter 1 size')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tenant Benefit Package visit')).not.toBeInTheDocument();
+    const preview = screen.getByRole('region', { name: 'What Jobber receives' });
+    expect(within(preview).getByText('100 Main Street - Zone 3 - Move out inspection')).toBeInTheDocument();
+    expect(within(preview).getByText(/- Thoroughly check for any damages and Make work order/)).toBeInTheDocument();
+    expect(within(preview).queryByText(/Occupied Inspection/i)).not.toBeInTheDocument();
+  });
+
+  it('does not hold a move-in back on a filter size it will never write', () => {
+    const ready = context();
+    render(
+      card({
+        inspectionType: 'MOVE_IN',
+        form: { ...bookingForm(ready.prefill), filters: [{ size: 'UPDATE', quantity: '', media: false, location: '' }] },
+      }),
+    );
+    expect(screen.queryByText('Fix before creating')).not.toBeInTheDocument();
+  });
+});
 
 describe('the Jobber booking on the create form', () => {
   it('previews exactly what Jobber receives, started from the tenant report', () => {

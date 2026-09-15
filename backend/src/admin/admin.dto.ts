@@ -179,7 +179,7 @@ export class CreateAdminInspectionDto {
    * administrator still approves the permanent layout.
    */
   @IsOptional() @IsBoolean() allowTechnicianAreaCapture?: boolean;
-  /** Book the visit in Jobber too. Occupied inspections only. */
+  /** Book the visit in Jobber too: occupied, move-in, move-out, back-to-market or HVAC. */
   @IsOptional() @ValidateNested() @Type(() => JobberBookingDto) jobberBooking?: JobberBookingDto;
 }
 

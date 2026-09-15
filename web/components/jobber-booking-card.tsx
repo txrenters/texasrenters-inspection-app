@@ -1,6 +1,11 @@
 'use client';
 
-import { jobberBookingProblems, jobberBookingText, type JobberBookingContext } from '@texasrenters/shared';
+import {
+  jobberBookingProblems,
+  jobberBookingText,
+  type BookableInspectionType,
+  type JobberBookingContext,
+} from '@texasrenters/shared';
 import { PlusIcon, TriangleAlertIcon, XIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, type ReactNode } from 'react';
@@ -21,13 +26,15 @@ import { bookingFromForm, bookingUnavailableReason, type BookingFormState } from
 const LINK_PLACEHOLDER = '(a link to this inspection)';
 
 /**
- * Books the occupied inspection's visit in Jobber as it is created.
+ * Books the inspection's visit in Jobber as it is created.
  *
  * The preview at the bottom is the text Jobber receives, built by the same
- * function the server sends with -- the office format, a link back here, and
- * completion steps pointing at the app.
+ * function the server sends with -- the office's format for that kind of visit,
+ * a link back here, and completion steps pointing at the app. Services, filters
+ * and the plan are asked only on an occupied visit, the only kind that books them.
  */
 export function JobberBookingCard({
+  inspectionType,
   context,
   loading,
   error,
@@ -37,6 +44,7 @@ export function JobberBookingCard({
   onChange,
   scheduledOn,
 }: {
+  inspectionType: BookableInspectionType;
   context: JobberBookingContext | undefined;
   loading: boolean;
   error: Error | null;
@@ -49,17 +57,19 @@ export function JobberBookingCard({
 }) {
   const unavailable = context ? bookingUnavailableReason(context) : null;
   const request = useMemo(() => bookingFromForm(form), [form]);
-  const problems = useMemo(() => jobberBookingProblems(request), [request]);
+  const problems = useMemo(() => jobberBookingProblems(request, inspectionType), [request, inspectionType]);
+  const occupied = inspectionType === 'OCCUPIED';
   const preview = useMemo(
     () =>
       context
         ? jobberBookingText(request, {
+            inspectionType,
             address: context.address,
             scheduledOn: /^\d{4}-\d{2}-\d{2}/.test(scheduledOn) ? scheduledOn.slice(0, 10) : '',
             inspectionUrl: LINK_PLACEHOLDER,
           })
         : null,
-    [context, request, scheduledOn],
+    [context, inspectionType, request, scheduledOn],
   );
   const set = <K extends keyof BookingFormState>(key: K, value: BookingFormState[K]) =>
     onChange({ ...form, [key]: value });
@@ -71,8 +81,8 @@ export function JobberBookingCard({
         <div className="grid gap-1.5">
           <CardTitle id="jobber-booking-title">Book in Jobber</CardTitle>
           <CardDescription>
-            Creates the visit in Jobber in the office&apos;s Details format, with a link back to this
-            inspection and completion steps that point technicians at the app.
+            Creates the visit in Jobber in the office&apos;s Details format for this kind of
+            inspection, with a link back to it and completion steps that point technicians at the app.
           </CardDescription>
         </div>
         {offered ? (
@@ -110,6 +120,7 @@ export function JobberBookingCard({
         ) : (
           <>
             <div className="grid gap-5 md:grid-cols-2">
+              {occupied ? (
               <Field>
                 <FieldLabel>Services</FieldLabel>
                 <div className="grid gap-2">
@@ -133,6 +144,7 @@ export function JobberBookingCard({
                   </span>
                 </div>
               </Field>
+              ) : null}
               <div className="grid content-start gap-4">
                 <Field>
                   <FieldLabel htmlFor="booking-zone">Zone</FieldLabel>
@@ -143,6 +155,8 @@ export function JobberBookingCard({
                     value={form.zone}
                   />
                 </Field>
+                {occupied ? (
+                <>
                 <CheckRow
                   checked={form.benefitPackage}
                   label="Tenant Benefit Package visit"
@@ -164,10 +178,12 @@ export function JobberBookingCard({
                     onChange={(checked) => set('hvacOptedOut', checked)}
                   />
                 </div>
+                </>
+                ) : null}
               </div>
             </div>
 
-            {form.services.filterChange ? (
+            {occupied && form.services.filterChange ? (
               <Rows
                 addLabel="Add a filter"
                 description="Leave the list empty and the Details ask the technician to update the sizes."
