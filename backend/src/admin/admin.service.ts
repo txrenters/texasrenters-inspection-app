@@ -42,7 +42,13 @@ import {
 } from './inspection-creation';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
-import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
+import {
+  VISIT_EDIT_KINDS,
+  enqueueJobberCompletion,
+  requestVisitPush,
+  type VisitEditKind,
+} from '../integrations/jobber/jobber.outbound';
+import { businessClockTime, businessInstant } from '../common/business-day';
 import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
 // A pure function, not the service: the panel needs Stream's definition of
@@ -82,6 +88,7 @@ import type {
   UnassignDto,
   UnitListQueryDto,
   UpdateAdminInspectionDto,
+  UpdateJobberVisitDto,
 } from './admin.dto';
 
 /** The street address a booked visit's title starts with: the unit's, else the building's. */
@@ -90,6 +97,22 @@ function bookingAddress(
   unit: { addressLine1: string | null } | null,
 ): string {
   return unit?.addressLine1?.trim() || building.addressLine1?.trim() || building.name;
+}
+
+/**
+ * A Jobber visit's clock-time window, moved to a new day at the same Texas times.
+ *
+ * Whole-day visits have no window and get none.
+ */
+function movedWindow(
+  existing: { scheduledStartAt: Date | null; scheduledEndAt: Date | null },
+  day: string,
+): { scheduledStartAt?: Date; scheduledEndAt?: Date } {
+  if (!existing.scheduledStartAt || !existing.scheduledEndAt) return {};
+  return {
+    scheduledStartAt: businessInstant(day, businessClockTime(existing.scheduledStartAt)),
+    scheduledEndAt: businessInstant(day, businessClockTime(existing.scheduledEndAt)),
+  };
 }
 
 function webOrigin(): string {
@@ -1228,11 +1251,10 @@ export class AdminService {
         // What the technician reported about those services at submission.
         servicesReport: true,
         servicesReportedAt: true,
-        // The Jobber booking this console asked for, when it asked for one.
+        // What this console asked Jobber for: the booking, and the edits since.
         jobberOutboundTasks: {
-          where: { kind: JobberOutboundKind.VISIT_CREATE },
-          take: 1,
-          select: { status: true, attempts: true, lastError: true, sentAt: true },
+          where: { kind: { in: [JobberOutboundKind.VISIT_CREATE, ...VISIT_EDIT_KINDS] } },
+          select: { kind: true, status: true, attempts: true, lastError: true, sentAt: true },
         },
         inspectionType: true,
         baselineInspectionId: true,
@@ -1342,13 +1364,21 @@ export class AdminService {
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
     const { jobberVisitId, jobberOutboundTasks, ...detail } = inspection;
+    // Optional-chained for the test doubles that stand in for this read without it.
+    const consoleTasks = jobberOutboundTasks ?? [];
+    const booking = consoleTasks.find((task) => task.kind === JobberOutboundKind.VISIT_CREATE);
     return {
       ...detail,
       evidence,
       baselineMissing,
       scheduledInJobber: Boolean(jobberVisitId),
-      // Optional-chained for the test doubles that stand in for this read without it.
-      jobberBooking: jobberOutboundTasks?.[0] ?? null,
+      jobberBooking: booking ? { status: booking.status, attempts: booking.attempts, lastError: booking.lastError, sentAt: booking.sentAt } : null,
+      // Edits waiting for, or refused by, Jobber. A sent one is history.
+      jobberPushes: consoleTasks
+        .filter((task) => task.kind !== JobberOutboundKind.VISIT_CREATE && task.status !== JobberOutboundStatus.SENT)
+        .map((task) => ({ kind: task.kind, status: task.status, attempts: task.attempts, lastError: task.lastError })),
+      // Whether a change made here reaches Jobber, so the edit form can say so.
+      jobberEditsPushed: getJobberConfig().pushEditsEnabled,
     };
   }
 
@@ -1652,6 +1682,70 @@ export class AdminService {
     return { tenancy, tenantNames: lease?.tenantDisplayNames ?? [] };
   }
 
+  /**
+   * Queues a console edit for the inspection's Jobber visit, when edits are pushed.
+   *
+   * In the caller's transaction. Nothing happens for an inspection with no
+   * Jobber visit, or while pushing edits is switched off -- then Jobber keeps
+   * its copy, as it always did.
+   */
+  private pushVisitEdit(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    inspectionId: string,
+    kind: VisitEditKind,
+  ) {
+    if (!getJobberConfig().pushEditsEnabled) return null;
+    return requestVisitPush(tx, {
+      organizationId: user.organizationId,
+      inspectionId,
+      kind,
+      requestedById: user.id,
+    });
+  }
+
+  /**
+   * Edits the visit's title and Details from the console.
+   *
+   * For a visit Jobber has, the change is pushed there and the sync holds off
+   * until it has gone. For one booked here and not yet sent, the booking sends
+   * the edited text. The text itself is never audited: it carries the tenant's
+   * phone and a way in.
+   */
+  async updateJobberVisit(user: AuthenticatedUser, id: string, input: UpdateJobberVisitDto) {
+    const existing = await this.requireInspection(user.organizationId, id);
+    if (existing.status === InspectionStatus.COMPLETED || existing.status === InspectionStatus.CANCELLED)
+      throw new ApplicationError(409, 'INSPECTION_FINALIZED', 'A completed or cancelled inspection cannot be changed.');
+    await this.prisma.$transaction(async (tx) => {
+      const pendingBooking = await tx.jobberOutboundTask.findFirst({
+        where: {
+          organizationId: user.organizationId,
+          inspectionId: id,
+          kind: JobberOutboundKind.VISIT_CREATE,
+          status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
+        },
+        select: { id: true },
+      });
+      if (!existing.jobberVisitId && !pendingBooking)
+        throw new ApplicationError(409, 'NO_JOBBER_VISIT', 'This inspection has no Jobber visit to edit.');
+      if (existing.jobberVisitId && !getJobberConfig().pushEditsEnabled)
+        throw new ApplicationError(
+          409,
+          'JOBBER_EDITS_OFF',
+          'Changes made here are not sent to Jobber on this server. Edit the visit in Jobber.',
+        );
+      const title = input.title?.trim();
+      await tx.inspection.update({
+        where: { id },
+        data: { ...(title ? { jobberVisitTitle: title } : {}), jobberVisitDetails: input.details.trim() || null },
+      });
+      await this.audit(tx, user, 'JOBBER_VISIT_EDITED', id, { titleChanged: Boolean(title) });
+      await this.pushVisitEdit(tx, user, id, JobberOutboundKind.VISIT_EDIT);
+    }, ADMIN_TRANSACTION_OPTIONS);
+    await this.cacheInvalidation?.publish({ type: 'inspection.changed', organizationId: user.organizationId });
+    return this.inspection(user, id);
+  }
+
   /** The last fifty notifications, newest first, as the bell shows them. */
   async organizationNotifications(user: AuthenticatedUser) {
     const rows = await this.prisma.organizationNotification.findMany({
@@ -1698,12 +1792,16 @@ export class AdminService {
      * change has to be made. The same day sent back is not a change — the edit
      * form always sends the date.
      */
-    if (
-      input.scheduledAt &&
-      existing.jobberVisitId &&
-      new Date(input.scheduledAt).toISOString().slice(0, 10) !==
-        existing.scheduledAt.toISOString().slice(0, 10)
-    )
+    const newDay = input.scheduledAt ? new Date(input.scheduledAt).toISOString().slice(0, 10) : null;
+    const movesJobberVisit = Boolean(
+      newDay && existing.jobberVisitId && newDay !== existing.scheduledAt.toISOString().slice(0, 10),
+    );
+    /**
+     * Unless the console's edits are pushed to Jobber, in which case the new day
+     * is sent there and the sync holds off until it has gone (see
+     * `pendingConsoleEdits`), so it stays changed.
+     */
+    if (movesJobberVisit && !getJobberConfig().pushEditsEnabled)
       throw new ApplicationError(
         409,
         'SCHEDULED_IN_JOBBER',
@@ -1746,6 +1844,8 @@ export class AdminService {
         where: { id },
         data: {
           scheduledAt: input.scheduledAt ? new Date(input.scheduledAt) : undefined,
+          // A visit Jobber had at a clock time keeps that time on its new day.
+          ...(movesJobberVisit && newDay ? movedWindow(existing, newDay) : {}),
           priority: input.priority,
           internalNotes: input.internalNotes,
           /**
@@ -1788,6 +1888,9 @@ export class AdminService {
         id,
         { ...input, closedAssignmentId: current?.id },
       );
+      if (movesJobberVisit) await this.pushVisitEdit(tx, user, id, JobberOutboundKind.VISIT_RESCHEDULE);
+      if (input.status === 'CANCELLED' && existing.jobberVisitId)
+        await this.pushVisitEdit(tx, user, id, JobberOutboundKind.VISIT_CANCEL);
       return updated;
     }, ADMIN_TRANSACTION_OPTIONS);
     await this.cacheInvalidation?.publish({
@@ -2715,6 +2818,7 @@ export class AdminService {
         assignmentId: assignment.id,
         technicianId: input.technicianId,
       });
+      await this.pushVisitEdit(tx, user, inspectionId, JobberOutboundKind.VISIT_ASSIGN);
       return { assignment, shouldNotify: true };
     }, ADMIN_TRANSACTION_OPTIONS);
     if (outcome.shouldNotify) {
@@ -2773,6 +2877,7 @@ export class AdminService {
         technicianId: input.technicianId,
         reason: input.reason,
       });
+      await this.pushVisitEdit(tx, user, inspectionId, JobberOutboundKind.VISIT_ASSIGN);
       return {
         assignment: next,
         previousTechnicianId: current.technicianId,
@@ -2819,6 +2924,7 @@ export class AdminService {
         assignmentId: current.id,
         reason: input.reason,
       });
+      await this.pushVisitEdit(tx, user, inspectionId, JobberOutboundKind.VISIT_ASSIGN);
       return { assignment: ended, technicianId: current.technicianId };
     }, ADMIN_TRANSACTION_OPTIONS);
     this.technicianEvents?.publish(outcome.technicianId, inspectionId, 'UNASSIGNED');
@@ -3952,6 +4058,8 @@ export class AdminService {
         inspectionType: true,
         // A Jobber visit's date is Jobber's to change; see `updateInspection`.
         scheduledAt: true,
+        scheduledStartAt: true,
+        scheduledEndAt: true,
         jobberVisitId: true,
       },
     });

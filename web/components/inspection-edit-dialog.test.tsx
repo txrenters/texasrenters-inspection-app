@@ -41,6 +41,18 @@ describe('the scheduled date in the edit form', () => {
     expect(screen.getByText(/scheduled in jobber\. change the date there/i)).toBeTruthy();
   });
 
+  it('opens on a Jobber visit when the console sends its changes to Jobber', () => {
+    render(
+      <InspectionEditDialog
+        inspection={inspection({ scheduledInJobber: true, jobberEditsPushed: true })}
+        onClose={() => {}}
+      />,
+    );
+
+    expect((screen.getByLabelText('Scheduled date') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/moves the jobber visit to it too/i)).toBeTruthy();
+  });
+
   it('stays editable on an inspection scheduled here', () => {
     render(<InspectionEditDialog inspection={inspection({ scheduledInJobber: false })} onClose={() => {}} />);
 

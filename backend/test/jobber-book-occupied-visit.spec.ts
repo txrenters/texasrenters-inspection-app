@@ -180,7 +180,15 @@ describe('booking a console-created occupied inspection in Jobber', () => {
 
     await worker.run('org-1');
     expect(prisma.jobberOutboundTask.findMany.mock.calls[0][0].where.kind).toEqual({
-      notIn: [JobberOutboundKind.TBP_VISIT_CREATE, JobberOutboundKind.VISIT_CREATE],
+      notIn: [
+        JobberOutboundKind.TBP_VISIT_CREATE,
+        JobberOutboundKind.VISIT_CREATE,
+        // Console edits follow booking when their own switch is unset.
+        JobberOutboundKind.VISIT_RESCHEDULE,
+        JobberOutboundKind.VISIT_ASSIGN,
+        JobberOutboundKind.VISIT_EDIT,
+        JobberOutboundKind.VISIT_CANCEL,
+      ],
     });
   });
 

@@ -56,6 +56,7 @@ import {
   CommitInspectionImportDto,
   CreateAdminInspectionDto,
   JobberBookingContextQueryDto,
+  UpdateJobberVisitDto,
   AdminChecklistAssessmentDto,
   CreateAreaChecklistItemDto,
   CreateChargeDto,
@@ -541,6 +542,16 @@ export class AdminController {
   @RequirePermissions('inspections:read')
   inspection(@Req() request: AuthenticatedRequest, @Param('inspectionId') id: string) {
     return this.service.inspection(request.user, id);
+  }
+  /** The visit's title and Details, edited here and pushed to Jobber. */
+  @Patch('inspections/:inspectionId/jobber-visit')
+  @RequirePermissions('inspections:manage')
+  updateJobberVisit(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: UpdateJobberVisitDto,
+  ) {
+    return this.service.updateJobberVisit(request.user, id, body);
   }
   @Get('inspections/:inspectionId/media')
   @RequirePermissions('inspections:read')

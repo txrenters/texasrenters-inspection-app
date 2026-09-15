@@ -7,6 +7,8 @@ import {
   Prisma,
   JobberConnectionStatus,
   JobberLinkStatus,
+  JobberOutboundKind,
+  JobberOutboundStatus,
   JobberVisitImportStatus,
 } from '@prisma/client';
 import { InspectionType } from '@prisma/client';
@@ -20,6 +22,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
+import { VISIT_EDIT_KINDS } from '../../integrations/jobber/jobber.outbound';
 import {
   JobberMappingService,
   type BuildingIndex,
@@ -812,6 +815,20 @@ export class JobberSyncWorker {
     await this.prisma.inspection.updateMany({ where: { id: inspection.id, organizationId }, data });
   }
 
+  /** The console edits to this inspection still waiting to reach Jobber. */
+  private async pendingConsoleEdits(organizationId: string, inspectionId: string): Promise<Set<JobberOutboundKind>> {
+    const waiting = await this.prisma.jobberOutboundTask.findMany({
+      where: {
+        organizationId,
+        inspectionId,
+        kind: { in: [...VISIT_EDIT_KINDS] },
+        status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
+      },
+      select: { kind: true },
+    });
+    return new Set(waiting.map((task) => task.kind));
+  }
+
   /**
    * Applies a Jobber-side change to an inspection we already created.
    *
@@ -852,8 +869,19 @@ export class JobberSyncWorker {
      * always arrives before its assignee does. Copying assignment only at
      * creation would leave every one of those inspections unassigned for good.
      */
-    await this.applyAssignment(organizationId, visit, inspectionId, result);
-    await this.applyVisitText(organizationId, visit, inspection);
+    /**
+     * An edit made in the console and not yet in Jobber wins over Jobber's copy.
+     *
+     * Until the push lands, Jobber still holds the old day, technician or
+     * Details, and applying them here would undo the office's edit a minute
+     * after they made it -- the Mariposa Green move-in, re-dated at 1:28 and put
+     * back at 1:30, was exactly that. Once the push is sent the two agree and
+     * this reconciles as before; if it is abandoned, Jobber's copy wins again.
+     */
+    const held = await this.pendingConsoleEdits(organizationId, inspectionId);
+    if (!held.has(JobberOutboundKind.VISIT_ASSIGN))
+      await this.applyAssignment(organizationId, visit, inspectionId, result);
+    if (!held.has(JobberOutboundKind.VISIT_EDIT)) await this.applyVisitText(organizationId, visit, inspection);
 
     /**
      * Jobber says the visit is finished.
@@ -867,7 +895,7 @@ export class JobberSyncWorker {
       return;
     }
 
-    if (!visit.startAt) {
+    if (!visit.startAt || held.has(JobberOutboundKind.VISIT_RESCHEDULE) || held.has(JobberOutboundKind.VISIT_CANCEL)) {
       result.skipped += 1;
       return;
     }

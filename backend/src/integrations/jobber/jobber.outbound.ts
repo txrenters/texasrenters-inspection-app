@@ -11,6 +11,63 @@ import type { PrismaService } from '../../common/prisma.service';
  * way: admin reaches into the integration, never the reverse. */
 type JobberOutboundClient = Prisma.TransactionClient | PrismaService;
 
+/** The console edits that are pushed to a visit Jobber already has. */
+export const VISIT_EDIT_KINDS = [
+  JobberOutboundKind.VISIT_RESCHEDULE,
+  JobberOutboundKind.VISIT_ASSIGN,
+  JobberOutboundKind.VISIT_EDIT,
+  JobberOutboundKind.VISIT_CANCEL,
+] as const;
+export type VisitEditKind = (typeof VISIT_EDIT_KINDS)[number];
+
+/**
+ * Records that Jobber is owed a console edit to this inspection's visit.
+ *
+ * In the caller's transaction, for the same reason as the completion: "the
+ * inspection changed" and "Jobber will be told" commit together. One task per
+ * kind, re-armed when the office edits again -- the worker reads the inspection
+ * when it sends, so a second edit before the first went simply replaces it.
+ *
+ * A no-op for an inspection with no Jobber visit. One booked from the console
+ * and not yet sent needs nothing: the booking sends what the inspection holds.
+ */
+export async function requestVisitPush(
+  tx: JobberOutboundClient,
+  input: { organizationId: string; inspectionId: string; kind: VisitEditKind; requestedById: string | null },
+) {
+  const inspection = await tx.inspection.findFirst({
+    where: { id: input.inspectionId, organizationId: input.organizationId },
+    select: { jobberVisitId: true, jobberJobId: true },
+  });
+  if (!inspection?.jobberVisitId) return null;
+  const visit = { jobberVisitId: inspection.jobberVisitId, jobberJobId: inspection.jobberJobId };
+  return tx.jobberOutboundTask.upsert({
+    where: {
+      organizationId_inspectionId_kind: {
+        organizationId: input.organizationId,
+        inspectionId: input.inspectionId,
+        kind: input.kind,
+      },
+    },
+    create: {
+      organizationId: input.organizationId,
+      inspectionId: input.inspectionId,
+      kind: input.kind,
+      createdById: input.requestedById,
+      ...visit,
+    },
+    update: {
+      status: JobberOutboundStatus.PENDING,
+      attempts: 0,
+      nextAttemptAt: new Date(),
+      lastError: null,
+      sentAt: null,
+      createdById: input.requestedById,
+      ...visit,
+    },
+  });
+}
+
 /**
  * Records that Jobber is owed a completion for this inspection.
  *

@@ -2575,6 +2575,22 @@ enum JobberOutboundKind {
   /// `jobberVisitDetails`, written when it was created, and `jobTitle` below
   /// carries the rest.
   VISIT_CREATE
+  /// A console edit to a visit Jobber already has, one task per kind per
+  /// inspection. Re-armed rather than duplicated when the office edits again:
+  /// the worker reads the inspection when it sends, so the latest edit is the
+  /// one Jobber gets. While one is waiting, the sync leaves that part of the
+  /// inspection alone, so Jobber's old value cannot overwrite the new one.
+  ///
+  /// The day, and the clock time the visit already had, moved to it.
+  VISIT_RESCHEDULE
+  /// Who is on the visit: the current technician, or nobody when Jobber has
+  /// no user with their email.
+  VISIT_ASSIGN
+  /// The visit's title and Details, as edited in the console.
+  VISIT_EDIT
+  /// The inspection was cancelled: the job is closed and its open visit
+  /// removed, or only the visit when the job holds others.
+  VISIT_CANCEL
 }
 
 enum JobberOutboundStatus {

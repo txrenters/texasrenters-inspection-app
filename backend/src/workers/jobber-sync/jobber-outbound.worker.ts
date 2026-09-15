@@ -9,20 +9,28 @@ import {
   JobberOutboundKind,
   JobberOutboundStatus,
   JobberVisitImportStatus,
+  type Prisma,
 } from '@prisma/client';
 
+import { businessClockTime, businessDate } from '../../common/business-day';
 import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
+import { VISIT_EDIT_KINDS } from '../../integrations/jobber/jobber.outbound';
 import { jobberServicesNote } from '../../integrations/jobber/jobber.services-note';
 import {
+  JOB_CLOSE_MUTATION,
   JOB_CREATE_MUTATION,
   JOB_NOTE_CREATE_MUTATION,
   TBP_JOB_INVOICING,
   VISIT_COMPLETE_MUTATION,
   VISIT_CREATE_MUTATION,
+  VISIT_DELETE_MUTATION,
+  VISIT_EDIT_ASSIGNED_USERS_MUTATION,
+  VISIT_EDIT_MUTATION,
+  VISIT_EDIT_SCHEDULE_MUTATION,
 } from '../../integrations/jobber/jobber.queries';
 
 /** How many failures before a task stops retrying and waits for a person. */
@@ -34,7 +42,7 @@ const SHARE_LIFETIME_DAYS = 30;
 const BATCH_SIZE = 25;
 
 /** Failures a retry cannot fix, abandoned at once rather than after six tries. */
-const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED']);
+const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED', 'JOBBER_EDIT_INSPECTION_MISSING']);
 
 /**
  * The timezone a booked visit's day is expressed in.
@@ -99,14 +107,11 @@ export class JobberOutboundWorker {
       result.processed += 1;
       try {
         await this.send(organizationId, task);
-        await this.prisma.jobberOutboundTask.update({
-          where: { id: task.id },
-          data: {
-            status: JobberOutboundStatus.SENT,
-            sentAt: new Date(),
-            attempts: task.attempts + 1,
-            lastError: null,
-          },
+        await this.mark(task, {
+          status: JobberOutboundStatus.SENT,
+          sentAt: new Date(),
+          attempts: task.attempts + 1,
+          lastError: null,
         });
         result.sent += 1;
       } catch (error) {
@@ -115,16 +120,13 @@ export class JobberOutboundWorker {
           error instanceof JobberError ? error.message : 'The Jobber update could not be sent.';
         const abandoned =
           attempts >= MAX_ATTEMPTS || (error instanceof JobberError && PERMANENT_FAILURES.has(error.code));
-        await this.prisma.jobberOutboundTask.update({
-          where: { id: task.id },
-          data: {
-            status: abandoned ? JobberOutboundStatus.ABANDONED : JobberOutboundStatus.FAILED,
-            attempts,
-            lastError: message,
-            // Exponential, capped at an hour: a Jobber outage should not become
-            // a retry storm against a rate limiter shared with the pull.
-            nextAttemptAt: new Date(Date.now() + Math.min(2 ** attempts, 60) * 60_000),
-          },
+        await this.mark(task, {
+          status: abandoned ? JobberOutboundStatus.ABANDONED : JobberOutboundStatus.FAILED,
+          attempts,
+          lastError: message,
+          // Exponential, capped at an hour: a Jobber outage should not become
+          // a retry storm against a rate limiter shared with the pull.
+          nextAttemptAt: new Date(Date.now() + Math.min(2 ** attempts, 60) * 60_000),
         });
         if (abandoned) result.abandoned += 1;
         else result.failed += 1;
@@ -132,6 +134,27 @@ export class JobberOutboundWorker {
       }
     }
     return result;
+  }
+
+  /**
+   * Records how an attempt went.
+   *
+   * A console edit can be re-armed by the office while it is being sent: a
+   * second edit resets it to pending so the newer state goes next. So an edit
+   * is marked only while it is still the attempt that was read -- otherwise
+   * this would mark the newer edit sent without ever sending it. The other
+   * kinds are never re-armed, and are marked as they always were.
+   */
+  private mark(
+    task: { id: string; kind: JobberOutboundKind; attempts: number; nextAttemptAt: Date },
+    data: Prisma.JobberOutboundTaskUpdateManyMutationInput,
+  ) {
+    if (!(VISIT_EDIT_KINDS as readonly JobberOutboundKind[]).includes(task.kind))
+      return this.prisma.jobberOutboundTask.update({ where: { id: task.id }, data });
+    return this.prisma.jobberOutboundTask.updateMany({
+      where: { id: task.id, attempts: task.attempts, nextAttemptAt: task.nextAttemptAt },
+      data,
+    });
   }
 
   /**
@@ -145,6 +168,7 @@ export class JobberOutboundWorker {
     return [
       ...(this.config.tbpBookingEnabled ? [] : [JobberOutboundKind.TBP_VISIT_CREATE]),
       ...(this.config.bookingEnabled ? [] : [JobberOutboundKind.VISIT_CREATE]),
+      ...(this.config.pushEditsEnabled ? [] : VISIT_EDIT_KINDS),
     ];
   }
 
@@ -164,6 +188,10 @@ export class JobberOutboundWorker {
     if (task.kind === JobberOutboundKind.TBP_VISIT_CREATE)
       return this.bookVisit(organizationId, task.id, task.inspectionId);
     if (task.kind === JobberOutboundKind.VISIT_CREATE) return this.bookInspectionVisit(organizationId, task);
+    if (task.kind === JobberOutboundKind.VISIT_RESCHEDULE) return this.pushSchedule(organizationId, task);
+    if (task.kind === JobberOutboundKind.VISIT_ASSIGN) return this.pushAssignment(organizationId, task);
+    if (task.kind === JobberOutboundKind.VISIT_EDIT) return this.pushVisitText(organizationId, task);
+    if (task.kind === JobberOutboundKind.VISIT_CANCEL) return this.pushCancellation(organizationId, task);
 
     // Only a completion reaches here, and a completion without a visit id is a
     // row that should never have been enqueued.
@@ -477,6 +505,131 @@ export class JobberOutboundWorker {
       throw new JobberError('Jobber created no visit.', 'JOBBER_VISIT_NOT_CREATED', 502);
 
     await this.claimVisit(organizationId, taskId, inspectionId, visitId, jobId);
+  }
+
+  /** The visit a console edit is for. Set when the edit was queued; its absence is a bad row. */
+  private editedVisit(task: { jobberVisitId: string | null }): string {
+    if (!task.jobberVisitId)
+      throw new JobberError('This change has no Jobber visit to apply to.', 'JOBBER_TASK_MISSING_VISIT', 500);
+    return task.jobberVisitId;
+  }
+
+  private async editedInspection<S extends Prisma.InspectionSelect>(
+    organizationId: string,
+    inspectionId: string,
+    select: S,
+  ) {
+    const inspection = await this.prisma.inspection.findFirst({ where: { id: inspectionId, organizationId }, select });
+    if (!inspection)
+      throw new JobberError(
+        'The inspection this change belongs to no longer exists.',
+        'JOBBER_EDIT_INSPECTION_MISSING',
+        404,
+      );
+    return inspection;
+  }
+
+  /**
+   * Moves the visit to the inspection's day.
+   *
+   * A visit that had a clock time keeps it: the console moves the window to the
+   * new day, and it is sent as that day and time in Texas. A whole-day visit
+   * stays whole-day.
+   */
+  private async pushSchedule(organizationId: string, task: { inspectionId: string; jobberVisitId: string | null }) {
+    const visitId = this.editedVisit(task);
+    const inspection = await this.editedInspection(organizationId, task.inspectionId, {
+      scheduledAt: true,
+      scheduledStartAt: true,
+      scheduledEndAt: true,
+    });
+    const day = inspection.scheduledAt.toISOString().slice(0, 10);
+    const timed = Boolean(inspection.scheduledStartAt && inspection.scheduledEndAt);
+    const at = (instant: Date | null) =>
+      timed && instant
+        ? { date: businessDate(instant), time: businessClockTime(instant), timezone: VISIT_TIMEZONE }
+        : { date: day, timezone: VISIT_TIMEZONE };
+    const response = await this.client.request<{ visitEditSchedule: JobberUserErrors }>(
+      organizationId,
+      VISIT_EDIT_SCHEDULE_MUTATION,
+      { id: visitId, input: { startAt: at(inspection.scheduledStartAt), endAt: at(inspection.scheduledEndAt) } },
+    );
+    this.assertNoUserErrors(response.visitEditSchedule);
+  }
+
+  /**
+   * Puts the inspection's current technician on the visit, or nobody.
+   *
+   * Nobody when there is no technician, and when Jobber has never reported a
+   * user with their email: an unassigned Jobber visit is one the sync leaves
+   * our assignment alone on, where the old assignee would be put back.
+   */
+  private async pushAssignment(organizationId: string, task: { inspectionId: string; jobberVisitId: string | null }) {
+    const visitId = this.editedVisit(task);
+    await this.editedInspection(organizationId, task.inspectionId, { id: true });
+    const current = await this.prisma.inspectionAssignment.findFirst({
+      where: { inspectionId: task.inspectionId, isCurrent: true },
+      select: { technician: { select: { email: true } } },
+    });
+    const jobberUserId = current
+      ? await jobberUserIdForEmail(this.prisma, organizationId, current.technician.email)
+      : null;
+    const response = await this.client.request<{ visitEditAssignedUsers: JobberUserErrors }>(
+      organizationId,
+      VISIT_EDIT_ASSIGNED_USERS_MUTATION,
+      { visitId, input: { assignedUserIds: jobberUserId ? [jobberUserId] : [] } },
+    );
+    this.assertNoUserErrors(response.visitEditAssignedUsers);
+  }
+
+  /** Writes the inspection's visit title and Details onto the visit. */
+  private async pushVisitText(organizationId: string, task: { inspectionId: string; jobberVisitId: string | null }) {
+    const visitId = this.editedVisit(task);
+    const inspection = await this.editedInspection(organizationId, task.inspectionId, {
+      jobberVisitTitle: true,
+      jobberVisitDetails: true,
+    });
+    const response = await this.client.request<{ visitEdit: JobberUserErrors }>(organizationId, VISIT_EDIT_MUTATION, {
+      id: visitId,
+      attributes: {
+        ...(inspection.jobberVisitTitle != null ? { title: inspection.jobberVisitTitle } : {}),
+        instructions: inspection.jobberVisitDetails ?? '',
+      },
+    });
+    this.assertNoUserErrors(response.visitEdit);
+  }
+
+  /**
+   * Takes a cancelled inspection's visit off Jobber's schedule.
+   *
+   * Closes the job with its open visits removed, which the office chose: the
+   * job stays as closed history and can be reopened. Only when this system knows
+   * of no other visit on the job -- the office's jobs hold one each, but closing
+   * a job with other work on it would take that work off the schedule too, so
+   * then only this visit is deleted.
+   */
+  private async pushCancellation(
+    organizationId: string,
+    task: { inspectionId: string; jobberVisitId: string | null; jobberJobId: string | null },
+  ) {
+    const visitId = this.editedVisit(task);
+    const otherVisits = task.jobberJobId
+      ? await this.prisma.jobberVisitImport.count({
+          where: { organizationId, jobberJobId: task.jobberJobId, NOT: { jobberVisitId: visitId } },
+        })
+      : 1;
+    if (task.jobberJobId && otherVisits === 0) {
+      const closed = await this.client.request<{ jobClose: JobberUserErrors }>(organizationId, JOB_CLOSE_MUTATION, {
+        jobId: task.jobberJobId,
+        input: { modifyIncompleteVisitsBy: 'DESTROY_ALL' },
+      });
+      this.assertNoUserErrors(closed.jobClose);
+      return;
+    }
+    const deleted = await this.client.request<{ visitDelete: JobberUserErrors }>(organizationId, VISIT_DELETE_MUTATION, {
+      visitIds: [visitId],
+    });
+    this.assertNoUserErrors(deleted.visitDelete);
   }
 
   /**

@@ -183,6 +183,12 @@ export class CreateAdminInspectionDto {
   @IsOptional() @ValidateNested() @Type(() => JobberBookingDto) jobberBooking?: JobberBookingDto;
 }
 
+/** The visit's title and Details, as edited in the console. */
+export class UpdateJobberVisitDto {
+  @IsOptional() @IsString() @MaxLength(300) title?: string;
+  @IsString() @MaxLength(10000) details!: string;
+}
+
 export class UpdateAdminInspectionDto {
   @IsOptional() @IsDateString() scheduledAt?: string;
   @IsOptional() @IsIn(['STANDARD', 'HIGH']) priority?: string;

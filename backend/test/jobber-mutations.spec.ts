@@ -56,7 +56,7 @@ describe('Jobber mutation shapes', () => {
     // Counted from actual declarations, not the word: the doc comments discuss
     // mutations and userErrors at length, and would inflate a naive count.
     const declarations = QUERIES.match(/mutation \w+\(/g) ?? [];
-    expect(declarations).toHaveLength(4);
+    expect(declarations).toHaveLength(9);
 
     // Sliced between the constants in the order they appear, so a mutation
     // added between two others is checked rather than folded into a neighbour.
@@ -64,6 +64,11 @@ describe('Jobber mutation shapes', () => {
       'VISIT_COMPLETE_MUTATION',
       'VISIT_CREATE_MUTATION',
       'JOB_CREATE_MUTATION',
+      'VISIT_EDIT_MUTATION',
+      'VISIT_EDIT_SCHEDULE_MUTATION',
+      'VISIT_EDIT_ASSIGNED_USERS_MUTATION',
+      'JOB_CLOSE_MUTATION',
+      'VISIT_DELETE_MUTATION',
       'JOB_NOTE_CREATE_MUTATION',
     ];
     const bounds = names

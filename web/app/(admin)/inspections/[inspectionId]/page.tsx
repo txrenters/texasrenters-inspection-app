@@ -21,6 +21,7 @@ import { InspectionDeleteDialog } from '@/components/inspection-delete-dialog';
 import {
   InspectionCancelDialog,
   InspectionEditDialog,
+  JobberVisitEditDialog,
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
 import { InspectionTabs } from '@/components/inspection-tabs';
@@ -138,6 +139,7 @@ function InspectionDetail() {
   const audit = useInspectionAudit(id, state.auditPage);
   const [assigning, setAssigning] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [editingVisit, setEditingVisit] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [unassigning, setUnassigning] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -420,6 +422,19 @@ function InspectionDetail() {
         servicesReport={item.servicesReport}
         servicesReportedAt={item.servicesReportedAt}
         booking={item.jobberBooking}
+        pushes={item.jobberPushes}
+        action={
+          // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
+          !finalized &&
+          permissions.has('inspections:manage') &&
+          (item.scheduledInJobber
+            ? item.jobberEditsPushed
+            : item.jobberBooking?.status === 'PENDING' || item.jobberBooking?.status === 'FAILED') ? (
+            <Button onClick={() => setEditingVisit(true)} size="sm" variant="outline">
+              Edit visit
+            </Button>
+          ) : null
+        }
       />
 
       {/* Area-first: recordings, photos, condition summaries and findings are
@@ -589,6 +604,9 @@ function InspectionDetail() {
       ) : null}
       {editing ? (
         <InspectionEditDialog inspection={item} onClose={() => setEditing(false)} />
+      ) : null}
+      {editingVisit ? (
+        <JobberVisitEditDialog inspection={item} onClose={() => setEditingVisit(false)} />
       ) : null}
       {cancelling ? (
         <InspectionCancelDialog inspectionId={id} onClose={() => setCancelling(false)} />
