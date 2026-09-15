@@ -140,6 +140,66 @@ export function shortestRouteOrder(matrix: DurationMatrix): number[] {
   return twoOpt(matrix, nearestNeighbour(matrix, stops));
 }
 
+/**
+ * The order to visit the stops in when the day starts at whichever comes first.
+ *
+ * A planned benefit-package day is measured from its first job -- the drive
+ * from home does not count against the office's ninety minutes -- so the best
+ * order is the shortest path through the stops from *any* of them. Takes a
+ * matrix of the stops alone and returns indices into it (`0..n-1`).
+ *
+ * The solver above wants an origin, so it is given one that costs nothing to
+ * leave: every first stop is then equally cheap to reach and only the drive
+ * between stops decides. Beyond `MAX_EXACT_STOPS` a single nearest-neighbour
+ * start would always begin at the first stop listed, so every start is tried
+ * and the shortest refined path wins.
+ */
+export function shortestOpenPathOrder(matrix: DurationMatrix): number[] {
+  const size = matrix.length;
+  if (size <= 1) return size === 1 ? [0] : [];
+
+  const freeStart = [
+    Array.from({ length: size + 1 }, () => 0),
+    ...matrix.map((row) => [0, ...row]),
+  ];
+  if (size <= MAX_EXACT_STOPS) return shortestRouteOrder(freeStart).map((index) => index - 1);
+
+  let best: number[] = [];
+  let bestCost = Number.POSITIVE_INFINITY;
+  for (let first = 1; first <= size; first += 1) {
+    const rest = Array.from({ length: size }, (_, index) => index + 1).filter((stop) => stop !== first);
+    const start = [first, ...nearestNeighbourFrom(freeStart, first, rest)];
+    const refined = twoOpt(freeStart, start);
+    const cost = routeDuration(freeStart, refined);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = refined;
+    }
+  }
+  return best.map((index) => index - 1);
+}
+
+function nearestNeighbourFrom(matrix: DurationMatrix, from: number, stops: readonly number[]): number[] {
+  const remaining = new Set(stops);
+  const order: number[] = [];
+  let current = from;
+  while (remaining.size) {
+    let next: number | null = null;
+    let nextCost = Number.POSITIVE_INFINITY;
+    for (const candidate of remaining) {
+      const cost = matrix[current]?.[candidate] ?? Number.POSITIVE_INFINITY;
+      if (next === null || cost < nextCost) {
+        nextCost = cost;
+        next = candidate;
+      }
+    }
+    order.push(next!);
+    remaining.delete(next!);
+    current = next!;
+  }
+  return order;
+}
+
 /** Mean Earth radius, in metres. */
 const EARTH_RADIUS_M = 6_371_008.8;
 

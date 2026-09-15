@@ -142,6 +142,11 @@ export interface RotationCandidate {
 export interface PriorRank {
   tenantExternalId: string;
   sequence: number;
+  /**
+   * Who took that visit, when known. Not part of the ordering -- the planner
+   * prefers the same technician again when it lays the day out.
+   */
+  technicianId?: string | null;
 }
 
 export type OrderSource = 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';

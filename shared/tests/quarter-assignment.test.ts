@@ -1,78 +1,84 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEFAULT_DAILY_STOP_CAP,
+  DEFAULT_DAY_LIMITS,
+  MAX_STOPS_PER_DAY,
   type PlannableDay,
   type PlannableStop,
-  type PlannableTechnician,
   assignQuarter,
+  crewKey,
+  estimatedDriveMinutes,
   nearestNeighbourOrder,
-  splitAmongTechnicians,
 } from '../src/contracts/quarter-assignment.js';
 
 /** Houston-ish, so distances are realistic rather than degenerate. */
-const at = (stopId: string, sequence: number, latitude: number, longitude: number): PlannableStop => ({
+const at = (
+  stopId: string,
+  sequence: number,
+  latitude: number,
+  longitude: number,
+  extra: Partial<PlannableStop> = {},
+): PlannableStop => ({
   stopId,
   sequence,
   latitude,
   longitude,
+  onSiteMinutes: 30,
+  inspectionType: 'OCCUPIED',
+  ...extra,
 });
 
-const tech = (technicianId: string, dailyStopCap = DEFAULT_DAILY_STOP_CAP): PlannableTechnician => ({
-  technicianId,
-  dailyStopCap,
-});
-
-const days = (count: number, technicianIds: string[]): PlannableDay[] =>
+const days = (count: number, technicianIds: string[], qualified?: PlannableDay['qualified']): PlannableDay[] =>
   Array.from({ length: count }, (_, index) => ({
     date: `2026-10-${String(index + 1).padStart(2, '0')}`,
     technicianIds,
+    ...(qualified ? { qualified } : {}),
   }));
 
-/** Keeps the input order, so a test can read placement without routing noise. */
-const asGiven = (dayStops: readonly PlannableStop[]) => [...dayStops];
+/** Stops a few hundred metres apart, in rotation order. */
+const stopsInRotation = (count: number, extra: Partial<PlannableStop> = {}) =>
+  Array.from({ length: count }, (_, index) => at(`s${index + 1}`, index + 1, 29.76 + index * 0.003, -95.37, extra));
 
-const stopsInRotation = (count: number) =>
-  Array.from({ length: count }, (_, index) =>
-    at(`s${index + 1}`, index + 1, 29.76 + index * 0.01, -95.37),
-  );
+/** Stops in one building: no drive between any of them, so only on-site time decides. */
+const sameBuilding = (count: number, extra: Partial<PlannableStop> = {}) =>
+  Array.from({ length: count }, (_, index) => at(`b${index + 1}`, index + 1, 29.76, -95.37, extra));
+
+const dayOf = (placed: { stopId: string; date: string }[]) => new Map(placed.map((stop) => [stop.stopId, stop.date]));
 
 describe('spreading a quarter across its working days', () => {
   /**
    * The programme runs all quarter. Packing to capacity from day one would
-   * finish in three weeks and leave nine with nobody to inspect — and every
+   * finish in three weeks and leave nine with nobody to inspect -- and every
    * tenant would drift earlier in the year, every year.
    */
   it('spreads stops across the whole quarter rather than front-loading', () => {
-    const { placed } = assignQuarter(stopsInRotation(20), [tech('t1')], days(10, ['t1']), asGiven);
+    const { placed } = assignQuarter(stopsInRotation(20), days(10, ['t1']));
 
-    const used = new Set(placed.map((stop) => stop.date));
-    expect(used.size).toBe(10);
+    expect(new Set(placed.map((stop) => stop.date)).size).toBe(10);
     expect(placed).toHaveLength(20);
   });
 
   /**
-   * The rotation is a promise to a tenant about roughly when somebody knocks.
-   * Drive time is not a good enough reason to break it, so a stop earlier in
-   * the rotation is never scheduled after a later one.
+   * Whoever was first last quarter is first again. With room on every day the
+   * rotation decides the day outright, so an earlier stop is never later.
    */
   it('keeps the rotation order across days', () => {
-    const { placed } = assignQuarter(stopsInRotation(12), [tech('t1')], days(6, ['t1']), asGiven);
+    const { placed } = assignQuarter(stopsInRotation(12), days(6, ['t1']));
 
-    const dayOf = new Map(placed.map((stop) => [stop.stopId, stop.date]));
-    const dates = stopsInRotation(12).map((stop) => dayOf.get(stop.stopId)!);
+    const schedule = dayOf(placed);
+    const dates = stopsInRotation(12).map((stop) => schedule.get(stop.stopId)!);
     expect([...dates]).toEqual([...dates].sort());
   });
 
   it('numbers each technician’s day from one', () => {
-    const { placed } = assignQuarter(stopsInRotation(4), [tech('t1')], days(2, ['t1']), asGiven);
+    const { placed } = assignQuarter(stopsInRotation(4), days(2, ['t1']));
 
     const firstDay = placed.filter((stop) => stop.date === '2026-10-01');
     expect(firstDay.map((stop) => stop.position).sort()).toEqual([1, 2]);
   });
 
   it('places nothing, and says why, when the quarter has no working days', () => {
-    const { placed, unplaced } = assignQuarter(stopsInRotation(3), [tech('t1')], [], asGiven);
+    const { placed, unplaced } = assignQuarter(stopsInRotation(3), []);
 
     expect(placed).toEqual([]);
     expect(unplaced).toEqual([
@@ -87,130 +93,181 @@ describe('spreading a quarter across its working days', () => {
    * nobody qualified is a skills problem, a full quarter is a staffing one.
    */
   it('distinguishes nobody qualified from no room left', () => {
-    const noCrew = assignQuarter(stopsInRotation(2), [tech('t1')], days(3, []), asGiven);
-    expect(noCrew.unplaced.map((stop) => stop.reason)).toEqual([
-      'NO_QUALIFIED_TECHNICIAN',
-      'NO_QUALIFIED_TECHNICIAN',
-    ]);
+    const noCrew = assignQuarter(stopsInRotation(2), days(3, []));
+    expect(noCrew.unplaced.map((stop) => stop.reason)).toEqual(['NO_QUALIFIED_TECHNICIAN', 'NO_QUALIFIED_TECHNICIAN']);
 
-    const full = assignQuarter(stopsInRotation(5), [tech('t1', 1)], days(2, ['t1']), asGiven);
-    expect(full.placed).toHaveLength(2);
-    expect(full.unplaced.map((stop) => stop.reason)).toEqual([
-      'NO_CAPACITY',
-      'NO_CAPACITY',
-      'NO_CAPACITY',
-    ]);
+    // Two days of six hours hold twenty-four half-hour visits, and no more.
+    const full = assignQuarter(sameBuilding(26), days(2, ['t1']));
+    expect(full.placed).toHaveLength(24);
+    expect(full.unplaced.map((stop) => stop.reason)).toEqual(['NO_CAPACITY', 'NO_CAPACITY']);
   });
 
-  /**
-   * A full day must not push every later stop back and cascade the quarter, so
-   * the search runs outward from the rotation's choice. A stop is better a day
-   * early than a fortnight late.
-   */
-  it('falls back to a neighbouring day rather than cascading', () => {
-    // Five stops over three days at one apiece. Rotation sends s1 and s2 both
-    // to day 0 and s3 and s4 both to day 1, so the collision is real: s2 has to
-    // move. It should land on day 1, next door — not at the end of the quarter.
-    const { placed } = assignQuarter(
-      stopsInRotation(5),
-      [tech('t1', 1)],
-      days(3, ['t1']),
-      asGiven,
-    );
+  it('reports demand against capacity in minutes', () => {
+    const { capacity } = assignQuarter(sameBuilding(30), days(2, ['t1', 't2']));
 
-    const dayOf = new Map(placed.map((stop) => [stop.stopId, stop.date]));
-    expect(dayOf.get('s1')).toBe('2026-10-01');
-    expect(dayOf.get('s2')).toBe('2026-10-02');
-    expect(placed).toHaveLength(3);
-  });
-
-  /**
-   * The search runs outward, and earlier wins a tie. A stop displaced from a
-   * full day should sit just before its slot rather than just after, so the
-   * rotation never drifts later and later across quarters.
-   */
-  it('prefers the earlier side when both neighbours are free', () => {
-    // s1..s3 fill days 0..2. s4 targets day 1, which is taken, so it must
-    // choose between day 0 and day 2 — both full — then day 3.
-    const spread = [at('s1', 1, 29.76, -95.37), at('s2', 2, 29.77, -95.37)];
-    const { placed } = assignQuarter(spread, [tech('t1', 1)], days(4, ['t1']), asGiven);
-    const dayOf = new Map(placed.map((stop) => [stop.stopId, stop.date]));
-
-    // Two stops, four days: rotation puts them on days 0 and 2, untouched.
-    expect(dayOf.get('s1')).toBe('2026-10-01');
-    expect(dayOf.get('s2')).toBe('2026-10-03');
-  });
-
-  it('reports demand against capacity so a shortfall is visible before publish', () => {
-    const { capacity } = assignQuarter(
-      stopsInRotation(30),
-      [tech('t1', 5), tech('t2', 5)],
-      days(2, ['t1', 't2']),
-      asGiven,
-    );
-
-    expect(capacity).toEqual({ stops: 30, slots: 20 });
+    expect(capacity).toEqual({ stops: 30, onSiteMinutes: 900, availableMinutes: 4 * 360 });
   });
 });
 
-describe('splitting one day between technicians', () => {
-  const capOf = new Map([
-    ['t1', 10],
-    ['t2', 10],
-  ]);
-
-  /**
-   * Six stops across four technicians gives four people a half-empty drive
-   * each. Only as many crews as the day needs are opened.
-   */
-  it('opens only as many crews as the day needs', () => {
-    const crews = splitAmongTechnicians(stopsInRotation(4), ['t1', 't2'], capOf);
+describe('the office’s limits on a technician’s day', () => {
+  /** Eleven properties is a fine day, as long as it keeps inside six hours and ninety minutes. */
+  it('puts eleven stops in one day when they fit, because stops are not the limit', () => {
+    const { crews } = assignQuarter(sameBuilding(11), days(1, ['t1', 't2']));
 
     expect(crews).toHaveLength(1);
-    expect(crews[0].technicianId).toBe('t1');
-    expect(crews[0].stops).toHaveLength(4);
+    expect(crews[0]!.stops).toHaveLength(11);
+    expect(crews[0]!.onSiteMinutes).toBe(330);
   });
 
-  it('opens a second crew once one technician cannot hold the day', () => {
-    const crews = splitAmongTechnicians(stopsInRotation(6), ['t1', 't2'], new Map([['t1', 4], ['t2', 4]]));
+  it('holds a day to six hours on site, sending a second technician for the rest', () => {
+    const { crews, unplaced } = assignQuarter(sameBuilding(14), days(1, ['t1', 't2']));
 
-    expect(crews).toHaveLength(2);
-    expect(crews.reduce((total, crew) => total + crew.stops.length, 0)).toBe(6);
-    expect(crews.every((crew) => crew.stops.length <= 4)).toBe(true);
+    expect(unplaced).toEqual([]);
+    expect(crews.map((crew) => crew.onSiteMinutes).sort((a, b) => b - a)).toEqual([360, 60]);
+    expect(crews.every((crew) => crew.onSiteMinutes <= DEFAULT_DAY_LIMITS.maxOnSiteMinutes)).toBe(true);
+  });
+
+  it('counts an HVAC visit by its own length', () => {
+    const hvac = sameBuilding(5, { onSiteMinutes: 75, inspectionType: 'HVAC' });
+    const { crews, unplaced } = assignQuarter(hvac, days(1, ['t1']));
+
+    // Four at 75 minutes is 300; a fifth would make 375.
+    expect(crews[0]!.stops).toHaveLength(4);
+    expect(unplaced).toEqual([{ stopId: 'b5', reason: 'NO_CAPACITY' }]);
   });
 
   /**
-   * Geography decides here and only here. Two clusters a long way apart must
-   * come out as two clean crews, not interleaved — interleaving is what makes
-   * two technicians drive past each other all day.
+   * Ninety minutes between the properties, and only between them: the day
+   * starts at the first job, so there is no leg from anywhere to the first.
    */
-  it('gives each crew one cluster rather than interleaving them', () => {
-    const houston = [at('h1', 1, 29.76, -95.37), at('h2', 2, 29.77, -95.36), at('h3', 3, 29.75, -95.38)];
-    const dallas = [at('d1', 4, 32.78, -96.8), at('d2', 5, 32.79, -96.79), at('d3', 6, 32.77, -96.81)];
+  it('holds a day to ninety minutes of driving between its stops', () => {
+    // Six stops 10 km apart in a line: each leg is estimated at 18 minutes, so
+    // five legs is 90 and a sixth leg would be 108.
+    const line = Array.from({ length: 7 }, (_, index) => at(`l${index + 1}`, index + 1, 29.76 + index * 0.0899, -95.37));
+    const { crews } = assignQuarter(line, days(1, ['t1', 't2']));
 
-    const crews = splitAmongTechnicians(
-      [...houston, ...dallas],
-      ['t1', 't2'],
-      new Map([['t1', 3], ['t2', 3]]),
-    );
-
+    expect(crews.every((crew) => crew.driveMinutes <= DEFAULT_DAY_LIMITS.maxDriveMinutes)).toBe(true);
+    expect(crews.reduce((total, crew) => total + crew.stops.length, 0)).toBe(7);
     expect(crews).toHaveLength(2);
-    for (const crew of crews) {
-      const ids = crew.stops.map((stop) => stop.stopId);
-      const allHouston = ids.every((id) => id.startsWith('h'));
-      const allDallas = ids.every((id) => id.startsWith('d'));
-      expect(allHouston || allDallas).toBe(true);
-    }
   });
 
-  it('returns nothing when nobody is working that day', () => {
-    expect(splitAmongTechnicians(stopsInRotation(3), [], capOf)).toEqual([]);
+  it('counts no drive for a day of one stop', () => {
+    const { crews } = assignQuarter([at('only', 1, 29.76, -95.37)], days(1, ['t1']));
+
+    expect(crews[0]!.driveMinutes).toBe(0);
+  });
+
+  it('refuses a visit longer than a whole day, rather than overrunning one', () => {
+    const { unplaced } = assignQuarter([at('long', 1, 29.76, -95.37, { onSiteMinutes: 400 })], days(3, ['t1']));
+
+    expect(unplaced).toEqual([{ stopId: 'long', reason: 'LONGER_THAN_A_DAY' }]);
+  });
+
+  it('never gives one day more stops than it can be routed with', () => {
+    const quick = sameBuilding(30, { onSiteMinutes: 5 });
+    const { crews } = assignQuarter(quick, days(1, ['t1', 't2']));
+
+    expect(crews.every((crew) => crew.stops.length <= MAX_STOPS_PER_DAY)).toBe(true);
+  });
+
+  it('orders a day so each stop leads to its neighbour', () => {
+    const scattered = [at('a', 1, 29.76, -95.37), at('c', 2, 29.78, -95.37), at('b', 3, 29.77, -95.37)];
+    const { crews } = assignQuarter(scattered, days(1, ['t1']));
+
+    const order = crews[0]!.stops.map((stop) => stop.stopId).join('');
+    expect(['abc', 'cba']).toContain(order);
+  });
+});
+
+describe('choosing who goes out', () => {
+  it('sends only technicians qualified for the kind of visit', () => {
+    const hvac = stopsInRotation(3, { inspectionType: 'HVAC' });
+    const { placed } = assignQuarter(hvac, days(1, ['t1', 't2'], { HVAC: ['t2'] }));
+
+    expect(new Set(placed.map((stop) => stop.technicianId))).toEqual(new Set(['t2']));
+  });
+
+  it('says nobody is qualified when no technician may take that kind of visit', () => {
+    const { unplaced } = assignQuarter(stopsInRotation(1, { inspectionType: 'HVAC' }), days(2, ['t1'], { HVAC: [] }));
+
+    expect(unplaced).toEqual([{ stopId: 's1', reason: 'NO_QUALIFIED_TECHNICIAN' }]);
+  });
+
+  /** The tenant sees the same technician as last quarter where that is possible. */
+  it('prefers the technician who took the tenancy last quarter', () => {
+    const { placed } = assignQuarter(stopsInRotation(2, { previousTechnicianId: 't2' }), days(1, ['t1', 't2']));
+
+    expect(placed.every((stop) => stop.technicianId === 't2')).toBe(true);
+  });
+
+  it('then prefers the technician the office ranks first', () => {
+    const { placed } = assignQuarter(stopsInRotation(2), days(1, ['t1', 't2', 't3']), {
+      technicianRank: (technicianId) => (technicianId === 't3' ? 0 : 1),
+    });
+
+    expect(placed.every((stop) => stop.technicianId === 't3')).toBe(true);
+  });
+
+  /**
+   * Sending a second person out for one stop is the expensive answer. A stop
+   * that does not fit its own day's technician joins one out a day away first.
+   */
+  it('joins a technician out on a nearby day before sending a second one out', () => {
+    // Six stops are aimed at day 1 and thirteen at day 2, which holds twelve.
+    // The thirteenth fits beside the six on day 1, so nobody else is sent out.
+    const building = sameBuilding(19);
+    const { placed, crews } = assignQuarter(building, days(2, ['t1', 't2']), {
+      rotation: { position: new Map(building.map((stop, index) => [stop.stopId, index < 6 ? 0 : 20])), size: 26 },
+    });
+
+    expect(dayOf(placed).get('b19')).toBe('2026-10-01');
+    expect(crews.filter((crew) => crew.date === '2026-10-02')).toHaveLength(1);
+    expect(crews.filter((crew) => crew.date === '2026-10-01')).toHaveLength(1);
+  });
+});
+
+describe('repairing a day that measured over the limits', () => {
+  it('keeps the days already laid out and places the rest around them', () => {
+    const [first, second, third] = stopsInRotation(3);
+    const { crews, placed } = assignQuarter([third!], days(1, ['t1', 't2']), {
+      existing: [{ date: '2026-10-01', technicianId: 't1', stops: [first!, second!], driveMinutes: 4 }],
+      rotation: { position: new Map([['s3', 2]]), size: 3 },
+    });
+
+    expect(placed.map((stop) => stop.stopId).sort()).toEqual(['s1', 's2', 's3']);
+    expect(crews).toHaveLength(1);
+    expect(crews[0]!.changed).toBe(true);
+  });
+
+  it('never puts a stop back on the day it was measured not to fit', () => {
+    const [first, second, third] = stopsInRotation(3);
+    const { crews } = assignQuarter([third!], days(1, ['t1', 't2']), {
+      existing: [{ date: '2026-10-01', technicianId: 't1', stops: [first!, second!], driveMinutes: 4 }],
+      avoid: new Map([['s3', new Set([crewKey('2026-10-01', 't1')])]]),
+    });
+
+    const withThird = crews.find((crew) => crew.stops.some((stop) => stop.stopId === 's3'))!;
+    expect(withThird.technicianId).toBe('t2');
+    expect(crews.find((crew) => crew.technicianId === 't1')!.changed).toBe(false);
+  });
+});
+
+describe('estimating a drive before it is measured', () => {
+  it('is no drive at all within one building', () => {
+    expect(estimatedDriveMinutes({ latitude: 29.76, longitude: -95.37 }, { latitude: 29.76, longitude: -95.37 })).toBe(0);
+  });
+
+  it('grows with the distance', () => {
+    const near = estimatedDriveMinutes({ latitude: 29.76, longitude: -95.37 }, { latitude: 29.77, longitude: -95.37 });
+    const far = estimatedDriveMinutes({ latitude: 29.76, longitude: -95.37 }, { latitude: 29.96, longitude: -95.37 });
+    expect(near).toBeGreaterThan(3);
+    expect(far).toBeGreaterThan(near * 5);
   });
 });
 
 describe('ordering a day without a road matrix', () => {
   /**
-   * The fallback, not the answer — `shortestRouteOrder` with a real duration
+   * The fallback, not the answer -- `shortestOpenPathOrder` with a real duration
    * matrix is what the planner uses when routing is configured. This exists so
    * an unrouted plan is still ordered sensibly rather than presented in
    * rotation order as if it were a route.

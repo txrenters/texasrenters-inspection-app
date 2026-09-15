@@ -323,19 +323,53 @@ export class JobberOutboundWorker {
         500,
       );
 
+    // Read when it is sent rather than when it was published, as a console
+    // booking is: between the two the office may have moved the day, changed
+    // the technician or edited the Details on the inspection.
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { id: inspectionId, organizationId },
+      select: {
+        status: true,
+        scheduledAt: true,
+        jobberVisitId: true,
+        jobberVisitTitle: true,
+        jobberVisitDetails: true,
+        assignments: {
+          where: { isCurrent: true },
+          take: 1,
+          select: { technician: { select: { email: true } } },
+        },
+      },
+    });
+    // Booked already: the claim committed, and only marking the task sent did not.
+    if (inspection?.jobberVisitId) return;
+    if (!inspection || inspection.status === InspectionStatus.CANCELLED)
+      throw new JobberError(
+        'The inspection was cancelled before its visit was booked in Jobber.',
+        'JOBBER_BOOKING_CANCELLED',
+        409,
+      );
+
     const link = await this.bookableProperty(organizationId, {
       buildingId: stop.propertywareBuildingId,
       unitId: stop.propertywareUnitId,
     });
+    // On the visit, as the plan's day was: the technician the plan chose, when
+    // Jobber knows them. Unknown books it unassigned, and the sync keeps ours.
+    const technicianJobberId = await jobberUserIdForEmail(
+      this.prisma,
+      organizationId,
+      inspection.assignments[0]?.technician.email,
+    );
     await this.createVisitInJobber(organizationId, taskId, inspectionId, {
       jobberPropertyId: link.jobberPropertyId,
       // The job title carries no address; the visit title does. That is the
       // office's convention, and the visit title is the one the importer reads.
       jobTitle: jobTitle(stop.zone, stop.plan.quarterYear, stop.plan.quarterNumber),
-      visitTitle: stop.visitTitle,
-      instructions: stop.visitDetails,
-      date: stop.scheduledOn.toISOString().slice(0, 10),
-      teamMemberIds: [],
+      visitTitle: inspection.jobberVisitTitle ?? stop.visitTitle,
+      instructions: inspection.jobberVisitDetails ?? stop.visitDetails,
+      date: inspection.scheduledAt.toISOString().slice(0, 10),
+      teamMemberIds: technicianJobberId ? [technicianJobberId] : [],
     });
   }
 
@@ -427,8 +461,8 @@ export class JobberOutboundWorker {
    * recurring job to hang a new visit on. `jobCreate` makes the job bare and
    * `visitCreate` supplies the title and instructions, rather than letting
    * Jobber mint the visit from the job's scheduling: the visit's instructions
-   * are what `occupiedInspectionInDetails` reads to decide this is an occupied
-   * inspection at all, and they have to be ours.
+   * are what `benefitPackageInspectionInDetails` reads to decide this is an
+   * occupied or HVAC inspection at all, and they have to be ours.
    *
    * Not transactional, and cannot be. If the job is created and the visit fails,
    * the job id is written to the task first so the retry books the visit onto

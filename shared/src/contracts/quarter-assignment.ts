@@ -1,9 +1,21 @@
 /**
- * Spreading a quarter's stops across working days and technicians.
+ * Laying a quarter's stops out over technician-days.
  *
  * Pure and dependency-free, like the rotation beside it, so the decisions here
  * can be argued with in a test rather than inferred from a plan somebody has
  * already published.
+ *
+ * ## The office's limits
+ *
+ * Stated on 2026-09-16: a technician's day is at most **six hours inspecting**
+ * and **ninety minutes driving between its properties**. The drive from home is
+ * not counted -- the day starts at the first job -- and the number of stops is
+ * not limited: eleven properties is a fine day if it keeps inside both.
+ *
+ * So a day is measured in minutes, never in stops. The on-site minutes are the
+ * visits' own lengths (an HVAC inspection takes longer than an occupied one);
+ * the drive is the path through the day's stops in its best order, first stop
+ * to last.
  *
  * ## Why there is no clustering pass
  *
@@ -12,50 +24,71 @@
  * clustered and re-clustering it would throw that away.
  *
  * The office sequences benefit-package visits **by zone**, and it shows in
- * their own calendar: of the first fifteen days of live TBP visits, eight
- * covered a single zone and the rest covered two. `Zone 1` is written into the
- * visit titles. The rotation order inherits that grouping — it was recovered
- * from those visits in the first place, and carried forward every quarter after
- * — so consecutive stops in the rotation are usually neighbours already.
+ * their own calendar: of Q3 2026's 52 technician-days, 24 covered a single zone
+ * and 25 covered two. The rotation order inherits that grouping -- it was
+ * recovered from those visits in the first place, and is carried forward every
+ * quarter after -- so consecutive stops in the rotation are usually neighbours
+ * already.
  *
  * That makes the honest algorithm a simple one: keep the order, cut it into
- * days, and only decide geography *within* a day, which is the only place drive
- * time actually accrues. A technician drives between their own stops, never
- * between days.
+ * days, and decide geography only *within* a day and between neighbouring days,
+ * which is where drive time actually accrues.
  */
 
 import { haversineMeters } from './route-plan.js';
 
-/** A stop that can be placed: it has a rotation position and a location. */
+/** A stop that can be placed: it has a rotation position, a location and a length. */
 export interface PlannableStop {
   stopId: string;
   /** 1-based rotation position, from `carryForwardOrder`. */
   sequence: number;
   latitude: number;
   longitude: number;
+  /** How long the visit takes on site, in minutes. */
+  onSiteMinutes: number;
+  /** The kind of visit, which decides who is qualified to take it. */
+  inspectionType: string;
+  /** Who took this tenancy's visit last quarter, preferred when a day is opened. */
+  previousTechnicianId?: string | null;
 }
 
-export interface PlannableTechnician {
-  technicianId: string;
-  /**
-   * How many benefit-package stops this person takes in a day.
-   *
-   * Ten by default rather than seven. Seven would keep every day inside
-   * `MAX_EXACT_STOPS`, where `shortestRouteOrder` solves exactly — but the
-   * office's own calendar runs five to twelve, and booking a day they would
-   * never book is a worse error than ordering ten stops with nearest-neighbour
-   * and 2-opt instead of by exhaustive search.
-   */
-  dailyStopCap: number;
-}
-
-/** One working day, and who may take an occupied inspection on it. */
+/** One working day, and who can be sent out on it. */
 export interface PlannableDay {
   /** `YYYY-MM-DD`. */
   date: string;
-  /** Qualified *and* available that day — expiry is evaluated per date. */
+  /** Available that day -- expiry is evaluated per date. */
   technicianIds: string[];
+  /**
+   * Who is qualified for each kind of visit that day. A kind missing here is
+   * open to everybody in `technicianIds`.
+   */
+  qualified?: Readonly<Record<string, readonly string[]>>;
 }
+
+export interface DayLimits {
+  /** Time spent inspecting in one technician-day. */
+  maxOnSiteMinutes: number;
+  /** Driving between one technician-day's properties, first to last. */
+  maxDriveMinutes: number;
+}
+
+export const DEFAULT_DAY_LIMITS: DayLimits = { maxOnSiteMinutes: 6 * 60, maxDriveMinutes: 90 };
+
+/**
+ * The most stops one day can hold, whatever the minutes say.
+ *
+ * Not the office's limit -- theirs is time -- but Google's: a day is routed
+ * with one matrix of every stop against every other, and a matrix over 625
+ * elements is refused. Twenty-four stops in six hours is fifteen minutes a
+ * visit, which no visit here takes.
+ */
+export const MAX_STOPS_PER_DAY = 24;
+
+/**
+ * How far a stop may move from its rotation day to join a technician already
+ * out nearby, before a second technician is sent out on its own day.
+ */
+export const NEARBY_DAYS = 2;
 
 export interface PlacedStop {
   stopId: string;
@@ -65,231 +98,286 @@ export interface PlacedStop {
   position: number;
 }
 
-export type UnplacedReason = 'NO_WORKING_DAYS' | 'NO_QUALIFIED_TECHNICIAN' | 'NO_CAPACITY';
+export interface AssignedCrew {
+  date: string;
+  technicianId: string;
+  /** In driving order. */
+  stops: PlannableStop[];
+  onSiteMinutes: number;
+  /** Between the stops, never from home. Estimated for any leg not yet measured. */
+  driveMinutes: number;
+  /** Given a stop in this pass, so a drive measured before it no longer describes the day. */
+  changed: boolean;
+}
+
+export type UnplacedReason = 'NO_WORKING_DAYS' | 'NO_QUALIFIED_TECHNICIAN' | 'NO_CAPACITY' | 'LONGER_THAN_A_DAY';
 
 export interface QuarterAssignment {
   placed: PlacedStop[];
+  crews: AssignedCrew[];
   unplaced: { stopId: string; reason: UnplacedReason }[];
   /** Demand against what the quarter could hold, for the capacity warning. */
-  capacity: { stops: number; slots: number };
+  capacity: { stops: number; onSiteMinutes: number; availableMinutes: number };
 }
 
-export const DEFAULT_DAILY_STOP_CAP = 10;
+interface Point {
+  latitude: number;
+  longitude: number;
+}
+
+/** Minutes between two places. */
+export type DriveEstimate = (from: Point, to: Point) => number;
 
 /**
- * Assign every stop a day, a technician, and a position in that day.
+ * A drive guessed from the straight line, used only to lay the quarter out.
  *
- * Stops arrive in rotation order and keep it: stop *i* of *n* lands on the day
- * *i/n* of the way through the quarter. Nothing here reorders the rotation to
- * suit a route — the office's order is a promise to a tenant about roughly when
- * somebody will knock, and drive time is not a good enough reason to break it.
+ * Every day is then measured on real roads (`QuarterPlannerService`), and a
+ * day that measures over the limit is repaired, so this only has to be close.
+ * It leans long: three minutes to get going plus a minute and a half per
+ * straight-line kilometre is about 30 km/h on a road a third longer than the
+ * line -- slower than the suburbs for a long leg, which is the side to be
+ * wrong on against a limit.
+ */
+export function estimatedDriveMinutes(from: Point, to: Point): number {
+  const kilometres = haversineMeters(from, to) / 1000;
+  // Two tenancies in one building are no drive at all.
+  return kilometres < 0.05 ? 0 : 3 + kilometres * 1.5;
+}
+
+export interface AssignmentOptions {
+  limits?: DayLimits;
+  driveMinutes?: DriveEstimate;
+  /** Lower is preferred when a technician is sent out on a day. */
+  technicianRank?: (technicianId: string) => number;
+  /**
+   * Each stop's place in the whole quarter's rotation, when only some of the
+   * quarter's stops are being placed -- a repair pass placing the stops a
+   * measured day could not keep. Without it, the stops given are the rotation.
+   */
+  rotation?: { position: ReadonlyMap<string, number>; size: number };
+  /** Days already laid out, which stops may join but never leave. */
+  existing?: readonly { date: string; technicianId: string; stops: readonly PlannableStop[]; driveMinutes: number }[];
+  /** Technician-days a stop must not join, as `date|technicianId`: the days it was measured not to fit. */
+  avoid?: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+interface Crew {
+  technicianId: string;
+  stops: PlannableStop[];
+  onSite: number;
+  drive: number;
+  changed: boolean;
+}
+
+/** `date|technicianId`, the identity of a technician-day. */
+export const crewKey = (date: string, technicianId: string) => `${date}|${technicianId}`;
+
+/**
+ * Give every stop a day, a technician, and a place in that day's drive.
+ *
+ * Stops arrive in rotation order and keep it: stop *i* of *n* is aimed at the
+ * day *i/n* of the way through the quarter, so whoever was first last quarter
+ * is first again and a tenant's visits stay about ninety days apart. Nothing
+ * here reorders the rotation to suit a route. A stop moves off its day only to
+ * fit the limits, and then to the nearest day that can take it.
+ *
+ * For each stop, in this order:
+ * 1. a technician already out on its day, if the stop fits their day;
+ * 2. a technician sent out on its day, if nobody is out on it yet;
+ * 3. a technician out within `NEARBY_DAYS`, rather than a second one on its day;
+ * 4. a second technician on its day;
+ * 5. the nearest day, either side, that can take it at all.
  */
 export function assignQuarter(
   stops: readonly PlannableStop[],
-  technicians: readonly PlannableTechnician[],
   days: readonly PlannableDay[],
-  sequenceDay: (dayStops: readonly PlannableStop[]) => PlannableStop[] = nearestNeighbourOrder,
+  options: AssignmentOptions = {},
 ): QuarterAssignment {
-  const capacity = { stops: stops.length, slots: totalSlots(technicians, days) };
-  if (stops.length === 0) return { placed: [], unplaced: [], capacity };
-  if (days.length === 0)
-    return {
-      placed: [],
-      unplaced: stops.map((stop) => ({ stopId: stop.stopId, reason: 'NO_WORKING_DAYS' as const })),
-      capacity,
-    };
+  const limits = options.limits ?? DEFAULT_DAY_LIMITS;
+  const drive = options.driveMinutes ?? estimatedDriveMinutes;
+  const rank = options.technicianRank ?? (() => 0);
+  const capacity = {
+    stops: stops.length,
+    onSiteMinutes: stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
+    availableMinutes: days.reduce((total, day) => total + day.technicianIds.length * limits.maxOnSiteMinutes, 0),
+  };
 
-  const capOf = new Map(technicians.map((tech) => [tech.technicianId, tech.dailyStopCap]));
+  const crewsByDay: Crew[][] = days.map(() => []);
+  const dayIndex = new Map(days.map((day, index) => [day.date, index]));
+  const load = new Map<string, number>();
+  const addLoad = (technicianId: string, minutes: number) =>
+    load.set(technicianId, (load.get(technicianId) ?? 0) + minutes);
+
+  for (const crew of options.existing ?? []) {
+    const index = dayIndex.get(crew.date);
+    if (index === undefined) continue;
+    const onSite = crew.stops.reduce((total, stop) => total + stop.onSiteMinutes, 0);
+    crewsByDay[index]!.push({
+      technicianId: crew.technicianId,
+      stops: [...crew.stops],
+      onSite,
+      drive: crew.driveMinutes,
+      changed: false,
+    });
+    addLoad(crew.technicianId, onSite);
+  }
+
+  const qualifiedOn = (day: PlannableDay, technicianId: string, inspectionType: string) => {
+    const list = day.qualified?.[inspectionType];
+    return day.technicianIds.includes(technicianId) && (!list || list.includes(technicianId));
+  };
+  const avoided = (stop: PlannableStop, date: string, technicianId: string) =>
+    options.avoid?.get(stop.stopId)?.has(crewKey(date, technicianId)) ?? false;
+
+  const join = (stop: PlannableStop, index: number) => {
+    const day = days[index]!;
+    let best: { crew: Crew; route: PlannableStop[]; drive: number } | null = null;
+    for (const crew of crewsByDay[index]!) {
+      if (crew.stops.length >= MAX_STOPS_PER_DAY) continue;
+      if (!qualifiedOn(day, crew.technicianId, stop.inspectionType)) continue;
+      if (avoided(stop, day.date, crew.technicianId)) continue;
+      if (crew.onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
+      const insertion = cheapestInsertion(crew.stops, crew.drive, stop, drive);
+      if (insertion.drive > limits.maxDriveMinutes + 1e-9) continue;
+      if (!best || insertion.drive - crew.drive < best.drive - best.crew.drive) best = { crew, ...insertion };
+    }
+    if (!best) return false;
+    best.crew.stops = best.route;
+    best.crew.drive = best.drive;
+    best.crew.onSite += stop.onSiteMinutes;
+    best.crew.changed = true;
+    addLoad(best.crew.technicianId, stop.onSiteMinutes);
+    return true;
+  };
+
+  const open = (stop: PlannableStop, index: number) => {
+    const day = days[index]!;
+    const out = new Set(crewsByDay[index]!.map((crew) => crew.technicianId));
+    const candidates = day.technicianIds.filter(
+      (technicianId) =>
+        !out.has(technicianId) &&
+        qualifiedOn(day, technicianId, stop.inspectionType) &&
+        !avoided(stop, day.date, technicianId),
+    );
+    if (candidates.length === 0) return false;
+    // Last quarter's technician first, so the tenant sees the same face; then
+    // whoever the office sends most; then whoever has the least so far.
+    // The day's own order ends it, so the choice is total and repeatable.
+    const technicianId = [...candidates].sort(
+      (left, right) =>
+        Number(right === stop.previousTechnicianId) - Number(left === stop.previousTechnicianId) ||
+        rank(left) - rank(right) ||
+        (load.get(left) ?? 0) - (load.get(right) ?? 0) ||
+        day.technicianIds.indexOf(left) - day.technicianIds.indexOf(right),
+    )[0]!;
+    crewsByDay[index]!.push({ technicianId, stops: [stop], onSite: stop.onSiteMinutes, drive: 0, changed: true });
+    addLoad(technicianId, stop.onSiteMinutes);
+    return true;
+  };
+
+  const place = (stop: PlannableStop, target: number) => {
+    const inRange = (index: number) => index >= 0 && index < days.length;
+    if (join(stop, target)) return true;
+    if (crewsByDay[target]!.length === 0 && open(stop, target)) return true;
+    for (let offset = 1; offset <= NEARBY_DAYS; offset += 1)
+      for (const index of [target - offset, target + offset]) if (inRange(index) && join(stop, index)) return true;
+    if (open(stop, target)) return true;
+    // Outward rather than only forward, so a full week does not push every
+    // later stop back and cascade the whole quarter. Earlier wins a tie: a
+    // stop that cannot sit on its own day is better a day early than late.
+    for (let offset = 1; offset < days.length; offset += 1)
+      for (const index of [target - offset, target + offset])
+        if (inRange(index) && (join(stop, index) || open(stop, index))) return true;
+    return false;
+  };
+
+  const unplaced: { stopId: string; reason: UnplacedReason }[] = [];
   const ordered = [...stops].sort((left, right) => left.sequence - right.sequence);
 
-  // Which day strict rotation puts each stop on. Spread across the quarter
-  // rather than packed to capacity from day one: the programme runs all quarter
-  // and finishing in three weeks would leave nine with nobody to inspect.
-  const buckets: PlannableStop[][] = Array.from({ length: days.length }, () => []);
-  const unplaced: { stopId: string; reason: UnplacedReason }[] = [];
-
-  for (const [index, stop] of ordered.entries()) {
-    const target = Math.min(
-      days.length - 1,
-      Math.floor((index * days.length) / ordered.length),
-    );
-    const placedOn = nearestDayWithRoom(buckets, days, capOf, target);
-    if (placedOn === null) {
-      unplaced.push({
-        stopId: stop.stopId,
-        reason: days.some((day) => dayCapacity(day, capOf) > 0)
-          ? 'NO_CAPACITY'
-          : 'NO_QUALIFIED_TECHNICIAN',
-      });
-      continue;
+  if (days.length === 0) {
+    for (const stop of ordered) unplaced.push({ stopId: stop.stopId, reason: 'NO_WORKING_DAYS' });
+  } else {
+    const size = Math.max(1, options.rotation?.size ?? ordered.length);
+    for (const [index, stop] of ordered.entries()) {
+      if (stop.onSiteMinutes > limits.maxOnSiteMinutes) {
+        unplaced.push({ stopId: stop.stopId, reason: 'LONGER_THAN_A_DAY' });
+        continue;
+      }
+      const position = options.rotation?.position.get(stop.stopId) ?? index;
+      const target = Math.min(days.length - 1, Math.max(0, Math.floor((position * days.length) / size)));
+      if (place(stop, target)) continue;
+      const anyoneQualified = days.some((day) =>
+        day.technicianIds.some((technicianId) => qualifiedOn(day, technicianId, stop.inspectionType)),
+      );
+      unplaced.push({ stopId: stop.stopId, reason: anyoneQualified ? 'NO_CAPACITY' : 'NO_QUALIFIED_TECHNICIAN' });
     }
-    buckets[placedOn].push(stop);
   }
 
+  const crews: AssignedCrew[] = [];
   const placed: PlacedStop[] = [];
-  for (const [index, dayStops] of buckets.entries()) {
-    if (dayStops.length === 0) continue;
-    for (const crew of splitAmongTechnicians(dayStops, days[index].technicianIds, capOf)) {
-      sequenceDay(crew.stops).forEach((stop, position) => {
-        placed.push({
-          stopId: stop.stopId,
-          date: days[index].date,
-          technicianId: crew.technicianId,
-          position: position + 1,
-        });
+  crewsByDay.forEach((dayCrews, index) => {
+    const date = days[index]!.date;
+    for (const crew of dayCrews) {
+      crews.push({
+        date,
+        technicianId: crew.technicianId,
+        stops: crew.stops,
+        onSiteMinutes: crew.onSite,
+        driveMinutes: crew.drive,
+        changed: crew.changed,
       });
+      crew.stops.forEach((stop, position) =>
+        placed.push({ stopId: stop.stopId, date, technicianId: crew.technicianId, position: position + 1 }),
+      );
     }
-  }
+  });
 
-  return { placed, unplaced, capacity };
+  return { placed, crews, unplaced, capacity };
 }
 
 /**
- * The day nearest the rotation's choice that still has room.
+ * Where a stop adds the least driving to a day, and the day's drive after it.
  *
- * Searches outward rather than only forward, so a full week does not push every
- * later stop back and cascade the whole quarter. A stop that cannot sit on its
- * own day is better a day early than a fortnight late.
+ * The day is a path, not a loop -- nobody drives back to the first property --
+ * so the ends are candidates too, and joining one costs a single leg.
  */
-function nearestDayWithRoom(
-  buckets: readonly PlannableStop[][],
-  days: readonly PlannableDay[],
-  capOf: ReadonlyMap<string, number>,
-  target: number,
-): number | null {
-  for (let offset = 0; offset < days.length; offset += 1) {
-    for (const candidate of offset === 0 ? [target] : [target - offset, target + offset]) {
-      if (candidate < 0 || candidate >= days.length) continue;
-      if (buckets[candidate].length < dayCapacity(days[candidate], capOf)) return candidate;
+function cheapestInsertion(
+  route: readonly PlannableStop[],
+  currentDrive: number,
+  stop: PlannableStop,
+  drive: DriveEstimate,
+): { route: PlannableStop[]; drive: number } {
+  if (route.length === 0) return { route: [stop], drive: 0 };
+  let bestAt = 0;
+  let bestAdded = Number.POSITIVE_INFINITY;
+  for (let at = 0; at <= route.length; at += 1) {
+    const before = route[at - 1];
+    const after = route[at];
+    const added =
+      (before ? drive(before, stop) : 0) + (after ? drive(stop, after) : 0) - (before && after ? drive(before, after) : 0);
+    if (added < bestAdded) {
+      bestAdded = added;
+      bestAt = at;
     }
   }
-  return null;
-}
-
-function dayCapacity(day: PlannableDay, capOf: ReadonlyMap<string, number>): number {
-  return day.technicianIds.reduce(
-    (total, id) => total + (capOf.get(id) ?? DEFAULT_DAILY_STOP_CAP),
-    0,
-  );
-}
-
-function totalSlots(
-  technicians: readonly PlannableTechnician[],
-  days: readonly PlannableDay[],
-): number {
-  const capOf = new Map(technicians.map((tech) => [tech.technicianId, tech.dailyStopCap]));
-  return days.reduce((total, day) => total + dayCapacity(day, capOf), 0);
-}
-
-export interface TechnicianDay {
-  technicianId: string;
-  stops: PlannableStop[];
-}
-
-/**
- * Split one day's stops between the technicians working it.
- *
- * Geography decides here and only here. The stops of a single day are usually
- * one or two zones already, so this is a short walk rather than a clustering
- * problem: seed each technician with the stop furthest from the others, then
- * give every remaining stop to whichever crew it is nearest.
- *
- * Deterministic throughout — the seeds are chosen by distance and ties fall to
- * the stop order, which is itself the rotation.
- */
-export function splitAmongTechnicians(
-  dayStops: readonly PlannableStop[],
-  technicianIds: readonly string[],
-  capOf: ReadonlyMap<string, number>,
-): TechnicianDay[] {
-  if (technicianIds.length === 0) return [];
-
-  // Only open as many crews as the day actually needs. Spreading six stops
-  // across four technicians gives four people a half-empty drive each.
-  const needed = Math.max(
-    1,
-    Math.min(
-      technicianIds.length,
-      minimumCrews(dayStops.length, technicianIds, capOf),
-    ),
-  );
-  const crews: TechnicianDay[] = technicianIds
-    .slice(0, needed)
-    .map((technicianId) => ({ technicianId, stops: [] }));
-  if (crews.length === 1) return [{ technicianId: crews[0].technicianId, stops: [...dayStops] }];
-
-  const remaining = [...dayStops];
-  // Seed each crew with the stop furthest from every seed already chosen, so
-  // two crews never start next door to each other and then interleave.
-  for (const crew of crews) {
-    const seeds = crews.flatMap((other) => other.stops);
-    const pick = seeds.length === 0 ? 0 : indexOfFurthest(remaining, seeds);
-    crew.stops.push(...remaining.splice(pick, 1));
-  }
-
-  for (const stop of remaining) {
-    const open = crews.filter(
-      (crew) => crew.stops.length < (capOf.get(crew.technicianId) ?? DEFAULT_DAILY_STOP_CAP),
-    );
-    const target = (open.length > 0 ? open : crews).reduce((best, crew) =>
-      distanceToCrew(stop, crew) < distanceToCrew(stop, best) ? crew : best,
-    );
-    target.stops.push(stop);
-  }
-
-  return crews.filter((crew) => crew.stops.length > 0);
-}
-
-function minimumCrews(
-  stopCount: number,
-  technicianIds: readonly string[],
-  capOf: ReadonlyMap<string, number>,
-): number {
-  let covered = 0;
-  let crews = 0;
-  for (const id of technicianIds) {
-    if (covered >= stopCount) break;
-    covered += capOf.get(id) ?? DEFAULT_DAILY_STOP_CAP;
-    crews += 1;
-  }
-  return crews;
-}
-
-function indexOfFurthest(
-  candidates: readonly PlannableStop[],
-  from: readonly PlannableStop[],
-): number {
-  let bestIndex = 0;
-  let bestDistance = -1;
-  for (const [index, candidate] of candidates.entries()) {
-    const nearest = Math.min(...from.map((seed) => haversineMeters(candidate, seed)));
-    if (nearest > bestDistance) {
-      bestDistance = nearest;
-      bestIndex = index;
-    }
-  }
-  return bestIndex;
-}
-
-function distanceToCrew(stop: PlannableStop, crew: TechnicianDay): number {
-  if (crew.stops.length === 0) return Number.POSITIVE_INFINITY;
-  return Math.min(...crew.stops.map((placed) => haversineMeters(stop, placed)));
+  return { route: [...route.slice(0, bestAt), stop, ...route.slice(bestAt)], drive: currentDrive + bestAdded };
 }
 
 /**
  * A straight-line ordering, used when no road matrix is available.
  *
- * Deliberately the fallback rather than the answer: `shortestRouteOrder` with a
- * real duration matrix is what the planner uses when routing is configured.
- * This exists so a plan is still produced — and still ordered sensibly — when
- * it is not, rather than presenting the rotation order as if it were a route.
+ * Deliberately the fallback rather than the answer: `shortestOpenPathOrder`
+ * with a real duration matrix is what the planner uses when routing is
+ * configured. This exists so a plan is still produced -- and still ordered
+ * sensibly -- when it is not, rather than presenting the rotation order as if
+ * it were a route.
  */
-export function nearestNeighbourOrder(dayStops: readonly PlannableStop[]): PlannableStop[] {
+export function nearestNeighbourOrder<T extends Point>(dayStops: readonly T[]): T[] {
   if (dayStops.length <= 2) return [...dayStops];
   const remaining = [...dayStops];
   const ordered = [remaining.shift()!];
   while (remaining.length > 0) {
-    const last = ordered[ordered.length - 1];
+    const last = ordered[ordered.length - 1]!;
     let bestIndex = 0;
     let bestDistance = Number.POSITIVE_INFINITY;
     for (const [index, candidate] of remaining.entries()) {

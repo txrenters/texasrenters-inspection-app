@@ -1,4 +1,4 @@
-import { JobberOutboundKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { InspectionType, JobberOutboundKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ApplicationError } from '../src/common/errors';
@@ -36,6 +36,9 @@ interface StopRow {
   propertywareUnitId: string | null;
   propertywareLeaseId: string | null;
   jobberJobId: string | null;
+  inspectionType: InspectionType;
+  visitTitle: string | null;
+  visitDetails: string | null;
 }
 
 const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): StopRow => ({
@@ -47,6 +50,12 @@ const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): 
   propertywareUnitId: null,
   propertywareLeaseId: null,
   jobberJobId: 'job-1',
+  inspectionType: InspectionType.OCCUPIED,
+  visitTitle: '1 Any St - Zone 1 - Q4 2026 Tenant Benefit Package',
+  visitDetails: [
+    'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
+    'Instruction for completion\n• Note the size of any filters that were not replaced.',
+  ].join('\n\n'),
   ...overrides,
 });
 
@@ -69,8 +78,10 @@ const build = (
   const assignmentCreate = jest.fn().mockResolvedValue({});
   const outboundCreate = jest.fn().mockResolvedValue({});
   const auditCreate = jest.fn().mockResolvedValue({});
+  const inspectionUpdate = jest.fn().mockResolvedValue({});
 
   const tx = {
+    inspection: { update: inspectionUpdate },
     inspectionAssignment: { create: assignmentCreate },
     jobberOutboundTask: { create: outboundCreate },
     tbpQuarterPlanStop: { update: stopUpdate },
@@ -104,6 +115,7 @@ const build = (
     assignmentCreate,
     outboundCreate,
     auditCreate,
+    inspectionUpdate,
   };
 };
 
@@ -275,5 +287,45 @@ describe('publishing a reviewed quarter', () => {
 
     expect(summary.published).toBe(1);
     expect(assignmentCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('publishing the quarter’s kinds of visit', () => {
+  /** Q2 and Q4: a tenancy on the HVAC plan gets an HVAC inspection, as the plan decided and a coordinator reviewed. */
+  it('creates an HVAC inspection for an HVAC stop', async () => {
+    const { service, auditCreate } = build([aStop('s1', 1, { inspectionType: InspectionType.HVAC })]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(creation.resolveInspectionPlan.mock.calls[0][1].inspectionType).toBe(InspectionType.HVAC);
+    expect(auditCreate.mock.calls[0][0].data.metadata.inspectionType).toBe(InspectionType.HVAC);
+  });
+
+  /** The phone shows the Details before the visit exists in Jobber, and the booking sends what is on the inspection. */
+  it('writes the visit’s title and Details on the inspection, linked back to it', async () => {
+    const { service, inspectionUpdate } = build([aStop('s1', 1)]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(creation.insertInspection.mock.calls[0][2]).toMatchObject({
+      jobberVisitTitle: '1 Any St - Zone 1 - Q4 2026 Tenant Benefit Package',
+    });
+    const details = inspectionUpdate.mock.calls[0][0].data.jobberVisitDetails as string;
+    const [services, link, completion] = details.split('\n\n');
+    expect(services).toBe('Filter Change: 20x25x1 + Pest Control + Occupied Inspection');
+    expect(link).toMatch(/^Texas Renters inspection: https?:\/\/\S+\/inspections\/insp-1$/);
+    expect(completion).toBe('Instruction for completion\n• Note the size of any filters that were not replaced.');
+  });
+
+  it('adopts only an existing inspection of the stop’s own kind', async () => {
+    const { service } = build([aStop('s1', 1, { inspectionType: InspectionType.HVAC })], {
+      existingInspectionId: 'insp-existing',
+    });
+    creation.insertInspection.mockRejectedValue(new ApplicationError(409, 'DUPLICATE_INSPECTION', 'already scheduled'));
+
+    await service.publish(USER, 'plan-1');
+
+    const prisma = (service as unknown as { prisma: { inspection: { findFirst: jest.Mock } } }).prisma;
+    expect(prisma.inspection.findFirst.mock.calls[0][0].where.inspectionType).toBe(InspectionType.HVAC);
   });
 });

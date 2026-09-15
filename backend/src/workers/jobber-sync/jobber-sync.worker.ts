@@ -35,13 +35,13 @@ import {
 import { jobberVisitsPageSchema, type JobberVisit } from '../../integrations/jobber/jobber.schemas';
 import {
   allowsTechnicianCapture,
+  benefitPackageInspectionInDetails,
   isSyncedType,
   notSyncedReason,
   namesAnInspection,
   NOT_AN_INSPECTION_REASON,
   resolveVisitType,
   visitTypeRules,
-  occupiedInspectionInDetails,
   type VisitTypeResolution,
 } from '../../integrations/jobber/jobber.visit-type';
 import {
@@ -541,13 +541,17 @@ export class JobberSyncWorker {
      * Only ever upgrades a delivery, never anything else: see
      * `occupiedInspectionInDetails` for why free text must not overrule a title
      * somebody chose.
+     *
+     * In Q2 and Q4 the walkthrough is an HVAC inspection for a tenancy on the
+     * HVAC plan, and the details say "+ HVAC Inspection" instead.
      */
-    const type: VisitTypeResolution =
-      titled.outcome === 'RESOLVED' &&
-      titled.inspectionType === InspectionType.AC_FILTER_DELIVERY &&
-      occupiedInspectionInDetails(visit.instructions)
-        ? { outcome: 'RESOLVED', inspectionType: InspectionType.OCCUPIED }
-        : titled;
+    const packaged =
+      titled.outcome === 'RESOLVED' && titled.inspectionType === InspectionType.AC_FILTER_DELIVERY
+        ? benefitPackageInspectionInDetails(visit.instructions)
+        : null;
+    const type: VisitTypeResolution = packaged ? { outcome: 'RESOLVED', inspectionType: packaged } : titled;
+    /** Named as an inspection by its title or its details, or a benefit-package visit carrying one. */
+    const namedAnInspection = namesAnInspection(visit.title, visit.instructions) || packaged !== null;
 
     const isComplete = Boolean(visit.completedAt || visit.visitStatus === 'COMPLETED');
 
@@ -595,7 +599,7 @@ export class JobberSyncWorker {
       type.outcome === 'RESOLVED' &&
       Boolean(visit.property?.id) &&
       Boolean(visit.startAt) &&
-      namesAnInspection(visit.title, visit.instructions);
+      namedAnInspection;
 
     if (isComplete && !isRecoverable) {
       await this.prisma.jobberVisitImport.update({
@@ -629,7 +633,7 @@ export class JobberSyncWorker {
      * learn: resolving first put work we never import into the mapping queue as
      * addresses to reconcile.
      */
-    if (!namesAnInspection(visit.title, visit.instructions)) {
+    if (!namedAnInspection) {
       await this.prisma.jobberVisitImport.update({
         where: { id: record.id },
         data: {
