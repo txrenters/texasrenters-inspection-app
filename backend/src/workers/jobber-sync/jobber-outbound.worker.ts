@@ -5,7 +5,7 @@ import type { VisitServicesReport } from '@texasrenters/shared';
 import {
   InspectionAreaCompletionStatus,
   InspectionSource,
-  JobberLinkStatus,
+  InspectionStatus,
   JobberOutboundKind,
   JobberOutboundStatus,
   JobberVisitImportStatus,
@@ -13,6 +13,7 @@ import {
 
 import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
+import { jobberUserIdForEmail, linkedJobberProperty } from '../../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
 import { jobberServicesNote } from '../../integrations/jobber/jobber.services-note';
@@ -31,6 +32,9 @@ const MAX_ATTEMPTS = 6;
 const SHARE_LIFETIME_DAYS = 30;
 
 const BATCH_SIZE = 25;
+
+/** Failures a retry cannot fix, abandoned at once rather than after six tries. */
+const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED']);
 
 /**
  * The timezone a booked visit's day is expressed in.
@@ -85,6 +89,7 @@ export class JobberOutboundWorker {
         organizationId,
         status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
         nextAttemptAt: { lte: new Date() },
+        kind: { notIn: this.switchedOffKinds() },
       },
       orderBy: { nextAttemptAt: 'asc' },
       take: BATCH_SIZE,
@@ -108,7 +113,8 @@ export class JobberOutboundWorker {
         const attempts = task.attempts + 1;
         const message =
           error instanceof JobberError ? error.message : 'The Jobber update could not be sent.';
-        const abandoned = attempts >= MAX_ATTEMPTS;
+        const abandoned =
+          attempts >= MAX_ATTEMPTS || (error instanceof JobberError && PERMANENT_FAILURES.has(error.code));
         await this.prisma.jobberOutboundTask.update({
           where: { id: task.id },
           data: {
@@ -128,6 +134,20 @@ export class JobberOutboundWorker {
     return result;
   }
 
+  /**
+   * The kinds whose switch is off, left waiting rather than attempted.
+   *
+   * Attempting them failed every time, and six failures abandon a task: a
+   * quarter published while booking was off gave up on its visits about two
+   * hours later, instead of waiting for the switch as its comment promised.
+   */
+  private switchedOffKinds(): JobberOutboundKind[] {
+    return [
+      ...(this.config.tbpBookingEnabled ? [] : [JobberOutboundKind.TBP_VISIT_CREATE]),
+      ...(this.config.bookingEnabled ? [] : [JobberOutboundKind.VISIT_CREATE]),
+    ];
+  }
+
   private async send(
     organizationId: string,
     task: {
@@ -138,10 +158,12 @@ export class JobberOutboundWorker {
       jobberJobId: string | null;
       createdById: string | null;
       servicesNoteSentAt: Date | null;
+      jobTitle: string | null;
     },
   ) {
     if (task.kind === JobberOutboundKind.TBP_VISIT_CREATE)
       return this.bookVisit(organizationId, task.id, task.inspectionId);
+    if (task.kind === JobberOutboundKind.VISIT_CREATE) return this.bookInspectionVisit(organizationId, task);
 
     // Only a completion reaches here, and a completion without a visit id is a
     // row that should never have been enqueued.
@@ -235,23 +257,9 @@ export class JobberOutboundWorker {
     });
   }
 
-  /**
-   * Books a benefit-package visit for a published plan stop.
-   *
-   * Two mutations, because the office's own jobs are one-off with a single
-   * visit each — 115 live TBP visits across 115 distinct jobs — so there is no
-   * recurring job to hang a new quarter on. `jobCreate` makes the job bare and
-   * `visitCreate` supplies the title and instructions, rather than letting
-   * Jobber mint the visit from the job's scheduling: the visit's instructions
-   * are what `occupiedInspectionInDetails` reads to decide this is an occupied
-   * inspection at all, and they have to be ours.
-   *
-   * Not transactional, and cannot be. If the job is created and the visit fails,
-   * the job id is written to the task first so the retry books the visit onto
-   * the job that already exists instead of making a second one.
-   */
+  /** Books a benefit-package visit for a published plan stop. */
   private async bookVisit(organizationId: string, taskId: string, inspectionId: string) {
-    if (process.env.JOBBER_TBP_WRITE_ENABLED !== 'true')
+    if (!this.config.tbpBookingEnabled)
       // A separate switch from JOBBER_SYNC_ENABLED, because this is the only
       // path that creates work in somebody else's calendar. Publishing a plan
       // while this is off produces every inspection here and leaves the visits
@@ -270,6 +278,7 @@ export class JobberOutboundWorker {
         scheduledOn: true,
         zone: true,
         propertywareBuildingId: true,
+        propertywareUnitId: true,
         plan: { select: { quarterYear: true, quarterNumber: true } },
       },
     });
@@ -280,23 +289,132 @@ export class JobberOutboundWorker {
         500,
       );
 
-    const link = await this.prisma.jobberPropertyLink.findFirst({
-      where: {
-        organizationId,
-        propertywareBuildingId: stop.propertywareBuildingId,
-        status: JobberLinkStatus.LINKED,
-      },
-      select: { jobberPropertyId: true },
+    const link = await this.bookableProperty(organizationId, {
+      buildingId: stop.propertywareBuildingId,
+      unitId: stop.propertywareUnitId,
     });
-    if (!link)
-      // Refused rather than guessed. Booking against the wrong property sends a
-      // technician to somebody else's home.
-      throw new JobberError(
-        'This property is not linked to a Jobber property.',
-        'JOBBER_PROPERTY_NOT_LINKED',
-        422,
-      );
+    await this.createVisitInJobber(organizationId, taskId, inspectionId, {
+      jobberPropertyId: link.jobberPropertyId,
+      // The job title carries no address; the visit title does. That is the
+      // office's convention, and the visit title is the one the importer reads.
+      jobTitle: jobTitle(stop.zone, stop.plan.quarterYear, stop.plan.quarterNumber),
+      visitTitle: stop.visitTitle,
+      instructions: stop.visitDetails,
+      date: stop.scheduledOn.toISOString().slice(0, 10),
+      teamMemberIds: [],
+    });
+  }
 
+  /**
+   * Books the visit a coordinator asked for when creating an occupied inspection.
+   *
+   * Read when it is sent rather than when it was queued: the day, and who is
+   * assigned, may have changed in between. The title and Details were written
+   * onto the inspection at creation -- the text the console previewed -- and
+   * the job's title rides on the task.
+   */
+  private async bookInspectionVisit(
+    organizationId: string,
+    task: { id: string; inspectionId: string; jobTitle: string | null },
+  ) {
+    if (!this.config.bookingEnabled)
+      throw new JobberError(
+        'Booking visits in Jobber is switched off (JOBBER_BOOKING_ENABLED).',
+        'JOBBER_BOOKING_DISABLED',
+        503,
+      );
+    const inspection = await this.prisma.inspection.findFirst({
+      where: { id: task.inspectionId, organizationId },
+      select: {
+        status: true,
+        scheduledAt: true,
+        jobberVisitId: true,
+        jobberVisitTitle: true,
+        jobberVisitDetails: true,
+        propertywareBuildingId: true,
+        propertywareUnitId: true,
+        assignments: {
+          where: { isCurrent: true },
+          take: 1,
+          select: { technician: { select: { email: true } } },
+        },
+      },
+    });
+    // Booked already: the claim committed, and only marking the task sent did not.
+    if (inspection?.jobberVisitId) return;
+    if (!inspection || inspection.status === InspectionStatus.CANCELLED)
+      throw new JobberError(
+        'The inspection was cancelled before its visit was booked in Jobber.',
+        'JOBBER_BOOKING_CANCELLED',
+        409,
+      );
+    if (!inspection.jobberVisitTitle || !inspection.propertywareBuildingId)
+      throw new JobberError('This inspection has no visit to book.', 'JOBBER_BOOKING_TEXT_MISSING', 500);
+
+    const link = await this.bookableProperty(organizationId, {
+      buildingId: inspection.propertywareBuildingId,
+      unitId: inspection.propertywareUnitId,
+    });
+    const technicianJobberId = await jobberUserIdForEmail(
+      this.prisma,
+      organizationId,
+      inspection.assignments[0]?.technician.email,
+    );
+    await this.createVisitInJobber(organizationId, task.id, task.inspectionId, {
+      jobberPropertyId: link.jobberPropertyId,
+      jobTitle: task.jobTitle ?? inspection.jobberVisitTitle,
+      visitTitle: inspection.jobberVisitTitle,
+      instructions: inspection.jobberVisitDetails,
+      date: inspection.scheduledAt.toISOString().slice(0, 10),
+      teamMemberIds: technicianJobberId ? [technicianJobberId] : [],
+    });
+  }
+
+  /** The Jobber property to book against, or the reason there is none. */
+  private async bookableProperty(organizationId: string, place: { buildingId: string; unitId: string | null }) {
+    const link = await linkedJobberProperty(this.prisma, organizationId, place);
+    if (link.status === 'LINKED') return link;
+    // Refused rather than guessed. Booking against the wrong property sends a
+    // technician to somebody else's home.
+    throw link.status === 'AMBIGUOUS'
+      ? new JobberError(
+          'This property is linked to more than one Jobber property.',
+          'JOBBER_PROPERTY_AMBIGUOUS',
+          422,
+        )
+      : new JobberError('This property is not linked to a Jobber property.', 'JOBBER_PROPERTY_NOT_LINKED', 422);
+  }
+
+  /**
+   * Creates the job and its one visit, then claims the visit as ours.
+   *
+   * Two mutations, because the office's own jobs are one-off with a single
+   * visit each — 115 live TBP visits across 115 distinct jobs — so there is no
+   * recurring job to hang a new visit on. `jobCreate` makes the job bare and
+   * `visitCreate` supplies the title and instructions, rather than letting
+   * Jobber mint the visit from the job's scheduling: the visit's instructions
+   * are what `occupiedInspectionInDetails` reads to decide this is an occupied
+   * inspection at all, and they have to be ours.
+   *
+   * Not transactional, and cannot be. If the job is created and the visit fails,
+   * the job id is written to the task first so the retry books the visit onto
+   * the job that already exists instead of making a second one.
+   */
+  private async createVisitInJobber(
+    organizationId: string,
+    taskId: string,
+    inspectionId: string,
+    booking: {
+      jobberPropertyId: string;
+      jobTitle: string;
+      visitTitle: string;
+      instructions: string | null;
+      /** The whole day the visit is booked for, "2026-10-06". */
+      date: string;
+      /** Jobber user ids to put on the visit; empty books it unassigned. */
+      teamMemberIds: string[];
+    },
+  ) {
     const existing = await this.prisma.jobberOutboundTask.findUnique({
       where: { id: taskId },
       select: { jobberJobId: true },
@@ -310,11 +428,8 @@ export class JobberOutboundWorker {
         jobCreate: JobberUserErrors & { job?: { id: string } | null };
       }>(organizationId, JOB_CREATE_MUTATION, {
         input: {
-          propertyId: link.jobberPropertyId,
-          // The job title carries no address; the visit title does. That is the
-          // office's convention, and the visit title is the one the importer
-          // reads.
-          title: jobTitle(stop.zone, stop.plan.quarterYear, stop.plan.quarterNumber),
+          propertyId: booking.jobberPropertyId,
+          title: booking.jobTitle,
           invoicing: TBP_JOB_INVOICING,
         },
       });
@@ -328,7 +443,7 @@ export class JobberOutboundWorker {
       });
     }
 
-    const date = stop.scheduledOn.toISOString().slice(0, 10);
+    const date = booking.date;
     const booked = await this.client.request<{
       visitCreate: JobberUserErrors & { createdVisits?: { id: string }[] | null };
     }>(organizationId, VISIT_CREATE_MUTATION, {
@@ -336,8 +451,8 @@ export class JobberOutboundWorker {
       input: {
         visits: [
           {
-            title: stop.visitTitle,
-            instructions: stop.visitDetails,
+            title: booking.visitTitle,
+            instructions: booking.instructions,
             schedule: {
               // Date and timezone without a time: the visit is booked for a
               // whole day, which is exactly what `Inspection.scheduledAt`
@@ -346,8 +461,10 @@ export class JobberOutboundWorker {
               // can keep.
               startAt: { date, timezone: VISIT_TIMEZONE },
               endAt: { date, timezone: VISIT_TIMEZONE },
-              // The office is told by the plan, not by four hundred pushes.
+              // Nobody is notified by Jobber: the plan tells the office about a
+              // quarter, and this app already tells a technician they are assigned.
               notifyTeam: false,
+              ...(booking.teamMemberIds.length ? { teamMemberIdsToAssign: booking.teamMemberIds } : {}),
             },
           },
         ],

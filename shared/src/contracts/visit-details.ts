@@ -95,9 +95,11 @@ const SERVICES_START = /filter\s*change|pest\s*control|oc{1,2}u\w{0,3}ied\s+insp
 const SIZE_ALL = new RegExp(SIZE.source, 'g');
 /** A contact line is a name and numbers; anything longer, or labelled, is a note that mentions a phone. */
 const MAX_TENANT_NAME = 60;
+/** The management plans the tenant report carries, as the office names them. */
 const PLAN_TIERS: Record<string, string> = {
   basic: 'Basic',
   standard: 'Standard',
+  plus: 'Plus',
   premium: 'Premium',
   bx: 'BX',
   mx: 'MX',
@@ -243,7 +245,7 @@ function readPlan(part: string): VisitDetails['plan'] {
   if (open < 0) return null;
   const inside = part.slice(open + 1, close > open ? close : undefined);
   if (!/plan|opted|hvac/i.test(inside)) return null;
-  const tier = /\b(basic|standard|premium|bx|mx)\b/i.exec(inside);
+  const tier = /\b(basic|standard|plus|premium|bx|mx)\b/i.exec(inside);
   return {
     tier: tier ? PLAN_TIERS[tier[1]!.toLowerCase()]! : null,
     // "Opted Ou HVAC" is how one coordinator types it; "w/o HVAC" says the same.

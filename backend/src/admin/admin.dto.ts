@@ -5,6 +5,7 @@ import {
   InspectionType,
   SkillRequirementLevel,
 } from '@prisma/client';
+import { MAX_BOOKING_FILTER_QUANTITY } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -24,6 +25,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 export class PaginationDto {
@@ -100,6 +102,56 @@ export class InspectionListQueryDto extends PaginationDto {
   @IsOptional() @IsIn(['true', 'false']) unassignedOnly?: string;
 }
 
+/** One filter a booking asks the technician to bring. */
+export class JobberBookingFilterDto {
+  /** Checked against the size pattern by `jobberBookingProblems`, which says what is wrong. */
+  @IsString() @MaxLength(40) size!: string;
+  @IsOptional() @IsInt() @Min(1) @Max(MAX_BOOKING_FILTER_QUANTITY) quantity?: number;
+  @IsOptional() @IsString() @MaxLength(80) location?: string | null;
+  @IsOptional() @IsBoolean() media?: boolean;
+}
+
+export class JobberBookingTenantDto {
+  @IsString() @MaxLength(120) name!: string;
+  @IsArray() @ArrayMaxSize(4) @IsString({ each: true }) @MaxLength(40, { each: true }) phones!: string[];
+  @IsOptional() @IsString() @MaxLength(120) unit?: string | null;
+}
+
+export class JobberBookingServicesDto {
+  @IsBoolean() filterChange!: boolean;
+  @IsBoolean() pestControl!: boolean;
+  @IsBoolean() fleaTreatment!: boolean;
+}
+
+/**
+ * Book the inspection's visit in Jobber as well: `JobberBookingInput` in shared.
+ *
+ * The server writes the title and Details from it with the function the console
+ * previews with, so what was read before booking is what Jobber receives.
+ */
+export class JobberBookingDto {
+  @IsOptional() @IsString() @MaxLength(20) zone?: string | null;
+  @IsBoolean() benefitPackage!: boolean;
+  @ValidateNested() @Type(() => JobberBookingServicesDto) services!: JobberBookingServicesDto;
+  @IsArray() @ArrayMaxSize(10) @ValidateNested({ each: true }) @Type(() => JobberBookingFilterDto)
+  filters!: JobberBookingFilterDto[];
+  @IsOptional() @IsString() @MaxLength(40) planTier?: string | null;
+  @IsBoolean() hvacOptedOut!: boolean;
+  @IsBoolean() contactTenantsBeforeArrival!: boolean;
+  @IsArray() @ArrayMaxSize(8) @ValidateNested({ each: true }) @Type(() => JobberBookingTenantDto)
+  tenants!: JobberBookingTenantDto[];
+  @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) @MaxLength(300, { each: true }) accessNotes!: string[];
+  @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) @MaxLength(1000, { each: true }) notes!: string[];
+}
+
+/** Where a booking would go, asked before the inspection exists. */
+export class JobberBookingContextQueryDto {
+  @IsUUID() propertyId!: string;
+  @IsOptional() @IsUUID() unitId?: string;
+  @IsOptional() @IsUUID() leaseId?: string;
+  @IsOptional() @IsUUID() technicianId?: string;
+}
+
 export class CreateAdminInspectionDto {
   @IsUUID() propertyId!: string;
   @IsOptional() @IsUUID() unitId?: string;
@@ -127,6 +179,8 @@ export class CreateAdminInspectionDto {
    * administrator still approves the permanent layout.
    */
   @IsOptional() @IsBoolean() allowTechnicianAreaCapture?: boolean;
+  /** Book the visit in Jobber too. Occupied inspections only. */
+  @IsOptional() @ValidateNested() @Type(() => JobberBookingDto) jobberBooking?: JobberBookingDto;
 }
 
 export class UpdateAdminInspectionDto {

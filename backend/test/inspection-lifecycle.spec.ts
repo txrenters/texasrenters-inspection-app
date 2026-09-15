@@ -187,6 +187,8 @@ describe('inspection status lifecycle (spec §11)', () => {
       // Whether the date is Jobber's to change: the edit form locks it when it
       // is, because the sync would put Jobber's date back.
       scheduledInJobber: false,
+      // The Jobber booking this console asked for; none for this inspection.
+      jobberBooking: null,
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({

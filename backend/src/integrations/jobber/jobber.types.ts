@@ -19,6 +19,10 @@ export interface JobberConfig {
   pushReportLink: boolean;
   /** Whether the technician's services report is posted to the Jobber job. */
   pushServicesNote: boolean;
+  /** Whether the console may book an occupied inspection's visit in Jobber. */
+  bookingEnabled: boolean;
+  /** Whether a published quarter plan books its visits in Jobber. */
+  tbpBookingEnabled: boolean;
 }
 
 export interface JobberTokenResponse {

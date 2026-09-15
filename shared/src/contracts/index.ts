@@ -70,6 +70,7 @@ export * from './standard-layout.js';
 export * from './checklist-comment.js';
 export * from './photo-capture-time.js';
 export * from './visit-details.js';
+export * from './visit-details-writer.js';
 export * from './visit-services.js';
 export * from './area-classification.js';
 export * from './inspection-scope.js';

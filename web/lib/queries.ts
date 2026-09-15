@@ -58,6 +58,7 @@ import type {
   PropertywareSyncError,
   PropertywareSyncRun,
   ProviderReadiness,
+  JobberBookingContext,
   JobberConnection,
   JobberPropertyLink,
   JobberSyncResult,
@@ -114,6 +115,7 @@ export const keys = {
   propertyAreas: (id: string) => ['admin', 'property', id, 'areas'] as const,
   units: (id: string) => ['admin', 'units', id] as const,
   leases: (id: string) => ['admin', 'leases', id] as const,
+  jobberBookingContext: (query: object) => ['admin', 'jobber-booking-context', query] as const,
   inspectionsRoot: ['admin', 'inspections'] as const,
   inspections: (query: object) => ['admin', 'inspections', query] as const,
   inspection: (id: string) => ['admin', 'inspection', id] as const,
@@ -262,6 +264,25 @@ export const useLeases = (id: string) =>
     queryFn: ({ signal }) =>
       api<Page<AdminLease>>(`/api/v1/admin/units/${id}/leases?page=1&pageSize=100`, { signal }),
     enabled: Boolean(id),
+  });
+/**
+ * Whether a new inspection's visit can be booked in Jobber, and what the form starts from.
+ *
+ * Keeps the previous answer while a new one loads: the technician changing
+ * refetches this, and the form should not blink away under the coordinator.
+ */
+export const useJobberBookingContext = (
+  query: { propertyId: string; unitId?: string; leaseId?: string; technicianId?: string },
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: keys.jobberBookingContext(query),
+    queryFn: ({ signal }) =>
+      api<JobberBookingContext>(`/api/v1/admin/inspections/jobber-booking-context${queryString(query)}`, {
+        signal,
+      }),
+    enabled: enabled && Boolean(query.propertyId),
+    placeholderData: keepPreviousData,
   });
 export const useInspections = (query: Record<string, string | number | boolean | undefined>) =>
   useQuery({

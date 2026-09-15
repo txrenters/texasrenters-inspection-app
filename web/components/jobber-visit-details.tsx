@@ -5,6 +5,7 @@ import {
   REPORTABLE_VISIT_SERVICES,
   servicesToReschedule,
   VISIT_SERVICE_LABEL,
+  type JobberBookingStatus,
   type VisitDetails,
   type VisitServicesReport,
 } from '@texasrenters/shared';
@@ -31,6 +32,7 @@ export function JobberVisitDetails({
   inspectionType,
   servicesReport,
   servicesReportedAt,
+  booking,
 }: {
   title?: string | null;
   details?: string | null;
@@ -38,6 +40,8 @@ export function JobberVisitDetails({
   /** What the technician reported about the booked services when submitting. */
   servicesReport?: VisitServicesReport | null;
   servicesReportedAt?: string | null;
+  /** The booking this console asked Jobber for, when the inspection was created here. */
+  booking?: JobberBookingStatus | null;
 }) {
   const read = useMemo(() => parseVisitDetails(details), [details]);
   if (!title && !read.raw) return null;
@@ -58,10 +62,34 @@ export function JobberVisitDetails({
   return (
     <Card aria-labelledby="jobber-visit-title">
       <CardHeader>
-        <CardTitle id="jobber-visit-title">Jobber visit</CardTitle>
+        <CardTitle id="jobber-visit-title" className="flex flex-wrap items-center gap-2">
+          Jobber visit
+          {booking?.status === 'SENT' ? <Badge variant="success">Booked from this console</Badge> : null}
+          {booking?.status === 'PENDING' || booking?.status === 'FAILED' ? (
+            <Badge variant="info">Booking in Jobber</Badge>
+          ) : null}
+        </CardTitle>
         {title ? <CardDescription>{title}</CardDescription> : null}
       </CardHeader>
       <CardContent className="grid gap-5">
+        {booking?.status === 'ABANDONED' ? (
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertTitle>This visit was not booked in Jobber</AlertTitle>
+            <AlertDescription>
+              {booking.lastError ?? 'Jobber did not accept it.'} Book it in Jobber; the inspection
+              here is unaffected.
+            </AlertDescription>
+          </Alert>
+        ) : booking?.status === 'FAILED' ? (
+          <Alert variant="warning">
+            <TriangleAlertIcon />
+            <AlertTitle>Jobber has not accepted the booking yet</AlertTitle>
+            <AlertDescription>
+              {booking.lastError ?? 'The last attempt failed.'} It is tried again automatically.
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {read.occupiedInspectionNotNeeded ? (
           <Alert variant="warning">
             <TriangleAlertIcon />

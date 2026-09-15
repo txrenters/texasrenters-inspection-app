@@ -4,6 +4,8 @@ import {
   FindingReviewStatus,
   InspectionStatus,
   InspectionType,
+  JobberConnectionStatus,
+  JobberOutboundKind,
   JobberOutboundStatus,
   MediaProcessingStatus,
   Prisma,
@@ -14,8 +16,13 @@ import {
 
 import {
   LEASE_EXPIRING_SOON_DAYS,
+  bookingFromTenancy,
   daysUntilLeaseEnd,
+  jobberBookingProblems,
+  jobberBookingText,
   leaseExpiryStatus,
+  type JobberBookingContext,
+  type JobberBookingInput,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -27,9 +34,13 @@ import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
 import {
   PORTFOLIO_VISIBLE,
+  type InspectionPlan,
   insertInspection,
+  requireBuilding,
   resolveInspectionPlan,
 } from './inspection-creation';
+import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { PresenceService } from '../realtime/presence.service';
 import { MailService } from '../mail/mail.service';
@@ -56,6 +67,7 @@ import type {
   InspectionListQueryDto,
   InspectionTbdDto,
   InspectionUnderReviewDto,
+  JobberBookingContextQueryDto,
   LeaseListQueryDto,
   AddInspectionAreasDto,
   MergeInspectionAreasDto,
@@ -70,6 +82,18 @@ import type {
   UnitListQueryDto,
   UpdateAdminInspectionDto,
 } from './admin.dto';
+
+/** The street address a booked visit's title starts with: the unit's, else the building's. */
+function bookingAddress(
+  building: { name: string; addressLine1: string | null },
+  unit: { addressLine1: string | null } | null,
+): string {
+  return unit?.addressLine1?.trim() || building.addressLine1?.trim() || building.name;
+}
+
+function webOrigin(): string {
+  return (process.env.WEB_APP_ORIGIN ?? 'http://localhost:5454').replace(/\/$/, '');
+}
 
 const ACTIVE_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.SCHEDULED,
@@ -1203,6 +1227,12 @@ export class AdminService {
         // What the technician reported about those services at submission.
         servicesReport: true,
         servicesReportedAt: true,
+        // The Jobber booking this console asked for, when it asked for one.
+        jobberOutboundTasks: {
+          where: { kind: JobberOutboundKind.VISIT_CREATE },
+          take: 1,
+          select: { status: true, attempts: true, lastError: true, sentAt: true },
+        },
         inspectionType: true,
         baselineInspectionId: true,
         baselineInspection: {
@@ -1310,8 +1340,15 @@ export class AdminService {
 
     // Whether the date is Jobber's to change, rather than Jobber's identifier:
     // the edit form needs the answer, and the visit id is nothing it can use.
-    const { jobberVisitId, ...detail } = inspection;
-    return { ...detail, evidence, baselineMissing, scheduledInJobber: Boolean(jobberVisitId) };
+    const { jobberVisitId, jobberOutboundTasks, ...detail } = inspection;
+    return {
+      ...detail,
+      evidence,
+      baselineMissing,
+      scheduledInJobber: Boolean(jobberVisitId),
+      // Optional-chained for the test doubles that stand in for this read without it.
+      jobberBooking: jobberOutboundTasks?.[0] ?? null,
+    };
   }
 
   async inspectionAudit(user: AuthenticatedUser, id: string, query: AuditListQueryDto) {
@@ -1337,6 +1374,7 @@ export class AdminService {
   }
 
   async createInspection(user: AuthenticatedUser, input: CreateAdminInspectionDto) {
+    const booking = input.jobberBooking ? this.bookableRequest(input) : null;
     const inspection = await this.prisma.$transaction(async (tx) => {
       // Every rule about what an inspection may be lives in inspection-creation.ts,
       // so a Jobber-scheduled visit is held to the same ones — including the area
@@ -1383,6 +1421,7 @@ export class AdminService {
           technicianId: input.technicianId,
           source: 'INSPECTION_CREATION',
         });
+      if (booking) await this.queueJobberBooking(tx, user, inspection.id, plan, booking);
       return { id: inspection.id };
     }, ADMIN_TRANSACTION_OPTIONS);
     if (inspection && input.technicianId) {
@@ -1397,6 +1436,210 @@ export class AdminService {
     // Clients must not have to invalidate and race a potentially older list
     // response just to learn the entity they created.
     return this.inspection(user, inspection.id);
+  }
+
+  /**
+   * Whether this request may book its visit in Jobber, asked before anything is written.
+   */
+  private bookableRequest(input: CreateAdminInspectionDto): JobberBookingInput {
+    if (input.inspectionType !== InspectionType.OCCUPIED)
+      throw new ApplicationError(
+        422,
+        'JOBBER_BOOKING_OCCUPIED_ONLY',
+        'Only an occupied inspection can be booked in Jobber from here.',
+      );
+    if (!getJobberConfig().bookingEnabled)
+      throw new ApplicationError(
+        409,
+        'JOBBER_BOOKING_DISABLED',
+        'Booking visits in Jobber is switched off on this server. Book the visit in Jobber instead.',
+      );
+    const booking = input.jobberBooking as JobberBookingInput;
+    const problems = jobberBookingProblems(booking);
+    if (problems.length) throw new ApplicationError(422, 'JOBBER_BOOKING_INVALID', problems.join(' '));
+    return booking;
+  }
+
+  /**
+   * Queues the Jobber booking inside the transaction that creates the inspection.
+   *
+   * "This inspection exists" and "Jobber will be asked to book it" commit
+   * together or not at all, the outbox rule the completion push already follows.
+   * Refused -- so nothing is created -- when there is nothing to book against: no
+   * connected account, or a property Jobber does not know. The console asks
+   * both before offering the booking, so this is the backstop, not the message.
+   *
+   * The title and Details are written onto the inspection now: the technician
+   * reads them on the phone whether or not Jobber has answered yet, and the
+   * worker sends exactly this text.
+   */
+  private async queueJobberBooking(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    inspectionId: string,
+    plan: InspectionPlan,
+    booking: JobberBookingInput,
+  ) {
+    const connection = await tx.jobberConnection.findUnique({
+      where: { organizationId: user.organizationId },
+      select: { status: true },
+    });
+    if (connection?.status !== JobberConnectionStatus.CONNECTED)
+      throw new ApplicationError(
+        409,
+        'JOBBER_NOT_CONNECTED',
+        'Jobber is not connected, so the visit cannot be booked there.',
+      );
+    const link = await linkedJobberProperty(tx, user.organizationId, {
+      buildingId: plan.property.id,
+      unitId: plan.unit?.id ?? null,
+    });
+    if (link.status !== 'LINKED')
+      throw link.status === 'AMBIGUOUS'
+        ? new ApplicationError(
+            422,
+            'JOBBER_PROPERTY_AMBIGUOUS',
+            'This property is linked to more than one Jobber property. Fix the link on the Jobber page first.',
+          )
+        : new ApplicationError(
+            422,
+            'JOBBER_PROPERTY_NOT_LINKED',
+            'This property is not linked to a Jobber property yet. Link it on the Jobber page first.',
+          );
+
+    const text = jobberBookingText(booking, {
+      address: bookingAddress(plan.property, plan.unit),
+      scheduledOn: plan.scheduledAt.toISOString().slice(0, 10),
+      inspectionUrl: `${webOrigin()}/inspections/${inspectionId}`,
+    });
+    await tx.inspection.update({
+      where: { id: inspectionId },
+      data: { jobberVisitTitle: text.visitTitle, jobberVisitDetails: text.visitDetails },
+    });
+    await tx.jobberOutboundTask.create({
+      data: {
+        organizationId: user.organizationId,
+        inspectionId,
+        kind: JobberOutboundKind.VISIT_CREATE,
+        status: JobberOutboundStatus.PENDING,
+        jobTitle: text.jobTitle,
+        createdById: user.id,
+      },
+    });
+    // Which property and which services: never the Details, which carry the
+    // tenant's phone and a way in.
+    await this.audit(tx, user, 'JOBBER_VISIT_BOOKING_QUEUED', inspectionId, {
+      jobberPropertyId: link.jobberPropertyId,
+      benefitPackage: booking.benefitPackage,
+      services: Object.entries(booking.services)
+        .filter(([, booked]) => booked)
+        .map(([service]) => service),
+    });
+  }
+
+  /**
+   * What the console needs to offer a Jobber booking, before the inspection exists.
+   *
+   * Whether booking is on and Jobber connected, which Jobber property the visit
+   * would go to, and a start for the form read off the tenant report and the
+   * lease. Behind inspections:manage, like creating the inspection: it carries
+   * tenant names.
+   */
+  async jobberBookingContext(
+    user: AuthenticatedUser,
+    query: JobberBookingContextQueryDto,
+  ): Promise<JobberBookingContext> {
+    const organizationId = user.organizationId;
+    const building = await requireBuilding(this.prisma, organizationId, query.propertyId, true);
+    const unit = query.unitId
+      ? await this.prisma.propertywareUnit.findFirst({
+          where: { id: query.unitId, organizationId, buildingId: building.id, isActive: true },
+          select: { id: true, addressLine1: true },
+        })
+      : null;
+    const [connection, link, start, technician] = await Promise.all([
+      this.prisma.jobberConnection.findUnique({ where: { organizationId }, select: { status: true } }),
+      linkedJobberProperty(this.prisma, organizationId, { buildingId: building.id, unitId: unit?.id ?? null }),
+      this.bookingTenancy(organizationId, building.id, unit?.id ?? null, query.leaseId ?? null),
+      query.technicianId
+        ? this.prisma.userProfile.findFirst({
+            where: {
+              id: query.technicianId,
+              memberships: { some: { organizationId, role: UserRole.INSPECTION_TECHNICIAN } },
+            },
+            select: { email: true },
+          })
+        : null,
+    ]);
+    return {
+      enabled: getJobberConfig().bookingEnabled,
+      connected: connection?.status === JobberConnectionStatus.CONNECTED,
+      jobberProperty:
+        link.status === 'LINKED' ? { status: 'LINKED', address: link.address } : { status: link.status, address: null },
+      address: bookingAddress(building, unit),
+      prefill:
+        start.tenancy || start.tenantNames.length
+          ? bookingFromTenancy({
+              zone: start.tenancy?.zone ?? null,
+              managementPlan: start.tenancy?.managementPlan ?? null,
+              hvacPlan: start.tenancy?.hvacPlan ?? null,
+              hvacFilterLocation: start.tenancy?.hvacFilterLocation ?? null,
+              hvacFilterSizes: start.tenancy?.hvacFilterSizes ?? [],
+              tbpEnrollment: start.tenancy?.tbpEnrollment ?? null,
+              tenantNames: start.tenantNames,
+            })
+          : null,
+      technicianInJobber: technician
+        ? Boolean(await jobberUserIdForEmail(this.prisma, organizationId, technician.email))
+        : null,
+    };
+  }
+
+  /**
+   * The tenancy and lease a booking's prefill is read from.
+   *
+   * The tenant report records a building and nothing finer, so a tenancy is
+   * matched to the lease by name, which the report's own key is built from. A
+   * building with one tenancy and at most one unit needs no match. Anything
+   * less certain prefills nothing: typing a plan is better than correcting
+   * somebody else's.
+   */
+  private async bookingTenancy(
+    organizationId: string,
+    buildingId: string,
+    unitId: string | null,
+    leaseId: string | null,
+  ) {
+    const leases =
+      leaseId || unitId
+        ? await this.prisma.propertywareLease.findMany({
+            where: leaseId
+              ? { id: leaseId, organizationId, buildingId }
+              : { organizationId, buildingId, unitId, isActive: true },
+            select: { leaseName: true, tenantDisplayNames: true },
+            take: 2,
+          })
+        : [];
+    const lease = leases.length === 1 ? leases[0]! : null;
+    const [tenancies, units] = await Promise.all([
+      this.prisma.propertywareTenant.findMany({
+        where: { organizationId, propertywareBuildingId: buildingId, isActive: true },
+        select: {
+          leaseName: true,
+          zone: true,
+          managementPlan: true,
+          hvacPlan: true,
+          hvacFilterLocation: true,
+          hvacFilterSizes: true,
+          tbpEnrollment: true,
+        },
+      }),
+      this.prisma.propertywareUnit.count({ where: { organizationId, buildingId, isActive: true } }),
+    ]);
+    const named = lease?.leaseName ? tenancies.filter((tenancy) => tenancy.leaseName === lease.leaseName) : [];
+    const tenancy =
+      named.length === 1 ? named[0]! : tenancies.length === 1 && units <= 1 ? tenancies[0]! : null;
+    return { tenancy, tenantNames: lease?.tenantDisplayNames ?? [] };
   }
 
   /** The last fifty notifications, newest first, as the bell shows them. */
