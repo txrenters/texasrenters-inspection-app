@@ -17,6 +17,8 @@ export interface JobberConfig {
   syncHorizonDays: number;
   /** Whether a finished report's share link is attached to the Jobber job. */
   pushReportLink: boolean;
+  /** Whether the technician's services report is posted to the Jobber job. */
+  pushServicesNote: boolean;
 }
 
 export interface JobberTokenResponse {

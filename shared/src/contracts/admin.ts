@@ -1,5 +1,6 @@
 import type { InspectionType } from '../enums/index.js';
 import type { PhotoCaptureTimeSource } from './photo-capture-time.js';
+import type { VisitServicesReport } from './visit-services.js';
 
 export interface Paginated<T> {
   items: T[];
@@ -480,6 +481,9 @@ export interface AdminInspection {
    */
   jobberVisitTitle?: string | null;
   jobberVisitDetails?: string | null;
+  /** What the technician reported at submission about the services the visit booked. */
+  servicesReport?: VisitServicesReport | null;
+  servicesReportedAt?: string | null;
   /**
    * The report's closing block, written at sign-off. Distinct from
    * `internalNotes`, which is never published — these three are printed on the

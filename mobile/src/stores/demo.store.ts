@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import type { CapturePreference } from '../capture/capture-intents';
+import type { ServicesDraft } from '../utils/services-report';
 import type {
   Finding,
   InspectionRoom,
@@ -39,6 +40,8 @@ interface DemoState {
    * occupied area with no answer of its own is simply asked.
    */
   captureModeByArea: Record<string, CapturePreference>;
+  /** The services checklist's answers, per inspection, until it is submitted. */
+  servicesDraftByInspection: Record<string, ServicesDraft>;
   draftRecording: LocalMedia | null;
   setHasHydrated: (value: boolean) => void;
   selectUser: (id: string) => void;
@@ -56,6 +59,8 @@ interface DemoState {
   removeSnapshots: (ids: readonly string[]) => void;
   toggleChecklistItem: (areaId: string, itemId: string) => void;
   setCaptureMode: (areaId: string, mode: CapturePreference) => void;
+  /** Null clears it, which submitting does. */
+  setServicesDraft: (inspectionId: string, draft: ServicesDraft | null) => void;
   /** Marks items covered without unticking anything — used by transcript matching. */
   markChecklistItemsCovered: (areaId: string, itemIds: readonly string[]) => void;
   enqueueUpload: (item: UploadItem) => void;
@@ -92,6 +97,7 @@ const initialDemoData = () => ({
   findings: findingRecord(),
   areaChecklist: {} as Record<string, string[]>,
   captureModeByArea: {} as Record<string, CapturePreference>,
+  servicesDraftByInspection: {} as Record<string, ServicesDraft>,
   draftRecording: null as LocalMedia | null,
 });
 
@@ -134,6 +140,13 @@ export const useDemoStore = create<DemoState>()(
         set((state) => ({
           captureModeByArea: { ...state.captureModeByArea, [areaId]: mode },
         })),
+      setServicesDraft: (inspectionId, draft) =>
+        set((state) => {
+          const next = { ...state.servicesDraftByInspection };
+          if (draft) next[inspectionId] = draft;
+          else delete next[inspectionId];
+          return { servicesDraftByInspection: next };
+        }),
       toggleChecklistItem: (areaId, itemId) =>
         set((state) => {
           const current = state.areaChecklist[areaId] ?? [];
@@ -290,6 +303,9 @@ export const useDemoStore = create<DemoState>()(
         // every persisted recording and upload instead. The per-inspection
         // choice this replaced is simply no longer written.
         captureModeByArea: state.captureModeByArea,
+        // Kept across restarts: a technician marks services as the visit goes,
+        // and an app closed before submitting must not forget them.
+        servicesDraftByInspection: state.servicesDraftByInspection,
         draftRecording: state.draftRecording,
       }),
       onRehydrateStorage: () => (state) => state?.setHasHydrated(true),

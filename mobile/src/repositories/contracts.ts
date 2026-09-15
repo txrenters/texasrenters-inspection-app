@@ -1,3 +1,5 @@
+import type { VisitServicesReport } from '@texasrenters/shared';
+
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type {
   AreaEnvironment,
@@ -171,7 +173,8 @@ export interface InspectionRepository {
   context(id: string): Promise<InspectionContext>;
   report(id: string): Promise<InspectionReport>;
   start(id: string): Promise<Inspection>;
-  complete(id: string): Promise<Inspection>;
+  /** `servicesReport` only for a visit that booked services; older builds sent none. */
+  complete(id: string, servicesReport?: VisitServicesReport): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
   addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;

@@ -1,5 +1,5 @@
 import { AreaCategory, AreaEnvironment, PhotoCaptureType } from '@prisma/client';
-import { MAX_LOCATION_BATCH } from '@texasrenters/shared';
+import { FILTER_SIZE_PATTERN, MAX_LOCATION_BATCH, MAX_SERVICE_REASON } from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -438,4 +438,44 @@ export class TechnicianLocationBatchDto {
  */
 export class TechnicianHomeDto {
   @IsString() @MaxLength(200) address!: string;
+}
+
+/** One booked service, as the technician reports it at submission. */
+export class TechnicianServiceOutcomeDto {
+  @IsBoolean() done!: boolean;
+  /** Why it was not done. The service requires one whenever `done` is false. */
+  @IsOptional() @IsString() @MaxLength(MAX_SERVICE_REASON) reason?: string | null;
+  /** The office should book this service again. */
+  @IsOptional() @IsBoolean() reschedule?: boolean;
+}
+
+export class TechnicianServiceOutcomesDto {
+  @IsOptional() @ValidateNested() @Type(() => TechnicianServiceOutcomeDto)
+  filterChange?: TechnicianServiceOutcomeDto;
+  @IsOptional() @ValidateNested() @Type(() => TechnicianServiceOutcomeDto)
+  pestControl?: TechnicianServiceOutcomeDto;
+  @IsOptional() @ValidateNested() @Type(() => TechnicianServiceOutcomeDto)
+  fleaTreatment?: TechnicianServiceOutcomeDto;
+}
+
+/** `VisitServicesReport` in shared, as it arrives. */
+export class TechnicianServicesReportDto {
+  @ValidateNested() @Type(() => TechnicianServiceOutcomesDto) services!: TechnicianServiceOutcomesDto;
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @Matches(FILTER_SIZE_PATTERN, { each: true })
+  filtersInstalled!: string[];
+  @IsOptional() @IsString() @MaxLength(1000) notes?: string | null;
+}
+
+/**
+ * Submitting an inspection.
+ *
+ * Empty for every app built before the services report, and it stays valid
+ * that way: a phone that has not taken the update must still be able to submit.
+ */
+export class TechnicianCompleteInspectionDto {
+  @IsOptional() @ValidateNested() @Type(() => TechnicianServicesReportDto)
+  servicesReport?: TechnicianServicesReportDto;
 }

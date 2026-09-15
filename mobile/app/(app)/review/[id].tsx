@@ -1,4 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangleIcon,
   CameraIcon,
@@ -28,6 +29,14 @@ import {
   evaluateSubmissionGate,
 } from '@/src/utils/submission-gate';
 import { HomeButton } from '@/src/components/HomeButton';
+import { ServicesDoneCard } from '@/src/components/ServicesDoneCard';
+import {
+  draftProblems,
+  EMPTY_SERVICES_DRAFT,
+  reportFromDraft,
+  servicesToReport,
+  type ServicesDraft,
+} from '@/src/utils/services-report';
 import { registerIcons } from '@/src/lib/icons';
 import { formatVisitWindow } from '@/src/utils/visit-window';
 
@@ -138,6 +147,19 @@ export default function InspectionReviewScreen() {
   const report = useInspectionReport(id);
   const actions = useInspectionActions(id);
   const skipAreas = useSkipAreas(id);
+  // The services checklist. Held in state so typing a reason updates the submit
+  // gate as it is typed, and written to the store after a pause -- the store is
+  // persisted as one document, and a write per keystroke is a rewrite per key.
+  const storedServicesDraft = useDemoStore((state) => state.servicesDraftByInspection?.[id]);
+  const setStoredServicesDraft = useDemoStore((state) => state.setServicesDraft);
+  const [servicesDraft, setServicesDraft] = useState<ServicesDraft>(
+    () => storedServicesDraft ?? EMPTY_SERVICES_DRAFT,
+  );
+  useEffect(() => {
+    if (servicesDraft === EMPTY_SERVICES_DRAFT) return;
+    const timer = setTimeout(() => setStoredServicesDraft(id, servicesDraft), 500);
+    return () => clearTimeout(timer);
+  }, [id, servicesDraft, setStoredServicesDraft]);
   // Only the *pending* count comes from the device: an item still in the
   // local queue is by definition not yet on the server. Everything else reads
   // from the report, so a reinstalled or replacement handset does not report
@@ -188,12 +210,20 @@ export default function InspectionReviewScreen() {
   }
 
   const { inspection, property, rooms, totals, generatedAt } = report.data;
+  // The services the visit booked, and what still stops the checklist. Pure
+  // reads, so they sit after the early returns without breaking hook order.
+  const servicesAsked = servicesToReport(inspection.visitDetails);
+  const servicesBlocked = draftProblems(servicesAsked, servicesDraft);
   const {
-    canSubmit,
-    blockedReason,
+    canSubmit: areasReady,
+    blockedReason: areasBlockedReason,
     incompleteRequiredRooms,
     analysisPendingRooms,
   } = evaluateSubmissionGate(rooms, inspection.status);
+  // Areas first: they are the longer job, and the services checklist is the
+  // last thing marked before submitting.
+  const canSubmit = areasReady && !servicesBlocked.length;
+  const blockedReason = areasBlockedReason ?? servicesBlocked[0];
   // `findings` is required by the report schema, so a live response always has
   // it. A warm-start restore does not go through that schema — the persisted
   // react-query cache is written back as-is — so a payload stored by an older
@@ -272,23 +302,34 @@ export default function InspectionReviewScreen() {
         {
           text: 'Submit',
           onPress: () =>
-            actions.complete.mutate(undefined, {
-              onSuccess: () =>
-                Alert.alert(
-                  'Inspection Submitted',
-                  'The inspection is complete. Pending evidence remains safely queued.',
-                  [
-                    {
-                      text: 'Done',
-                      onPress: () => router.replace('/(app)/(tabs)/inspections'),
-                    },
-                  ],
-                ),
-            }),
+            actions.complete.mutate(
+              servicesAsked.services.length ? reportFromDraft(servicesAsked, servicesDraft) : undefined,
+              {
+                onSuccess: () => {
+                  // Local state first, so the pending write-back is cancelled
+                  // rather than putting the answers back after they are cleared.
+                  setServicesDraft(EMPTY_SERVICES_DRAFT);
+                  setStoredServicesDraft(id, null);
+                  showSubmitted();
+                },
+              },
+            ),
         },
       ],
     );
   };
+
+  const showSubmitted = () =>
+    Alert.alert(
+      'Inspection Submitted',
+      'The inspection is complete. Pending evidence remains safely queued.',
+      [
+        {
+          text: 'Done',
+          onPress: () => router.replace('/(app)/(tabs)/inspections'),
+        },
+      ],
+    );
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -455,6 +496,15 @@ export default function InspectionReviewScreen() {
             <Text className="mt-0.5 text-xs text-muted-foreground">Pending</Text>
           </View>
         </View>
+
+        {inspection.status === 'IN_PROGRESS' ? (
+          <ServicesDoneCard
+            ask={servicesAsked}
+            draft={servicesDraft}
+            onChange={setServicesDraft}
+            className="mx-5 mt-4"
+          />
+        ) : null}
 
         <View className="mx-5 mt-4 rounded-2xl bg-card p-5">
           <View className="flex-row items-center justify-between">

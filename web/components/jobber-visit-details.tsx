@@ -1,12 +1,20 @@
 'use client';
 
-import { parseVisitDetails, type VisitDetails } from '@texasrenters/shared';
+import {
+  parseVisitDetails,
+  REPORTABLE_VISIT_SERVICES,
+  servicesToReschedule,
+  VISIT_SERVICE_LABEL,
+  type VisitDetails,
+  type VisitServicesReport,
+} from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
 import { useMemo } from 'react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatDateTime } from '@/lib/format';
 
 /**
  * What the coordinator wrote on the Jobber visit, read into what the office needs.
@@ -21,10 +29,15 @@ export function JobberVisitDetails({
   title,
   details,
   inspectionType,
+  servicesReport,
+  servicesReportedAt,
 }: {
   title?: string | null;
   details?: string | null;
   inspectionType: string;
+  /** What the technician reported about the booked services when submitting. */
+  servicesReport?: VisitServicesReport | null;
+  servicesReportedAt?: string | null;
 }) {
   const read = useMemo(() => parseVisitDetails(details), [details]);
   if (!title && !read.raw) return null;
@@ -40,6 +53,7 @@ export function JobberVisitDetails({
     !read.occupiedInspectionNotNeeded;
   const tenantOrAccess =
     read.tenants.length > 0 || read.accessNotes.length > 0 || read.contactTenantsBeforeArrival;
+  const toReschedule = servicesToReschedule(servicesReport);
 
   return (
     <Card aria-labelledby="jobber-visit-title">
@@ -55,6 +69,19 @@ export function JobberVisitDetails({
             <AlertDescription>
               It was still imported as one, because the Details mention an occupied inspection.
               Check with the coordinator before a technician walks it.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {toReschedule.length ? (
+          <Alert variant="warning">
+            <TriangleAlertIcon />
+            <AlertTitle>
+              {toReschedule.map((service) => VISIT_SERVICE_LABEL[service]).join(' and ')} to reschedule
+            </AlertTitle>
+            <AlertDescription>
+              {toReschedule
+                .map((service) => `${VISIT_SERVICE_LABEL[service]}: ${servicesReport?.services[service]?.reason ?? ''}`)
+                .join(' ')}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -157,6 +184,39 @@ export function JobberVisitDetails({
               </section>
             ) : null}
           </div>
+        ) : null}
+
+        {servicesReport ? (
+          <section className="grid gap-2" aria-label="Services done">
+            <h3 className="text-muted-foreground text-xs">
+              Services reported by the technician
+              {servicesReportedAt ? ` · ${formatDateTime(servicesReportedAt)}` : ''}
+            </h3>
+            <ul className="grid gap-1.5 text-sm">
+              {REPORTABLE_VISIT_SERVICES.filter((service) => servicesReport.services[service]).map((service) => {
+                const outcome = servicesReport.services[service]!;
+                return (
+                  <li key={service} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <Badge variant={outcome.done ? 'success' : 'warning'}>
+                      {outcome.done ? 'Done' : 'Not done'}
+                    </Badge>
+                    <span className="font-medium">{VISIT_SERVICE_LABEL[service]}</span>
+                    {outcome.reason ? <span className="text-muted-foreground">{outcome.reason}</span> : null}
+                    {outcome.reschedule ? <Badge variant="outline">Reschedule</Badge> : null}
+                  </li>
+                );
+              })}
+            </ul>
+            {servicesReport.filtersInstalled.length ? (
+              <p className="text-sm">
+                Filters installed:{' '}
+                <span className="font-mono">{servicesReport.filtersInstalled.join(', ')}</span>
+              </p>
+            ) : null}
+            {servicesReport.notes ? (
+              <p className="text-sm whitespace-pre-wrap">{servicesReport.notes}</p>
+            ) : null}
+          </section>
         ) : null}
 
         {read.notes.length ? (

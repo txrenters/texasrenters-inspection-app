@@ -7,6 +7,11 @@ import {
   inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
   keywordsFromLabel,
+  normalizeFilterSize,
+  parseVisitDetails,
+  reportableServices,
+  servicesReportProblems,
+  type VisitServicesReport,
 } from '@texasrenters/shared';
 import { checklistItemsAreOrganizationWide, checklistKindWhere } from '../common/checklist-kind';
 import { randomUUID } from 'node:crypto';
@@ -45,6 +50,7 @@ import {
 } from './media-processing.service';
 import type {
   TechnicianAdditionalVideoDto,
+  TechnicianCompleteInspectionDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -574,7 +580,49 @@ export class TechnicianService {
     return this.mapInspection(updated, user.id);
   }
 
-  async completeInspection(user: AuthenticatedUser, id: string) {
+  /**
+   * The services report to store with a submission, checked against what the visit booked.
+   *
+   * Only when the app sent one: a phone that has not taken the update submits
+   * without, and must still be able to. Once sent it has to be whole -- every
+   * booked service answered, a reason for each not done -- because the office
+   * reads it as the account of the visit. The same rule gates the phone's
+   * submit button, so the two cannot disagree.
+   */
+  private servicesReportFor(
+    inspection: { jobberVisitDetails: string | null },
+    report: TechnicianCompleteInspectionDto['servicesReport'],
+  ): VisitServicesReport | null {
+    if (!report) return null;
+    const booked = reportableServices(parseVisitDetails(inspection.jobberVisitDetails));
+    const problems = servicesReportProblems(booked, report as VisitServicesReport);
+    if (problems.length)
+      throw new ApplicationError(422, 'SERVICES_REPORT_INCOMPLETE', problems.join(' '));
+    const notes = report.notes?.trim() || null;
+    if (!booked.length && !notes) return null;
+    const services: VisitServicesReport['services'] = {};
+    for (const service of booked) {
+      const outcome = report.services[service]!;
+      services[service] = {
+        done: outcome.done,
+        reason: outcome.done ? null : (outcome.reason ?? '').trim(),
+        reschedule: !outcome.done && Boolean(outcome.reschedule),
+      };
+    }
+    return {
+      services,
+      filtersInstalled: services.filterChange?.done
+        ? [...new Set(report.filtersInstalled.map(normalizeFilterSize))]
+        : [],
+      notes,
+    };
+  }
+
+  async completeInspection(
+    user: AuthenticatedUser,
+    id: string,
+    input: TechnicianCompleteInspectionDto = {},
+  ) {
     const inspection = await this.assignedInspection(user, id);
     if (inspection.status !== InspectionStatus.IN_PROGRESS)
       throw new ApplicationError(
@@ -604,12 +652,21 @@ export class TechnicianService {
     // administrator finalizes *this inspection*. Record the submission and let
     // the AI pipeline advance it to REVIEW_REQUIRED once processing finishes.
     // The Jobber push below is a separate claim — see the comment on it.
+    const servicesReport = this.servicesReportFor(inspection, input.servicesReport);
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.inspection.update({
         where: { id },
         data: {
           status: InspectionStatus.TECHNICIAN_SUBMITTED,
           submittedAt: new Date(),
+          // Stored with the submission, in the same transaction that queues the
+          // Jobber completion, because the note to Jobber is read from it.
+          ...(servicesReport
+            ? {
+                servicesReport: servicesReport as unknown as Prisma.InputJsonValue,
+                servicesReportedAt: new Date(),
+              }
+            : {}),
           // Cleared on submission: by now the technician has acted on it, and a
           // reason left standing would reappear as an instruction on work they
           // have already redone.
