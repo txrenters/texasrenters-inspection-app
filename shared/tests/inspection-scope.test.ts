@@ -6,6 +6,7 @@ import {
   checklistKindFor,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
+  inspectionIsWalkedAsOccupied,
   inspectionRequiresAreaRecording,
   inspectionRequiresEveryArea,
 } from '../src/contracts/inspection-scope.js';
@@ -158,17 +159,22 @@ describe('which checklist a visit asks about an area', () => {
    * evaluation of every component in every room. See `occupied-checklist.ts`.
    */
   it('asks the room checklist for the tenancy visits that evaluate components', () => {
-    for (const type of [
-      InspectionType.MOVE_IN,
-      InspectionType.BACK_TO_MARKET,
-      InspectionType.MOVE_OUT,
-    ]) {
+    for (const type of [InspectionType.MOVE_IN, InspectionType.MOVE_OUT]) {
       expect(checklistKindFor(type)).toBe('ROOM');
     }
   });
 
   it('asks the short list on an occupied visit', () => {
     expect(checklistKindFor(InspectionType.OCCUPIED)).toBe('OCCUPIED');
+  });
+
+  /**
+   * Back-to-market was on the room list until 2026-09-15. A technician opened
+   * one and found no condition to choose, and the office's answer was that it
+   * is the same inspection as an occupied one.
+   */
+  it('asks the same short list on a back-to-market', () => {
+    expect(checklistKindFor(InspectionType.BACK_TO_MARKET)).toBe('OCCUPIED');
   });
 
   it('asks the equipment checklist when servicing an air conditioner', () => {
@@ -205,14 +211,16 @@ describe('which visits owe a video walkthrough of every area', () => {
    * type, so Mark Complete looked enabled and the request behind it answered
    * 409. Both sides read this function now.
    */
-  it('excuses only an occupied inspection', () => {
-    expect(inspectionRequiresAreaRecording(InspectionType.OCCUPIED)).toBe(false);
-  });
+  it.each([[InspectionType.OCCUPIED], [InspectionType.BACK_TO_MARKET]])(
+    'excuses %s, which is walked in photographs',
+    (type) => {
+      expect(inspectionRequiresAreaRecording(type)).toBe(false);
+    },
+  );
 
   it.each([
     [InspectionType.MOVE_IN],
     [InspectionType.MOVE_OUT],
-    [InspectionType.BACK_TO_MARKET],
     [InspectionType.HVAC],
   ])('still requires one on %s', (type) => {
     // A move-in and a move-out are the condition record a comparison is built
@@ -225,5 +233,14 @@ describe('which visits owe a video walkthrough of every area', () => {
     // stronger evidence, not the weaker.
     expect(inspectionRequiresAreaRecording('SOMETHING_NEW')).toBe(true);
     expect(inspectionRequiresAreaRecording(null)).toBe(true);
+  });
+});
+
+describe('which visits are walked as an occupied inspection', () => {
+  it('is occupied and back-to-market, and nothing else', () => {
+    const walked = Object.values(InspectionType).filter((type) => inspectionIsWalkedAsOccupied(type));
+    expect([...walked].sort()).toEqual([InspectionType.BACK_TO_MARKET, InspectionType.OCCUPIED]);
+    expect(inspectionIsWalkedAsOccupied(null)).toBe(false);
+    expect(inspectionIsWalkedAsOccupied('SOMETHING_NEW')).toBe(false);
   });
 });

@@ -337,7 +337,7 @@ describe('the checklist an added area is given', () => {
     expect(rows.every((row: { kind: string }) => row.kind === 'ROOM')).toBe(true);
   });
 
-  it.each([['OCCUPIED'], ['HVAC'], ['SUPRA_LOCKBOX_PLACEMENT']])(
+  it.each([['OCCUPIED'], ['BACK_TO_MARKET'], ['HVAC'], ['SUPRA_LOCKBOX_PLACEMENT']])(
     'does not wait on the model during a %s visit',
     async (inspectionType) => {
       const { service: svc, generate } = withType(inspectionType);
@@ -346,7 +346,7 @@ describe('the checklist an added area is given', () => {
     },
   );
 
-  it.each([['MOVE_IN'], ['MOVE_OUT'], ['BACK_TO_MARKET']])(
+  it.each([['MOVE_IN'], ['MOVE_OUT']])(
     'still asks the model on a %s visit, which does read this list',
     async (inspectionType) => {
       const { service: svc, generate } = withType(inspectionType);

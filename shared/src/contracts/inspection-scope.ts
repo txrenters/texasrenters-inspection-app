@@ -129,6 +129,23 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
  */
 
 /**
+ * Whether a visit is walked the way an occupied inspection is: photographs
+ * first, and each room's condition asked as two short questions rather than
+ * every component scored.
+ *
+ * Occupied, and back-to-market since 2026-09-15. The office asked for it after
+ * a technician opened a back-to-market at 418 Drennan and found none of the
+ * occupied flow: no condition to choose, and no way to finish a room without
+ * filming it. In their words the two are the same inspection, mostly
+ * photographs; a back-to-market adds notes on repairs to make before the move-out,
+ * which the area note already carries. What it asks may diverge again once they
+ * have walked a few this way, and this is the one place that would change.
+ */
+export function inspectionIsWalkedAsOccupied(inspectionType: string | null | undefined): boolean {
+  return inspectionType === InspectionType.OCCUPIED || inspectionType === InspectionType.BACK_TO_MARKET;
+}
+
+/**
  * Which set of checklist items this visit asks about an area.
  *
  * All three sets are persisted against the same area and only one is asked at a
@@ -144,16 +161,11 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 export function checklistKindFor(
   inspectionType: string | null | undefined,
 ): 'ROOM' | 'AIR_CONDITIONING' | 'OCCUPIED' | 'NONE' {
+  // A short assessment of the room, not an evaluation of its components. The
+  // kind keeps the name of the visit it was written for; back-to-market asks
+  // the same two questions. See `inspectionIsWalkedAsOccupied`.
+  if (inspectionIsWalkedAsOccupied(inspectionType)) return 'OCCUPIED';
   switch (inspectionType) {
-    /**
-     * A short assessment of the room, not an evaluation of its components.
-     *
-     * Only OCCUPIED. Back-to-market is deliberately left on the room list: it
-     * is the inspection that decides what has to be made good before the next
-     * tenancy, so the detail is the point of it.
-     */
-    case InspectionType.OCCUPIED:
-      return 'OCCUPIED';
     // Nothing to score. A lockbox is placed or it is not, and a filter is
     // delivered or it is not; the evidence is the answer. Asking the room
     // checklist here would be the original bug in a new costume — a technician
@@ -173,13 +185,14 @@ export function checklistKindFor(
 /**
  * Whether every area of this visit owes a video walkthrough.
  *
- * False only for an occupied inspection. These are periodic checks during a
- * tenancy, walked room by room in somebody's home: where a room is plainly
- * fine, a photograph records that as well as a walkthrough does and takes a
- * fraction of the time. Requiring a video regardless is what had technicians
- * filming empty hallways to get past a disabled button. A move-in and a
- * move-out are different — those are the condition record a comparison is built
- * from, and the video is the evidence.
+ * False for an occupied inspection, and for a back-to-market walked the same
+ * way (`inspectionIsWalkedAsOccupied`). These are checks during a tenancy,
+ * walked room by room in somebody's home: where a room is plainly fine, a
+ * photograph records that as well as a walkthrough does and takes a fraction of
+ * the time. Requiring a video regardless is what had technicians filming empty
+ * hallways to get past a disabled button. A move-in and a move-out are
+ * different — those are the condition record a comparison is built from, and
+ * the video is the evidence.
  *
  * "Not obliged to film" is not "may finish an area having recorded nothing".
  * An area with neither a photograph nor a recording is one nobody can show was
@@ -199,7 +212,7 @@ export function checklistKindFor(
 export function inspectionRequiresAreaRecording(
   inspectionType: string | null | undefined,
 ): boolean {
-  return inspectionType !== InspectionType.OCCUPIED;
+  return !inspectionIsWalkedAsOccupied(inspectionType);
 }
 
 /**

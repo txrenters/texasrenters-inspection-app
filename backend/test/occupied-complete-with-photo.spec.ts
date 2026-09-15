@@ -112,8 +112,19 @@ describe('completing an occupied area', () => {
   });
 });
 
+describe('completing a back-to-market area', () => {
+  it('accepts a photograph, as an occupied area does', async () => {
+    // The office walks a back-to-market as an occupied inspection. Until
+    // 2026-09-15 this answered ROOM_VIDEO_REQUIRED, and a technician at 418
+    // Drennan could not finish a room without filming it.
+    const { service, update } = build({ inspectionType: 'BACK_TO_MARKET', photos: 4 });
+    await service.completeRoom(technician, ROOM_ID);
+    expect(update).toHaveBeenCalled();
+  });
+});
+
 describe('completing an area of every other kind of visit', () => {
-  it.each([['MOVE_IN'], ['MOVE_OUT'], ['BACK_TO_MARKET'], ['HVAC']])(
+  it.each([['MOVE_IN'], ['MOVE_OUT'], ['HVAC']])(
     'still requires a recording on %s',
     async (inspectionType) => {
       // A move-in and a move-out are the condition record a comparison is built
