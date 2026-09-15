@@ -209,14 +209,11 @@ export function usePlanningMutations() {
     api<T>(`${PLANNING}${path}`, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 
   return {
+    // A quarter is built with the office's rules as the plan holds them, so the
+    // console sends only which quarter: there is nothing for a coordinator to set.
     build: useMutation({
-      mutationFn: (input: { year: number; quarter: number } & Partial<PlanSettings>) =>
+      mutationFn: (input: { year: number; quarter: number }) =>
         post<{ planId: string; routing: PlanRoutingSummary }>('/quarters', input),
-      onSuccess: refresh,
-    }),
-    route: useMutation({
-      mutationFn: ({ planId, ...settings }: { planId: string } & Partial<PlanSettings>) =>
-        post<PlanRoutingSummary>(`/quarters/${planId}/route`, settings),
       onSuccess: refresh,
     }),
     importOfficeDetails: useMutation({

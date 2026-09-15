@@ -4,6 +4,7 @@ import {
   type PriorRank,
   type RotationCandidate,
   carryForwardOrder,
+  closedDaysOfQuarter,
   nextQuarter,
   planningOpensOn,
   previousQuarter,
@@ -12,6 +13,7 @@ import {
   quarterLabel,
   quarterOf,
   quarterStart,
+  usFederalHolidays,
   workingDaysOfQuarter,
 } from '../src/contracts/quarter-plan.js';
 
@@ -111,17 +113,22 @@ describe('the working days of a quarter', () => {
     expect(days).toContain('2026-10-05');
   });
 
-  /**
-   * Passed in rather than derived. A hardcoded list of US federal holidays
-   * would be wrong for the days this office actually closes and right for days
-   * it does not — their calendar is theirs to state.
-   */
-  it('leaves out the days the office says it is closed', () => {
-    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-26', '2026-12-25']);
+  /** The office works weekdays and not US holidays (2026-09-16), and nobody has to type them in. */
+  it('leaves out the US federal holidays that fall in it', () => {
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 });
 
-    expect(days).not.toContain('2026-11-26');
-    expect(days).not.toContain('2026-12-25');
+    // Columbus Day, Veterans Day, Thanksgiving and Christmas: 66 weekdays, less four.
+    expect(days).toHaveLength(62);
+    for (const holiday of ['2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25']) expect(days).not.toContain(holiday);
     expect(days).toContain('2026-11-27');
+  });
+
+  it('leaves out any other day the office names as closed', () => {
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-27', '2026-12-24']);
+
+    expect(days).toHaveLength(60);
+    expect(days).not.toContain('2026-11-27');
+    expect(days).not.toContain('2026-12-24');
   });
 
   it('ignores a holiday that falls outside the quarter', () => {
@@ -129,6 +136,47 @@ describe('the working days of a quarter', () => {
     const without = workingDaysOfQuarter({ year: 2026, quarter: 4 });
 
     expect(withStray).toEqual(without);
+  });
+});
+
+describe('the US federal holidays', () => {
+  it('lists the eleven as they are observed', () => {
+    expect(usFederalHolidays(2026)).toEqual([
+      '2026-01-01',
+      '2026-01-19',
+      '2026-02-16',
+      '2026-05-25',
+      '2026-06-19',
+      // 4 July 2026 is a Saturday, so it is observed on the Friday.
+      '2026-07-03',
+      '2026-09-07',
+      '2026-10-12',
+      '2026-11-11',
+      '2026-11-26',
+      '2026-12-25',
+    ]);
+  });
+
+  it('moves a Sunday holiday to the Monday and a Saturday one to the Friday', () => {
+    const holidays = usFederalHolidays(2027);
+
+    expect(holidays).toContain('2027-07-05');
+    expect(holidays).toContain('2027-12-24');
+  });
+
+  it('puts a Saturday New Year’s Day on the last day of the year before', () => {
+    expect(usFederalHolidays(2027)).toContain('2027-12-31');
+    expect(usFederalHolidays(2028)).not.toContain('2028-01-01');
+    expect(usFederalHolidays(2028)).toHaveLength(10);
+  });
+});
+
+describe('the days a quarter loses', () => {
+  it('lists its holidays and named closed days, only on weekdays inside it', () => {
+    // 26 November is Thanksgiving already, 4 July is in Q3 and 3 October is a Saturday.
+    const closed = closedDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-27', '2026-11-26', '2026-07-04', '2026-10-03']);
+
+    expect(closed).toEqual(['2026-10-12', '2026-11-11', '2026-11-26', '2026-11-27', '2026-12-25']);
   });
 });
 

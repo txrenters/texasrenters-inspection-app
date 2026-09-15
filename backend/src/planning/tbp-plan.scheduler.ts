@@ -109,8 +109,9 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     // a technician against every stop it *can* place is reviewable; one that
     // refused to route because a single tenancy is missing a unit is not, and
     // the coordinator has two weeks to fix that tenancy and re-route.
-    // The closed days from the environment only when it names some: a plan
-    // keeps the ones a coordinator set, and an empty list would wipe them.
+    // Extra closed days from the environment only when it names some: weekends
+    // and US federal holidays are always left out, and an empty list would
+    // wipe any days already set on the plan.
     const holidays = this.holidays();
     const routed = await withTenant(organizationId, () =>
       this.planner.route(organizationId, result.planId, holidays.length ? { holidays } : {}),
@@ -127,11 +128,10 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * The days the office is closed, as `YYYY-MM-DD`.
-   *
-   * Configuration rather than a derived calendar: a hardcoded list of US
-   * federal holidays would be wrong for the days this office actually closes
-   * and right for days it does not. Malformed entries are dropped rather than
+   * Days the office is closed besides weekends and US federal holidays, as
+   * `YYYY-MM-DD` -- the day after Thanksgiving, say. The planner leaves those
+   * two out whatever this says: the office works weekdays and not US holidays
+   * (2026-09-16). Malformed entries are dropped rather than
    * throwing — a typo in a holiday list should cost one working day, not the
    * quarter's plan.
    */

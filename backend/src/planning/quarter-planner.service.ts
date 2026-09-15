@@ -55,7 +55,10 @@ export interface PlanRoutingSettings {
   hvacVisitMinutes?: number;
   maxOnSiteMinutes?: number;
   maxDriveMinutes?: number;
-  /** Days the office is closed, `YYYY-MM-DD`. */
+  /**
+   * Days the office is closed besides weekends and US federal holidays,
+   * `YYYY-MM-DD`. Those are always left out; this is for any other day.
+   */
   holidays?: string[];
 }
 

@@ -91,20 +91,84 @@ export function quarterDueForPlanning(
     : null;
 }
 
+const MONDAY = 1;
+const THURSDAY = 4;
+
+const isoDate = (time: number) => new Date(time).toISOString().slice(0, 10);
+
+/** A fixed-date holiday as it is observed: a Saturday one on the Friday before, a Sunday one on the Monday after. */
+function observed(time: number): number {
+  const weekday = new Date(time).getUTCDay();
+  return weekday === 6 ? time - MS_PER_DAY : weekday === 0 ? time + MS_PER_DAY : time;
+}
+
+/** The `nth` `weekday` of a month (`month` counted from 0), where -1 is the last. */
+function nthWeekday(year: number, month: number, weekday: number, nth: number): number {
+  if (nth === -1) {
+    const last = new Date(Date.UTC(year, month + 1, 0));
+    return last.getTime() - ((last.getUTCDay() - weekday + 7) % 7) * MS_PER_DAY;
+  }
+  const first = new Date(Date.UTC(year, month, 1));
+  return first.getTime() + (((weekday - first.getUTCDay() + 7) % 7) + (nth - 1) * 7) * MS_PER_DAY;
+}
+
+/**
+ * The US federal holidays as they are observed, `YYYY-MM-DD`, for the days that
+ * fall in `year`.
+ *
+ * The office's calendar, as it stated it on 2026-09-16: the office and its
+ * technicians work weekdays, and not weekends or US holidays. Each holiday is
+ * moved as the federal calendar moves it -- so New Year's Day 2028, a Saturday,
+ * is observed on Friday 31 December 2027, and is listed under 2027.
+ */
+export function usFederalHolidays(year: number): string[] {
+  return [
+    observed(Date.UTC(year, 0, 1)), // New Year's Day
+    nthWeekday(year, 0, MONDAY, 3), // Martin Luther King Jr. Day
+    nthWeekday(year, 1, MONDAY, 3), // Washington's Birthday
+    nthWeekday(year, 4, MONDAY, -1), // Memorial Day
+    observed(Date.UTC(year, 5, 19)), // Juneteenth
+    observed(Date.UTC(year, 6, 4)), // Independence Day
+    nthWeekday(year, 8, MONDAY, 1), // Labor Day
+    nthWeekday(year, 9, MONDAY, 2), // Columbus Day
+    observed(Date.UTC(year, 10, 11)), // Veterans Day
+    nthWeekday(year, 10, THURSDAY, 4), // Thanksgiving Day
+    observed(Date.UTC(year, 11, 25)), // Christmas Day
+    observed(Date.UTC(year + 1, 0, 1)), // Next New Year's Day, when a Saturday puts it on 31 December
+  ]
+    .map(isoDate)
+    .filter((date) => date.startsWith(`${year}-`))
+    .sort();
+}
+
+/**
+ * The weekdays a quarter loses, `YYYY-MM-DD` in order: its US federal holidays,
+ * and any other day the office names as closed. A named day on a weekend or
+ * outside the quarter loses nothing, so it is not listed.
+ */
+export function closedDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
+  const start = isoDate(quarterStart(quarter).getTime());
+  const end = isoDate(quarterEnd(quarter).getTime());
+  return [...new Set([...usFederalHolidays(quarter.year), ...closedDays])]
+    .filter((date) => {
+      const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+      return date >= start && date < end && weekday !== 0 && weekday !== 6;
+    })
+    .sort();
+}
+
 /**
  * The days of a quarter somebody could actually be sent out on.
  *
- * Weekends excluded, and nothing else assumed. Public holidays are passed in
- * rather than derived: this office's calendar is theirs to state, and a
- * hardcoded list of US federal holidays would be wrong for the days they
- * actually close and right for days they do not.
+ * Weekdays, less the quarter's US federal holidays and any other day the office
+ * names as closed (`closedDaysOfQuarter`). Nobody has to type the holidays in.
  *
  * Returned as `YYYY-MM-DD` strings, which is what `Inspection.scheduledAt`
  * stores and what the console reads back — a `Date` here would invite a
  * timezone to creep into a calendar fact.
  */
-export function workingDaysOfQuarter(quarter: Quarter, holidays: readonly string[] = []): string[] {
-  const closed = new Set(holidays);
+export function workingDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
+  const closed = new Set(closedDaysOfQuarter(quarter, closedDays));
   const days: string[] = [];
   const end = quarterEnd(quarter);
 

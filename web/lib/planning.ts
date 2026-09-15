@@ -59,6 +59,11 @@ export function formatMinutes(minutes: number): string {
   return rest === 0 ? `${hours} hr` : `${hours} hr ${rest} min`;
 }
 
+const SHORT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/** "Oct 12" for `2026-10-12`. A calendar date, so read in UTC: in Manila, local time would show the day before. */
+export const formatShortDay = (date: string) => SHORT_DAY.format(new Date(`${date}T00:00:00Z`));
+
 export type LimitState = 'within' | 'near' | 'over';
 
 /**

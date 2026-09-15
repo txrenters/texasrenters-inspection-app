@@ -31,10 +31,8 @@ export class PlanRoutingSettingsDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(480) maxDriveMinutes?: number;
 
   /**
-   * The days the office is closed, as `YYYY-MM-DD`.
-   *
-   * Stated rather than derived: a list of US federal holidays would be wrong
-   * for the days this office actually closes and right for days it does not.
+   * Days the office is closed besides weekends and US federal holidays, as
+   * `YYYY-MM-DD`. Those are always left out; this is for any other day.
    */
   @IsOptional()
   @IsArray()

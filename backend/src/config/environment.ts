@@ -202,10 +202,8 @@ const environmentSchema = z
      * planning window and does nothing on the days it does not. */
     TBP_PLAN_CRON: z.string().optional(),
     TBP_PLANNING_LEAD_DAYS: z.coerce.number().int().min(1).max(90).default(14),
-    /** Comma-separated YYYY-MM-DD days the office is closed. Configuration
-     * rather than a derived calendar: a hardcoded list of US federal holidays
-     * would be wrong for the days this office actually closes and right for
-     * days it does not. */
+    /** Comma-separated YYYY-MM-DD days the office is closed besides weekends
+     * and US federal holidays, which the planner always leaves out. */
     TBP_PLANNING_HOLIDAYS: z.string().optional(),
 
     /** Read directly by `OsrmClient`, and previously absent from this schema
