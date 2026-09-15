@@ -1,3 +1,5 @@
+import { choicesInAnswer } from './checklist-choices.js';
+
 /**
  * Which answers ask the technician to say what they found.
  *
@@ -58,9 +60,9 @@ const REASSURING_CHOICES: readonly string[] = [
  * Whether choosing this option should invite a comment.
  *
  * Answers false for an unanswered item: a box that appears before anything has
- * been chosen is the every-row comment field this exists to avoid.
+ * been chosen is the every-row comment field this exists to avoid. With several
+ * options ticked, one concern among them is enough to ask.
  */
 export function choiceInvitesComment(choice: string | null | undefined): boolean {
-  if (!choice) return false;
-  return !REASSURING_CHOICES.includes(choice.trim().toLowerCase());
+  return choicesInAnswer(choice).some((picked) => !REASSURING_CHOICES.includes(picked.toLowerCase()));
 }

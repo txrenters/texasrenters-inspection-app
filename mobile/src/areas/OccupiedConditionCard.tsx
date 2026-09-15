@@ -1,7 +1,7 @@
 import { Text, View } from 'react-native';
 import { choiceInvitesComment } from '@texasrenters/shared';
 
-import { ChoiceField, CommentField } from '../capture/ChecklistAnswerFields';
+import { ChoicesField, CommentField } from '../capture/ChecklistAnswerFields';
 import type { ChecklistItem } from '../capture/area-checklist';
 import type { ChecklistAssessment } from '../domain/models';
 
@@ -25,8 +25,8 @@ import type { ChecklistAssessment } from '../domain/models';
  * checklist at all now: demoed to the product owner, that sheet read as a
  * duplicate of this card, so this card is the one place they are answered.
  *
- * Each question is a radio list — see `ChoiceField` — because the options,
- * drawn as separate buttons, looked as though several could be picked.
+ * Each question is a list of checkboxes — see `ChoicesField`. The office asked
+ * on 2026-09-15 to tick several: a room can be clean and still need attention.
  *
  * ── INLINE RATHER THAN BEHIND A BUTTON ───────────────────────────────────────
  *
@@ -69,13 +69,14 @@ export function OccupiedConditionCard({
         return (
           <View className="mt-4" key={item.id}>
             <Text className="text-sm font-semibold text-foreground">{item.label}</Text>
-            <ChoiceField
+            <ChoicesField
               item={item}
               onChange={(next) => onRecord(item.id, { textValue: next })}
               value={answer}
             />
-            {/* Asked only when the answer says something was wrong — prompted
-                rather than required, for the reasons in `choiceInvitesComment`. */}
+            {/* Asked only when something ticked says something was wrong —
+                prompted rather than required, for the reasons in
+                `choiceInvitesComment`. */}
             {choiceInvitesComment(answer) ? (
               <CommentField
                 item={item}
