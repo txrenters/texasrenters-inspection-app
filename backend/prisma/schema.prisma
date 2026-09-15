@@ -3003,6 +3003,23 @@ model TbpQuarterPlan {
   /// checked" is a different fact from "not enrolled".
   unverifiedEnrollmentCount Int @default(0)
 
+  /// The office's limits on a technician-day, and the visit lengths a day is
+  /// measured with (2026-09-16: six hours inspecting, ninety minutes driving
+  /// between properties). Kept on the plan so its forecast is explained by the
+  /// numbers it was routed with; a re-route with new numbers replaces them.
+  occupiedVisitMinutes Int      @default(30)
+  hvacVisitMinutes     Int      @default(45)
+  maxOnSiteMinutes     Int      @default(360)
+  maxDriveMinutes      Int      @default(90)
+  /// The days the office is closed this quarter, `YYYY-MM-DD`.
+  holidays             String[] @default([])
+
+  /// The office's sheet of visit Details for the quarter, as imported:
+  /// `[{ address, city, postalCode, details }]`. Kept whole rather than only
+  /// copied onto stops, so a regeneration matches it to the tenancies it adds.
+  officeDetailsRows       Json?
+  officeDetailsImportedAt DateTime?
+
   publishStartedAt DateTime?
   publishedAt      DateTime?
   publishedById    String?   @db.Uuid
@@ -3049,6 +3066,25 @@ model TbpQuarterPlanStop {
   propertywareUnitId     String?           @db.Uuid
   propertywareLeaseId    String?           @db.Uuid
   unitResolution         TbpUnitResolution @default(UNRESOLVED)
+
+  /// OCCUPIED or HVAC: Q1 and Q3 are occupied, Q2 and Q4 are HVAC for a tenancy
+  /// on the HVAC plan (shared `tbpInspectionFor`). Published as this type.
+  inspectionType             InspectionType @default(OCCUPIED)
+  /// A `TbpInspectionReason`, so the console can say why.
+  inspectionTypeReason       String?
+  /// The tenant report does not settle it, and somebody should look.
+  inspectionTypeNeedsReview  Boolean        @default(false)
+  /// A coordinator chose the type, so regeneration must leave it alone.
+  inspectionTypeOverriddenAt DateTime?
+  /// How long the visit counts for in its day, from the plan's visit lengths.
+  onSiteMinutes              Int?
+  /// Who took this tenancy's visit last quarter, preferred when its day is
+  /// laid out. A hint rather than a relation: a technician who has since left
+  /// is simply not preferred.
+  previousTechnicianId       String?        @db.Uuid
+  /// The services line the office's sheet gives this tenancy, as written.
+  /// `visitDetails` is built from it, with the inspection named for the type.
+  officeDetails              String?
 
   scheduledOn          DateTime? @db.Date
   assignedTechnicianId String?   @db.Uuid
@@ -3121,6 +3157,9 @@ enum PlanOriginKind {
   /// No origin at all, so the day is measured from the middle of its own stops.
   /// Honest, and useless for "when will they arrive at the first one".
   CLUSTER_CENTROID
+  /// Measured from the day's first property, which is the office's rule for a
+  /// benefit-package day: the drive from home does not count against it.
+  FIRST_STOP
 }
 
 /// Where a forecast's numbers came from.
@@ -3192,6 +3231,10 @@ model TbpQuarterPlanDay {
   date           DateTime @db.Date
 
   stopCount            Int
+  /// Time spent inspecting, against the plan's `maxOnSiteMinutes`.
+  onSiteMinutes        Int @default(0)
+  hvacStopCount        Int @default(0)
+  /// Between the day's properties only, against the plan's `maxDriveMinutes`.
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
 

@@ -109,8 +109,11 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     // a technician against every stop it *can* place is reviewable; one that
     // refused to route because a single tenancy is missing a unit is not, and
     // the coordinator has two weeks to fix that tenancy and re-route.
+    // The closed days from the environment only when it names some: a plan
+    // keeps the ones a coordinator set, and an empty list would wipe them.
+    const holidays = this.holidays();
     const routed = await withTenant(organizationId, () =>
-      this.planner.route(organizationId, result.planId, this.holidays()),
+      this.planner.route(organizationId, result.planId, holidays.length ? { holidays } : {}),
     );
 
     if (routed.unplaced.length > 0)

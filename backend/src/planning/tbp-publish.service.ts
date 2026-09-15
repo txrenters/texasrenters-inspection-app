@@ -1,14 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import type { InspectionType } from '@prisma/client';
 import {
   InspectionSource,
   InspectionStatus,
-  InspectionType,
   JobberOutboundKind,
   JobberOutboundStatus,
   Prisma,
   TbpPlanStatus,
   TbpStopStatus,
 } from '@prisma/client';
+import { withInspectionLink } from '@texasrenters/shared';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
 import { type AuthenticatedUser, auditActor } from '../common/auth';
@@ -24,6 +25,11 @@ import { PrismaService } from '../common/prisma.service';
  * along it is.
  */
 const PROGRESS_CHUNK = 25;
+
+/** Where the console is, for the link a visit's Details carry back to its inspection. */
+function webOrigin(): string {
+  return (process.env.WEB_APP_ORIGIN ?? 'http://localhost:5454').replace(/\/$/, '');
+}
 
 export interface PublishSummary {
   planId: string;
@@ -76,6 +82,9 @@ export class TbpPublishService {
           propertywareUnitId: true,
           propertywareLeaseId: true,
           jobberJobId: true,
+          inspectionType: true,
+          visitTitle: true,
+          visitDetails: true,
         },
       });
       if (batch.length === 0) break;
@@ -125,6 +134,11 @@ export class TbpPublishService {
    * — and this needs one, because two coordinators clicking Publish within a
    * second of each other would otherwise both start creating the same quarter.
    * The update touching exactly one row is the proof that this caller won.
+   *
+   * A publish that failed part-way is claimed the same way, and its failed
+   * stops go back to planned so this run tries them again -- otherwise
+   * "publishing again picks up where it stopped" was a promise with no way to
+   * keep it: the claim only took a DRAFT, and the loop only a PLANNED stop.
    */
   private async claim(user: AuthenticatedUser, planId: string) {
     const blocked = await this.prisma.tbpQuarterPlanStop.count({
@@ -142,7 +156,11 @@ export class TbpPublishService {
       );
 
     const { count } = await this.prisma.tbpQuarterPlan.updateMany({
-      where: { id: planId, organizationId: user.organizationId, status: TbpPlanStatus.DRAFT },
+      where: {
+        id: planId,
+        organizationId: user.organizationId,
+        status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED] },
+      },
       data: {
         status: TbpPlanStatus.PUBLISHING,
         publishStartedAt: new Date(),
@@ -156,6 +174,11 @@ export class TbpPublishService {
         'PLAN_NOT_DRAFT',
         'This plan is already publishing, published, or no longer a draft.',
       );
+
+    await this.prisma.tbpQuarterPlanStop.updateMany({
+      where: { planId, organizationId: user.organizationId, status: TbpStopStatus.FAILED, inspectionId: null },
+      data: { status: TbpStopStatus.PLANNED, blockedCode: null, blockedMessage: null },
+    });
   }
 
   private async publishStop(
@@ -170,6 +193,9 @@ export class TbpPublishService {
       propertywareUnitId: string | null;
       propertywareLeaseId: string | null;
       jobberJobId: string | null;
+      inspectionType: InspectionType;
+      visitTitle: string | null;
+      visitDetails: string | null;
     },
   ): Promise<'PUBLISHED' | 'ADOPTED' | 'FAILED'> {
     if (!stop.propertywareBuildingId || !stop.scheduledOn)
@@ -182,7 +208,8 @@ export class TbpPublishService {
           buildingId: stop.propertywareBuildingId!,
           unitId: stop.propertywareUnitId,
           leaseId: stop.propertywareLeaseId,
-          inspectionType: InspectionType.OCCUPIED,
+          // HVAC or occupied, as the quarter's rule decided and the coordinator reviewed.
+          inspectionType: stop.inspectionType,
           scheduledAt: stop.scheduledOn!,
         });
 
@@ -195,7 +222,21 @@ export class TbpPublishService {
           createdById: null,
           source: InspectionSource.MANUAL,
           status: InspectionStatus.SCHEDULED,
+          // The visit's text on the inspection, as a console booking has it:
+          // the technician reads it on the phone before the visit exists in
+          // Jobber, and the booking sends what is here.
+          jobberVisitTitle: stop.visitTitle,
+          jobberVisitDetails: stop.visitDetails,
         });
+
+        if (stop.visitDetails)
+          // The link needs the inspection's id, so it is added once there is one.
+          await tx.inspection.update({
+            where: { id: inspection.id },
+            data: {
+              jobberVisitDetails: withInspectionLink(stop.visitDetails, `${webOrigin()}/inspections/${inspection.id}`),
+            },
+          });
 
         if (stop.assignedTechnicianId)
           await tx.inspectionAssignment.create({
@@ -237,7 +278,7 @@ export class TbpPublishService {
             action: 'INSPECTION_CREATED_FROM_TBP_PLAN',
             entityType: 'Inspection',
             entityId: inspection.id,
-            metadata: { planId, stopId: stop.id, sequence: stop.sequence },
+            metadata: { planId, stopId: stop.id, sequence: stop.sequence, inspectionType: stop.inspectionType },
           },
         });
       });
@@ -268,12 +309,18 @@ export class TbpPublishService {
    * is to take ownership of the row rather than report a failure a coordinator
    * cannot act on.
    *
-   * Only for that specific collision. A 409 from the duplicate *check* is the
-   * same situation; anything else is a real failure and is left alone.
+   * Only for that specific collision, and only an inspection of the stop's own
+   * type. A 409 from the duplicate *check* is the same situation; anything else
+   * is a real failure and is left alone.
    */
   private async adoptable(
     user: AuthenticatedUser,
-    stop: { propertywareBuildingId: string | null; propertywareUnitId: string | null; scheduledOn: Date | null },
+    stop: {
+      propertywareBuildingId: string | null;
+      propertywareUnitId: string | null;
+      scheduledOn: Date | null;
+      inspectionType: InspectionType;
+    },
     error: unknown,
   ) {
     const collision =
@@ -286,7 +333,7 @@ export class TbpPublishService {
         organizationId: user.organizationId,
         propertywareBuildingId: stop.propertywareBuildingId,
         propertywareUnitId: stop.propertywareUnitId,
-        inspectionType: InspectionType.OCCUPIED,
+        inspectionType: stop.inspectionType,
         scheduledAt: stop.scheduledOn,
         status: InspectionStatus.SCHEDULED,
       },

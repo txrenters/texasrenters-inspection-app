@@ -285,6 +285,21 @@ const NOT_A_LOCATION = /^(?:update|not completed|n\/?a|tbd|none|\.+|-+)$/i;
 const SIZE_IN_TEXT = /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?/;
 
 /**
+ * A tenancy's zone as the office writes it in a Jobber title: "Zone 4".
+ *
+ * The tenant report holds zones as bare numbers ("4") and "Not Set" where there
+ * is none. Copied as they are, a title reads "- 4 -" or "- Not Set -" in the one
+ * segment the office reads as "- Zone 4 -". Anything that is not a numbered
+ * zone is null, so a title leaves the segment out. The console's booking, the
+ * quarterly planner's visit title and the job a planned visit is booked on all
+ * read the zone through this, so the three cannot write it differently.
+ */
+export function tenancyZoneLabel(zone: string | null | undefined): string | null {
+  const zoneNumber = /^(?:zone\s*)?(\d{1,2})$/i.exec(zone?.trim() ?? '')?.[1];
+  return zoneNumber ? `Zone ${Number(zoneNumber)}` : null;
+}
+
+/**
  * What a booking starts from, read off the tenant report.
  *
  * Only a start: the report is typed by hand and holds "UPDATE" where a filter
@@ -292,8 +307,6 @@ const SIZE_IN_TEXT = /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(
  * value here is shown to the office to correct before anything is booked.
  */
 export function bookingFromTenancy(tenancy: TenancyForBooking): BookingPrefill {
-  const zone = tenancy.zone?.trim() ?? '';
-  const zoneNumber = /^(?:zone\s*)?(\d{1,2})$/i.exec(zone)?.[1];
   const location = tenancy.hvacFilterLocation?.trim() ?? '';
   const usableLocation = location && !NOT_A_LOCATION.test(location) && !SIZE_IN_TEXT.test(location) ? location : null;
   const filters = tenancy.hvacFilterSizes
@@ -309,7 +322,7 @@ export function bookingFromTenancy(tenancy: TenancyForBooking): BookingPrefill {
   // A location names where a filter is; with several sizes it cannot say which.
   if (filters.length === 1 && usableLocation) filters[0] = { ...filters[0]!, location: usableLocation };
   return {
-    zone: zoneNumber ? `Zone ${Number(zoneNumber)}` : null,
+    zone: tenancyZoneLabel(tenancy.zone),
     benefitPackage: tenancy.tbpEnrollment?.trim().toLowerCase() === 'yes',
     planTier: tenancy.managementPlan?.trim() || null,
     hvacOptedOut: /opted\s*out/i.test(tenancy.hvacPlan ?? ''),
