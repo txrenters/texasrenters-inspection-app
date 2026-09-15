@@ -483,12 +483,18 @@ const dashboardSchema = z.object({
   recent: z.array(inspectionSchema),
 });
 
-export async function requestJson(path: string, options: RequestInit = {}): Promise<unknown> {
+export async function requestJson(
+  path: string,
+  options: RequestInit = {},
+  // Off only for a caller that could not save a renewed session -- the
+  // location task on a locked iPhone. See `getSession`.
+  { renewSession = true }: { renewSession?: boolean } = {},
+): Promise<unknown> {
   if (!environment.apiBaseUrl)
     throw new Error('The TexasRenters API URL is not configured for this app build.');
   // Refreshes in place when the token is close to expiry. This is the only
   // thing that keeps a token alive — nothing refreshes on a timer.
-  const session = await getSession();
+  const session = await getSession({ renew: renewSession });
   if (!session) throw new SessionExpiredError();
   const method = (options.method ?? 'GET').toUpperCase();
   const canFallback = method === 'GET' || method === 'HEAD';

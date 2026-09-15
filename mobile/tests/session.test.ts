@@ -226,6 +226,55 @@ describe('mobile session', () => {
     expect(seen).toEqual(['auth-user', null]);
   });
 
+  /**
+   * The location task sends from a pocket, and on an iPhone it may not renew:
+   * rotation retires the old refresh token, and a new one that cannot be saved
+   * to a locked keychain turns the next attempt into a replay, which ends every
+   * session on the account.
+   */
+  describe('without renewing', () => {
+    it('hands out a token inside the renewal margin rather than renewing it', async () => {
+      fetchMock.mockResolvedValueOnce(
+        ok({ accessToken: token({ sub: 'auth-user', exp: inSeconds(45) }), refreshToken: 'refresh-1' }),
+      );
+      await signIn('tech@example.com', 'password');
+
+      const session = await getSession({ renew: false });
+
+      expect(session?.refreshToken).toBe('refresh-1');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers null for a token about to expire, and still does not renew', async () => {
+      fetchMock.mockResolvedValueOnce(
+        ok({ accessToken: token({ sub: 'auth-user', exp: inSeconds(5) }), refreshToken: 'refresh-1' }),
+      );
+      await signIn('tech@example.com', 'password');
+
+      expect(await getSession({ renew: false })).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // Nothing was given up: an ordinary caller renews it as before.
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-2' }));
+      expect((await getSession())?.refreshToken).toBe('refresh-2');
+    });
+  });
+
+  it('does not remember a storage read that failed as being signed out', async () => {
+    // An iPhone's keychain refuses reads while the phone is locked. Caching
+    // that as "no session" left the process signed out after it was unlocked.
+    fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-1' }));
+    await signIn('tech@example.com', 'password');
+    resetSessionCache();
+
+    const read = jest
+      .spyOn(sessionStorage, 'getItem')
+      .mockRejectedValueOnce(new Error('User interaction is not allowed.'));
+
+    expect(await getSession()).toBeNull();
+    expect((await getSession())?.refreshToken).toBe('refresh-1');
+    read.mockRestore();
+  });
+
   it('treats a malformed stored token as signed out', async () => {
     // The chunked SecureStore writer can leave a torn value if the process dies
     // mid-write; that must read as signed out rather than crash the launch.

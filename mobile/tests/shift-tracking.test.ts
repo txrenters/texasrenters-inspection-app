@@ -7,6 +7,8 @@
  *   Uncaught (in promise) Error: One of the `NSLocation*UsageDescription` keys
  *   must be present in Info.plist to be able to use geolocation.
  */
+import * as TaskManager from 'expo-task-manager';
+
 import {
   ensureShiftTracking,
   isShiftTrackingActive,
@@ -25,8 +27,11 @@ const mockStartUpdates = jest.fn();
 const mockHasStarted = jest.fn().mockResolvedValue(false);
 const mockStopUpdates = jest.fn().mockResolvedValue(undefined);
 const mockIsRegistered = jest.fn().mockResolvedValue(false);
+const mockTaskOptions = jest.fn().mockResolvedValue(null);
 const mockWatchPosition = jest.fn();
 const mockAppendFixes = jest.fn();
+const mockSendRecorded = jest.fn();
+const mockAppState = { currentState: 'active' };
 
 jest.mock('expo-location', () => ({
   hasServicesEnabledAsync: () => mockHasServices(),
@@ -38,19 +43,41 @@ jest.mock('expo-location', () => ({
   // The question that distinguishes a task which is *delivering* from one that
   // is merely registered. Its absence here is what the bug looked like.
   hasStartedLocationUpdatesAsync: (...args: unknown[]) => mockHasStarted(...args),
-  Accuracy: { Balanced: 3 },
+  Accuracy: { Balanced: 3, High: 4 },
   ActivityType: { Other: 1 },
 }));
 
 jest.mock('expo-task-manager', () => ({
   defineTask: jest.fn(),
   isTaskRegisteredAsync: (...args: unknown[]) => mockIsRegistered(...args),
+  getTaskOptionsAsync: (...args: unknown[]) => mockTaskOptions(...args),
+}));
+
+// A getter, not the object itself: the factory runs when the module under test
+// is imported, before `mockAppState` has been initialised.
+jest.mock('react-native', () => ({
+  AppState: {
+    get currentState() {
+      return mockAppState.currentState;
+    },
+  },
 }));
 
 jest.mock('../src/location/location-storage', () => ({
   appendLocationFixes: (...args: unknown[]) => mockAppendFixes(...args),
 }));
 
+jest.mock('../src/location/location-sender', () => ({
+  sendRecordedFixes: (...args: unknown[]) => mockSendRecorded(...args),
+}));
+
+/**
+ * The task the module defines at load, captured before any `clearAllMocks`
+ * forgets the call that registered it.
+ */
+const recordLocationsTask = (TaskManager.defineTask as unknown as jest.Mock).mock.calls[0][1] as (
+  body: { data?: unknown; error?: unknown },
+) => Promise<void>;
 
 beforeEach(async () => {
   // The foreground watcher is module state, which `clearAllMocks` does not
@@ -66,7 +93,10 @@ beforeEach(async () => {
   mockHasStarted.mockResolvedValue(false);
   mockStopUpdates.mockResolvedValue(undefined);
   mockIsRegistered.mockResolvedValue(false);
+  mockTaskOptions.mockResolvedValue(null);
   mockAppendFixes.mockResolvedValue(undefined);
+  mockSendRecorded.mockResolvedValue(undefined);
+  mockAppState.currentState = 'active';
 });
 
 describe('startShiftTracking', () => {
@@ -323,3 +353,121 @@ describe('the two recording modes', () => {
   });
 });
 
+/**
+ * The office map froze for the length of every drive.
+ *
+ * The background task recorded the whole drive, but sending was left to a
+ * JavaScript timer, and Android stops timers the moment the app leaves the
+ * screen. Nothing left the handset until the technician opened the app at the
+ * next property, so the marker sat still and then jumped to the address.
+ */
+describe('a fix recorded while driving', () => {
+  const fix = {
+    coords: { latitude: 29.5516, longitude: -95.1449, accuracy: 6, heading: 42, speed: 16.4 },
+    timestamp: Date.parse('2026-09-15T19:40:00.000Z'),
+  };
+
+  it('is sent from the location task itself, after it is queued', async () => {
+    const order: string[] = [];
+    mockAppendFixes.mockImplementation(async () => {
+      order.push('queued');
+    });
+    mockSendRecorded.mockImplementation(async () => {
+      order.push('sent');
+    });
+
+    await recordLocationsTask({ data: { locations: [fix] } });
+
+    expect(mockAppendFixes).toHaveBeenCalledWith([
+      expect.objectContaining({ headingDegrees: 42, speedMetersPerSecond: 16.4 }),
+    ]);
+    // Queued first, so a send that fails -- or never finishes -- loses nothing.
+    expect(order).toEqual(['queued', 'sent']);
+  });
+
+  it('sends nothing when the OS delivered nothing', async () => {
+    await recordLocationsTask({ data: { locations: [] } });
+    await recordLocationsTask({ error: new Error('location unavailable') });
+
+    expect(mockAppendFixes).not.toHaveBeenCalled();
+    expect(mockSendRecorded).not.toHaveBeenCalled();
+  });
+
+  it('is sent by the foreground watcher too', async () => {
+    mockRequestBackground.mockResolvedValue({ granted: false });
+    await startShiftTracking();
+
+    const onFix = mockWatchPosition.mock.calls[0][1] as (location: unknown) => void;
+    onFix(fix);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mockSendRecorded).toHaveBeenCalled();
+  });
+
+  it('is recorded from satellites, which is what carries speed and heading', async () => {
+    // Balanced positioned the phone from Wi-Fi and towers, and those fixes
+    // carry no speed or course: Android reports both as zero.
+    await startShiftTracking();
+
+    expect(mockStartUpdates).toHaveBeenCalledWith(
+      'texasrenters-shift-location',
+      expect.objectContaining({ accuracy: 4 }),
+    );
+  });
+});
+
+/**
+ * A running task keeps the options it was started with.
+ *
+ * The OS stores them with the registration, and a running task is never
+ * started again, so a handset whose task never stopped would record on the
+ * old options for ever.
+ */
+describe('a task started by an earlier build', () => {
+  const earlier = { accuracy: 3, timeInterval: 15_000, distanceInterval: 10 };
+
+  it('is given this build’s options when the app opens', async () => {
+    mockHasStarted.mockResolvedValue(true);
+    mockTaskOptions.mockResolvedValue(earlier);
+
+    await expect(startShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+
+    expect(mockStartUpdates).toHaveBeenCalledWith(
+      'texasrenters-shift-location',
+      expect.objectContaining({ accuracy: 4, foregroundService: expect.any(Object) }),
+    );
+    // Updated in place, not torn down: stopping it would lose the fixes the OS
+    // was still holding.
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('is left alone when its options already match', async () => {
+    mockHasStarted.mockResolvedValue(true);
+    mockTaskOptions.mockResolvedValue({ ...earlier, accuracy: 4 });
+
+    await startShiftTracking();
+
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('is not touched from the background, where Android refuses it', async () => {
+    mockHasStarted.mockResolvedValue(true);
+    mockTaskOptions.mockResolvedValue(earlier);
+    mockAppState.currentState = 'background';
+
+    await startShiftTracking();
+
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+  });
+
+  it('keeps recording in the background when the update is refused', async () => {
+    // Falling back to the foreground watcher here would stop the drive being
+    // recorded at all -- the opposite of the point.
+    mockHasStarted.mockResolvedValue(true);
+    mockTaskOptions.mockResolvedValue(earlier);
+    mockStartUpdates.mockRejectedValue(new Error('ForegroundServiceStartNotAllowedException'));
+
+    await expect(startShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+    expect(mockWatchPosition).not.toHaveBeenCalled();
+  });
+});

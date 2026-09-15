@@ -1,7 +1,9 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { normaliseMotion } from '@texasrenters/shared';
+import { AppState } from 'react-native';
 
+import { sendRecordedFixes } from './location-sender';
 import { appendLocationFixes } from './location-storage';
 import type { QueuedFix } from './location-queue';
 
@@ -23,10 +25,6 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
 /**
  * How often a fix is wanted, and how far the technician must move to earn one.
  *
- * `Balanced` rather than `BestForNavigation`: this runs all day on a handset
- * that also films video, and metre-accurate positioning would cost the battery
- * the rest of the shift depends on.
- *
  * Fifteen seconds rather than the minute it used to be. A minute is fine for
  * "which property is she at" and useless for watching somebody move -- a van
  * covers half a mile between fixes, so the console drew a technician
@@ -36,6 +34,51 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
  */
 const FIX_INTERVAL_MS = 15_000;
 const FIX_DISTANCE_M = 10;
+
+/**
+ * `High`, which is satellites, rather than the `Balanced` this used to be.
+ *
+ * Balanced was chosen for the battery, and it cannot answer what the office
+ * map now asks: how fast, and which way. Android's balanced mode positions a
+ * phone from Wi-Fi and cell towers, and a fix from those carries no speed or
+ * course -- Android reports both as zero, so a technician doing sixty on the
+ * freeway read as standing still. iOS answers `-1` for the same reason. Worse,
+ * away from Wi-Fi a tower fix is often hundreds of metres wide, and anything
+ * past `MAX_USEFUL_ACCURACY_M` is refused, so a highway drive could produce no
+ * usable fixes at all.
+ *
+ * Not `BestForNavigation`: on iOS that adds sensor fusion a technician map does
+ * not need. The cost is the battery, on a phone that also films video. If that
+ * proves too much, this is the one line to change -- the console derives motion
+ * from successive fixes when the handset reports none.
+ */
+const FIX_ACCURACY = Location.Accuracy.High;
+
+/**
+ * What the background task runs with. One object, because the task is started
+ * in one place and has its options brought up to date in another, and the two
+ * must never disagree.
+ */
+const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
+  accuracy: FIX_ACCURACY,
+  timeInterval: FIX_INTERVAL_MS,
+  distanceInterval: FIX_DISTANCE_M,
+  // Never pause. iOS will otherwise decide a stationary device needs no
+  // updates and stop delivering, and a technician working inside one
+  // property for an hour looks identical to one who has gone home.
+  pausesUpdatesAutomatically: false,
+  showsBackgroundLocationIndicator: true,
+  foregroundService: {
+    notificationTitle: 'Recording your location',
+    notificationBody: 'TexasRenters Inspect is on. Close the app to stop.',
+    // Stops when the app is closed, keeps running when it is merely
+    // minimised -- which is the whole working day, since the phone is in a
+    // pocket between rooms. `false` kept the service alive after the app
+    // was swiped away, which is tracking somebody who has finished, and is
+    // the one behaviour nobody would think to check for.
+    killServiceOnDestroy: true,
+  },
+};
 
 /** Same shape the camera uses for snapshot ids — no new dependency for this. */
 function fixId() {
@@ -57,9 +100,19 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   // outage still draws the route in the order it was walked.
   const fixes: QueuedFix[] = locations.map(toQueuedFix);
 
-  // Queued, never sent from here. This context may have no session and no
-  // network, and a task that awaited an HTTP call would be killed mid-flight.
+  // Queued first, so nothing recorded depends on the send below succeeding.
   await appendLocationFixes(fixes);
+
+  // Then sent from here, and this is what makes the office map live. The task
+  // is the only code that runs while the phone is in a pocket: the sender's
+  // timer is JavaScript, which Android stops the moment the app leaves the
+  // screen, so a whole drive used to wait on the handset and arrive in one
+  // batch at the next property. It used to be deliberately queue-only, for
+  // fear of a request killed mid-flight or a context with no session -- both
+  // now harmless: fixes leave the queue only once the API has them, the API
+  // discards a repeat by `deviceFixId`, and with no usable session the send
+  // simply leaves them for the app.
+  await sendRecordedFixes();
 });
 
 /**
@@ -192,14 +245,14 @@ async function watchInForeground() {
   await stopBackgroundUpdates();
   foregroundWatch = await Location.watchPositionAsync(
     {
-      accuracy: Location.Accuracy.Balanced,
+      accuracy: FIX_ACCURACY,
       timeInterval: FIX_INTERVAL_MS,
       distanceInterval: FIX_DISTANCE_M,
     },
     (location) => {
-      // Queued, not sent: the same path the background task uses, so a fix
+      // Queued, then sent: the same path the background task uses, so a fix
       // recorded in either mode reaches the office the same way.
-      void appendLocationFixes([toQueuedFix(location)]);
+      void appendLocationFixes([toQueuedFix(location)]).then(() => sendRecordedFixes());
     },
   );
 }
@@ -223,37 +276,52 @@ async function startBackgroundUpdates(): Promise<boolean> {
      * returned early, and nothing ever restarted the updates. A technician's
      * trail simply stopped for the rest of the day.
      */
-    if (await Location.hasStartedLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => false))
+    if (await Location.hasStartedLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => false)) {
+      await bringBackgroundUpdatesUpToDate();
       return true;
+    }
 
     // Registered but not delivering: clear it out before starting again, or
     // `startLocationUpdatesAsync` has nothing to do and the stall persists.
     if (await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false))
       await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
 
-    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, {
-    accuracy: Location.Accuracy.Balanced,
-    timeInterval: FIX_INTERVAL_MS,
-    distanceInterval: FIX_DISTANCE_M,
-    // Never pause. iOS will otherwise decide a stationary device needs no
-    // updates and stop delivering, and a technician working inside one
-    // property for an hour looks identical to one who has gone home.
-    pausesUpdatesAutomatically: false,
-    showsBackgroundLocationIndicator: true,
-      foregroundService: {
-        notificationTitle: 'Recording your location',
-        notificationBody: 'TexasRenters Inspect is on. Close the app to stop.',
-        // Stops when the app is closed, keeps running when it is merely
-        // minimised -- which is the whole working day, since the phone is in a
-        // pocket between rooms. `false` kept the service alive after the app
-        // was swiped away, which is tracking somebody who has finished, and is
-        // the one behaviour nobody would think to check for.
-        killServiceOnDestroy: true,
-      },
-    });
+    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, BACKGROUND_UPDATES);
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Give a task that is already running the options this build asks for.
+ *
+ * The OS keeps a task's options with its registration, and a running task is
+ * never started again -- the guard above returns first. So a task started by
+ * an earlier build keeps that build's options indefinitely, and a change to
+ * them reaches only the handsets whose task happens to stop. Registering a
+ * running task again updates its options in place, on both platforms, without
+ * restarting the service.
+ *
+ * Only while the app is on screen: Android refuses a foreground-service task
+ * from the background, and throws. Never fails the start either way -- the
+ * task is running, on whatever it had.
+ */
+async function bringBackgroundUpdatesUpToDate() {
+  try {
+    const current = await TaskManager.getTaskOptionsAsync<Partial<Location.LocationTaskOptions>>(
+      SHIFT_LOCATION_TASK,
+    );
+    if (
+      current?.accuracy === BACKGROUND_UPDATES.accuracy &&
+      current?.timeInterval === BACKGROUND_UPDATES.timeInterval &&
+      current?.distanceInterval === BACKGROUND_UPDATES.distanceInterval
+    )
+      return;
+    if (AppState.currentState !== 'active') return;
+    await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, BACKGROUND_UPDATES);
+  } catch {
+    // Still running on its previous options, which is how it ran until now.
   }
 }
 
