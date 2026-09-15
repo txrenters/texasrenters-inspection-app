@@ -46,6 +46,44 @@ export type PhotoCaptureTimeSource = (typeof PHOTO_CAPTURE_TIME_SOURCES)[number]
  */
 export const MAX_CAPTURE_CLOCK_AHEAD_MS = 2 * 60_000;
 
+/**
+ * A zone name the photo endpoint accepts: "America/Chicago", "Etc/GMT+5", "UTC".
+ *
+ * The same characters the server's upload validation allows. A photograph whose
+ * zone failed that check would be refused outright, and a refusal is never
+ * retried, so a phone checks before it sends.
+ */
+export const CAPTURE_TIME_ZONE_PATTERN = /^[A-Za-z0-9_+\-/]{1,64}$/;
+
+/** What a phone reports about the moment its shutter fired. */
+export interface PhotoCaptureClaim {
+  /** The phone's clock at the shutter, as an instant. */
+  capturedAt: string;
+  /** Minutes east of UTC on the phone at that moment; Houston in summer is -300. */
+  captureUtcOffsetMinutes: number;
+  /** The phone's zone name, when it could say. */
+  captureTimeZone?: string;
+}
+
+/**
+ * The claim for a shutter at `atMs`, by the clock of the device running this.
+ *
+ * The zone is handed in rather than looked up: finding it needs `Intl`, and this
+ * module loads on the phone, where zone lookups have crashed Hermes before. A
+ * zone that does not look like a zone name is left out rather than sent, since
+ * the server would refuse the photograph over it.
+ */
+export function photoCaptureClaim(atMs: number, timeZone?: string | null): PhotoCaptureClaim {
+  const at = new Date(atMs);
+  if (Number.isNaN(at.getTime())) throw new RangeError('A capture time has to be a real moment.');
+  return {
+    capturedAt: at.toISOString(),
+    // getTimezoneOffset counts minutes *behind* UTC; `|| 0` turns UTC's -0 into 0.
+    captureUtcOffsetMinutes: -at.getTimezoneOffset() || 0,
+    ...(timeZone && CAPTURE_TIME_ZONE_PATTERN.test(timeZone) ? { captureTimeZone: timeZone } : {}),
+  };
+}
+
 let stampFormat: Intl.DateTimeFormat | null | undefined;
 
 /**

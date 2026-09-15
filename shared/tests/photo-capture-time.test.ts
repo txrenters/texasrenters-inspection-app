@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatPhotoStamp,
   parseReportPhotoStamp,
+  photoCaptureClaim,
   utcOffsetMinutes,
   wallClockToInstant,
 } from '../src/index.js';
@@ -90,5 +91,28 @@ describe('zone arithmetic', () => {
         'Asia/Manila',
       ).toISOString(),
     ).toBe('2026-09-02T05:15:39.000Z');
+  });
+});
+
+describe('what a phone reports about its shutter', () => {
+  it('is the instant, the offset east of UTC and the zone', () => {
+    const claim = photoCaptureClaim(Date.parse('2026-09-15T14:03:27.412Z'), 'America/Chicago');
+
+    expect(claim.capturedAt).toBe('2026-09-15T14:03:27.412Z');
+    expect(claim.captureTimeZone).toBe('America/Chicago');
+    // Whatever zone the test machine runs in, the offset is its clock's, east-positive.
+    expect(claim.captureUtcOffsetMinutes).toBe(
+      -new Date('2026-09-15T14:03:27.412Z').getTimezoneOffset() || 0,
+    );
+  });
+
+  it('leaves out a zone the server would refuse, so the photograph still uploads', () => {
+    expect(photoCaptureClaim(Date.now(), 'Central Daylight Time').captureTimeZone).toBeUndefined();
+    expect(photoCaptureClaim(Date.now(), '').captureTimeZone).toBeUndefined();
+    expect(photoCaptureClaim(Date.now(), null)).not.toHaveProperty('captureTimeZone');
+  });
+
+  it('refuses a moment that is not one', () => {
+    expect(() => photoCaptureClaim(Number.NaN, 'UTC')).toThrow(RangeError);
   });
 });
