@@ -130,6 +130,29 @@ describe('inspectionPageSchema round trip', () => {
     expect(second).toEqual(first);
   });
 
+  it('keeps the Jobber visit details through the offline cache, text or null', () => {
+    // A technician opening the inspection in a dead zone still needs the gate
+    // code; a cache that dropped the field would hide it exactly then.
+    const withDetails = {
+      ...serverPage,
+      items: [
+        {
+          ...serverInspection,
+          visitTitle: '1 Main St - Zone 1 - Q3 2026 Tenant Benefit Package',
+          visitDetails: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
+        },
+        { ...serverInspection, id: 'insp-2', visitTitle: null, visitDetails: null },
+      ],
+    };
+    const { first, second } = roundTrip(inspectionPageSchema, withDetails);
+    expect(second).toEqual(first);
+    const restored = inspectionPageSchema.parse(second);
+    expect(restored.items[0]?.visitDetails).toBe(
+      'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
+    );
+    expect(restored.items[1]?.visitDetails).toBeNull();
+  });
+
   it('keeps the server total instead of the page length', () => {
     // The old schema was `z.object({ items })`, so `total` was parsed away and
     // the header counted rows in hand — permanently "25 total".

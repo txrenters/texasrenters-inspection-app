@@ -473,6 +473,14 @@ export interface AdminInspection {
   updatedAt: string;
   internalNotes?: string | null;
   /**
+   * The Jobber visit's title and Details, as the sync last read them.
+   *
+   * On the detail only. They carry the tenant's phone number and access codes,
+   * so they are never part of a shared report. Read with `parseVisitDetails`.
+   */
+  jobberVisitTitle?: string | null;
+  jobberVisitDetails?: string | null;
+  /**
    * The report's closing block, written at sign-off. Distinct from
    * `internalNotes`, which is never published — these three are printed on the
    * document a tenant and an owner read.

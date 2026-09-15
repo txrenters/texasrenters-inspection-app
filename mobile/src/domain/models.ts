@@ -196,6 +196,13 @@ export interface Inspection {
    */
   reopenReason?: string;
   propertyNotes: string;
+  /**
+   * The Jobber visit's title and the Details the coordinator wrote on it: the
+   * filters to bring, the tenant's number, the gate code. Null for an inspection
+   * booked here; absent from a response built before the field existed.
+   */
+  visitTitle?: string | null;
+  visitDetails?: string | null;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };
   updatedAt?: string;

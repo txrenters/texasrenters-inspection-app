@@ -24,6 +24,7 @@ import {
   InspectionUnassignDialog,
 } from '@/components/inspection-actions-dialogs';
 import { InspectionTabs } from '@/components/inspection-tabs';
+import { JobberVisitDetails } from '@/components/jobber-visit-details';
 import { ReportClosingNotes } from '@/components/report-closing-notes';
 import { InspectionWorkflowPanel } from '@/components/inspection-workflow';
 import { PageHeader } from '@/components/page-header';
@@ -411,6 +412,12 @@ function InspectionDetail() {
           </div>
         ) : null}
       </section>
+
+      <JobberVisitDetails
+        title={item.jobberVisitTitle}
+        details={item.jobberVisitDetails}
+        inspectionType={item.inspectionType}
+      />
 
       {/* Area-first: recordings, photos, condition summaries and findings are
           read through the area they belong to rather than through four

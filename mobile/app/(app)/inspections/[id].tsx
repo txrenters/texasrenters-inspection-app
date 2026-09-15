@@ -27,6 +27,7 @@ import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
+import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { useThemeColors } from '@/src/lib/theme-colors';
@@ -365,6 +366,14 @@ export default function InspectionOverviewScreen() {
             </View>
           ) : null}
         </View>
+
+        {/* Before the progress card: the filters to bring and who to call are
+            needed before the first area is opened, not after. */}
+        <VisitDetailsCard
+          title={item.visitTitle}
+          details={item.visitDetails}
+          className="mx-5 mt-5"
+        />
 
         <View className="mx-5 mt-5 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-center justify-between">
