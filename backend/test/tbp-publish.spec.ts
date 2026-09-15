@@ -75,6 +75,7 @@ const build = (
       return Promise.resolve({});
     },
   );
+  const stopUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
   const assignmentCreate = jest.fn().mockResolvedValue({});
   const outboundCreate = jest.fn().mockResolvedValue({});
   const auditCreate = jest.fn().mockResolvedValue({});
@@ -95,6 +96,7 @@ const build = (
         Promise.resolve([...remaining.values()].slice(0, take)),
       ),
       update: stopUpdate,
+      updateMany: stopUpdateMany,
     },
     tbpQuarterPlan: { updateMany: planUpdateMany, update: planUpdate },
     inspection: {
@@ -116,6 +118,7 @@ const build = (
     outboundCreate,
     auditCreate,
     inspectionUpdate,
+    stopUpdateMany,
   };
 };
 
@@ -188,7 +191,7 @@ describe('publishing a reviewed quarter', () => {
     expect(creation.insertInspection).not.toHaveBeenCalled();
   });
 
-  it('claims the plan by moving it out of DRAFT, and only from DRAFT', async () => {
+  it('claims the plan by moving it out of DRAFT, or out of a publish that failed', async () => {
     const { service, planUpdateMany } = build([aStop('s1', 1)]);
 
     await service.publish(USER, 'plan-1');
@@ -196,9 +199,21 @@ describe('publishing a reviewed quarter', () => {
     expect(planUpdateMany.mock.calls[0][0].where).toMatchObject({
       id: 'plan-1',
       organizationId: 'org-1',
-      status: TbpPlanStatus.DRAFT,
+      status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED] },
     });
     expect(planUpdateMany.mock.calls[0][0].data.status).toBe(TbpPlanStatus.PUBLISHING);
+  });
+
+  /** Publishing again after a failure picks up where it stopped, the failed stops included. */
+  it('tries the stops a failed publish could not create again', async () => {
+    const { service, stopUpdateMany } = build([aStop('s1', 1)]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(stopUpdateMany).toHaveBeenCalledWith({
+      where: { planId: 'plan-1', organizationId: 'org-1', status: TbpStopStatus.FAILED, inspectionId: null },
+      data: { status: TbpStopStatus.PLANNED, blockedCode: null, blockedMessage: null },
+    });
   });
 
   /**

@@ -1,6 +1,7 @@
 import {
   Building2,
   CalendarClock,
+  CalendarRange,
   ClipboardCheck,
   FileWarning,
   Gauge,
@@ -124,6 +125,14 @@ export const adminNavigation: AdminNavigationGroup[] = [
         // the combined list — the view this page exists to serve — would have
         // no route into it at all.
         children: [{ title: 'All assignments', type: '' }, ...INSPECTION_TYPE_CHILDREN],
+      },
+      {
+        // Beside assignments: a published plan *is* a quarter of assignments,
+        // and this is where they are laid out before they exist.
+        title: 'Benefit package plan',
+        href: '/planning',
+        icon: CalendarRange,
+        permission: 'planning:read',
       },
       {
         // Beside assignments rather than under People: this answers "where is

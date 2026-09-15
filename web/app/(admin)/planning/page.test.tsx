@@ -1,0 +1,147 @@
+import { render, screen, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import PlanningPage from './page';
+
+const hooks = vi.hoisted(() => ({
+  usePlanQuarters: vi.fn(),
+  usePlanStops: vi.fn(),
+  usePlanDays: vi.fn(),
+  usePlanDayRoute: vi.fn(),
+  usePlanningMutations: vi.fn(),
+}));
+
+vi.mock('@/lib/planning-queries', () => hooks);
+vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
+vi.mock('@/lib/url-state', () => ({ useUrlState: () => [{ quarter: '2026-4', tab: 'days', day: '' }, vi.fn()] }));
+// The map loads Google's script; the page around it is what is under test.
+vi.mock('@/components/planning/plan-day-map', () => ({ PlanDayMap: () => <div data-testid="plan-day-map" /> }));
+
+const idle = { mutate: vi.fn(), isPending: false };
+
+const PLAN = {
+  id: 'plan-1',
+  quarterYear: 2026,
+  quarterNumber: 4,
+  quarterStartsOn: '2026-10-01T00:00:00.000Z',
+  status: 'DRAFT',
+  stopCount: 3,
+  blockedCount: 0,
+  publishedCount: 0,
+  unverifiedEnrollmentCount: 0,
+  generatedAt: '2026-09-16T10:00:00.000Z',
+  publishedAt: null,
+  lastError: null,
+  officeDetailsImportedAt: '2026-09-16T10:05:00.000Z',
+  hvacStopCount: 1,
+  occupiedStopCount: 2,
+  occupiedVisitMinutes: 30,
+  hvacVisitMinutes: 45,
+  maxOnSiteMinutes: 360,
+  maxDriveMinutes: 90,
+  holidays: ['2026-11-26'],
+};
+
+const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
+  id,
+  sequence: Number(id.slice(1)),
+  previousSequence: null,
+  orderSource: 'PRIOR_QUARTER',
+  zone: '1',
+  scheduledOn: '2026-10-05T00:00:00.000Z',
+  positionInDay: Number(id.slice(1)),
+  assignedTechnicianId: 'tech-1',
+  assignedTechnician: { id: 'tech-1', displayName: 'Moses Rivera' },
+  unitResolution: 'NO_UNITS',
+  status: 'PLANNED',
+  blockedCode: null,
+  blockedMessage: null,
+  inspectionType: 'OCCUPIED',
+  inspectionTypeReason: 'HVAC_PLAN_NOT_ADDED',
+  inspectionTypeNeedsReview: false,
+  inspectionTypeOverriddenAt: null,
+  onSiteMinutes: 30,
+  driveSecondsForecast: 600,
+  officeDetails: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
+  visitTitle: `${id} Any St - Zone 1 - Q4 2026 Tenant Benefit Package`,
+  visitDetails: 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection\n\nInstruction for completion',
+  inspectionId: null,
+  tenant: { leaseName: 'Lease', addressLine1: `${id} Any St`, city: 'Katy', postalCode: '77494', managementPlan: 'Standard', hvacPlan: 'Not Completed' },
+  ...overrides,
+});
+
+const DAY = {
+  id: 'day-1',
+  date: '2026-10-05T00:00:00.000Z',
+  technicianId: 'tech-1',
+  technician: { id: 'tech-1', displayName: 'Moses Rivera' },
+  stopCount: 3,
+  onSiteMinutes: 105,
+  hvacStopCount: 1,
+  totalDriveSeconds: 1200,
+  totalDriveMeters: 14000,
+  originKind: 'FIRST_STOP',
+  durationSource: 'GOOGLE_TRAFFIC_AWARE',
+  departureAssumedAt: '2026-10-05T14:00:00.000Z',
+  stops: [
+    { id: 's1', sequence: 1, positionInDay: 1, inspectionType: 'OCCUPIED', onSiteMinutes: 30, driveSecondsForecast: null, zone: '1', status: 'PLANNED', address: '1 Any St', city: 'Katy', latitude: 29.7, longitude: -95.7 },
+    { id: 's2', sequence: 2, positionInDay: 2, inspectionType: 'HVAC', onSiteMinutes: 45, driveSecondsForecast: 600, zone: '1', status: 'PLANNED', address: '2 Any St', city: 'Katy', latitude: 29.71, longitude: -95.7 },
+    { id: 's3', sequence: 3, positionInDay: 3, inspectionType: 'OCCUPIED', onSiteMinutes: 30, driveSecondsForecast: 600, zone: '1', status: 'PLANNED', address: '3 Any St', city: 'Katy', latitude: 29.72, longitude: -95.7 },
+  ],
+};
+
+function mount({ plans = [PLAN], stops = [stop('s1'), stop('s2', { inspectionType: 'HVAC' }), stop('s3')] } = {}) {
+  hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
+  hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
+  hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [DAY] : [] });
+  hooks.usePlanDayRoute.mockReturnValue({ isSuccess: true, data: { source: 'GOOGLE_TRAFFIC_AWARE', geometry: [[29.7, -95.7], [29.72, -95.7]], legs: [] } });
+  hooks.usePlanningMutations.mockReturnValue({
+    build: idle,
+    route: idle,
+    importOfficeDetails: idle,
+    setType: idle,
+    exclude: idle,
+    publish: idle,
+  });
+  return render(<PlanningPage />);
+}
+
+beforeEach(() => vi.clearAllMocks());
+
+describe('the benefit package plan page', () => {
+  it('offers to build a quarter that has no plan yet', () => {
+    mount({ plans: [] });
+
+    expect(screen.getByText('No plan for Q4 2026 yet')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Build the Q4 2026 plan/ })).toBeTruthy();
+  });
+
+  it('shows a day against the office’s limits, with its clock', async () => {
+    mount();
+
+    const day = screen.getByRole('region', { name: /Monday, October 5, Moses Rivera/ });
+    expect(within(day).getByText('1 hr 45 min of 6 hr')).toBeTruthy();
+    expect(within(day).getByText(/20 of 90 min/)).toBeTruthy();
+    // Nine o'clock at the first property, then ten minutes' drive to each of the next.
+    expect(within(day).getByText('9:00 AM – 9:30 AM')).toBeTruthy();
+    expect(within(day).getByText('9:40 AM – 10:25 AM')).toBeTruthy();
+    expect(within(day).getByText('HVAC inspection')).toBeTruthy();
+    // Loaded after the page, as the real map is.
+    expect(await screen.findByTestId('plan-day-map')).toBeTruthy();
+  });
+
+  /** A blocked stop is a tenancy nobody would inspect; the API refuses too, and the button says so first. */
+  it('will not publish while a visit needs attention', () => {
+    mount({
+      stops: [stop('s1'), stop('s2', { status: 'BLOCKED', blockedCode: 'NOT_PLACED', blockedMessage: 'No day has room.' })],
+    });
+
+    expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('publishes a draft whose visits are all placed', () => {
+    mount();
+
+    expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});

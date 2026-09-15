@@ -134,6 +134,11 @@ export class TbpPublishService {
    * — and this needs one, because two coordinators clicking Publish within a
    * second of each other would otherwise both start creating the same quarter.
    * The update touching exactly one row is the proof that this caller won.
+   *
+   * A publish that failed part-way is claimed the same way, and its failed
+   * stops go back to planned so this run tries them again -- otherwise
+   * "publishing again picks up where it stopped" was a promise with no way to
+   * keep it: the claim only took a DRAFT, and the loop only a PLANNED stop.
    */
   private async claim(user: AuthenticatedUser, planId: string) {
     const blocked = await this.prisma.tbpQuarterPlanStop.count({
@@ -151,7 +156,11 @@ export class TbpPublishService {
       );
 
     const { count } = await this.prisma.tbpQuarterPlan.updateMany({
-      where: { id: planId, organizationId: user.organizationId, status: TbpPlanStatus.DRAFT },
+      where: {
+        id: planId,
+        organizationId: user.organizationId,
+        status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED] },
+      },
       data: {
         status: TbpPlanStatus.PUBLISHING,
         publishStartedAt: new Date(),
@@ -165,6 +174,11 @@ export class TbpPublishService {
         'PLAN_NOT_DRAFT',
         'This plan is already publishing, published, or no longer a draft.',
       );
+
+    await this.prisma.tbpQuarterPlanStop.updateMany({
+      where: { planId, organizationId: user.organizationId, status: TbpStopStatus.FAILED, inspectionId: null },
+      data: { status: TbpStopStatus.PLANNED, blockedCode: null, blockedMessage: null },
+    });
   }
 
   private async publishStop(
