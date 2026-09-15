@@ -11,6 +11,7 @@ import {
   previousQuarter,
   quarterLabel,
   quarterStart,
+  tenancyZoneLabel,
 } from '@texasrenters/shared';
 
 import { ApplicationError } from '../common/errors';
@@ -639,14 +640,17 @@ const rotationCandidate = (tenant: PlanTenant): RotationCandidate => ({
  * technicians and coordinators have been reading that shape for as long as the
  * programme has run. A tidier format would be a change nobody asked for, on the
  * one string every person in this workflow sees.
+ *
+ * The tenant report holds the zone as "4" or "Not Set", so it goes through
+ * `tenancyZoneLabel`, the rule the console's booking uses, rather than being
+ * copied in as it is.
  */
 export function visitTitle(
   tenant: Pick<PlanTenant, 'addressLine1' | 'zone'>,
   quarter: Quarter,
 ): string {
   const address = tenant.addressLine1?.trim() || 'Unknown address';
-  const zone = tenant.zone?.trim();
-  return [address, zone, `${quarterLabel(quarter)} Tenant Benefit Package`]
+  return [address, tenancyZoneLabel(tenant.zone), `${quarterLabel(quarter)} Tenant Benefit Package`]
     .filter(Boolean)
     .join(' - ');
 }

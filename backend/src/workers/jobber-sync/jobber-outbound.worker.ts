@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { VisitServicesReport } from '@texasrenters/shared';
+import { tenancyZoneLabel, type VisitServicesReport } from '@texasrenters/shared';
 import {
   InspectionAreaCompletionStatus,
   InspectionSource,
@@ -55,9 +55,14 @@ const PERMANENT_FAILURES = new Set(['JOBBER_BOOKING_CANCELLED', 'JOBBER_EDIT_INS
  */
 const VISIT_TIMEZONE = process.env.JOBBER_VISIT_TIMEZONE ?? 'America/Chicago';
 
-/** `Zone 1 - Q4 2026 Tenant Benefit Package`, as the office writes a job. */
+/**
+ * `Zone 1 - Q4 2026 Tenant Benefit Package`, as the office writes a job.
+ *
+ * The stop holds the zone as the tenant report does ("4", "Not Set"), so it is
+ * labelled by the same rule as the stop's visit title.
+ */
 function jobTitle(zone: string | null, year: number, quarter: number): string {
-  return [zone?.trim(), `Q${quarter} ${year} Tenant Benefit Package`].filter(Boolean).join(' - ');
+  return [tenancyZoneLabel(zone), `Q${quarter} ${year} Tenant Benefit Package`].filter(Boolean).join(' - ');
 }
 
 interface JobberUserErrors {
