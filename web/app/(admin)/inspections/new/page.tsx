@@ -5,6 +5,7 @@ import {
   AreaScope,
   InspectionType,
   areaScopeFor,
+  isBookableInspectionType,
   jobberBookingProblems,
   type AdminProperty,
 } from '@texasrenters/shared';
@@ -228,13 +229,13 @@ function CreateInspectionForm() {
   const technicianId = watch('technicianId');
   const scheduledAt = watch('scheduledAt');
   /**
-   * The Jobber booking, offered for an occupied inspection.
+   * The Jobber booking, offered for every kind of visit the office books in Jobber.
    *
    * Started from the tenant report once per property, unit and lease, and not
    * again for the same one: choosing a technician refetches whether they can be
    * put on the visit, and must not wipe what the coordinator typed.
    */
-  const occupied = inspectionType === InspectionType.OCCUPIED;
+  const bookable = isBookableInspectionType(inspectionType);
   const bookingContext = useJobberBookingContext(
     {
       propertyId,
@@ -242,7 +243,7 @@ function CreateInspectionForm() {
       leaseId: leaseId || undefined,
       technicianId: technicianId || undefined,
     },
-    occupied,
+    bookable,
   );
   const [bookInJobber, setBookInJobber] = useState(true);
   const [bookingFormState, setBookingFormState] = useState(() => bookingForm(null));
@@ -260,13 +261,14 @@ function CreateInspectionForm() {
     bookingContext.data && (!bookingContext.isPlaceholderData || prefilledFor === bookingPlace)
       ? bookingContext.data
       : undefined;
-  const bookingPending = occupied && Boolean(propertyId) && !bookingContextHere && !bookingContext.error;
+  const bookingPending = bookable && Boolean(propertyId) && !bookingContextHere && !bookingContext.error;
   const bookingActive =
-    occupied &&
+    bookable &&
     bookInJobber &&
     bookingContextHere !== undefined &&
     bookingUnavailableReason(bookingContextHere) === null;
-  const bookingProblems = bookingActive ? jobberBookingProblems(bookingFromForm(bookingFormState)) : [];
+  const bookingProblems =
+    bookingActive && bookable ? jobberBookingProblems(bookingFromForm(bookingFormState), inspectionType) : [];
 
   const approvedAreas =
     propertyAreas.data?.filter(
@@ -736,8 +738,9 @@ function CreateInspectionForm() {
           </CardContent>
         </Card>
 
-        {occupied ? (
+        {bookable ? (
           <JobberBookingCard
+            inspectionType={inspectionType}
             book={bookInJobber}
             context={bookingContextHere}
             error={bookingContext.error}

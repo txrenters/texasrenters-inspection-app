@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  COMPLETION_BLOCKS,
   bookingFromTenancy,
   formatOccupiedVisitDetails,
+  isBookableInspectionType,
   jobberBookingProblems,
   jobberBookingText,
   occupiedJobTitle,
@@ -245,3 +247,68 @@ describe('a booking started from the tenant report', () => {
   });
 });
 
+
+describe('a booking for each other kind of inspection', () => {
+  const input = (overrides: Partial<JobberBookingInput> = {}): JobberBookingInput => ({
+    zone: 'Zone 2',
+    benefitPackage: false,
+    services: { filterChange: true, pestControl: true, fleaTreatment: false },
+    filters: [{ size: 'UPDATE' }],
+    planTier: 'Basic',
+    hvacOptedOut: true,
+    contactTenantsBeforeArrival: true,
+    tenants: [{ name: 'Alex Doe', phones: ['(281) 555-0103'] }],
+    accessNotes: ['LB Code: 1234'],
+    notes: ['Tenant moving in 9/30'],
+    ...overrides,
+  });
+  const visit = (inspectionType: 'MOVE_IN' | 'MOVE_OUT' | 'BACK_TO_MARKET' | 'HVAC') => ({
+    inspectionType,
+    address: '200 Oak Ave',
+    scheduledOn: '2026-10-01',
+    inspectionUrl: 'https://inspection.texasrenters.com/inspections/inspection-2',
+  });
+
+  it.each([
+    ['MOVE_IN', '200 Oak Ave - Zone 2 - Move in Inspection', 'Zone 2 - Move in Inspection'],
+    ['MOVE_OUT', '200 Oak Ave - Zone 2 - Move out inspection', 'Zone 2 - Move out inspection'],
+    ['BACK_TO_MARKET', '200 Oak Ave - Zone 2 - BTM Inspection', 'Zone 2 - BTM Inspection'],
+    ['HVAC', '200 Oak Ave - Zone 2 - HVAC Inspection', 'Zone 2 - HVAC Inspection'],
+  ] as const)('titles a %s visit the way the office does', (type, visitTitle, jobTitle) => {
+    const text = jobberBookingText(input(), visit(type));
+    expect(text.visitTitle).toBe(visitTitle);
+    expect(text.jobTitle).toBe(jobTitle);
+  });
+
+  it.each(['MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'HVAC'] as const)(
+    'writes %s Details without the benefit-package services, or anything the sync reads as occupied',
+    (type) => {
+      const details = jobberBookingText(input(), visit(type)).visitDetails;
+      expect(details).not.toMatch(/occupied\s+insp/i);
+      expect(details).not.toMatch(/Filter Change|Pest Control|Basic Plan|UPDATE/);
+      expect(details).not.toMatch(/Inspect Cloud/i);
+      const read = parseVisitDetails(details);
+      expect(read.services.occupiedInspection).toBe(false);
+      expect(read.tenants).toEqual([{ unit: null, name: 'Alex Doe', phones: ['(281) 555-0103'] }]);
+      expect(read.accessNotes).toEqual(['LB Code: 1234']);
+      // The office's block, whole, as the parser finds it.
+      expect(read.completionInstructions.length).toBeGreaterThan(0);
+      expect(details.endsWith(COMPLETION_BLOCKS[type].slice(1).join('\n'))).toBe(true);
+    },
+  );
+
+  it("keeps the office's numbering on a move-in, with the app where Inspect Cloud was", () => {
+    expect(COMPLETION_BLOCKS.MOVE_IN).toContain('2. Submit it in the Texas Renters inspection app.');
+    expect(COMPLETION_BLOCKS.BACK_TO_MARKET).toContain('3. Place Sign, Supra, and Lockbox');
+  });
+
+  it('checks filter sizes only where filters are written', () => {
+    expect(jobberBookingProblems(input(), 'MOVE_IN')).toEqual([]);
+    expect(jobberBookingProblems(input(), 'OCCUPIED')).toEqual(['"UPDATE" is not a filter size like 20x25x1.']);
+  });
+
+  it('books the five inspection types and nothing else', () => {
+    expect(['OCCUPIED', 'MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'HVAC'].every(isBookableInspectionType)).toBe(true);
+    expect(['SUPRA_LOCKBOX_PLACEMENT', 'ROOF', 'AC_FILTER_DELIVERY', null].some(isBookableInspectionType)).toBe(false);
+  });
+});

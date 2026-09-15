@@ -68,6 +68,77 @@ function visitQuarter(day: string): string {
   return quarterLabel(quarterOf(new Date(`${day}T00:00:00Z`)));
 }
 
+/** The kinds of inspection the console can book a Jobber visit for. */
+export const BOOKABLE_INSPECTION_TYPES = ['OCCUPIED', 'MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'HVAC'] as const;
+export type BookableInspectionType = (typeof BOOKABLE_INSPECTION_TYPES)[number];
+
+export function isBookableInspectionType(type: string | null | undefined): type is BookableInspectionType {
+  return (BOOKABLE_INSPECTION_TYPES as readonly string[]).includes(type ?? '');
+}
+
+/**
+ * What each kind of visit is called at the end of its title, as the office writes it.
+ *
+ * The most common spelling of each, read from the office's own visits on
+ * 2026-09-15 -- "Move in Inspection" 46 times, "Move out inspection" 32 -- and
+ * each still types as its inspection from the title alone.
+ */
+const VISIT_KIND: Record<Exclude<BookableInspectionType, 'OCCUPIED'>, string> = {
+  MOVE_IN: 'Move in Inspection',
+  MOVE_OUT: 'Move out inspection',
+  BACK_TO_MARKET: 'BTM Inspection',
+  HVAC: 'HVAC Inspection',
+};
+
+/** Where the office's steps said to upload to Inspect Cloud, which the app replaces. */
+const SUBMIT_IN_APP = 'Submit it in the Texas Renters inspection app';
+
+/**
+ * The completion block the office writes on each kind of visit, heading first.
+ *
+ * Word for word from their visits (the lines shared by every one of them),
+ * with one change: "Upload to Inspect Cloud" becomes submitting in the app,
+ * which is where these inspections are done now. The numbering is kept, because
+ * the office reads "1, 3" in a job's notes against it. A move-in's "call Frank
+ * about the sign" lines are left out: they are on a third of the visits, and
+ * carry a phone number.
+ *
+ * HVAC has no office template to copy -- one visit, no steps -- so it asks
+ * only for the one thing that is certain.
+ */
+export const COMPLETION_BLOCKS: Record<Exclude<BookableInspectionType, 'OCCUPIED'>, readonly string[]> = {
+  MOVE_IN: [
+    'Completion Instruction',
+    '• Indicate in the notes which services were completed by using the corresponding numbers:',
+    '1. Conduct Move in inspection.',
+    `2. ${SUBMIT_IN_APP}.`,
+    '3. Add cockroach baits on kitchen cabinets',
+    '4. Assess if it needs professional cleaning.',
+    '5. Check if it needs installation for float switch or if its already installed.',
+    '• Note if it needs installation for float switch or if its already installed',
+    '• If needed refresh cleaning or professional cleaning, inform us while you are at the location so we can schedule it in Jobber',
+    '• Put additional notes if needed',
+    '•Document and let Franc know if and how many locks are on kwik set locks/the easy rekey tool system',
+  ],
+  MOVE_OUT: [
+    'Completion Instruction',
+    '• Conduct Move out inspection',
+    '- Thoroughly check for any damages and Make work order',
+    `• ${SUBMIT_IN_APP}`,
+    '• Put additional notes if needed',
+    '• Document and let Franc know if and how many locks are on kwik set locks/the easy rekey tool system',
+    "• Asses the doors and take picture if it's on kwik set system.",
+  ],
+  BACK_TO_MARKET: [
+    'Instruction Completion',
+    'Note: Pick up sign/supra/lockbox at the office',
+    '1. Conduct BTM Inspection',
+    `2. ${SUBMIT_IN_APP}`,
+    '3. Place Sign, Supra, and Lockbox',
+  ],
+  HVAC: ['Instruction for completion', `• Complete the HVAC inspection in the Texas Renters inspection app.`],
+};
+
 /**
  * The visit title, in the shape the office already reads.
  *
@@ -101,6 +172,44 @@ export function occupiedJobTitle(input: { zone: string | null; scheduledOn: stri
   return [input.zone?.trim(), kind].filter(Boolean).join(' - ');
 }
 
+/**
+ * The Details for a kind of visit other than occupied.
+ *
+ * Who to call, how to get in and anything else the coordinator wrote, then a
+ * link back to the inspection, then the office's completion block for that
+ * kind. There is no services line: filters, pest control and the plan are the
+ * benefit-package visit's business. And nothing here may say "occupied
+ * inspection" -- the sync would read the visit as one.
+ */
+export function formatVisitDetails(
+  inspectionType: Exclude<BookableInspectionType, 'OCCUPIED'>,
+  booking: Pick<OccupiedVisitBooking, 'contactTenantsBeforeArrival' | 'tenants' | 'accessNotes' | 'notes' | 'inspectionUrl'>,
+): string {
+  const paragraphs = [
+    [
+      booking.contactTenantsBeforeArrival ? 'Make sure to contact tenants that you are on your way.' : null,
+      ...tenantLines(booking.tenants),
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    booking.accessNotes.map((note) => note.trim()).filter(Boolean).join('\n'),
+    ...booking.notes.map((note) => note.trim()).filter(Boolean),
+    booking.inspectionUrl ? `Texas Renters inspection: ${booking.inspectionUrl}` : null,
+    COMPLETION_BLOCKS[inspectionType].join('\n'),
+  ];
+  return paragraphs.filter((paragraph) => paragraph && paragraph.trim()).join('\n\n');
+}
+
+function tenantLines(tenants: OccupiedVisitTenant[]): string[] {
+  return tenants
+    .filter((tenant) => tenant.name.trim() || tenant.phones.length)
+    .map((tenant) =>
+      [tenant.unit?.trim() ? `${tenant.unit.trim()} - Tenant:` : 'Tenant:', tenant.name.trim(), ...tenant.phones]
+        .filter(Boolean)
+        .join(' '),
+    );
+}
+
 export function formatOccupiedVisitDetails(booking: OccupiedVisitBooking): string {
   const tier = booking.planTier?.trim() ?? '';
   const plan = [
@@ -130,13 +239,7 @@ export function formatOccupiedVisitDetails(booking: OccupiedVisitBooking): strin
     .filter(Boolean)
     .join(' + ');
 
-  const tenants = booking.tenants
-    .filter((tenant) => tenant.name.trim() || tenant.phones.length)
-    .map((tenant) =>
-      [tenant.unit?.trim() ? `${tenant.unit.trim()} - Tenant:` : 'Tenant:', tenant.name.trim(), ...tenant.phones]
-        .filter(Boolean)
-        .join(' '),
-    );
+  const tenants = tenantLines(booking.tenants);
 
   const paragraphs = [
     services,
@@ -231,10 +334,14 @@ export const MAX_BOOKING_FILTER_QUANTITY = 20;
  * Empty when it can go. The console disables its button on this and the API
  * refuses on it, so the two cannot disagree about what is bookable.
  */
-export function jobberBookingProblems(input: JobberBookingInput): string[] {
+export function jobberBookingProblems(
+  input: JobberBookingInput,
+  inspectionType: BookableInspectionType = 'OCCUPIED',
+): string[] {
   const problems: string[] = [];
-  // Sizes only matter when the filter change is booked; unticked, none are written.
-  if (!input.services.filterChange) return problems;
+  // Sizes only matter on a benefit-package visit that books the filter change;
+  // anywhere else, none are written.
+  if (inspectionType !== 'OCCUPIED' || !input.services.filterChange) return problems;
   for (const filter of input.filters) {
     if (!FILTER_SIZE_PATTERN.test(filter.size))
       problems.push(`"${filter.size.trim() || 'blank'}" is not a filter size like 20x25x1.`);
@@ -262,9 +369,24 @@ export interface JobberBookingText {
  */
 export function jobberBookingText(
   input: JobberBookingInput,
-  visit: { address: string; scheduledOn: string; inspectionUrl: string | null },
+  visit: {
+    /** Occupied when omitted: the kind the console first booked. */
+    inspectionType?: BookableInspectionType;
+    address: string;
+    scheduledOn: string;
+    inspectionUrl: string | null;
+  },
 ): JobberBookingText {
   const zone = input.zone?.trim() || null;
+  const type = visit.inspectionType ?? 'OCCUPIED';
+  if (type !== 'OCCUPIED') {
+    const kind = VISIT_KIND[type];
+    return {
+      jobTitle: [zone, kind].filter(Boolean).join(' - '),
+      visitTitle: [visit.address.trim() || 'Unknown address', zone, kind].filter(Boolean).join(' - '),
+      visitDetails: formatVisitDetails(type, { ...input, inspectionUrl: visit.inspectionUrl }),
+    };
+  }
   return {
     jobTitle: occupiedJobTitle({ zone, scheduledOn: visit.scheduledOn, benefitPackage: input.benefitPackage }),
     visitTitle: occupiedVisitTitle({
