@@ -17,6 +17,14 @@ const STORAGE_KEY = 'texasrenters.session';
 /** Matches the web client. Refresh before expiry, not after. */
 const RENEW_MARGIN_SECONDS = 60;
 
+/**
+ * How much life a token needs to be used without renewing it.
+ *
+ * Inside the renewal margin, but not so close to the end that it expires on
+ * the way to the server.
+ */
+const UNRENEWED_MARGIN_SECONDS = 10;
+
 export interface MobileSession {
   accessToken: string;
   refreshToken: string;
@@ -106,8 +114,19 @@ async function persist(session: MobileSession | null) {
 
 async function load(): Promise<MobileSession | null> {
   if (cached !== undefined) return cached;
+  let raw: string | null;
   try {
-    const raw = await sessionStorage.getItem(STORAGE_KEY);
+    raw = await sessionStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage that refused to answer, which is not the same as storage that
+    // holds no session -- and must not be remembered as one. An iPhone's
+    // keychain refuses every read while the phone is locked, and the location
+    // task reads the session from a pocket. Caching `null` here would leave
+    // this process signed out after the phone was unlocked, with a perfectly
+    // good session sitting in the keychain.
+    return null;
+  }
+  try {
     if (!raw) return (cached = null);
     const stored = JSON.parse(raw) as { accessToken?: string; refreshToken?: string };
     if (!stored.accessToken || !stored.refreshToken) return (cached = null);
@@ -133,11 +152,19 @@ function endpoint(path: string) {
  * firing several requests at once would otherwise present the same retired
  * token repeatedly — which the backend correctly treats as a stolen token and
  * answers by ending every session for the account.
+ *
+ * `renew: false` is for a caller that could not save a renewed session, and
+ * so must not ask for one: rotation retires the old refresh token either way,
+ * and offering it again later ends the session. It gets the token while the
+ * token still has a little life in it, and `null` after that.
  */
-export async function getSession(): Promise<MobileSession | null> {
+export async function getSession({ renew = true }: { renew?: boolean } = {}): Promise<
+  MobileSession | null
+> {
   const current = await load();
   if (!current) return null;
   if (!isExpired(current)) return current;
+  if (!renew) return isExpired(current, UNRENEWED_MARGIN_SECONDS) ? null : current;
 
   inFlightRefresh ??= refresh(current.refreshToken).finally(() => {
     inFlightRefresh = null;

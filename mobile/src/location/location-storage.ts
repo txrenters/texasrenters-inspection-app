@@ -32,22 +32,41 @@ export async function writeLocationQueue(queue: readonly QueuedFix[]) {
   }
 }
 
+/** The end of the line of changes waiting to be applied. */
+let lastChange: Promise<unknown> = Promise.resolve();
+
 /**
- * Appends what the OS just delivered.
+ * One change to the queue at a time.
  *
- * Read-modify-write, which is safe here because the only writers are this
- * device's own location task and its sender, and neither runs concurrently
- * with itself.
+ * Every change is a read, a modification and a write, and two of them
+ * interleaved lose one: the sender reads the queue, the location task appends a
+ * fix, and the sender writes back what it read minus what it sent -- without
+ * the fix that arrived in between. That could already happen while fixes were
+ * only sent from a timer; sending as each fix is recorded makes the two
+ * overlap on every fix, so changes wait for the one before them here.
+ *
+ * Within one JavaScript runtime, which is where the task and the sender both
+ * run.
  */
+export function updateLocationQueue(
+  change: (queue: QueuedFix[]) => readonly QueuedFix[],
+): Promise<void> {
+  const applied = lastChange.then(async () => {
+    await writeLocationQueue(change(await readLocationQueue()));
+  });
+  // A change that throws must not wedge every change behind it.
+  lastChange = applied.catch(() => undefined);
+  return applied;
+}
+
+/** Appends what the OS just delivered. */
 export async function appendLocationFixes(fixes: readonly QueuedFix[]) {
   if (!fixes.length) return;
-  const existing = await readLocationQueue();
-  await writeLocationQueue([...existing, ...fixes]);
+  await updateLocationQueue((existing) => [...existing, ...fixes]);
 }
 
 export async function removeLocationFixes(ids: readonly string[]) {
   if (!ids.length) return;
   const dropped = new Set(ids);
-  const existing = await readLocationQueue();
-  await writeLocationQueue(existing.filter((fix) => !dropped.has(fix.id)));
+  await updateLocationQueue((existing) => existing.filter((fix) => !dropped.has(fix.id)));
 }
