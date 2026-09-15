@@ -24,6 +24,7 @@ import {
   JOB_CLOSE_MUTATION,
   JOB_CREATE_MUTATION,
   JOB_NOTE_CREATE_MUTATION,
+  JOB_VISITS_QUERY,
   TBP_JOB_INVOICING,
   VISIT_COMPLETE_MUTATION,
   VISIT_CREATE_MUTATION,
@@ -603,22 +604,29 @@ export class JobberOutboundWorker {
    * Takes a cancelled inspection's visit off Jobber's schedule.
    *
    * Closes the job with its open visits removed, which the office chose: the
-   * job stays as closed history and can be reopened. Only when this system knows
-   * of no other visit on the job -- the office's jobs hold one each, but closing
-   * a job with other work on it would take that work off the schedule too, so
-   * then only this visit is deleted.
+   * job stays as closed history and can be reopened. Only when Jobber says the
+   * job has no other open visit -- most of the office's jobs hold one, but 37 of
+   * the ones imported hold two to five, and closing a job with other work on it
+   * would take that work off the schedule too. Then only this visit is deleted,
+   * and so it is when the job has more visits than one page shows.
    */
   private async pushCancellation(
     organizationId: string,
     task: { inspectionId: string; jobberVisitId: string | null; jobberJobId: string | null },
   ) {
     const visitId = this.editedVisit(task);
-    const otherVisits = task.jobberJobId
-      ? await this.prisma.jobberVisitImport.count({
-          where: { organizationId, jobberJobId: task.jobberJobId, NOT: { jobberVisitId: visitId } },
-        })
-      : 1;
-    if (task.jobberJobId && otherVisits === 0) {
+    const job = task.jobberJobId
+      ? (
+          await this.client.request<{
+            job: { visits: { nodes: { id: string; isComplete: boolean }[]; pageInfo: { hasNextPage: boolean } } } | null;
+          }>(organizationId, JOB_VISITS_QUERY, { id: task.jobberJobId })
+        ).job
+      : null;
+    const onlyOpenVisit =
+      job !== null &&
+      !job.visits.pageInfo.hasNextPage &&
+      job.visits.nodes.every((visit) => visit.id === visitId || visit.isComplete);
+    if (task.jobberJobId && onlyOpenVisit) {
       const closed = await this.client.request<{ jobClose: JobberUserErrors }>(organizationId, JOB_CLOSE_MUTATION, {
         jobId: task.jobberJobId,
         input: { modifyIncompleteVisitsBy: 'DESTROY_ALL' },

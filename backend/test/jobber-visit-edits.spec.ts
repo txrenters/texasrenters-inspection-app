@@ -167,25 +167,41 @@ describe('pushing a console edit to Jobber', () => {
     });
   });
 
-  it("closes a cancelled inspection's job and removes its open visit", async () => {
-    const { worker, request } = build({
-      task: editTask(JobberOutboundKind.VISIT_CANCEL),
-      response: { jobClose: { userErrors: [] } },
-    });
-    await worker.run('org-1');
-    expect(request.mock.calls[0][1]).toContain('jobClose');
-    expect(request.mock.calls[0][2]).toEqual({ jobId: 'job-9', input: { modifyIncompleteVisitsBy: 'DESTROY_ALL' } });
+  const jobVisits = (nodes: { id: string; isComplete: boolean }[], hasNextPage = false) => ({
+    job: { visits: { nodes, pageInfo: { hasNextPage } } },
   });
 
-  it('deletes only the visit when the job holds other visits too', async () => {
-    const { worker, request } = build({
-      task: editTask(JobberOutboundKind.VISIT_CANCEL),
-      otherVisitsOnJob: 2,
-      response: { visitDelete: { userErrors: [] } },
-    });
+  it("closes a cancelled inspection's job and removes its open visit, when it is the job's only open one", async () => {
+    const { worker, request } = build({ task: editTask(JobberOutboundKind.VISIT_CANCEL) });
+    request
+      .mockResolvedValueOnce(jobVisits([{ id: 'visit-9', isComplete: false }, { id: 'visit-1', isComplete: true }]))
+      .mockResolvedValueOnce({ jobClose: { userErrors: [] } });
+
+    await expect(worker.run('org-1')).resolves.toMatchObject({ sent: 1 });
+    expect(request.mock.calls[0][2]).toEqual({ id: 'job-9' });
+    expect(request.mock.calls[1][1]).toContain('jobClose');
+    expect(request.mock.calls[1][2]).toEqual({ jobId: 'job-9', input: { modifyIncompleteVisitsBy: 'DESTROY_ALL' } });
+  });
+
+  it('deletes only the visit when Jobber shows other open visits on the job', async () => {
+    const { worker, request } = build({ task: editTask(JobberOutboundKind.VISIT_CANCEL) });
+    request
+      .mockResolvedValueOnce(jobVisits([{ id: 'visit-9', isComplete: false }, { id: 'visit-10', isComplete: false }]))
+      .mockResolvedValueOnce({ visitDelete: { userErrors: [] } });
+
     await worker.run('org-1');
-    expect(request.mock.calls[0][1]).toContain('visitDelete');
-    expect(request.mock.calls[0][2]).toEqual({ visitIds: ['visit-9'] });
+    expect(request.mock.calls[1][1]).toContain('visitDelete');
+    expect(request.mock.calls[1][2]).toEqual({ visitIds: ['visit-9'] });
+  });
+
+  it('deletes only the visit when the job has more visits than one page shows', async () => {
+    const { worker, request } = build({ task: editTask(JobberOutboundKind.VISIT_CANCEL) });
+    request
+      .mockResolvedValueOnce(jobVisits([{ id: 'visit-9', isComplete: false }], true))
+      .mockResolvedValueOnce({ visitDelete: { userErrors: [] } });
+
+    await worker.run('org-1');
+    expect(request.mock.calls[1][1]).toContain('visitDelete');
   });
 
   it('marks an edit sent only if the office has not edited again while it was going', async () => {

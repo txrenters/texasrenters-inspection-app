@@ -301,6 +301,32 @@ export const JOB_CLOSE_MUTATION = `
   }
 `;
 
+/**
+ * The visits on one job, to decide whether closing it takes anything else off
+ * the schedule.
+ *
+ * Asked of Jobber at the moment of cancelling rather than read from the visits
+ * this system imported: those cover the sync's window only, and a job's visit
+ * two months out would be invisible to it and destroyed by the close.
+ * `job(id:)`, `Job.visits` and `Visit.isComplete` are verified; the page shape
+ * is the one the paged visit query already uses.
+ */
+export const JOB_VISITS_QUERY = `
+  query JobVisits($id: EncodedId!) {
+    job(id: $id) {
+      visits(first: 50) {
+        nodes {
+          id
+          isComplete
+        }
+        pageInfo {
+          hasNextPage
+        }
+      }
+    }
+  }
+`;
+
 export const VISIT_DELETE_MUTATION = `
   mutation DeleteVisits($visitIds: [EncodedId!]!) {
     visitDelete(visitIds: $visitIds) {
