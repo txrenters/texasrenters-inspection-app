@@ -61,20 +61,25 @@ describe('which inspection a benefit-package visit is', () => {
       });
   });
 
-  /** "Premium (w/o HVAC)" is its own plan; a substring match would sell 43 tenancies an HVAC inspection. */
+  /** "Premium (w/o HVAC)" is its own plan: "Not Completed" there is not an HVAC plan the tenant has. */
   it('does not read "Premium (w/o HVAC)" as Premium', () => {
     expect(tbpInspectionFor(4, plan('Premium (w/o HVAC)', 'Not Completed'))).toMatchObject({
       inspectionType: 'OCCUPIED',
-      reason: 'PLAN_WITHOUT_HVAC',
+      reason: 'HVAC_PLAN_NOT_ADDED',
     });
   });
 
-  it('flags a tier the rule does not name that says it is on our AC plan anyway', () => {
-    for (const tier of ['Premium (w/o HVAC)', 'BX', 'MX'])
+  /**
+   * Asked about the 26 BX and "Premium (w/o HVAC)" tenancies on our AC plan, the
+   * office said HVAC: they are all enrolled in the benefit package, and the AC
+   * plan is what decides it, whatever the management plan is called.
+   */
+  it('is an HVAC inspection for any other plan on our AC plan', () => {
+    for (const tier of ['Premium (w/o HVAC)', 'BX', 'MX', null])
       expect(tbpInspectionFor(4, plan(tier, 'On our AC Plan'))).toEqual({
-        inspectionType: 'OCCUPIED',
-        reason: 'AC_PLAN_ON_OTHER_TIER',
-        needsReview: true,
+        inspectionType: 'HVAC',
+        reason: 'HVAC_PLAN_ADDED',
+        needsReview: false,
       });
   });
 

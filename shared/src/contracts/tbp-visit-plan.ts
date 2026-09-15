@@ -10,6 +10,8 @@
  *   still has to say "On our AC Plan" or "Not Completed".
  * - Standard and Basic tenancies can add the HVAC plan, and the ones that have
  *   ("On our AC Plan") get the HVAC inspection too.
+ * - So does a tenancy on any other plan -- BX, "Premium (w/o HVAC)" -- whose
+ *   HVAC Plan says "On our AC Plan" (the office, asked about the 26 of those).
  *
  * Checked against the report before it was written down. Of the Standard and
  * Basic tenancies "On our AC Plan", 33 of 47 had their last HVAC inspection in
@@ -40,8 +42,6 @@ export type TbpInspectionReason =
   | 'HVAC_OPTED_OUT'
   | 'HVAC_PLAN_NOT_ADDED'
   | 'HVAC_PLAN_NOT_RECORDED'
-  | 'AC_PLAN_ON_OTHER_TIER'
-  | 'PLAN_WITHOUT_HVAC'
   | 'SET_BY_COORDINATOR';
 
 export interface TbpInspectionDecision {
@@ -50,10 +50,9 @@ export interface TbpInspectionDecision {
   /**
    * The report does not settle it, so somebody should look before publishing.
    *
-   * A Premium or Plus tenancy with no recognisable HVAC Plan, and a tenancy on
-   * a tier the rule does not name (BX, MX, Premium (w/o HVAC)) whose HVAC Plan
-   * says "On our AC Plan" anyway. Both are planned as occupied inspections,
-   * which is what the rule says, and both are shown to the office.
+   * A Premium or Plus tenancy whose HVAC Plan is blank or unrecognised: the
+   * plan includes an HVAC inspection, but the rule asks the report to confirm
+   * it. Planned as an occupied inspection, and shown to the office.
    */
   needsReview: boolean;
 }
@@ -64,10 +63,8 @@ export const TBP_INSPECTION_REASON_TEXT: Record<TbpInspectionReason, string> = {
   PLAN_INCLUDES_HVAC: 'Premium and Plus include the HVAC plan.',
   HVAC_PLAN_ADDED: 'On our AC Plan.',
   HVAC_OPTED_OUT: 'Opted out of the HVAC plan.',
-  HVAC_PLAN_NOT_ADDED: 'Standard and Basic get an HVAC inspection only on our AC plan.',
+  HVAC_PLAN_NOT_ADDED: 'Not on our AC Plan, and the management plan does not include it.',
   HVAC_PLAN_NOT_RECORDED: 'Premium or Plus, but the HVAC plan is not recorded.',
-  AC_PLAN_ON_OTHER_TIER: 'On our AC Plan, but on a management plan the HVAC rule does not name.',
-  PLAN_WITHOUT_HVAC: 'This management plan has no HVAC inspection.',
   SET_BY_COORDINATOR: 'Set by a coordinator.',
 };
 
@@ -77,21 +74,18 @@ export interface TbpTenancyPlan {
   hvacPlan: string | null;
 }
 
-type Tier = 'INCLUDES_HVAC' | 'CAN_ADD_HVAC' | 'OTHER';
 type HvacPlan = 'ON_PLAN' | 'NOT_COMPLETED' | 'OPTED_OUT' | 'UNKNOWN';
 
 /**
- * The management plan, by what it means for HVAC.
+ * Whether the management plan includes the HVAC plan: Premium and Plus.
  *
  * Exact names only. "Premium (w/o HVAC)" is a different plan from "Premium" --
- * its name says so -- and a substring match would give its 43 tenancies an HVAC
- * inspection nobody sold them.
+ * its name says so -- and a substring match would give its "Not Completed"
+ * tenancies an HVAC inspection nobody sold them.
  */
-function tierOf(plan: string | null): Tier {
+function includesHvac(plan: string | null): boolean {
   const name = (plan ?? '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/ plan$/, '');
-  if (name === 'premium' || name === 'plus') return 'INCLUDES_HVAC';
-  if (name === 'standard' || name === 'basic') return 'CAN_ADD_HVAC';
-  return 'OTHER';
+  return name === 'premium' || name === 'plus';
 }
 
 /**
@@ -123,18 +117,14 @@ export function tbpInspectionFor(quarter: QuarterNumber, tenancy: TbpTenancyPlan
   // the plan would otherwise include.
   if (hvac === 'OPTED_OUT') return decision('OCCUPIED', 'HVAC_OPTED_OUT');
 
-  switch (tierOf(tenancy.managementPlan)) {
-    case 'INCLUDES_HVAC':
-      return hvac === 'ON_PLAN' || hvac === 'NOT_COMPLETED'
-        ? decision('HVAC', 'PLAN_INCLUDES_HVAC')
-        : decision('OCCUPIED', 'HVAC_PLAN_NOT_RECORDED', true);
-    case 'CAN_ADD_HVAC':
-      return hvac === 'ON_PLAN' ? decision('HVAC', 'HVAC_PLAN_ADDED') : decision('OCCUPIED', 'HVAC_PLAN_NOT_ADDED');
-    default:
-      return hvac === 'ON_PLAN'
-        ? decision('OCCUPIED', 'AC_PLAN_ON_OTHER_TIER', true)
-        : decision('OCCUPIED', 'PLAN_WITHOUT_HVAC');
-  }
+  if (includesHvac(tenancy.managementPlan))
+    return hvac === 'ON_PLAN' || hvac === 'NOT_COMPLETED'
+      ? decision('HVAC', 'PLAN_INCLUDES_HVAC')
+      : decision('OCCUPIED', 'HVAC_PLAN_NOT_RECORDED', true);
+
+  // Every other plan -- Standard, Basic, BX, MX, Premium (w/o HVAC) -- gets
+  // the HVAC inspection when the tenancy is on our AC plan, and not otherwise.
+  return hvac === 'ON_PLAN' ? decision('HVAC', 'HVAC_PLAN_ADDED') : decision('OCCUPIED', 'HVAC_PLAN_NOT_ADDED');
 }
 
 // ---------------------------------------------------------------- Details
