@@ -1,5 +1,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { DriveTimeSource, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import {
+  DriveTimeSource,
+  InspectionStatus,
+  InspectionType,
+  PlanOriginKind,
+  TbpPlanStatus,
+  TbpStopStatus,
+} from '@prisma/client';
 import {
   type AssignedCrew,
   type DayLimits,
@@ -11,6 +18,8 @@ import {
   crewKey,
   estimatedDriveMinutes,
   haversineMeters,
+  mainTechnicians,
+  quarterEnd,
   quarterLabel,
   shortestOpenPathOrder,
   workingDaysOfQuarter,
@@ -80,7 +89,8 @@ export interface RoutingSummary {
 /** What a stop routing could not place says, on the stop. */
 const UNPLACED_MESSAGE: Record<RoutingUnplacedReason, string> = {
   NO_WORKING_DAYS: 'The quarter has no working days to place this visit on.',
-  NO_QUALIFIED_TECHNICIAN: 'No technician with a planning profile is qualified for this kind of visit.',
+  NO_QUALIFIED_TECHNICIAN:
+    'No technician set up for planning is given this kind of inspection in Jobber, so there is nobody to send.',
   NO_CAPACITY: 'No technician-day this quarter has room for this visit inside the day limits.',
   LONGER_THAN_A_DAY: 'This visit is longer than a whole day on site.',
   DRIVE_LIMIT: 'No day it could join keeps the drive between properties inside the limit.',
@@ -168,14 +178,14 @@ export class QuarterPlannerService {
 
     const { stops, overrides } = await this.plannableStops(organizationId, planId, settings);
     const dates = workingDaysOfQuarter(quarter, settings.holidays);
-    const { days, homes } = await this.availability(
+    const { days, homes, technicianRank } = await this.availability(
       organizationId,
+      quarter,
       dates,
       [...new Set(stops.map((stop) => stop.inspectionType as InspectionType))],
     );
 
     const limits: DayLimits = { maxOnSiteMinutes: settings.maxOnSiteMinutes, maxDriveMinutes: settings.maxDriveMinutes };
-    const technicianRank = rankByLastQuarter(stops);
     const rotation = { position: new Map(stops.map((stop, index) => [stop.stopId, index])), size: stops.length };
 
     const assignment = assignQuarter(stops, days, { limits, technicianRank });
@@ -346,7 +356,7 @@ export class QuarterPlannerService {
   /**
    * Who can work each day of the quarter, per kind of visit, and where they live.
    *
-   * Two independent gates, and both matter. A planning profile marked plannable
+   * Three gates, and each matters. A planning profile marked plannable
    * is a coordinator saying "this person takes benefit-package days" -- and a
    * technician with no profile at all is not planned: accounts carrying the
    * technician role include office staff who test the app, and a plan books
@@ -354,10 +364,25 @@ export class QuarterPlannerService {
    * and per kind of visit, because a certificate lapsing mid-quarter must take
    * away the later days and leave the earlier ones alone.
    *
+   * And a kind of visit goes only to the technicians the office gives it to in
+   * Jobber (`jobberAssignments`, `mainTechnicians`): the office's rule is that a
+   * quarter is assigned the way Jobber already is, occupied inspections to one
+   * technician and HVAC inspections to another. Whoever took a tenancy last
+   * quarter is preferred only among those, so an occupied tenancy's HVAC
+   * quarter goes to the HVAC technician rather than back to the occupied one.
+   * A kind nobody has been given in Jobber is blocked with the reason, never
+   * handed to whoever happens to be free.
+   *
    * The home is used only to start a day at the end nearer it. It is never
    * counted against the day: the office's drive limit starts at the first job.
    */
-  private async availability(organizationId: string, dates: readonly string[], types: readonly InspectionType[]) {
+  private async availability(
+    organizationId: string,
+    quarter: Quarter,
+    dates: readonly string[],
+    types: readonly InspectionType[],
+  ) {
+    const assigned = await this.jobberAssignments(organizationId, quarter);
     const profiles = await this.prisma.technicianPlanningProfile.findMany({
       where: { organizationId },
       select: { technicianId: true, isPlannable: true, homeLatitude: true, homeLongitude: true },
@@ -376,18 +401,62 @@ export class QuarterPlannerService {
       const qualified: Record<string, string[]> = {};
       const available: string[] = [];
       for (const [type, calendar] of calendars) {
-        qualified[type] = (calendar.get(date) ?? [])
+        const candidates = (calendar.get(date) ?? [])
           .filter((candidate) => plannable.has(candidate.technicianId))
-          // Most qualified first, so the strongest are sent when a day does
-          // not need everybody.
-          .sort((left, right) => right.preferredHeld - left.preferredHeld)
-          .map((candidate) => candidate.technicianId);
+          // Most qualified first, so that between two technicians the office
+          // gives a kind alike, the stronger is sent when a day needs one.
+          .sort((left, right) => right.preferredHeld - left.preferredHeld);
+        qualified[type] = mainTechnicians(
+          new Map(
+            candidates.map((candidate) => [candidate.technicianId, assigned.get(type)?.get(candidate.technicianId) ?? 0]),
+          ),
+        );
         for (const technicianId of qualified[type]) if (!available.includes(technicianId)) available.push(technicianId);
       }
       return { date, technicianIds: available, qualified };
     });
 
-    return { days, homes };
+    // Between technicians who take the same kind, the one given it most is sent first.
+    const technicianRank = (technicianId: string, inspectionType: string) =>
+      -(assigned.get(inspectionType as InspectionType)?.get(technicianId) ?? 0);
+
+    return { days, homes, technicianRank };
+  }
+
+  /**
+   * How many inspections of each kind the office has assigned each technician
+   * in Jobber, over the year to the end of the quarter being planned.
+   *
+   * Read from the inspections booked in Jobber, by who each is assigned to now:
+   * the sync keeps that in step with Jobber, so a visit the office moved to
+   * another technician counts for the one it moved to. A year, so an HVAC
+   * quarter is always inside it; to the quarter's end, so visits the office has
+   * already booked into the quarter count too. A cancelled visit was not
+   * worked, and is not counted.
+   */
+  private async jobberAssignments(organizationId: string, quarter: Quarter) {
+    const rows = await this.prisma.inspectionAssignment.findMany({
+      where: {
+        isCurrent: true,
+        inspection: {
+          organizationId,
+          inspectionType: { in: [InspectionType.OCCUPIED, InspectionType.HVAC] },
+          jobberVisitId: { not: null },
+          status: { not: InspectionStatus.CANCELLED },
+          // The quarter after this one a year ago: Q4 2026 reads from 1 January 2026.
+          scheduledAt: { gte: new Date(Date.UTC(quarter.year - 1, quarter.quarter * 3, 1)), lt: quarterEnd(quarter) },
+        },
+      },
+      select: { technicianId: true, inspection: { select: { inspectionType: true } } },
+    });
+
+    const assigned = new Map<InspectionType, Map<string, number>>();
+    for (const row of rows) {
+      const counts = assigned.get(row.inspection.inspectionType) ?? new Map<string, number>();
+      counts.set(row.technicianId, (counts.get(row.technicianId) ?? 0) + 1);
+      assigned.set(row.inspection.inspectionType, counts);
+    }
+    return assigned;
   }
 
   /**
@@ -562,18 +631,6 @@ export function routingSettings(
     maxDriveMinutes: within('maxDriveMinutes', 0, 480),
     holidays: [...new Set(holidays)].sort(),
   };
-}
-
-/**
- * Technicians ranked by how many of the quarter's tenancies they visited last
- * quarter, so the office's benefit-package technician is sent first. In Q3
- * 2026 one technician took 330 of 344 visits.
- */
-function rankByLastQuarter(stops: readonly PlannableStop[]) {
-  const visits = new Map<string, number>();
-  for (const stop of stops)
-    if (stop.previousTechnicianId) visits.set(stop.previousTechnicianId, (visits.get(stop.previousTechnicianId) ?? 0) + 1);
-  return (technicianId: string) => -(visits.get(technicianId) ?? 0);
 }
 
 /** The drive through stops in the order given, in seconds, from a matrix. */
