@@ -144,6 +144,25 @@ describe('the Jobber visit on an inspection', () => {
     expect(screen.queryByText('Booked from this console')).not.toBeInTheDocument();
   });
 
+  it('says which console changes are still on their way to Jobber, and which it refused', () => {
+    render(
+      <JobberVisitDetails
+        title={TITLE}
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        pushes={[
+          { kind: 'VISIT_RESCHEDULE', status: 'PENDING', attempts: 0, lastError: null },
+          { kind: 'VISIT_ASSIGN', status: 'ABANDONED', attempts: 6, lastError: 'Jobber rejected the update.' },
+        ]}
+        action={<button type="button">Edit visit</button>}
+      />,
+    );
+
+    expect(screen.getByText('Sending the new date to Jobber')).toBeInTheDocument();
+    expect(screen.getByText('Jobber did not take the technician')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit visit' })).toBeInTheDocument();
+  });
+
   it('shows nothing for an inspection that did not come from Jobber', () => {
     const { container } = render(<JobberVisitDetails inspectionType="MOVE_IN" />);
     expect(container).toBeEmptyDOMElement();

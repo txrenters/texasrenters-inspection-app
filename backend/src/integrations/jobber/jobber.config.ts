@@ -63,6 +63,12 @@ export function getJobberConfig(env: NodeJS.ProcessEnv = process.env): JobberCon
     // decisions -- one visit a coordinator asked for, or a whole quarter.
     bookingEnabled: env.JOBBER_BOOKING_ENABLED === 'true',
     tbpBookingEnabled: env.JOBBER_TBP_WRITE_ENABLED === 'true',
+    // Follows booking unless set: an office that lets the console book visits
+    // has decided the console writes to Jobber, and edits are the same decision.
+    pushEditsEnabled:
+      env.JOBBER_PUSH_EDITS_ENABLED === undefined
+        ? env.JOBBER_BOOKING_ENABLED === 'true'
+        : env.JOBBER_PUSH_EDITS_ENABLED === 'true',
   };
   if (config.redirectUri) {
     const redirect = new URL(config.redirectUri);

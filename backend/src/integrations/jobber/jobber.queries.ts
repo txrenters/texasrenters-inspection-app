@@ -235,6 +235,110 @@ export const TBP_JOB_INVOICING = {
 } as const;
 
 /**
+ * The edits the console pushes to a visit Jobber already has.
+ *
+ * Signatures verified against the live schema on 2026-09-15, and their payloads
+ * on a second read-only check the same day: every one returns
+ * `userErrors: [MutationErrors!]!`, the shape `visitComplete` has been answering
+ * with in production. Each selects nothing else -- the worker only needs to know
+ * Jobber accepted the change.
+ *
+ *   visitEdit(id, attributes: { title, instructions })
+ *   visitEditSchedule(id, input: { startAt, endAt: { date!, time, timezone! } })
+ *   visitEditAssignedUsers(visitId, input: { assignedUserIds! })
+ *   jobClose(jobId, input: { modifyIncompleteVisitsBy: DESTROY_ALL | COMPLETE_PAST_DESTROY_FUTURE })
+ *   visitDelete(visitIds!)
+ */
+export const VISIT_EDIT_MUTATION = `
+  mutation EditVisit($id: EncodedId!, $attributes: VisitEditAttributes!) {
+    visitEdit(id: $id, attributes: $attributes) {
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+export const VISIT_EDIT_SCHEDULE_MUTATION = `
+  mutation RescheduleVisit($id: EncodedId!, $input: VisitEditScheduleInput!) {
+    visitEditSchedule(id: $id, input: $input) {
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+export const VISIT_EDIT_ASSIGNED_USERS_MUTATION = `
+  mutation AssignVisit($visitId: EncodedId!, $input: VisitEditAssignedUsersInput!) {
+    visitEditAssignedUsers(visitId: $visitId, input: $input) {
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
+ * Closes a job and removes its visits not yet done.
+ *
+ * `DESTROY_ALL`, which the office chose for a cancelled inspection: the visit
+ * leaves the technician's schedule and the job stays as closed history, which
+ * `jobReopen` can undo. Used only when the job holds no other visit this system
+ * knows of; otherwise just the one visit is deleted.
+ */
+export const JOB_CLOSE_MUTATION = `
+  mutation CloseJob($jobId: EncodedId!, $input: JobCloseInput!) {
+    jobClose(jobId: $jobId, input: $input) {
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
+ * The visits on one job, to decide whether closing it takes anything else off
+ * the schedule.
+ *
+ * Asked of Jobber at the moment of cancelling rather than read from the visits
+ * this system imported: those cover the sync's window only, and a job's visit
+ * two months out would be invisible to it and destroyed by the close.
+ * `job(id:)`, `Job.visits` and `Visit.isComplete` are verified; the page shape
+ * is the one the paged visit query already uses.
+ */
+export const JOB_VISITS_QUERY = `
+  query JobVisits($id: EncodedId!) {
+    job(id: $id) {
+      visits(first: 50) {
+        nodes {
+          id
+          isComplete
+        }
+        pageInfo {
+          hasNextPage
+        }
+      }
+    }
+  }
+`;
+
+export const VISIT_DELETE_MUTATION = `
+  mutation DeleteVisits($visitIds: [EncodedId!]!) {
+    visitDelete(visitIds: $visitIds) {
+      userErrors {
+        message
+        path
+      }
+    }
+  }
+`;
+
+/**
  * Attaches a note to the job the visit belongs to.
  *
  * `jobCreateNote`, not `jobNoteCreate`. The latter was a guess and does not

@@ -48,6 +48,7 @@ function workerWith(updatedCount = 1) {
   };
   const prisma = {
     $transaction: jest.fn(async (run: (t: typeof tx) => Promise<unknown>) => run(tx)),
+    jobberOutboundTask: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const worker = new JobberSyncWorker(prisma as never, {} as never, {} as never);
   // Reached directly: it is private, and the alternative is standing up the

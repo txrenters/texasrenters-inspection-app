@@ -5,12 +5,13 @@ import {
   REPORTABLE_VISIT_SERVICES,
   servicesToReschedule,
   VISIT_SERVICE_LABEL,
+  type AdminInspection,
   type JobberBookingStatus,
   type VisitDetails,
   type VisitServicesReport,
 } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +34,8 @@ export function JobberVisitDetails({
   servicesReport,
   servicesReportedAt,
   booking,
+  pushes,
+  action,
 }: {
   title?: string | null;
   details?: string | null;
@@ -42,6 +45,10 @@ export function JobberVisitDetails({
   servicesReportedAt?: string | null;
   /** The booking this console asked Jobber for, when the inspection was created here. */
   booking?: JobberBookingStatus | null;
+  /** Console edits to the visit still on their way to Jobber, or refused by it. */
+  pushes?: AdminInspection['jobberPushes'];
+  /** A control for the header: "Edit visit", where the viewer may. */
+  action?: ReactNode;
 }) {
   const read = useMemo(() => parseVisitDetails(details), [details]);
   if (!title && !read.raw) return null;
@@ -61,17 +68,39 @@ export function JobberVisitDetails({
 
   return (
     <Card aria-labelledby="jobber-visit-title">
-      <CardHeader>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div className="grid gap-1.5">
         <CardTitle id="jobber-visit-title" className="flex flex-wrap items-center gap-2">
           Jobber visit
           {booking?.status === 'SENT' ? <Badge variant="success">Booked from this console</Badge> : null}
           {booking?.status === 'PENDING' || booking?.status === 'FAILED' ? (
             <Badge variant="info">Booking in Jobber</Badge>
           ) : null}
+          {(pushes ?? [])
+            .filter((push) => push.status !== 'ABANDONED')
+            .map((push) => (
+              <Badge key={push.kind} variant="info">
+                Sending {PUSH_LABEL[push.kind]} to Jobber
+              </Badge>
+            ))}
         </CardTitle>
         {title ? <CardDescription>{title}</CardDescription> : null}
+        </div>
+        {action}
       </CardHeader>
       <CardContent className="grid gap-5">
+        {(pushes ?? [])
+          .filter((push) => push.status === 'ABANDONED')
+          .map((push) => (
+            <Alert key={push.kind} variant="destructive">
+              <TriangleAlertIcon />
+              <AlertTitle>Jobber did not take {PUSH_LABEL[push.kind]}</AlertTitle>
+              <AlertDescription>
+                {push.lastError ?? 'The change was refused.'} Make the change in Jobber; until then
+                Jobber&apos;s copy is what the sync keeps.
+              </AlertDescription>
+            </Alert>
+          ))}
         {booking?.status === 'ABANDONED' ? (
           <Alert variant="destructive">
             <TriangleAlertIcon />
@@ -282,6 +311,14 @@ export function JobberVisitDetails({
     </Card>
   );
 }
+
+/** What each kind of console edit changes, in a sentence: "Sending the new date to Jobber". */
+const PUSH_LABEL: Record<NonNullable<AdminInspection['jobberPushes']>[number]['kind'], string> = {
+  VISIT_RESCHEDULE: 'the new date',
+  VISIT_ASSIGN: 'the technician',
+  VISIT_EDIT: 'the visit details',
+  VISIT_CANCEL: 'the cancellation',
+};
 
 function serviceLabels(read: VisitDetails) {
   return [

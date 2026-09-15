@@ -491,6 +491,15 @@ export interface AdminInspection {
    * Null for anything booked in Jobber by the office, or created without one.
    */
   jobberBooking?: JobberBookingStatus | null;
+  /** Console edits to the Jobber visit still waiting for Jobber, or refused by it. */
+  jobberPushes?: {
+    kind: 'VISIT_RESCHEDULE' | 'VISIT_ASSIGN' | 'VISIT_EDIT' | 'VISIT_CANCEL';
+    status: 'PENDING' | 'FAILED' | 'ABANDONED';
+    attempts: number;
+    lastError: string | null;
+  }[];
+  /** Whether changes made in the console to a Jobber visit are sent to Jobber. */
+  jobberEditsPushed?: boolean;
   /**
    * The report's closing block, written at sign-off. Distinct from
    * `internalNotes`, which is never published — these three are printed on the

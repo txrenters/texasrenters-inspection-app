@@ -189,6 +189,9 @@ describe('inspection status lifecycle (spec §11)', () => {
       scheduledInJobber: false,
       // The Jobber booking this console asked for; none for this inspection.
       jobberBooking: null,
+      // No console edit waiting for Jobber, and edits are not pushed here.
+      jobberPushes: [],
+      jobberEditsPushed: false,
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({

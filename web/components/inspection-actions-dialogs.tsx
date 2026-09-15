@@ -25,6 +25,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -109,17 +110,19 @@ export function InspectionEditDialog({
             {/* Date only, matching the DATE column. The hour this used to collect
                 was never used by the schedule it claims to control.
 
-                Locked on a Jobber visit: the sync puts Jobber's date back on
-                its next pass, so a date changed here would not stay changed,
-                and the API refuses it. The description says where to go. */}
+                Locked on a Jobber visit unless the console's edits are sent to
+                Jobber: otherwise the sync puts Jobber's date back on its next
+                pass, and the API refuses it. The description says which. */}
             <DatePicker
-              disabled={inspection.scheduledInJobber}
+              disabled={inspection.scheduledInJobber && !inspection.jobberEditsPushed}
               id="edit-inspection-schedule"
               onChange={setScheduledAt}
               value={scheduledAt}
             />
             <FieldDescription>
-              {inspection.scheduledInJobber ? (
+              {inspection.scheduledInJobber && inspection.jobberEditsPushed ? (
+                <>Scheduled in Jobber. A new date here moves the Jobber visit to it too.</>
+              ) : inspection.scheduledInJobber ? (
                 <>Scheduled in Jobber. Change the date there and it updates here.</>
               ) : (
                 <>Controls when this inspection appears in the technician&rsquo;s schedule.</>
@@ -180,6 +183,93 @@ export function InspectionEditDialog({
             <Button disabled={!scheduledAt || mutation.isPending} type="submit">
               {mutation.isPending ? <Spinner /> : null}
               {mutation.isPending ? 'Saving…' : 'Save changes'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * The visit's title and Details, as the technician and Jobber read them.
+ *
+ * Plain text rather than the booking form: this edits visits the office wrote
+ * in Jobber as well as ones booked here, in whatever shape they are. Sent to
+ * Jobber; for a visit booked here and not yet sent, the booking carries it.
+ */
+export function JobberVisitEditDialog({
+  inspection,
+  onClose,
+}: {
+  inspection: AdminInspection;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(inspection.jobberVisitTitle ?? '');
+  const [details, setDetails] = useState(inspection.jobberVisitDetails ?? '');
+  const mutation = useAdminMutations().updateJobberVisit;
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    try {
+      await mutation.mutateAsync({ id: inspection.id, title: title.trim() || undefined, details });
+      onClose();
+    } catch {
+      // The mutation surfaces the sanitized API error inline.
+    }
+  }
+
+  return (
+    <Dialog onOpenChange={(next) => (next ? undefined : onClose())} open>
+      <DialogContent className="sm:max-w-2xl">
+        <form className="grid gap-4" onSubmit={(event) => void submit(event)}>
+          <DialogHeader>
+            <DialogTitle>Edit Jobber visit</DialogTitle>
+            <DialogDescription>
+              {inspection.scheduledInJobber
+                ? 'Saved here and sent to the visit in Jobber.'
+                : 'Saved here and sent with the booking, which has not reached Jobber yet.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <Field>
+            <FieldLabel htmlFor="jobber-visit-title-input">Visit title</FieldLabel>
+            <Input
+              id="jobber-visit-title-input"
+              maxLength={300}
+              onChange={(event) => setTitle(event.target.value)}
+              value={title}
+            />
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="jobber-visit-details-input">Details</FieldLabel>
+            <Textarea
+              className="min-h-72 font-mono text-xs leading-relaxed"
+              id="jobber-visit-details-input"
+              maxLength={10000}
+              onChange={(event) => setDetails(event.target.value)}
+              value={details}
+            />
+            <FieldDescription>
+              Keep the services line and the completion steps as they are: the app reads the
+              services from them, and the sync reads the kind of inspection.
+            </FieldDescription>
+          </Field>
+
+          {mutation.error ? (
+            <Alert variant="destructive">
+              <AlertDescription>{mutation.error.message}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <DialogFooter>
+            <Button onClick={onClose} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button disabled={mutation.isPending} type="submit">
+              {mutation.isPending ? <Spinner /> : null}
+              {mutation.isPending ? 'Saving…' : 'Save and send'}
             </Button>
           </DialogFooter>
         </form>

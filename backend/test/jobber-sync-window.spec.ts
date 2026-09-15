@@ -25,6 +25,7 @@ const window = (client: { requestDetailed: jest.Mock }, call: number) =>
 
 function build(pages: number) {
   const prisma = {
+    jobberOutboundTask: { findMany: jest.fn().mockResolvedValue([]) },
     jobberConnection: {
       findUnique: jest.fn().mockResolvedValue({ status: 'CONNECTED' }),
       update: jest.fn().mockResolvedValue({}),

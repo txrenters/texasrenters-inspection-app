@@ -40,6 +40,7 @@ const result = (): JobberSyncResult => ({
 function workerFor(stored: { jobberVisitTitle: string | null; jobberVisitDetails: string | null }) {
   const updateMany = jest.fn().mockResolvedValue({ count: 1 });
   const prisma = {
+    jobberOutboundTask: { findMany: jest.fn().mockResolvedValue([]) },
     inspection: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'inspection-1',

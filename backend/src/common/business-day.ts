@@ -77,6 +77,24 @@ export function businessDayFromQuery(value?: string, now: Date = new Date()): Da
   return Number.isNaN(parsed.getTime()) ? now : parsed;
 }
 
+/** "14:30:00": the wall-clock time an instant shows in Texas. */
+export function businessClockTime(instant: Date): string {
+  return zonedTime(instant).toISOString().slice(11, 19);
+}
+
+/**
+ * The instant a Texas wall-clock time names on a Texas date.
+ *
+ * The same one-pass offset reading as `businessDayBounds`. A time inside the
+ * hour a daylight-saving change skips has no instant of its own and lands an
+ * hour out; nobody books a visit at 2:30 in the morning.
+ */
+export function businessInstant(date: string, time: string): Date {
+  const naive = new Date(`${date}T${time}.000Z`);
+  const offsetMs = naive.getTime() - zonedTime(naive).getTime();
+  return new Date(naive.getTime() + offsetMs);
+}
+
 /** The same instant, re-read as though the clock on the wall were UTC. */
 function zonedTime(instant: Date): Date {
   const parts = new Intl.DateTimeFormat('en-CA', {

@@ -23,6 +23,8 @@ export interface JobberConfig {
   bookingEnabled: boolean;
   /** Whether a published quarter plan books its visits in Jobber. */
   tbpBookingEnabled: boolean;
+  /** Whether console edits to a Jobber visit -- day, technician, Details, cancellation -- are pushed to Jobber. */
+  pushEditsEnabled: boolean;
 }
 
 export interface JobberTokenResponse {

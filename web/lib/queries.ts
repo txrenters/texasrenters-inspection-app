@@ -1771,6 +1771,19 @@ export function useAdminMutations() {
         refreshInspection(data.id);
       },
     }),
+    /** The visit's title and Details, edited in the console and pushed to Jobber. */
+    updateJobberVisit: useMutation({
+      mutationFn: ({ id, ...input }: { id: string; title?: string; details: string }) =>
+        api<AdminInspection>(`/api/v1/admin/inspections/${id}/jobber-visit`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+        }),
+      onSuccess: (data, variables) => {
+        mergeAuthoritativeEntity(client, keys.all, data);
+        client.setQueryData(keys.inspection(variables.id), data);
+        refreshInspection(variables.id);
+      },
+    }),
     updateInspection: useMutation({
       mutationFn: ({
         id,
