@@ -10,6 +10,7 @@ import {
   occupiedJobTitle,
   occupiedVisitTitle,
   parseVisitDetails,
+  tenancyZoneLabel,
   type JobberBookingInput,
   type OccupiedVisitBooking,
 } from '../src/index.js';
@@ -196,6 +197,24 @@ describe('a booking sent from the console', () => {
       jobberBookingText(unbooked, { address: '100 Main St', scheduledOn: '2026-10-06', inspectionUrl: null })
         .visitDetails,
     ).not.toContain('UPDATE');
+  });
+});
+
+describe('a zone read off the tenant report', () => {
+  it('is written "Zone N", however the report typed the number', () => {
+    expect(tenancyZoneLabel('4')).toBe('Zone 4');
+    expect(tenancyZoneLabel(' 2 ')).toBe('Zone 2');
+    expect(tenancyZoneLabel('04')).toBe('Zone 4');
+    expect(tenancyZoneLabel('zone5')).toBe('Zone 5');
+    // Already labelled: unchanged, so labelling twice is harmless.
+    expect(tenancyZoneLabel('Zone 3')).toBe('Zone 3');
+  });
+
+  it('is nothing when the report holds no zone', () => {
+    expect(tenancyZoneLabel('Not Set')).toBeNull();
+    expect(tenancyZoneLabel('')).toBeNull();
+    expect(tenancyZoneLabel(null)).toBeNull();
+    expect(tenancyZoneLabel(undefined)).toBeNull();
   });
 });
 
