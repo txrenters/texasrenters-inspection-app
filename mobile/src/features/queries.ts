@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { VisitServicesReport } from '@texasrenters/shared';
 
 import type {
   ChecklistAssessment,
@@ -299,9 +300,9 @@ export function useInspectionActions(id: string) {
       queryKeys.inspectionsRoot,
       queryKeys.dashboard,
     ]);
-  const action = (
+  const action = <Variables = void>(
     state: 'PROCESSING',
-    request: () => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>,
+    request: (variables: Variables) => Promise<Awaited<ReturnType<typeof repositories.inspections.start>>>,
   ) => ({
     mutationFn: request,
     onMutate: async () => {
@@ -312,7 +313,7 @@ export function useInspectionActions(id: string) {
     },
     onSuccess: (
       inspection: Awaited<ReturnType<typeof repositories.inspections.start>>,
-      _variables: void,
+      _variables: Variables,
       context?: { operation: string },
     ) => {
       if (!context || !completeIntent(id, context.operation, inspection)) return;
@@ -320,14 +321,20 @@ export function useInspectionActions(id: string) {
       client.setQueryData(queryKeys.inspection(id), inspection);
       void refresh();
     },
-    onError: (_error: unknown, _variables: void, context?: { operation: string }) => {
+    onError: (_error: unknown, _variables: Variables, context?: { operation: string }) => {
       if (context) failIntent(id, context.operation);
       void refresh();
     },
   });
   return {
-    start: useMutation(action('PROCESSING', () => repositories.inspections.start(id))),
-    complete: useMutation(action('PROCESSING', () => repositories.inspections.complete(id))),
+    start: useMutation(action<void>('PROCESSING', () => repositories.inspections.start(id))),
+    // The services report rides with the submission, so the note to Jobber and
+    // "submitted" are written by the same request.
+    complete: useMutation(
+      action<VisitServicesReport | undefined>('PROCESSING', (servicesReport) =>
+        repositories.inspections.complete(id, servicesReport),
+      ),
+    ),
   };
 }
 export function useRooms(inspectionId: string) {

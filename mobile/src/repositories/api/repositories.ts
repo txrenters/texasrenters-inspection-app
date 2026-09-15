@@ -44,7 +44,7 @@ import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import { resolveApiUrl } from '@texasrenters/shared';
-import type { InspectionType } from '@texasrenters/shared';
+import type { InspectionType, VisitServicesReport } from '@texasrenters/shared';
 
 import { z } from 'zod';
 
@@ -724,9 +724,13 @@ export class ApiInspectionRepository implements InspectionRepository {
     ]);
     return inspection;
   }
-  async complete(id: string) {
+  async complete(id: string, servicesReport?: VisitServicesReport) {
     const inspection = inspectionSchema.parse(
-      await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`, 'POST'),
+      await writeJson(
+        `/api/v1/technician/inspections/${encodeURIComponent(id)}/complete`,
+        'POST',
+        servicesReport ? { servicesReport } : undefined,
+      ),
     );
     await Promise.all([
       storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),

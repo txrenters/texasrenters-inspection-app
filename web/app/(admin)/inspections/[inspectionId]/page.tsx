@@ -417,6 +417,8 @@ function InspectionDetail() {
         title={item.jobberVisitTitle}
         details={item.jobberVisitDetails}
         inspectionType={item.inspectionType}
+        servicesReport={item.servicesReport}
+        servicesReportedAt={item.servicesReportedAt}
       />
 
       {/* Area-first: recordings, photos, condition summaries and findings are

@@ -35,6 +35,7 @@ import {
   MobilePushDeviceDto,
   RemoveMobilePushDeviceDto,
   TechnicianAdditionalVideoDto,
+  TechnicianCompleteInspectionDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -164,8 +165,9 @@ export class TechnicianController {
   @Post('inspections/:inspectionId/complete') completeInspection(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
+    @Body() body: TechnicianCompleteInspectionDto,
   ) {
-    return this.service.completeInspection(request.user, id);
+    return this.service.completeInspection(request.user, id, body);
   }
   @Get('inspections/:inspectionId/rooms') rooms(
     @Req() request: AuthenticatedRequest,

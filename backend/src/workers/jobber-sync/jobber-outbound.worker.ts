@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import type { VisitServicesReport } from '@texasrenters/shared';
 import {
+  InspectionAreaCompletionStatus,
   InspectionSource,
   JobberLinkStatus,
   JobberOutboundKind,
@@ -13,6 +15,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { JobberClient } from '../../integrations/jobber/jobber.client';
 import { getJobberConfig } from '../../integrations/jobber/jobber.config';
 import { JobberError } from '../../integrations/jobber/jobber.errors';
+import { jobberServicesNote } from '../../integrations/jobber/jobber.services-note';
 import {
   JOB_CREATE_MUTATION,
   JOB_NOTE_CREATE_MUTATION,
@@ -134,6 +137,7 @@ export class JobberOutboundWorker {
       jobberVisitId: string | null;
       jobberJobId: string | null;
       createdById: string | null;
+      servicesNoteSentAt: Date | null;
     },
   ) {
     if (task.kind === JobberOutboundKind.TBP_VISIT_CREATE)
@@ -148,6 +152,10 @@ export class JobberOutboundWorker {
         500,
       );
     const jobberVisitId = task.jobberVisitId;
+    // Before the completion, the order a technician would have done it in, and
+    // so that a completion which then fails does not leave a finished visit
+    // with no word on what was done.
+    await this.sendServicesNote(organizationId, task);
     /**
      * Jobber is told when the work was signed off, not when the outbox drained.
      *
@@ -177,6 +185,54 @@ export class JobberOutboundWorker {
       { jobId: task.jobberJobId, input: { message: `Inspection report: ${url}` } },
     );
     this.assertNoUserErrors(note.jobCreateNote);
+  }
+
+  /**
+   * Posts the technician's services report to the visit's job.
+   *
+   * A job note because Jobber has no note on a visit -- a visit's Notes tab is
+   * its job's notes -- and the office's jobs carry one visit each. Marked sent
+   * on its own, because the completion that follows can still fail and retry.
+   */
+  private async sendServicesNote(
+    organizationId: string,
+    task: { id: string; inspectionId: string; jobberJobId: string | null; servicesNoteSentAt: Date | null },
+  ) {
+    if (!this.config.pushServicesNote || !task.jobberJobId || task.servicesNoteSentAt) return;
+    const inspection = await this.prisma.inspection.findUnique({
+      where: { id: task.inspectionId },
+      select: {
+        servicesReport: true,
+        servicesReportedAt: true,
+        submittedAt: true,
+        jobberVisitDetails: true,
+        areas: { select: { completionStatus: true } },
+        assignments: {
+          where: { isCurrent: true },
+          take: 1,
+          select: { technician: { select: { displayName: true } } },
+        },
+      },
+    });
+    if (!inspection?.servicesReport) return;
+    const message = jobberServicesNote({
+      report: inspection.servicesReport as unknown as VisitServicesReport,
+      details: inspection.jobberVisitDetails,
+      inspectionDone: inspection.areas.some((area) => area.completionStatus === InspectionAreaCompletionStatus.COMPLETED),
+      technicianName: inspection.assignments[0]?.technician.displayName ?? null,
+      recordedAt: inspection.servicesReportedAt ?? inspection.submittedAt ?? new Date(),
+    });
+    if (!message) return;
+    const note = await this.client.request<{ jobCreateNote: JobberUserErrors }>(
+      organizationId,
+      JOB_NOTE_CREATE_MUTATION,
+      { jobId: task.jobberJobId, input: { message } },
+    );
+    this.assertNoUserErrors(note.jobCreateNote);
+    await this.prisma.jobberOutboundTask.update({
+      where: { id: task.id },
+      data: { servicesNoteSentAt: new Date() },
+    });
   }
 
   /**

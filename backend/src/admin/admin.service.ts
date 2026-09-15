@@ -1200,6 +1200,9 @@ export class AdminService {
         // sits behind inspections:read; the public report builds its own.
         jobberVisitTitle: true,
         jobberVisitDetails: true,
+        // What the technician reported about those services at submission.
+        servicesReport: true,
+        servicesReportedAt: true,
         inspectionType: true,
         baselineInspectionId: true,
         baselineInspection: {

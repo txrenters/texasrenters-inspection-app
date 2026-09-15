@@ -88,6 +88,34 @@ describe('the Jobber visit on an inspection', () => {
     expect(screen.getByText(/They list filter change, pest control\./)).toBeInTheDocument();
   });
 
+  it('shows what the technician reported, and a service to book again above everything else', () => {
+    render(
+      <JobberVisitDetails
+        title={TITLE}
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        servicesReport={{
+          services: {
+            filterChange: { done: true, reason: null, reschedule: false },
+            pestControl: { done: false, reason: 'Tenant asked not to spray, has a newborn.', reschedule: true },
+          },
+          filtersInstalled: ['20x25x4', '12x24x1'],
+          notes: 'Return air grille was blocked.',
+        }}
+        servicesReportedAt="2026-09-15T19:14:05.000Z"
+      />,
+    );
+
+    expect(screen.getByText('Pest control to reschedule')).toBeInTheDocument();
+    const reported = screen.getByRole('region', { name: 'Services done' });
+    expect(within(reported).getByText('AC filter change')).toBeInTheDocument();
+    expect(within(reported).getByText('Done')).toBeInTheDocument();
+    expect(within(reported).getByText('Not done')).toBeInTheDocument();
+    expect(within(reported).getByText('Reschedule')).toBeInTheDocument();
+    expect(within(reported).getByText('20x25x4, 12x24x1')).toBeInTheDocument();
+    expect(within(reported).getByText('Return air grille was blocked.')).toBeInTheDocument();
+  });
+
   it('shows nothing for an inspection that did not come from Jobber', () => {
     const { container } = render(<JobberVisitDetails inspectionType="MOVE_IN" />);
     expect(container).toBeEmptyDOMElement();

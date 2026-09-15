@@ -55,6 +55,9 @@ export function getJobberConfig(env: NodeJS.ProcessEnv = process.env): JobberCon
     // in the client hub is account configuration this backend cannot read.
     // Completion is pushed regardless; only the link waits on a human check.
     pushReportLink: env.JOBBER_PUSH_REPORT_LINK === 'true',
+    // On unless switched off: the office asked for it, and it replaces a note
+    // technicians were typing into Jobber by hand.
+    pushServicesNote: env.JOBBER_PUSH_SERVICES_NOTE !== 'false',
   };
   if (config.redirectUri) {
     const redirect = new URL(config.redirectUri);

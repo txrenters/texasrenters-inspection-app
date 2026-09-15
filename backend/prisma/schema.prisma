@@ -1189,6 +1189,12 @@ model Inspection {
   /// and never on a shared report: they carry a tenant's number and a way in.
   jobberVisitTitle           String?
   jobberVisitDetails         String?
+  /// What the technician reported at submission about the services the Jobber
+  /// visit booked: each done or not, why not, and whether to book it again
+  /// (`VisitServicesReport` in shared). Null for a visit that booked none, or
+  /// a submission from an app built before the report existed.
+  servicesReport             Json?
+  servicesReportedAt         DateTime?
   inspectionType             InspectionType
   /// Which system booked this visit.
   ///
@@ -2600,6 +2606,11 @@ model JobberOutboundTask {
   /// Sanitized. Never the provider body.
   lastError      String?
   sentAt         DateTime?
+  /// When the technician's services report went to Jobber as a job note.
+  ///
+  /// Its own column because the note is sent before the completion: a retry
+  /// after the completion failed must not post the same note a second time.
+  servicesNoteSentAt DateTime?
   /// Who signed the inspection off. The report share this task publishes is
   /// created in their name, because a share link needs an owner and this is the
   /// person whose sign-off produced it.

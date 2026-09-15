@@ -213,7 +213,7 @@ export class MockInspectionRepository implements InspectionRepository {
   async start(id: string) {
     return this.get(id);
   }
-  async complete(id: string) {
+  async complete(id: string, _servicesReport?: unknown) {
     return this.get(id);
   }
   async rooms(inspectionId: string) {
