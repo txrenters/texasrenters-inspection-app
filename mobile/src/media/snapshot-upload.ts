@@ -116,6 +116,23 @@ export function snapshotsAwaitingUpload(
     .sort((left, right) => Date.parse(left.capturedAt) - Date.parse(right.capturedAt));
 }
 
+/**
+ * The capture time to send with a snapshot, when it has one.
+ *
+ * Only a photograph timed at the shutter carries its zone and offset, and only
+ * those send `capturedAt`. On one saved by an earlier release it is when the file
+ * was written -- after the whole walkthrough, for a frame cut from a recording
+ * -- and a stamp on evidence must not claim a moment nobody recorded.
+ */
+export function captureTimeToSend(snapshot: RoomSnapshot) {
+  if (snapshot.captureUtcOffsetMinutes === undefined) return {};
+  return {
+    capturedAt: snapshot.capturedAt,
+    captureUtcOffsetMinutes: snapshot.captureUtcOffsetMinutes,
+    ...(snapshot.captureTimeZone ? { captureTimeZone: snapshot.captureTimeZone } : {}),
+  };
+}
+
 export interface SnapshotUploadPort {
   update: (id: string, patch: Partial<RoomSnapshot>) => void;
 }
@@ -144,6 +161,7 @@ export async function uploadSnapshotNow(
       videoTimestampMs: snapshot.videoTimestampMs,
       captureSource: snapshot.captureSource,
       sequenceNumber: snapshot.sequenceNumber,
+      ...captureTimeToSend(snapshot),
     });
     store.update(snapshot.id, {
       uploadStatus: 'UPLOADED',

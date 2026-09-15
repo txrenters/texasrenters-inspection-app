@@ -1,6 +1,8 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
+import type { PhotoCaptureClaim } from '@texasrenters/shared';
+
 import type { PhotoCaptureType, RoomSnapshot } from '../domain/models';
 import type { SnapshotCaptureSource } from '../capture/guided-capture';
 
@@ -20,6 +22,14 @@ type RoomSnapshotInput = {
   captureSource?: SnapshotCaptureSource;
   sequenceNumber?: number;
   findingId?: string;
+  /**
+   * When the shutter fired: `shutterClock()` read before the camera was asked
+   * for the picture, or `frameClock()` for a frame cut from a recording.
+   *
+   * Absent means the moment is not known, and the photograph is timed when it
+   * is built here -- which is never sent to the server as a capture time.
+   */
+  clock?: PhotoCaptureClaim;
   /**
    * When this photograph becomes due to upload.
    *
@@ -46,6 +56,7 @@ export function buildRoomSnapshot({
   captureSource = 'SEPARATE_PHOTO_CAPTURE',
   sequenceNumber,
   findingId,
+  clock,
   nextAttemptAt,
 }: RoomSnapshotInput): RoomSnapshot {
   return {
@@ -58,7 +69,13 @@ export function buildRoomSnapshot({
     width: Math.max(1, Math.round(width)),
     height: Math.max(1, Math.round(height)),
     sizeBytes: sizeBytes && sizeBytes > 0 ? sizeBytes : undefined,
-    capturedAt: new Date().toISOString(),
+    capturedAt: clock?.capturedAt ?? new Date().toISOString(),
+    ...(clock
+      ? {
+          captureUtcOffsetMinutes: clock.captureUtcOffsetMinutes,
+          ...(clock.captureTimeZone ? { captureTimeZone: clock.captureTimeZone } : {}),
+        }
+      : {}),
     captureType,
     recordingSessionId,
     videoTimestampMs,

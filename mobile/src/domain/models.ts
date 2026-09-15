@@ -337,6 +337,17 @@ export interface RoomSnapshot {
   height: number;
   sizeBytes?: number;
   capturedAt: string;
+  /**
+   * The phone's zone and UTC offset at the shutter.
+   *
+   * Present only on photographs timed at the shutter, and that is what they
+   * mark: on these `capturedAt` is the capture, and it is sent as such. On a
+   * photograph saved by an earlier release `capturedAt` is when its file was
+   * written -- for a frame cut from a recording, after the whole walkthrough --
+   * so it is not sent, and the server labels the time as its own receipt.
+   */
+  captureTimeZone?: string;
+  captureUtcOffsetMinutes?: number;
   captureType?: PhotoCaptureType;
   recordingSessionId?: string;
   videoTimestampMs?: number;

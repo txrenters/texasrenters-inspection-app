@@ -45,6 +45,16 @@ export interface UploadRoomPhotoInput {
    * that row, which is how the office's printed report is laid out.
    */
   checklistItemId?: string;
+  /**
+   * The phone's clock at the shutter, with its zone and offset.
+   *
+   * Sent only for a photograph timed at the shutter. The server keeps the
+   * phone's claim either way, and stamps it as the capture only when it could be
+   * true; without it the photograph is stamped with the upload's arrival.
+   */
+  capturedAt?: string;
+  captureTimeZone?: string;
+  captureUtcOffsetMinutes?: number;
 }
 
 /**
@@ -82,6 +92,11 @@ export async function uploadRoomPhoto(input: UploadRoomPhotoInput): Promise<{ id
           : {}),
         ...(input.findingId ? { findingId: input.findingId } : {}),
         ...(input.checklistItemId ? { checklistItemId: input.checklistItemId } : {}),
+        ...(input.capturedAt ? { capturedAt: input.capturedAt } : {}),
+        ...(input.captureTimeZone ? { captureTimeZone: input.captureTimeZone } : {}),
+        ...(input.captureUtcOffsetMinutes !== undefined
+          ? { captureUtcOffsetMinutes: String(input.captureUtcOffsetMinutes) }
+          : {}),
       },
       headers: { authorization: `Bearer ${session.accessToken}` },
     },

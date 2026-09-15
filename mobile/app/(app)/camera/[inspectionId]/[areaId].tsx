@@ -65,6 +65,7 @@ import type { PhotoCaptureType, RoomSnapshot } from '@/src/domain/models';
 import { useInspection, useInspectionActions, useRoom } from '@/src/features/queries';
 import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
+import { frameClock, shutterClock } from '@/src/media/capture-clock';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import {
   buildRoomSnapshot,
@@ -168,6 +169,9 @@ export default function RoomCameraScreen() {
   // this device once recording stops — Android cannot photograph mid-video, and
   // a Stream recording never reaches the backend for server-side extraction.
   const frameMarkersRef = useRef<number[]>([]);
+  // When the phone was asked to start recording, by its clock. A marked frame
+  // shows this moment plus its offset, so that is the time it is filed under.
+  const recordingStartedAtMsRef = useRef(0);
   const guidanceMilestoneRef = useRef(0);
   const previousGuidanceRef = useRef<string | null>(null);
   /**
@@ -624,6 +628,7 @@ export default function RoomCameraScreen() {
           : 'Wall 1 registered. Begin one slow clockwise walkthrough.',
     );
     try {
+      recordingStartedAtMsRef.current = Date.now();
       const result = await camera.recordAsync({
         maxDuration: MAX_RECORDING_SECONDS,
         ...(Platform.OS === 'ios' ? { codec: 'avc1' as const } : {}),
@@ -661,6 +666,7 @@ export default function RoomCameraScreen() {
               recordingSessionId: captureSessionIdRef.current,
               videoTimestampMs: still.videoTimestampMs,
               captureSource: 'VIDEO_FRAME_EXTRACTION',
+              clock: frameClock(recordingStartedAtMsRef.current, still.videoTimestampMs),
               sequenceNumber: photoCount + index + 1,
             }),
           );
@@ -941,6 +947,9 @@ export default function RoomCameraScreen() {
       confirmCapture(`Moment marked at ${formatDuration(secondsRef.current)}. Keep recording.`);
       return;
     }
+    // Read before anything is awaited: the picture is taken at the tap, and
+    // saving it takes a moment longer on some phones.
+    const clock = shutterClock();
     setCapturingPhoto(true);
     setError(null);
     try {
@@ -964,6 +973,7 @@ export default function RoomCameraScreen() {
           recording && Platform.OS === 'ios'
             ? 'NATIVE_STILL_DURING_VIDEO'
             : 'SEPARATE_PHOTO_CAPTURE',
+        clock,
         sequenceNumber: photoCount + 1,
         /**
          * Not due to send yet.
