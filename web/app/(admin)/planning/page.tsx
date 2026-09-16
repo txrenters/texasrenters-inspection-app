@@ -50,8 +50,9 @@ import { useUrlState } from '@/lib/url-state';
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
  * on the HVAC plan; the crew each covers a zone a week, moving on each week;
  * visits go on weekdays that are not US holidays, with Mondays from the second
- * week kept for rescheduled visits; and a technician-day is at most six hours
- * inspecting and ninety minutes driving, counted from home. Building a quarter
+ * week kept for rescheduled visits; and a technician-day is a full one -- at
+ * least nine visits where the properties allow -- inside six hours inspecting
+ * and ninety minutes driving between its properties. Building a quarter
  * applies all of it and asks the coordinator nothing (the office found a form
  * of minutes and closed days confusing, 2026-09-16). This page is where a
  * coordinator checks the days, changes any draft visit in its window -- the
@@ -189,7 +190,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each technician on the crew covers one zone a week and moves to the next zone the week after; a day is up to 6 hours inspecting and 90 minutes driving, counted from home. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each technician on the crew covers one zone a week and moves to the next zone the week after. Days are full, at least 9 visits where the properties allow, within 6 hours inspecting and 90 minutes driving between properties; the drive from home isn't counted. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -256,7 +257,7 @@ export default function PlanningPage() {
               value={attention.length.toLocaleString()}
             />
             <Stat
-              detail={`Up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting and ${plan.maxDriveMinutes} min driving a day, counted from home`}
+              detail={`Up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting and ${plan.maxDriveMinutes} min driving between properties a day`}
               label="Days over the limits"
               tone={overLimitDays.length ? 'destructive' : 'success'}
               value={overLimitDays.length.toLocaleString()}
@@ -271,6 +272,12 @@ export default function PlanningPage() {
             {alsoClosed.length ? (
               <StatStripItem label="Also closed" value={alsoClosed.map(formatShortDay).join(', ')} />
             ) : null}
+            <StatStripItem
+              label="Visits a day"
+              value={`at least ${plan.minStopsPerDay} where the properties allow, up to ${Math.floor(
+                plan.maxOnSiteMinutes / Math.max(1, Math.min(plan.occupiedVisitMinutes, plan.hvacVisitMinutes)),
+              )}`}
+            />
             <StatStripItem label="Mondays" value="kept free for rescheduled visits from week 2" />
             {rotation.data ? (
               <StatStripItem

@@ -43,6 +43,7 @@ const PLAN = {
   hvacVisitMinutes: 45,
   maxOnSiteMinutes: 360,
   maxDriveMinutes: 90,
+  minStopsPerDay: 9,
   holidays: ['2026-11-26'],
 };
 
@@ -209,7 +210,8 @@ describe('the benefit package plan page', () => {
 
     // The quarter's US holidays, found by the planner rather than typed in.
     expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
-    expect(screen.getByText('Up to 6 hr inspecting and 90 min driving a day, counted from home')).toBeTruthy();
+    expect(screen.getByText('Up to 6 hr inspecting and 90 min driving between properties a day')).toBeTruthy();
+    expect(screen.getByText('at least 9 where the properties allow, up to 12')).toBeTruthy();
     expect(screen.queryByText(/360/)).toBeNull();
     // Thanksgiving is on the plan as well, and is a holiday rather than another closed day.
     expect(screen.queryByText('Also closed')).toBeNull();
@@ -238,17 +240,15 @@ describe('the benefit package plan page', () => {
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  /** The office's rule (2026-09-16): a day starts from home, and the drive to the first property counts. */
-  it('counts the drive from home in the day’s driving, and says when to leave', () => {
-    mount({
-      day: { ...DAY, originKind: 'HOME', totalDriveSeconds: 55 * 60, homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 },
-    });
+  /** The office's rule (2026-09-16): a day starts from home, and only the drives between its properties count. */
+  it('shows the drive from home and when to leave, apart from the day’s limit', () => {
+    mount({ day: { ...DAY, originKind: 'HOME', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('35 min · 42 km · leave 8:25 AM')).toBeTruthy();
-    expect(within(day).getByText('35 min from home')).toBeTruthy();
-    expect(within(day).getByText(/55 of 90 min/)).toBeTruthy();
-    expect(within(day).getByText(/counts the drive from home to the first property/)).toBeTruthy();
+    expect(within(day).getByText('35 min from home, not counted')).toBeTruthy();
+    expect(within(day).getByText(/20 of 90 min/)).toBeTruthy();
+    expect(within(day).getByText(/the drive from home is not counted/)).toBeTruthy();
   });
 
   /** A plan built before days started from home, or for a technician with no home on file. */

@@ -22,7 +22,10 @@ export interface PlanSettings {
   occupiedVisitMinutes: number;
   hvacVisitMinutes: number;
   maxOnSiteMinutes: number;
+  /** Between a day's properties; the drive from home is not counted. */
   maxDriveMinutes: number;
+  /** Visits a day should hold at least, where the properties allow. */
+  minStopsPerDay: number;
   holidays: string[];
 }
 
@@ -122,10 +125,10 @@ export interface PlanDay {
   stopCount: number;
   onSiteMinutes: number;
   hvacStopCount: number;
-  /** What the drive limit counts: from home to the first property on a day routed from home, and between the properties. Never the drive home. */
+  /** Between the day's properties, first to last: what the drive limit counts. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
-  /** From the technician's home to the first property, when the day was routed from home. Part of `totalDriveSeconds`. */
+  /** From the technician's home to the first property, when the day was routed from home. Shown, not counted. */
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
   /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
