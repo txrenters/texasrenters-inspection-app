@@ -3012,17 +3012,20 @@ model TbpQuarterPlan {
   /// checked" is a different fact from "not enrolled".
   unverifiedEnrollmentCount Int @default(0)
 
-  /// The office's limits on a technician-day, and the visit lengths a day is
-  /// measured with (2026-09-16: thirty minutes a visit of either kind, six hours
-  /// inspecting, ninety minutes driving between the properties with the drive
-  /// from home not counted, and at least nine visits a day where the properties
-  /// allow). Kept on the plan so its forecast is explained by the numbers it was
-  /// routed with; a re-route with new numbers replaces them.
-  occupiedVisitMinutes Int      @default(30)
-  hvacVisitMinutes     Int      @default(30)
+  /// The office's rules for a technician-day, and the visit lengths a day is
+  /// measured with (2026-09-17: nine to twelve visits every day, twenty minutes a
+  /// visit of either kind, six hours inspecting at most, and the drive between
+  /// the properties kept short rather than capped). Kept on the plan so its
+  /// forecast is explained by the numbers it was routed with; a re-route with new
+  /// numbers replaces them.
+  occupiedVisitMinutes Int      @default(20)
+  hvacVisitMinutes     Int      @default(20)
   maxOnSiteMinutes     Int      @default(360)
+  /// How far a zone's middle may be from the nearest crew member's home for the
+  /// crew to work it. No longer a limit on a day's driving (2026-09-17).
   maxDriveMinutes      Int      @default(90)
   minStopsPerDay       Int      @default(9)
+  maxStopsPerDay       Int      @default(12)
   /// The days the office is closed this quarter, `YYYY-MM-DD`.
   holidays             String[] @default([])
 
@@ -3268,8 +3271,7 @@ model TbpQuarterPlanDay {
   /// Time spent inspecting, against the plan's `maxOnSiteMinutes`.
   onSiteMinutes        Int @default(0)
   hvacStopCount        Int @default(0)
-  /// Between the day's properties, first to last: what the plan's
-  /// `maxDriveMinutes` counts (the office, 2026-09-16).
+  /// Between the day's properties, first to last.
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
   /// The drive from home to the first property, when the day was routed from a

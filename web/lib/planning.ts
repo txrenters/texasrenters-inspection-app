@@ -79,8 +79,9 @@ export type LimitState = 'within' | 'near' | 'over';
 /**
  * How a day stands against one of the office's limits.
  *
- * Near is the last tenth: a day at 85 of 90 minutes is inside the rule and one
- * slow junction from outside it, which is worth seeing before it is published.
+ * Near is the last tenth: a day at 5 hr 30 min of 6 hr inspecting is inside the
+ * rule and one long visit from outside it, which is worth seeing before it is
+ * published.
  */
 export function limitState(value: number, limit: number): LimitState {
   if (value > limit) return 'over';

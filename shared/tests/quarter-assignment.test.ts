@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEFAULT_DAY_LIMITS,
   type AssignedCrew,
   type PlannableDay,
   type PlannableStop,
   crewKey,
   estimatedDriveMinutes,
-  foldIntoDays,
+  improveDays,
   layoutFullDays,
   nearestNeighbourOrder,
 } from '../src/contracts/quarter-assignment.js';
@@ -48,40 +47,50 @@ const dueOn = (entries: [string, number][], size: number) => ({ position: new Ma
 
 const stopIds = (crew: AssignedCrew) => crew.stops.map((stop) => stop.stopId).sort();
 
+/** The estimated drive through a day's stops in the order given. */
+const drivenMinutes = (stops: readonly PlannableStop[]) =>
+  stops.slice(1).reduce((total, stop, index) => total + estimatedDriveMinutes(stops[index]!, stop), 0);
+
 /**
- * The office's rule (2026-09-16): at least nine visits a day, inside six hours
- * on site and ninety minutes between the properties.
+ * The office's rules (2026-09-17): nine to twelve visits every day, and the
+ * driving between the properties kept as short as that allows, never capped.
  */
 describe('laying the quarter out in full days', () => {
-  it('fills a day before starting another', () => {
-    const { crews } = layoutFullDays(cluster('s', 12), days(5, ['t1']));
-
-    expect(crews).toHaveLength(1);
-    expect(crews[0]!.stops).toHaveLength(12);
+  it('fills a day before starting another, and holds it to twelve', () => {
+    expect(layoutFullDays(cluster('s', 12), days(5, ['t1'])).crews.map((crew) => crew.stops.length)).toEqual([12]);
+    expect(layoutFullDays(cluster('s', 24), days(5, ['t1'])).crews.map((crew) => crew.stops.length)).toEqual([12, 12]);
   });
 
   it('starts the next day when a day is full, and makes it full too', () => {
     const { crews } = layoutFullDays(cluster('s', 21), days(10, ['t1']));
 
-    expect(crews.map((crew) => crew.stops.length)).toEqual([12, 9]);
+    expect(crews).toHaveLength(2);
+    for (const crew of crews) expect(crew.stops.length).toBeGreaterThanOrEqual(9);
+    expect(crews.reduce((total, crew) => total + crew.stops.length, 0)).toBe(21);
   });
 
+  /** Long visits: six hours on site is eight of them, so this is where a day holds fewer than nine. */
   it('holds a day to six hours on site', () => {
-    const sameBuilding = Array.from({ length: 13 }, (_, index) => at(`b${index + 1}`, index + 1, 29.76, -95.37));
+    const sameBuilding = Array.from({ length: 10 }, (_, index) => at(`b${index + 1}`, index + 1, 29.76, -95.37, { onSiteMinutes: 45 }));
 
     const { crews } = layoutFullDays(sameBuilding, days(5, ['t1']));
 
-    expect(crews.map((crew) => crew.onSiteMinutes)).toEqual([360, 30]);
+    expect(crews.map((crew) => crew.onSiteMinutes)).toEqual([360, 90]);
   });
 
-  /** Ten kilometres apart in a line: eighteen minutes a leg by the estimate, so five legs is ninety. */
-  it('holds a day to ninety minutes of driving between its properties', () => {
-    const line = Array.from({ length: 7 }, (_, index) => at(`l${index + 1}`, index + 1, 29.76 + index * 0.0899, -95.37));
+  /**
+   * Ten kilometres apart in a line, eighteen minutes a leg by the estimate. The
+   * old ninety-minute limit made a day of six and a day of one of these; the
+   * office would rather drive (2026-09-17).
+   */
+  it('keeps nine to a day however far apart the properties are', () => {
+    const line = Array.from({ length: 18 }, (_, index) => at(`l${index + 1}`, index + 1, 29.76 + index * 0.0899, -95.37));
 
-    const { crews } = layoutFullDays(line, days(5, ['t1']));
+    const { crews, unplaced } = layoutFullDays(line, days(10, ['t1']));
 
-    expect(crews.map((crew) => crew.stops.length)).toEqual([6, 1]);
-    for (const crew of crews) expect(crew.driveMinutes).toBeLessThanOrEqual(DEFAULT_DAY_LIMITS.maxDriveMinutes);
+    expect(unplaced).toEqual([]);
+    expect(crews.map((crew) => crew.stops.length)).toEqual([9, 9]);
+    for (const crew of crews) expect(crew.driveMinutes).toBeGreaterThan(90);
   });
 
   it('builds a day from the visits that add least driving, not the next in the rotation', () => {
@@ -96,7 +105,7 @@ describe('laying the quarter out in full days', () => {
     for (const crew of crews) expect(new Set(crew.stops.map((stop) => stop.latitude)).size).toBe(1);
   });
 
-  /** A tenant's visits stay about ninety days apart: at most two weeks from last quarter's day. */
+  /** A tenant's visits stay about ninety days apart: at most three weeks from last quarter's day. */
   it('keeps each visit near its day in the rotation, however close the properties are', () => {
     const early = cluster('e', 9);
     const late = cluster('l', 9, 10);
@@ -107,10 +116,24 @@ describe('laying the quarter out in full days', () => {
     expect(crews.map((crew) => crew.date)).toEqual(['2026-10-01', '2026-11-10']);
   });
 
+  /** A day of nine comes first: the one visit due weeks after the rest joins their day rather than make a day of one. */
+  it('moves a visit past three weeks only to keep a day from falling short of nine', () => {
+    const early = cluster('e', 9);
+    const late = at('late', 10, 29.765, -95.37);
+    const rotation = dueOn([...early.map((stop): [string, number] => [stop.stopId, 0]), ['late', 40]], 50);
+
+    const { crews, unplaced } = layoutFullDays([...early, late], days(50, ['t1']), { rotation });
+
+    expect(unplaced).toEqual([]);
+    expect(crews).toHaveLength(1);
+    expect(crews[0]).toMatchObject({ date: '2026-10-01' });
+    expect(stopIds(crews[0]!)).toContain('late');
+  });
+
   /**
    * A day left short gives its visits to another day that can take them: two
    * visits due just outside the first day's reach from its first visit, but
-   * inside two weeks of the day as it came out.
+   * inside three weeks of the day as it came out.
    */
   it('folds a short day into another day of the zone', () => {
     const seed = at('seed', 1, 29.76, -95.37);
@@ -120,8 +143,8 @@ describe('laying the quarter out in full days', () => {
       [
         ['seed', 0],
         ...middle.map((stop, index): [string, number] => [stop.stopId, 10 + index]),
-        ['late1', 20],
-        ['late2', 21],
+        ['late1', 25],
+        ['late2', 26],
       ],
       30,
     );
@@ -189,65 +212,70 @@ describe('laying the quarter out in full days', () => {
   });
 });
 
-/** After Google measures a day over the limit: the stops it could not keep. */
-describe('folding the visits a measured day could not keep into other days', () => {
+/** Days a planner already has, made better where they stand. */
+describe('shortening the driving across days', () => {
   const crew = (date: string, technicianId: string, stops: PlannableStop[]): AssignedCrew => ({
     date,
     technicianId,
     stops,
     onSiteMinutes: stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
-    driveMinutes: 10,
-    changed: false,
+    driveMinutes: drivenMinutes(stops),
   });
+  const north = (prefix: string, count: number, extra: Partial<PlannableStop> = {}) => cluster(prefix, count, 1, extra);
+  /** Some twenty kilometres south of `north`. */
+  const south = (prefix: string, count: number, extra: Partial<PlannableStop> = {}) =>
+    cluster(prefix, count, 50, extra).map((stop) => ({ ...stop, latitude: stop.latitude - 0.2 }));
 
-  it('gives a stop to the day that adds least driving, never the day it came off', () => {
-    const quarter = days(5, ['t1']);
+  it('trades visits between two days when each is on the other’s side of town', () => {
+    const [strayNorth] = north('stray-n', 1);
+    const [straySouth] = south('stray-s', 1);
     const crews = [
-      crew('2026-10-01', 't1', cluster('a', 4)),
-      crew('2026-10-02', 't1', cluster('b', 4).map((stop) => ({ ...stop, latitude: stop.latitude + 0.05 }))),
+      crew('2026-10-01', 't1', [...north('n', 9), straySouth!]),
+      crew('2026-10-02', 't1', [...south('s', 9), strayNorth!]),
     ];
-    const moved = at('moved', 20, 29.761, -95.37);
 
-    const result = foldIntoDays([moved], crews, quarter, { avoid: new Map([['moved', new Set([crewKey('2026-10-01', 't1')])]]) });
+    const improved = improveDays(crews, days(5, ['t1']));
 
-    expect(result.unplaced).toEqual([]);
-    expect(stopIds(result.crews[1]!)).toContain('moved');
-    expect(result.crews[1]!.changed).toBe(true);
-    expect(result.crews[0]!.changed).toBe(false);
+    expect(improved).toHaveLength(2);
+    for (const day of improved) expect(new Set(day.stops.map((stop) => stop.latitude > 29.7)).size).toBe(1);
+    expect(improved.reduce((total, day) => total + day.driveMinutes, 0)).toBeLessThan(
+      crews.reduce((total, day) => total + day.driveMinutes, 0) / 2,
+    );
   });
 
-  it('opens a day of its own only when no day near its week can take the stop', () => {
-    const quarter = days(5, ['t1']);
-    const full = crew('2026-10-01', 't1', Array.from({ length: 12 }, (_, index) => at(`f${index + 1}`, index + 1, 29.76, -95.37)));
+  it('never takes a day under nine or over twelve, and never lengthens the driving', () => {
+    // Scattered on a fixed pseudo-random pattern, so the test is the same every run.
+    let seed = 7;
+    const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const scattered = Array.from({ length: 30 }, (_, index) => at(`p${index + 1}`, index + 1, 29.6 + next() * 0.3, -95.5 + next() * 0.3));
+    const crews = [
+      crew('2026-10-01', 't1', scattered.slice(0, 9)),
+      crew('2026-10-02', 't1', scattered.slice(9, 18)),
+      crew('2026-10-05', 't1', scattered.slice(18)),
+    ];
 
-    const result = foldIntoDays([at('extra', 20, 29.76, -95.37)], [full], quarter, {
-      rotation: { position: new Map([['extra', 1]]), size: 5 },
-    });
+    const improved = improveDays(crews, days(10, ['t1']));
 
-    expect(result.unplaced).toEqual([]);
-    expect(result.crews).toHaveLength(2);
-    expect(result.crews[1]).toMatchObject({ date: '2026-10-02', technicianId: 't1', changed: true });
-    expect(stopIds(result.crews[1]!)).toEqual(['extra']);
+    for (const day of improved) {
+      expect(day.stops.length).toBeGreaterThanOrEqual(9);
+      expect(day.stops.length).toBeLessThanOrEqual(12);
+      expect(day.driveMinutes).toBeCloseTo(drivenMinutes(day.stops), 6);
+    }
+    expect(improved.flatMap((day) => day.stops.map((stop) => stop.stopId)).sort()).toEqual(scattered.map((stop) => stop.stopId).sort());
+    expect(improved.reduce((total, day) => total + day.driveMinutes, 0)).toBeLessThanOrEqual(
+      crews.reduce((total, day) => total + day.driveMinutes, 0),
+    );
   });
 
-  it('returns a stop for a person when there is no free day near its week either', () => {
-    const quarter = days(1, ['t1']);
-    const full = crew('2026-10-01', 't1', Array.from({ length: 12 }, (_, index) => at(`f${index + 1}`, index + 1, 29.76, -95.37)));
+  it('gives a visit only to whoever has its zone that day, however much driving it would save', () => {
+    const zoned = days(2, ['moses', 'kevin']).map((day) => ({ ...day, zoneTechnicians: { '1': 'moses', '2': 'kevin' } }));
+    const [outlier] = north('outlier', 1, { zone: '2' });
+    const crews = [crew('2026-10-01', 'moses', north('n', 10, { zone: '1' })), crew('2026-10-01', 'kevin', [...south('s', 9, { zone: '2' }), outlier!])];
 
-    const result = foldIntoDays([at('extra', 20, 29.76, -95.37)], [full], quarter);
+    const improved = improveDays(crews, zoned);
 
-    expect(result.crews).toHaveLength(1);
-    expect(result.unplaced).toEqual([{ stopId: 'extra', reason: 'NO_CAPACITY' }]);
-  });
-
-  it('gives a stop only to whoever has its zone that day', () => {
-    const quarter = days(1, ['moses', 'kevin']).map((day) => ({ ...day, zoneTechnicians: { '1': 'moses', '2': 'kevin' } }));
-    const crews = [crew('2026-10-01', 'kevin', cluster('k', 3, 1, { zone: '2' }))];
-
-    const result = foldIntoDays([at('north', 9, 29.76, -95.37, { zone: '1' })], crews, quarter);
-
-    expect(stopIds(result.crews[0]!)).not.toContain('north');
-    expect(result.crews[1]).toMatchObject({ date: '2026-10-01', technicianId: 'moses' });
+    expect(stopIds(improved.find((day) => day.technicianId === 'kevin')!)).toContain('outlier1');
+    for (const day of improved) expect(new Set(day.stops.map((stop) => stop.zone))).toEqual(new Set([day.technicianId === 'moses' ? '1' : '2']));
   });
 });
 

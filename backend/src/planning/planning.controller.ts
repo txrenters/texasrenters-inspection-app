@@ -161,6 +161,7 @@ export class PlanningController {
           maxOnSiteMinutes: true,
           maxDriveMinutes: true,
           minStopsPerDay: true,
+          maxStopsPerDay: true,
           holidays: true,
           officeDetailsImportedAt: true,
         },

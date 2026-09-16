@@ -57,8 +57,13 @@ function zonesOf(day: PlanDay) {
   return zones.length ? `${zones.length === 1 ? 'Zone' : 'Zones'} ${zones.join(', ')}` : null;
 }
 
-function Meter({ label, value, limit, text }: { label: string; value: number; limit: number; text: string }) {
-  const state = limitState(value, limit);
+/**
+ * A figure and its bar. Against a `limit` it turns amber near it and red over it;
+ * against a `scale` alone the bar only compares the day with the others.
+ */
+function Meter({ label, value, limit, scale, text }: { label: string; value: number; limit?: number; scale?: number; text: string }) {
+  const state = limit === undefined ? 'within' : limitState(value, limit);
+  const of = limit ?? scale ?? value;
   return (
     <div className="grid gap-1">
       <div className={cn('flex items-baseline justify-between gap-2 text-xs', LIMIT_TEXT[state])}>
@@ -66,7 +71,7 @@ function Meter({ label, value, limit, text }: { label: string; value: number; li
         <span className="font-mono tabular-nums">{text}</span>
       </div>
       <div aria-hidden className="bg-muted h-1 overflow-hidden rounded-full">
-        <div className={cn('h-full rounded-full', LIMIT_BAR[state])} style={{ width: `${Math.min(100, (value / Math.max(1, limit)) * 100)}%` }} />
+        <div className={cn('h-full rounded-full', LIMIT_BAR[state])} style={{ width: `${Math.min(100, (value / Math.max(1, of)) * 100)}%` }} />
       </div>
     </div>
   );
@@ -102,6 +107,8 @@ export function PlanDays({
     (rotation?.crew ?? []).map((member) => [member.technicianId, member.displayName?.split(' ')[0] ?? 'Someone']),
   );
   const zonesInWeek = new Map((rotation?.weeks ?? []).map((week) => [week.weekOf, week.zones]));
+  // Driving has no limit (2026-09-17): each day's bar is against the plan's longest.
+  const longestDrive = Math.max(1, ...days.map((day) => driveMinutes(day) ?? 0));
   // Every zone on the circle, in order: with more zones than crew, one waits its turn each week.
   const ownersOf = (monday: string) => {
     const week = zonesInWeek.get(monday);
@@ -159,7 +166,7 @@ export function PlanDays({
                     />
                     <Meter
                       label="Driving"
-                      limit={settings.maxDriveMinutes}
+                      scale={longestDrive}
                       text={drive === null ? 'not measured' : `${drive} min`}
                       value={drive ?? 0}
                     />
@@ -176,11 +183,11 @@ export function PlanDays({
   );
 }
 
-/** How the day's drives were measured, and what the ninety minutes count. */
+/** How the day's drives were measured, and what the driving shown covers. */
 function measuredText(day: PlanDay) {
   const fromHome = day.originKind === 'HOME';
   const counted = fromHome
-    ? 'The day is routed from the technician’s home; only the drives between its properties count toward the limit, and the drive from home is not counted.'
+    ? 'The day is routed from the technician’s home, in the order that drives least; the driving shown is between its properties, and the drive from home is shown apart.'
     : 'This day was built without the technician’s home, so it starts at its first job. Rebuild the plan to route days from home; the home comes from the technician’s planning profile.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
@@ -191,7 +198,7 @@ function measuredText(day: PlanDay) {
       return 'No drive times could be measured for this day; the distances are in a straight line.';
     default:
       return fromHome
-        ? 'One property, so there is nothing to drive between; the drive from home is not counted.'
+        ? 'One property, so there is nothing to drive between; the drive from home is shown apart.'
         : 'One property, so there is nothing to drive between.';
   }
 }
@@ -213,7 +220,6 @@ function DayDetail({
   const ends = clock.at(-1)?.leaves;
   const homeMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
   const onSite = limitState(day.onSiteMinutes, settings.maxOnSiteMinutes);
-  const driving = drive === null ? 'within' : limitState(drive, settings.maxDriveMinutes);
 
   return (
     <section aria-label={`${LONG_DAY.format(new Date(day.date))}, ${day.technician.displayName}`} className="grid gap-3">
@@ -231,8 +237,8 @@ function DayDetail({
           </div>
           <div className="flex items-baseline gap-2">
             <dt className="text-muted-foreground">Driving</dt>
-            <dd className={cn('font-mono tabular-nums', toneOf(driving))}>
-              {drive === null ? 'not measured' : `${drive} of ${settings.maxDriveMinutes} min`}
+            <dd className="font-mono tabular-nums">
+              {drive === null ? 'not measured' : `${drive} min between properties`}
               {day.totalDriveMeters ? ` · ${formatDistance(day.totalDriveMeters)}` : ''}
             </dd>
           </div>
@@ -283,7 +289,7 @@ function DayDetail({
                 {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
               </span>
             ) : homeMinutes !== null ? (
-              <span className="text-muted-foreground text-xs">{homeMinutes} min from home, not counted</span>
+              <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
             ) : null}
             <button
               aria-label={`Details of stop ${stop.positionInDay ?? index + 1}, ${stop.address ?? 'unknown address'}`}

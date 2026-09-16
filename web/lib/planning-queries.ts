@@ -22,10 +22,12 @@ export interface PlanSettings {
   occupiedVisitMinutes: number;
   hvacVisitMinutes: number;
   maxOnSiteMinutes: number;
-  /** Between a day's properties; the drive from home is not counted. */
+  /** How far a zone may be from the crew's homes. Not a limit on a day's driving, which is never capped. */
   maxDriveMinutes: number;
-  /** Visits a day should hold at least, where the properties allow. */
+  /** Visits every day holds at least. */
   minStopsPerDay: number;
+  /** Visits one day holds at most. */
+  maxStopsPerDay: number;
   holidays: string[];
 }
 
@@ -143,7 +145,6 @@ export interface PlanRoutingSummary {
   placed: number;
   unplaced: { stopId: string; reason: string }[];
   days: number;
-  repaired: number;
   durationSource: PlanDay['durationSource'];
   settings: PlanSettings;
 }
