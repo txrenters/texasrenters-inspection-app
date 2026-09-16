@@ -33,7 +33,8 @@ export async function POST(request: NextRequest) {
     upstream = await fetch(`${apiBaseUrl()}/api/v1/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-      body: JSON.stringify({ refreshToken }),
+      // `console`, so a session signed in before the API marked console sessions is marked now.
+      body: JSON.stringify({ refreshToken, client: 'console' }),
     });
   } catch {
     // Unreachable API: leave the cookies alone. The token is probably still

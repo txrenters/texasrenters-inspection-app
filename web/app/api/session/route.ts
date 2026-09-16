@@ -29,7 +29,10 @@ export async function POST(request: NextRequest) {
     upstream = await fetch(`${apiBaseUrl()}/api/v1/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-      body: JSON.stringify({ email: credentials.email, password: credentials.password }),
+      // `console`: only the technician app is held to one signed-in device. A
+      // coordinator who is a technician too must never be refused here, or made
+      // to sign their phone out (the office, 2026-09-17).
+      body: JSON.stringify({ email: credentials.email, password: credentials.password, client: 'console' }),
     });
   } catch {
     return NextResponse.json(

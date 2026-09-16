@@ -81,6 +81,8 @@ export class SessionService {
       ipAddress?: string;
       takeOverExistingSession?: boolean;
       deviceId?: string;
+      /** `console` from the office console, which is never held to one device. */
+      client?: 'console';
     } = {},
   ): Promise<SessionTokens> {
     const credential = await this.prisma.authCredential.findUnique({
@@ -103,9 +105,13 @@ export class SessionService {
     // timing oracle in a different place.
     if (!credential.profile.isActive) throw REJECTED;
 
-    await this.enforceSingleDevice(credential.authUserId, credential.profile, context);
+    // Only the technician app is held to one device (the office, 2026-09-17). A
+    // coordinator who is a technician too signs in to the console without being
+    // refused, and without signing their phone out.
+    const fromConsole = context.client === 'console';
+    if (!fromConsole) await this.enforceSingleDevice(credential.authUserId, credential.profile, context);
 
-    const session = await this.issueSession(credential.authUserId, context);
+    const session = await this.issueSession(credential.authUserId, { ...context, fromConsole });
     await this.prisma.authCredential.update({
       where: { authUserId: credential.authUserId },
       data: { lastSignInAt: new Date() },
@@ -125,7 +131,7 @@ export class SessionService {
    */
   async refresh(
     refreshToken: string,
-    context: { userAgent?: string; ipAddress?: string } = {},
+    context: { userAgent?: string; ipAddress?: string; client?: 'console' } = {},
   ): Promise<SessionTokens> {
     const tokenHash = this.tokens.hashRefreshToken(refreshToken);
     const existing = await this.prisma.authRefreshToken.findUnique({
@@ -136,6 +142,8 @@ export class SessionService {
         expiresAt: true,
         revokedAt: true,
         replacedById: true,
+        deviceId: true,
+        fromConsole: true,
         credential: {
           select: { mustChangePassword: true, profile: { select: { isActive: true } } },
         },
@@ -169,6 +177,10 @@ export class SessionService {
     if (!existing.credential.profile.isActive) throw REJECTED;
 
     const next = this.tokens.createRefreshToken();
+    // The session keeps its device and where it was signed in from. Dropping
+    // `deviceId` here made a phone's own session look like another handset
+    // after its first refresh; a console session from before `fromConsole`
+    // existed is marked when the console refreshes it.
     // One transaction: a crash between retiring the old token and storing the
     // new one would sign the user out with no way back.
     await this.prisma.$transaction(async (tx) => {
@@ -179,6 +191,8 @@ export class SessionService {
           expiresAt: next.expiresAt,
           userAgent: context.userAgent ?? null,
           ipAddress: context.ipAddress ?? null,
+          deviceId: existing.deviceId ?? null,
+          fromConsole: existing.fromConsole || context.client === 'console',
         },
         select: { id: true },
       });
@@ -224,9 +238,12 @@ export class SessionService {
    * indistinguishable from an outage to whoever it happens to, so the log has
    * to be able to answer "why was I signed out" months later.
    */
-  async revokeAllFor(authUserId: string, reason: string) {
+  async revokeAllFor(authUserId: string, reason: string, options: { handsetsOnly?: boolean } = {}) {
     const { count } = await this.prisma.authRefreshToken.updateMany({
-      where: { authUserId, revokedAt: null },
+      // `handsetsOnly` for the one-device rule, which is the app's alone: a
+      // phone taking the account over must not sign the console out. A replayed
+      // token or a new password still ends everything.
+      where: { authUserId, revokedAt: null, ...(options.handsetsOnly ? { fromConsole: false } : {}) },
       data: { revokedAt: new Date() },
     });
     if (count > 0) this.logger.log(`Revoked ${count} session(s) for ${authUserId}: ${reason}.`);
@@ -242,9 +259,12 @@ export class SessionService {
    * the schema, so one live session per account is the only place this can be
    * enforced today.
    *
-   * Technicians only. An administrator signed in to the console and carrying
-   * the app is doing something normal, and refusing it would teach people to
-   * share logins — which is the thing this is trying to prevent.
+   * Technicians only, and on the app only. An administrator signed in to the
+   * console and carrying the app is doing something normal, and refusing it
+   * would teach people to share logins — which is the thing this is trying to
+   * prevent. So is a technician who also works the console: `signIn` never
+   * brings a console sign-in here, and a console session is never the "other
+   * device" a phone is refused over or signs out (the office, 2026-09-17).
    *
    * Refusing rather than evicting, and then taking over only when asked: the
    * device already in the field may be mid-walkthrough, and signing it out from
@@ -262,7 +282,7 @@ export class SessionService {
     if (!isTechnician) return;
 
     if (context.takeOverExistingSession) {
-      await this.revokeAllFor(authUserId, 'signed in on another device');
+      await this.revokeAllFor(authUserId, 'signed in on another device', { handsetsOnly: true });
       return;
     }
 
@@ -279,7 +299,7 @@ export class SessionService {
       : {};
 
     const live = await this.prisma.authRefreshToken.findFirst({
-      where: { authUserId, revokedAt: null, expiresAt: { gt: new Date() }, ...otherDevice },
+      where: { authUserId, revokedAt: null, expiresAt: { gt: new Date() }, fromConsole: false, ...otherDevice },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true, userAgent: true },
     });
@@ -290,7 +310,7 @@ export class SessionService {
     // never reaches the server, which is why the old token was still there at
     // all, and being told to take your own phone over is nonsense.
     if (!live) {
-      await this.revokeAllFor(authUserId, 'signed in again on the same device');
+      await this.revokeAllFor(authUserId, 'signed in again on the same device', { handsetsOnly: true });
       return;
     }
 
@@ -303,7 +323,7 @@ export class SessionService {
 
   private async issueSession(
     authUserId: string,
-    context: { userAgent?: string; ipAddress?: string; deviceId?: string },
+    context: { userAgent?: string; ipAddress?: string; deviceId?: string; fromConsole?: boolean },
   ) {
     const credential = await this.prisma.authCredential.findUniqueOrThrow({
       where: { authUserId },
@@ -318,6 +338,7 @@ export class SessionService {
         userAgent: context.userAgent ?? null,
         ipAddress: context.ipAddress ?? null,
         deviceId: context.deviceId ?? null,
+        fromConsole: context.fromConsole ?? false,
       },
     });
     const access = this.tokens.issueAccessToken({

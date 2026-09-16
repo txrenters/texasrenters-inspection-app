@@ -87,6 +87,7 @@ export class AuthController {
       ...clientContext(request),
       takeOverExistingSession: body.takeOverExistingSession === true,
       deviceId: body.deviceId,
+      client: body.client,
     });
   }
 
@@ -99,7 +100,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(200)
   refresh(@Req() request: Request, @Body() body: RefreshTokenDto) {
-    return this.sessions.refresh(body.refreshToken, clientContext(request));
+    return this.sessions.refresh(body.refreshToken, { ...clientContext(request), client: body.client });
   }
 
   /**

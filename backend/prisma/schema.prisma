@@ -618,6 +618,15 @@ model AuthRefreshToken {
   /// the session over anyway. This only decides whether a person is *asked*.
   deviceId  String?
 
+  /// Signed in from the office console rather than the technician app.
+  ///
+  /// The console is never held to one device (the office, 2026-09-17): an
+  /// account that is a coordinator and a technician too signs in at a desk
+  /// without signing its phone out, and a phone that takes the account over
+  /// leaves the console signed in. Reported by the console's own server route,
+  /// and like `deviceId` not a security boundary.
+  fromConsole Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   credential AuthCredential @relation(fields: [authUserId], references: [authUserId], onDelete: Cascade)
