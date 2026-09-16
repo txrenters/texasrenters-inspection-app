@@ -861,6 +861,27 @@ describe('a day routed from the technician’s home', () => {
     expect(day.homeDriveSeconds).toBe(60);
   });
 
+  /**
+   * 2026-09-16: Google answered no drive from home for a full day, the route
+   * from home came back empty, and the Rebuild failed with a 500. A day Google
+   * cannot fully measure is still laid out, routed between its properties.
+   */
+  it('lays a full day out even when Google answers no drive from home', async () => {
+    const stops = Array.from({ length: 9 }, (_, index) => stop(`s${index + 1}`, index + 1, index * 0.1));
+    const { service, dayCreate, stopUpdate } = build(stops, {
+      technicians: [HOME],
+      googleSeconds: (from) => (from.latitude === 29.7 ? Number.POSITIVE_INFINITY : 300),
+    });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect(summary.placed).toBe(9);
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day).toMatchObject({ stopCount: 9, totalDriveSeconds: 8 * 300, homeDriveSeconds: null });
+    const positions = stops.map((row) => updateFor(stopUpdate, row.id)?.positionInDay).sort((a, b) => Number(a) - Number(b));
+    expect(positions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
   it('measures the drive from home to a day of one property', async () => {
     const { service, dayCreate, google } = build([stop('only', 1)], { technicians: [HOME], googleSeconds: fiveMinutes });
 

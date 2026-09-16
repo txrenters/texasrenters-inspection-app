@@ -51,6 +51,14 @@ function permutations(items: readonly number[]): number[][] {
   return output;
 }
 
+/**
+ * From the origin, always to the nearest stop not yet visited.
+ *
+ * A stop no remaining leg reaches -- Google leaves a pair it could not answer as
+ * `Infinity` -- is still visited, after the reachable ones and in the order
+ * given. An order that leaves a stop out is a day that loses a property, and an
+ * empty one broke a whole quarter's routing (2026-09-16).
+ */
 function nearestNeighbour(matrix: DurationMatrix, stops: readonly number[]): number[] {
   const remaining = new Set(stops);
   const order: number[] = [];
@@ -66,7 +74,10 @@ function nearestNeighbour(matrix: DurationMatrix, stops: readonly number[]): num
         best = candidate;
       }
     }
-    if (best === null) break;
+    if (best === null) {
+      order.push(...remaining);
+      break;
+    }
     order.push(best);
     remaining.delete(best);
     current = best;
