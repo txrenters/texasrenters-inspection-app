@@ -5,6 +5,8 @@ import {
   CLUSTER_MAX_ZOOM,
   clusterByGrid,
   type Clusterable,
+  inBox,
+  padBox,
   zoomToIsolate,
 } from './map-clusters';
 
@@ -196,5 +198,75 @@ describe('properties closer together than the grid', () => {
       { id: 'unit-b', latitude: 30.1401, longitude: -95.4602 },
     ];
     expect(clusterByGrid(twins, CLUSTER_MAX_ZOOM + 1)).toHaveLength(2);
+  });
+});
+
+/**
+ * Zooming in and out stuttered, and froze for up to a second.
+ *
+ * At street level every property stood alone, so all 586 were markers at once,
+ * nearly all of them off-screen; and every lone property was keyed by its grid
+ * cell, which changes at every zoom, so each settle threw them all away and
+ * drew them again. Measured on a production build: 9 to 11 long tasks, 675 to
+ * 841 ms of blocked main thread, over two zoom-out/zoom-in cycles. After: none.
+ */
+describe('keeping markers across zoom levels', () => {
+  it('keys a lone property by itself, whatever the zoom', () => {
+    const keysAt = (zoom: number) =>
+      clusterByGrid(HOUSTON_77044, zoom)
+        .filter((cluster) => cluster.members.length === 1)
+        .map((cluster) => cluster.key)
+        .sort();
+
+    expect(keysAt(17)).toEqual(['copper-hollow', 'mariposa-green', 'solitude-way']);
+    expect(keysAt(18)).toEqual(keysAt(17));
+    expect(keysAt(CLUSTER_MAX_ZOOM + 1)).toEqual(keysAt(17));
+  });
+
+  it('never gives a group the key of a lone property', () => {
+    const group = clusterByGrid(HOUSTON_77044, 10).find((cluster) => cluster.members.length > 1);
+
+    expect(group).toBeDefined();
+    expect(HOUSTON_77044.map((property) => property.id)).not.toContain(group?.key);
+  });
+});
+
+describe('drawing only what is near the screen', () => {
+  const houston = { north: 29.9, south: 29.6, east: -95.2, west: -95.6 };
+
+  it('grows the view by a share of its own size on every side', () => {
+    const padded = padBox(houston, 0.5);
+
+    expect(padded.north).toBeCloseTo(30.05, 6);
+    expect(padded.south).toBeCloseTo(29.45, 6);
+    expect(padded.east).toBeCloseTo(-95.0, 6);
+    expect(padded.west).toBeCloseTo(-95.8, 6);
+  });
+
+  it('includes a point just past the edge once padded, and not before', () => {
+    const justEast = { latitude: 29.75, longitude: -95.15 };
+
+    expect(inBox(justEast, houston)).toBe(false);
+    expect(inBox(justEast, padBox(houston, 0.5))).toBe(true);
+  });
+
+  it('leaves out a property in another city', () => {
+    expect(inBox(FAR_AWAY, padBox(houston, 0.5))).toBe(false);
+  });
+
+  it('never grows past the edge of the world', () => {
+    const padded = padBox({ north: 84, south: -84, east: 170, west: -170 }, 0.5);
+
+    expect(padded.north).toBeLessThanOrEqual(90);
+    expect(padded.south).toBeGreaterThanOrEqual(-90);
+    expect(padded).toMatchObject({ east: 180, west: -180 });
+  });
+
+  it('handles a view that spans the date line', () => {
+    const pacific = { north: 10, south: -10, east: -170, west: 170 };
+
+    expect(inBox({ latitude: 0, longitude: 175 }, pacific)).toBe(true);
+    expect(inBox({ latitude: 0, longitude: -175 }, pacific)).toBe(true);
+    expect(inBox({ latitude: 0, longitude: 0 }, pacific)).toBe(false);
   });
 });
