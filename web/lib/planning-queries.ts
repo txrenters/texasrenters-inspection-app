@@ -138,6 +138,28 @@ export interface PlanDay {
   durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
   stops: PlanDayStop[];
+  /** The move-outs the day is built around; `onSiteMinutes` includes theirs, `stopCount` does not. */
+  anchors?: PlanDayAnchor[];
+}
+
+/** A move-out a planned day is built around (the office, 2026-09-17: TBPs are done around move-outs). */
+export interface PlanDayAnchor {
+  id: string;
+  inspectionId: string;
+  /** 1-based among all the day's stops, visits included. */
+  positionInDay: number | null;
+  onSiteMinutes: number;
+  driveSecondsForecast: number | null;
+  address: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  assignedTechnician: { id: string; displayName: string } | null;
+  /** Assigned to someone other than the day's technician, or nobody: move-outs are theirs, so reassign it in Jobber. */
+  needsReassigning: boolean;
+  /** `YYYY-MM-DD`, the move-out's date now: another day's than this one when it moved after the plan was laid out. */
+  scheduledOn: string;
+  cancelled: boolean;
 }
 
 export interface PlanRoutingSummary {

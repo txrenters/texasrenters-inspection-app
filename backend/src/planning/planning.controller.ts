@@ -14,7 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { InspectionStatus, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 import { haversineMeters, type Quarter, quarterLabel } from '@texasrenters/shared';
 
 import {
@@ -297,7 +297,7 @@ export class PlanningController {
   @RequirePermissions('planning:read')
   async days(@Req() request: AuthenticatedRequest, @Param('planId') planId: string) {
     const organizationId = request.user.organizationId;
-    const [days, stops] = await Promise.all([
+    const [days, stops, anchors] = await Promise.all([
       this.prisma.tbpQuarterPlanDay.findMany({
         where: { planId, organizationId },
         orderBy: [{ date: 'asc' }, { technicianId: 'asc' }],
@@ -342,12 +342,38 @@ export class PlanningController {
           propertywareBuilding: { select: { latitude: true, longitude: true } },
         },
       }),
+      this.prisma.tbpQuarterPlanAnchor.findMany({
+        where: { planId, organizationId },
+        orderBy: [{ date: 'asc' }, { positionInDay: 'asc' }],
+        select: {
+          id: true,
+          inspectionId: true,
+          technicianId: true,
+          date: true,
+          onSiteMinutes: true,
+          positionInDay: true,
+          driveSecondsForecast: true,
+          inspection: {
+            select: {
+              scheduledAt: true,
+              status: true,
+              propertywareBuilding: { select: { addressLine1: true, city: true, latitude: true, longitude: true } },
+              assignments: { where: { isCurrent: true }, select: { technician: { select: { id: true, displayName: true } } } },
+            },
+          },
+        },
+      }),
     ]);
 
     const byDay = new Map<string, typeof stops>();
     for (const stop of stops) {
       const key = `${stop.scheduledOn!.toISOString().slice(0, 10)}|${stop.assignedTechnicianId}`;
       byDay.set(key, [...(byDay.get(key) ?? []), stop]);
+    }
+    const anchorsByDay = new Map<string, typeof anchors>();
+    for (const anchor of anchors) {
+      const key = `${anchor.date.toISOString().slice(0, 10)}|${anchor.technicianId}`;
+      anchorsByDay.set(key, [...(anchorsByDay.get(key) ?? []), anchor]);
     }
 
     return days.map((day) => ({
@@ -366,6 +392,28 @@ export class PlanningController {
         latitude: stop.propertywareBuilding?.latitude === null || stop.propertywareBuilding?.latitude === undefined ? null : Number(stop.propertywareBuilding.latitude),
         longitude: stop.propertywareBuilding?.longitude === null || stop.propertywareBuilding?.longitude === undefined ? null : Number(stop.propertywareBuilding.longitude),
       })),
+      // The move-outs the day is built around (the office, 2026-09-17).
+      anchors: (anchorsByDay.get(`${day.date.toISOString().slice(0, 10)}|${day.technicianId}`) ?? []).map((anchor) => {
+        const building = anchor.inspection.propertywareBuilding;
+        const assigned = anchor.inspection.assignments[0]?.technician ?? null;
+        return {
+          id: anchor.id,
+          inspectionId: anchor.inspectionId,
+          positionInDay: anchor.positionInDay,
+          onSiteMinutes: anchor.onSiteMinutes,
+          driveSecondsForecast: anchor.driveSecondsForecast,
+          address: building?.addressLine1 ?? null,
+          city: building?.city ?? null,
+          latitude: building?.latitude == null ? null : Number(building.latitude),
+          longitude: building?.longitude == null ? null : Number(building.longitude),
+          assignedTechnician: assigned,
+          // Move-outs are this technician's: one assigned to anyone else, or nobody, is for the office to reassign.
+          needsReassigning: assigned?.id !== day.technicianId,
+          // Moved or cancelled since the plan was laid out: a rebuild places the day again.
+          scheduledOn: anchor.inspection.scheduledAt.toISOString().slice(0, 10),
+          cancelled: anchor.inspection.status === InspectionStatus.CANCELLED,
+        };
+      }),
     }));
   }
 
@@ -405,17 +453,28 @@ export class PlanningController {
     });
     if (!day) throw new ApplicationError(404, 'PLAN_DAY_NOT_FOUND', 'This planned day does not exist.');
 
-    const stops = await this.prisma.tbpQuarterPlanStop.findMany({
-      where: { planId, organizationId, scheduledOn: day.date, assignedTechnicianId: day.technicianId },
-      orderBy: { positionInDay: 'asc' },
-      select: { id: true, propertywareBuilding: { select: { latitude: true, longitude: true } } },
-    });
-    const points = stops
-      .filter((stop) => stop.propertywareBuilding?.latitude != null && stop.propertywareBuilding?.longitude != null)
+    const [stops, anchors] = await Promise.all([
+      this.prisma.tbpQuarterPlanStop.findMany({
+        where: { planId, organizationId, scheduledOn: day.date, assignedTechnicianId: day.technicianId },
+        orderBy: { positionInDay: 'asc' },
+        select: { id: true, positionInDay: true, propertywareBuilding: { select: { latitude: true, longitude: true } } },
+      }),
+      // The day's move-outs are on its road, in their places among the visits.
+      this.prisma.tbpQuarterPlanAnchor.findMany({
+        where: { planId, organizationId, date: day.date, technicianId: day.technicianId },
+        select: { id: true, positionInDay: true, inspection: { select: { propertywareBuilding: { select: { latitude: true, longitude: true } } } } },
+      }),
+    ]);
+    const points = [
+      ...stops.map((stop) => ({ id: stop.id, position: stop.positionInDay, building: stop.propertywareBuilding })),
+      ...anchors.map((anchor) => ({ id: anchor.id, position: anchor.positionInDay, building: anchor.inspection.propertywareBuilding })),
+    ]
+      .sort((left, right) => (left.position ?? Number.MAX_SAFE_INTEGER) - (right.position ?? Number.MAX_SAFE_INTEGER))
+      .filter((stop) => stop.building?.latitude != null && stop.building?.longitude != null)
       .map((stop) => ({
         id: stop.id,
-        latitude: Number(stop.propertywareBuilding!.latitude),
-        longitude: Number(stop.propertywareBuilding!.longitude),
+        latitude: Number(stop.building!.latitude),
+        longitude: Number(stop.building!.longitude),
       }));
     const profile = await this.prisma.technicianPlanningProfile.findFirst({
       where: { technicianId: day.technicianId, organizationId },

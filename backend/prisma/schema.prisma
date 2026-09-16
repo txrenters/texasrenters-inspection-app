@@ -384,6 +384,7 @@ model Organization {
   tbpQuarterPlans                 TbpQuarterPlan[]
   tbpQuarterPlanStops             TbpQuarterPlanStop[]
   tbpQuarterPlanDays              TbpQuarterPlanDay[]
+  tbpQuarterPlanAnchors           TbpQuarterPlanAnchor[]
   technicianPlanningProfiles      TechnicianPlanningProfile[]
 }
 
@@ -496,6 +497,7 @@ model UserProfile {
   tbpPlansPublished    TbpQuarterPlan[]         @relation("TbpPlanPublishedBy")
   tbpPlanStops         TbpQuarterPlanStop[]     @relation("TbpStopTechnician")
   tbpPlanDays          TbpQuarterPlanDay[]      @relation("TbpPlanDayTechnician")
+  tbpPlanAnchors       TbpQuarterPlanAnchor[]   @relation("TbpPlanAnchorTechnician")
   planningProfile      TechnicianPlanningProfile? @relation("TechnicianPlanningProfile")
 }
 
@@ -1293,6 +1295,7 @@ model Inspection {
   findings                   InspectionFinding[]
   reportShares               InspectionReportShare[]
   areaEvidenceRequests       AreaEvidenceRequest[]
+  tbpPlanAnchors             TbpQuarterPlanAnchor[]
 
   /// One inspection per Jobber visit. Postgres allows many NULLs in a unique
   /// index, so every manually booked inspection is unaffected — but a visit
@@ -3047,6 +3050,7 @@ model TbpQuarterPlan {
   publishedBy  UserProfile?         @relation("TbpPlanPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
   stops        TbpQuarterPlanStop[]
   days         TbpQuarterPlanDay[]
+  anchors      TbpQuarterPlanAnchor[]
 
   @@unique([organizationId, quarterYear, quarterNumber])
   @@index([organizationId, status])
@@ -3246,6 +3250,11 @@ model TechnicianPlanningProfile {
   /// one zone on each week: whoever is 1 starts the quarter on the first zone.
   tbpZoneOrder Int?
 
+  /// The technician who handles move-outs: Moses (the office, 2026-09-17). On a
+  /// day they have a move-out, their benefit-package visits are the ones nearest
+  /// it, from any zone. Nobody marked means move-outs anchor nothing.
+  handlesMoveOuts Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3299,5 +3308,41 @@ model TbpQuarterPlanDay {
   technician   UserProfile    @relation("TbpPlanDayTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
 
   @@unique([planId, technicianId, date])
+  @@index([organizationId, date])
+}
+
+/// A move-out a benefit-package day is built around (the office, 2026-09-17).
+///
+/// Move-outs are the anchors of the days of the technician who `handlesMoveOuts`:
+/// on a day they have one, their benefit-package visits are the ones nearest it,
+/// from any zone. The move-out is its own inspection, already booked in Jobber,
+/// so the plan only records it -- whose day it anchors, its time on site and its
+/// place in the day's route -- and never publishes it. Recorded again from the
+/// move-outs booked by then each time the plan is laid out.
+model TbpQuarterPlanAnchor {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  planId         String   @db.Uuid
+  inspectionId   String   @db.Uuid
+  /// Whose day it anchors: the technician who handles move-outs, whoever the
+  /// move-out is assigned to. One assigned to anyone else is shown for the office
+  /// to reassign in Jobber.
+  technicianId   String   @db.Uuid
+  date           DateTime @db.Date
+  /// An hour on site (the office, 2026-09-17), counted in the day's time but not
+  /// as one of its visits.
+  onSiteMinutes  Int      @default(60)
+  /// 1-based among all the day's stops, visits included.
+  positionInDay        Int?
+  driveSecondsForecast Int?
+  createdAt      DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         TbpQuarterPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  inspection   Inspection     @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  technician   UserProfile    @relation("TbpPlanAnchorTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, inspectionId])
+  @@index([planId, technicianId, date])
   @@index([organizationId, date])
 }

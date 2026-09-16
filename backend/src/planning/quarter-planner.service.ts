@@ -1,20 +1,26 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { DriveTimeSource, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { DriveTimeSource, InspectionStatus, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 import {
+  type AnchorSkipReason,
   type AssignedCrew,
+  type DayAnchor,
   type DayLimits,
   type PlannableDay,
   type PlannableStop,
   type Quarter,
   type UnplacedReason,
   MAX_STOPS_PER_DAY,
+  anchorAsStop,
+  anchorIdOf,
   byZoneNumber,
   crewKey,
   estimatedDriveMinutes,
   haversineMeters,
   layoutFullDays,
   plannedVisitDaysOfQuarter,
+  quarterEnd,
   quarterLabel,
+  quarterStart,
   quarterWeekIndex,
   shortestOpenPathOrder,
   shortestRouteOrder,
@@ -47,6 +53,12 @@ const DAY_STARTS_AT = '09:00:00';
  * ordered from home itself (`orientTowardHome`).
  */
 const HOME_END_TOLERANCE_SECONDS = 120;
+
+/**
+ * How long a move-out anchoring a day counts on site: an hour (the office,
+ * 2026-09-17), on top of the day's nine to twelve benefit-package visits.
+ */
+const MOVE_OUT_ANCHOR_MINUTES = 60;
 
 /** Block codes routing owns, cleared whenever the plan is routed again. */
 const ROUTING_BLOCK_CODES = ['NO_COORDINATES', 'NOT_PLACED'];
@@ -85,6 +97,13 @@ export interface RoutingSummary {
   days: number;
   durationSource: DriveTimeSource | null;
   settings: Required<PlanRoutingSettings>;
+  /** Move-outs a day was built around. */
+  anchored: number;
+  /**
+   * Move-outs no day was built around, and why: a weekend, a holiday or a Monday
+   * kept free has no planned day; a day a coordinator took is theirs.
+   */
+  anchorsSkipped: { inspectionId: string; reason: AnchorSkipReason | 'NO_LOCATION' }[];
 }
 
 /** Who has which zone in each week of a plan's quarter, for the console. */
@@ -173,6 +192,9 @@ export class QuarterPlannerService {
    *   limit on it, each visit within three weeks of last quarter's week unless a
    *   day of nine needs it further (`layoutFullDays`);
    * - each day driven from the technician's home, in the order that drives least;
+   * - a move-out anchors a day of the technician who handles move-outs: on its
+   *   date their visits are the ones nearest it, from any zone, and the move-out
+   *   is routed with them (`moveOutAnchors`);
    * - no planned visit on a Monday from the quarter's second week on, which is
    *   kept for rescheduled visits;
    * - a visit a coordinator placed by hand stays on the day and with the
@@ -252,17 +274,23 @@ export class QuarterPlannerService {
     const unreachable = free.filter((stop) => stop.zone && outOfReach.has(stop.zone));
     const rotation = { position: new Map(stops.map((stop, index) => [stop.stopId, index])), size: stops.length };
 
+    const moveOuts = await this.moveOutAnchors(organizationId, quarter);
     const assignment = layoutFullDays(free.filter((stop) => !stop.zone || !outOfReach.has(stop.zone)), days, {
       limits,
       rotation,
       taken: new Set(placedByHand.map((crew) => crewKey(crew.date, crew.technicianId))),
+      anchors: moveOuts.anchors,
     });
     const unplaced: RoutingSummary['unplaced'] = [
       ...unreachable.map((stop) => ({ stopId: stop.stopId, reason: 'ZONE_OUT_OF_REACH' as const })),
       ...assignment.unplaced,
     ];
-    const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops'>) =>
-      this.measure(crew, homes.get(crew.technicianId));
+    // A day's move-outs are routed and measured with its visits, as stops it drives to.
+    const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors'>) =>
+      this.measure(
+        { date: crew.date, technicianId: crew.technicianId, stops: [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops] },
+        homes.get(crew.technicianId),
+      );
     const measured: MeasuredCrew[] = [];
     for (const crew of assignment.crews) measured.push(await measureCrew(crew));
     const byHand: MeasuredCrew[] = [];
@@ -276,12 +304,17 @@ export class QuarterPlannerService {
     const summary: RoutingSummary = {
       planId,
       quarter,
-      placed: crews.reduce((total, crew) => total + crew.stops.length, 0),
+      placed: crews.reduce((total, crew) => total + crew.stops.filter((stop) => anchorIdOf(stop) === null).length, 0),
       unplaced,
       capacity: assignment.capacity,
       days: crews.length,
       durationSource: crews.find((crew) => crew.durationSource !== null)?.durationSource ?? null,
       settings,
+      anchored: assignment.crews.reduce((total, crew) => total + (crew.anchors?.length ?? 0), 0),
+      anchorsSkipped: [
+        ...moveOuts.withoutLocation.map((inspectionId) => ({ inspectionId, reason: 'NO_LOCATION' as const })),
+        ...assignment.skippedAnchors.map(({ anchorId, reason }) => ({ inspectionId: anchorId, reason })),
+      ],
     };
 
     if (assignment.capacity.onSiteMinutes > assignment.capacity.availableMinutes)
@@ -303,6 +336,8 @@ export class QuarterPlannerService {
       placed: summary.placed,
       unplaced: summary.unplaced.length,
       days: summary.days,
+      anchored: summary.anchored,
+      anchorsSkipped: summary.anchorsSkipped.length,
       crew: roster.technicianIds.length,
       zones: zones.circle,
       zonesOutOfReach: zones.outOfReach,
@@ -434,25 +469,103 @@ export class QuarterPlannerService {
             ],
       );
 
-      if (stops.length === 0) {
+      // The move-outs the day is built around are still its stops.
+      const anchors = (
+        await this.prisma.tbpQuarterPlanAnchor.findMany({
+          where: { planId, organizationId, technicianId, date: on },
+          select: {
+            inspectionId: true,
+            onSiteMinutes: true,
+            inspection: { select: { propertywareBuilding: { select: { latitude: true, longitude: true } } } },
+          },
+        })
+      ).flatMap((row) => {
+        const building = row.inspection.propertywareBuilding;
+        return building?.latitude == null || building.longitude == null
+          ? []
+          : [
+              anchorAsStop({
+                id: row.inspectionId,
+                date,
+                technicianId,
+                latitude: Number(building.latitude),
+                longitude: Number(building.longitude),
+                onSiteMinutes: row.onSiteMinutes,
+              }),
+            ];
+      });
+
+      if (stops.length === 0 && anchors.length === 0) {
         await this.prisma.tbpQuarterPlanDay.deleteMany({ where: { planId, organizationId, technicianId, date: on } });
         continue;
       }
 
-      const crew = await this.measure({ date, technicianId, stops }, await this.homeOf(organizationId, technicianId));
+      const crew = await this.measure({ date, technicianId, stops: [...anchors, ...stops] }, await this.homeOf(organizationId, technicianId));
       await this.prisma.$transaction(async (tx) => {
         await tx.tbpQuarterPlanDay.upsert({
           where: { planId_technicianId_date: { planId, technicianId, date: on } },
           create: { organizationId, planId, technicianId, date: on, ...dayRow(crew) },
           update: { ...dayRow(crew), computedAt: new Date() },
         });
-        for (const [index, stop] of crew.stops.entries())
-          await tx.tbpQuarterPlanStop.update({
-            where: { id: stop.stopId },
-            data: { positionInDay: index + 1, driveSecondsForecast: whole(crew.legSeconds[index] ?? null) },
-          });
+        for (const [index, stop] of crew.stops.entries()) {
+          const data = { positionInDay: index + 1, driveSecondsForecast: whole(crew.legSeconds[index] ?? null) };
+          const anchorId = anchorIdOf(stop);
+          if (anchorId) await tx.tbpQuarterPlanAnchor.updateMany({ where: { planId, inspectionId: anchorId }, data });
+          else await tx.tbpQuarterPlanStop.update({ where: { id: stop.stopId }, data });
+        }
       });
     }
+  }
+
+  /**
+   * The move-outs the quarter's days are built around (the office, 2026-09-17).
+   *
+   * Every move-out booked inside the quarter and not cancelled anchors a day of
+   * the technician who handles move-outs -- Moses -- whoever it is assigned to
+   * now: move-outs are his, and the console shows one assigned to anybody else
+   * for the office to reassign in Jobber. With nobody marked, nothing anchors. A
+   * move-out whose building has no coordinates has nowhere to gather visits
+   * round, so it is reported instead.
+   */
+  private async moveOutAnchors(
+    organizationId: string,
+    quarter: Quarter,
+  ): Promise<{ anchors: DayAnchor[]; withoutLocation: string[] }> {
+    const handler = await this.prisma.technicianPlanningProfile.findFirst({
+      where: { organizationId, isPlannable: true, handlesMoveOuts: true },
+      orderBy: [{ tbpZoneOrder: 'asc' }, { technicianId: 'asc' }],
+      select: { technicianId: true },
+    });
+    if (!handler) return { anchors: [], withoutLocation: [] };
+
+    const moveOuts = await this.prisma.inspection.findMany({
+      where: {
+        organizationId,
+        inspectionType: InspectionType.MOVE_OUT,
+        status: { not: InspectionStatus.CANCELLED },
+        scheduledAt: { gte: quarterStart(quarter), lt: quarterEnd(quarter) },
+      },
+      orderBy: { scheduledAt: 'asc' },
+      select: { id: true, scheduledAt: true, propertywareBuilding: { select: { latitude: true, longitude: true } } },
+    });
+    const anchors: DayAnchor[] = [];
+    const withoutLocation: string[] = [];
+    for (const moveOut of moveOuts) {
+      const building = moveOut.propertywareBuilding;
+      if (building?.latitude == null || building.longitude == null) {
+        withoutLocation.push(moveOut.id);
+        continue;
+      }
+      anchors.push({
+        id: moveOut.id,
+        date: moveOut.scheduledAt.toISOString().slice(0, 10),
+        technicianId: handler.technicianId,
+        latitude: Number(building.latitude),
+        longitude: Number(building.longitude),
+        onSiteMinutes: MOVE_OUT_ANCHOR_MINUTES,
+      });
+    }
+    return { anchors, withoutLocation };
   }
 
   /**
@@ -702,6 +815,7 @@ export class QuarterPlannerService {
     // this run could not place does not keep the day the last run gave it,
     // which publish would otherwise book.
     await this.prisma.tbpQuarterPlanDay.deleteMany({ where: { planId } });
+    await this.prisma.tbpQuarterPlanAnchor.deleteMany({ where: { planId } });
     await this.prisma.tbpQuarterPlanStop.updateMany({
       where: { planId, organizationId, status: TbpStopStatus.PLANNED },
       data: { positionInDay: null, driveSecondsForecast: null },
@@ -728,7 +842,24 @@ export class QuarterPlannerService {
             },
           });
 
-          for (const [index, stop] of crew.stops.entries())
+          for (const [index, stop] of crew.stops.entries()) {
+            const anchorId = anchorIdOf(stop);
+            if (anchorId) {
+              // A move-out the day is built around: recorded with its place in the route, never published.
+              await tx.tbpQuarterPlanAnchor.create({
+                data: {
+                  organizationId,
+                  planId,
+                  inspectionId: anchorId,
+                  technicianId: crew.technicianId,
+                  date: new Date(`${crew.date}T00:00:00.000Z`),
+                  onSiteMinutes: stop.onSiteMinutes,
+                  positionInDay: index + 1,
+                  driveSecondsForecast: whole(crew.legSeconds[index] ?? null),
+                },
+              });
+              continue;
+            }
             await tx.tbpQuarterPlanStop.update({
               where: { id: stop.stopId },
               // A visit a coordinator placed is laid out on the day and with the
@@ -740,6 +871,7 @@ export class QuarterPlannerService {
                 driveSecondsForecast: whole(crew.legSeconds[index] ?? null),
               },
             });
+          }
         }
       });
     }
@@ -821,10 +953,12 @@ const whole = (value: number | null) => (value === null || !Number.isFinite(valu
 /** A measured technician-day, as its row holds it. */
 function dayRow(crew: MeasuredCrew) {
   const first = crew.stops[0]!;
+  // A move-out the day is built around takes its time on site, but is not one of the day's visits.
+  const visits = crew.stops.filter((stop) => anchorIdOf(stop) === null);
   return {
-    stopCount: crew.stops.length,
+    stopCount: visits.length,
     onSiteMinutes: crew.stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
-    hvacStopCount: crew.stops.filter((stop) => stop.inspectionType === InspectionType.HVAC).length,
+    hvacStopCount: visits.filter((stop) => stop.inspectionType === InspectionType.HVAC).length,
     totalDriveSeconds: whole(crew.totalDriveSeconds),
     totalDriveMeters: whole(crew.totalDriveMeters),
     homeDriveSeconds: whole(crew.homeDriveSeconds),
