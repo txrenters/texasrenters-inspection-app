@@ -143,10 +143,10 @@ export function shortestRouteOrder(matrix: DurationMatrix): number[] {
 /**
  * The order to visit the stops in when the day starts at whichever comes first.
  *
- * A planned benefit-package day is measured from its first job -- the drive
- * from home does not count against the office's ninety minutes -- so the best
- * order is the shortest path through the stops from *any* of them. Takes a
- * matrix of the stops alone and returns indices into it (`0..n-1`).
+ * A planned benefit-package day for a technician with no home on file starts
+ * at its first job, so the best order is the shortest path through the stops
+ * from *any* of them. Takes a matrix of the stops alone and returns indices
+ * into it (`0..n-1`).
  *
  * The solver above wants an origin, so it is given one that costs nothing to
  * leave: every first stop is then equally cheap to reach and only the drive

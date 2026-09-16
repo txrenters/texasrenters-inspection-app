@@ -15,7 +15,7 @@ const between = (matrix: number[][], order: number[]) => {
 
 describe('shortestOpenPathOrder', () => {
   /**
-   * A planned day starts at its first job, so the best order walks the line
+   * A day with no home to start from starts at its first job, so the best order walks the line
    * from one end. Listed from the middle out, so keeping the input order fails.
    */
   it('starts the day at an end of the line rather than where the list starts', () => {

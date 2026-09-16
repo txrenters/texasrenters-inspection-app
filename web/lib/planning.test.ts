@@ -27,8 +27,8 @@ describe('a planned day as a clock', () => {
     ]);
   });
 
-  /** The day starts at the first job, so whatever reached the first stop is not on the clock. */
-  it('never counts a drive to the first stop', () => {
+  /** The clock starts at the first job at nine; the drive from home comes before it (`leaveHomeAt`). */
+  it('starts the clock at the first stop, whatever the drive to it', () => {
     expect(dayClock([{ onSiteMinutes: 30, driveSecondsForecast: 3600 }])[0]).toMatchObject({ arrives: 540, driveMinutes: 0 });
   });
 });

@@ -1,5 +1,6 @@
 'use client';
 
+import { zoneNumberOf } from '@texasrenters/shared';
 import dynamic from 'next/dynamic';
 import { useMemo } from 'react';
 
@@ -7,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDistance } from '@/lib/format';
 import { dayClock, formatClock, formatMinutes, leaveHomeAt, limitState, type LimitState } from '@/lib/planning';
-import { usePlanDayRoute, type PlanDay, type PlanSettings } from '@/lib/planning-queries';
+import { usePlanDayRoute, type PlanDay, type PlanRotation, type PlanSettings } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
 const PlanDayMap = dynamic(() => import('@/components/planning/plan-day-map').then((module) => module.PlanDayMap), {
@@ -34,14 +35,26 @@ const LIMIT_BAR: Record<LimitState, string> = {
   over: 'bg-destructive',
 };
 
-/** Minutes driving between a day's properties, or null when nothing measured it. */
+/** Minutes of the day's counted driving -- from home, and between its properties -- or null when nothing measured it. */
 const driveMinutes = (day: PlanDay) => (day.totalDriveSeconds === null ? null : Math.round(day.totalDriveSeconds / 60));
+
+/** The Monday a day's week starts on, `YYYY-MM-DD`. */
+function mondayOf(date: string) {
+  const day = new Date(date);
+  return new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
+}
 
 /** The Monday a day's week starts on, as its group heading. */
 function weekOf(date: string) {
-  const day = new Date(date);
-  const monday = new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 86_400_000);
+  const monday = new Date(`${mondayOf(date)}T00:00:00Z`);
   return `Week of ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(monday)}`;
+}
+
+/** The zones a day's visits are in, as "Zone 2" or "Zones 1, 2". */
+function zonesOf(day: PlanDay) {
+  const zones = [...new Set(day.stops.map((stop) => zoneNumberOf(stop.zone)).filter((zone): zone is string => Boolean(zone)))];
+  zones.sort((left, right) => Number(left) - Number(right));
+  return zones.length ? `${zones.length === 1 ? 'Zone' : 'Zones'} ${zones.join(', ')}` : null;
 }
 
 function Meter({ label, value, limit, text }: { label: string; value: number; limit: number; text: string }) {
@@ -66,6 +79,7 @@ export function PlanDays({
   selectedDayId,
   onSelect,
   onOpenStop,
+  rotation,
 }: {
   planId: string;
   days: PlanDay[];
@@ -74,13 +88,30 @@ export function PlanDays({
   onSelect: (dayId: string) => void;
   /** A stop's pin or row was clicked: open its details. */
   onOpenStop?: (stopId: string) => void;
+  /** Who has which zone each week, shown under each week's heading. */
+  rotation?: PlanRotation | null;
 }) {
   const selected = days.find((day) => day.id === selectedDayId) ?? days[0] ?? null;
   const weeks = useMemo(() => {
     const grouped = new Map<string, PlanDay[]>();
-    for (const day of days) grouped.set(weekOf(day.date), [...(grouped.get(weekOf(day.date)) ?? []), day]);
+    for (const day of days) grouped.set(mondayOf(day.date), [...(grouped.get(mondayOf(day.date)) ?? []), day]);
     return [...grouped.entries()];
   }, [days]);
+  // First names, as the office says them: "Zone 1 Moses".
+  const firstNames = new Map(
+    (rotation?.crew ?? []).map((member) => [member.technicianId, member.displayName?.split(' ')[0] ?? 'Someone']),
+  );
+  const zonesInWeek = new Map((rotation?.weeks ?? []).map((week) => [week.weekOf, week.zones]));
+  // Every zone on the circle, in order: with more zones than crew, one waits its turn each week.
+  const ownersOf = (monday: string) => {
+    const week = zonesInWeek.get(monday);
+    if (!week) return [];
+    const owners = new Map(week.map((entry) => [entry.zone, entry.technicianId]));
+    return (rotation?.zones ?? []).map((zone) => {
+      const owner = owners.get(zone);
+      return `Zone ${zone} ${owner ? (firstNames.get(owner) ?? 'Someone') : 'no one'}`;
+    });
+  };
 
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
@@ -88,9 +119,14 @@ export function PlanDays({
         aria-label="Planned technician-days"
         className="bg-card grid gap-4 rounded-xl border p-2 lg:sticky lg:top-[calc(var(--app-header-height)+1rem)] lg:max-h-[calc(100vh-var(--app-header-height)-2rem)] lg:overflow-y-auto"
       >
-        {weeks.map(([week, weekDays]) => (
-          <section className="grid gap-1" key={week}>
-            <h3 className="text-muted-foreground px-2 pt-1 text-xs font-medium tracking-wide uppercase">{week}</h3>
+        {weeks.map(([monday, weekDays]) => (
+          <section className="grid gap-1" key={monday}>
+            <h3 className="text-muted-foreground px-2 pt-1 text-xs font-medium tracking-wide uppercase">
+              {weekOf(monday)}
+            </h3>
+            {ownersOf(monday).length ? (
+              <p className="text-muted-foreground -mt-0.5 px-2 text-xs">{ownersOf(monday).join(' · ')}</p>
+            ) : null}
             {weekDays.map((day) => {
               const drive = driveMinutes(day);
               const active = selected?.id === day.id;
@@ -112,6 +148,7 @@ export function PlanDays({
                   <div className="text-muted-foreground text-xs">
                     {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
                     {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
+                    {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <Meter
@@ -143,7 +180,7 @@ export function PlanDays({
 function measuredText(day: PlanDay) {
   const fromHome = day.originKind === 'HOME';
   const counted = fromHome
-    ? 'The day is routed from the technician’s home; only the drives between properties count toward the limit.'
+    ? 'The day is routed from the technician’s home, and its driving counts the drive from home to the first property as well as between the properties; the drive home is not counted.'
     : 'This day was built without the technician’s home, so it starts at its first job. Rebuild the plan to route days from home; the home comes from the technician’s planning profile.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
@@ -154,7 +191,7 @@ function measuredText(day: PlanDay) {
       return 'No drive times could be measured for this day; the distances are in a straight line.';
     default:
       return fromHome
-        ? 'One property, so there is nothing to drive between; the drive from home is not counted.'
+        ? 'One property: its driving is the drive from home.'
         : 'One property, so there is nothing to drive between.';
   }
 }
@@ -246,7 +283,7 @@ function DayDetail({
                 {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
               </span>
             ) : homeMinutes !== null ? (
-              <span className="text-muted-foreground text-xs">{homeMinutes} min from home, not counted</span>
+              <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
             ) : null}
             <button
               aria-label={`Details of stop ${stop.positionInDay ?? index + 1}, ${stop.address ?? 'unknown address'}`}
@@ -272,7 +309,7 @@ function DayDetail({
                   </span>
                 </div>
                 <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
-                  <span>{[stop.city, stop.zone && /^\d+$/.test(stop.zone) ? `Zone ${stop.zone}` : null].filter(Boolean).join(' · ')}</span>
+                  <span>{[stop.city, zoneNumberOf(stop.zone) ? `Zone ${zoneNumberOf(stop.zone)}` : null].filter(Boolean).join(' · ')}</span>
                   <Badge variant={stop.inspectionType === 'HVAC' ? 'info' : 'secondary'}>
                     {stop.inspectionType === 'HVAC' ? 'HVAC inspection' : 'Occupied inspection'}
                   </Badge>

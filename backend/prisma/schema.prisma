@@ -3209,6 +3209,12 @@ model TechnicianPlanningProfile {
   /// account, which would also take away their handset.
   isPlannable Boolean @default(true)
 
+  /// Place in the benefit-package crew's zone rotation, from 1; null is not on
+  /// the crew. The office's crew (2026-09-16) -- Moses, Kevin and Emanuel --
+  /// take the quarter's visits, both kinds, one zone a week each, and all move
+  /// one zone on each week: whoever is 1 starts the quarter on the first zone.
+  tbpZoneOrder Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3234,12 +3240,14 @@ model TbpQuarterPlanDay {
   /// Time spent inspecting, against the plan's `maxOnSiteMinutes`.
   onSiteMinutes        Int @default(0)
   hvacStopCount        Int @default(0)
-  /// Between the day's properties only, against the plan's `maxDriveMinutes`.
+  /// The drive the plan's `maxDriveMinutes` counts: from the technician's home
+  /// to the first property when the day is routed from home, and between the
+  /// properties (the office, 2026-09-16). The drive home is not counted.
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
-  /// The drive from the technician's home to the day's first property, when the
-  /// day was routed from a home on file (`originKind` HOME). Shown, with when to
-  /// leave, and never counted against `maxDriveMinutes` (the office, 2026-09-16).
+  /// The drive from home to the first property, when the day was routed from a
+  /// home on file (`originKind` HOME). Part of `totalDriveSeconds`, and kept
+  /// apart so the console can show it and when to leave.
   homeDriveSeconds     Int?
   homeDriveMeters      Int?
 

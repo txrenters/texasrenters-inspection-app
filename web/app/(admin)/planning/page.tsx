@@ -34,6 +34,7 @@ import { formatMinutes, formatShortDay, quarterChoices, quarterKey, quarterName 
 import {
   usePlanDays,
   usePlanQuarters,
+  usePlanRotation,
   usePlanStops,
   usePlanningMutations,
   type PlanDay,
@@ -79,6 +80,7 @@ export default function PlanningPage() {
     quarters.data?.find((entry) => quarterKey(entry.quarterYear, entry.quarterNumber) === choice.key) ?? null;
   const stops = usePlanStops(plan?.id);
   const days = usePlanDays(plan?.id);
+  const rotation = usePlanRotation(plan?.id);
   const mutations = usePlanningMutations();
   const [publishing, setPublishing] = useState(false);
   // The visit whose details are open, from its pin, its row in a day, or the tables.
@@ -185,7 +187,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order, on weekdays that are not US holidays. Whether a visit is an HVAC or an occupied inspection comes from the tenancy's plan, and a technician's day is up to 6 hours inspecting and 90 minutes driving between properties."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each technician on the crew covers one zone a week and moves to the next zone the week after; a day is up to 6 hours inspecting and 90 minutes driving, counted from home. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -252,7 +254,7 @@ export default function PlanningPage() {
               value={attention.length.toLocaleString()}
             />
             <Stat
-              detail={`Up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting and ${plan.maxDriveMinutes} min driving a day`}
+              detail={`Up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting and ${plan.maxDriveMinutes} min driving a day, counted from home`}
               label="Days over the limits"
               tone={overLimitDays.length ? 'destructive' : 'success'}
               value={overLimitDays.length.toLocaleString()}
@@ -266,6 +268,23 @@ export default function PlanningPage() {
             />
             {alsoClosed.length ? (
               <StatStripItem label="Also closed" value={alsoClosed.map(formatShortDay).join(', ')} />
+            ) : null}
+            <StatStripItem label="Mondays" value="kept free for rescheduled visits from week 2" />
+            {rotation.data ? (
+              <StatStripItem
+                label="Crew"
+                value={
+                  rotation.data.crew.length
+                    ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · a zone each, moving weekly`
+                    : 'nobody yet: set on the technicians’ planning profiles'
+                }
+              />
+            ) : null}
+            {rotation.data?.outOfReach.length ? (
+              <StatStripItem
+                label="Out of reach"
+                value={`${rotation.data.outOfReach.map((zone) => `Zone ${zone}`).join(', ')}: too far from every home`}
+              />
             ) : null}
             <StatStripItem
               label="Details"
@@ -296,6 +315,7 @@ export default function PlanningPage() {
                 <PlanDays
                   days={days.data}
                   onOpenStop={setOpenStopId}
+                  rotation={rotation.data ?? null}
                   onSelect={(day) => setState({ day })}
                   planId={plan.id}
                   selectedDayId={state.day}

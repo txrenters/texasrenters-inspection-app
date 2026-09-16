@@ -8,7 +8,6 @@ import {
   assignQuarter,
   crewKey,
   estimatedDriveMinutes,
-  mainTechnicians,
   nearestNeighbourOrder,
 } from '../src/contracts/quarter-assignment.js';
 
@@ -46,19 +45,81 @@ const sameBuilding = (count: number, extra: Partial<PlannableStop> = {}) =>
 
 const dayOf = (placed: { stopId: string; date: string }[]) => new Map(placed.map((stop) => [stop.stopId, stop.date]));
 
-describe('who takes a kind of visit', () => {
-  /** Q3 2026 in Jobber: 323 occupied visits to one technician, ten to another, one to a third. */
-  it('is the technician the office gives it to, not one who covered a few days', () => {
-    expect(mainTechnicians(new Map([['kevin', 10], ['moses', 323], ['amy', 1]]))).toEqual(['moses']);
+/**
+ * The office's rule (2026-09-16): each technician on the crew has one zone a
+ * week, and a stop goes only to whoever has its zone.
+ */
+describe('giving days out by zone', () => {
+  const zoned = (technicians: string[], owners: Record<string, string>, count = 1): PlannableDay[] =>
+    days(count, technicians).map((day) => ({ ...day, zoneTechnicians: owners }));
+
+  it('sends each stop to whoever has its zone that day', () => {
+    const { placed } = assignQuarter(
+      [at('north', 1, 29.9, -95.37, { zone: '1' }), at('south', 2, 29.7, -95.37, { zone: '2' })],
+      zoned(['moses', 'kevin'], { '1': 'moses', '2': 'kevin' }),
+    );
+
+    expect(Object.fromEntries(placed.map((stop) => [stop.stopId, stop.technicianId]))).toEqual({
+      north: 'moses',
+      south: 'kevin',
+    });
   });
 
-  it('is both technicians when the office shares it between them, most first', () => {
-    expect(mainTechnicians(new Map([['a', 60], ['b', 100], ['c', 20]]))).toEqual(['b', 'a']);
+  it('never gives a stop to a technician who is out, but on another zone', () => {
+    // Kevin is already out that day on zone 2; the zone 1 stop still waits for Moses.
+    const { placed } = assignQuarter(
+      [at('a', 1, 29.7, -95.37, { zone: '2' }), at('b', 2, 29.7001, -95.37, { zone: '1' })],
+      zoned(['moses', 'kevin'], { '1': 'moses', '2': 'kevin' }),
+    );
+
+    expect(placed.find((stop) => stop.stopId === 'b')?.technicianId).toBe('moses');
   });
 
-  it('is nobody when the office has given it to nobody', () => {
-    expect(mainTechnicians(new Map([['a', 0]]))).toEqual([]);
-    expect(mainTechnicians(new Map())).toEqual([]);
+  it('moves a stop whose zone has nobody on its day to the nearest day that does', () => {
+    const quarter: PlannableDay[] = [
+      { date: '2026-10-01', technicianIds: ['moses'], zoneTechnicians: { '1': 'moses' } },
+      { date: '2026-10-02', technicianIds: ['moses'], zoneTechnicians: { '2': 'moses' } },
+      { date: '2026-10-05', technicianIds: ['moses'], zoneTechnicians: { '2': 'moses' } },
+    ];
+
+    // Aimed at the middle day, whose zone 3 has nobody; zone 3 is nobody's all quarter.
+    const nowhere = assignQuarter([at('x', 1, 29.7, -95.37, { zone: '3' })], quarter, { rotation: { position: new Map([['x', 1]]), size: 3 } });
+    expect(nowhere.unplaced).toEqual([{ stopId: 'x', reason: 'NO_QUALIFIED_TECHNICIAN' }]);
+
+    const earlier = assignQuarter([at('y', 1, 29.7, -95.37, { zone: '1' })], quarter, { rotation: { position: new Map([['y', 1]]), size: 3 } });
+    expect(earlier.placed[0]?.date).toBe('2026-10-01');
+  });
+});
+
+/** The ninety minutes count the drive from home to the first property (2026-09-16). */
+describe('a day’s drive counted from home', () => {
+  const home = { latitude: 29.7, longitude: -95.37 };
+
+  it('counts the drive from home to the first stop', () => {
+    const { crews } = assignQuarter([at('only', 1, 29.8, -95.37)], days(1, ['t1']), { homes: new Map([['t1', home]]) });
+
+    expect(crews[0]?.driveMinutes).toBeCloseTo(estimatedDriveMinutes(home, at('only', 1, 29.8, -95.37)), 5);
+  });
+
+  it('will not send a technician to a stop too far from home to reach inside the drive limit', () => {
+    // About 110 km from home: some 170 minutes each way on the estimate.
+    const { placed, unplaced } = assignQuarter([at('far', 1, 30.7, -95.37)], days(3, ['t1']), {
+      homes: new Map([['t1', home]]),
+    });
+
+    expect(placed).toEqual([]);
+    expect(unplaced).toEqual([{ stopId: 'far', reason: 'OUT_OF_REACH' }]);
+  });
+
+  it('keeps a day inside the limit with the drive from home in it', () => {
+    // A is about 48 minutes from home and B another 61 beyond it: 109 minutes
+    // in all, over ninety, though the drive between them alone is not.
+    const stops = [at('a', 1, 29.97, -95.37), at('b', 2, 29.97, -94.97)];
+    const { crews, unplaced } = assignQuarter(stops, days(1, ['t1']), { homes: new Map([['t1', home]]) });
+
+    expect(crews.map((crew) => crew.stops.map((stop) => stop.stopId))).toEqual([['a']]);
+    expect(unplaced).toEqual([{ stopId: 'b', reason: 'NO_CAPACITY' }]);
+    for (const crew of crews) expect(crew.driveMinutes).toBeLessThanOrEqual(DEFAULT_DAY_LIMITS.maxDriveMinutes);
   });
 });
 
@@ -154,8 +215,8 @@ describe('the office’s limits on a technician’s day', () => {
   });
 
   /**
-   * Ninety minutes between the properties, and only between them: the day
-   * starts at the first job, so there is no leg from anywhere to the first.
+   * Ninety minutes of driving. With no home on file the day starts at the
+   * first job, so the ninety minutes are all between the properties.
    */
   it('holds a day to ninety minutes of driving between its stops', () => {
     // Six stops 10 km apart in a line: each leg is estimated at 18 minutes, so
