@@ -2,6 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { Prisma } from '@prisma/client';
 import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
@@ -166,6 +167,58 @@ describe('technician photo evidence', () => {
     expect(result).toMatchObject({ id: 'photo-1' });
     expect(prisma.inspectionPhoto.create).not.toHaveBeenCalled();
     expect(mediaStorage.putFromFile).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 2026-09-16: a first upload took 69 seconds on a weak signal, the phone sent
+   * it again, and both passed the key check. The retry lost the insert and got
+   * a 500 although the photo was saved.
+   */
+  it('returns the saved photo when a retry races the upload it repeats, and drops its own copy', async () => {
+    const lostTheRace = new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`idempotencyKey`)', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['idempotencyKey'] },
+    });
+    const { service, prisma, mediaStorage } = build({
+      inspectionPhoto: {
+        // Nothing stored yet when this attempt checked; the first one finished before it wrote.
+        findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'photo-1', inspectionAreaId: 'area-1' }),
+        create: jest.fn().mockRejectedValue(lostTheRace),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(photoRecord()),
+      },
+    });
+
+    const result = await service.uploadPhoto(
+      technician,
+      'area-1',
+      { idempotencyKey: 'photo-key-abc123', captureType: 'AREA_OVERVIEW' as never },
+      jpeg(),
+    );
+
+    expect(result).toMatchObject({ id: 'photo-1' });
+    expect(prisma.inspectionPhoto.findUniqueOrThrow).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'photo-1' } }));
+    expect(mediaStorage.delete).toHaveBeenCalledWith(mediaStorage.putFromFile.mock.calls[0][0]);
+  });
+
+  it('still fails an upload on any other unique constraint', async () => {
+    const otherConstraint = new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`id`)', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['id'] },
+    });
+    const { service, mediaStorage } = build({
+      inspectionPhoto: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockRejectedValue(otherConstraint),
+        findUniqueOrThrow: jest.fn(),
+      },
+    });
+
+    await expect(
+      service.uploadPhoto(technician, 'area-1', { idempotencyKey: 'photo-key-abc123', captureType: 'AREA_OVERVIEW' as never }, jpeg()),
+    ).rejects.toBe(otherConstraint);
+    expect(mediaStorage.delete).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a non-image upload', async () => {
