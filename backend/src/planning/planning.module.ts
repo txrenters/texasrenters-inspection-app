@@ -4,6 +4,7 @@ import { AdminModule } from '../admin/admin.module';
 import { DatabaseModule } from '../database/database.module';
 import { RoutingModule } from '../routing/routing.module';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
+import { PlanBuildGuard } from './plan-build-guard';
 import { PlanningController } from './planning.controller';
 import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanService } from './tbp-plan.service';
@@ -13,7 +14,14 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
 @Module({
   imports: [DatabaseModule, RoutingModule, AdminModule],
   controllers: [PlanningController],
-  providers: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler, TbpStopEditService],
+  providers: [
+    TbpPlanService,
+    QuarterPlannerService,
+    TbpPublishService,
+    TbpPlanScheduler,
+    TbpStopEditService,
+    PlanBuildGuard,
+  ],
   exports: [TbpPlanService, QuarterPlannerService, TbpPublishService, TbpPlanScheduler],
 })
 export class PlanningModule {}

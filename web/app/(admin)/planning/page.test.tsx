@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PlanningPage from './page';
@@ -203,6 +204,26 @@ describe('the benefit package plan page', () => {
     expect(build.mutate).toHaveBeenCalledWith({ year: 2026, quarter: 4 }, expect.anything());
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
+  });
+
+  /** A build takes minutes (244 s for Q4 2026); a spinner alone read as a hung page. */
+  it('says a build takes a few minutes while it runs, in the toast its result replaces', () => {
+    const loading = vi.spyOn(toast, 'loading');
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+
+    expect(loading).toHaveBeenCalledWith('Building Q4 2026', {
+      id: 'plan-build-2026-4',
+      description: expect.stringContaining('takes a few minutes'),
+    });
+    const [, handlers] = build.mutate.mock.calls.at(-1)! as [unknown, { onError: (error: Error) => void }];
+    const error = vi.spyOn(toast, 'error');
+    handlers.onError(new Error('The Q4 2026 plan is already being built, since 1:48 PM Central.'));
+    expect(error).toHaveBeenCalledWith('Q4 2026 could not be planned', {
+      id: 'plan-build-2026-4',
+      description: 'The Q4 2026 plan is already being built, since 1:48 PM Central.',
+    });
   });
 
   it('states the working days and the day limits in plain words', () => {
