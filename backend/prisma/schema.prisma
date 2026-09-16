@@ -3004,14 +3004,16 @@ model TbpQuarterPlan {
   unverifiedEnrollmentCount Int @default(0)
 
   /// The office's limits on a technician-day, and the visit lengths a day is
-  /// measured with (2026-09-16: six hours inspecting, ninety minutes driving
-  /// counted from home to the first property and between the properties). Kept
-  /// on the plan so its forecast is explained by the numbers it was routed with;
-  /// a re-route with new numbers replaces them.
+  /// measured with (2026-09-16: thirty minutes a visit of either kind, six hours
+  /// inspecting, ninety minutes driving between the properties with the drive
+  /// from home not counted, and at least nine visits a day where the properties
+  /// allow). Kept on the plan so its forecast is explained by the numbers it was
+  /// routed with; a re-route with new numbers replaces them.
   occupiedVisitMinutes Int      @default(30)
-  hvacVisitMinutes     Int      @default(45)
+  hvacVisitMinutes     Int      @default(30)
   maxOnSiteMinutes     Int      @default(360)
   maxDriveMinutes      Int      @default(90)
+  minStopsPerDay       Int      @default(9)
   /// The days the office is closed this quarter, `YYYY-MM-DD`.
   holidays             String[] @default([])
 
@@ -3257,14 +3259,13 @@ model TbpQuarterPlanDay {
   /// Time spent inspecting, against the plan's `maxOnSiteMinutes`.
   onSiteMinutes        Int @default(0)
   hvacStopCount        Int @default(0)
-  /// The drive the plan's `maxDriveMinutes` counts: from the technician's home
-  /// to the first property when the day is routed from home, and between the
-  /// properties (the office, 2026-09-16). The drive home is not counted.
+  /// Between the day's properties, first to last: what the plan's
+  /// `maxDriveMinutes` counts (the office, 2026-09-16).
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
   /// The drive from home to the first property, when the day was routed from a
-  /// home on file (`originKind` HOME). Part of `totalDriveSeconds`, and kept
-  /// apart so the console can show it and when to leave.
+  /// home on file (`originKind` HOME). Shown, with when to leave, and not counted
+  /// against the limit.
   homeDriveSeconds     Int?
   homeDriveMeters      Int?
 

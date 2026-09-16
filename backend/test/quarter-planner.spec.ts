@@ -58,6 +58,7 @@ const PLAN = {
   hvacVisitMinutes: 45,
   maxOnSiteMinutes: 360,
   maxDriveMinutes: 90,
+  minStopsPerDay: 9,
   holidays: [] as string[],
 };
 
@@ -252,10 +253,11 @@ describe('measuring days again after a coordinator’s change', () => {
 
     await service.measureDays('org-1', 'plan-1', [{ date: '2026-10-02', technicianId: 'tech-1' }]);
 
+    // One property: nothing to drive between, and the drive from home shown apart.
     expect(dayUpsert.mock.calls[0][0].create).toMatchObject({
       originKind: PlanOriginKind.HOME,
       homeDriveSeconds: 300,
-      totalDriveSeconds: 300,
+      totalDriveSeconds: 0,
     });
   });
 });
@@ -433,6 +435,20 @@ describe('routing a draft quarter', () => {
     expect(dayCreate.mock.calls[0][0].data).toMatchObject({ stopCount: 2, totalDriveSeconds: 3600 });
   });
 
+  /** The office (2026-09-16): full days, at least nine visits where the properties allow. */
+  it('lays visits due the same fortnight out as one full day, not one a day', async () => {
+    const stops = Array.from({ length: 10 }, (_, index) => stop(`s${index + 1}`, index + 1, index * 0.1));
+    const { service, dayCreate } = build(stops, { googleSeconds: fiveMinutes });
+
+    const summary = await service.route('org-1', 'plan-1', {
+      holidays: onlyOn('2026-10-01', '2026-10-02', '2026-10-06', '2026-10-07', '2026-10-08'),
+    });
+
+    expect(summary.placed).toBe(10);
+    expect(dayCreate).toHaveBeenCalledTimes(1);
+    expect(dayCreate.mock.calls[0][0].data).toMatchObject({ stopCount: 10, totalDriveSeconds: 9 * 300 });
+  });
+
   it('counts a visit at the length a coordinator set, and leaves it when lengths are reset by kind', async () => {
     const longer: StopRow = { ...stop('s1', 1), onSiteMinutes: 90, onSiteMinutesOverriddenAt: new Date('2026-09-16') };
     const { service, dayCreate, stopUpdateMany } = build([longer]);
@@ -506,6 +522,7 @@ describe('the office’s limits on a planned day', () => {
         hvacVisitMinutes: 60,
         maxOnSiteMinutes: 360,
         maxDriveMinutes: 90,
+        minStopsPerDay: 9,
         holidays: ['2026-11-26'],
       },
     });
@@ -530,8 +547,9 @@ describe('the office’s limits on a planned day', () => {
    */
   /** Within the zone's technician's own days: a day that measures over gives a stop to another of them. */
   it('moves a stop off a day that measures over the drive limit', async () => {
-    // Two days, one technician on the zone. The estimate puts s3 beside s4 on
-    // the Friday; Google says the two are 100 minutes apart.
+    // Two days, one technician on the zone. The estimate lays the four out as
+    // one day; Google says s3 is 100 minutes from the rest, so it goes to the
+    // other day near its week, which only it needs.
     const outlier = stop('s3', 3, 2);
     const slow = (from: Point, to: Point) =>
       from.latitude === outlier.latitude || to.latitude === outlier.latitude ? 6000 : 300;
@@ -543,9 +561,9 @@ describe('the office’s limits on a planned day', () => {
 
     expect(summary.repaired).toBe(1);
     expect(summary.unplaced).toEqual([]);
-    // Either gives the Friday back a day of one stop; the later in the rotation moves.
-    expect(updateFor(stopUpdate, 's3')?.scheduledOn).toEqual(new Date('2026-10-02T00:00:00.000Z'));
-    expect(updateFor(stopUpdate, 's4')?.scheduledOn).toEqual(new Date('2026-10-01T00:00:00.000Z'));
+    const dayOf = (id: string) => (updateFor(stopUpdate, id)?.scheduledOn as Date).toISOString().slice(0, 10);
+    expect([dayOf('s2'), dayOf('s4')]).toEqual([dayOf('s1'), dayOf('s1')]);
+    expect(dayOf('s3')).not.toBe(dayOf('s1'));
   });
 
   it('blocks a stop no day can take inside the drive limit, rather than keeping an over-limit day', async () => {
@@ -681,27 +699,28 @@ describe('zones, weeks and Mondays', () => {
     { technicianId: 'emanuel', isPlannable: true, tbpZoneOrder: 3 },
   ];
 
-  it('gives each zone to its technician for the week, and moves everyone one zone on the next', async () => {
-    // Thursday 1 October is in the first week, Tuesday 6 October in the second.
+  it('gives each zone to its technician for the week, and moves everyone one zone on each week', async () => {
+    // Thursday 1 October is in the first week and Friday 16 October in the
+    // third: fifteen days apart, so no visit of one can join a day of the other.
     const { service, stopUpdate } = build(
       [
         stop('z1-first-week', 1, 0, { zone: '1' }),
         stop('z2-first-week', 2, 5, { zone: '2' }),
-        stop('z1-second-week', 3, 0.1, { zone: '1' }),
-        stop('z2-second-week', 4, 5.1, { zone: '2' }),
+        stop('z1-third-week', 3, 0.1, { zone: '1' }),
+        stop('z2-third-week', 4, 5.1, { zone: '2' }),
       ],
       { technicians: CREW },
     );
 
-    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-06') });
+    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-16') });
 
     const who = (id: string) => [updateFor(stopUpdate, id)?.assignedTechnicianId, updateFor(stopUpdate, id)?.scheduledOn];
-    // Two zones and three people: the first week Moses has 1 and Kevin 2; the
-    // next, everyone moves on one -- Moses to 2, Emanuel round to 1.
+    // Two zones and three people: the first week Moses has 1 and Kevin 2; two
+    // weeks on, everyone has moved on two -- Kevin to 1, Emanuel to 2.
     expect(who('z1-first-week')).toEqual(['moses', new Date('2026-10-01T00:00:00.000Z')]);
     expect(who('z2-first-week')).toEqual(['kevin', new Date('2026-10-01T00:00:00.000Z')]);
-    expect(who('z1-second-week')).toEqual(['emanuel', new Date('2026-10-06T00:00:00.000Z')]);
-    expect(who('z2-second-week')).toEqual(['moses', new Date('2026-10-06T00:00:00.000Z')]);
+    expect(who('z1-third-week')).toEqual(['kevin', new Date('2026-10-16T00:00:00.000Z')]);
+    expect(who('z2-third-week')).toEqual(['emanuel', new Date('2026-10-16T00:00:00.000Z')]);
   });
 
   it('plans no visit on a Monday from the second week on', async () => {
@@ -815,13 +834,14 @@ describe('a day routed from the technician’s home', () => {
     const day = dayCreate.mock.calls[0][0].data;
     expect(day.originKind).toBe(PlanOriginKind.HOME);
     expect(day.homeDriveSeconds).toBe(60);
-    // The drive the limit counts: from home, and between the properties.
-    expect(day.totalDriveSeconds).toBe(1260);
+    // The drive the limit counts: between the properties.
+    expect(day.totalDriveSeconds).toBe(1200);
   });
 
-  it('gives up a visit when the drive from home puts the day over the limit', async () => {
-    // X is a minute from home and Y 30 minutes beyond it -- 31 in all, over a
-    // 30-minute limit, though the drive between them alone would just fit.
+  /** The office (2026-09-16): ninety minutes between the properties; the drive from home is not counted. */
+  it('leaves the drive from home out of the day’s drive limit', async () => {
+    // X is a minute from home and Y 30 minutes beyond it: 31 in all, and exactly
+    // the 30-minute limit between the two properties.
     const { service, stopUpdate, dayCreate } = build([stop('X', 1, 0), stop('Y', 2, 1)], {
       technicians: [HOME],
       plan: { maxDriveMinutes: 30 },
@@ -833,11 +853,11 @@ describe('a day routed from the technician’s home', () => {
 
     const summary = await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
 
-    expect(summary.placed).toBe(1);
-    expect(summary.unplaced.map((entry) => entry.stopId)).toEqual(['Y']);
+    expect(summary.placed).toBe(2);
+    expect(summary.unplaced).toEqual([]);
     expect(updateFor(stopUpdate, 'X')?.positionInDay).toBe(1);
     const day = dayCreate.mock.calls[0][0].data;
-    expect(day.totalDriveSeconds).toBe(60);
+    expect(day.totalDriveSeconds).toBe(1800);
     expect(day.homeDriveSeconds).toBe(60);
   });
 
@@ -851,8 +871,8 @@ describe('a day routed from the technician’s home', () => {
     expect(day.originKind).toBe(PlanOriginKind.HOME);
     expect(day.homeDriveSeconds).toBe(300);
     expect(day.homeDriveMeters).toBe(3000);
-    // The drive from home is the whole day's drive, and it counts.
-    expect(day.totalDriveSeconds).toBe(300);
+    // Nothing to drive between: the drive from home is shown, and not counted.
+    expect(day.totalDriveSeconds).toBe(0);
   });
 
   /** The planning profile stays the one place a technician's address is kept. */

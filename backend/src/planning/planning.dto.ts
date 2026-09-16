@@ -28,8 +28,10 @@ export class PlanRoutingSettingsDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(240) hvacVisitMinutes?: number;
   /** Time spent inspecting in one technician-day: six hours is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(30) @Max(720) maxOnSiteMinutes?: number;
-  /** Driving between one day's properties, first to last: ninety minutes is the office's rule. */
+  /** Driving between one day's properties, first to last, home not counted: ninety minutes is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(480) maxDriveMinutes?: number;
+  /** Visits a day should hold at least, where the properties allow: nine is the office's rule. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) minStopsPerDay?: number;
 
   /**
    * Days the office is closed besides weekends and US federal holidays, as

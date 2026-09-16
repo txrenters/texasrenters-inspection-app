@@ -236,9 +236,10 @@ export function PlanDayMap({
           streetViewControl={false}
         >
           <FitStops dayKey={dayKey} points={points} />
-          {/* The drive from home counts toward the day's driving, so it is drawn
-              as the day's route, from the "From" pin to the first property. */}
-          <RouteLine path={homePath} straight={homeStraight} />
+          {/* The drive from home is driven and not counted against the day, so
+              it is drawn in the grey of a finished leg, from the "From" pin to
+              the first property, under the day's route. */}
+          <RouteLine colorClass="map-route-done-line" path={homePath} straight={homeStraight} weight={3} />
           <RouteLine path={path} straight={straight} />
           {home ? (
             <AdvancedMarker

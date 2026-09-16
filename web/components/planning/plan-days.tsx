@@ -35,7 +35,7 @@ const LIMIT_BAR: Record<LimitState, string> = {
   over: 'bg-destructive',
 };
 
-/** Minutes of the day's counted driving -- from home, and between its properties -- or null when nothing measured it. */
+/** Minutes driving between a day's properties, or null when nothing measured it. */
 const driveMinutes = (day: PlanDay) => (day.totalDriveSeconds === null ? null : Math.round(day.totalDriveSeconds / 60));
 
 /** The Monday a day's week starts on, `YYYY-MM-DD`. */
@@ -180,7 +180,7 @@ export function PlanDays({
 function measuredText(day: PlanDay) {
   const fromHome = day.originKind === 'HOME';
   const counted = fromHome
-    ? 'The day is routed from the technician’s home, and its driving counts the drive from home to the first property as well as between the properties; the drive home is not counted.'
+    ? 'The day is routed from the technician’s home; only the drives between its properties count toward the limit, and the drive from home is not counted.'
     : 'This day was built without the technician’s home, so it starts at its first job. Rebuild the plan to route days from home; the home comes from the technician’s planning profile.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
@@ -191,7 +191,7 @@ function measuredText(day: PlanDay) {
       return 'No drive times could be measured for this day; the distances are in a straight line.';
     default:
       return fromHome
-        ? 'One property: its driving is the drive from home.'
+        ? 'One property, so there is nothing to drive between; the drive from home is not counted.'
         : 'One property, so there is nothing to drive between.';
   }
 }
@@ -283,7 +283,7 @@ function DayDetail({
                 {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
               </span>
             ) : homeMinutes !== null ? (
-              <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
+              <span className="text-muted-foreground text-xs">{homeMinutes} min from home, not counted</span>
             ) : null}
             <button
               aria-label={`Details of stop ${stop.positionInDay ?? index + 1}, ${stop.address ?? 'unknown address'}`}

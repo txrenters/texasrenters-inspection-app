@@ -157,6 +157,7 @@ export class PlanningController {
           hvacVisitMinutes: true,
           maxOnSiteMinutes: true,
           maxDriveMinutes: true,
+          minStopsPerDay: true,
           holidays: true,
           officeDetailsImportedAt: true,
         },
