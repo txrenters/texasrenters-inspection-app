@@ -111,17 +111,25 @@ export default function PlanningPage() {
   const alsoClosed = closedDaysOfQuarter(quarter, plan?.holidays ?? []).filter((day) => !holidays.includes(day));
 
   const build = () => {
+    // One toast from the click to the result. A build takes minutes, and a
+    // spinner on a small button alone reads as a page that has hung.
+    const id = `plan-build-${choice.key}`;
+    toast.loading(`Building ${choice.label}`, {
+      id,
+      description: 'Drive times come from Google at a steady pace, so this takes a few minutes. Keep this page open.',
+    });
     mutations.build.mutate(
       { year: choice.year, quarter: choice.quarter },
       {
         onSuccess: (result) => {
           toast.success(`${choice.label} is planned`, {
+            id,
             description: `${result.routing.placed.toLocaleString()} visits over ${result.routing.days.toLocaleString()} technician-days${
               result.routing.unplaced.length ? `; ${result.routing.unplaced.length} need attention` : ''
             }.`,
           });
         },
-        onError: (error) => toast.error(`${choice.label} could not be planned`, { description: error.message }),
+        onError: (error) => toast.error(`${choice.label} could not be planned`, { id, description: error.message }),
       },
     );
   };

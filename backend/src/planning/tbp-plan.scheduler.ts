@@ -3,6 +3,7 @@ import { type Quarter, quarterDueForPlanning, quarterLabel } from '@texasrenters
 import { CronJob } from 'cron';
 
 import { withTenant } from '../database/tenant-context';
+import { PlanBuildGuard } from './plan-build-guard';
 import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanService } from './tbp-plan.service';
 
@@ -26,6 +27,7 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(TbpPlanService) private readonly plans: TbpPlanService,
     @Inject(QuarterPlannerService) private readonly planner: QuarterPlannerService,
+    @Inject(PlanBuildGuard) private readonly builds: PlanBuildGuard,
   ) {}
 
   onModuleInit() {
@@ -72,7 +74,17 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     try {
       const due = quarterDueForPlanning(new Date());
       if (!due) return;
-      await this.generate(organizationId, due);
+      // Never over a build a coordinator started from the console. The window
+      // is a fortnight wide, so tomorrow's tick tries again.
+      const building = this.builds.current(organizationId);
+      if (building) {
+        this.logger.log({
+          event: 'tbp_planning_skipped',
+          reason: `The ${building.quarter} plan is already being built.`,
+        });
+        return;
+      }
+      await this.builds.run(organizationId, quarterLabel(due), () => this.generate(organizationId, due));
     } catch (error) {
       // Never throw out of a cron callback: an unhandled rejection takes the
       // process down, and a missed planning run is not worth an outage. The

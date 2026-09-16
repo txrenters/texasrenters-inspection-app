@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
-import { haversineMeters } from '@texasrenters/shared';
+import { haversineMeters, type Quarter, quarterLabel } from '@texasrenters/shared';
 
 import {
   ApiAuthGuard,
@@ -25,9 +25,11 @@ import {
 } from '../common/auth';
 import { businessInstant } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
+import { holdRequestOpen } from '../common/long-request';
 import { PrismaService } from '../common/prisma.service';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
 import { toLatLngPath } from '../routing/route.service';
+import { PlanBuildGuard } from './plan-build-guard';
 import {
   OfficeDetailsImportDto,
   PlanQuarterDto,
@@ -123,6 +125,7 @@ export class PlanningController {
     @Inject(TbpPlanScheduler) private readonly scheduler: TbpPlanScheduler,
     @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
     @Inject(TbpStopEditService) private readonly edits: TbpStopEditService,
+    @Inject(PlanBuildGuard) private readonly builds: PlanBuildGuard,
   ) {}
 
   /** Whether the cron is alive and when it next wakes, for the console. */
@@ -454,26 +457,44 @@ export class PlanningController {
    * `planning:publish` rather than `planning:read`, even though this creates
    * nothing real: regenerating replaces the ordering a coordinator may have
    * been reviewing, and that is not a read.
+   *
+   * Minutes of work, because Google's drive times are paced. The request is
+   * held open past the server's 30-second idle timeout, which cut the console
+   * off with a 502 while the build carried on (2026-09-16), and a second build
+   * while one runs is refused rather than written over the top of it.
    */
   @Post('quarters')
   @RequirePermissions('planning:publish')
-  async generate(@Req() request: AuthenticatedRequest, @Body() body: PlanQuarterDto) {
+  generate(@Req() request: AuthenticatedRequest, @Body() body: PlanQuarterDto) {
     const { year, quarter: number, ...settings } = body;
-    const quarter = { year, quarter: number as 1 | 2 | 3 | 4 };
-    const generated = await this.plans.generate(request.user.organizationId, quarter);
-    const routed = await this.planner.route(request.user.organizationId, generated.planId, settings);
-    return { ...generated, routing: routed };
+    const quarter: Quarter = { year, quarter: number as Quarter['quarter'] };
+    const organizationId = request.user.organizationId;
+    holdRequestOpen(request);
+    return this.builds.run(organizationId, quarterLabel(quarter), async () => {
+      const generated = await this.plans.generate(organizationId, quarter);
+      const routed = await this.planner.route(organizationId, generated.planId, settings);
+      return { ...generated, routing: routed };
+    });
   }
 
-  /** Lay the draft's days out again, with the plan's settings or new ones. */
+  /** Lay the draft's days out again, with the plan's settings or new ones. Minutes of work, as a build is. */
   @Post('quarters/:planId/route')
   @RequirePermissions('planning:publish')
-  route(
+  async route(
     @Req() request: AuthenticatedRequest,
     @Param('planId') planId: string,
     @Body() body: PlanRoutingSettingsDto,
   ) {
-    return this.planner.route(request.user.organizationId, planId, body);
+    const organizationId = request.user.organizationId;
+    holdRequestOpen(request);
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { quarterYear: true, quarterNumber: true },
+    });
+    const label = plan
+      ? quarterLabel({ year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] })
+      : 'quarter';
+    return this.builds.run(organizationId, label, () => this.planner.route(organizationId, planId, body));
   }
 
   /**
@@ -498,8 +519,9 @@ export class PlanningController {
    * Turn the draft into real inspections.
    *
    * Synchronous, and that is a deliberate limit rather than an oversight. A few
-   * hundred stops at one short transaction each takes tens of seconds, which a
-   * request can carry — and the alternative, a detached promise, would report
+   * hundred stops at one short transaction each takes tens of seconds or more,
+   * which a request held open past the server's idle timeout can carry — and
+   * the alternative, a detached promise, would report
    * success before anything had been created and leave a failure visible only
    * in the logs. The plan's own status is the progress record either way, so a
    * client that times out can poll `GET quarters` and see PUBLISHING.
@@ -508,6 +530,9 @@ export class PlanningController {
   @RequirePermissions('planning:publish')
   @HttpCode(200)
   publish(@Req() request: AuthenticatedRequest, @Param('planId') planId: string) {
+    // Never while a build is rewriting the very stops this would publish.
+    this.builds.refuseWhileBuilding(request.user.organizationId);
+    holdRequestOpen(request);
     return this.publisher.publish(request.user, planId);
   }
 
