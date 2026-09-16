@@ -74,6 +74,12 @@ const SHORT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numer
 /** "Oct 12" for `2026-10-12`. A calendar date, so read in UTC: in Manila, local time would show the day before. */
 export const formatShortDay = (date: string) => SHORT_DAY.format(new Date(`${date}T00:00:00Z`));
 
+/** A day with fewer or more visits than the office's rule, or more time inspecting than a day holds. */
+export const dayOutsideRules = (
+  day: { stopCount: number; onSiteMinutes: number },
+  rules: { minStopsPerDay: number; maxStopsPerDay: number; maxOnSiteMinutes: number },
+) => day.stopCount < rules.minStopsPerDay || day.stopCount > rules.maxStopsPerDay || day.onSiteMinutes > rules.maxOnSiteMinutes;
+
 export type LimitState = 'within' | 'near' | 'over';
 
 /**

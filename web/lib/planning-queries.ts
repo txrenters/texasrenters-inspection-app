@@ -127,10 +127,10 @@ export interface PlanDay {
   stopCount: number;
   onSiteMinutes: number;
   hvacStopCount: number;
-  /** Between the day's properties, first to last: what the drive limit counts. */
+  /** Between the day's properties, first to last. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
-  /** From the technician's home to the first property, when the day was routed from home. Shown, not counted. */
+  /** From the technician's home to the first property, when the day was routed from home. Shown apart. */
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
   /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
