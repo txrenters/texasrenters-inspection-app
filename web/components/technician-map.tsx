@@ -25,7 +25,7 @@ import { CameraDirector, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
-import { clusterByGrid, zoomToIsolate } from '@/components/map-clusters';
+import { clusterByGrid, inBox, padBox, zoomToIsolate, type Box } from '@/components/map-clusters';
 import { formatDistance, formatDuration } from '@/lib/format';
 import { useContinuousRotation, useGlide } from '@/lib/map-animation';
 import { drawsAsDriving, motionOf, type Motion } from '@/lib/technician-motion';
@@ -402,39 +402,66 @@ const PlanePin = memo(function PlanePin() {
 });
 
 /**
- * The zoom, as state, so clustering can be computed from it.
+ * The zoom and the visible area, as state, as of the last time the map settled.
  *
  * Grouping is worked out in projected pixels at the current zoom, so it changes
  * when the zoom does and never when panning — a clustering that reshuffled as
- * you dragged would read as the data itself moving.
+ * you dragged would read as the data itself moving. The visible area decides
+ * which of those groups are drawn at all.
  */
-function useZoom() {
+function useSettledView() {
   const map = useMap();
-  const [zoom, setZoom] = useState(FALLBACK_ZOOM);
+  const [view, setView] = useState<{ zoom: number; box: Box | null }>({
+    zoom: FALLBACK_ZOOM,
+    box: null,
+  });
 
   useEffect(() => {
     if (!map) return;
-    const sync = () => setZoom((current) => map.getZoom() ?? current);
+    const sync = () =>
+      setView((current) => {
+        const zoom = map.getZoom() ?? current.zoom;
+        const bounds = map.getBounds();
+        const box = bounds
+          ? {
+              north: bounds.getNorthEast().lat(),
+              south: bounds.getSouthWest().lat(),
+              east: bounds.getNorthEast().lng(),
+              west: bounds.getSouthWest().lng(),
+            }
+          : current.box;
+        // The same view handed back, so a settle that changed nothing costs no
+        // render at all.
+        const unchanged =
+          zoom === current.zoom &&
+          box?.north === current.box?.north &&
+          box?.south === current.box?.south &&
+          box?.east === current.box?.east &&
+          box?.west === current.box?.west;
+        return unchanged ? current : { zoom, box };
+      });
     sync();
     /**
-     * `idle`, not `zoom_changed`.
+     * `idle`, not `zoom_changed` or `bounds_changed`.
      *
-     * `zoom_changed` fires at every level of a scroll or pinch, and each one
-     * re-grouped 552 properties and remounted every marker on the map —
-     * mid-gesture, several times a second. That was the stutter. `idle` fires
-     * once, when the map settles, so the regrouping happens exactly as often as
-     * the answer actually changes.
-     *
-     * The functional update matters too: a pan fires `idle` without changing
-     * the zoom, and returning the same number lets React bail out of the render
-     * entirely rather than reconciling every marker to the same position.
+     * Those fire on every frame of a scroll, pinch or drag, and each one
+     * re-grouped the properties and reconciled every marker — mid-gesture,
+     * several times a second. `idle` fires once, when the map settles, so the
+     * work happens exactly as often as the answer actually changes.
      */
     const listener = map.addListener('idle', sync);
     return () => listener.remove();
   }, [map]);
 
-  return zoom;
+  return view;
 }
+
+/**
+ * How far past the edge of the map markers are still drawn, as a share of the
+ * view's size on each side -- so a short pan does not uncover an empty strip
+ * that fills in only when the map settles.
+ */
+const DRAWN_BEYOND_VIEW = 0.5;
 
 /**
  * A `google.maps.Polyline`, as a component.
@@ -607,10 +634,32 @@ const PropertyLayer = memo(function PropertyLayer({
   selectedPropertyId: string | null;
 }) {
   const map = useMap();
-  const zoom = useZoom();
+  const { zoom, box } = useSettledView();
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   const clusters = useMemo(() => clusterByGrid(properties, zoom), [properties, zoom]);
+
+  /**
+   * Only the groups on or near the screen are drawn.
+   *
+   * Every property used to be a marker all the time. At street level that is
+   * every one of them standing alone -- 586 in production -- nearly all of them
+   * miles off-screen, each a real element Google repositions on every frame of
+   * a zoom. Scrolling the map in and out stuttered and froze for up to a
+   * second. The grouping itself is unchanged: it is still worked out from the
+   * zoom alone, so panning never reshuffles a badge.
+   *
+   * Until the map first reports where it is looking, everything is drawn --
+   * which costs nothing, because the zoom used for grouping is still the
+   * opening, country-wide one, where the whole portfolio is a handful of
+   * badges. The open window's group stays drawn even when panned out of view,
+   * so it does not close under the reader.
+   */
+  const drawn = useMemo(() => {
+    if (!box) return clusters;
+    const reach = padBox(box, DRAWN_BEYOND_VIEW);
+    return clusters.filter((cluster) => cluster.key === openKey || inBox(cluster, reach));
+  }, [box, clusters, openKey]);
 
   /**
    * Opens the selected property's window once it is actually drawn.
@@ -641,7 +690,7 @@ const PropertyLayer = memo(function PropertyLayer({
 
   return (
     <>
-      {clusters.map((cluster) => {
+      {drawn.map((cluster) => {
         const single = cluster.members.length === 1 ? cluster.members[0] : null;
         // Everything recedes rather than disappearing when somebody is
         // selected: a dispatcher looking at one technician still needs to see
