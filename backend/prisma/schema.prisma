@@ -3237,6 +3237,11 @@ model TbpQuarterPlanDay {
   /// Between the day's properties only, against the plan's `maxDriveMinutes`.
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
+  /// The drive from the technician's home to the day's first property, when the
+  /// day was routed from a home on file (`originKind` HOME). Shown, with when to
+  /// leave, and never counted against `maxDriveMinutes` (the office, 2026-09-16).
+  homeDriveSeconds     Int?
+  homeDriveMeters      Int?
 
   originLatitude  Decimal?       @db.Decimal(9, 6)
   originLongitude Decimal?       @db.Decimal(9, 6)

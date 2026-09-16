@@ -6,7 +6,7 @@ import { useMemo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDistance } from '@/lib/format';
-import { dayClock, formatClock, formatMinutes, limitState, type LimitState } from '@/lib/planning';
+import { dayClock, formatClock, formatMinutes, leaveHomeAt, limitState, type LimitState } from '@/lib/planning';
 import { usePlanDayRoute, type PlanDay, type PlanSettings } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
@@ -65,12 +65,15 @@ export function PlanDays({
   settings,
   selectedDayId,
   onSelect,
+  onOpenStop,
 }: {
   planId: string;
   days: PlanDay[];
   settings: PlanSettings;
   selectedDayId: string;
   onSelect: (dayId: string) => void;
+  /** A stop's pin or row was clicked: open its details. */
+  onOpenStop?: (stopId: string) => void;
 }) {
   const selected = days.find((day) => day.id === selectedDayId) ?? days[0] ?? null;
   const weeks = useMemo(() => {
@@ -131,16 +134,47 @@ export function PlanDays({
         ))}
       </nav>
 
-      {selected ? <DayDetail day={selected} planId={planId} settings={settings} /> : null}
+      {selected ? <DayDetail day={selected} onOpenStop={onOpenStop} planId={planId} settings={settings} /> : null}
     </div>
   );
 }
 
-function DayDetail({ planId, day, settings }: { planId: string; day: PlanDay; settings: PlanSettings }) {
+/** How the day's drives were measured, and what the ninety minutes count. */
+function measuredText(day: PlanDay) {
+  const fromHome = day.originKind === 'HOME';
+  const counted = fromHome
+    ? 'The day is routed from the technician’s home; only the drives between properties count toward the limit.'
+    : 'This day was built without the technician’s home, so it starts at its first job. Rebuild the plan to route days from home; the home comes from the technician’s planning profile.';
+  switch (day.durationSource) {
+    case 'GOOGLE_TRAFFIC_AWARE':
+      return `Drives measured by Google for a 9 AM start. ${counted}`;
+    case 'OSRM_FREE_FLOW':
+      return `Drives measured without traffic. ${counted}`;
+    case 'HAVERSINE':
+      return 'No drive times could be measured for this day; the distances are in a straight line.';
+    default:
+      return fromHome
+        ? 'One property, so there is nothing to drive between; the drive from home is not counted.'
+        : 'One property, so there is nothing to drive between.';
+  }
+}
+
+function DayDetail({
+  planId,
+  day,
+  settings,
+  onOpenStop,
+}: {
+  planId: string;
+  day: PlanDay;
+  settings: PlanSettings;
+  onOpenStop?: (stopId: string) => void;
+}) {
   const route = usePlanDayRoute(planId, day.id);
   const clock = useMemo(() => dayClock(day.stops), [day.stops]);
   const drive = driveMinutes(day);
   const ends = clock.at(-1)?.leaves;
+  const homeMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
   const onSite = limitState(day.onSiteMinutes, settings.maxOnSiteMinutes);
   const driving = drive === null ? 'within' : limitState(drive, settings.maxDriveMinutes);
 
@@ -151,7 +185,7 @@ function DayDetail({ planId, day, settings }: { planId: string; day: PlanDay; se
           <h2 className="text-base font-semibold tracking-tight">{LONG_DAY.format(new Date(day.date))}</h2>
           <span className="text-sm font-medium">{day.technician.displayName}</span>
         </div>
-        <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-3">
+        <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 xl:grid-cols-4">
           <div className="flex items-baseline gap-2">
             <dt className="text-muted-foreground">Inspecting</dt>
             <dd className={cn('font-mono tabular-nums', toneOf(onSite))}>
@@ -171,21 +205,35 @@ function DayDetail({ planId, day, settings }: { planId: string; day: PlanDay; se
               {clock.length ? `${formatClock(clock[0]!.arrives)} – ${formatClock(ends!)}` : '—'}
             </dd>
           </div>
+          <div className="flex items-baseline gap-2">
+            <dt className="text-muted-foreground">From home</dt>
+            <dd className="font-mono tabular-nums">
+              {day.originKind !== 'HOME'
+                ? 'not used'
+                : homeMinutes === null || !clock.length
+                  ? 'not measured'
+                  : `${homeMinutes} min${day.homeDriveMeters ? ` · ${formatDistance(day.homeDriveMeters)}` : ''} · leave ${formatClock(
+                      leaveHomeAt(clock[0]!.arrives, day.homeDriveSeconds!),
+                    )}`}
+            </dd>
+          </div>
         </dl>
-        <p className="text-muted-foreground text-xs">
-          {day.durationSource === 'GOOGLE_TRAFFIC_AWARE'
-            ? 'Drives measured by Google for a 9 AM start, between the properties only: the day starts at its first job.'
-            : day.durationSource === 'OSRM_FREE_FLOW'
-              ? 'Drives measured without traffic, between the properties only: the day starts at its first job.'
-              : day.durationSource === 'HAVERSINE'
-                ? 'No drive times could be measured for this day; the distance is in a straight line.'
-                : 'One property, so there is nothing to drive between.'}
-        </p>
+        <p className="text-muted-foreground text-xs">{measuredText(day)}</p>
       </div>
 
       <div className="h-80 lg:h-[26rem]">
-        <PlanDayMap dayKey={day.id} geometry={route.data?.geometry ?? []} stops={day.stops} />
+        <PlanDayMap
+          dayKey={day.id}
+          geometry={route.data?.geometry ?? []}
+          home={route.data?.home ?? null}
+          homeGeometry={route.data?.homeGeometry ?? []}
+          onSelectStop={onOpenStop}
+          stops={day.stops}
+        />
       </div>
+      {onOpenStop ? (
+        <p className="text-muted-foreground -mt-1 text-xs">Click a property on the map, or in the list, to see its details.</p>
+      ) : null}
       {route.isSuccess && !route.data.geometry.length && day.stops.length > 1 ? (
         <p className="text-muted-foreground -mt-1 text-xs">The road could not be drawn, so the stops are joined with dashed straight lines.</p>
       ) : null}
@@ -197,8 +245,16 @@ function DayDetail({ planId, day, settings }: { planId: string; day: PlanDay; se
               <span className="text-muted-foreground text-xs">
                 {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
               </span>
+            ) : homeMinutes !== null ? (
+              <span className="text-muted-foreground text-xs">{homeMinutes} min from home, not counted</span>
             ) : null}
-            <div className="flex items-start gap-3">
+            <button
+              aria-label={`Details of stop ${stop.positionInDay ?? index + 1}, ${stop.address ?? 'unknown address'}`}
+              className="hover:bg-accent/60 focus-visible:ring-ring/50 -mx-2 flex items-start gap-3 rounded-md px-2 py-1 text-left outline-none focus-visible:ring-[3px] disabled:pointer-events-none"
+              disabled={!onOpenStop}
+              onClick={() => onOpenStop?.(stop.id)}
+              type="button"
+            >
               <span
                 aria-hidden
                 className={cn(
@@ -223,7 +279,7 @@ function DayDetail({ planId, day, settings }: { planId: string; day: PlanDay; se
                   <span>{formatMinutes(stop.onSiteMinutes ?? 0)}</span>
                 </div>
               </div>
-            </div>
+            </button>
           </li>
         ))}
       </ol>

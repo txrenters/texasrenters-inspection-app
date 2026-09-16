@@ -22,6 +22,7 @@ import {
   quarterEnd,
   quarterLabel,
   shortestOpenPathOrder,
+  shortestRouteOrder,
   workingDaysOfQuarter,
 } from '@texasrenters/shared';
 
@@ -52,7 +53,10 @@ const DAY_STARTS_AT = '09:00:00';
  */
 const MAX_REPAIR_ROUNDS = 3;
 
-/** How much longer a day's drive may be so that it starts at the end nearer the technician's home. */
+/**
+ * How much longer a day's drive may be so that it starts at the end nearer the
+ * technician's home, when the day cannot be routed from the home itself.
+ */
 const HOME_END_TOLERANCE_SECONDS = 120;
 
 /** Block codes routing owns, cleared whenever the plan is routed again. */
@@ -104,11 +108,25 @@ interface MeasuredCrew {
   stops: PlannableStop[];
   /** Seconds from the stop before, per stop; null for the first, or when nothing measured it. */
   legSeconds: (number | null)[];
+  /** Between the day's properties only: what the drive limit counts. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
+  /** Whether the day was routed from the technician's home. */
+  fromHome: boolean;
+  /** Home to the first property, when measured. Never part of `totalDriveSeconds`. */
+  homeDriveSeconds: number | null;
+  homeDriveMeters: number | null;
   durationSource: DriveTimeSource | null;
-  /** The matrix it was measured with, so trimming the day needs no second call. */
-  matrix: { durations: number[][]; distances: number[][] | null; index: Map<string, number> } | null;
+  /**
+   * The matrix it was measured with, so trimming the day needs no second call.
+   * Holds the home first when the day has one (`homeIndex`).
+   */
+  matrix: {
+    durations: number[][];
+    distances: number[][] | null;
+    index: Map<string, number>;
+    homeIndex: number | null;
+  } | null;
 }
 
 @Injectable()
@@ -190,11 +208,14 @@ export class QuarterPlannerService {
 
     const assignment = assignQuarter(stops, days, { limits, technicianRank });
     const unplaced: RoutingSummary['unplaced'] = [...assignment.unplaced];
+    const limitSeconds = settings.maxDriveMinutes * 60;
     let measured = new Map<string, MeasuredCrew>();
     for (const crew of assignment.crews)
-      measured.set(crewKey(crew.date, crew.technicianId), await this.measure(crew, homes.get(crew.technicianId)));
+      measured.set(
+        crewKey(crew.date, crew.technicianId),
+        await this.measure(crew, homes.get(crew.technicianId), limitSeconds),
+      );
 
-    const limitSeconds = settings.maxDriveMinutes * 60;
     const avoid = new Map<string, Set<string>>();
     let repaired = 0;
     for (let round = 0; round < MAX_REPAIR_ROUNDS; round += 1) {
@@ -230,7 +251,10 @@ export class QuarterPlannerService {
       for (const crew of again.crews) {
         const key = crewKey(crew.date, crew.technicianId);
         const previous = measured.get(key);
-        next.set(key, crew.changed || !previous ? await this.measure(crew, homes.get(crew.technicianId)) : previous);
+        next.set(
+          key,
+          crew.changed || !previous ? await this.measure(crew, homes.get(crew.technicianId), limitSeconds) : previous,
+        );
       }
       measured = next;
     }
@@ -373,8 +397,9 @@ export class QuarterPlannerService {
    * A kind nobody has been given in Jobber is blocked with the reason, never
    * handed to whoever happens to be free.
    *
-   * The home is used only to start a day at the end nearer it. It is never
-   * counted against the day: the office's drive limit starts at the first job.
+   * The home is where a day's route starts (the office, 2026-09-16), and the
+   * drive from it is shown. It is never counted against the day: the office's
+   * drive limit is the drive between the day's properties.
    */
   private async availability(
     organizationId: string,
@@ -460,7 +485,7 @@ export class QuarterPlannerService {
   }
 
   /**
-   * Order one technician-day and measure its drive between stops.
+   * Order one technician-day and measure its drives.
    *
    * Google first, OSRM second, straight-line last. The fallbacks are ordered by
    * how much they can honestly claim: traffic-aware seconds, free-flow seconds,
@@ -468,16 +493,20 @@ export class QuarterPlannerService {
    * duration is worse than an absent one, and a plan that says "five hours"
    * when it means "we did not measure" is how somebody ends up late.
    *
-   * One matrix of the day's stops alone. The day starts at its first job, so
-   * nothing is measured from home or from the middle of the day's stops.
+   * One matrix of the technician's home and the day's stops. The day is routed
+   * from home (the office, 2026-09-16), so the home leg is measured and kept;
+   * the drive counted against the limit is still between the stops only.
+   * Without a home on file the matrix is the stops alone and the day starts at
+   * its first job, as before.
    */
   private async measure(
     crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops'>,
     home: GeoPoint | undefined,
+    limitSeconds: number,
   ): Promise<MeasuredCrew> {
     const stops = [...crew.stops];
-    const base = { date: crew.date, technicianId: crew.technicianId };
-    if (stops.length <= 1)
+    const base = { date: crew.date, technicianId: crew.technicianId, fromHome: Boolean(home) };
+    if (stops.length === 0 || (stops.length === 1 && !home))
       // Nothing to drive between, which is a true zero rather than an unknown.
       return {
         ...base,
@@ -485,36 +514,46 @@ export class QuarterPlannerService {
         legSeconds: stops.map(() => null),
         totalDriveSeconds: 0,
         totalDriveMeters: 0,
+        homeDriveSeconds: null,
+        homeDriveMeters: null,
         durationSource: null,
         matrix: null,
       };
 
-    const google = await this.google.matrix(stops, businessInstant(crew.date, DAY_STARTS_AT));
-    const durations = google?.durations ?? (await this.osrm.durations(stops));
+    // The home first, so row and column zero are the drives from and to it.
+    const points: GeoPoint[] = home ? [home, ...stops] : stops;
+    const offset = home ? 1 : 0;
+    const google = await this.google.matrix(points, businessInstant(crew.date, DAY_STARTS_AT));
+    const durations = google?.durations ?? (await this.osrm.durations(points));
     if (durations) {
       const matrix = {
         durations,
         distances: google?.distances ?? null,
-        index: new Map(stops.map((stop, position) => [stop.stopId, position])),
+        index: new Map(stops.map((stop, position) => [stop.stopId, position + offset])),
+        homeIndex: home ? 0 : null,
       };
       return {
         ...base,
-        ...inMatrixOrder(stops, matrix, home),
+        ...inMatrixOrder(stops, matrix, home, limitSeconds),
         durationSource: google ? DriveTimeSource.GOOGLE_TRAFFIC_AWARE : DriveTimeSource.OSRM_FREE_FLOW,
         matrix,
       };
     }
 
     // Straight-line: a real distance, and deliberately no seconds. We know how
-    // far apart the stops are; we do not know how long the drive takes.
-    const metres = stops.map((from) => stops.map((to) => haversineMeters(from, to)));
-    const order = orientTowardHome(shortestOpenPathOrder(metres), metres, stops, home, 0);
+    // far apart the stops are; we do not know how long the drive takes. With no
+    // seconds there is no limit to keep, so a home-started order always stands.
+    const metres = points.map((from) => points.map((to) => haversineMeters(from, to)));
+    const between = stops.map((_, from) => stops.map((__, to) => metres[from + offset]![to + offset]!));
+    const order = dayOrder(between, home ? stops.map((_, to) => metres[0]![to + offset]!) : null, stops, home, Infinity, 0);
     return {
       ...base,
       stops: order.map((index) => stops[index]!),
       legSeconds: order.map(() => null),
       totalDriveSeconds: null,
-      totalDriveMeters: pathCost(metres, order),
+      totalDriveMeters: pathCost(between, order),
+      homeDriveSeconds: null,
+      homeDriveMeters: home && order.length ? metres[0]![order[0]! + offset]! : null,
       durationSource: DriveTimeSource.HAVERSINE,
       matrix: null,
     };
@@ -560,9 +599,14 @@ export class QuarterPlannerService {
               hvacStopCount: crew.stops.filter((stop) => stop.inspectionType === InspectionType.HVAC).length,
               totalDriveSeconds: crew.totalDriveSeconds === null ? null : Math.round(crew.totalDriveSeconds),
               totalDriveMeters: crew.totalDriveMeters === null ? null : Math.round(crew.totalDriveMeters),
-              originLatitude: first.latitude,
-              originLongitude: first.longitude,
-              originKind: PlanOriginKind.FIRST_STOP,
+              homeDriveSeconds: crew.homeDriveSeconds === null ? null : Math.round(crew.homeDriveSeconds),
+              homeDriveMeters: crew.homeDriveMeters === null ? null : Math.round(crew.homeDriveMeters),
+              // A day routed from home says so, and does not copy the home's
+              // coordinates onto every day of the quarter: the planning profile
+              // stays the one place a technician's address is kept.
+              originLatitude: crew.fromHome ? null : first.latitude,
+              originLongitude: crew.fromHome ? null : first.longitude,
+              originKind: crew.fromHome ? PlanOriginKind.HOME : PlanOriginKind.FIRST_STOP,
               durationSource: crew.durationSource,
               departureAssumedAt: businessInstant(crew.date, DAY_STARTS_AT),
             },
@@ -651,9 +695,9 @@ function estimatedPathMinutes(stops: readonly PlannableStop[]): number {
 /**
  * The same day driven the other way, when that starts nearer home.
  *
- * The drive from home is not counted, but it is driven. Between two orders
- * within a couple of minutes of each other, the one that starts at the end
- * nearer the technician's home is the one they would choose.
+ * Used only when the day cannot be routed from the home itself (`dayOrder`).
+ * Between two orders within a couple of minutes of each other, the one that
+ * starts at the end nearer the technician's home is the one they would choose.
  */
 function orientTowardHome(
   order: number[],
@@ -668,18 +712,64 @@ function orientTowardHome(
   return nearerHome && pathCost(matrix, reversed) <= pathCost(matrix, order) + toleranceSeconds ? reversed : order;
 }
 
-/** Stops ordered and measured from a matrix that holds them all. */
+/**
+ * The order to drive a day in: from the technician's home, when that keeps the
+ * day inside the drive limit.
+ *
+ * The office's rule (2026-09-16): a day starts from home, and the ninety
+ * minutes are the drives between its properties. So the route is the shortest
+ * from home through every property -- which starts at or near the property
+ * nearest home -- unless its drive between the properties would run over the
+ * limit where the shortest path through them alone would not. Then the day
+ * keeps that path, started at the end nearer home: starting from home must
+ * never cost a day a property it could otherwise keep.
+ *
+ * `between` is the stops' own matrix; `fromHome` the drive from home to each.
+ */
+function dayOrder(
+  between: readonly (readonly number[])[],
+  fromHome: readonly number[] | null,
+  stops: readonly GeoPoint[],
+  home: GeoPoint | undefined,
+  limit: number,
+  toleranceSeconds = HOME_END_TOLERANCE_SECONDS,
+): number[] {
+  const free = orientTowardHome(shortestOpenPathOrder(between), between, stops, home, toleranceSeconds);
+  if (!fromHome || stops.length === 0) return free;
+  // The solver's origin is row zero; nothing ever drives back to it.
+  const withHome = [[0, ...fromHome], ...between.map((row) => [0, ...row])];
+  const solved = shortestRouteOrder(withHome).map((index) => index - 1);
+  // Between two routes from home that drive the same, start at the property
+  // nearer home: a tie in the numbers is not a tie on the road.
+  const total = (order: readonly number[]) => (order.length ? fromHome[order[0]!]! : 0) + pathCost(between, order);
+  const reversed = [...solved].reverse();
+  const homeFirst =
+    home && total(reversed) <= total(solved) && haversineMeters(home, stops[reversed[0]!]!) < haversineMeters(home, stops[solved[0]!]!)
+      ? reversed
+      : solved;
+  const cost = pathCost(between, homeFirst);
+  return cost <= limit || cost <= pathCost(between, free) ? homeFirst : free;
+}
+
+/** Stops ordered and measured from a matrix that holds them all, and the home when it has one. */
 function inMatrixOrder(
   stops: readonly PlannableStop[],
   matrix: NonNullable<MeasuredCrew['matrix']>,
   home: GeoPoint | undefined,
-): Pick<MeasuredCrew, 'stops' | 'legSeconds' | 'totalDriveSeconds' | 'totalDriveMeters'> {
+  limitSeconds: number,
+): Pick<
+  MeasuredCrew,
+  'stops' | 'legSeconds' | 'totalDriveSeconds' | 'totalDriveMeters' | 'homeDriveSeconds' | 'homeDriveMeters'
+> {
   const indexes = stops.map((stop) => matrix.index.get(stop.stopId)!);
   const durations = indexes.map((from) => indexes.map((to) => matrix.durations[from]![to]!));
-  const order = orientTowardHome(shortestOpenPathOrder(durations), durations, stops, home, HOME_END_TOLERANCE_SECONDS);
+  const homeRow = matrix.homeIndex === null ? null : matrix.durations[matrix.homeIndex]!;
+  const order = dayOrder(durations, homeRow ? indexes.map((to) => homeRow[to]!) : null, stops, home, limitSeconds);
   const ordered = order.map((index) => stops[index]!);
   const legSeconds = order.map((index, position) => (position === 0 ? null : durations[order[position - 1]!]![index]!));
   const distances = matrix.distances;
+  const first = order.length ? indexes[order[0]!]! : null;
+  const fromHome = (value: number | undefined) => (value === undefined || !Number.isFinite(value) ? null : value);
   return {
     stops: ordered,
     legSeconds,
@@ -690,6 +780,9 @@ function inMatrixOrder(
           order,
         )
       : null,
+    homeDriveSeconds: homeRow && first !== null ? fromHome(homeRow[first]) : null,
+    homeDriveMeters:
+      distances && matrix.homeIndex !== null && first !== null ? fromHome(distances[matrix.homeIndex]![first]) : null,
   };
 }
 
@@ -707,6 +800,8 @@ function trimToLimit(
   limitSeconds: number,
   home: GeoPoint | undefined,
 ): { crew: MeasuredCrew; dropped: PlannableStop[] } {
+  // Trimming reorders from the same matrix, home included, so a trimmed day is
+  // still routed from home and its home leg is still real.
   const matrix = crew.matrix;
   if (!matrix || crew.totalDriveSeconds === null || crew.totalDriveSeconds <= limitSeconds) return { crew, dropped: [] };
 
@@ -728,7 +823,7 @@ function trimToLimit(
     }
     dropped.push(current.stops[worst]!);
     const rest = current.stops.filter((_, index) => index !== worst);
-    current = { ...current, ...inMatrixOrder(rest, matrix, home) };
+    current = { ...current, ...inMatrixOrder(rest, matrix, home, limitSeconds) };
   }
   return { crew: current, dropped };
 }

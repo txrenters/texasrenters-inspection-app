@@ -41,6 +41,16 @@ export function dayClock<T extends TimedStop>(stops: readonly T[], startsAt = DA
   });
 }
 
+/**
+ * When to leave home to reach the day's first property on time.
+ *
+ * The drive from home is measured for the same nine o'clock start as the rest
+ * of the day, so this is a forecast, not a promise about the morning's traffic.
+ */
+export function leaveHomeAt(firstArrives: number, homeDriveSeconds: number): number {
+  return firstArrives - Math.round(homeDriveSeconds / 60);
+}
+
 /** "9:05 AM". */
 export function formatClock(minutesAfterMidnight: number): string {
   const total = ((Math.round(minutesAfterMidnight) % 1440) + 1440) % 1440;
