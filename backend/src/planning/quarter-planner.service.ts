@@ -1,12 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import {
-  DriveTimeSource,
-  InspectionStatus,
-  InspectionType,
-  PlanOriginKind,
-  TbpPlanStatus,
-  TbpStopStatus,
-} from '@prisma/client';
+import { DriveTimeSource, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 import {
   type AssignedCrew,
   type DayLimits,
@@ -15,15 +8,18 @@ import {
   type Quarter,
   type UnplacedReason,
   assignQuarter,
+  byZoneNumber,
   crewKey,
   estimatedDriveMinutes,
   haversineMeters,
-  mainTechnicians,
-  quarterEnd,
+  plannedVisitDaysOfQuarter,
   quarterLabel,
+  quarterWeekIndex,
   shortestOpenPathOrder,
   shortestRouteOrder,
-  workingDaysOfQuarter,
+  weekStartOf,
+  weeklyZoneTechnicians,
+  zoneNumberOf,
 } from '@texasrenters/shared';
 
 import { TechnicianSkillsService } from '../admin/technician-skills.service';
@@ -53,12 +49,6 @@ const DAY_STARTS_AT = '09:00:00';
  */
 const MAX_REPAIR_ROUNDS = 3;
 
-/**
- * How much longer a day's drive may be so that it starts at the end nearer the
- * technician's home, when the day cannot be routed from the home itself.
- */
-const HOME_END_TOLERANCE_SECONDS = 120;
-
 /** Block codes routing owns, cleared whenever the plan is routed again. */
 const ROUTING_BLOCK_CODES = ['NO_COORDINATES', 'NOT_PLACED'];
 
@@ -75,7 +65,7 @@ export interface PlanRoutingSettings {
   holidays?: string[];
 }
 
-export type RoutingUnplacedReason = UnplacedReason | 'DRIVE_LIMIT';
+export type RoutingUnplacedReason = UnplacedReason | 'DRIVE_LIMIT' | 'ZONE_OUT_OF_REACH';
 
 export interface RoutingSummary {
   planId: string;
@@ -90,14 +80,28 @@ export interface RoutingSummary {
   repaired: number;
 }
 
+/** Who has which zone in each week of a plan's quarter, for the console. */
+export interface PlanRotation {
+  /** The benefit-package crew, in the order the zones go round. */
+  crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
+  /** The zones the crew goes round, in order. */
+  zones: string[];
+  /** Zones no crew member's home is within the day's drive of. */
+  outOfReach: string[];
+  weeks: { weekOf: string; zones: { zone: string; technicianId: string }[] }[];
+}
+
 /** What a stop routing could not place says, on the stop. */
 const UNPLACED_MESSAGE: Record<RoutingUnplacedReason, string> = {
-  NO_WORKING_DAYS: 'The quarter has no working days to place this visit on.',
+  NO_WORKING_DAYS: 'The quarter has no days to plan this visit on.',
   NO_QUALIFIED_TECHNICIAN:
-    'No technician set up for planning is given this kind of inspection in Jobber, so there is nobody to send.',
-  NO_CAPACITY: 'No technician-day this quarter has room for this visit inside the day limits.',
+    'Nobody on the benefit-package crew can take this visit. The crew is set on the technicians’ planning profiles.',
+  NO_CAPACITY: 'No day this quarter has room for this visit inside the day limits, with the technician who has its zone.',
   LONGER_THAN_A_DAY: 'This visit is longer than a whole day on site.',
-  DRIVE_LIMIT: 'No day it could join keeps the drive between properties inside the limit.',
+  OUT_OF_REACH: 'This property is further from home, for every technician who could take it, than the day’s drive allows.',
+  DRIVE_LIMIT: 'No day it could join keeps the drive, counted from home, inside the limit.',
+  ZONE_OUT_OF_REACH:
+    'No one on the benefit-package crew lives within the day’s drive of this zone, so the office needs to arrange these visits.',
 };
 
 /** A technician-day, measured on real roads where anything could measure it. */
@@ -108,12 +112,15 @@ interface MeasuredCrew {
   stops: PlannableStop[];
   /** Seconds from the stop before, per stop; null for the first, or when nothing measured it. */
   legSeconds: (number | null)[];
-  /** Between the day's properties only: what the drive limit counts. */
+  /**
+   * The drive the day's limit counts: from home to the first property when the
+   * day is routed from home, and between the properties.
+   */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
   /** Whether the day was routed from the technician's home. */
   fromHome: boolean;
-  /** Home to the first property, when measured. Never part of `totalDriveSeconds`. */
+  /** Home to the first property, when measured. Part of `totalDriveSeconds`. */
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
   durationSource: DriveTimeSource | null;
@@ -127,6 +134,12 @@ interface MeasuredCrew {
     index: Map<string, number>;
     homeIndex: number | null;
   } | null;
+}
+
+/** The benefit-package crew, in the order the zones go round, and where each lives. */
+export interface Roster {
+  technicianIds: string[];
+  homes: Map<string, GeoPoint>;
 }
 
 @Injectable()
@@ -150,9 +163,14 @@ export class QuarterPlannerService {
    * unavailable. Splitting them means a coordinator can fix a blocked tenancy
    * and re-route without rebuilding the rotation underneath it.
    *
-   * The office's limits hold for every day it writes: at most `maxOnSiteMinutes`
-   * inspecting and `maxDriveMinutes` driving between the day's properties. Days
-   * are laid out on an estimate, measured on real roads, and a day that
+   * The office's rules (2026-09-16) hold for every day it writes:
+   * - the crew each has one zone a week, moving one zone on each week, and a
+   *   visit goes only to whoever has its zone (`weeklyZoneTechnicians`);
+   * - at most `maxOnSiteMinutes` inspecting, and `maxDriveMinutes` driving
+   *   counted from home to the first property and between the properties;
+   * - no planned visit on a Monday from the quarter's second week on, which is
+   *   kept for rescheduled visits.
+   * Days are laid out on an estimate, measured on real roads, and a day that
    * measures over is repaired; a stop no day can take is blocked with the
    * reason, never squeezed in.
    */
@@ -195,26 +213,38 @@ export class QuarterPlannerService {
       });
 
     const { stops, overrides } = await this.plannableStops(organizationId, planId, settings);
-    const dates = workingDaysOfQuarter(quarter, settings.holidays);
-    const { days, homes, technicianRank } = await this.availability(
+    const limits: DayLimits = { maxOnSiteMinutes: settings.maxOnSiteMinutes, maxDriveMinutes: settings.maxDriveMinutes };
+    const roster = await this.roster(organizationId);
+    const zones = zoneCircle(stops, roster, limits.maxDriveMinutes);
+    const days = await this.availability(
       organizationId,
       quarter,
-      dates,
-      [...new Set(stops.map((stop) => stop.inspectionType as InspectionType))],
+      plannedVisitDaysOfQuarter(quarter, settings.holidays),
+      stops,
+      roster,
+      zones.circle,
     );
+    const homes = roster.homes;
 
-    const limits: DayLimits = { maxOnSiteMinutes: settings.maxOnSiteMinutes, maxDriveMinutes: settings.maxDriveMinutes };
+    // A zone nobody on the crew lives within the day's drive of is a person's to
+    // arrange: its visits are blocked with that reason rather than attempted.
+    const outOfReach = new Set(zones.outOfReach);
+    const unreachable = stops.filter((stop) => stop.zone && outOfReach.has(stop.zone));
     const rotation = { position: new Map(stops.map((stop, index) => [stop.stopId, index])), size: stops.length };
 
-    const assignment = assignQuarter(stops, days, { limits, technicianRank });
-    const unplaced: RoutingSummary['unplaced'] = [...assignment.unplaced];
+    const assignment = assignQuarter(
+      stops.filter((stop) => !stop.zone || !outOfReach.has(stop.zone)),
+      days,
+      { limits, homes, rotation },
+    );
+    const unplaced: RoutingSummary['unplaced'] = [
+      ...unreachable.map((stop) => ({ stopId: stop.stopId, reason: 'ZONE_OUT_OF_REACH' as const })),
+      ...assignment.unplaced,
+    ];
     const limitSeconds = settings.maxDriveMinutes * 60;
     let measured = new Map<string, MeasuredCrew>();
     for (const crew of assignment.crews)
-      measured.set(
-        crewKey(crew.date, crew.technicianId),
-        await this.measure(crew, homes.get(crew.technicianId), limitSeconds),
-      );
+      measured.set(crewKey(crew.date, crew.technicianId), await this.measure(crew, homes.get(crew.technicianId)));
 
     const avoid = new Map<string, Set<string>>();
     let repaired = 0;
@@ -223,7 +253,8 @@ export class QuarterPlannerService {
       for (const [key, crew] of measured) {
         const trimmed = trimToLimit(crew, limitSeconds, homes.get(crew.technicianId));
         if (trimmed.dropped.length === 0) continue;
-        measured.set(key, trimmed.crew);
+        if (trimmed.crew.stops.length) measured.set(key, trimmed.crew);
+        else measured.delete(key);
         for (const stop of trimmed.dropped) {
           displaced.push(stop);
           const avoided = avoid.get(stop.stopId) ?? new Set<string>();
@@ -236,14 +267,17 @@ export class QuarterPlannerService {
 
       const again = assignQuarter(displaced, days, {
         limits,
-        technicianRank,
+        homes,
         rotation,
         avoid,
         existing: [...measured.values()].map((crew) => ({
           date: crew.date,
           technicianId: crew.technicianId,
           stops: crew.stops,
-          driveMinutes: crew.totalDriveSeconds === null ? estimatedPathMinutes(crew.stops) : crew.totalDriveSeconds / 60,
+          driveMinutes:
+            crew.totalDriveSeconds === null || !Number.isFinite(crew.totalDriveSeconds)
+              ? estimatedPathMinutes(crew.stops, homes.get(crew.technicianId))
+              : crew.totalDriveSeconds / 60,
         })),
       });
       unplaced.push(...again.unplaced);
@@ -251,10 +285,7 @@ export class QuarterPlannerService {
       for (const crew of again.crews) {
         const key = crewKey(crew.date, crew.technicianId);
         const previous = measured.get(key);
-        next.set(
-          key,
-          crew.changed || !previous ? await this.measure(crew, homes.get(crew.technicianId), limitSeconds) : previous,
-        );
+        next.set(key, crew.changed || !previous ? await this.measure(crew, homes.get(crew.technicianId)) : previous);
       }
       measured = next;
     }
@@ -264,7 +295,8 @@ export class QuarterPlannerService {
     for (const [key, crew] of measured) {
       const trimmed = trimToLimit(crew, limitSeconds, homes.get(crew.technicianId));
       if (trimmed.dropped.length === 0) continue;
-      measured.set(key, trimmed.crew);
+      if (trimmed.crew.stops.length) measured.set(key, trimmed.crew);
+      else measured.delete(key);
       for (const stop of trimmed.dropped) unplaced.push({ stopId: stop.stopId, reason: 'DRIVE_LIMIT' });
     }
 
@@ -305,6 +337,9 @@ export class QuarterPlannerService {
       unplaced: summary.unplaced.length,
       days: summary.days,
       repaired,
+      crew: roster.technicianIds.length,
+      zones: zones.circle,
+      zonesOutOfReach: zones.outOfReach,
       durationSource: summary.durationSource,
     });
 
@@ -312,7 +347,83 @@ export class QuarterPlannerService {
   }
 
   /**
-   * The stops that can be placed at all, with each visit's length.
+   * Who has which zone in each week of a plan's quarter, for the console.
+   *
+   * Worked out as routing works it out -- the same crew, zones and reach -- so
+   * the page shows the rotation the days were laid out with, as long as the
+   * crew has not changed since. Reads only: it never blocks a stop.
+   */
+  async rotation(organizationId: string, planId: string): Promise<PlanRotation> {
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { quarterYear: true, quarterNumber: true, maxDriveMinutes: true, holidays: true },
+    });
+    if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
+    const quarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
+
+    const rows = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: { planId, organizationId, status: { not: TbpStopStatus.EXCLUDED } },
+      select: {
+        id: true,
+        sequence: true,
+        zone: true,
+        inspectionType: true,
+        propertywareBuilding: { select: { latitude: true, longitude: true } },
+      },
+    });
+    const stops = withZones(
+      rows.flatMap((row) =>
+        row.propertywareBuilding?.latitude == null || row.propertywareBuilding.longitude == null
+          ? []
+          : [
+              {
+                stopId: row.id,
+                sequence: row.sequence,
+                latitude: Number(row.propertywareBuilding.latitude),
+                longitude: Number(row.propertywareBuilding.longitude),
+                onSiteMinutes: 0,
+                inspectionType: row.inspectionType,
+                zone: zoneNumberOf(row.zone),
+              },
+            ],
+      ),
+    );
+    const roster = await this.roster(organizationId);
+    const zones = zoneCircle(stops, roster, plan.maxDriveMinutes);
+    const people = roster.technicianIds.length
+      ? await this.prisma.userProfile.findMany({
+          where: { id: { in: roster.technicianIds } },
+          select: { id: true, displayName: true },
+        })
+      : [];
+    const names = new Map(people.map((person) => [person.id, person.displayName]));
+
+    const weeks = new Map<string, Record<string, string>>();
+    for (const date of plannedVisitDaysOfQuarter(quarter, plan.holidays)) {
+      const weekOf = weekStartOf(date);
+      if (!weeks.has(weekOf))
+        weeks.set(weekOf, weeklyZoneTechnicians(roster.technicianIds, zones.circle, quarterWeekIndex(date, quarter)));
+    }
+
+    return {
+      crew: roster.technicianIds.map((technicianId) => ({
+        technicianId,
+        displayName: names.get(technicianId) ?? null,
+        hasHome: roster.homes.has(technicianId),
+      })),
+      zones: zones.circle,
+      outOfReach: zones.outOfReach,
+      weeks: [...weeks.entries()].map(([weekOf, owners]) => ({
+        weekOf,
+        zones: Object.entries(owners)
+          .map(([zone, technicianId]) => ({ zone, technicianId }))
+          .sort((left, right) => byZoneNumber(left.zone, right.zone)),
+      })),
+    };
+  }
+
+  /**
+   * The stops that can be placed at all, with each visit's length and zone.
    *
    * A stop whose building never geocoded has no coordinates, so no day can be
    * chosen for it on any sensible basis. It is marked rather than dropped —
@@ -329,6 +440,7 @@ export class QuarterPlannerService {
       select: {
         id: true,
         sequence: true,
+        zone: true,
         inspectionType: true,
         previousTechnicianId: true,
         scheduleOverriddenAt: true,
@@ -361,6 +473,7 @@ export class QuarterPlannerService {
         onSiteMinutes:
           row.inspectionType === InspectionType.HVAC ? settings.hvacVisitMinutes : settings.occupiedVisitMinutes,
         previousTechnicianId: row.previousTechnicianId ?? null,
+        zone: zoneNumberOf(row.zone),
       });
     }
 
@@ -374,114 +487,67 @@ export class QuarterPlannerService {
         },
       });
 
-    return { stops, overrides };
+    return { stops: withZones(stops), overrides };
   }
 
   /**
-   * Who can work each day of the quarter, per kind of visit, and where they live.
+   * The benefit-package crew, in the order the zones go round, and where each lives.
    *
-   * Three gates, and each matters. A planning profile marked plannable
-   * is a coordinator saying "this person takes benefit-package days" -- and a
-   * technician with no profile at all is not planned: accounts carrying the
-   * technician role include office staff who test the app, and a plan books
-   * real visits in Jobber under whoever it picks. Qualification is per date
-   * and per kind of visit, because a certificate lapsing mid-quarter must take
-   * away the later days and leave the earlier ones alone.
+   * Set on the technicians' planning profiles by their place in the rotation
+   * (`tbpZoneOrder`): the office's crew -- Moses, Kevin and Emanuel, 2026-09-16
+   * -- takes both kinds of visit, and nobody else is sent, however plannable. A
+   * profile marked unplannable is left out even with a place: somebody on leave
+   * keeps it for when they are back.
    *
-   * And a kind of visit goes only to the technicians the office gives it to in
-   * Jobber (`jobberAssignments`, `mainTechnicians`): the office's rule is that a
-   * quarter is assigned the way Jobber already is, occupied inspections to one
-   * technician and HVAC inspections to another. Whoever took a tenancy last
-   * quarter is preferred only among those, so an occupied tenancy's HVAC
-   * quarter goes to the HVAC technician rather than back to the occupied one.
-   * A kind nobody has been given in Jobber is blocked with the reason, never
-   * handed to whoever happens to be free.
+   * The home is where each day's route starts, and the drive from it counts
+   * against the day's drive limit.
+   */
+  private async roster(organizationId: string): Promise<Roster> {
+    const profiles = await this.prisma.technicianPlanningProfile.findMany({
+      where: { organizationId, isPlannable: true, tbpZoneOrder: { not: null } },
+      orderBy: [{ tbpZoneOrder: 'asc' }, { technicianId: 'asc' }],
+      select: { technicianId: true, homeLatitude: true, homeLongitude: true },
+    });
+    const homes = new Map<string, GeoPoint>();
+    for (const row of profiles)
+      if (row.homeLatitude != null && row.homeLongitude != null)
+        homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
+    return { technicianIds: profiles.map((row) => row.technicianId), homes };
+  }
+
+  /**
+   * Who can work each planned day, per zone and kind of visit.
    *
-   * The home is where a day's route starts (the office, 2026-09-16), and the
-   * drive from it is shown. It is never counted against the day: the office's
-   * drive limit is the drive between the day's properties.
+   * Each day's zones come from the week it falls in: the crew each has one zone,
+   * and all move one zone on each week. Qualification still applies on top, per
+   * date and per kind of visit, because a certificate lapsing mid-quarter must
+   * take away the later days and leave the earlier ones alone.
    */
   private async availability(
     organizationId: string,
     quarter: Quarter,
     dates: readonly string[],
-    types: readonly InspectionType[],
-  ) {
-    const assigned = await this.jobberAssignments(organizationId, quarter);
-    const profiles = await this.prisma.technicianPlanningProfile.findMany({
-      where: { organizationId },
-      select: { technicianId: true, isPlannable: true, homeLatitude: true, homeLongitude: true },
-    });
-    const plannable = new Set(profiles.filter((row) => row.isPlannable).map((row) => row.technicianId));
-    const homes = new Map<string, GeoPoint>();
-    for (const row of profiles)
-      if (row.homeLatitude !== null && row.homeLatitude !== undefined && row.homeLongitude !== null && row.homeLongitude !== undefined)
-        homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
-
+    stops: readonly PlannableStop[],
+    roster: Roster,
+    circle: readonly string[],
+  ): Promise<PlannableDay[]> {
+    const types = [...new Set(stops.map((stop) => stop.inspectionType as InspectionType))];
     const asDates = dates.map((date) => new Date(`${date}T00:00:00.000Z`));
     const calendars = new Map<InspectionType, Awaited<ReturnType<TechnicianSkillsService['qualificationCalendar']>>>();
     for (const type of types) calendars.set(type, await this.skills.qualificationCalendar(organizationId, type, asDates));
 
-    const days: PlannableDay[] = dates.map((date) => {
+    return dates.map((date) => {
+      const zoneTechnicians = circle.length
+        ? weeklyZoneTechnicians(roster.technicianIds, circle, quarterWeekIndex(date, quarter))
+        : undefined;
+      const working = zoneTechnicians ? [...new Set(Object.values(zoneTechnicians))] : [...roster.technicianIds];
       const qualified: Record<string, string[]> = {};
-      const available: string[] = [];
       for (const [type, calendar] of calendars) {
-        const candidates = (calendar.get(date) ?? [])
-          .filter((candidate) => plannable.has(candidate.technicianId))
-          // Most qualified first, so that between two technicians the office
-          // gives a kind alike, the stronger is sent when a day needs one.
-          .sort((left, right) => right.preferredHeld - left.preferredHeld);
-        qualified[type] = mainTechnicians(
-          new Map(
-            candidates.map((candidate) => [candidate.technicianId, assigned.get(type)?.get(candidate.technicianId) ?? 0]),
-          ),
-        );
-        for (const technicianId of qualified[type]) if (!available.includes(technicianId)) available.push(technicianId);
+        const onCalendar = new Set((calendar.get(date) ?? []).map((candidate) => candidate.technicianId));
+        qualified[type] = working.filter((technicianId) => onCalendar.has(technicianId));
       }
-      return { date, technicianIds: available, qualified };
+      return { date, technicianIds: working, qualified, ...(zoneTechnicians ? { zoneTechnicians } : {}) };
     });
-
-    // Between technicians who take the same kind, the one given it most is sent first.
-    const technicianRank = (technicianId: string, inspectionType: string) =>
-      -(assigned.get(inspectionType as InspectionType)?.get(technicianId) ?? 0);
-
-    return { days, homes, technicianRank };
-  }
-
-  /**
-   * How many inspections of each kind the office has assigned each technician
-   * in Jobber, over the year to the end of the quarter being planned.
-   *
-   * Read from the inspections booked in Jobber, by who each is assigned to now:
-   * the sync keeps that in step with Jobber, so a visit the office moved to
-   * another technician counts for the one it moved to. A year, so an HVAC
-   * quarter is always inside it; to the quarter's end, so visits the office has
-   * already booked into the quarter count too. A cancelled visit was not
-   * worked, and is not counted.
-   */
-  private async jobberAssignments(organizationId: string, quarter: Quarter) {
-    const rows = await this.prisma.inspectionAssignment.findMany({
-      where: {
-        isCurrent: true,
-        inspection: {
-          organizationId,
-          inspectionType: { in: [InspectionType.OCCUPIED, InspectionType.HVAC] },
-          jobberVisitId: { not: null },
-          status: { not: InspectionStatus.CANCELLED },
-          // The quarter after this one a year ago: Q4 2026 reads from 1 January 2026.
-          scheduledAt: { gte: new Date(Date.UTC(quarter.year - 1, quarter.quarter * 3, 1)), lt: quarterEnd(quarter) },
-        },
-      },
-      select: { technicianId: true, inspection: { select: { inspectionType: true } } },
-    });
-
-    const assigned = new Map<InspectionType, Map<string, number>>();
-    for (const row of rows) {
-      const counts = assigned.get(row.inspection.inspectionType) ?? new Map<string, number>();
-      counts.set(row.technicianId, (counts.get(row.technicianId) ?? 0) + 1);
-      assigned.set(row.inspection.inspectionType, counts);
-    }
-    return assigned;
   }
 
   /**
@@ -494,15 +560,13 @@ export class QuarterPlannerService {
    * when it means "we did not measure" is how somebody ends up late.
    *
    * One matrix of the technician's home and the day's stops. The day is routed
-   * from home (the office, 2026-09-16), so the home leg is measured and kept;
-   * the drive counted against the limit is still between the stops only.
-   * Without a home on file the matrix is the stops alone and the day starts at
-   * its first job, as before.
+   * from home, and the drive from home counts against the day's limit with the
+   * drives between the properties (the office, 2026-09-16). Without a home on
+   * file the matrix is the stops alone and the day starts at its first job.
    */
   private async measure(
     crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops'>,
     home: GeoPoint | undefined,
-    limitSeconds: number,
   ): Promise<MeasuredCrew> {
     const stops = [...crew.stops];
     const base = { date: crew.date, technicianId: crew.technicianId, fromHome: Boolean(home) };
@@ -534,26 +598,26 @@ export class QuarterPlannerService {
       };
       return {
         ...base,
-        ...inMatrixOrder(stops, matrix, home, limitSeconds),
+        ...inMatrixOrder(stops, matrix, home),
         durationSource: google ? DriveTimeSource.GOOGLE_TRAFFIC_AWARE : DriveTimeSource.OSRM_FREE_FLOW,
         matrix,
       };
     }
 
     // Straight-line: a real distance, and deliberately no seconds. We know how
-    // far apart the stops are; we do not know how long the drive takes. With no
-    // seconds there is no limit to keep, so a home-started order always stands.
+    // far apart the stops are; we do not know how long the drive takes.
     const metres = points.map((from) => points.map((to) => haversineMeters(from, to)));
     const between = stops.map((_, from) => stops.map((__, to) => metres[from + offset]![to + offset]!));
-    const order = dayOrder(between, home ? stops.map((_, to) => metres[0]![to + offset]!) : null, stops, home, Infinity, 0);
+    const order = dayOrder(between, home ? stops.map((_, to) => metres[0]![to + offset]!) : null, stops, home);
+    const homeLeg = home && order.length ? metres[0]![order[0]! + offset]! : null;
     return {
       ...base,
       stops: order.map((index) => stops[index]!),
       legSeconds: order.map(() => null),
       totalDriveSeconds: null,
-      totalDriveMeters: pathCost(between, order),
+      totalDriveMeters: (homeLeg ?? 0) + pathCost(between, order),
       homeDriveSeconds: null,
-      homeDriveMeters: home && order.length ? metres[0]![order[0]! + offset]! : null,
+      homeDriveMeters: homeLeg,
       durationSource: DriveTimeSource.HAVERSINE,
       matrix: null,
     };
@@ -584,6 +648,10 @@ export class QuarterPlannerService {
       data: { assignedTechnicianId: null },
     });
 
+    // A drive nothing could measure between two points is Infinity in the
+    // matrix; the database takes a whole number or nothing.
+    const whole = (value: number | null) => (value === null || !Number.isFinite(value) ? null : Math.round(value));
+
     for (const batch of chunk(crews, 10)) {
       await this.prisma.$transaction(async (tx) => {
         for (const crew of batch) {
@@ -597,10 +665,10 @@ export class QuarterPlannerService {
               stopCount: crew.stops.length,
               onSiteMinutes: crew.stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
               hvacStopCount: crew.stops.filter((stop) => stop.inspectionType === InspectionType.HVAC).length,
-              totalDriveSeconds: crew.totalDriveSeconds === null ? null : Math.round(crew.totalDriveSeconds),
-              totalDriveMeters: crew.totalDriveMeters === null ? null : Math.round(crew.totalDriveMeters),
-              homeDriveSeconds: crew.homeDriveSeconds === null ? null : Math.round(crew.homeDriveSeconds),
-              homeDriveMeters: crew.homeDriveMeters === null ? null : Math.round(crew.homeDriveMeters),
+              totalDriveSeconds: whole(crew.totalDriveSeconds),
+              totalDriveMeters: whole(crew.totalDriveMeters),
+              homeDriveSeconds: whole(crew.homeDriveSeconds),
+              homeDriveMeters: whole(crew.homeDriveMeters),
               // A day routed from home says so, and does not copy the home's
               // coordinates onto every day of the quarter: the planning profile
               // stays the one place a technician's address is kept.
@@ -624,7 +692,7 @@ export class QuarterPlannerService {
                 ...(pinned?.scheduleOverriddenAt ? {} : { scheduledOn: new Date(`${crew.date}T00:00:00.000Z`) }),
                 ...(pinned?.technicianOverriddenAt ? {} : { assignedTechnicianId: crew.technicianId }),
                 positionInDay: index + 1,
-                driveSecondsForecast: leg === null || leg === undefined ? null : Math.round(leg),
+                driveSecondsForecast: whole(leg ?? null),
               },
             });
           }
@@ -677,6 +745,71 @@ export function routingSettings(
   };
 }
 
+/** The middle of each zone's stops, as a place. */
+function zoneMiddles(stops: readonly PlannableStop[]): Map<string, GeoPoint> {
+  const sums = new Map<string, { latitude: number; longitude: number; count: number }>();
+  for (const stop of stops) {
+    if (!stop.zone) continue;
+    const sum = sums.get(stop.zone) ?? { latitude: 0, longitude: 0, count: 0 };
+    sums.set(stop.zone, { latitude: sum.latitude + stop.latitude, longitude: sum.longitude + stop.longitude, count: sum.count + 1 });
+  }
+  return new Map(
+    [...sums.entries()].map(([zone, sum]) => [zone, { latitude: sum.latitude / sum.count, longitude: sum.longitude / sum.count }]),
+  );
+}
+
+/**
+ * Every stop with a zone: its own, or for the few the tenant report leaves
+ * without one ("Not Set"), the zone whose middle is nearest -- so it is still
+ * worked by whoever has that part of town that week.
+ */
+export function withZones<T extends PlannableStop>(stops: readonly T[]): T[] {
+  const middles = zoneMiddles(stops);
+  if (middles.size === 0) return [...stops];
+  return stops.map((stop) => {
+    if (stop.zone) return stop;
+    let nearest: string | null = null;
+    let nearestMetres = Number.POSITIVE_INFINITY;
+    for (const [zone, middle] of middles) {
+      const metres = haversineMeters(stop, middle);
+      if (metres < nearestMetres) {
+        nearest = zone;
+        nearestMetres = metres;
+      }
+    }
+    return { ...stop, zone: nearest };
+  });
+}
+
+/**
+ * The zones the crew goes round, in order, and the zones none of them can reach.
+ *
+ * A zone is out of reach when every crew member's home is further from its
+ * middle than the day's drive allows even to get there -- zone 5, some 200 km
+ * from the three homes in Q4 2026. Left in the circle, it would take a person's
+ * week and leave another zone without anybody; out of it, its visits are
+ * blocked with the reason for the office to arrange. A crew member with no home
+ * on file starts at their first job, so reaches anywhere.
+ */
+export function zoneCircle(
+  stops: readonly PlannableStop[],
+  roster: Roster,
+  maxDriveMinutes: number,
+): { circle: string[]; outOfReach: string[] } {
+  const zones = [...zoneMiddles(stops).entries()].sort(([left], [right]) => byZoneNumber(left, right));
+  // Without a crew there is nobody to be out of reach of: routing says so per stop.
+  if (roster.technicianIds.length === 0) return { circle: zones.map(([zone]) => zone), outOfReach: [] };
+  const reachable = (middle: GeoPoint) =>
+    roster.technicianIds.some((technicianId) => {
+      const home = roster.homes.get(technicianId);
+      return !home || estimatedDriveMinutes(home, middle) <= maxDriveMinutes;
+    });
+  return {
+    circle: zones.filter(([, middle]) => reachable(middle)).map(([zone]) => zone),
+    outOfReach: zones.filter(([, middle]) => !reachable(middle)).map(([zone]) => zone),
+  };
+}
+
 /** The drive through stops in the order given, in seconds, from a matrix. */
 function pathCost(matrix: readonly (readonly number[])[], order: readonly number[]): number {
   let total = 0;
@@ -685,44 +818,21 @@ function pathCost(matrix: readonly (readonly number[])[], order: readonly number
   return total;
 }
 
-/** The estimated drive through stops in the order given, in minutes. */
-function estimatedPathMinutes(stops: readonly PlannableStop[]): number {
-  let total = 0;
+/** The estimated drive of a day in the order given, from home when it has one, in minutes. */
+function estimatedPathMinutes(stops: readonly PlannableStop[], home?: GeoPoint): number {
+  let total = home && stops.length ? estimatedDriveMinutes(home, stops[0]!) : 0;
   for (let index = 1; index < stops.length; index += 1) total += estimatedDriveMinutes(stops[index - 1]!, stops[index]!);
   return total;
 }
 
 /**
- * The same day driven the other way, when that starts nearer home.
+ * The order to drive a day in: the shortest route from the technician's home.
  *
- * Used only when the day cannot be routed from the home itself (`dayOrder`).
- * Between two orders within a couple of minutes of each other, the one that
- * starts at the end nearer the technician's home is the one they would choose.
- */
-function orientTowardHome(
-  order: number[],
-  matrix: readonly (readonly number[])[],
-  stops: readonly GeoPoint[],
-  home: GeoPoint | undefined,
-  toleranceSeconds: number,
-): number[] {
-  if (!home || order.length < 2) return order;
-  const reversed = [...order].reverse();
-  const nearerHome = haversineMeters(home, stops[reversed[0]!]!) < haversineMeters(home, stops[order[0]!]!);
-  return nearerHome && pathCost(matrix, reversed) <= pathCost(matrix, order) + toleranceSeconds ? reversed : order;
-}
-
-/**
- * The order to drive a day in: from the technician's home, when that keeps the
- * day inside the drive limit.
- *
- * The office's rule (2026-09-16): a day starts from home, and the ninety
- * minutes are the drives between its properties. So the route is the shortest
- * from home through every property -- which starts at or near the property
- * nearest home -- unless its drive between the properties would run over the
- * limit where the shortest path through them alone would not. Then the day
- * keeps that path, started at the end nearer home: starting from home must
- * never cost a day a property it could otherwise keep.
+ * The drive from home counts against the day's limit with the drives between
+ * the properties (the office, 2026-09-16), so the route that drives least from
+ * home is the one to keep. Between two that drive the same, the day starts at
+ * the property nearer home: a tie in the numbers is not a tie on the road.
+ * Without a home, the shortest path through the stops from any of them.
  *
  * `between` is the stops' own matrix; `fromHome` the drive from home to each.
  */
@@ -731,24 +841,17 @@ function dayOrder(
   fromHome: readonly number[] | null,
   stops: readonly GeoPoint[],
   home: GeoPoint | undefined,
-  limit: number,
-  toleranceSeconds = HOME_END_TOLERANCE_SECONDS,
 ): number[] {
-  const free = orientTowardHome(shortestOpenPathOrder(between), between, stops, home, toleranceSeconds);
-  if (!fromHome || stops.length === 0) return free;
+  if (!fromHome || !home || stops.length === 0) return shortestOpenPathOrder(between);
   // The solver's origin is row zero; nothing ever drives back to it.
   const withHome = [[0, ...fromHome], ...between.map((row) => [0, ...row])];
   const solved = shortestRouteOrder(withHome).map((index) => index - 1);
-  // Between two routes from home that drive the same, start at the property
-  // nearer home: a tie in the numbers is not a tie on the road.
   const total = (order: readonly number[]) => (order.length ? fromHome[order[0]!]! : 0) + pathCost(between, order);
   const reversed = [...solved].reverse();
-  const homeFirst =
-    home && total(reversed) <= total(solved) && haversineMeters(home, stops[reversed[0]!]!) < haversineMeters(home, stops[solved[0]!]!)
-      ? reversed
-      : solved;
-  const cost = pathCost(between, homeFirst);
-  return cost <= limit || cost <= pathCost(between, free) ? homeFirst : free;
+  return total(reversed) <= total(solved) &&
+    haversineMeters(home, stops[reversed[0]!]!) < haversineMeters(home, stops[solved[0]!]!)
+    ? reversed
+    : solved;
 }
 
 /** Stops ordered and measured from a matrix that holds them all, and the home when it has one. */
@@ -756,7 +859,6 @@ function inMatrixOrder(
   stops: readonly PlannableStop[],
   matrix: NonNullable<MeasuredCrew['matrix']>,
   home: GeoPoint | undefined,
-  limitSeconds: number,
 ): Pick<
   MeasuredCrew,
   'stops' | 'legSeconds' | 'totalDriveSeconds' | 'totalDriveMeters' | 'homeDriveSeconds' | 'homeDriveMeters'
@@ -764,25 +866,26 @@ function inMatrixOrder(
   const indexes = stops.map((stop) => matrix.index.get(stop.stopId)!);
   const durations = indexes.map((from) => indexes.map((to) => matrix.durations[from]![to]!));
   const homeRow = matrix.homeIndex === null ? null : matrix.durations[matrix.homeIndex]!;
-  const order = dayOrder(durations, homeRow ? indexes.map((to) => homeRow[to]!) : null, stops, home, limitSeconds);
+  const order = dayOrder(durations, homeRow ? indexes.map((to) => homeRow[to]!) : null, stops, home);
   const ordered = order.map((index) => stops[index]!);
   const legSeconds = order.map((index, position) => (position === 0 ? null : durations[order[position - 1]!]![index]!));
   const distances = matrix.distances;
   const first = order.length ? indexes[order[0]!]! : null;
-  const fromHome = (value: number | undefined) => (value === undefined || !Number.isFinite(value) ? null : value);
+  const homeSeconds = homeRow && first !== null ? homeRow[first]! : null;
+  const homeMeters = distances && matrix.homeIndex !== null && first !== null ? distances[matrix.homeIndex]![first]! : null;
+  const betweenMeters = distances
+    ? pathCost(
+        indexes.map((from) => indexes.map((to) => distances[from]![to]!)),
+        order,
+      )
+    : null;
   return {
     stops: ordered,
     legSeconds,
-    totalDriveSeconds: pathCost(durations, order),
-    totalDriveMeters: distances
-      ? pathCost(
-          indexes.map((from) => indexes.map((to) => distances[from]![to]!)),
-          order,
-        )
-      : null,
-    homeDriveSeconds: homeRow && first !== null ? fromHome(homeRow[first]) : null,
-    homeDriveMeters:
-      distances && matrix.homeIndex !== null && first !== null ? fromHome(distances[matrix.homeIndex]![first]) : null,
+    totalDriveSeconds: (homeSeconds ?? 0) + pathCost(durations, order),
+    totalDriveMeters: betweenMeters === null ? null : (homeMeters ?? 0) + betweenMeters,
+    homeDriveSeconds: homeSeconds !== null && Number.isFinite(homeSeconds) ? homeSeconds : null,
+    homeDriveMeters: homeMeters !== null && Number.isFinite(homeMeters) ? homeMeters : null,
   };
 }
 
@@ -791,29 +894,27 @@ function inMatrixOrder(
  *
  * One stop at a time, the one whose leaving saves the most driving -- usually
  * the one out on its own -- until the day fits. Reordered and re-measured from
- * the matrix already fetched, so a trimmed day's numbers are real, not
- * estimated. A tie goes to the stop later in the rotation, so the earlier keeps
- * its day. A day nothing measured is left alone: there is nothing to trim by.
+ * the matrix already fetched, home included, so a trimmed day's numbers are
+ * real, not estimated. A tie goes to the stop later in the rotation, so the
+ * earlier keeps its day. A day nothing measured is left alone: there is nothing
+ * to trim by. A day of one stop too far from home gives that stop up too.
  */
 function trimToLimit(
   crew: MeasuredCrew,
   limitSeconds: number,
   home: GeoPoint | undefined,
 ): { crew: MeasuredCrew; dropped: PlannableStop[] } {
-  // Trimming reorders from the same matrix, home included, so a trimmed day is
-  // still routed from home and its home leg is still real.
   const matrix = crew.matrix;
   if (!matrix || crew.totalDriveSeconds === null || crew.totalDriveSeconds <= limitSeconds) return { crew, dropped: [] };
 
   let current = crew;
   const dropped: PlannableStop[] = [];
-  while (current.stops.length > 1 && (current.totalDriveSeconds ?? 0) > limitSeconds) {
-    const order = current.stops.map((stop) => matrix.index.get(stop.stopId)!);
+  while (current.stops.length > 0 && (current.totalDriveSeconds ?? 0) > limitSeconds) {
     let worst = current.stops.length - 1;
     let worstSaved = Number.NEGATIVE_INFINITY;
     for (const [position, stop] of current.stops.entries()) {
-      const rest = order.filter((_, index) => index !== position);
-      const cost = pathCost(matrix.durations, rest);
+      const rest = current.stops.filter((_, index) => index !== position);
+      const cost = rest.length ? (inMatrixOrder(rest, matrix, home).totalDriveSeconds ?? Number.POSITIVE_INFINITY) : 0;
       const saved = Number.isFinite(cost) ? (current.totalDriveSeconds ?? 0) - cost : Number.NEGATIVE_INFINITY;
       const later = stop.sequence > current.stops[worst]!.sequence;
       if (saved > worstSaved || (saved === worstSaved && later)) {
@@ -823,7 +924,17 @@ function trimToLimit(
     }
     dropped.push(current.stops[worst]!);
     const rest = current.stops.filter((_, index) => index !== worst);
-    current = { ...current, ...inMatrixOrder(rest, matrix, home, limitSeconds) };
+    current = rest.length
+      ? { ...current, ...inMatrixOrder(rest, matrix, home) }
+      : {
+          ...current,
+          stops: [],
+          legSeconds: [],
+          totalDriveSeconds: 0,
+          totalDriveMeters: 0,
+          homeDriveSeconds: null,
+          homeDriveMeters: null,
+        };
   }
   return { crew: current, dropped };
 }

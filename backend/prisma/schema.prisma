@@ -3005,8 +3005,9 @@ model TbpQuarterPlan {
 
   /// The office's limits on a technician-day, and the visit lengths a day is
   /// measured with (2026-09-16: six hours inspecting, ninety minutes driving
-  /// between properties). Kept on the plan so its forecast is explained by the
-  /// numbers it was routed with; a re-route with new numbers replaces them.
+  /// counted from home to the first property and between the properties). Kept
+  /// on the plan so its forecast is explained by the numbers it was routed with;
+  /// a re-route with new numbers replaces them.
   occupiedVisitMinutes Int      @default(30)
   hvacVisitMinutes     Int      @default(45)
   maxOnSiteMinutes     Int      @default(360)
@@ -3157,8 +3158,8 @@ enum PlanOriginKind {
   /// No origin at all, so the day is measured from the middle of its own stops.
   /// Honest, and useless for "when will they arrive at the first one".
   CLUSTER_CENTROID
-  /// Measured from the day's first property, which is the office's rule for a
-  /// benefit-package day: the drive from home does not count against it.
+  /// Measured from the day's first property: a benefit-package day for a
+  /// technician with no home on file, or one built before days started from home.
   FIRST_STOP
 }
 
@@ -3209,6 +3210,12 @@ model TechnicianPlanningProfile {
   /// account, which would also take away their handset.
   isPlannable Boolean @default(true)
 
+  /// Place in the benefit-package crew's zone rotation, from 1; null is not on
+  /// the crew. The office's crew (2026-09-16) -- Moses, Kevin and Emanuel --
+  /// take the quarter's visits, both kinds, one zone a week each, and all move
+  /// one zone on each week: whoever is 1 starts the quarter on the first zone.
+  tbpZoneOrder Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3234,12 +3241,14 @@ model TbpQuarterPlanDay {
   /// Time spent inspecting, against the plan's `maxOnSiteMinutes`.
   onSiteMinutes        Int @default(0)
   hvacStopCount        Int @default(0)
-  /// Between the day's properties only, against the plan's `maxDriveMinutes`.
+  /// The drive the plan's `maxDriveMinutes` counts: from the technician's home
+  /// to the first property when the day is routed from home, and between the
+  /// properties (the office, 2026-09-16). The drive home is not counted.
   totalDriveSeconds    Int?
   totalDriveMeters     Int?
-  /// The drive from the technician's home to the day's first property, when the
-  /// day was routed from a home on file (`originKind` HOME). Shown, with when to
-  /// leave, and never counted against `maxDriveMinutes` (the office, 2026-09-16).
+  /// The drive from home to the first property, when the day was routed from a
+  /// home on file (`originKind` HOME). Part of `totalDriveSeconds`, and kept
+  /// apart so the console can show it and when to leave.
   homeDriveSeconds     Int?
   homeDriveMeters      Int?
 

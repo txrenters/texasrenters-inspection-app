@@ -60,12 +60,23 @@ const StopPin = memo(function StopPin({ order, hvac }: { order: number; hvac: bo
   );
 });
 
-/** Where the day starts: the technician's home, a house in the technician colour. */
+/** Where the day starts: the technician's home, labelled "From" as the office calls it. */
 const HomePin = memo(function HomePin() {
   return (
-    <svg aria-hidden height="28" viewBox="0 0 28 28" width="28">
-      <circle className="fill-map-technician" cx="14" cy="14" r="12" stroke="#fff" strokeWidth="2" />
-      <path d="M8.5 13.5 14 9l5.5 4.5V19a.5.5 0 0 1-.5.5h-3.25v-3.5h-3.5v3.5H9a.5.5 0 0 1-.5-.5z" fill="#fff" />
+    <svg aria-hidden className="drop-shadow-sm" height="28" viewBox="0 0 66 28" width="66">
+      <rect className="fill-map-technician" height="24" rx="12" stroke="#fff" strokeWidth="2" width="62" x="2" y="2" />
+      <path d="M9.5 13.5 15 9l5.5 4.5V19a.5.5 0 0 1-.5.5h-3.25v-3.5h-3.5v3.5H10a.5.5 0 0 1-.5-.5z" fill="#fff" />
+      <text
+        dominantBaseline="central"
+        fill="#fff"
+        fontFamily="system-ui, sans-serif"
+        fontSize="12"
+        fontWeight="700"
+        x="25"
+        y="14"
+      >
+        From
+      </text>
     </svg>
   );
 });
@@ -174,8 +185,8 @@ export function PlanDayMap({
   stops: readonly PlanDayStop[];
   /** The road line between the stops, `[lat, lng]`; empty draws straight segments instead. */
   geometry: readonly LatLng[];
-  /** The technician's home, when the day was routed from it. */
-  home?: { latitude: number; longitude: number } | null;
+  /** The technician's home, where the day starts. */
+  home?: { latitude: number; longitude: number; address?: string | null } | null;
   /** The road from home to the first stop; empty draws a straight dashed segment. */
   homeGeometry?: readonly LatLng[];
   /** A stop's pin was clicked: open its details. */
@@ -225,12 +236,16 @@ export function PlanDayMap({
           streetViewControl={false}
         >
           <FitStops dayKey={dayKey} points={points} />
-          {/* The drive from home is driven and not counted against the day, so
-              it is drawn in the grey of a finished leg, under the day's route. */}
-          <RouteLine colorClass="map-route-done-line" path={homePath} straight={homeStraight} weight={3} />
+          {/* The drive from home counts toward the day's driving, so it is drawn
+              as the day's route, from the "From" pin to the first property. */}
+          <RouteLine path={homePath} straight={homeStraight} />
           <RouteLine path={path} straight={straight} />
           {home ? (
-            <AdvancedMarker position={{ lat: home.latitude, lng: home.longitude }} title="Technician’s home" zIndex={5}>
+            <AdvancedMarker
+              position={{ lat: home.latitude, lng: home.longitude }}
+              title={`From: ${home.address ?? 'the technician’s home'}`}
+              zIndex={5}
+            >
               <HomePin />
             </AdvancedMarker>
           ) : null}

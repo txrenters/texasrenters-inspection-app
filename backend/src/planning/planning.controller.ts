@@ -346,15 +346,30 @@ export class PlanningController {
   }
 
   /**
+   * Who has which zone in each week of the plan's quarter.
+   *
+   * The office's crew each has one zone a week and moves one zone on each week
+   * (2026-09-16). The page shows it beside the days, so a coordinator can see
+   * why a visit went to whom.
+   */
+  @Get('quarters/:planId/rotation')
+  @RequirePermissions('planning:read')
+  rotation(@Req() request: AuthenticatedRequest, @Param('planId') planId: string) {
+    return this.planner.rotation(request.user.organizationId, planId);
+  }
+
+  /**
    * The road line through one planned day, for the map.
    *
    * Drawn on request rather than stored: a plan holds sixty-odd days and a
    * coordinator looks at a handful. With no Google key the line is empty and
    * the console joins the stops with straight lines, saying so.
    *
-   * A day routed from the technician's home starts the line there, and the
-   * home is read from the planning profile at the time of drawing -- the one
-   * place the address is kept -- with the leg to the first stop returned apart.
+   * The technician's home is where the day starts -- the "From" on the map --
+   * and is read from the planning profile at the time of drawing, the one place
+   * the address is kept. A day routed from it starts the line there, with the
+   * leg to the first stop returned apart; a day built before days started from
+   * home still shows the home, with no leg drawn to it.
    */
   @Get('quarters/:planId/days/:dayId/route')
   @RequirePermissions('planning:read')
@@ -378,31 +393,34 @@ export class PlanningController {
         latitude: Number(stop.propertywareBuilding!.latitude),
         longitude: Number(stop.propertywareBuilding!.longitude),
       }));
-    const profile =
-      day.originKind === PlanOriginKind.HOME
-        ? await this.prisma.technicianPlanningProfile.findFirst({
-            where: { technicianId: day.technicianId, organizationId },
-            select: { homeLatitude: true, homeLongitude: true },
-          })
-        : null;
+    const profile = await this.prisma.technicianPlanningProfile.findFirst({
+      where: { technicianId: day.technicianId, organizationId },
+      select: { homeLatitude: true, homeLongitude: true, homeGeocodedFor: true },
+    });
     const home =
       profile?.homeLatitude != null && profile?.homeLongitude != null
-        ? { latitude: Number(profile.homeLatitude), longitude: Number(profile.homeLongitude) }
+        ? {
+            latitude: Number(profile.homeLatitude),
+            longitude: Number(profile.homeLongitude),
+            address: profile.homeGeocodedFor ?? null,
+          }
         : null;
+    // Only a day routed from home drives from it.
+    const start = day.originKind === PlanOriginKind.HOME ? home : null;
     const undrawn = { source: null, geometry: [], homeGeometry: [], legs: [], home };
-    if (points.length === 0 || points.length + (home ? 1 : 0) < 2) return undrawn;
+    if (points.length === 0 || points.length + (start ? 1 : 0) < 2) return undrawn;
 
-    const key = `${day.id}:${home ? `${home.latitude},${home.longitude};` : ''}${points.map((point) => point.id).join(',')}`;
+    const key = `${day.id}:${start ? `${start.latitude},${start.longitude};` : ''}${points.map((point) => point.id).join(',')}`;
     const cached = this.drawnDays.get(key);
     if (cached) return { source: 'GOOGLE_TRAFFIC_AWARE', home, ...cached };
 
     const date = day.date.toISOString().slice(0, 10);
-    const drawn = await this.google.route(home ? [home, ...points] : points, businessInstant(date, '09:00:00'));
+    const drawn = await this.google.route(start ? [start, ...points] : points, businessInstant(date, '09:00:00'));
     if (!drawn) return undrawn;
 
     // `[lat, lng]`, the order a map draws in; Google's decoder gives `[lon, lat]`.
     const path = toLatLngPath(drawn.geometry);
-    const line: DrawnDay = home
+    const line: DrawnDay = start
       ? { ...splitAtFirstStop(path, points[0]!, drawn.legs[0]?.distanceMeters), legs: drawn.legs.slice(1) }
       : { geometry: path, homeGeometry: [], legs: drawn.legs };
     if (this.drawnDays.size >= MAX_DRAWN_DAYS) this.drawnDays.delete(this.drawnDays.keys().next().value!);

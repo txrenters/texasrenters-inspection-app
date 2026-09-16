@@ -8,6 +8,7 @@ const hooks = vi.hoisted(() => ({
   usePlanStops: vi.fn(),
   usePlanDays: vi.fn(),
   usePlanDayRoute: vi.fn(),
+  usePlanRotation: vi.fn(),
   usePlanningMutations: vi.fn(),
 }));
 
@@ -50,7 +51,7 @@ const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
   previousSequence: null,
   orderSource: 'PRIOR_QUARTER',
   zone: '1',
-  scheduledOn: '2026-10-05T00:00:00.000Z',
+  scheduledOn: '2026-10-01T00:00:00.000Z',
   positionInDay: Number(id.slice(1)),
   assignedTechnicianId: 'tech-1',
   assignedTechnician: { id: 'tech-1', displayName: 'Moses Rivera' },
@@ -95,7 +96,7 @@ const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
 
 const DAY = {
   id: 'day-1',
-  date: '2026-10-05T00:00:00.000Z',
+  date: '2026-10-01T00:00:00.000Z',
   technicianId: 'tech-1',
   technician: { id: 'tech-1', displayName: 'Moses Rivera' },
   stopCount: 3,
@@ -105,7 +106,7 @@ const DAY = {
   totalDriveMeters: 14000,
   originKind: 'FIRST_STOP',
   durationSource: 'GOOGLE_TRAFFIC_AWARE',
-  departureAssumedAt: '2026-10-05T14:00:00.000Z',
+  departureAssumedAt: '2026-10-01T14:00:00.000Z',
   stops: [
     { id: 's1', sequence: 1, positionInDay: 1, inspectionType: 'OCCUPIED', onSiteMinutes: 30, driveSecondsForecast: null, zone: '1', status: 'PLANNED', address: '1 Any St', city: 'Katy', latitude: 29.7, longitude: -95.7 },
     { id: 's2', sequence: 2, positionInDay: 2, inspectionType: 'HVAC', onSiteMinutes: 45, driveSecondsForecast: 600, zone: '1', status: 'PLANNED', address: '2 Any St', city: 'Katy', latitude: 29.71, longitude: -95.7 },
@@ -122,6 +123,36 @@ function mount({
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
   hooks.usePlanDays.mockReturnValue({ isLoading: false, isError: false, data: plans.length ? [day] : [] });
   hooks.usePlanDayRoute.mockReturnValue({ isSuccess: true, data: { source: 'GOOGLE_TRAFFIC_AWARE', geometry: [[29.7, -95.7], [29.72, -95.7]], legs: [] } });
+  hooks.usePlanRotation.mockReturnValue({
+    isSuccess: true,
+    data: {
+      crew: [
+        { technicianId: 'tech-1', displayName: 'Moses Rivera', hasHome: true },
+        { technicianId: 'tech-2', displayName: 'Kevin Grant', hasHome: true },
+        { technicianId: 'tech-3', displayName: 'Emanuel Hall', hasHome: true },
+      ],
+      zones: ['1', '2', '3', '4'],
+      outOfReach: ['5'],
+      weeks: [
+        {
+          weekOf: '2026-09-28',
+          zones: [
+            { zone: '1', technicianId: 'tech-1' },
+            { zone: '2', technicianId: 'tech-2' },
+            { zone: '3', technicianId: 'tech-3' },
+          ],
+        },
+        {
+          weekOf: '2026-10-05',
+          zones: [
+            { zone: '2', technicianId: 'tech-1' },
+            { zone: '3', technicianId: 'tech-2' },
+            { zone: '4', technicianId: 'tech-3' },
+          ],
+        },
+      ],
+    },
+  });
   hooks.usePlanningMutations.mockReturnValue({
     build,
     importOfficeDetails: idle,
@@ -170,7 +201,7 @@ describe('the benefit package plan page', () => {
 
     // The quarter's US holidays, found by the planner rather than typed in.
     expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
-    expect(screen.getByText('Up to 6 hr inspecting and 90 min driving a day')).toBeTruthy();
+    expect(screen.getByText('Up to 6 hr inspecting and 90 min driving a day, counted from home')).toBeTruthy();
     expect(screen.queryByText(/360/)).toBeNull();
     // Thanksgiving is on the plan as well, and is a holiday rather than another closed day.
     expect(screen.queryByText('Also closed')).toBeNull();
@@ -179,7 +210,7 @@ describe('the benefit package plan page', () => {
   it('shows a day against the office’s limits, with its clock', async () => {
     mount();
 
-    const day = screen.getByRole('region', { name: /Monday, October 5, Moses Rivera/ });
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('1 hr 45 min of 6 hr')).toBeTruthy();
     expect(within(day).getByText(/20 of 90 min/)).toBeTruthy();
     // Nine o'clock at the first property, then ten minutes' drive to each of the next.
@@ -199,21 +230,24 @@ describe('the benefit package plan page', () => {
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  /** The office's rule (2026-09-16): a day starts from home, and only the drives between properties count. */
-  it('shows the drive from home and when to leave, apart from the day’s limit', () => {
-    mount({ day: { ...DAY, originKind: 'HOME', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
+  /** The office's rule (2026-09-16): a day starts from home, and the drive to the first property counts. */
+  it('counts the drive from home in the day’s driving, and says when to leave', () => {
+    mount({
+      day: { ...DAY, originKind: 'HOME', totalDriveSeconds: 55 * 60, homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 },
+    });
 
-    const day = screen.getByRole('region', { name: /Monday, October 5, Moses Rivera/ });
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('35 min · 42 km · leave 8:25 AM')).toBeTruthy();
-    expect(within(day).getByText('35 min from home, not counted')).toBeTruthy();
-    expect(within(day).getByText(/20 of 90 min/)).toBeTruthy();
+    expect(within(day).getByText('35 min from home')).toBeTruthy();
+    expect(within(day).getByText(/55 of 90 min/)).toBeTruthy();
+    expect(within(day).getByText(/counts the drive from home to the first property/)).toBeTruthy();
   });
 
   /** A plan built before days started from home, or for a technician with no home on file. */
   it('says when a day was built without the technician’s home', () => {
     mount();
 
-    const day = screen.getByRole('region', { name: /Monday, October 5, Moses Rivera/ });
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('not used')).toBeTruthy();
     expect(within(day).getByText(/Rebuild the plan to route days from home/)).toBeTruthy();
   });
@@ -253,6 +287,18 @@ describe('the benefit package plan page', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 's3 Any St' })).toBeTruthy();
+  });
+
+  /** The office's rules (2026-09-16): a zone each a week, moving weekly; Mondays kept for reschedules. */
+  it('shows the crew, who has which zone each week, and the Mondays kept for reschedules', () => {
+    mount();
+
+    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · a zone each, moving weekly')).toBeTruthy();
+    // Four zones and three people: the zone nobody has this week waits its turn.
+    expect(screen.getByText('Zone 1 Moses · Zone 2 Kevin · Zone 3 Emanuel · Zone 4 no one')).toBeTruthy();
+    expect(screen.getByText('Zone 5: too far from every home')).toBeTruthy();
+    expect(screen.getByText('kept free for rescheduled visits from week 2')).toBeTruthy();
+    expect(screen.getByText(/1 HVAC · Zone 1/)).toBeTruthy();
   });
 
   it('publishes a draft whose visits are all placed', () => {

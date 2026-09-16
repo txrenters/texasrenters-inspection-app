@@ -115,10 +115,10 @@ export interface PlanDay {
   stopCount: number;
   onSiteMinutes: number;
   hvacStopCount: number;
-  /** Between the day's properties only: what the drive limit counts. */
+  /** What the drive limit counts: from home to the first property on a day routed from home, and between the properties. Never the drive home. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
-  /** From the technician's home to the first property, when the day was routed from home. Not counted. */
+  /** From the technician's home to the first property, when the day was routed from home. Part of `totalDriveSeconds`. */
   homeDriveSeconds: number | null;
   homeDriveMeters: number | null;
   /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
@@ -160,9 +160,20 @@ export interface PlanDayRoute {
   geometry: [number, number][];
   /** `[lat, lng]`, from home to the first stop. Empty when the day has no home or nothing drew it. */
   homeGeometry: [number, number][];
-  /** The technician's home, when the day was routed from it. */
-  home: { latitude: number; longitude: number } | null;
+  /** The technician's home -- where the day starts, the "From" on the map -- when one is on file. */
+  home: { latitude: number; longitude: number; address: string | null } | null;
   legs: { durationSeconds: number; distanceMeters: number }[];
+}
+
+/** Who has which zone in each week of the quarter (the office's crew, 2026-09-16). */
+export interface PlanRotation {
+  /** In the order the zones go round. */
+  crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
+  zones: string[];
+  /** Zones nobody on the crew lives within the day's drive of. */
+  outOfReach: string[];
+  /** `weekOf` is the week's Monday, `YYYY-MM-DD`. */
+  weeks: { weekOf: string; zones: { zone: string; technicianId: string }[] }[];
 }
 
 export interface PublishSummary {
@@ -179,6 +190,7 @@ export const planningKeys = {
   stops: (planId: string) => ['admin', 'planning', planId, 'stops'] as const,
   days: (planId: string) => ['admin', 'planning', planId, 'days'] as const,
   dayRoute: (planId: string, dayId: string) => ['admin', 'planning', planId, 'days', dayId, 'route'] as const,
+  rotation: (planId: string) => ['admin', 'planning', planId, 'rotation'] as const,
 };
 
 /** The most stops one request returns; a plan larger than this is read a page at a time. */
@@ -211,6 +223,13 @@ export const usePlanDays = (planId: string | undefined) =>
   useQuery({
     queryKey: planningKeys.days(planId ?? ''),
     queryFn: ({ signal }) => api<PlanDay[]>(`${PLANNING}/quarters/${planId}/days`, { signal }),
+    enabled: Boolean(planId),
+  });
+
+export const usePlanRotation = (planId: string | undefined) =>
+  useQuery({
+    queryKey: planningKeys.rotation(planId ?? ''),
+    queryFn: ({ signal }) => api<PlanRotation>(`${PLANNING}/quarters/${planId}/rotation`, { signal }),
     enabled: Boolean(planId),
   });
 

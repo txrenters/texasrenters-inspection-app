@@ -80,6 +80,7 @@ export * from './quarter-assignment.js';
 export * from './quarter-plan.js';
 export * from './tbp-visit-plan.js';
 export * from './route-plan.js';
+export * from './zone-rotation.js';
 export * from './live-route.js';
 export * from './technician-location.js';
 export * from './technician-timeline.js';
