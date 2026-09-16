@@ -7,6 +7,7 @@ import {
 import {
   IsBoolean,
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
@@ -84,6 +85,14 @@ export class SignInDto {
   @IsOptional()
   @IsBoolean()
   takeOverExistingSession?: boolean;
+
+  /**
+   * `console` from the office console's own server route. The console is never
+   * held to one device; the technician app, which sends nothing, is.
+   */
+  @IsOptional()
+  @IsIn(['console'])
+  client?: 'console';
 }
 
 /**
@@ -98,6 +107,11 @@ export class RefreshTokenDto {
   @MinLength(20)
   @MaxLength(512)
   refreshToken!: string;
+
+  /** `console` from the office console, which marks a session from before `fromConsole` as its own. */
+  @IsOptional()
+  @IsIn(['console'])
+  client?: 'console';
 }
 
 /**
