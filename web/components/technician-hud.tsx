@@ -1,13 +1,14 @@
 'use client';
 
 import { isLocationPaused, type TechnicianPosition } from '@texasrenters/shared';
-import { LocateFixedIcon, LocateIcon } from 'lucide-react';
+import { InfoIcon, LocateFixedIcon, LocateIcon, TriangleAlertIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { MAP_OVERLAY_ATTRIBUTE } from '@/components/map-camera';
 import { Button } from '@/components/ui/button';
 import { formatCompass, formatDuration } from '@/lib/format';
 import { motionOf, speedKmh, type Motion, type MotionSample } from '@/lib/technician-motion';
+import { trackingProblem, trackingSummary } from '@/lib/tracking-status';
 import { cn } from '@/lib/utils';
 
 /**
@@ -116,14 +117,20 @@ export function TechnicianHud({
   const heading = current ? (motion?.headingDegrees ?? null) : null;
   const { label, tone } = describeMotion(motion, { paused, now });
   const name = position.technician?.displayName ?? 'Unknown technician';
+  // Why the marker may not be telling the whole story, in the phone's own
+  // words -- the reason a stalled marker used to arrive without.
+  const problem = trackingProblem(position.tracking);
+  const phone = trackingSummary(position.tracking);
 
   return (
     <div
       {...overlay}
-      aria-label={`${name}: ${label}`}
-      className="bg-popover text-popover-foreground mx-2.5 mb-2 flex max-w-[calc(100vw-2rem)] items-stretch divide-x overflow-hidden rounded-xl border shadow-lg"
+      aria-label={`${name}: ${label}${problem ? `. ${problem.message}` : ''}`}
+      className="bg-popover text-popover-foreground mx-2.5 mb-2 flex max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border shadow-lg"
       role="group"
+      title={phone ?? undefined}
     >
+      <div className="flex items-stretch divide-x">
       <Cell className="pr-4">
         <div
           className={cn(
@@ -198,6 +205,18 @@ export function TechnicianHud({
             )}
           </div>
         </Cell>
+      ) : null}
+      </div>
+
+      {problem ? (
+        <div className="flex items-start gap-2 border-t px-3.5 py-2 text-xs leading-snug">
+          {problem.tone === 'warning' ? (
+            <TriangleAlertIcon aria-hidden className="text-warning mt-px size-3.5 shrink-0" />
+          ) : (
+            <InfoIcon aria-hidden className="text-muted-foreground mt-px size-3.5 shrink-0" />
+          )}
+          <span>{problem.message}</span>
+        </div>
       ) : null}
     </div>
   );

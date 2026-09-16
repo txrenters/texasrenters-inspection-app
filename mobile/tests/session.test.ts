@@ -12,6 +12,7 @@ jest.mock('../src/config/environment', () => ({
 import {
   getSession,
   onSessionChange,
+  renewSessionAhead,
   requestPasswordReset,
   resetSessionCache,
   signIn,
@@ -256,6 +257,41 @@ describe('mobile session', () => {
       // Nothing was given up: an ordinary caller renews it as before.
       fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-2' }));
       expect((await getSession())?.refreshToken).toBe('refresh-2');
+    });
+  });
+
+  /**
+   * Renewing early, while the app is on screen, so an iPhone that may not renew
+   * from a pocket leaves with most of a token to send with.
+   */
+  describe('renewing ahead', () => {
+    const issued = (secondsAgo: number, lifetime = 3600) =>
+      token({ sub: 'auth-user', iat: inSeconds(-secondsAgo), exp: inSeconds(lifetime - secondsAgo) });
+
+    it('renews a token past most of its life', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: issued(30 * 60), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: live(), refreshToken: 'refresh-2' }));
+      await renewSessionAhead();
+
+      expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/auth/refresh');
+      expect((await getSession())?.refreshToken).toBe('refresh-2');
+    });
+
+    it('leaves a fresh token alone', async () => {
+      fetchMock.mockResolvedValueOnce(ok({ accessToken: issued(5 * 60), refreshToken: 'refresh-1' }));
+      await signIn('tech@example.com', 'password');
+
+      await renewSessionAhead();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does nothing without a session', async () => {
+      await renewSessionAhead();
+
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 

@@ -108,7 +108,7 @@ export function resetLocationSender() {
  * is not, leaves the fixes queued for the app to send -- and renew -- the next
  * time it is on screen, which is what happened to every fix before this.
  */
-function maySessionRenewNow() {
+export function maySessionRenewNow() {
   return Platform.OS !== 'ios' || AppState.currentState === 'active';
 }
 

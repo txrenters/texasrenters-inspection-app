@@ -17,6 +17,7 @@ import { PropertyGeocodingService } from '../admin/property-geocoding.service';
 import { TechnicianHomeService } from './technician-home.service';
 import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService } from './technician.service';
+import { TrackingStatusStore } from './tracking-status.store';
 
 @Module({
   imports: [RealtimeModule, RoutingModule],
@@ -24,6 +25,7 @@ import { TechnicianService } from './technician.service';
   providers: [
     TechnicianService,
     TechnicianLocationService,
+    TrackingStatusStore,
     TechnicianHomeService,
     // Its only dependency is Prisma. Provided here rather than importing the
     // whole admin module into the technician one for a single geocoder.

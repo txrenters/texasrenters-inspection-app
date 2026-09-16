@@ -30,6 +30,8 @@ export interface MobileSession {
   refreshToken: string;
   /** Epoch seconds, read from the token rather than stored separately. */
   expiresAt: number;
+  /** Epoch seconds the token was issued, when it says. */
+  issuedAt?: number;
   authUserId: string;
   mustChangePassword: boolean;
 }
@@ -60,6 +62,7 @@ function claimsOf(accessToken: string) {
     const claims = JSON.parse(decodeBase64Url(payload)) as {
       sub?: string;
       exp?: number;
+      iat?: number;
       app_metadata?: { must_change_password?: boolean };
     };
     if (!claims.sub || typeof claims.exp !== 'number') return null;
@@ -76,6 +79,7 @@ function toSession(accessToken: string, refreshToken: string): MobileSession | n
     accessToken,
     refreshToken,
     expiresAt: claims.exp!,
+    ...(typeof claims.iat === 'number' ? { issuedAt: claims.iat } : {}),
     authUserId: claims.sub!,
     mustChangePassword: claims.app_metadata?.must_change_password === true,
   };
@@ -170,6 +174,35 @@ export async function getSession({ renew = true }: { renew?: boolean } = {}): Pr
     inFlightRefresh = null;
   });
   return inFlightRefresh;
+}
+
+/**
+ * Renew early, while the app is on screen, once the token is past most of its
+ * life.
+ *
+ * For an iPhone in a pocket. The location task sends from the background, where
+ * iOS keeps the keychain locked, so it may not renew (see `getSession`) and it
+ * stops sending the moment the token expires. Tokens were renewed only a
+ * minute before expiry, so a technician could leave a property with minutes of
+ * token left and the drive went unsent. Renewing here once the token is past
+ * `RENEW_AHEAD_SHARE` of its life means leaving the app always leaves more than
+ * half of a token's life to send with -- over half an hour at the default.
+ *
+ * Only call this with the app on screen: the renewed token has to be saved.
+ */
+const RENEW_AHEAD_SHARE = 0.4;
+
+export async function renewSessionAhead(): Promise<void> {
+  const current = await load();
+  if (!current?.issuedAt) return;
+  const lifetime = current.expiresAt - current.issuedAt;
+  const used = Math.floor(Date.now() / 1000) - current.issuedAt;
+  if (lifetime <= 0 || used < lifetime * RENEW_AHEAD_SHARE) return;
+
+  inFlightRefresh ??= refresh(current.refreshToken).finally(() => {
+    inFlightRefresh = null;
+  });
+  await inFlightRefresh;
 }
 
 async function refresh(refreshToken: string): Promise<MobileSession | null> {

@@ -4,20 +4,21 @@ import { normaliseMotion } from '@texasrenters/shared';
 import { AppState } from 'react-native';
 
 import { sendRecordedFixes } from './location-sender';
-import { appendLocationFixes } from './location-storage';
+import { appendLocationFixes, readLastFixAt } from './location-storage';
 import type { QueuedFix } from './location-queue';
 
 /**
- * Recording where a technician is while they are on shift.
+ * Recording where a technician is, the whole time they are signed in.
  *
- * Behind a toggle they set themselves, and never simply "while signed in".
- * Tracking somebody at home in the evening is neither useful to dispatch nor
- * defensible to the person being tracked, and an app that starts on its own is
- * one nobody can tell is running.
+ * On the road as well as at the property: the office plans routes and times
+ * visits from this trail, and a trail with every drive missing measures
+ * nothing. So recording carries on with the app minimised, with the screen
+ * locked, and -- on Android -- after the app is swiped away. Signing out stops
+ * it, and so does the pause in Settings.
  *
- * The Android foreground-service notification is not an inconvenience to be
- * minimised — it is the thing that makes "they were told" true minute to
- * minute rather than only in a document they signed once.
+ * Never hidden. Android shows its foreground-service notification for as long
+ * as recording runs, and iOS its blue location indicator whenever the app is
+ * not on screen: the technician can always see that it is on.
  */
 
 export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
@@ -59,7 +60,7 @@ const FIX_ACCURACY = Location.Accuracy.High;
  * in one place and has its options brought up to date in another, and the two
  * must never disagree.
  */
-const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
+export const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
   accuracy: FIX_ACCURACY,
   timeInterval: FIX_INTERVAL_MS,
   distanceInterval: FIX_DISTANCE_M,
@@ -70,13 +71,18 @@ const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
   showsBackgroundLocationIndicator: true,
   foregroundService: {
     notificationTitle: 'Recording your location',
-    notificationBody: 'TexasRenters Inspect is on. Close the app to stop.',
-    // Stops when the app is closed, keeps running when it is merely
-    // minimised -- which is the whole working day, since the phone is in a
-    // pocket between rooms. `false` kept the service alive after the app
-    // was swiped away, which is tracking somebody who has finished, and is
-    // the one behaviour nobody would think to check for.
-    killServiceOnDestroy: true,
+    notificationBody: 'TexasRenters Inspect records your location while you are signed in.',
+    /**
+     * Kept running when the app is swiped away.
+     *
+     * This was `true`, on the view that closing the app meant the day was
+     * over. It does not: technicians clear their recent apps between visits
+     * as a habit, and every one of those ended the recording in the middle of
+     * the working day -- the drives the office most needs were the ones that
+     * went missing. The notification stays up the whole time, so it is never
+     * running unseen; signing out, or the pause in Settings, stops it.
+     */
+    killServiceOnDestroy: false,
   },
 };
 
@@ -118,10 +124,11 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
 /**
  * How the shift is being recorded.
  *
- * `FOREGROUND_ONLY` is a real mode rather than a degraded one: it records every
- * fix while the app is on screen, which is most of a walkthrough. It runs when
- * background permission is refused, and it is the only thing Expo Go can do at
- * all -- background location needs a development build.
+ * - `BACKGROUND` -- the registered task, which keeps recording with the app
+ *   minimised or the screen locked.
+ * - `FOREGROUND_ONLY` -- a watcher that stops the moment the app leaves the
+ *   screen. Only where the task cannot start at all: Expo Go, or a binary
+ *   built without the background mode.
  */
 export type ShiftMode = 'BACKGROUND' | 'FOREGROUND_ONLY';
 
@@ -196,27 +203,32 @@ async function beginShiftTracking(): Promise<ShiftStartResult> {
   const foreground = await Location.requestForegroundPermissionsAsync();
   if (!foreground.granted) return { started: false, reason: 'FOREGROUND_DENIED' };
 
-  // Asked second, and separately, because that is how both platforms present
-  // it: iOS will not offer "always" until "while using" is granted, and
-  // Android 11 upward sends the technician to Settings rather than showing a
-  // dialogue.
-  //
-  // Refusing it is **not** fatal, and used to be treated as though it were:
-  // this returned BACKGROUND_DENIED and started nothing at all. A technician
-  // who granted "while using" got no tracking, and Expo Go -- which cannot do
-  // background location under any circumstances -- could never start a shift.
-  // The comment here already claimed foreground-only worked; the code simply
-  // never did it.
-  const background = await Location.requestBackgroundPermissionsAsync().catch(() => ({
-    granted: false,
-  }));
+  /**
+   * "All the time" is asked for, and never required.
+   *
+   * It used to be required: without it this fell back to a watcher that stops
+   * the moment the app leaves the screen. That is what almost every phone got,
+   * because "while using the app" is the answer people give -- and on Android
+   * 11 onward "all the time" is not even offered in the dialogue, only on a
+   * settings page. So the office map showed technicians only while the app was
+   * open at a property, and every drive between them was simply never recorded.
+   *
+   * Neither platform needs it to record in the background. Android lets a
+   * foreground service started with the app on screen keep reading location
+   * after it leaves, with its notification showing; iOS does the same for
+   * updates started on screen with background updates allowed, with its blue
+   * indicator showing. Both are exactly how this task runs.
+   *
+   * It is still worth having, and still asked for: with it, iOS relaunches a
+   * recording the system ended, and Android can restart the service after the
+   * system kills it. The app says so in Settings when it is missing.
+   */
+  await Location.requestBackgroundPermissionsAsync().catch(() => undefined);
 
-  if (background.granted && (await startBackgroundUpdates()))
-    return { started: true, mode: 'BACKGROUND' };
+  if (await startBackgroundUpdates()) return { started: true, mode: 'BACKGROUND' };
 
-  // Either permission was refused, or it was held and the task would not start
-  // -- Expo Go, or a binary without the background mode. Foreground recording
-  // is still worth having, and is what was granted.
+  // The task would not start at all -- Expo Go, or a binary without the
+  // background mode. Recording while the app is open is still worth having.
   await watchInForeground();
   return { started: true, mode: 'FOREGROUND_ONLY' };
 }
@@ -224,9 +236,8 @@ async function beginShiftTracking(): Promise<ShiftStartResult> {
 /**
  * Records while the app is on screen.
  *
- * `watchPositionAsync` rather than a registered task, because a background task
- * requires background permission by definition. This stops when the app leaves
- * the foreground, which is the honest limit of what was granted.
+ * `watchPositionAsync` rather than a registered task, for a build that cannot
+ * run the task at all. This stops when the app leaves the foreground.
  */
 async function watchInForeground() {
   if (foregroundWatch) return;
@@ -235,12 +246,11 @@ async function watchInForeground() {
    * Only one recorder at a time.
    *
    * A background task registered in an earlier session outlives the app, so
-   * reaching here -- background permission refused, or the task refusing to
-   * start -- could leave it still delivering while a foreground watch started
-   * alongside it. Both append to the same queue, and production shows the
-   * result: two genuinely different fixes, three to twenty-two metres apart,
-   * stamped with the same millisecond and uploaded in one batch. The map drew
-   * two markers for one person.
+   * reaching here -- the task refusing to start -- could leave an old one still
+   * delivering while a foreground watch started alongside it. Both append to
+   * the same queue, and production shows the result: two genuinely different
+   * fixes, three to twenty-two metres apart, stamped with the same millisecond
+   * and uploaded in one batch. The map drew two markers for one person.
    */
   await stopBackgroundUpdates();
   foregroundWatch = await Location.watchPositionAsync(
@@ -266,25 +276,13 @@ async function startBackgroundUpdates(): Promise<boolean> {
   foregroundWatch = null;
 
   try {
-    /**
-     * Whether it is *delivering*, not whether it is registered.
-     *
-     * `isTaskRegisteredAsync` answers a different question, and the difference
-     * is the bug this file had: when the OS stops a background location task --
-     * an Android battery manager reclaiming it, iOS terminating it under
-     * pressure -- the registration survives. The guard said "already running",
-     * returned early, and nothing ever restarted the updates. A technician's
-     * trail simply stopped for the rest of the day.
-     */
-    if (await Location.hasStartedLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => false)) {
-      await bringBackgroundUpdatesUpToDate();
+    // Registered already -- by this launch, an earlier one, or an earlier
+    // build. Brought up to date, and restarted if it has gone quiet, rather
+    // than trusted: see `refreshBackgroundUpdates`.
+    if (await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false)) {
+      await refreshBackgroundUpdates();
       return true;
     }
-
-    // Registered but not delivering: clear it out before starting again, or
-    // `startLocationUpdatesAsync` has nothing to do and the stall persists.
-    if (await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false))
-      await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
 
     await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, BACKGROUND_UPDATES);
     return true;
@@ -294,34 +292,72 @@ async function startBackgroundUpdates(): Promise<boolean> {
 }
 
 /**
- * Give a task that is already running the options this build asks for.
+ * How long recording may go without a fix, with the app on screen, before it
+ * is presumed stalled and restarted.
  *
- * The OS keeps a task's options with its registration, and a running task is
- * never started again -- the guard above returns first. So a task started by
- * an earlier build keeps that build's options indefinitely, and a change to
- * them reaches only the handsets whose task happens to stop. Registering a
- * running task again updates its options in place, on both platforms, without
- * restarting the service.
- *
- * Only while the app is on screen: Android refuses a foreground-service task
- * from the background, and throws. Never fails the start either way -- the
- * task is running, on whatever it had.
+ * A healthy recording standing still can go quiet too -- it reports on
+ * movement -- so this is a restart, never a claim that anything failed. A
+ * restart asks the OS for a position straight away, which is itself a fix.
  */
-async function bringBackgroundUpdatesUpToDate() {
+export const STALLED_AFTER_MS = 3 * 60_000;
+
+/** The parts of the task's options that differ from build to build. */
+function optionsKey(options: Partial<Location.LocationTaskOptions> | null | undefined) {
+  return JSON.stringify([
+    options?.accuracy ?? null,
+    options?.timeInterval ?? null,
+    options?.distanceInterval ?? null,
+    options?.foregroundService?.notificationBody ?? null,
+    options?.foregroundService?.killServiceOnDestroy ?? null,
+  ]);
+}
+
+/**
+ * Put a registered task right: this build's options, and delivering.
+ *
+ * **Neither platform can say whether a task is delivering.**
+ * `hasStartedLocationUpdatesAsync` looks like that question and is not: on
+ * Android it asks whether the task has a location consumer, on iOS whether it
+ * is registered with one -- both true for a task the OS killed an hour ago. So
+ * the recording that stopped for the rest of a working day kept reading as
+ * running, and nothing restarted it. The last recorded fix is the evidence that
+ * can be trusted.
+ *
+ * Also the only way a change of options reaches a running task: the OS stores
+ * them with the registration, and nothing restarts a registered task, so an
+ * earlier build's options would otherwise stay for good.
+ *
+ * - Registering again updates the options in place and restarts the updates,
+ *   without touching the Android service.
+ * - A change to the service itself -- its notification, whether it survives a
+ *   swipe -- only reaches Android through a new service: stopped, then started.
+ *
+ * Only while the app is on screen: Android refuses to start a foreground
+ * service from the background, and throws. Never throws itself.
+ */
+async function refreshBackgroundUpdates() {
+  if (AppState.currentState !== 'active') return;
   try {
     const current = await TaskManager.getTaskOptionsAsync<Partial<Location.LocationTaskOptions>>(
       SHIFT_LOCATION_TASK,
-    );
-    if (
-      current?.accuracy === BACKGROUND_UPDATES.accuracy &&
-      current?.timeInterval === BACKGROUND_UPDATES.timeInterval &&
-      current?.distanceInterval === BACKGROUND_UPDATES.distanceInterval
-    )
-      return;
-    if (AppState.currentState !== 'active') return;
+    ).catch(() => null);
+    const lastFixAt = await readLastFixAt();
+    const stalled = lastFixAt === null || Date.now() - lastFixAt > STALLED_AFTER_MS;
+    // Options that cannot be read say nothing about being out of date. Treating
+    // them as different would stop and start the service -- notification and
+    // all -- on every check, on a phone where nothing is wrong.
+    const outdated = current !== null && optionsKey(current) !== optionsKey(BACKGROUND_UPDATES);
+    if (!stalled && !outdated) return;
+
+    const serviceChanged =
+      outdated &&
+      JSON.stringify(current?.foregroundService ?? null) !==
+        JSON.stringify(BACKGROUND_UPDATES.foregroundService);
+    if (serviceChanged)
+      await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
     await Location.startLocationUpdatesAsync(SHIFT_LOCATION_TASK, BACKGROUND_UPDATES);
   } catch {
-    // Still running on its previous options, which is how it ran until now.
+    // Left as it was. The next foreground, or the next check, tries again.
   }
 }
 
@@ -342,38 +378,37 @@ async function stopBackgroundUpdates() {
   await Location.stopLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => undefined);
 }
 
-/**
- * Whether a shift is running, in either mode.
- *
- * The registered task is the honest source for background tracking: it
- * survives the app being killed, so a stored flag would drift. A foreground
- * watch cannot survive that, so its own handle is the only thing that knows.
- */
-export async function isShiftTrackingActive() {
-  if (foregroundWatch) return true;
-  // As above: registered is not running. This reported a stalled task as
-  // active, so Settings told a technician their location was being recorded
-  // while nothing had been sent for an hour.
-  return Location.hasStartedLocationUpdatesAsync(SHIFT_LOCATION_TASK).catch(() => false);
+/** How this device is recording right now, for the office to see. */
+export async function currentShiftMode(): Promise<ShiftMode | null> {
+  if (foregroundWatch) return 'FOREGROUND_ONLY';
+  return (await TaskManager.isTaskRegisteredAsync(SHIFT_LOCATION_TASK).catch(() => false))
+    ? 'BACKGROUND'
+    : null;
 }
 
 /**
- * Put tracking back if it has stopped, and do nothing if it has not.
+ * Whether a shift is running, in either mode.
+ *
+ * Registered, which is all either platform can say -- see
+ * `refreshBackgroundUpdates` for why that is not the same as delivering, and
+ * what is done about it.
+ */
+export async function isShiftTrackingActive() {
+  return (await currentShiftMode()) !== null;
+}
+
+/**
+ * Put tracking back if it has stopped, and do nothing if it is healthy.
  *
  * Called whenever the app comes back to the foreground and on a timer while it
- * is there. `startShiftTracking` was previously called exactly once, from an
- * effect keyed on whether the technician is signed in -- which does not change
- * during a working day. So a task the OS stopped at eleven stayed stopped
- * until the app was relaunched, and the trail had an hour-long hole in it that
- * looked from the console exactly like somebody who had gone home.
- *
- * Idempotent and cheap: when updates are running this asks the OS one question
- * and returns.
+ * is there. Starts a shift that is not running; for one that is, restarts the
+ * recording if nothing has been recorded for `STALLED_AFTER_MS`, or if its
+ * options are out of date.
  */
 export async function ensureShiftTracking(): Promise<ShiftStartResult | null> {
-  // Nothing to re-arm if this device never granted anything. `startShiftTracking`
-  // re-checks permissions itself and reports the reason, so this stays a thin
-  // wrapper rather than a second copy of that logic.
-  if (await isShiftTrackingActive()) return null;
-  return startShiftTracking();
+  // `startShiftTracking` re-checks permissions itself and reports the reason,
+  // so this stays a thin wrapper rather than a second copy of that logic.
+  if (!(await isShiftTrackingActive())) return startShiftTracking();
+  if (!foregroundWatch) await refreshBackgroundUpdates();
+  return null;
 }

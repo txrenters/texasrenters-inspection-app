@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import Constants from 'expo-constants';
+import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import {
@@ -16,9 +17,19 @@ import {
   UserIcon,
   WifiIcon,
   MapPinIcon,
+  NavigationIcon,
   WrenchIcon,
 } from 'lucide-react-native';
-import { Alert, Pressable, ScrollView, Switch, Text, View } from 'react-native';
+import {
+  Alert,
+  AppState,
+  Linking,
+  Pressable,
+  ScrollView,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useTabBarInset } from '@/src/lib/tab-bar-inset';
@@ -53,11 +64,44 @@ registerIcons(
   LogOutIcon,
   MapPinIcon,
   MoonIcon,
+  NavigationIcon,
   Trash2Icon,
   UserIcon,
   WifiIcon,
   WrenchIcon,
 );
+
+type LocationAccess = 'ALWAYS' | 'WHILE_USING' | 'OFF';
+
+/**
+ * What the phone allows, read again whenever the app comes back -- which is
+ * exactly when somebody returns from changing it in the system settings.
+ */
+function useLocationAccess() {
+  const [access, setAccess] = useState<LocationAccess | null>(null);
+  useEffect(() => {
+    const read = () => {
+      void Promise.all([
+        Location.getForegroundPermissionsAsync().catch(() => null),
+        Location.getBackgroundPermissionsAsync().catch(() => null),
+      ]).then(([foreground, background]) =>
+        setAccess(background?.granted ? 'ALWAYS' : foreground?.granted ? 'WHILE_USING' : 'OFF'),
+      );
+    };
+    read();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') read();
+    });
+    return () => subscription.remove();
+  }, []);
+  return access;
+}
+
+const LOCATION_ACCESS_DESCRIPTION: Record<LocationAccess, string> = {
+  ALWAYS: 'Allowed all the time',
+  WHILE_USING: 'Only while using the app. Tap, then choose “Allow all the time” (iPhone: “Always”)',
+  OFF: 'Not allowed. Tap to allow location for this app',
+};
 
 export default function SettingsScreen() {
   const tabBarInset = useTabBarInset();
@@ -70,6 +114,7 @@ export default function SettingsScreen() {
   const setLocationPaused = usePreferencesStore((state) => state.setLocationPaused);
   const [recording, setRecording] = useState(!locationPaused);
   const [shiftBusy, setShiftBusy] = useState(false);
+  const locationAccess = useLocationAccess();
   useEffect(() => {
     void isShiftTrackingActive().then(setRecording);
   }, []);
@@ -189,14 +234,13 @@ export default function SettingsScreen() {
       const result = await startShiftTracking();
       setRecording(result.started);
       if (result.started) {
-        // Said plainly rather than left to be discovered. Foreground-only is a
-        // working shift, but it stops recording the moment the phone is
-        // pocketed -- which is most of the drive between properties, and the
-        // gap somebody would otherwise notice as missing minutes on the map.
+        // Said plainly rather than left to be discovered. Foreground-only now
+        // means the background recording could not start at all, which is a
+        // build problem rather than a setting -- and it loses every drive.
         if (result.mode === 'FOREGROUND_ONLY')
           Alert.alert(
             'Recording only while the app is on screen',
-            'This device has not allowed location in the background, so recording stops whenever the app is minimised — including while you are driving with the phone in your pocket. To record the whole shift, allow location "all the time" in the app settings.',
+            'This build of the app could not start recording in the background, so recording stops whenever the app is minimised — including while you are driving. Ask the office for the current build.',
           );
         return;
       }
@@ -251,9 +295,21 @@ export default function SettingsScreen() {
             iconClassName="text-chart-2"
             iconBackground="bg-chart-2/15"
             title="Share my location"
-            description="Records your location for dispatch while the app is open. Stops when you close the app."
+            description="Records your location for dispatch the whole time you are signed in — on the road and at every visit, with the app minimised too."
             value={recording}
             onValueChange={(next) => void toggleShift(next)}
+          />
+          {/* Recording carries on in the background with location allowed only
+              while using the app, but "all the time" is what lets the phone
+              restart it after the system closes the app -- so it is shown, and
+              one tap from being fixed, rather than asked for once and forgotten. */}
+          <SettingLinkRow
+            icon={NavigationIcon}
+            iconClassName={locationAccess === 'ALWAYS' ? 'text-chart-2' : 'text-destructive'}
+            iconBackground={locationAccess === 'ALWAYS' ? 'bg-chart-2/15' : 'bg-destructive/15'}
+            title="Location access"
+            description={locationAccess ? LOCATION_ACCESS_DESCRIPTION[locationAccess] : 'Checking…'}
+            onPress={() => void Linking.openSettings()}
           />
           {/* Beside the location switch, because both answer the same
               question for the office map: where your day starts, and where you

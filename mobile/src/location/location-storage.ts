@@ -63,6 +63,40 @@ export function updateLocationQueue(
 export async function appendLocationFixes(fixes: readonly QueuedFix[]) {
   if (!fixes.length) return;
   await updateLocationQueue((existing) => [...existing, ...fixes]);
+  await rememberLastFix(fixes);
+}
+
+/**
+ * When a fix was last recorded, by anything, whether or not it was sent.
+ *
+ * Kept apart from the queue because sending empties the queue, and this has to
+ * survive that. It answers the one question the OS will not: is the recording
+ * actually delivering? Both platforms report a stopped location task as still
+ * started -- they answer "is it registered" -- so a recorder the OS quietly
+ * killed looked healthy for the rest of the day.
+ */
+const LAST_FIX_KEY = 'texasrenters-location-last-fix-v1';
+
+async function rememberLastFix(fixes: readonly QueuedFix[]) {
+  const newest = Math.max(...fixes.map((fix) => Date.parse(fix.recordedAt)));
+  if (!Number.isFinite(newest)) return;
+  try {
+    await locationKeyValueStore.setItem(LAST_FIX_KEY, new Date(newest).toISOString());
+  } catch {
+    // A lost timestamp costs one unnecessary restart of the recording; failing
+    // the location task costs the fix.
+  }
+}
+
+/** Epoch milliseconds of the last recorded fix, or null if there has never been one. */
+export async function readLastFixAt(): Promise<number | null> {
+  try {
+    const raw = await locationKeyValueStore.getItem(LAST_FIX_KEY);
+    const at = raw ? Date.parse(raw) : Number.NaN;
+    return Number.isFinite(at) ? at : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function removeLocationFixes(ids: readonly string[]) {
