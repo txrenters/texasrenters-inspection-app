@@ -568,7 +568,7 @@ describe('who a planned day goes to', () => {
     );
   });
 
-  /** The drive from home is not counted, but it is driven: between equal orders, start near home. */
+  /** Between routes from home that drive the same, the day starts at the property nearer home. */
   it('starts the day at the end nearer the technician’s home', async () => {
     // Laid out north first; the same drive the other way starts beside home.
     const { service, stopUpdate } = build([stop('south', 1, 0), stop('north', 2, 3)], {
@@ -580,5 +580,106 @@ describe('who a planned day goes to', () => {
 
     expect(updateFor(stopUpdate, 'south')?.positionInDay).toBe(1);
     expect(updateFor(stopUpdate, 'north')?.positionInDay).toBe(2);
+  });
+});
+
+/**
+ * The office's rule (2026-09-16): a day starts from the technician's home, and
+ * the ninety minutes are still the drives between its properties.
+ */
+describe('a day routed from the technician’s home', () => {
+  const HOME = { technicianId: 'tech-1', isPlannable: true, homeLatitude: 29.7, homeLongitude: -95.37 };
+
+  /**
+   * Drives by place, as Google would give them -- one-way roads and all, so a
+   * drive and its return need not take the same time. Places are told apart by
+   * latitude: home at 29.70, and the stops `stop()` puts at 29.76 upward.
+   */
+  const drives = (table: Record<string, number>) => (from: Point, to: Point) => {
+    const place = (point: Point) => point.latitude.toFixed(2);
+    return table[`${place(from)}>${place(to)}`] ?? 3600;
+  };
+
+  it('routes the day from home even when the shortest path between the properties starts at the far end', async () => {
+    // P is beside home and R far from it. Between the three, R-Q-P is the
+    // shortest path (10 min) and P-Q-R the slower way (20 min), so a day
+    // measured from its first job alone started at R -- a 40-minute drive
+    // from home to begin a day that could start at P, one minute away.
+    const { service, stopUpdate, dayCreate } = build([stop('P', 1, 0), stop('Q', 2, 1), stop('R', 3, 2)], {
+      technicians: [HOME],
+      googleSeconds: drives({
+        '29.70>29.76': 60, '29.70>29.77': 1200, '29.70>29.78': 2400,
+        '29.76>29.77': 600, '29.77>29.78': 600, '29.76>29.78': 1200,
+        '29.78>29.77': 300, '29.77>29.76': 300, '29.78>29.76': 600,
+      }),
+    });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect(['P', 'Q', 'R'].map((id) => updateFor(stopUpdate, id)?.positionInDay)).toEqual([1, 2, 3]);
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.originKind).toBe(PlanOriginKind.HOME);
+    expect(day.homeDriveSeconds).toBe(60);
+    // Still only between the properties: that is what the limit counts.
+    expect(day.totalDriveSeconds).toBe(1200);
+  });
+
+  /** Starting from home must never cost a day a property it could otherwise keep. */
+  it('keeps the path between the properties when starting from home would put the day over the limit', async () => {
+    // X is beside home. From home the quickest route is X then Y, but X to Y is
+    // 15 minutes against a 10-minute limit -- while Y to X is 5.
+    const { service, stopUpdate, dayCreate } = build([stop('X', 1, 0), stop('Y', 2, 1)], {
+      technicians: [HOME],
+      plan: { maxDriveMinutes: 10 },
+      googleSeconds: drives({
+        '29.70>29.76': 60, '29.70>29.77': 1200,
+        '29.76>29.77': 900, '29.77>29.76': 300,
+      }),
+    });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect(summary.placed).toBe(2);
+    expect(summary.unplaced).toEqual([]);
+    expect(updateFor(stopUpdate, 'Y')?.positionInDay).toBe(1);
+    expect(updateFor(stopUpdate, 'X')?.positionInDay).toBe(2);
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.totalDriveSeconds).toBe(300);
+    // The morning drive is to where the day actually starts.
+    expect(day.homeDriveSeconds).toBe(1200);
+  });
+
+  it('measures the drive from home to a day of one property', async () => {
+    const { service, dayCreate, google } = build([stop('only', 1)], { technicians: [HOME], googleSeconds: fiveMinutes });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    expect((google.matrix as jest.Mock).mock.calls[0][0]).toHaveLength(2);
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.originKind).toBe(PlanOriginKind.HOME);
+    expect(day.homeDriveSeconds).toBe(300);
+    expect(day.homeDriveMeters).toBe(3000);
+    expect(day.totalDriveSeconds).toBe(0);
+  });
+
+  /** The planning profile stays the one place a technician's address is kept. */
+  it('does not copy the home onto the planned day', async () => {
+    const { service, dayCreate } = build([stop('a', 1), stop('b', 2, 1)], { technicians: [HOME], googleSeconds: fiveMinutes });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.originLatitude).toBeNull();
+    expect(day.originLongitude).toBeNull();
+  });
+
+  it('starts at the first job, as before, for a technician with no home on file', async () => {
+    const { service, dayCreate } = build([stop('a', 1), stop('b', 2, 1)], { googleSeconds: fiveMinutes });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyTheFirstWorkingDay() });
+
+    const day = dayCreate.mock.calls[0][0].data;
+    expect(day.originKind).toBe(PlanOriginKind.FIRST_STOP);
+    expect(day.homeDriveSeconds).toBeNull();
   });
 });

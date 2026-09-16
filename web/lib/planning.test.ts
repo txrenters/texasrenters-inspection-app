@@ -5,6 +5,7 @@ import {
   formatClock,
   formatMinutes,
   formatShortDay,
+  leaveHomeAt,
   limitState,
   parseCsv,
   quarterChoices,
@@ -48,6 +49,11 @@ describe('writing times', () => {
   it('writes a calendar date as its month and day, whatever the time zone', () => {
     expect(formatShortDay('2026-10-12')).toBe('Oct 12');
     expect(formatShortDay('2026-12-25')).toBe('Dec 25');
+  });
+
+  it('says when to leave home: the drive from home before the first job at nine', () => {
+    expect(formatClock(leaveHomeAt(9 * 60, 35 * 60 + 20))).toBe('8:25 AM');
+    expect(formatClock(leaveHomeAt(9 * 60, 0))).toBe('9:00 AM');
   });
 });
 

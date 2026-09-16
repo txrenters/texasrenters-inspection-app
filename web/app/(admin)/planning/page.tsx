@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
 import { PlanDays } from '@/components/planning/plan-days';
+import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
 import { Stat, StatGroup, StatStrip, StatStripItem } from '@/components/stat-card';
@@ -80,6 +81,8 @@ export default function PlanningPage() {
   const days = usePlanDays(plan?.id);
   const mutations = usePlanningMutations();
   const [publishing, setPublishing] = useState(false);
+  // The visit whose details are open, from its pin, its row in a day, or the tables.
+  const [openStopId, setOpenStopId] = useState<string | null>(null);
 
   const draft = plan?.status === 'DRAFT';
   const building = mutations.build.isPending;
@@ -91,6 +94,10 @@ export default function PlanningPage() {
   const overLimitDays = plan ? (days.data ?? []).filter((day) => overLimit(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
+  const openStop = openStopId ? ((stops.data ?? []).find((stop) => stop.id === openStopId) ?? null) : null;
+  const openStopDay = openStopId
+    ? ((days.data ?? []).find((day) => day.stops.some((stop) => stop.id === openStopId)) ?? null)
+    : null;
 
   // The weekdays the planner skipped: the quarter's US holidays, and any other
   // day closed on the plan, listed apart so a holiday is never mislabelled.
@@ -288,6 +295,7 @@ export default function PlanningPage() {
               ) : (
                 <PlanDays
                   days={days.data}
+                  onOpenStop={setOpenStopId}
                   onSelect={(day) => setState({ day })}
                   planId={plan.id}
                   selectedDayId={state.day}
@@ -302,7 +310,7 @@ export default function PlanningPage() {
               ) : stops.isError ? (
                 <ErrorState error={stops.error} retry={() => void stops.refetch()} />
               ) : (
-                <PlanStopsTable editable={canChange && draft} stops={stops.data ?? []} />
+                <PlanStopsTable editable={canChange && draft} onOpen={setOpenStopId} stops={stops.data ?? []} />
               )}
             </TabsContent>
 
@@ -317,6 +325,7 @@ export default function PlanningPage() {
               ) : (
                 <PlanStopsTable
                   editable={canChange && draft}
+                  onOpen={setOpenStopId}
                   stops={(stops.data ?? []).filter((stop) => attentionIds.has(stop.id))}
                 />
               )}
@@ -324,6 +333,8 @@ export default function PlanningPage() {
           </Tabs>
         </div>
       )}
+
+      <PlanStopDialog day={openStopDay} onOpenChange={(open) => !open && setOpenStopId(null)} stop={openStop} />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>
         <AlertDialogContent>

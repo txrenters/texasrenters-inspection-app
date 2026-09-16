@@ -68,13 +68,27 @@ export interface PlanStop {
   visitTitle: string | null;
   visitDetails: string | null;
   inspectionId: string | null;
+  jobberVisitId: string | null;
+  hvacFilterSizes: string[];
+  scheduleOverriddenAt: string | null;
+  technicianOverriddenAt: string | null;
+  previousTechnician: { id: string; displayName: string | null } | null;
+  propertywareUnit: { name: string } | null;
   tenant: {
     leaseName: string;
     addressLine1: string | null;
     city: string | null;
+    state: string | null;
     postalCode: string | null;
     managementPlan: string | null;
     hvacPlan: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    hvacFilterLocation: string | null;
+    hvacFilterSizes: string[];
+    lastFilterDelivery: string | null;
+    lastHvacInspection: string | null;
+    lastOccupiedInspection: string | null;
   };
 }
 
@@ -101,8 +115,13 @@ export interface PlanDay {
   stopCount: number;
   onSiteMinutes: number;
   hvacStopCount: number;
+  /** Between the day's properties only: what the drive limit counts. */
   totalDriveSeconds: number | null;
   totalDriveMeters: number | null;
+  /** From the technician's home to the first property, when the day was routed from home. Not counted. */
+  homeDriveSeconds: number | null;
+  homeDriveMeters: number | null;
+  /** `HOME` when the day was routed from the technician's home; `FIRST_STOP` when there was none on file. */
   originKind: string;
   durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
@@ -137,8 +156,12 @@ export interface OfficeDetailsImport {
 
 export interface PlanDayRoute {
   source: string | null;
-  /** `[lat, lng]`. Empty when nothing could draw the day. */
+  /** `[lat, lng]`, between the day's stops. Empty when nothing could draw the day. */
   geometry: [number, number][];
+  /** `[lat, lng]`, from home to the first stop. Empty when the day has no home or nothing drew it. */
+  homeGeometry: [number, number][];
+  /** The technician's home, when the day was routed from it. */
+  home: { latitude: number; longitude: number } | null;
   legs: { durationSeconds: number; distanceMeters: number }[];
 }
 

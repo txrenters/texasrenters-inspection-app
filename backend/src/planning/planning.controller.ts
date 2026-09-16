@@ -13,7 +13,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { haversineMeters } from '@texasrenters/shared';
 
 import {
   ApiAuthGuard,
@@ -49,12 +50,67 @@ export const PLANNING_TAG = 'Quarterly planning';
  */
 const MAX_DRAWN_DAYS = 200;
 
+type LatLng = [number, number];
+
+/** A drawn day: the home leg apart from the drive between its properties, which is the one the limit counts. */
+interface DrawnDay {
+  geometry: LatLng[];
+  homeGeometry: LatLng[];
+  legs: { durationSeconds: number; distanceMeters: number }[];
+}
+
+/**
+ * A road line from home through a day's stops, cut where it reaches the first.
+ *
+ * One Google call draws the whole drive, and the console shows the home leg
+ * differently: it is driven, and not counted. Google snaps a stop to its road,
+ * so the line passes the first stop rather than through its coordinates, and
+ * can pass it again later in the day. So the cut is found by distance along the
+ * line -- the home leg's own length, as Google measured it -- and settled on the
+ * vertex nearest the stop around there. Without a length, it is the first
+ * vertex beside the stop, or the nearest one on the whole line.
+ */
+export function splitAtFirstStop(
+  path: readonly LatLng[],
+  first: { latitude: number; longitude: number },
+  homeLegMeters?: number,
+) {
+  if (path.length < 2) return { homeGeometry: [...path], geometry: [] as LatLng[] };
+  const toStop = ([latitude, longitude]: LatLng) => haversineMeters({ latitude, longitude }, first);
+  const nearestIn = (from: number, to: number) => {
+    let best = from;
+    for (let index = from; index <= to; index += 1) if (toStop(path[index]!) < toStop(path[best]!)) best = index;
+    return best;
+  };
+
+  let cut: number;
+  if (homeLegMeters && homeLegMeters > 0) {
+    // Metres along the line to each vertex. A drawn line runs a little short of
+    // the road it follows, so the stop is looked for within a margin of the
+    // leg's length -- never far enough to reach a later pass by the same stop.
+    const along = [0];
+    for (let index = 1; index < path.length; index += 1) {
+      const [latitude, longitude] = path[index - 1]!;
+      along.push(along[index - 1]! + haversineMeters({ latitude, longitude }, { latitude: path[index]![0], longitude: path[index]![1] }));
+    }
+    const margin = Math.max(250, homeLegMeters * 0.05);
+    const near = along.flatMap((metres, index) => (Math.abs(metres - homeLegMeters) <= margin ? [index] : []));
+    cut = near.length
+      ? near.reduce((best, index) => (toStop(path[index]!) < toStop(path[best]!) ? index : best), near[0]!)
+      : Math.max(0, along.findIndex((metres) => metres >= homeLegMeters));
+  } else {
+    cut = path.findIndex((point) => toStop(point) <= 60);
+    if (cut === -1) cut = nearestIn(0, path.length - 1);
+  }
+  return { homeGeometry: path.slice(0, cut + 1), geometry: path.slice(cut) };
+}
+
 @ApiTags(PLANNING_TAG)
 @ApiBearerAuth()
 @UseGuards(ApiAuthGuard, PermissionsGuard)
 @Controller('admin/planning')
 export class PlanningController {
-  private readonly drawnDays = new Map<string, { geometry: [number, number][]; legs: { durationSeconds: number; distanceMeters: number }[] }>();
+  private readonly drawnDays = new Map<string, DrawnDay>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -114,17 +170,23 @@ export class PlanningController {
     });
   }
 
+  /**
+   * The plan's visits, with everything the console's visit window shows: what
+   * Jobber will be sent, the property and its tenancy, and why the visit is the
+   * kind it is.
+   */
   @Get('quarters/:planId/stops')
   @RequirePermissions('planning:read')
-  stops(
+  async stops(
     @Req() request: AuthenticatedRequest,
     @Param('planId') planId: string,
     @Query() query: PlanStopListQueryDto,
   ) {
-    return this.prisma.tbpQuarterPlanStop.findMany({
+    const organizationId = request.user.organizationId;
+    const stops = await this.prisma.tbpQuarterPlanStop.findMany({
       where: {
         planId,
-        organizationId: request.user.organizationId,
+        organizationId,
         ...(query.status ? { status: query.status } : {}),
       },
       orderBy: { sequence: 'asc' },
@@ -154,18 +216,50 @@ export class PlanningController {
         visitTitle: true,
         visitDetails: true,
         inspectionId: true,
+        jobberVisitId: true,
+        hvacFilterSizes: true,
+        previousTechnicianId: true,
+        scheduleOverriddenAt: true,
+        technicianOverriddenAt: true,
+        propertywareUnit: { select: { name: true } },
         tenant: {
           select: {
             leaseName: true,
             addressLine1: true,
             city: true,
+            state: true,
             postalCode: true,
             managementPlan: true,
             hvacPlan: true,
+            startDate: true,
+            endDate: true,
+            hvacFilterLocation: true,
+            hvacFilterSizes: true,
+            lastFilterDelivery: true,
+            lastHvacInspection: true,
+            lastOccupiedInspection: true,
           },
         },
       },
     });
+
+    // Last quarter's technician, by name: the stop keeps only the id.
+    const previousIds = [
+      ...new Set(stops.map((stop) => stop.previousTechnicianId).filter((id): id is string => Boolean(id))),
+    ];
+    const previous = previousIds.length
+      ? await this.prisma.userProfile.findMany({
+          where: { id: { in: previousIds }, memberships: { some: { organizationId } } },
+          select: { id: true, displayName: true },
+        })
+      : [];
+    const names = new Map(previous.map((technician) => [technician.id, technician.displayName]));
+    return stops.map(({ previousTechnicianId, ...stop }) => ({
+      ...stop,
+      previousTechnician: previousTechnicianId
+        ? { id: previousTechnicianId, displayName: names.get(previousTechnicianId) ?? null }
+        : null,
+    }));
   }
 
   /**
@@ -193,6 +287,8 @@ export class PlanningController {
           hvacStopCount: true,
           totalDriveSeconds: true,
           totalDriveMeters: true,
+          homeDriveSeconds: true,
+          homeDriveMeters: true,
           originKind: true,
           durationSource: true,
           departureAssumedAt: true,
@@ -255,6 +351,10 @@ export class PlanningController {
    * Drawn on request rather than stored: a plan holds sixty-odd days and a
    * coordinator looks at a handful. With no Google key the line is empty and
    * the console joins the stops with straight lines, saying so.
+   *
+   * A day routed from the technician's home starts the line there, and the
+   * home is read from the planning profile at the time of drawing -- the one
+   * place the address is kept -- with the leg to the first stop returned apart.
    */
   @Get('quarters/:planId/days/:dayId/route')
   @RequirePermissions('planning:read')
@@ -262,7 +362,7 @@ export class PlanningController {
     const organizationId = request.user.organizationId;
     const day = await this.prisma.tbpQuarterPlanDay.findFirst({
       where: { id: dayId, planId, organizationId },
-      select: { id: true, date: true, technicianId: true },
+      select: { id: true, date: true, technicianId: true, originKind: true },
     });
     if (!day) throw new ApplicationError(404, 'PLAN_DAY_NOT_FOUND', 'This planned day does not exist.');
 
@@ -278,21 +378,36 @@ export class PlanningController {
         latitude: Number(stop.propertywareBuilding!.latitude),
         longitude: Number(stop.propertywareBuilding!.longitude),
       }));
-    if (points.length < 2) return { source: null, geometry: [], legs: [] };
+    const profile =
+      day.originKind === PlanOriginKind.HOME
+        ? await this.prisma.technicianPlanningProfile.findFirst({
+            where: { technicianId: day.technicianId, organizationId },
+            select: { homeLatitude: true, homeLongitude: true },
+          })
+        : null;
+    const home =
+      profile?.homeLatitude != null && profile?.homeLongitude != null
+        ? { latitude: Number(profile.homeLatitude), longitude: Number(profile.homeLongitude) }
+        : null;
+    const undrawn = { source: null, geometry: [], homeGeometry: [], legs: [], home };
+    if (points.length === 0 || points.length + (home ? 1 : 0) < 2) return undrawn;
 
-    const key = `${day.id}:${points.map((point) => point.id).join(',')}`;
+    const key = `${day.id}:${home ? `${home.latitude},${home.longitude};` : ''}${points.map((point) => point.id).join(',')}`;
     const cached = this.drawnDays.get(key);
-    if (cached) return { source: 'GOOGLE_TRAFFIC_AWARE', ...cached };
+    if (cached) return { source: 'GOOGLE_TRAFFIC_AWARE', home, ...cached };
 
     const date = day.date.toISOString().slice(0, 10);
-    const drawn = await this.google.route(points, businessInstant(date, '09:00:00'));
-    if (!drawn) return { source: null, geometry: [], legs: [] };
+    const drawn = await this.google.route(home ? [home, ...points] : points, businessInstant(date, '09:00:00'));
+    if (!drawn) return undrawn;
 
     // `[lat, lng]`, the order a map draws in; Google's decoder gives `[lon, lat]`.
-    const line = { geometry: toLatLngPath(drawn.geometry), legs: drawn.legs };
+    const path = toLatLngPath(drawn.geometry);
+    const line: DrawnDay = home
+      ? { ...splitAtFirstStop(path, points[0]!, drawn.legs[0]?.distanceMeters), legs: drawn.legs.slice(1) }
+      : { geometry: path, homeGeometry: [], legs: drawn.legs };
     if (this.drawnDays.size >= MAX_DRAWN_DAYS) this.drawnDays.delete(this.drawnDays.keys().next().value!);
     this.drawnDays.set(key, line);
-    return { source: 'GOOGLE_TRAFFIC_AWARE', ...line };
+    return { source: 'GOOGLE_TRAFFIC_AWARE', home, ...line };
   }
 
   /**

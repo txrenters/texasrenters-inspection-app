@@ -16,8 +16,8 @@ import { strokeFrom } from '@/components/technician-map';
 import type { PlanDayStop } from '@/lib/planning-queries';
 
 /**
- * One planned technician-day on the map: its stops in driving order, and the
- * road between them.
+ * One planned technician-day on the map: the technician's home, the day's stops
+ * in driving order, and the road between them.
  *
  * Must be loaded with `ssr: false`, like the technician map: the Maps script
  * touches `window` and measures its container.
@@ -26,6 +26,8 @@ import type { PlanDayStop } from '@/lib/planning-queries';
 const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 const MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID';
 const FALLBACK_CENTER = { lat: 29.76, lng: -95.37 };
+
+type LatLng = readonly [number, number];
 
 /**
  * A numbered stop, shaped by its kind of visit.
@@ -36,7 +38,7 @@ const FALLBACK_CENTER = { lat: 29.76, lng: -95.37 };
  */
 const StopPin = memo(function StopPin({ order, hvac }: { order: number; hvac: boolean }) {
   return (
-    <svg aria-hidden height="26" viewBox="0 0 26 26" width="26">
+    <svg aria-hidden className="cursor-pointer" height="26" viewBox="0 0 26 26" width="26">
       {hvac ? (
         <rect className="fill-map-property" height="20" rx="4" stroke="#fff" strokeWidth="2" width="20" x="3" y="3" />
       ) : (
@@ -58,28 +60,55 @@ const StopPin = memo(function StopPin({ order, hvac }: { order: number; hvac: bo
   );
 });
 
-/** The day's line: a white casing under the route colour, as the technician map draws one. */
-function RouteLine({ path, straight }: { path: readonly [number, number][]; straight: boolean }) {
+/** Where the day starts: the technician's home, a house in the technician colour. */
+const HomePin = memo(function HomePin() {
+  return (
+    <svg aria-hidden height="28" viewBox="0 0 28 28" width="28">
+      <circle className="fill-map-technician" cx="14" cy="14" r="12" stroke="#fff" strokeWidth="2" />
+      <path d="M8.5 13.5 14 9l5.5 4.5V19a.5.5 0 0 1-.5.5h-3.25v-3.5h-3.5v3.5H9a.5.5 0 0 1-.5-.5z" fill="#fff" />
+    </svg>
+  );
+});
+
+/** A colour a CSS rule gives, read once: Google takes a colour string, not a `var()`. */
+function strokeOf(className: string) {
+  const probe = document.createElement('span');
+  probe.className = className;
+  probe.style.display = 'none';
+  document.body.append(probe);
+  const color = strokeFrom(getComputedStyle(probe));
+  probe.remove();
+  return color;
+}
+
+/**
+ * A line on the map: a white casing under the colour, as the technician map
+ * draws a route. Straight segments are dashed, so nobody reads them as roads.
+ */
+function RouteLine({
+  path,
+  straight,
+  colorClass = 'map-route-line',
+  weight = 4,
+}: {
+  path: readonly LatLng[];
+  straight: boolean;
+  colorClass?: string;
+  weight?: number;
+}) {
   const map = useMap();
 
   useEffect(() => {
     if (!map || path.length < 2) return;
-    const probe = document.createElement('span');
-    probe.className = 'map-route-line';
-    probe.style.display = 'none';
-    document.body.append(probe);
-    const color = strokeFrom(getComputedStyle(probe));
-    probe.remove();
-
+    const color = strokeOf(colorClass);
     const points = path.map(([lat, lng]) => ({ lat, lng }));
-    const casing = new google.maps.Polyline({ map, path: points, strokeColor: '#fff', strokeOpacity: 0.9, strokeWeight: 7, zIndex: 1 });
+    const casing = new google.maps.Polyline({ map, path: points, strokeColor: '#fff', strokeOpacity: 0.9, strokeWeight: weight + 3, zIndex: 1 });
     const line = new google.maps.Polyline({
       map,
       path: points,
       strokeColor: color,
-      // Straight segments are drawn dashed, so nobody reads them as roads.
       strokeOpacity: straight ? 0 : 1,
-      strokeWeight: 4,
+      strokeWeight: weight,
       zIndex: 2,
       ...(straight
         ? { icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeWeight: 3, scale: 3 }, offset: '0', repeat: '14px' }] }
@@ -89,7 +118,7 @@ function RouteLine({ path, straight }: { path: readonly [number, number][]; stra
       casing.setMap(null);
       line.setMap(null);
     };
-  }, [map, path, straight]);
+  }, [map, path, straight, colorClass, weight]);
 
   return null;
 }
@@ -137,11 +166,20 @@ export function PlanDayMap({
   dayKey,
   stops,
   geometry,
+  home = null,
+  homeGeometry = [],
+  onSelectStop,
 }: {
   dayKey: string;
   stops: readonly PlanDayStop[];
-  /** The road line, `[lat, lng]`; empty draws straight segments between the stops instead. */
-  geometry: readonly [number, number][];
+  /** The road line between the stops, `[lat, lng]`; empty draws straight segments instead. */
+  geometry: readonly LatLng[];
+  /** The technician's home, when the day was routed from it. */
+  home?: { latitude: number; longitude: number } | null;
+  /** The road from home to the first stop; empty draws a straight dashed segment. */
+  homeGeometry?: readonly LatLng[];
+  /** A stop's pin was clicked: open its details. */
+  onSelectStop?: (stopId: string) => void;
 }) {
   const { resolvedTheme } = useTheme();
   const placed = useMemo(
@@ -152,12 +190,24 @@ export function PlanDayMap({
       ),
     [stops],
   );
-  const points = useMemo(() => placed.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })), [placed]);
+  // Home in the frame too: the drive from it is part of the day as driven.
+  const points = useMemo(
+    () => [
+      ...(home ? [{ lat: home.latitude, lng: home.longitude }] : []),
+      ...placed.map((stop) => ({ lat: stop.latitude, lng: stop.longitude })),
+    ],
+    [home, placed],
+  );
   const straight = geometry.length < 2;
-  const path = useMemo<[number, number][]>(
-    () => (straight ? placed.map((stop) => [stop.latitude, stop.longitude]) : [...geometry]),
+  const path = useMemo<LatLng[]>(
+    () => (straight ? placed.map((stop) => [stop.latitude, stop.longitude] as const) : [...geometry]),
     [geometry, placed, straight],
   );
+  const homeStraight = homeGeometry.length < 2;
+  const homePath = useMemo<LatLng[]>(() => {
+    if (!home || !placed.length) return [];
+    return homeStraight ? [[home.latitude, home.longitude], [placed[0]!.latitude, placed[0]!.longitude]] : [...homeGeometry];
+  }, [home, homeGeometry, homeStraight, placed]);
 
   if (!API_KEY) return <Unavailable>The map needs a Google Maps browser key (NEXT_PUBLIC_GOOGLE_MAPS_API_KEY).</Unavailable>;
 
@@ -175,12 +225,22 @@ export function PlanDayMap({
           streetViewControl={false}
         >
           <FitStops dayKey={dayKey} points={points} />
+          {/* The drive from home is driven and not counted against the day, so
+              it is drawn in the grey of a finished leg, under the day's route. */}
+          <RouteLine colorClass="map-route-done-line" path={homePath} straight={homeStraight} weight={3} />
           <RouteLine path={path} straight={straight} />
+          {home ? (
+            <AdvancedMarker position={{ lat: home.latitude, lng: home.longitude }} title="Technician’s home" zIndex={5}>
+              <HomePin />
+            </AdvancedMarker>
+          ) : null}
           {placed.map((stop, index) => (
             <AdvancedMarker
+              clickable={Boolean(onSelectStop)}
               key={stop.id}
+              onClick={() => onSelectStop?.(stop.id)}
               position={{ lat: stop.latitude, lng: stop.longitude }}
-              title={`${index + 1}. ${stop.address ?? 'Unknown address'}`}
+              title={`${index + 1}. ${stop.address ?? 'Unknown address'}${onSelectStop ? ' (open its details)' : ''}`}
               zIndex={10 + index}
             >
               <StopPin hvac={stop.inspectionType === 'HVAC'} order={stop.positionInDay ?? index + 1} />

@@ -1,7 +1,7 @@
 'use client';
 
 import { TBP_INSPECTION_REASON_TEXT, type TbpInspectionReason } from '@texasrenters/shared';
-import { AlertTriangleIcon, MoreHorizontalIcon } from 'lucide-react';
+import { AlertTriangleIcon, MoreHorizontalIcon, PanelRightOpenIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -29,7 +29,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { EMPTY, formatScheduledDate } from '@/lib/format';
 import { usePlanningMutations, type PlanStop, type PlanStopStatus } from '@/lib/planning-queries';
 
-const STATUS: Record<PlanStopStatus, { label: string; variant: 'secondary' | 'warning' | 'outline' | 'success' | 'destructive' }> = {
+export const STOP_STATUS: Record<PlanStopStatus, { label: string; variant: 'secondary' | 'warning' | 'outline' | 'success' | 'destructive' }> = {
   PLANNED: { label: 'Planned', variant: 'secondary' },
   BLOCKED: { label: 'Needs attention', variant: 'warning' },
   EXCLUDED: { label: 'Excluded', variant: 'outline' },
@@ -116,14 +116,23 @@ const COLUMNS: Array<Column<PlanStop>> = [
     header: 'Status',
     cell: (stop) => (
       <div className="grid gap-1">
-        <Badge variant={STATUS[stop.status].variant}>{STATUS[stop.status].label}</Badge>
+        <Badge variant={STOP_STATUS[stop.status].variant}>{STOP_STATUS[stop.status].label}</Badge>
         {stop.blockedMessage ? <span className="text-muted-foreground text-xs text-pretty">{stop.blockedMessage}</span> : null}
       </div>
     ),
   },
 ];
 
-export function PlanStopsTable({ stops, editable }: { stops: PlanStop[]; editable: boolean }) {
+export function PlanStopsTable({
+  stops,
+  editable,
+  onOpen,
+}: {
+  stops: PlanStop[];
+  editable: boolean;
+  /** Opens a visit's details, as its pin on the map does. */
+  onOpen?: (stopId: string) => void;
+}) {
   const { setType, exclude } = usePlanningMutations();
   const [excluding, setExcluding] = useState<PlanStop | null>(null);
   const [reason, setReason] = useState('');
@@ -166,8 +175,21 @@ export function PlanStopsTable({ stops, editable }: { stops: PlanStop[]; editabl
   return (
     <>
       <DataTable
-        actions={(stop) =>
-          editableStop(stop) ? (
+        actions={(stop) => (
+          <div className="flex items-center justify-end gap-0.5">
+            {onOpen ? (
+              <Button
+                aria-label={`Details of the visit at ${stop.tenant.addressLine1 ?? 'this property'}`}
+                className="relative z-10"
+                onClick={() => onOpen(stop.id)}
+                size="icon-sm"
+                title="Details"
+                variant="ghost"
+              >
+                <PanelRightOpenIcon />
+              </Button>
+            ) : null}
+            {editableStop(stop) ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button aria-label={`Change the visit at ${stop.tenant.addressLine1 ?? 'this property'}`} className="relative z-10" size="icon-sm" variant="ghost">
@@ -184,8 +206,9 @@ export function PlanStopsTable({ stops, editable }: { stops: PlanStop[]; editabl
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          ) : null
-        }
+            ) : null}
+          </div>
+        )}
         columns={COLUMNS}
         label="Visits in this quarter's plan"
         rowKey={(stop) => stop.id}
