@@ -428,6 +428,44 @@ export class TechnicianLocationBatchDto {
   fixes!: TechnicianLocationFixDto[];
 }
 
+const TRACKING_PERMISSIONS = ['GRANTED', 'DENIED', 'UNDETERMINED', 'UNKNOWN'] as const;
+
+/**
+ * How the phone is recording location, in its own words. See
+ * `TechnicianTrackingStatus` in shared for what each field means.
+ *
+ * Every string is bounded and every enum closed: this is shown to the office
+ * as written, and a phone is not a trusted source of free text.
+ */
+export class TechnicianLocationStatusDto {
+  @IsIn(['BACKGROUND', 'FOREGROUND_ONLY', 'OFF'])
+  recording!: 'BACKGROUND' | 'FOREGROUND_ONLY' | 'OFF';
+
+  @IsOptional()
+  @IsIn(['PAUSED', 'FOREGROUND_DENIED', 'UNAVAILABLE', 'UNSUPPORTED'])
+  stoppedBecause?: 'PAUSED' | 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' | null;
+
+  @IsIn(TRACKING_PERMISSIONS)
+  foregroundPermission!: (typeof TRACKING_PERMISSIONS)[number];
+
+  @IsIn(TRACKING_PERMISSIONS)
+  backgroundPermission!: (typeof TRACKING_PERMISSIONS)[number];
+
+  @IsOptional() @IsBoolean() servicesEnabled?: boolean | null;
+
+  @IsIn(['ios', 'android', 'other']) platform!: 'ios' | 'android' | 'other';
+
+  @IsOptional() @IsString() @MaxLength(40) appVersion?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(64) updateId?: string | null;
+
+  @IsOptional() @IsString() @MaxLength(20) appState?: string | null;
+
+  @IsOptional() @IsISO8601() lastFixAt?: string | null;
+
+  @Type(() => Number) @IsInt() @Min(0) @Max(100_000) queuedFixes!: number;
+}
+
 /**
  * A technician's home, as they would write it on an envelope.
  *

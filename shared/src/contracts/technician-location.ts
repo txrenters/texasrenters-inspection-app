@@ -203,6 +203,55 @@ export interface TechnicianPosition {
    * socket, which says nothing about the app; see `mergeLatestPosition`.
    */
   app?: { connected: boolean; lastSeenAt: string | null } | null;
+  /**
+   * How the phone says it is recording, as of its last report -- or null
+   * when it has not reported since the API started.
+   */
+  tracking?: ReportedTrackingStatus | null;
+}
+
+/**
+ * How a technician's phone is recording location, in its own words.
+ *
+ * Sent by the phone when recording starts, when the app comes back to the
+ * foreground, and every few minutes while it is open. It exists because a
+ * marker that stops moving says nothing about why: recording switched off, a
+ * permission refused, an app on an old update, or fixes stuck on the handset
+ * all looked the same from the office, and twice a drive went missing with
+ * nothing to show which.
+ */
+export interface TechnicianTrackingStatus {
+  /**
+   * What is recording right now. `BACKGROUND` keeps going with the app
+   * minimised; `FOREGROUND_ONLY` stops when it leaves the screen; `OFF` is
+   * nothing.
+   */
+  recording: 'BACKGROUND' | 'FOREGROUND_ONLY' | 'OFF';
+  /** Why recording is not running, when the phone knows. */
+  stoppedBecause: 'PAUSED' | 'FOREGROUND_DENIED' | 'UNAVAILABLE' | 'UNSUPPORTED' | null;
+  /** "While using the app". */
+  foregroundPermission: TrackingPermission;
+  /** "All the time" / "Always". */
+  backgroundPermission: TrackingPermission;
+  /** The phone's location services switch, or null when it would not say. */
+  servicesEnabled: boolean | null;
+  platform: 'ios' | 'android' | 'other';
+  appVersion: string | null;
+  /** The over-the-air update the app is running, or null for the embedded one. */
+  updateId: string | null;
+  /** `active`, `background` or `inactive` at the moment of the report. */
+  appState: string | null;
+  /** The newest fix the phone recorded, whether or not it has been sent. */
+  lastFixAt: string | null;
+  /** Fixes recorded and not yet accepted by the API. */
+  queuedFixes: number;
+}
+
+export type TrackingPermission = 'GRANTED' | 'DENIED' | 'UNDETERMINED' | 'UNKNOWN';
+
+export interface ReportedTrackingStatus extends TechnicianTrackingStatus {
+  /** When the API received the report. */
+  reportedAt: string;
 }
 
 /**
@@ -321,7 +370,12 @@ export function mergeLatestPosition(
   return [
     // A fix pushed over the socket carries no word about the app; keep what
     // the last full read said rather than forgetting it until the next poll.
-    { ...incoming, app: incoming.app ?? existing?.app ?? null },
+    // The same for how the phone last said it was recording.
+    {
+      ...incoming,
+      app: incoming.app ?? existing?.app ?? null,
+      tracking: incoming.tracking ?? existing?.tracking ?? null,
+    },
     ...positions.filter((position) => position.technicianId !== incoming.technicianId),
   ];
 }

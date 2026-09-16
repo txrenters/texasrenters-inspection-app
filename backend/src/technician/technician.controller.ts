@@ -46,6 +46,7 @@ import {
   TechnicianUpdateAreaDto,
   TechnicianHomeDto,
   TechnicianLocationBatchDto,
+  TechnicianLocationStatusDto,
 } from './technician.dto';
 import { RouteService } from '../routing/route.service';
 import { TechnicianHomeService } from './technician-home.service';
@@ -97,6 +98,22 @@ export class TechnicianController {
   @Post('locations')
   recordLocations(@Req() request: AuthenticatedRequest, @Body() body: TechnicianLocationBatchDto) {
     return this.locations.record(request.user, body);
+  }
+
+  /**
+   * How this phone is recording location: whether it records with the app
+   * minimised, what the technician has allowed, which update it runs, and how
+   * much is waiting to send. The office sees it beside the technician on the
+   * map, so a marker that stops moving comes with a reason.
+   *
+   * Their own phone only -- the id comes from the token.
+   */
+  @Put('location-status')
+  reportLocationStatus(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: TechnicianLocationStatusDto,
+  ) {
+    return this.locations.recordTrackingStatus(request.user, body);
   }
 
   /**
