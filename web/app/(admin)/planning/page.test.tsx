@@ -45,6 +45,7 @@ const PLAN = {
   maxOnSiteMinutes: 360,
   maxDriveMinutes: 90,
   minStopsPerDay: 9,
+  maxStopsPerDay: 12,
   holidays: ['2026-11-26'],
 };
 
@@ -231,8 +232,10 @@ describe('the benefit package plan page', () => {
 
     // The quarter's US holidays, found by the planner rather than typed in.
     expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
-    expect(screen.getByText('Up to 6 hr inspecting and 90 min driving between properties a day')).toBeTruthy();
-    expect(screen.getByText('at least 9 where the properties allow, up to 12')).toBeTruthy();
+    expect(screen.getByText('9 to 12 visits and up to 6 hr inspecting a day')).toBeTruthy();
+    expect(screen.getByText('9 to 12 every day, laid out for the least driving')).toBeTruthy();
+    // Driving has no limit to show (2026-09-17).
+    expect(screen.queryByText(/90 min/)).toBeNull();
     expect(screen.queryByText(/360/)).toBeNull();
     // Thanksgiving is on the plan as well, and is a holiday rather than another closed day.
     expect(screen.queryByText('Also closed')).toBeNull();
@@ -243,7 +246,7 @@ describe('the benefit package plan page', () => {
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('1 hr 45 min of 6 hr')).toBeTruthy();
-    expect(within(day).getByText(/20 of 90 min/)).toBeTruthy();
+    expect(within(day).getByText(/20 min between properties/)).toBeTruthy();
     // Nine o'clock at the first property, then ten minutes' drive to each of the next.
     expect(within(day).getByText('9:00 AM – 9:30 AM')).toBeTruthy();
     expect(within(day).getByText('9:40 AM – 10:25 AM')).toBeTruthy();
@@ -261,15 +264,15 @@ describe('the benefit package plan page', () => {
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  /** The office's rule (2026-09-16): a day starts from home, and only the drives between its properties count. */
-  it('shows the drive from home and when to leave, apart from the day’s limit', () => {
+  /** A day starts from home; its driving between the properties is shown apart from the drive from home. */
+  it('shows the drive from home and when to leave, apart from the driving between properties', () => {
     mount({ day: { ...DAY, originKind: 'HOME', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
 
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('35 min · 42 km · leave 8:25 AM')).toBeTruthy();
-    expect(within(day).getByText('35 min from home, not counted')).toBeTruthy();
-    expect(within(day).getByText(/20 of 90 min/)).toBeTruthy();
-    expect(within(day).getByText(/the drive from home is not counted/)).toBeTruthy();
+    expect(within(day).getByText('35 min from home')).toBeTruthy();
+    expect(within(day).getByText(/20 min between properties/)).toBeTruthy();
+    expect(within(day).getByText(/the drive from home is shown apart/)).toBeTruthy();
   });
 
   /** A plan built before days started from home, or for a technician with no home on file. */

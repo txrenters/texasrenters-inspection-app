@@ -18,20 +18,26 @@ import {
 } from 'class-validator';
 
 /**
- * The office's limits on a technician-day and the visit lengths they are
+ * The office's rules for a technician-day and the visit lengths they are
  * measured with. Any left out keep the plan's current values.
  */
 export class PlanRoutingSettingsDto {
-  /** Minutes an occupied inspection counts for in a day. */
+  /** Minutes an occupied inspection counts for in a day: twenty is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(240) occupiedVisitMinutes?: number;
-  /** Minutes an HVAC inspection counts for in a day. */
+  /** Minutes an HVAC inspection counts for in a day: twenty is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(240) hvacVisitMinutes?: number;
   /** Time spent inspecting in one technician-day: six hours is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(30) @Max(720) maxOnSiteMinutes?: number;
-  /** Driving between one day's properties, first to last, home not counted: ninety minutes is the office's rule. */
+  /**
+   * How far, by an estimated drive, a zone may be from the nearest crew member's
+   * home for the crew to work it: ninety minutes. Not a limit on a day's driving,
+   * which is kept short and never capped.
+   */
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(480) maxDriveMinutes?: number;
-  /** Visits a day should hold at least, where the properties allow: nine is the office's rule. */
+  /** Visits every day holds at least: nine is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) minStopsPerDay?: number;
+  /** Visits one day holds at most: twelve is the office's rule. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) maxStopsPerDay?: number;
 
   /**
    * Days the office is closed besides weekends and US federal holidays, as

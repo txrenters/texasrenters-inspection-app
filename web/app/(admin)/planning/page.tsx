@@ -50,9 +50,9 @@ import { useUrlState } from '@/lib/url-state';
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
  * on the HVAC plan; the crew each covers a zone a week, moving on each week;
  * visits go on weekdays that are not US holidays, with Mondays from the second
- * week kept for rescheduled visits; and a technician-day is a full one -- at
- * least nine visits where the properties allow -- inside six hours inspecting
- * and ninety minutes driving between its properties. Building a quarter
+ * week kept for rescheduled visits; and every technician-day holds nine to
+ * twelve visits, laid out for the least driving, which has no limit (the office,
+ * 2026-09-17). Building a quarter
  * applies all of it and asks the coordinator nothing (the office found a form
  * of minutes and closed days confusing, 2026-09-16). This page is where a
  * coordinator checks the days, changes any draft visit in its window -- the
@@ -68,9 +68,9 @@ const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' 
   CANCELLED: { label: 'Cancelled', variant: 'outline' },
 };
 
-const overLimit = (day: PlanDay, limits: PlanSettings) =>
-  day.onSiteMinutes > limits.maxOnSiteMinutes ||
-  (day.totalDriveSeconds !== null && day.totalDriveSeconds > limits.maxDriveMinutes * 60);
+/** A day with fewer or more visits than the office's rule, or more time inspecting than a day holds. */
+const outsideRules = (day: PlanDay, rules: PlanSettings) =>
+  day.stopCount < rules.minStopsPerDay || day.stopCount > rules.maxStopsPerDay || day.onSiteMinutes > rules.maxOnSiteMinutes;
 
 export default function PlanningPage() {
   const { has } = usePermissions();
@@ -96,7 +96,7 @@ export default function PlanningPage() {
     (stop) => stop.inspectionTypeNeedsReview && stop.status !== 'EXCLUDED' && stop.status !== 'PUBLISHED',
   );
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
-  const overLimitDays = plan ? (days.data ?? []).filter((day) => overLimit(day, plan)) : [];
+  const daysOutsideRules = plan ? (days.data ?? []).filter((day) => outsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
   const openStop = openStopId ? ((stops.data ?? []).find((stop) => stop.id === openStopId) ?? null) : null;
@@ -198,7 +198,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each technician on the crew covers one zone a week and moves to the next zone the week after. Days are full, at least 9 visits where the properties allow, within 6 hours inspecting and 90 minutes driving between properties; the drive from home isn't counted. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each technician on the crew covers one zone a week and moves to the next zone the week after. Every day has 9 to 12 visits, laid out for the least driving, and a visit stays within 3 weeks of last quarter's week unless a day of 9 needs it further. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -265,10 +265,10 @@ export default function PlanningPage() {
               value={attention.length.toLocaleString()}
             />
             <Stat
-              detail={`Up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting and ${plan.maxDriveMinutes} min driving between properties a day`}
-              label="Days over the limits"
-              tone={overLimitDays.length ? 'destructive' : 'success'}
-              value={overLimitDays.length.toLocaleString()}
+              detail={`${plan.minStopsPerDay} to ${plan.maxStopsPerDay} visits and up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting a day`}
+              label="Days outside the rules"
+              tone={daysOutsideRules.length ? 'destructive' : 'success'}
+              value={daysOutsideRules.length.toLocaleString()}
             />
           </StatGroup>
 
@@ -282,9 +282,7 @@ export default function PlanningPage() {
             ) : null}
             <StatStripItem
               label="Visits a day"
-              value={`at least ${plan.minStopsPerDay} where the properties allow, up to ${Math.floor(
-                plan.maxOnSiteMinutes / Math.max(1, Math.min(plan.occupiedVisitMinutes, plan.hvacVisitMinutes)),
-              )}`}
+              value={`${plan.minStopsPerDay} to ${plan.maxStopsPerDay} every day, laid out for the least driving`}
             />
             <StatStripItem label="Mondays" value="kept free for rescheduled visits from week 2" />
             {rotation.data ? (

@@ -2,8 +2,8 @@ import { splitAtFirstStop } from '../src/planning/planning.controller';
 
 /**
  * A day routed from home is drawn as one Google line and cut where it reaches
- * the first property, so the console can show the home leg apart: it is driven,
- * and not counted against the day's ninety minutes.
+ * the first property, so the console can show the home leg apart from the
+ * driving between the day's properties.
  */
 describe('cutting a day’s road line at its first property', () => {
   const first = { latitude: 29.76, longitude: -95.37 };
