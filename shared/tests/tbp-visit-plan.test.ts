@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   tbpInspectionFor,
+  detailsNamingInspection,
   tbpServicesLine,
+  unitFilterSizes,
   tbpServicesLineFromTenancy,
   tbpVisitDetails,
   withInspectionLink,
@@ -139,6 +141,74 @@ describe('the services line of a planned visit', () => {
   it('keeps the line on one line', () => {
     expect(tbpServicesLine('Filter Change: 20x25x1 + Occupied Inspection (Premium\tOpted out HVAC Plan)\n', 'OCCUPIED')).toBe(
       'Filter Change: 20x25x1 + Occupied Inspection (Premium Opted out HVAC Plan)',
+    );
+  });
+});
+
+/** 5009 N Main St: one building, three units, and the filter sizes the office labels by unit. */
+describe('one unit’s filter sizes, from a building’s sizes labelled by unit', () => {
+  const units = [
+    { name: 'House', addressLine1: '5009 N Main St' },
+    { name: '1/2', addressLine1: '5009 1/2 N Main St' },
+    { name: '1/4', addressLine1: '5009 1/4 N Main St' },
+  ];
+  const sizes = [
+    '20x20x1 (N Main)',
+    '16x20x1 (1/2 N Main)',
+    '14x18x1 (1/2 N Main)',
+    'reusable window AC unit (no need to change - 1/4 N Main)',
+  ];
+
+  it('keeps each unit’s own sizes, without their label', () => {
+    expect(unitFilterSizes(sizes, units[0]!, units)).toEqual(['20x20x1']);
+    expect(unitFilterSizes(sizes, units[1]!, units)).toEqual(['16x20x1', '14x18x1']);
+    expect(unitFilterSizes(sizes, units[2]!, units)).toEqual(['reusable window AC unit (no need to change)']);
+  });
+
+  it('takes a label that is the unit’s name as well as its address', () => {
+    expect(unitFilterSizes(['16x25x1 (1/2)', '20x25x1 (House)'], units[1]!, units)).toEqual(['16x25x1']);
+  });
+
+  it('keeps a note that names no unit as the whole building’s', () => {
+    expect(unitFilterSizes(['16x25x4 (MEDIA)', '20x20x1 (1/2 N Main)'], units[0]!, units)).toEqual(['16x25x4 (MEDIA)']);
+  });
+
+  it('says nothing when the sizes are not labelled by unit', () => {
+    expect(unitFilterSizes(['20x25x1', '16x25x4 (MEDIA)'], units[1]!, units)).toBeNull();
+  });
+});
+
+/** A coordinator's own Details, when the kind of visit changes under them. */
+describe('Details a coordinator wrote, naming another inspection', () => {
+  const written = [
+    'Filter Change: 20x25x1 + Pest Control + Occupied Inspection (BX Plan)',
+    'Tenant asked for a call 30 minutes ahead.',
+    '',
+    'Instruction for completion',
+  ].join('\n');
+
+  it('renames the inspection on the services line and keeps the rest as written', () => {
+    const renamed = detailsNamingInspection(written, 'HVAC', 'unused').split('\n');
+
+    expect(renamed[0]).toBe('Filter Change: 20x25x1 + Pest Control + HVAC Inspection (BX Plan)');
+    expect(renamed.slice(1)).toEqual(written.split('\n').slice(1));
+  });
+
+  it('names the inspection on a services line that has none, before its closing note', () => {
+    expect(detailsNamingInspection('Filter Change: 20x25x1 + Pest Control (BX Plan)\nGate code at office', 'HVAC', 'unused')).toBe(
+      'Filter Change: 20x25x1 + Pest Control + HVAC Inspection (BX Plan)\nGate code at office',
+    );
+  });
+
+  it('prefers the line naming an inspection over an earlier note holding a “+”', () => {
+    expect(
+      detailsNamingInspection('Call + text before arriving\nFilter Change: 14x20x1 + Occupied Inspection', 'HVAC', 'unused'),
+    ).toBe('Call + text before arriving\nFilter Change: 14x20x1 + HVAC Inspection');
+  });
+
+  it('puts a services line in front of Details that have none', () => {
+    expect(detailsNamingInspection('Check the smoke alarms.', 'HVAC', 'Filter Change: 20x25x1 + HVAC Inspection')).toBe(
+      'Filter Change: 20x25x1 + HVAC Inspection\n\nCheck the smoke alarms.',
     );
   });
 });

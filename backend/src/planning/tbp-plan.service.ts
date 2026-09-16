@@ -11,6 +11,7 @@ import {
   type TbpInspectionReason,
   type TbpInspectionType,
   carryForwardOrder,
+  detailsNamingInspection,
   previousQuarter,
   quarterLabel,
   quarterStart,
@@ -19,6 +20,7 @@ import {
   tbpServicesLineFromTenancy,
   tbpVisitDetails,
   tenancyZoneLabel,
+  unitFilterSizes,
 } from '@texasrenters/shared';
 
 import { type AuthenticatedUser, auditActor } from '../common/auth';
@@ -72,6 +74,9 @@ interface ResolvedUnit {
   unitId: string | null;
   leaseId: string | null;
   resolution: TbpUnitResolution;
+  /** The unit's name and address, and every unit of its building, when a unit was found. */
+  unit?: { name: string; addressLine1: string | null } | null;
+  units?: { name: string; addressLine1: string | null }[];
 }
 
 export interface GenerationResult {
@@ -206,6 +211,10 @@ export class TbpPlanService {
         scheduleOverriddenAt: null,
         technicianOverriddenAt: null,
         inspectionTypeOverriddenAt: null,
+        visitTitleOverriddenAt: null,
+        visitDetailsOverriddenAt: null,
+        onSiteMinutesOverriddenAt: null,
+        unitOverriddenAt: null,
       },
     });
 
@@ -285,6 +294,8 @@ export class TbpPlanService {
         status: true,
         inspectionId: true,
         inspectionType: true,
+        hvacFilterSizes: true,
+        visitDetailsOverriddenAt: true,
         tenant: { select: TENANT_SELECT },
       },
     });
@@ -302,10 +313,18 @@ export class TbpPlanService {
       if (!officeDetails) withoutOfficeDetails += 1;
       await this.prisma.tbpQuarterPlanStop.update({
         where: { id: stop.id },
-        data: {
-          officeDetails,
-          visitDetails: planVisitDetails(stop.tenant, stop.inspectionType as TbpInspectionType, officeDetails),
-        },
+        // Details a coordinator wrote are sent as written; the sheet's line is
+        // still kept on the stop, beside them.
+        data: stop.visitDetailsOverriddenAt
+          ? { officeDetails }
+          : {
+              officeDetails,
+              visitDetails: planVisitDetails(
+                { ...stop.tenant, hvacFilterSizes: stop.hvacFilterSizes },
+                stop.inspectionType as TbpInspectionType,
+                officeDetails,
+              ),
+            },
       });
     }
 
@@ -346,9 +365,10 @@ export class TbpPlanService {
    *
    * The rule reads a tenant report typed by hand, and some tenancies are
    * flagged for exactly this -- a BX plan "On our AC Plan", say. The choice
-   * sticks through regeneration, and the Details follow it. The day the stop
-   * sits on was measured with the old visit length, so the plan wants routing
-   * again, which the console says.
+   * sticks through regeneration, and the Details follow it: Details a
+   * coordinator wrote keep their words, with only the inspection on their
+   * services line renamed. A length a coordinator set stays. The day it sits on
+   * is measured again by `TbpStopEditService`, which is how the console asks.
    */
   async setInspectionType(user: AuthenticatedUser, stopId: string, inspectionType: TbpInspectionType) {
     const stop = await this.prisma.tbpQuarterPlanStop.findFirst({
@@ -360,6 +380,10 @@ export class TbpPlanService {
         inspectionId: true,
         inspectionType: true,
         officeDetails: true,
+        visitDetails: true,
+        visitDetailsOverriddenAt: true,
+        onSiteMinutesOverriddenAt: true,
+        hvacFilterSizes: true,
         plan: { select: { status: true, occupiedVisitMinutes: true, hvacVisitMinutes: true } },
         tenant: { select: TENANT_SELECT },
       },
@@ -380,8 +404,17 @@ export class TbpPlanService {
         inspectionTypeReason: reason,
         inspectionTypeNeedsReview: false,
         inspectionTypeOverriddenAt: new Date(),
-        onSiteMinutes: inspectionType === 'HVAC' ? stop.plan.hvacVisitMinutes : stop.plan.occupiedVisitMinutes,
-        visitDetails: planVisitDetails(stop.tenant, inspectionType, stop.officeDetails),
+        ...(stop.onSiteMinutesOverriddenAt
+          ? {}
+          : { onSiteMinutes: inspectionType === 'HVAC' ? stop.plan.hvacVisitMinutes : stop.plan.occupiedVisitMinutes }),
+        visitDetails:
+          stop.visitDetailsOverriddenAt && stop.visitDetails
+            ? detailsNamingInspection(
+                stop.visitDetails,
+                inspectionType,
+                servicesLineFor({ ...stop.tenant, hvacFilterSizes: stop.hvacFilterSizes }, inspectionType, stop.officeDetails),
+              )
+            : planVisitDetails({ ...stop.tenant, hvacFilterSizes: stop.hvacFilterSizes }, inspectionType, stop.officeDetails),
       },
       select: { id: true, inspectionType: true, inspectionTypeReason: true, onSiteMinutes: true, visitDetails: true },
     });
@@ -643,6 +676,11 @@ export class TbpPlanService {
         inspectionId: true,
         inspectionType: true,
         inspectionTypeOverriddenAt: true,
+        visitDetails: true,
+        visitTitleOverriddenAt: true,
+        visitDetailsOverriddenAt: true,
+        propertywareUnitId: true,
+        unitOverriddenAt: true,
       },
     });
 
@@ -656,8 +694,11 @@ export class TbpPlanService {
     )
       return false;
 
+    // The unit a coordinator chose stands: nothing in the reports can say better.
     const unit = tenant.propertywareBuildingId
-      ? await this.resolveUnit(organizationId, tenant)
+      ? existing?.unitOverriddenAt && existing.propertywareUnitId
+        ? await this.chosenUnit(organizationId, tenant.propertywareBuildingId, existing.propertywareUnitId)
+        : await this.resolveUnit(organizationId, tenant)
       : { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
 
     const blocked = !tenant.propertywareBuildingId
@@ -665,7 +706,7 @@ export class TbpPlanService {
       : unit.resolution === TbpUnitResolution.UNRESOLVED
         ? {
             code: 'UNIT_REQUIRED',
-            message: 'This building has several units and none of them matched this tenancy.',
+            message: 'This building has several units, and Propertyware does not say which this tenancy is in. Open the visit and choose its unit.',
           }
         : null;
 
@@ -679,6 +720,23 @@ export class TbpPlanService {
         }
       : tbpInspectionFor(quarter.quarter, tenant);
 
+    // In a building of several units, the unit's own filter sizes, where the
+    // office labels the building's by unit.
+    const sizes = unit.unit && unit.units ? (unitFilterSizes(tenant.hvacFilterSizes, unit.unit, unit.units) ?? tenant.hvacFilterSizes) : tenant.hvacFilterSizes;
+    const sized = { ...tenant, hvacFilterSizes: sizes };
+    // A coordinator's title and Details are sent as written; only the
+    // inspection on the Details' services line follows a new kind of visit.
+    const details =
+      existing?.visitDetailsOverriddenAt && existing.visitDetails
+        ? existing.inspectionType === decided.inspectionType
+          ? existing.visitDetails
+          : detailsNamingInspection(
+              existing.visitDetails,
+              decided.inspectionType,
+              servicesLineFor(sized, decided.inspectionType, context.officeDetails),
+            )
+        : planVisitDetails(sized, decided.inspectionType, context.officeDetails);
+
     const shared = {
       previousSequence: ranked.previousSequence,
       orderSource: ranked.orderSource as TbpOrderSource,
@@ -687,14 +745,24 @@ export class TbpPlanService {
       propertywareUnitId: unit.unitId,
       propertywareLeaseId: unit.leaseId,
       unitResolution: unit.resolution,
-      hvacFilterSizes: tenant.hvacFilterSizes,
+      hvacFilterSizes: sizes,
       inspectionType: decided.inspectionType,
       inspectionTypeReason: decided.reason,
       inspectionTypeNeedsReview: decided.needsReview,
       previousTechnicianId: context.previousTechnicianId,
       officeDetails: context.officeDetails,
-      visitTitle: visitTitle(tenant, quarter),
-      visitDetails: planVisitDetails(tenant, decided.inspectionType, context.officeDetails),
+      ...(existing?.visitTitleOverriddenAt
+        ? {}
+        : {
+            // A unit a coordinator chose is the door the visit is for.
+            visitTitle: visitTitle(
+              unit.resolution === TbpUnitResolution.MANUAL && unit.unit?.addressLine1
+                ? { ...tenant, addressLine1: unit.unit.addressLine1 }
+                : tenant,
+              quarter,
+            ),
+          }),
+      visitDetails: details,
       status: blocked ? TbpStopStatus.BLOCKED : TbpStopStatus.PLANNED,
       blockedCode: blocked?.code ?? null,
       blockedMessage: blocked?.message ?? null,
@@ -740,8 +808,12 @@ export class TbpPlanService {
 
     const units = await this.prisma.propertywareUnit.findMany({
       where: { organizationId, buildingId, isActive: true },
-      select: { id: true },
+      select: { id: true, name: true, addressLine1: true },
     });
+    const named = (unitId: string | null) => {
+      const found = units.find((candidate) => candidate.id === unitId);
+      return found ? { unit: { name: found.name, addressLine1: found.addressLine1 }, units } : {};
+    };
 
     // A building with no units of its own is inspected as the building, which
     // `resolveInspectionPlan` accepts.
@@ -767,10 +839,11 @@ export class TbpPlanService {
         unitId: leases[0].unitId,
         leaseId: leases[0].id,
         resolution: TbpUnitResolution.LEASE_MATCH,
+        ...named(leases[0].unitId),
       };
 
     if (units.length === 1)
-      return { unitId: units[0].id, leaseId: null, resolution: TbpUnitResolution.SOLE_UNIT };
+      return { unitId: units[0].id, leaseId: null, resolution: TbpUnitResolution.SOLE_UNIT, ...named(units[0].id) };
 
     // Somebody has already inspected this tenancy and named a unit. That is a
     // human answer to the same question, and it is better than none -- an HVAC
@@ -791,9 +864,30 @@ export class TbpPlanService {
         unitId: prior.propertywareUnitId,
         leaseId: prior.propertywareLeaseId,
         resolution: TbpUnitResolution.PRIOR_INSPECTION,
+        ...named(prior.propertywareUnitId),
       };
 
     return { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
+  }
+
+  /**
+   * The unit a coordinator chose for a tenancy, if it is still one of its
+   * building's. A unit Propertyware has since removed falls back to the ladder.
+   */
+  private async chosenUnit(organizationId: string, buildingId: string, unitId: string): Promise<ResolvedUnit> {
+    const units = await this.prisma.propertywareUnit.findMany({
+      where: { organizationId, buildingId, isActive: true },
+      select: { id: true, name: true, addressLine1: true },
+    });
+    const chosen = units.find((candidate) => candidate.id === unitId);
+    if (!chosen) return { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
+    return {
+      unitId: chosen.id,
+      leaseId: null,
+      resolution: TbpUnitResolution.MANUAL,
+      unit: { name: chosen.name, addressLine1: chosen.addressLine1 },
+      units,
+    };
   }
 }
 
@@ -996,11 +1090,18 @@ export function planVisitDetails(
   inspectionType: TbpInspectionType,
   officeDetails?: string | null,
 ): string {
-  return tbpVisitDetails(
-    officeDetails?.trim()
-      ? tbpServicesLine(officeDetails, inspectionType)
-      : tbpServicesLineFromTenancy(tenant, inspectionType),
-  );
+  return tbpVisitDetails(servicesLineFor(tenant, inspectionType, officeDetails));
+}
+
+/** The services line a planned visit's Details open with: the office's, or one written from the tenancy. */
+export function servicesLineFor(
+  tenant: Pick<PlanTenant, 'hvacFilterSizes' | 'hvacFilterLocation' | 'managementPlan' | 'hvacPlan'>,
+  inspectionType: TbpInspectionType,
+  officeDetails?: string | null,
+): string {
+  return officeDetails?.trim()
+    ? tbpServicesLine(officeDetails, inspectionType)
+    : tbpServicesLineFromTenancy(tenant, inspectionType);
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {

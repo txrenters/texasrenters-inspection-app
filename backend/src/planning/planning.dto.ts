@@ -9,6 +9,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -57,6 +58,22 @@ export class PlanStopListQueryDto {
 
 export class PlanStopTypeDto {
   @IsIn(TBP_INSPECTION_TYPES) inspectionType!: TbpInspectionType;
+}
+
+/** A coordinator's change to one visit in a draft. Anything left out stays as it is. */
+export class PlanStopEditDto {
+  /** The visit's day, `YYYY-MM-DD`, inside the plan's quarter. */
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) scheduledOn?: string;
+  @IsOptional() @IsUUID('all') assignedTechnicianId?: string;
+  /** One of the property's units, for a building of several. */
+  @IsOptional() @IsUUID('all') propertywareUnitId?: string;
+  /** Sent to Jobber as written, and keeps "Tenant Benefit Package". */
+  @IsOptional() @IsString() @MaxLength(300) visitTitle?: string;
+  /** Sent to Jobber as written, and names the inspection the visit is. */
+  @IsOptional() @IsString() @MaxLength(4000) visitDetails?: string;
+  /** Minutes on site, at most the plan's day on site. */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(720) onSiteMinutes?: number;
+  @IsOptional() @IsIn(TBP_INSPECTION_TYPES) inspectionType?: TbpInspectionType;
 }
 
 /** One row of the office's sheet: the property and the services line written for it. */

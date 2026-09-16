@@ -144,7 +144,7 @@ export function PlanStopsTable({
       {
         onSuccess: () =>
           toast.success(`${stop.tenant.addressLine1 ?? 'The visit'} is now an ${inspectionType === 'HVAC' ? 'HVAC' : 'occupied'} inspection`, {
-            description: 'Lay the days out again so its day is measured with the new length.',
+            description: 'Its day is measured again with the new length.',
           }),
         onError: (error) => toast.error('The visit could not be changed', { description: error.message }),
       },

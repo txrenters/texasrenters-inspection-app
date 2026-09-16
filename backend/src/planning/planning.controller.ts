@@ -7,6 +7,7 @@ import {
   HttpCode,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -31,6 +32,7 @@ import {
   OfficeDetailsImportDto,
   PlanQuarterDto,
   PlanRoutingSettingsDto,
+  PlanStopEditDto,
   PlanStopListQueryDto,
   PlanStopTypeDto,
 } from './planning.dto';
@@ -38,6 +40,7 @@ import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
 import { TbpPlanService } from './tbp-plan.service';
 import { TbpPublishService } from './tbp-publish.service';
+import { TbpStopEditService } from './tbp-stop-edit.service';
 
 export const PLANNING_TAG = 'Quarterly planning';
 
@@ -119,6 +122,7 @@ export class PlanningController {
     @Inject(TbpPublishService) private readonly publisher: TbpPublishService,
     @Inject(TbpPlanScheduler) private readonly scheduler: TbpPlanScheduler,
     @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
+    @Inject(TbpStopEditService) private readonly edits: TbpStopEditService,
   ) {}
 
   /** Whether the cron is alive and when it next wakes, for the console. */
@@ -221,7 +225,21 @@ export class PlanningController {
         previousTechnicianId: true,
         scheduleOverriddenAt: true,
         technicianOverriddenAt: true,
-        propertywareUnit: { select: { name: true } },
+        visitTitleOverriddenAt: true,
+        visitDetailsOverriddenAt: true,
+        onSiteMinutesOverriddenAt: true,
+        unitOverriddenAt: true,
+        propertywareUnit: { select: { id: true, name: true, addressLine1: true } },
+        // A building of several units: the ones a coordinator can choose from.
+        propertywareBuilding: {
+          select: {
+            units: {
+              where: { isActive: true },
+              select: { id: true, name: true, addressLine1: true },
+              orderBy: { name: 'asc' },
+            },
+          },
+        },
         tenant: {
           select: {
             leaseName: true,
@@ -254,8 +272,9 @@ export class PlanningController {
         })
       : [];
     const names = new Map(previous.map((technician) => [technician.id, technician.displayName]));
-    return stops.map(({ previousTechnicianId, ...stop }) => ({
+    return stops.map(({ previousTechnicianId, propertywareBuilding, ...stop }) => ({
       ...stop,
+      buildingUnits: propertywareBuilding?.units ?? [],
       previousTechnician: previousTechnicianId
         ? { id: previousTechnicianId, displayName: names.get(previousTechnicianId) ?? null }
         : null,
@@ -491,7 +510,7 @@ export class PlanningController {
     return this.publisher.publish(request.user, planId);
   }
 
-  /** A coordinator deciding a stop is an HVAC or an occupied inspection. */
+  /** A coordinator deciding a stop is an HVAC or an occupied inspection; its day is measured again. */
   @Post('stops/:stopId/inspection-type')
   @RequirePermissions('planning:publish')
   @HttpCode(200)
@@ -500,7 +519,28 @@ export class PlanningController {
     @Param('stopId') stopId: string,
     @Body() body: PlanStopTypeDto,
   ) {
-    return this.plans.setInspectionType(request.user, stopId, body.inspectionType);
+    return this.edits.edit(request.user, stopId, { inspectionType: body.inspectionType });
+  }
+
+  /**
+   * A coordinator's change to one visit in a draft, from its window: the day,
+   * technician, unit, title, Details, kind of visit or length.
+   *
+   * Kept through a rebuild, and the days it touches are measured again. A
+   * visit routing could not place is placed by giving it a day and a
+   * technician; a tenancy in a building of several units, by choosing its unit.
+   */
+  @Patch('stops/:stopId')
+  @RequirePermissions('planning:publish')
+  editStop(@Req() request: AuthenticatedRequest, @Param('stopId') stopId: string, @Body() body: PlanStopEditDto) {
+    return this.edits.edit(request.user, stopId, body);
+  }
+
+  /** The technicians a visit can be given to, the benefit-package crew first. */
+  @Get('technicians')
+  @RequirePermissions('planning:read')
+  technicians(@Req() request: AuthenticatedRequest) {
+    return this.edits.technicians(request.user.organizationId);
   }
 
   /**

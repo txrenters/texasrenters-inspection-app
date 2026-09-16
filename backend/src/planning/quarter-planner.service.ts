@@ -169,7 +169,10 @@ export class QuarterPlannerService {
    * - at most `maxOnSiteMinutes` inspecting, and `maxDriveMinutes` driving
    *   counted from home to the first property and between the properties;
    * - no planned visit on a Monday from the quarter's second week on, which is
-   *   kept for rescheduled visits.
+   *   kept for rescheduled visits;
+   * - a visit a coordinator placed by hand stays on the day and with the
+   *   technician they chose: its day is laid out first, the planner fills
+   *   around it, and it is never moved or trimmed off.
    * Days are laid out on an estimate, measured on real roads, and a day that
    * measures over is repaired; a stop no day can take is blocked with the
    * reason, never squeezed in.
@@ -208,11 +211,12 @@ export class QuarterPlannerService {
       [InspectionType.HVAC, settings.hvacVisitMinutes],
     ] as const)
       await this.prisma.tbpQuarterPlanStop.updateMany({
-        where: { planId, organizationId, inspectionType },
+        // A length a coordinator set is that visit's own, not its kind's.
+        where: { planId, organizationId, inspectionType, onSiteMinutesOverriddenAt: null },
         data: { onSiteMinutes: minutes },
       });
 
-    const { stops, overrides } = await this.plannableStops(organizationId, planId, settings);
+    const { stops, pins } = await this.plannableStops(organizationId, planId, settings);
     const limits: DayLimits = { maxOnSiteMinutes: settings.maxOnSiteMinutes, maxDriveMinutes: settings.maxDriveMinutes };
     const roster = await this.roster(organizationId);
     const zones = zoneCircle(stops, roster, limits.maxDriveMinutes);
@@ -224,18 +228,27 @@ export class QuarterPlannerService {
       roster,
       zones.circle,
     );
-    const homes = roster.homes;
+    const homes = await this.homesWith(organizationId, roster, pins);
+
+    // Visits a coordinator placed by hand are laid out first, as the days they
+    // make, and the planner fills around them. A day the planner would not use
+    // -- a Monday kept for rescheduled visits, say -- is not in its calendar,
+    // so it is measured and kept beside the planner's days.
+    const pinned = new Set(pins.keys());
+    const free = stops.filter((stop) => !pinned.has(stop.stopId));
+    const placedByHand = pinnedCrews(stops, pins, homes);
+    const calendar = new Set(days.map((day) => day.date));
 
     // A zone nobody on the crew lives within the day's drive of is a person's to
     // arrange: its visits are blocked with that reason rather than attempted.
     const outOfReach = new Set(zones.outOfReach);
-    const unreachable = stops.filter((stop) => stop.zone && outOfReach.has(stop.zone));
+    const unreachable = free.filter((stop) => stop.zone && outOfReach.has(stop.zone));
     const rotation = { position: new Map(stops.map((stop, index) => [stop.stopId, index])), size: stops.length };
 
     const assignment = assignQuarter(
-      stops.filter((stop) => !stop.zone || !outOfReach.has(stop.zone)),
+      free.filter((stop) => !stop.zone || !outOfReach.has(stop.zone)),
       days,
-      { limits, homes, rotation },
+      { limits, homes, rotation, existing: placedByHand.filter((crew) => calendar.has(crew.date)) },
     );
     const unplaced: RoutingSummary['unplaced'] = [
       ...unreachable.map((stop) => ({ stopId: stop.stopId, reason: 'ZONE_OUT_OF_REACH' as const })),
@@ -243,7 +256,7 @@ export class QuarterPlannerService {
     ];
     const limitSeconds = settings.maxDriveMinutes * 60;
     let measured = new Map<string, MeasuredCrew>();
-    for (const crew of assignment.crews)
+    for (const crew of [...assignment.crews, ...placedByHand.filter((day) => !calendar.has(day.date))])
       measured.set(crewKey(crew.date, crew.technicianId), await this.measure(crew, homes.get(crew.technicianId)));
 
     const avoid = new Map<string, Set<string>>();
@@ -251,7 +264,7 @@ export class QuarterPlannerService {
     for (let round = 0; round < MAX_REPAIR_ROUNDS; round += 1) {
       const displaced: PlannableStop[] = [];
       for (const [key, crew] of measured) {
-        const trimmed = trimToLimit(crew, limitSeconds, homes.get(crew.technicianId));
+        const trimmed = trimToLimit(crew, limitSeconds, homes.get(crew.technicianId), pinned);
         if (trimmed.dropped.length === 0) continue;
         if (trimmed.crew.stops.length) measured.set(key, trimmed.crew);
         else measured.delete(key);
@@ -287,13 +300,15 @@ export class QuarterPlannerService {
         const previous = measured.get(key);
         next.set(key, crew.changed || !previous ? await this.measure(crew, homes.get(crew.technicianId)) : previous);
       }
+      // The planner answers only for its own calendar; a coordinator's day off it stays.
+      for (const [key, crew] of measured) if (!calendar.has(crew.date)) next.set(key, crew);
       measured = next;
     }
 
     // Whatever still measures over after the repairs gives its extra stops to a
     // person: the office's limit is a rule, not a target.
     for (const [key, crew] of measured) {
-      const trimmed = trimToLimit(crew, limitSeconds, homes.get(crew.technicianId));
+      const trimmed = trimToLimit(crew, limitSeconds, homes.get(crew.technicianId), pinned);
       if (trimmed.dropped.length === 0) continue;
       if (trimmed.crew.stops.length) measured.set(key, trimmed.crew);
       else measured.delete(key);
@@ -303,7 +318,7 @@ export class QuarterPlannerService {
     const crews = [...measured.values()].sort(
       (left, right) => left.date.localeCompare(right.date) || left.technicianId.localeCompare(right.technicianId),
     );
-    await this.persist(organizationId, planId, crews, overrides, unplaced);
+    await this.persist(organizationId, planId, crews, unplaced);
 
     const summary: RoutingSummary = {
       planId,
@@ -423,6 +438,73 @@ export class QuarterPlannerService {
   }
 
   /**
+   * Measure some technician-days again, from the visits on them now.
+   *
+   * For a coordinator's change to a draft: a visit moved to another day or
+   * technician leaves one day and joins another, and a new visit length changes
+   * a day's time inspecting. Each day is ordered from the technician's home and
+   * measured on real roads, as routing measures one, and written back; a day
+   * left with no visit goes. Nothing is refused for making a day long: the day
+   * shows over its limits, for the coordinator to see and decide.
+   */
+  async measureDays(
+    organizationId: string,
+    planId: string,
+    days: readonly { date: string; technicianId: string }[],
+  ): Promise<void> {
+    const unique = new Map(days.map((day) => [crewKey(day.date, day.technicianId), day]));
+    for (const { date, technicianId } of unique.values()) {
+      const on = new Date(`${date}T00:00:00.000Z`);
+      const rows = await this.prisma.tbpQuarterPlanStop.findMany({
+        where: { planId, organizationId, status: TbpStopStatus.PLANNED, scheduledOn: on, assignedTechnicianId: technicianId },
+        select: {
+          id: true,
+          sequence: true,
+          zone: true,
+          inspectionType: true,
+          onSiteMinutes: true,
+          propertywareBuilding: { select: { latitude: true, longitude: true } },
+        },
+        orderBy: { sequence: 'asc' },
+      });
+      const stops: PlannableStop[] = rows.flatMap((row) =>
+        row.propertywareBuilding?.latitude == null || row.propertywareBuilding.longitude == null
+          ? []
+          : [
+              {
+                stopId: row.id,
+                sequence: row.sequence,
+                latitude: Number(row.propertywareBuilding.latitude),
+                longitude: Number(row.propertywareBuilding.longitude),
+                inspectionType: row.inspectionType,
+                onSiteMinutes: row.onSiteMinutes ?? 0,
+                zone: zoneNumberOf(row.zone),
+              },
+            ],
+      );
+
+      if (stops.length === 0) {
+        await this.prisma.tbpQuarterPlanDay.deleteMany({ where: { planId, organizationId, technicianId, date: on } });
+        continue;
+      }
+
+      const crew = await this.measure({ date, technicianId, stops }, await this.homeOf(organizationId, technicianId));
+      await this.prisma.$transaction(async (tx) => {
+        await tx.tbpQuarterPlanDay.upsert({
+          where: { planId_technicianId_date: { planId, technicianId, date: on } },
+          create: { organizationId, planId, technicianId, date: on, ...dayRow(crew) },
+          update: { ...dayRow(crew), computedAt: new Date() },
+        });
+        for (const [index, stop] of crew.stops.entries())
+          await tx.tbpQuarterPlanStop.update({
+            where: { id: stop.stopId },
+            data: { positionInDay: index + 1, driveSecondsForecast: whole(crew.legSeconds[index] ?? null) },
+          });
+      });
+    }
+  }
+
+  /**
    * The stops that can be placed at all, with each visit's length and zone.
    *
    * A stop whose building never geocoded has no coordinates, so no day can be
@@ -443,15 +525,20 @@ export class QuarterPlannerService {
         zone: true,
         inspectionType: true,
         previousTechnicianId: true,
+        scheduledOn: true,
+        assignedTechnicianId: true,
         scheduleOverriddenAt: true,
         technicianOverriddenAt: true,
+        onSiteMinutes: true,
+        onSiteMinutesOverriddenAt: true,
         propertywareBuilding: { select: { latitude: true, longitude: true } },
       },
       orderBy: { sequence: 'asc' },
     });
 
     const stops: PlannableStop[] = [];
-    const overrides = new Map<string, { scheduleOverriddenAt: Date | null; technicianOverriddenAt: Date | null }>();
+    // Placed by hand: a coordinator chose both the day and the technician.
+    const pins = new Map<string, Pin>();
     const unplaceable: string[] = [];
     for (const row of rows) {
       const latitude = row.propertywareBuilding?.latitude;
@@ -460,10 +547,8 @@ export class QuarterPlannerService {
         unplaceable.push(row.id);
         continue;
       }
-      overrides.set(row.id, {
-        scheduleOverriddenAt: row.scheduleOverriddenAt ?? null,
-        technicianOverriddenAt: row.technicianOverriddenAt ?? null,
-      });
+      if (row.scheduleOverriddenAt && row.technicianOverriddenAt && row.scheduledOn && row.assignedTechnicianId)
+        pins.set(row.id, { date: row.scheduledOn.toISOString().slice(0, 10), technicianId: row.assignedTechnicianId });
       stops.push({
         stopId: row.id,
         sequence: row.sequence,
@@ -471,7 +556,11 @@ export class QuarterPlannerService {
         longitude: Number(longitude),
         inspectionType: row.inspectionType ?? InspectionType.OCCUPIED,
         onSiteMinutes:
-          row.inspectionType === InspectionType.HVAC ? settings.hvacVisitMinutes : settings.occupiedVisitMinutes,
+          row.onSiteMinutesOverriddenAt && row.onSiteMinutes !== null && row.onSiteMinutes !== undefined
+            ? row.onSiteMinutes
+            : row.inspectionType === InspectionType.HVAC
+              ? settings.hvacVisitMinutes
+              : settings.occupiedVisitMinutes,
         previousTechnicianId: row.previousTechnicianId ?? null,
         zone: zoneNumberOf(row.zone),
       });
@@ -487,7 +576,7 @@ export class QuarterPlannerService {
         },
       });
 
-    return { stops: withZones(stops), overrides };
+    return { stops: withZones(stops), pins };
   }
 
   /**
@@ -513,6 +602,37 @@ export class QuarterPlannerService {
       if (row.homeLatitude != null && row.homeLongitude != null)
         homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
     return { technicianIds: profiles.map((row) => row.technicianId), homes };
+  }
+
+  /**
+   * The crew's homes, and the home of anyone else a coordinator placed a visit
+   * with: somebody off the crew covering a day still drives from their own.
+   */
+  private async homesWith(organizationId: string, roster: Roster, pins: ReadonlyMap<string, Pin>) {
+    const others = [...new Set([...pins.values()].map((pin) => pin.technicianId))].filter(
+      (technicianId) => !roster.technicianIds.includes(technicianId),
+    );
+    if (others.length === 0) return roster.homes;
+    const profiles = await this.prisma.technicianPlanningProfile.findMany({
+      where: { organizationId, technicianId: { in: others } },
+      select: { technicianId: true, homeLatitude: true, homeLongitude: true },
+    });
+    const homes = new Map(roster.homes);
+    for (const row of profiles)
+      if (row.homeLatitude != null && row.homeLongitude != null)
+        homes.set(row.technicianId, { latitude: Number(row.homeLatitude), longitude: Number(row.homeLongitude) });
+    return homes;
+  }
+
+  /** Where a technician's day starts, when a home is on file: anyone's, not only the crew's. */
+  private async homeOf(organizationId: string, technicianId: string): Promise<GeoPoint | undefined> {
+    const profile = await this.prisma.technicianPlanningProfile.findFirst({
+      where: { organizationId, technicianId },
+      select: { homeLatitude: true, homeLongitude: true },
+    });
+    return profile?.homeLatitude != null && profile.homeLongitude != null
+      ? { latitude: Number(profile.homeLatitude), longitude: Number(profile.homeLongitude) }
+      : undefined;
   }
 
   /**
@@ -627,7 +747,6 @@ export class QuarterPlannerService {
     organizationId: string,
     planId: string,
     crews: readonly MeasuredCrew[],
-    overrides: ReadonlyMap<string, { scheduleOverriddenAt: Date | null; technicianOverriddenAt: Date | null }>,
     unplaced: RoutingSummary['unplaced'],
   ) {
     // Cleared first, so a re-route never leaves a day from the previous run
@@ -648,54 +767,31 @@ export class QuarterPlannerService {
       data: { assignedTechnicianId: null },
     });
 
-    // A drive nothing could measure between two points is Infinity in the
-    // matrix; the database takes a whole number or nothing.
-    const whole = (value: number | null) => (value === null || !Number.isFinite(value) ? null : Math.round(value));
-
     for (const batch of chunk(crews, 10)) {
       await this.prisma.$transaction(async (tx) => {
         for (const crew of batch) {
-          const first = crew.stops[0]!;
           await tx.tbpQuarterPlanDay.create({
             data: {
               organizationId,
               planId,
               technicianId: crew.technicianId,
               date: new Date(`${crew.date}T00:00:00.000Z`),
-              stopCount: crew.stops.length,
-              onSiteMinutes: crew.stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
-              hvacStopCount: crew.stops.filter((stop) => stop.inspectionType === InspectionType.HVAC).length,
-              totalDriveSeconds: whole(crew.totalDriveSeconds),
-              totalDriveMeters: whole(crew.totalDriveMeters),
-              homeDriveSeconds: whole(crew.homeDriveSeconds),
-              homeDriveMeters: whole(crew.homeDriveMeters),
-              // A day routed from home says so, and does not copy the home's
-              // coordinates onto every day of the quarter: the planning profile
-              // stays the one place a technician's address is kept.
-              originLatitude: crew.fromHome ? null : first.latitude,
-              originLongitude: crew.fromHome ? null : first.longitude,
-              originKind: crew.fromHome ? PlanOriginKind.HOME : PlanOriginKind.FIRST_STOP,
-              durationSource: crew.durationSource,
-              departureAssumedAt: businessInstant(crew.date, DAY_STARTS_AT),
+              ...dayRow(crew),
             },
           });
 
-          for (const [index, stop] of crew.stops.entries()) {
-            const pinned = overrides.get(stop.stopId);
-            const leg = crew.legSeconds[index];
+          for (const [index, stop] of crew.stops.entries())
             await tx.tbpQuarterPlanStop.update({
               where: { id: stop.stopId },
-              // A coordinator's own choice of day or technician is never
-              // overwritten by a re-route; the two `*OverriddenAt` guards are
-              // what make re-routing safe to run more than once.
+              // A visit a coordinator placed is laid out on the day and with the
+              // technician they chose, so writing its day writes theirs back.
               data: {
-                ...(pinned?.scheduleOverriddenAt ? {} : { scheduledOn: new Date(`${crew.date}T00:00:00.000Z`) }),
-                ...(pinned?.technicianOverriddenAt ? {} : { assignedTechnicianId: crew.technicianId }),
+                scheduledOn: new Date(`${crew.date}T00:00:00.000Z`),
+                assignedTechnicianId: crew.technicianId,
                 positionInDay: index + 1,
-                driveSecondsForecast: whole(leg ?? null),
+                driveSecondsForecast: whole(crew.legSeconds[index] ?? null),
               },
             });
-          }
         }
       });
     }
@@ -742,6 +838,54 @@ export function routingSettings(
     maxOnSiteMinutes: within('maxOnSiteMinutes', 30, 720),
     maxDriveMinutes: within('maxDriveMinutes', 0, 480),
     holidays: [...new Set(holidays)].sort(),
+  };
+}
+
+/** A visit a coordinator placed by hand: the day and the technician they chose. */
+interface Pin {
+  date: string;
+  technicianId: string;
+}
+
+/** A coordinator's placed visits, as the technician-days they make, with an estimate of each day's drive. */
+function pinnedCrews(stops: readonly PlannableStop[], pins: ReadonlyMap<string, Pin>, homes: ReadonlyMap<string, GeoPoint>) {
+  const crews = new Map<string, { date: string; technicianId: string; stops: PlannableStop[] }>();
+  for (const stop of stops) {
+    const pin = pins.get(stop.stopId);
+    if (!pin) continue;
+    const key = crewKey(pin.date, pin.technicianId);
+    const crew = crews.get(key) ?? { date: pin.date, technicianId: pin.technicianId, stops: [] };
+    crew.stops.push(stop);
+    crews.set(key, crew);
+  }
+  return [...crews.values()].map((crew) => ({
+    ...crew,
+    driveMinutes: estimatedPathMinutes(crew.stops, homes.get(crew.technicianId)),
+  }));
+}
+
+/** A drive nothing could measure is Infinity in the matrix; the database takes a whole number or nothing. */
+const whole = (value: number | null) => (value === null || !Number.isFinite(value) ? null : Math.round(value));
+
+/** A measured technician-day, as its row holds it. */
+function dayRow(crew: MeasuredCrew) {
+  const first = crew.stops[0]!;
+  return {
+    stopCount: crew.stops.length,
+    onSiteMinutes: crew.stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
+    hvacStopCount: crew.stops.filter((stop) => stop.inspectionType === InspectionType.HVAC).length,
+    totalDriveSeconds: whole(crew.totalDriveSeconds),
+    totalDriveMeters: whole(crew.totalDriveMeters),
+    homeDriveSeconds: whole(crew.homeDriveSeconds),
+    homeDriveMeters: whole(crew.homeDriveMeters),
+    // A day routed from home says so, and does not copy the home's coordinates
+    // onto every day of the quarter: the planning profile stays the one place a
+    // technician's address is kept.
+    originLatitude: crew.fromHome ? null : first.latitude,
+    originLongitude: crew.fromHome ? null : first.longitude,
+    originKind: crew.fromHome ? PlanOriginKind.HOME : PlanOriginKind.FIRST_STOP,
+    durationSource: crew.durationSource,
+    departureAssumedAt: businessInstant(crew.date, DAY_STARTS_AT),
   };
 }
 
@@ -897,12 +1041,15 @@ function inMatrixOrder(
  * the matrix already fetched, home included, so a trimmed day's numbers are
  * real, not estimated. A tie goes to the stop later in the rotation, so the
  * earlier keeps its day. A day nothing measured is left alone: there is nothing
- * to trim by. A day of one stop too far from home gives that stop up too.
+ * to trim by. A day of one stop too far from home gives that stop up too. A
+ * visit a coordinator placed is never given up: a day of only theirs stays
+ * over the limit, for them to see.
  */
 function trimToLimit(
   crew: MeasuredCrew,
   limitSeconds: number,
   home: GeoPoint | undefined,
+  pinned: ReadonlySet<string> = new Set(),
 ): { crew: MeasuredCrew; dropped: PlannableStop[] } {
   const matrix = crew.matrix;
   if (!matrix || crew.totalDriveSeconds === null || crew.totalDriveSeconds <= limitSeconds) return { crew, dropped: [] };
@@ -910,9 +1057,11 @@ function trimToLimit(
   let current = crew;
   const dropped: PlannableStop[] = [];
   while (current.stops.length > 0 && (current.totalDriveSeconds ?? 0) > limitSeconds) {
-    let worst = current.stops.length - 1;
+    const candidates = [...current.stops.entries()].filter(([, stop]) => !pinned.has(stop.stopId));
+    if (candidates.length === 0) break;
+    let worst = candidates[candidates.length - 1]![0];
     let worstSaved = Number.NEGATIVE_INFINITY;
-    for (const [position, stop] of current.stops.entries()) {
+    for (const [position, stop] of candidates) {
       const rest = current.stops.filter((_, index) => index !== position);
       const cost = rest.length ? (inMatrixOrder(rest, matrix, home).totalDriveSeconds ?? Number.POSITIVE_INFINITY) : 0;
       const saved = Number.isFinite(cost) ? (current.totalDriveSeconds ?? 0) - cost : Number.NEGATIVE_INFINITY;

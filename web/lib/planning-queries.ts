@@ -72,8 +72,15 @@ export interface PlanStop {
   hvacFilterSizes: string[];
   scheduleOverriddenAt: string | null;
   technicianOverriddenAt: string | null;
+  /** Set when a coordinator wrote the title, the Details, the length or the unit; a rebuild keeps them. */
+  visitTitleOverriddenAt: string | null;
+  visitDetailsOverriddenAt: string | null;
+  onSiteMinutesOverriddenAt: string | null;
+  unitOverriddenAt: string | null;
   previousTechnician: { id: string; displayName: string | null } | null;
-  propertywareUnit: { name: string } | null;
+  propertywareUnit: { id: string; name: string; addressLine1: string | null } | null;
+  /** The building's units, when it has any: in a building of several, a coordinator chooses the tenancy's. */
+  buildingUnits: { id: string; name: string; addressLine1: string | null }[];
   tenant: {
     leaseName: string;
     addressLine1: string | null;
@@ -176,6 +183,27 @@ export interface PlanRotation {
   weeks: { weekOf: string; zones: { zone: string; technicianId: string }[] }[];
 }
 
+/** A technician a visit can be given to, the benefit-package crew first. */
+export interface PlanTechnician {
+  id: string;
+  displayName: string;
+  /** Place in the crew's zone rotation; null is not on the crew. */
+  crewOrder: number | null;
+  hasHome: boolean;
+}
+
+/** A coordinator's change to one visit in a draft; anything left out stays as it is. */
+export interface PlanStopEdit {
+  /** `YYYY-MM-DD`. */
+  scheduledOn?: string;
+  assignedTechnicianId?: string;
+  propertywareUnitId?: string;
+  visitTitle?: string;
+  visitDetails?: string;
+  onSiteMinutes?: number;
+  inspectionType?: PlanInspectionType;
+}
+
 export interface PublishSummary {
   planId: string;
   published: number;
@@ -191,6 +219,7 @@ export const planningKeys = {
   days: (planId: string) => ['admin', 'planning', planId, 'days'] as const,
   dayRoute: (planId: string, dayId: string) => ['admin', 'planning', planId, 'days', dayId, 'route'] as const,
   rotation: (planId: string) => ['admin', 'planning', planId, 'rotation'] as const,
+  technicians: ['admin', 'planning', 'technicians'] as const,
 };
 
 /** The most stops one request returns; a plan larger than this is read a page at a time. */
@@ -233,6 +262,15 @@ export const usePlanRotation = (planId: string | undefined) =>
     enabled: Boolean(planId),
   });
 
+/** Who a visit can be given to, read only when a visit's window can change it. */
+export const usePlanTechnicians = (enabled: boolean) =>
+  useQuery({
+    queryKey: planningKeys.technicians,
+    queryFn: ({ signal }) => api<PlanTechnician[]>(`${PLANNING}/technicians`, { signal }),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+
 /** The road line through one day. Each draw is a Google call, so a drawn day is kept for the visit. */
 export const usePlanDayRoute = (planId: string | undefined, dayId: string | undefined) =>
   useQuery({
@@ -266,6 +304,16 @@ export function usePlanningMutations() {
     setType: useMutation({
       mutationFn: ({ stopId, inspectionType }: { stopId: string; inspectionType: PlanInspectionType }) =>
         post<{ id: string }>(`/stops/${stopId}/inspection-type`, { inspectionType }),
+      onSuccess: refresh,
+    }),
+    // One visit's change, from its window. Its days are measured again on the
+    // server, so days, stops and counts are all read again after.
+    editStop: useMutation({
+      mutationFn: ({ stopId, ...input }: PlanStopEdit & { stopId: string }) =>
+        api<{ id: string; changed: string[] }>(`${PLANNING}/stops/${stopId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(input),
+        }),
       onSuccess: refresh,
     }),
     exclude: useMutation({

@@ -48,13 +48,15 @@ import { useUrlState } from '@/lib/url-state';
  *
  * The office's rules, as the planner applies them: whoever was first last
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
- * on the HVAC plan; visits go on weekdays that are not US holidays; and a
- * technician-day is at most six hours inspecting and ninety minutes driving
- * between its properties. Building a quarter applies all of it and asks the
- * coordinator nothing (the office found a form of minutes and closed days
- * confusing, 2026-09-16). This page is where a coordinator checks the days,
- * fixes what the tenant report could not settle, and publishes -- which creates
- * the inspections and queues their visits for Jobber.
+ * on the HVAC plan; the crew each covers a zone a week, moving on each week;
+ * visits go on weekdays that are not US holidays, with Mondays from the second
+ * week kept for rescheduled visits; and a technician-day is at most six hours
+ * inspecting and ninety minutes driving, counted from home. Building a quarter
+ * applies all of it and asks the coordinator nothing (the office found a form
+ * of minutes and closed days confusing, 2026-09-16). This page is where a
+ * coordinator checks the days, changes any draft visit in its window -- the
+ * day, technician, unit, title, Details -- and publishes, which creates the
+ * inspections and queues their visits for Jobber.
  */
 
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
@@ -354,7 +356,14 @@ export default function PlanningPage() {
         </div>
       )}
 
-      <PlanStopDialog day={openStopDay} onOpenChange={(open) => !open && setOpenStopId(null)} stop={openStop} />
+      <PlanStopDialog
+        closedDays={closedDaysOfQuarter(quarter, plan?.holidays ?? [])}
+        day={openStopDay}
+        editable={canChange && draft}
+        onOpenChange={(open) => !open && setOpenStopId(null)}
+        quarter={quarter}
+        stop={openStop}
+      />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>
         <AlertDialogContent>
