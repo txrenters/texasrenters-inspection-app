@@ -99,6 +99,24 @@ describe('shortestRouteOrder', () => {
   });
 });
 
+/**
+ * Google leaves a pair it could not answer as Infinity. On 2026-09-16 a quarter
+ * of full days came back with no drive from home answered, and a nine-stop day
+ * got an empty order back -- which took the whole plan's routing down with it.
+ */
+describe('an order through stops no leg reaches', () => {
+  it('still visits every stop past the exact-search limit, in the order given', () => {
+    const size = MAX_EXACT_STOPS + 2;
+    const matrix = Array.from({ length: size + 1 }, (_, from) =>
+      Array.from({ length: size + 1 }, (_, to) => (from === to ? 0 : from === 0 ? Number.POSITIVE_INFINITY : 60)),
+    );
+
+    const order = shortestRouteOrder(matrix);
+
+    expect([...order].sort((a, b) => a - b)).toEqual(Array.from({ length: size }, (_, index) => index + 1));
+  });
+});
+
 describe('routeDuration', () => {
   it('sums the origin leg and every hop, and does not return home', () => {
     // origin->A 1, A->B 1, B->C 1. A tour would add C->origin (3) and be wrong:

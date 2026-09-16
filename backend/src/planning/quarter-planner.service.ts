@@ -1039,6 +1039,7 @@ function dayOrder(
   // The solver's origin is row zero; nothing ever drives back to it.
   const withHome = [[0, ...fromHome], ...between.map((row) => [0, ...row])];
   const solved = shortestRouteOrder(withHome).map((index) => index - 1);
+  if (solved.length !== stops.length) return free;
   const total = (order: readonly number[]) => (order.length ? fromHome[order[0]!]! : 0) + pathCost(between, order);
   const reversed = [...solved].reverse();
   const homeFirst =
@@ -1102,7 +1103,9 @@ function trimToLimit(
   home: GeoPoint | undefined,
 ): { crew: MeasuredCrew; dropped: PlannableStop[] } {
   const matrix = crew.matrix;
-  if (!matrix || crew.totalDriveSeconds === null || crew.totalDriveSeconds <= limitSeconds) return { crew, dropped: [] };
+  // A day with a leg nothing measured has no total to trim by, however it reads.
+  if (!matrix || crew.totalDriveSeconds === null || !Number.isFinite(crew.totalDriveSeconds) || crew.totalDriveSeconds <= limitSeconds)
+    return { crew, dropped: [] };
 
   let current = crew;
   const dropped: PlannableStop[] = [];
