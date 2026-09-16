@@ -36,11 +36,12 @@ import {
   InspectionType,
   MediaProcessingStatus,
   MediaUploadStatus,
+  Prisma,
   PropertyAreaStatus,
   VideoRecordingType,
 } from '@prisma/client';
 import type { AreaCategory, AreaEnvironment } from '@prisma/client';
-import type { FindingReviewStatus, Prisma } from '@prisma/client';
+import type { FindingReviewStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
 import { ApplicationError } from '../common/errors';
@@ -126,6 +127,13 @@ function videoStorageKey(
   mimeType: string,
 ) {
   return `${organizationId}/${inspectionId}/${areaId}/videos/${randomUUID()}${videoExtension(mimeType)}`;
+}
+
+/** A unique-constraint failure on the named column, as Prisma reports one. */
+function isUniqueViolationOf(error: unknown, column: string) {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+  const target = (error.meta as { target?: unknown } | undefined)?.target;
+  return Array.isArray(target) ? target.includes(column) : String(target ?? '').includes(column);
 }
 
 function captureSummaryFromDto(dto: TechnicianMediaUploadDto): Prisma.InputJsonValue {
@@ -2257,24 +2265,8 @@ export class TechnicianService {
       }
 
       // Retried uploads reuse the client key and return the stored photo.
-      const existing = await this.prisma.inspectionPhoto.findUnique({
-        where: { idempotencyKey: dto.idempotencyKey },
-        select: { id: true, inspectionAreaId: true },
-      });
-      if (existing) {
-        if (existing.inspectionAreaId !== area.id)
-          throw new ApplicationError(
-            409,
-            'PHOTO_KEY_CONFLICT',
-            'This photo key was already used for another area.',
-          );
-        return this.mapPhoto(
-          await this.prisma.inspectionPhoto.findUniqueOrThrow({
-            where: { id: existing.id },
-            select: photoSelect,
-          }),
-        );
-      }
+      const stored = await this.photoStoredUnder(dto.idempotencyKey, area.id);
+      if (stored) return stored;
 
       if (dto.findingId) {
         const finding = await this.prisma.inspectionFinding.findFirst({
@@ -2348,12 +2340,47 @@ export class TechnicianService {
         });
       } catch (error) {
         await this.mediaStorage.delete(storageKey).catch(() => undefined);
+        // A retry that raced the upload it repeats. On a weak signal the phone
+        // gave up on a first attempt that then finished (69 seconds, 2026-09-16),
+        // and both passed the check above. That one is the photo: this copy's
+        // file goes, and the retry gets the photo back as any later retry would,
+        // rather than a 500 for evidence that is saved.
+        if (isUniqueViolationOf(error, 'idempotencyKey')) {
+          const saved = await this.photoStoredUnder(dto.idempotencyKey, area.id);
+          if (saved) return saved;
+        }
         throw error;
       }
       return this.mapPhoto(record);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * The photo already stored under an upload's key, or null.
+   *
+   * A key already used for another area is refused: returning that photo would
+   * file it as this room's evidence.
+   */
+  private async photoStoredUnder(idempotencyKey: string, areaId: string) {
+    const existing = await this.prisma.inspectionPhoto.findUnique({
+      where: { idempotencyKey },
+      select: { id: true, inspectionAreaId: true },
+    });
+    if (!existing) return null;
+    if (existing.inspectionAreaId !== areaId)
+      throw new ApplicationError(
+        409,
+        'PHOTO_KEY_CONFLICT',
+        'This photo key was already used for another area.',
+      );
+    return this.mapPhoto(
+      await this.prisma.inspectionPhoto.findUniqueOrThrow({
+        where: { id: existing.id },
+        select: photoSelect,
+      }),
+    );
   }
 
   async listPhotos(user: AuthenticatedUser, roomId: string) {

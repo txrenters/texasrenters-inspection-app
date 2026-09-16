@@ -31,6 +31,24 @@ function describeValidationFailure(exception: unknown): string {
   return exception.message;
 }
 
+/**
+ * Whether the client went away before its request finished.
+ *
+ * A phone on a weak signal drops mid-upload, and multer then fails the request
+ * with "Request aborted" or "Request closed" (body parsing, with
+ * `request.aborted`). Nothing went wrong on the server and nobody is left to
+ * read an answer. Logged as 500s with stacks -- four in eight minutes from one
+ * poor signal on 2026-09-16 -- they buried the failures that were real.
+ */
+function isClientAbort(exception: unknown, request: Request) {
+  if (!(exception instanceof Error) || !(request.destroyed || request.socket?.destroyed === true)) return false;
+  return (
+    exception.message === 'Request aborted' ||
+    exception.message === 'Request closed' ||
+    (exception as { type?: unknown }).type === 'request.aborted'
+  );
+}
+
 @Catch()
 export class ApplicationExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('Exceptions');
@@ -38,6 +56,14 @@ export class ApplicationExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const response = host.switchToHttp().getResponse<Response>();
     const request = host.switchToHttp().getRequest<Request & { requestId?: string }>();
+    if (isClientAbort(exception, request)) {
+      // 499, "client closed request": a line to count, not a stack to read.
+      this.logger.warn(
+        `${request.method} ${request.url} -> 499 client closed the request (requestId=${request.requestId ?? 'unknown'})`,
+      );
+      if (!response.headersSent) response.status(499).end();
+      return;
+    }
     const status =
       exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
     // Unexpected exceptions must leave a trace; without this, every raw 500
