@@ -133,7 +133,7 @@ describe('laying the quarter out in full days', () => {
   });
 
   it('gives a zone’s visits only to whoever has the zone that day', () => {
-    const zoned = days(14, ['moses', 'kevin']).map((day, index) => ({
+    const zoned: PlannableDay[] = days(14, ['moses', 'kevin']).map((day, index) => ({
       ...day,
       zoneTechnicians: index < 7 ? { '1': 'moses', '2': 'kevin' } : { '1': 'kevin', '2': 'moses' },
     }));
@@ -146,7 +146,7 @@ describe('laying the quarter out in full days', () => {
     for (const crew of crews) {
       const zones = new Set(crew.stops.map((stop) => stop.zone));
       expect(zones.size).toBe(1);
-      const owners = zoned.find((day) => day.date === crew.date)!.zoneTechnicians;
+      const owners = zoned.find((day) => day.date === crew.date)!.zoneTechnicians!;
       expect(crew.technicianId).toBe(owners[crew.stops[0]!.zone!]);
     }
   });
