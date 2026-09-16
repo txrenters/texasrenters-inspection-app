@@ -3122,9 +3122,25 @@ model TbpQuarterPlanStop {
 
   /// A coordinator touched this field, so regeneration must leave it alone.
   /// Without these the fortnightly cron would quietly undo every manual fix.
+  /// A visit placed by hand has both `scheduleOverriddenAt` and
+  /// `technicianOverriddenAt`: routing lays its day out first, fills around it,
+  /// and never moves it or trims it (the office, 2026-09-16).
   sequenceOverriddenAt   DateTime?
   scheduleOverriddenAt   DateTime?
   technicianOverriddenAt DateTime?
+  /// The title and Details as a coordinator wrote them, sent to Jobber as
+  /// written: regeneration and the office's sheet leave them alone, and a new
+  /// kind of visit only renames the inspection on the services line.
+  visitTitleOverriddenAt    DateTime?
+  visitDetailsOverriddenAt  DateTime?
+  /// A visit length a coordinator set, kept in place of the plan's length for
+  /// its kind of visit.
+  onSiteMinutesOverriddenAt DateTime?
+  /// The unit a coordinator chose (`unitResolution` MANUAL). The tenant and
+  /// lease reports hold only the building, so in a building of several units
+  /// nothing else can say which door a tenancy is behind -- 5009 N Main St's
+  /// House, 1/2 and 1/4. Regeneration keeps it.
+  unitOverriddenAt          DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

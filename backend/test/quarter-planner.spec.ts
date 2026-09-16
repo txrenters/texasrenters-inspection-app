@@ -14,8 +14,13 @@ interface StopRow {
   longitude: number | null;
   inspectionType?: InspectionType;
   previousTechnicianId?: string | null;
+  /** `YYYY-MM-DD`, as a coordinator or an earlier run left it. */
+  scheduledOn?: string | null;
+  assignedTechnicianId?: string | null;
   scheduleOverriddenAt?: Date | null;
   technicianOverriddenAt?: Date | null;
+  onSiteMinutes?: number | null;
+  onSiteMinutesOverriddenAt?: Date | null;
   /** As the tenant report writes it. */
   zone?: string | null;
 }
@@ -88,6 +93,7 @@ const build = (
   }));
 
   const dayCreate = jest.fn().mockResolvedValue({});
+  const dayUpsert = jest.fn().mockResolvedValue({});
   const stopUpdate = jest.fn().mockResolvedValue({});
   const stopUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
   const dayDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
@@ -106,8 +112,12 @@ const build = (
           zone: row.zone === undefined ? '1' : row.zone,
           inspectionType: row.inspectionType ?? InspectionType.OCCUPIED,
           previousTechnicianId: row.previousTechnicianId ?? null,
+          scheduledOn: row.scheduledOn ? new Date(`${row.scheduledOn}T00:00:00.000Z`) : null,
+          assignedTechnicianId: row.assignedTechnicianId ?? null,
           scheduleOverriddenAt: row.scheduleOverriddenAt ?? null,
           technicianOverriddenAt: row.technicianOverriddenAt ?? null,
+          onSiteMinutes: row.onSiteMinutes ?? null,
+          onSiteMinutesOverriddenAt: row.onSiteMinutesOverriddenAt ?? null,
           propertywareBuilding:
             row.latitude === null ? null : { latitude: row.latitude, longitude: row.longitude },
         })),
@@ -123,8 +133,11 @@ const build = (
           .filter((row) => row.isPlannable && row.tbpZoneOrder !== null)
           .sort((left, right) => left.tbpZoneOrder! - right.tbpZoneOrder!),
       ),
+      findFirst: jest.fn(({ where }: { where: { technicianId: string } }) =>
+        Promise.resolve(profiles.find((row) => row.technicianId === where.technicianId) ?? null),
+      ),
     },
-    tbpQuarterPlanDay: { deleteMany: dayDeleteMany, create: dayCreate },
+    tbpQuarterPlanDay: { deleteMany: dayDeleteMany, create: dayCreate, upsert: dayUpsert },
     userProfile: {
       findMany: jest.fn().mockResolvedValue(
         technicians.map((row) => ({ id: row.technicianId, displayName: `Name of ${row.technicianId}` })),
@@ -175,6 +188,8 @@ const build = (
   return {
     service: new QuarterPlannerService(prisma, skills, google, osrm),
     dayCreate,
+    dayUpsert,
+    stopFindMany: client.tbpQuarterPlanStop.findMany,
     stopUpdate,
     stopUpdateMany,
     dayDeleteMany,
@@ -194,6 +209,56 @@ const updateFor = (stopUpdate: jest.Mock, id: string) =>
 
 /** Five minutes between any two stops. */
 const fiveMinutes = () => 300;
+
+/** After a coordinator moves a visit or changes its length, from its window. */
+describe('measuring days again after a coordinator’s change', () => {
+  const onDay = (id: string, sequence: number, offset: number) => ({
+    id,
+    sequence,
+    zone: '1',
+    inspectionType: InspectionType.OCCUPIED,
+    onSiteMinutes: 45,
+    propertywareBuilding: { latitude: 29.76 + offset * 0.01, longitude: -95.37 },
+  });
+
+  it('measures the day a visit joined from the visits on it now, and removes the day it left empty', async () => {
+    const { service, stopFindMany, dayUpsert, dayDeleteMany, stopUpdate } = build([], { googleSeconds: fiveMinutes });
+    stopFindMany.mockResolvedValueOnce([onDay('s1', 1, 0), onDay('s2', 2, 1)]).mockResolvedValueOnce([]);
+
+    await service.measureDays('org-1', 'plan-1', [
+      { date: '2026-10-02', technicianId: 'tech-1' },
+      { date: '2026-10-01', technicianId: 'tech-2' },
+    ]);
+
+    expect(dayUpsert).toHaveBeenCalledTimes(1);
+    const upsert = dayUpsert.mock.calls[0][0];
+    expect(upsert.where).toEqual({
+      planId_technicianId_date: { planId: 'plan-1', technicianId: 'tech-1', date: new Date('2026-10-02T00:00:00.000Z') },
+    });
+    expect(upsert.create).toMatchObject({ organizationId: 'org-1', stopCount: 2, onSiteMinutes: 90, totalDriveSeconds: 300 });
+    expect(upsert.update).toMatchObject({ stopCount: 2, onSiteMinutes: 90, totalDriveSeconds: 300 });
+    expect([updateFor(stopUpdate, 's1')?.positionInDay, updateFor(stopUpdate, 's2')?.positionInDay].sort()).toEqual([1, 2]);
+    expect(dayDeleteMany).toHaveBeenCalledWith({
+      where: { planId: 'plan-1', organizationId: 'org-1', technicianId: 'tech-2', date: new Date('2026-10-01T00:00:00.000Z') },
+    });
+  });
+
+  it('routes a measured day from the technician’s home', async () => {
+    const { service, stopFindMany, dayUpsert } = build([], {
+      technicians: [{ technicianId: 'tech-1', isPlannable: true, homeLatitude: 29.7, homeLongitude: -95.37 }],
+      googleSeconds: fiveMinutes,
+    });
+    stopFindMany.mockResolvedValueOnce([onDay('s1', 1, 0)]);
+
+    await service.measureDays('org-1', 'plan-1', [{ date: '2026-10-02', technicianId: 'tech-1' }]);
+
+    expect(dayUpsert.mock.calls[0][0].create).toMatchObject({
+      originKind: PlanOriginKind.HOME,
+      homeDriveSeconds: 300,
+      totalDriveSeconds: 300,
+    });
+  });
+});
 
 describe('routing a draft quarter', () => {
   it('gives every stop a day, a technician and a position', async () => {
@@ -307,24 +372,78 @@ describe('routing a draft quarter', () => {
    * choice of day or technician is a decision — not something an automation
    * gets to reverse on its next pass.
    */
-  it('leaves a coordinator’s chosen day and technician alone', async () => {
-    const pinned: StopRow = {
+  /**
+   * A visit a coordinator placed by hand stays on the day and with the
+   * technician they chose (the office, 2026-09-16) -- even a day the planner
+   * would not use, with somebody off the crew -- and its day is counted there.
+   */
+  it('keeps a visit a coordinator placed on their day and technician, and counts its day there', async () => {
+    const placed: StopRow = {
       ...stop('s1', 1),
-      scheduleOverriddenAt: new Date('2026-09-20'),
-      technicianOverriddenAt: new Date('2026-09-20'),
+      scheduledOn: '2026-10-02',
+      assignedTechnicianId: 'tech-2',
+      scheduleOverriddenAt: new Date('2026-09-16'),
+      technicianOverriddenAt: new Date('2026-09-16'),
     };
-    const { service, stopUpdate } = build([pinned, stop('s2', 2, 1)]);
+    const { service, stopUpdate, dayCreate } = build([placed, stop('s2', 2, 1)], {
+      technicians: [
+        { technicianId: 'tech-1', isPlannable: true },
+        { technicianId: 'tech-2', isPlannable: true, tbpZoneOrder: null },
+      ],
+    });
 
-    await service.route('org-1', 'plan-1');
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01') });
 
-    const pinnedUpdate = updateFor(stopUpdate, 's1')!;
-    expect(pinnedUpdate).not.toHaveProperty('scheduledOn');
-    expect(pinnedUpdate).not.toHaveProperty('assignedTechnicianId');
-    expect(pinnedUpdate.positionInDay).toBe(1);
+    expect(summary.unplaced).toEqual([]);
+    expect(updateFor(stopUpdate, 's1')).toMatchObject({
+      scheduledOn: new Date('2026-10-02T00:00:00.000Z'),
+      assignedTechnicianId: 'tech-2',
+      positionInDay: 1,
+    });
+    expect(updateFor(stopUpdate, 's2')).toMatchObject({
+      scheduledOn: new Date('2026-10-01T00:00:00.000Z'),
+      assignedTechnicianId: 'tech-1',
+    });
+    const days = dayCreate.mock.calls.map((call) => call[0].data);
+    expect(days).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ technicianId: 'tech-2', date: new Date('2026-10-02T00:00:00.000Z'), stopCount: 1 }),
+        expect.objectContaining({ technicianId: 'tech-1', date: new Date('2026-10-01T00:00:00.000Z'), stopCount: 1 }),
+      ]),
+    );
+  });
 
-    const freeUpdate = updateFor(stopUpdate, 's2')!;
-    expect(freeUpdate).toHaveProperty('scheduledOn');
-    expect(freeUpdate).toHaveProperty('assignedTechnicianId');
+  /** The limit is the office's rule for the planner; a coordinator's own day over it is theirs to see. */
+  it('never takes a coordinator’s visit off its day for the drive limit', async () => {
+    const byHand = (id: string, sequence: number, offset: number): StopRow => ({
+      ...stop(id, sequence, offset),
+      scheduledOn: '2026-10-01',
+      assignedTechnicianId: 'tech-1',
+      scheduleOverriddenAt: new Date('2026-09-16'),
+      technicianOverriddenAt: new Date('2026-09-16'),
+    });
+    const { service, dayCreate } = build([byHand('a', 1, 0), byHand('b', 2, 30)], {
+      plan: { maxDriveMinutes: 30 },
+      googleSeconds: () => 3600,
+    });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01') });
+
+    expect(summary.unplaced).toEqual([]);
+    expect(dayCreate.mock.calls[0][0].data).toMatchObject({ stopCount: 2, totalDriveSeconds: 3600 });
+  });
+
+  it('counts a visit at the length a coordinator set, and leaves it when lengths are reset by kind', async () => {
+    const longer: StopRow = { ...stop('s1', 1), onSiteMinutes: 90, onSiteMinutesOverriddenAt: new Date('2026-09-16') };
+    const { service, dayCreate, stopUpdateMany } = build([longer]);
+
+    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01') });
+
+    expect(dayCreate.mock.calls[0][0].data.onSiteMinutes).toBe(90);
+    expect(stopUpdateMany).toHaveBeenCalledWith({
+      where: { planId: 'plan-1', organizationId: 'org-1', inspectionType: InspectionType.OCCUPIED, onSiteMinutesOverriddenAt: null },
+      data: { onSiteMinutes: 30 },
+    });
   });
 
   /**

@@ -179,6 +179,98 @@ export function tbpServicesLine(line: string, inspectionType: TbpInspectionType)
   return [services ? `${services} + ${name}` : name, note?.text].filter(Boolean).join(' ');
 }
 
+/**
+ * Details a coordinator wrote, made to name another inspection.
+ *
+ * Their text is kept. Only the services line -- the line joining services with
+ * "+", which the sync and the phone read the visit by -- has its inspection
+ * renamed, or named where it has none; a line already naming an inspection is
+ * preferred over an earlier note that happens to hold a "+". Details with no
+ * services line at all get `servicesLine` in front of them.
+ */
+export function detailsNamingInspection(
+  details: string,
+  inspectionType: TbpInspectionType,
+  servicesLine: string,
+): string {
+  const lines = details.split(/\r?\n/);
+  const named = lines.findIndex((line) => line.includes('+') && INSPECTION_ON_LINE.test(line));
+  const services = named === -1 ? lines.findIndex((line) => line.includes('+')) : named;
+  if (services === -1) return [servicesLine.trim(), details.trim()].filter(Boolean).join('\n\n');
+  lines[services] = tbpServicesLine(lines[services]!, inspectionType);
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------- Units
+
+/** A unit of a building, as Propertyware names it. */
+export interface BuildingUnit {
+  name: string;
+  addressLine1: string | null;
+}
+
+const STREET_TYPES = new Set([
+  'st', 'street', 'ave', 'avenue', 'rd', 'road', 'dr', 'drive', 'ln', 'lane', 'blvd', 'boulevard', 'ct', 'court',
+  'way', 'pl', 'place', 'cir', 'circle', 'pkwy', 'parkway', 'trl', 'trail', 'ter', 'terrace', 'loop', 'hwy',
+  'highway', 'cv', 'cove', 'xing', 'crossing', 'bnd', 'bend', 'sq', 'square',
+]);
+
+/** A street without its house number or street type, as a unit is labelled: "1/2 n main" for "5009 1/2 N Main St". */
+function unitKey(text: string): string {
+  const tokens = text.toLowerCase().replace(/[^a-z0-9/]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+  if (tokens.length > 1 && /^\d+$/.test(tokens[0]!)) tokens.shift();
+  if (tokens.length > 1 && STREET_TYPES.has(tokens[tokens.length - 1]!)) tokens.pop();
+  return tokens.join(' ');
+}
+
+/** "16x20x1 (1/2 N Main)" as the size and the unit named; a note before " - " stays with the size. */
+function unitLabel(entry: string): { text: string; unit: string } | null {
+  const match = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(entry.trim());
+  if (!match) return null;
+  const inner = match[2]!.trim();
+  const dash = inner.lastIndexOf(' - ');
+  const note = dash === -1 ? '' : inner.slice(0, dash).trim();
+  return { text: note ? `${match[1]!.trim()} (${note})` : match[1]!.trim(), unit: dash === -1 ? inner : inner.slice(dash + 3) };
+}
+
+/**
+ * One unit's filter sizes, from a building's sizes labelled by unit.
+ *
+ * The tenant report holds filter sizes per building, so for a building of
+ * several units the office writes which unit each belongs to: 5009 N Main St's
+ * are "20x20x1 (N Main)", "16x20x1 (1/2 N Main)", "14x18x1 (1/2 N Main)" and
+ * "reusable window AC unit (no need to change - 1/4 N Main)". A label names a
+ * unit when it is the unit's name, or its address without the house number and
+ * street type. The unit's own sizes are kept without their label, sizes naming
+ * another unit are left out, and a size with no unit label -- "(MEDIA)" is a
+ * note, not a unit -- stays as the whole building's. Null when no size is
+ * labelled by unit at all, so the caller keeps the building's sizes as they are.
+ */
+export function unitFilterSizes(
+  sizes: readonly string[],
+  unit: BuildingUnit,
+  units: readonly BuildingUnit[],
+): string[] | null {
+  const keysOf = (candidate: BuildingUnit) =>
+    [unitKey(candidate.name), candidate.addressLine1 ? unitKey(candidate.addressLine1) : ''].filter(Boolean);
+  const mine = new Set(keysOf(unit));
+  const anyUnit = new Set([...units, unit].flatMap(keysOf));
+
+  let labelled = false;
+  const kept: string[] = [];
+  for (const entry of sizes) {
+    const label = unitLabel(entry);
+    const key = label ? unitKey(label.unit) : '';
+    if (!label || !anyUnit.has(key)) {
+      kept.push(entry);
+      continue;
+    }
+    labelled = true;
+    if (mine.has(key)) kept.push(label.text);
+  }
+  return labelled ? kept : null;
+}
+
 /** The tenancy fields a services line is written from, when the office wrote none. */
 export interface TbpTenancyServices extends TbpTenancyPlan {
   hvacFilterSizes: string[];

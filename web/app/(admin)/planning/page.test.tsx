@@ -9,6 +9,7 @@ const hooks = vi.hoisted(() => ({
   usePlanDays: vi.fn(),
   usePlanDayRoute: vi.fn(),
   usePlanRotation: vi.fn(),
+  usePlanTechnicians: vi.fn(),
   usePlanningMutations: vi.fn(),
 }));
 
@@ -73,8 +74,13 @@ const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
   hvacFilterSizes: ['20x25x1'],
   scheduleOverriddenAt: null,
   technicianOverriddenAt: null,
+  visitTitleOverriddenAt: null,
+  visitDetailsOverriddenAt: null,
+  onSiteMinutesOverriddenAt: null,
+  unitOverriddenAt: null,
   previousTechnician: { id: 'tech-1', displayName: 'Moses Rivera' },
   propertywareUnit: null,
+  buildingUnits: [],
   tenant: {
     leaseName: `Tenant of ${id}`,
     addressLine1: `${id} Any St`,
@@ -153,8 +159,10 @@ function mount({
       ],
     },
   });
+  hooks.usePlanTechnicians.mockReturnValue({ data: [] });
   hooks.usePlanningMutations.mockReturnValue({
     build,
+    editStop: idle,
     importOfficeDetails: idle,
     setType: idle,
     exclude: idle,
@@ -277,6 +285,21 @@ describe('the benefit package plan page', () => {
 
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('35 min from home · 42 km · leave 8:25 AM')).toBeTruthy();
+  });
+
+  /** The office edits a draft visit where it reads it (2026-09-16): each value is its own control. */
+  it('lets a coordinator change a draft visit’s values in its window, and nothing of a published plan', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'Details of stop 2, 2 Any St' }));
+    const dialog = await screen.findByRole('dialog');
+    for (const value of ['the date', 'the technician', 'the time on site', 'the kind of visit', 'the title', 'the Details'])
+      expect(within(dialog).getByRole('button', { name: new RegExp(`Change ${value}`) })).toBeTruthy();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    mount({ plans: [{ ...PLAN, status: 'PUBLISHED' }] });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Details of stop 2, 2 Any St' }).at(-1)!);
+    const published = (await screen.findAllByRole('dialog')).at(-1)!;
+    expect(within(published).queryByRole('button', { name: /Change the date/ })).toBeNull();
   });
 
   it('opens a visit’s details from the visits table', async () => {
