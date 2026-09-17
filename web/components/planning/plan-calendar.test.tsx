@@ -116,6 +116,16 @@ describe('the benefit-package calendar', () => {
     expect(screen.getByRole('button', { name: /^Friday, October 2: Emanuel Hall, 12 visits.*inspecting$/ })).toBeTruthy();
   });
 
+  it('marks a day built around a move-out', () => {
+    const anchored = {
+      ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 10, '3'),
+      anchors: [{ id: 'anchor-1', inspectionId: 'move-out-1' }],
+    } as unknown as PlanDay;
+    render(<PlanCalendar days={[anchored]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+
+    expect(screen.getByRole('button', { name: /^Wednesday, October 14: Moses Rodriguez, 10 visits.*, built around a move-out, / })).toBeTruthy();
+  });
+
   it('keys each technician’s colour and totals', () => {
     render(<PlanCalendar days={DAYS} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
 

@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   type AssignedCrew,
+  type DayAnchor,
   type PlannableDay,
   type PlannableStop,
+  anchorAsStop,
+  anchorIdOf,
   crewKey,
   estimatedDriveMinutes,
   improveDays,
@@ -128,6 +131,19 @@ describe('laying the quarter out in full days', () => {
     expect(crews).toHaveLength(1);
     expect(crews[0]).toMatchObject({ date: '2026-10-01' });
     expect(stopIds(crews[0]!)).toContain('late');
+  });
+
+  /** Six weeks at most: a tenant visited months off their cycle is worse off than a short day. */
+  it('never moves a visit more than six weeks from its week, even for a day of nine', () => {
+    const early = cluster('e', 9);
+    const late = at('late', 10, 29.765, -95.37);
+    const rotation = dueOn([...early.map((stop): [string, number] => [stop.stopId, 0]), ['late', 70]], 80);
+
+    const { crews } = layoutFullDays([...early, late], days(80, ['t1']), { rotation });
+
+    const lateDay = crews.find((crew) => stopIds(crew).includes('late'))!;
+    expect(lateDay.date).toBe('2026-12-10');
+    expect(lateDay.stops).toHaveLength(1);
   });
 
   /**
@@ -276,6 +292,120 @@ describe('shortening the driving across days', () => {
 
     expect(stopIds(improved.find((day) => day.technicianId === 'kevin')!)).toContain('outlier1');
     for (const day of improved) expect(new Set(day.stops.map((stop) => stop.zone))).toEqual(new Set([day.technicianId === 'moses' ? '1' : '2']));
+  });
+});
+
+/**
+ * The office (2026-09-17): move-outs are Moses's, and "we should be doing TBPs
+ * around those". A move-out is the anchor of its day.
+ */
+describe('days built around a move-out', () => {
+  const moveOut = (id: string, date: string, latitude: number, extra: Partial<DayAnchor> = {}): DayAnchor => ({
+    id,
+    date,
+    technicianId: 'moses',
+    latitude,
+    longitude: -95.37,
+    onSiteMinutes: 60,
+    ...extra,
+  });
+  /** Moses has zone 1 every day, and Kevin zone 2. */
+  const zoned = (count: number) => days(count, ['moses', 'kevin'], { zoneTechnicians: { '1': 'moses', '2': 'kevin' } });
+  const north = cluster('n', 9, 1, { zone: '1' });
+  /** Kevin's zone, some twenty kilometres south, where the move-out is. */
+  const south = cluster('s', 12, 10, { zone: '2' }).map((stop) => ({ ...stop, latitude: stop.latitude - 0.2 }));
+
+  it('gives the move-out’s day the visits nearest it, whatever zone they are in', () => {
+    const { crews, skippedAnchors } = layoutFullDays([...north, ...south], zoned(10), {
+      anchors: [moveOut('move-out-1', '2026-10-03', 29.56)],
+    });
+
+    const anchored = crews.find((crew) => crew.anchors?.length)!;
+    expect(skippedAnchors).toEqual([]);
+    expect(anchored).toMatchObject({ date: '2026-10-03', technicianId: 'moses' });
+    expect(anchored.anchors!.map((anchor) => anchor.id)).toEqual(['move-out-1']);
+    // Kevin's zone that day, because that is where the move-out is.
+    expect(new Set(anchored.stops.map((stop) => stop.zone))).toEqual(new Set(['2']));
+    expect(anchored.stops.length).toBeGreaterThanOrEqual(9);
+    // Moses's own zone goes on another of his days.
+    expect(crews.filter((crew) => crew.technicianId === 'moses' && crew.date === '2026-10-03')).toHaveLength(1);
+  });
+
+  it('counts the move-out’s hour on site, but not toward the nine visits', () => {
+    const { crews } = layoutFullDays([...north, ...south], zoned(10), { anchors: [moveOut('move-out-1', '2026-10-03', 29.56)] });
+
+    const anchored = crews.find((crew) => crew.anchors?.length)!;
+    expect(anchored.onSiteMinutes).toBe(60 + anchored.stops.length * 30);
+    expect(anchored.onSiteMinutes).toBeLessThanOrEqual(360);
+    expect(anchored.stops.every((stop) => anchorIdOf(stop) === null)).toBe(true);
+  });
+
+  it('only takes visits due near the move-out’s date', () => {
+    const early = cluster('early', 9, 1, { zone: '1' }).map((stop) => ({ ...stop, latitude: stop.latitude - 0.2 }));
+    const due = cluster('due', 9, 10, { zone: '1' });
+    const rotation = dueOn(
+      [...early.map((stop): [string, number] => [stop.stopId, 0]), ...due.map((stop): [string, number] => [stop.stopId, 40])],
+      50,
+    );
+    const quarter = days(50, ['moses'], { zoneTechnicians: { '1': 'moses' } });
+
+    // Right beside the early visits, but six weeks after they are due.
+    const { crews } = layoutFullDays([...early, ...due], quarter, {
+      rotation,
+      anchors: [moveOut('move-out-1', '2026-11-10', 29.56)],
+    });
+
+    const anchored = crews.find((crew) => crew.anchors?.length)!;
+    expect(anchored.stops.map((stop) => stop.stopId).every((id) => id.startsWith('due'))).toBe(true);
+  });
+
+  it('says why a move-out has no day built around it', () => {
+    const { crews, skippedAnchors } = layoutFullDays(north, zoned(3), {
+      anchors: [
+        moveOut('on-no-planned-day', '2026-11-30', 29.76),
+        moveOut('not-working', '2026-10-01', 29.76, { technicianId: 'amy' }),
+        moveOut('taken', '2026-10-02', 29.76),
+      ],
+      taken: new Set([crewKey('2026-10-02', 'moses')]),
+    });
+
+    expect(skippedAnchors).toEqual([
+      { anchorId: 'not-working', reason: 'TECHNICIAN_NOT_WORKING' },
+      { anchorId: 'taken', reason: 'DAY_TAKEN' },
+      { anchorId: 'on-no-planned-day', reason: 'NOT_A_PLANNED_DAY' },
+    ]);
+    expect(crews.some((crew) => crew.anchors?.length)).toBe(false);
+  });
+
+  it('routes a move-out as a stop of its day, told apart from the visits', () => {
+    const stop = anchorAsStop(moveOut('move-out-1', '2026-10-03', 29.56));
+
+    expect(stop).toMatchObject({ latitude: 29.56, onSiteMinutes: 60, zone: null });
+    expect(anchorIdOf(stop)).toBe('move-out-1');
+    expect(anchorIdOf(north[0]!)).toBeNull();
+  });
+
+  it('is left as it is when days are improved', () => {
+    const [stray] = cluster('stray', 1, 30).map((stop) => ({ ...stop, latitude: stop.latitude - 0.2 }));
+    const anchoredDay: AssignedCrew = {
+      date: '2026-10-01',
+      technicianId: 't1',
+      stops: [...cluster('a', 9), stray!],
+      onSiteMinutes: 360,
+      driveMinutes: 60,
+      anchors: [moveOut('move-out-1', '2026-10-01', 29.76, { technicianId: 't1' })],
+    };
+    const other: AssignedCrew = {
+      date: '2026-10-02',
+      technicianId: 't1',
+      stops: cluster('b', 9, 20).map((stop) => ({ ...stop, latitude: stop.latitude - 0.2 })),
+      onSiteMinutes: 270,
+      driveMinutes: 30,
+    };
+
+    const improved = improveDays([anchoredDay, other], days(5, ['t1']));
+
+    expect(stopIds(improved.find((crew) => crew.anchors?.length)!)).toEqual(stopIds(anchoredDay));
   });
 });
 

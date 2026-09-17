@@ -2,13 +2,22 @@
 
 import { zoneNumberOf } from '@texasrenters/shared';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useMemo } from 'react';
 
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDistance } from '@/lib/format';
-import { dayClock, formatClock, formatMinutes, leaveHomeAt, limitState, type LimitState } from '@/lib/planning';
-import { usePlanDayRoute, type PlanDay, type PlanRotation, type PlanSettings } from '@/lib/planning-queries';
+import type { DayMapStop } from '@/components/planning/plan-day-map';
+import { dayClock, formatClock, formatMinutes, formatShortDay, leaveHomeAt, limitState, type LimitState } from '@/lib/planning';
+import {
+  usePlanDayRoute,
+  type PlanDay,
+  type PlanDayAnchor,
+  type PlanDayStop,
+  type PlanRotation,
+  type PlanSettings,
+} from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
 const PlanDayMap = dynamic(() => import('@/components/planning/plan-day-map').then((module) => module.PlanDayMap), {
@@ -34,6 +43,34 @@ const LIMIT_BAR: Record<LimitState, string> = {
   near: 'bg-warning',
   over: 'bg-destructive',
 };
+
+type TimelineEntry = (PlanDayStop & { kind: 'visit' }) | (PlanDayAnchor & { kind: 'move-out' });
+
+/** A day's visits and the move-outs it is built around, in driving order. */
+function dayTimeline(day: PlanDay): TimelineEntry[] {
+  return [
+    ...day.stops.map((stop) => ({ ...stop, kind: 'visit' as const })),
+    ...(day.anchors ?? []).map((anchor) => ({ ...anchor, kind: 'move-out' as const })),
+  ].sort((left, right) => (left.positionInDay ?? Number.MAX_SAFE_INTEGER) - (right.positionInDay ?? Number.MAX_SAFE_INTEGER));
+}
+
+const mapStopOf = (entry: TimelineEntry): DayMapStop => ({
+  id: entry.id,
+  positionInDay: entry.positionInDay,
+  latitude: entry.latitude,
+  longitude: entry.longitude,
+  address: entry.address,
+  kind: entry.kind === 'move-out' ? 'MOVE_OUT' : entry.inspectionType,
+});
+
+/** What the office needs to do about a move-out a day is built around, if anything. */
+export function moveOutProblem(day: PlanDay, anchor: PlanDayAnchor): string | null {
+  if (anchor.cancelled) return 'Cancelled since the plan was laid out · rebuild';
+  if (anchor.scheduledOn !== day.date.slice(0, 10)) return `Moved to ${formatShortDay(anchor.scheduledOn)} · rebuild`;
+  if (anchor.needsReassigning)
+    return `${anchor.assignedTechnician ? `Assigned to ${anchor.assignedTechnician.displayName}` : 'Not assigned'} · reassign in Jobber`;
+  return null;
+}
 
 /** Minutes driving between a day's properties, or null when nothing measured it. */
 const driveMinutes = (day: PlanDay) => (day.totalDriveSeconds === null ? null : Math.round(day.totalDriveSeconds / 60));
@@ -155,6 +192,7 @@ export function PlanDays({
                   <div className="text-muted-foreground text-xs">
                     {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
                     {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
+                    {day.anchors?.length ? ` · ${day.anchors.length === 1 ? 'move-out' : `${day.anchors.length} move-outs`}` : ''}
                     {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -215,7 +253,8 @@ function DayDetail({
   onOpenStop?: (stopId: string) => void;
 }) {
   const route = usePlanDayRoute(planId, day.id);
-  const clock = useMemo(() => dayClock(day.stops), [day.stops]);
+  const timeline = useMemo(() => dayTimeline(day), [day]);
+  const clock = useMemo(() => dayClock(timeline), [timeline]);
   const drive = driveMinutes(day);
   const ends = clock.at(-1)?.leaves;
   const homeMinutes = day.homeDriveSeconds === null ? null : Math.round(day.homeDriveSeconds / 60);
@@ -271,13 +310,13 @@ function DayDetail({
           home={route.data?.home ?? null}
           homeGeometry={route.data?.homeGeometry ?? []}
           onSelectStop={onOpenStop}
-          stops={day.stops}
+          stops={timeline.map(mapStopOf)}
         />
       </div>
       {onOpenStop ? (
         <p className="text-muted-foreground -mt-1 text-xs">Click a property on the map, or in the list, to see its details.</p>
       ) : null}
-      {route.isSuccess && !route.data.geometry.length && day.stops.length > 1 ? (
+      {route.isSuccess && !route.data.geometry.length && timeline.length > 1 ? (
         <p className="text-muted-foreground -mt-1 text-xs">The road could not be drawn, so the stops are joined with dashed straight lines.</p>
       ) : null}
 
@@ -291,6 +330,32 @@ function DayDetail({
             ) : homeMinutes !== null ? (
               <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
             ) : null}
+            {stop.kind === 'move-out' ? (
+              <div className="-mx-2 flex items-start gap-3 rounded-md px-2 py-1">
+                <span
+                  aria-hidden
+                  className="bg-warning mt-0.5 flex size-6 shrink-0 rotate-45 items-center justify-center rounded-sm"
+                >
+                  <span className="-rotate-45 text-[11px] font-bold text-white">{stop.positionInDay ?? index + 1}</span>
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <Link className="truncate text-sm font-medium hover:underline" href={`/inspections/${stop.inspectionId}`}>
+                      {stop.address ?? 'Unknown address'}
+                    </Link>
+                    <span className="text-muted-foreground font-mono text-xs tabular-nums">
+                      {formatClock(stop.arrives)} – {formatClock(stop.leaves)}
+                    </span>
+                  </div>
+                  <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+                    {stop.city ? <span>{stop.city}</span> : null}
+                    <Badge variant="warning">Move-out</Badge>
+                    <span>{formatMinutes(stop.onSiteMinutes)}</span>
+                    {moveOutProblem(day, stop) ? <span className="text-destructive">{moveOutProblem(day, stop)}</span> : null}
+                  </div>
+                </div>
+              </div>
+            ) : (
             <button
               aria-label={`Details of stop ${stop.positionInDay ?? index + 1}, ${stop.address ?? 'unknown address'}`}
               className="hover:bg-accent/60 focus-visible:ring-ring/50 -mx-2 flex items-start gap-3 rounded-md px-2 py-1 text-left outline-none focus-visible:ring-[3px] disabled:pointer-events-none"
@@ -323,6 +388,7 @@ function DayDetail({
                 </div>
               </div>
             </button>
+            )}
           </li>
         ))}
       </ol>

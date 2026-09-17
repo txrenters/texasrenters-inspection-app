@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
 import { PlanCalendar } from '@/components/planning/plan-calendar';
-import { PlanDays } from '@/components/planning/plan-days';
+import { moveOutProblem, PlanDays } from '@/components/planning/plan-days';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
@@ -91,6 +91,12 @@ export default function PlanningPage() {
     (stop) => stop.inspectionTypeNeedsReview && stop.status !== 'EXCLUDED' && stop.status !== 'PUBLISHED',
   );
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
+  const moveOutsToCheck = (days.data ?? []).flatMap((day) =>
+    (day.anchors ?? []).flatMap((anchor) => {
+      const problem = moveOutProblem(day, anchor);
+      return problem ? [{ day, anchor, problem }] : [];
+    }),
+  );
   const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
@@ -239,6 +245,25 @@ export default function PlanningPage() {
             <Alert variant="destructive">
               <AlertTitle>The last publish did not finish</AlertTitle>
               <AlertDescription>{plan.lastError}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          {moveOutsToCheck.length ? (
+            // Days are built around move-outs (the office, 2026-09-17), so one that moved, was
+            // cancelled or is not with the day's technician makes that day wrong until fixed.
+            <Alert>
+              <AlertTitle>
+                {moveOutsToCheck.length} {moveOutsToCheck.length === 1 ? 'move-out' : 'move-outs'} to check
+              </AlertTitle>
+              <AlertDescription>
+                <ul className="grid gap-0.5">
+                  {moveOutsToCheck.map(({ day, anchor, problem }) => (
+                    <li key={anchor.id}>
+                      {formatShortDay(day.date.slice(0, 10))}, {day.technician.displayName} · {anchor.address ?? 'Unknown address'}: {problem}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
             </Alert>
           ) : null}
 

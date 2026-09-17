@@ -13,7 +13,16 @@ import { useTheme } from 'next-themes';
 import { memo, useEffect, useMemo } from 'react';
 
 import { strokeFrom } from '@/components/technician-map';
-import type { PlanDayStop } from '@/lib/planning-queries';
+
+/** A stop on the day's map: a visit, or a move-out the day is built around. */
+export interface DayMapStop {
+  id: string;
+  positionInDay: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  address: string | null;
+  kind: 'HVAC' | 'OCCUPIED' | 'MOVE_OUT';
+}
 
 /**
  * One planned technician-day on the map: the technician's home, the day's stops
@@ -30,17 +39,20 @@ const FALLBACK_CENTER = { lat: 29.76, lng: -95.37 };
 type LatLng = readonly [number, number];
 
 /**
- * A numbered stop, shaped by its kind of visit.
+ * A numbered stop, shaped by its kind.
  *
- * An HVAC inspection is a square and an occupied one a circle, in two colours:
- * shape carries it for anyone who cannot tell the colours apart, on a map full
- * of green parks and red roads.
+ * An HVAC inspection is a square, an occupied one a circle, and the move-out a
+ * day is built around a diamond, each in its own colour: shape carries it for
+ * anyone who cannot tell the colours apart, on a map full of green parks and
+ * red roads.
  */
-const StopPin = memo(function StopPin({ order, hvac }: { order: number; hvac: boolean }) {
+const StopPin = memo(function StopPin({ order, kind }: { order: number; kind: DayMapStop['kind'] }) {
   return (
-    <svg aria-hidden className="cursor-pointer" height="26" viewBox="0 0 26 26" width="26">
-      {hvac ? (
+    <svg aria-hidden className={kind === 'MOVE_OUT' ? undefined : 'cursor-pointer'} height="26" viewBox="0 0 26 26" width="26">
+      {kind === 'HVAC' ? (
         <rect className="fill-map-property" height="20" rx="4" stroke="#fff" strokeWidth="2" width="20" x="3" y="3" />
+      ) : kind === 'MOVE_OUT' ? (
+        <polygon className="fill-warning" points="13,1 25,13 13,25 1,13" stroke="#fff" strokeWidth="2" />
       ) : (
         <circle className="fill-map-route" cx="13" cy="13" r="10" stroke="#fff" strokeWidth="2" />
       )}
@@ -182,7 +194,7 @@ export function PlanDayMap({
   onSelectStop,
 }: {
   dayKey: string;
-  stops: readonly PlanDayStop[];
+  stops: readonly DayMapStop[];
   /** The road line between the stops, `[lat, lng]`; empty draws straight segments instead. */
   geometry: readonly LatLng[];
   /** The technician's home, where the day starts. */
@@ -196,7 +208,7 @@ export function PlanDayMap({
   const placed = useMemo(
     () =>
       stops.filter(
-        (stop): stop is PlanDayStop & { latitude: number; longitude: number } =>
+        (stop): stop is DayMapStop & { latitude: number; longitude: number } =>
           stop.latitude !== null && stop.longitude !== null,
       ),
     [stops],
@@ -250,18 +262,22 @@ export function PlanDayMap({
               <HomePin />
             </AdvancedMarker>
           ) : null}
-          {placed.map((stop, index) => (
-            <AdvancedMarker
-              clickable={Boolean(onSelectStop)}
-              key={stop.id}
-              onClick={() => onSelectStop?.(stop.id)}
-              position={{ lat: stop.latitude, lng: stop.longitude }}
-              title={`${index + 1}. ${stop.address ?? 'Unknown address'}${onSelectStop ? ' (open its details)' : ''}`}
-              zIndex={10 + index}
-            >
-              <StopPin hvac={stop.inspectionType === 'HVAC'} order={stop.positionInDay ?? index + 1} />
-            </AdvancedMarker>
-          ))}
+          {placed.map((stop, index) => {
+            // A move-out is its own inspection, not one of the plan's visits: nothing to open here.
+            const opens = Boolean(onSelectStop) && stop.kind !== 'MOVE_OUT';
+            return (
+              <AdvancedMarker
+                clickable={opens}
+                key={stop.id}
+                onClick={opens ? () => onSelectStop?.(stop.id) : undefined}
+                position={{ lat: stop.latitude, lng: stop.longitude }}
+                title={`${stop.positionInDay ?? index + 1}. ${stop.kind === 'MOVE_OUT' ? 'Move-out: ' : ''}${stop.address ?? 'Unknown address'}${opens ? ' (open its details)' : ''}`}
+                zIndex={10 + index}
+              >
+                <StopPin kind={stop.kind} order={stop.positionInDay ?? index + 1} />
+              </AdvancedMarker>
+            );
+          })}
         </GoogleMap>
       </MapOrReason>
     </APIProvider>

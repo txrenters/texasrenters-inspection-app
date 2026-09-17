@@ -265,6 +265,42 @@ describe('the benefit package plan page', () => {
     expect(await screen.findByTestId('plan-day-map')).toBeTruthy();
   });
 
+  /** The office (2026-09-17): move-outs are Moses's, and TBPs are done around them. */
+  it('shows the move-out a day is built around, and asks to reassign one that is not the day’s technician’s', () => {
+    mount({
+      day: {
+        ...DAY,
+        onSiteMinutes: 165,
+        stops: DAY.stops.map((stop, index) => ({ ...stop, positionInDay: index === 0 ? 1 : index + 2 })),
+        anchors: [
+          {
+            id: 'anchor-1',
+            inspectionId: 'insp-9',
+            positionInDay: 2,
+            onSiteMinutes: 60,
+            driveSecondsForecast: 600,
+            address: '9 Move Out Ln',
+            city: 'Katy',
+            latitude: 29.705,
+            longitude: -95.7,
+            assignedTechnician: { id: 'amy', displayName: 'Amy Wilson' },
+            needsReassigning: true,
+            scheduledOn: '2026-10-01',
+            cancelled: false,
+          },
+        ],
+      },
+    });
+
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
+    expect(within(day).getByRole('link', { name: '9 Move Out Ln' }).getAttribute('href')).toBe('/inspections/insp-9');
+    expect(within(day).getByText('Move-out')).toBeTruthy();
+    expect(within(day).getByText('Assigned to Amy Wilson · reassign in Jobber')).toBeTruthy();
+    // Ten minutes from the first property, and an hour there.
+    expect(within(day).getByText('9:40 AM – 10:40 AM')).toBeTruthy();
+    expect(screen.getByText('1 move-out to check')).toBeTruthy();
+  });
+
   /** A blocked stop is a tenancy nobody would inspect; the API refuses too, and the button says so first. */
   it('will not publish while a visit needs attention', () => {
     mount({
