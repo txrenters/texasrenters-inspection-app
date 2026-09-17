@@ -56,11 +56,15 @@ export type AdminBreadcrumb = {
  *
  * Ordered by the tenancy lifecycle — move-in, occupied, back-to-market,
  * move-out — rather than alphabetically, because that is the sequence a
- * property actually moves through. Everything scheduled independently of the
- * tenancy follows, in the order the office listed it.
+ * property actually moves through. HVAC follows.
+ *
+ * Not every type is a section. Roof, Supra + lockbox placement and removal, and
+ * AC filter delivery were taken out of the sidebar by the office (2026-09-17):
+ * they are still types, still listed in the whole list, and a link to one
+ * still opens it.
  *
  * Shared by Inspections and Assignments rather than written out twice, so a
- * tenth type cannot appear in one list and be missing from the other.
+ * type cannot appear in one list and be missing from the other.
  */
 export const INSPECTION_TYPE_CHILDREN: readonly AdminNavigationChild[] = [
   { title: 'Move-in', type: 'MOVE_IN' },
@@ -68,10 +72,6 @@ export const INSPECTION_TYPE_CHILDREN: readonly AdminNavigationChild[] = [
   { title: 'Back-to-market', type: 'BACK_TO_MARKET' },
   { title: 'Move-out', type: 'MOVE_OUT' },
   { title: 'HVAC', type: 'HVAC' },
-  { title: 'Roof', type: 'ROOF' },
-  { title: 'Supra + lockbox placement', type: 'SUPRA_LOCKBOX_PLACEMENT' },
-  { title: 'Supra + lockbox removal', type: 'SUPRA_LOCKBOX_REMOVAL' },
-  { title: 'AC filter delivery', type: 'AC_FILTER_DELIVERY' },
 ];
 
 export const adminNavigation: AdminNavigationGroup[] = [
@@ -113,7 +113,10 @@ export const adminNavigation: AdminNavigationGroup[] = [
         href: '/inspections',
         icon: ClipboardCheck,
         permission: 'inspections:read',
-        children: [...INSPECTION_TYPE_CHILDREN],
+        // "All inspections" first, as under Assignments: the header only opens
+        // and closes the section, so this is the way to every type at once,
+        // including the ones that are not sections of their own.
+        children: [{ title: 'All inspections', type: '' }, ...INSPECTION_TYPE_CHILDREN],
       },
       {
         title: 'Assignments',

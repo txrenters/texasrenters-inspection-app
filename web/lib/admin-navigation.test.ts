@@ -90,41 +90,42 @@ describe('admin navigation', () => {
   });
 
   describe('inspection type sub-items', () => {
-    it('covers every inspection type, in every section that has sub-items', () => {
-      // The sub-items are the primary way into a type's history. A type added
-      // to the enum and not here would exist only behind the toolbar dropdown.
+    it('offers the whole list, then the types the office inspects, in every section', () => {
+      // Roof, Supra + lockbox placement and removal, and AC filter delivery are
+      // not sections of their own (the office, 2026-09-17). The whole list is
+      // where they are, which is why it comes first.
       //
       // Over every section rather than only Inspections: Assignments carries
       // the same list, and asserting one of them is how the two drift.
       const sectioned = adminNavigation
         .flatMap((group) => group.items)
         .filter((item) => item.children?.length);
-      expect(sectioned.length).toBeGreaterThan(1);
+      expect(sectioned.map((item) => item.title)).toEqual(['Inspections', 'Assignments']);
 
       for (const item of sectioned) {
-        const types = (item.children ?? [])
-          .map((child) => child.type)
-          // The empty type is "everything", not a type. Only Assignments has
-          // one, because a section list with no way back to the whole list is
-          // a list you cannot see all of.
-          .filter((type) => type !== '')
-          .sort();
-        expect(types).toEqual([...Object.values(InspectionType)].sort());
+        expect(item.children).toEqual([
+          { title: `All ${item.title.toLowerCase()}`, type: '' },
+          { title: 'Move-in', type: 'MOVE_IN' },
+          { title: 'Occupied', type: 'OCCUPIED' },
+          { title: 'Back-to-market', type: 'BACK_TO_MARKET' },
+          { title: 'Move-out', type: 'MOVE_OUT' },
+          { title: 'HVAC', type: 'HVAC' },
+        ]);
+        // Each one a real type: a misspelt one is a section of nothing.
+        for (const child of item.children!.filter((entry) => entry.type))
+          expect(Object.values(InspectionType)).toContain(child.type);
       }
     });
 
-    it('sends the all-assignments sub-item to the plain list, not to an empty filter', () => {
+    it.each([
+      ['/inspections', 'All inspections'],
+      ['/assignments', 'All assignments'],
+    ])('sends the whole-list sub-item of %s to the plain list, not to an empty filter', (href, title) => {
       // `?type=` is not "no filter" — the page would forward the blank to an
       // API that rejects anything outside the enum.
-      const assignments = adminNavigation
-        .flatMap((group) => group.items)
-        .find((item) => item.href === '/assignments')!;
-      expect(navigationChildHref(assignments, { title: 'All assignments', type: '' })).toBe(
-        '/assignments',
-      );
-      expect(activeNavigationChild(assignments, '/assignments', null)?.title).toBe(
-        'All assignments',
-      );
+      const item = adminNavigation.flatMap((group) => group.items).find((entry) => entry.href === href)!;
+      expect(navigationChildHref(item, { title, type: '' })).toBe(href);
+      expect(activeNavigationChild(item, href, null)?.title).toBe(title);
     });
 
     it('links to the list carrying the type, not to a nested route', () => {
@@ -140,15 +141,17 @@ describe('admin navigation', () => {
         'Move-out',
       );
 
-      // No type selected: the parent is active, no child is.
-      expect(activeNavigationChild(inspections, '/inspections', null)).toBeUndefined();
+      // No type selected is the whole list, which is a sub-item of its own.
+      expect(activeNavigationChild(inspections, '/inspections', null)?.title).toBe('All inspections');
       // A detail page belongs to no single type filter, even though the parent
       // stays highlighted for it.
       expect(activeNavigationChild(inspections, '/inspections/inspection-1', 'MOVE_OUT')).toBe(
         undefined,
       );
-      // A type the nav does not offer must not highlight anything.
+      // A type the nav does not offer must not highlight anything: neither a
+      // made-up one, nor one that is a type but no longer a section.
       expect(activeNavigationChild(inspections, '/inspections', 'NOT_A_TYPE')).toBeUndefined();
+      expect(activeNavigationChild(inspections, '/inspections', 'ROOF')).toBeUndefined();
     });
 
     it('shows the open type as a breadcrumb under Inspections', () => {
@@ -157,6 +160,10 @@ describe('admin navigation', () => {
         { title: 'Move-out' },
       ]);
 
+      expect(getAdminBreadcrumbs('/inspections', null)).toEqual([
+        { title: 'Inspections', href: '/inspections' },
+        { title: 'All inspections' },
+      ]);
       // An unknown type is not a section, so the trail stays as it was.
       expect(getAdminBreadcrumbs('/inspections', 'NOT_A_TYPE')).toEqual([{ title: 'Inspections' }]);
       // The type does not leak onto a detail page's trail.
