@@ -178,6 +178,15 @@ export interface Inspection {
    */
   scheduledStartAt?: string;
   scheduledEndAt?: string;
+  /**
+   * The job's clock.
+   *
+   * `startedAt` is stamped by Start job and `submittedAt` by submitting, so the
+   * job screen counts from the first and stops at the second, and the office
+   * reads the pair as how long the visit took.
+   */
+  startedAt?: string;
+  submittedAt?: string;
   assignedUserId: string;
   status: InspectionStatus;
   priority: Priority;
@@ -203,10 +212,53 @@ export interface Inspection {
    */
   visitTitle?: string | null;
   visitDetails?: string | null;
+  /**
+   * What the office holds on this tenancy, and what the last visit flagged.
+   *
+   * Sent with the single job and never with the list. Absent where the office
+   * holds nothing certain: the tenant report records a building rather than a
+   * unit, so a duplex often resolves to no file at all.
+   */
+  onFile?: JobFile;
+  lastVisit?: JobLastVisit;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };
   updatedAt?: string;
   __sync?: EntitySyncMetadata;
+}
+
+/**
+ * The office's file on a tenancy, as the job screen reads it.
+ *
+ * Two records behind it: the lease, which names the tenants and its dates, and
+ * the Propertyware tenant report, which carries the plan and the filters. Every
+ * field can be missing on its own — one known fact is worth showing.
+ */
+export interface JobFile {
+  tenantNames: string[];
+  /** The management plan: Basic, Plus, Premium. */
+  plan?: string;
+  /** Whether the tenant is on the HVAC plan, as the report writes it. */
+  hvacPlan?: string;
+  benefitPackage?: string;
+  /** The sizes the office believes are fitted here. */
+  filterSizes: string[];
+  filterLocation?: string;
+  /** As the report writes them: a date, a month, or a note. */
+  lastFilterDelivery?: string;
+  lastHvacInspection?: string;
+  lastOccupiedInspection?: string;
+  /** `YYYY-MM-DD`, read as the day it is rather than an instant. */
+  movedIn?: string;
+  leaseEnds?: string;
+}
+
+/** What the last visit at this address left the office to pass on. */
+export interface JobLastVisit {
+  scheduledAt: string;
+  type: string;
+  nextInspectionAlert?: string;
+  maintenanceComments?: string;
 }
 
 export interface InspectionContext {

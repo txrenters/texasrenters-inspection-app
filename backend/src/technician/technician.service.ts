@@ -49,6 +49,7 @@ import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
+import { tenancyOnFile } from '../admin/tenancy-on-file';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
 import { AreaChecklistAiService } from '../admin/area-checklist-ai.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
@@ -85,6 +86,15 @@ export interface UploadedRoomVideo {
  * it is a database error, not a miss that returns nothing.
  */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A `@db.Date` column as the day it is, for the app to format.
+ *
+ * Prisma reads a date column as UTC midnight, so the first ten characters are
+ * that date wherever the phone happens to be. Sending the whole instant would
+ * have a lease ending the evening before in Texas.
+ */
+const isoDay = (value: Date | null | undefined) => value?.toISOString().slice(0, 10) ?? null;
 
 const allowedVideoMimeTypes = new Set([
   'video/mp4',
@@ -276,6 +286,13 @@ const technicianInspectionSummarySelect = {
   status: true,
   priority: true,
   internalNotes: true,
+  // The job's clock: started when the technician pressed Start, stopped when
+  // they submitted. The app counts from the first, the office reads the pair.
+  startedAt: true,
+  submittedAt: true,
+  // Which tenancy the office booked this for, so the job screen can show the
+  // file it holds on them.
+  propertywareLeaseId: true,
   // What the coordinator wrote on the Jobber visit. A technician only ever
   // receives inspections assigned to them, which is who these are for.
   jobberVisitTitle: true,
@@ -568,7 +585,94 @@ export class TechnicianService {
 
   async inspection(user: AuthenticatedUser, id: string) {
     const record = await this.assignedInspection(user, id);
-    return this.mapInspection(record, user.id);
+    return {
+      ...this.mapInspection(record, user.id),
+      ...(await this.jobFile(user.organizationId, record)),
+    };
+  }
+
+  /**
+   * What the office already knows about this job, beyond the visit's own text.
+   *
+   * A technician at the door was working from the coordinator's Details alone:
+   * the filter sizes the office holds on file, the plan the tenant is on and
+   * what the last visit flagged were all in the console and nowhere else.
+   *
+   * On the single job only, never in the list. It is two more queries, and a
+   * list of twenty jobs would pay them twenty times over for a card nobody has
+   * opened yet.
+   */
+  private async jobFile(organizationId: string, record: TechnicianInspectionSummaryRecord) {
+    const buildingId = record.propertywareBuilding?.id;
+    if (!buildingId) return { onFile: null, lastVisit: null };
+    const unitId = record.propertywareUnit?.id ?? null;
+    const [file, previous] = await Promise.all([
+      tenancyOnFile(this.prisma, {
+        organizationId,
+        buildingId,
+        unitId,
+        leaseId: record.propertywareLeaseId,
+      }),
+      /**
+       * The last visit here that left the office a note.
+       *
+       * The same unit where the job names one, the building otherwise: a note
+       * about the upstairs unit is not about this one. Only a completed visit,
+       * and only one carrying something to read, so the app never shows an
+       * empty "last visit" block.
+       */
+      this.prisma.inspection.findFirst({
+        where: {
+          organizationId,
+          id: { not: record.id },
+          status: InspectionStatus.COMPLETED,
+          scheduledAt: { lte: record.scheduledAt },
+          ...(unitId ? { propertywareUnitId: unitId } : { propertywareBuildingId: buildingId }),
+          OR: [{ nextInspectionAlert: { not: null } }, { maintenanceComments: { not: null } }],
+        },
+        orderBy: { scheduledAt: 'desc' },
+        select: {
+          scheduledAt: true,
+          inspectionType: true,
+          nextInspectionAlert: true,
+          maintenanceComments: true,
+        },
+      }),
+    ]);
+
+    const onFile = {
+      tenantNames: file.tenantNames,
+      plan: file.tenancy?.managementPlan ?? null,
+      hvacPlan: file.tenancy?.hvacPlan ?? null,
+      benefitPackage: file.tenancy?.tbpEnrollment ?? null,
+      // The sizes the office believes are there. Not a replacement for the
+      // visit's own list, which is what the coordinator checked this quarter.
+      filterSizes: file.tenancy?.hvacFilterSizes ?? [],
+      filterLocation: file.tenancy?.hvacFilterLocation ?? null,
+      lastFilterDelivery: file.tenancy?.lastFilterDelivery ?? null,
+      lastHvacInspection: isoDay(file.tenancy?.lastHvacInspection),
+      lastOccupiedInspection: file.tenancy?.lastOccupiedInspection ?? null,
+      movedIn: isoDay(file.lease?.moveInDate),
+      leaseEnds: isoDay(file.lease?.endDate ?? file.lease?.scheduledMoveOutDate),
+    };
+    const alert = previous?.nextInspectionAlert?.trim() || null;
+    const maintenance = previous?.maintenanceComments?.trim() || null;
+    return {
+      // Null rather than a card of blanks: nothing on file is a fact worth
+      // reading as such, and an empty card only takes up the screen.
+      onFile: Object.values(onFile).some((value) => (Array.isArray(value) ? value.length : Boolean(value)))
+        ? onFile
+        : null,
+      lastVisit:
+        previous && (alert || maintenance)
+          ? {
+              scheduledAt: previous.scheduledAt.toISOString(),
+              type: previous.inspectionType,
+              nextInspectionAlert: alert,
+              maintenanceComments: maintenance,
+            }
+          : null,
+    };
   }
 
   async inspectionContext(user: AuthenticatedUser, id: string) {
@@ -2837,6 +2941,10 @@ export class TechnicianService {
       // time at all, and "no time" must not read as midnight.
       scheduledStartAt: record.scheduledStartAt?.toISOString(),
       scheduledEndAt: record.scheduledEndAt?.toISOString(),
+      // When the technician pressed Start, and when they submitted. The app
+      // counts the job from the first and stops at the second.
+      startedAt: record.startedAt?.toISOString(),
+      submittedAt: record.submittedAt?.toISOString(),
       assignedUserId: technicianId,
       status: this.mapInspectionStatus(record.status),
       priority: record.priority,

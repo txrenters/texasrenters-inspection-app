@@ -66,7 +66,7 @@ function AssignedInspectionRow({ inspection }: { inspection: Inspection }) {
         .filter(Boolean)
         .join(', ')}
       accessibilityRole="button"
-      accessibilityHint="Opens this inspection"
+      accessibilityHint="Opens this job"
       className="mx-5 min-h-14 flex-row items-center gap-3 border-b border-border py-3.5 active:opacity-60"
       onPress={() => router.push(`/inspections/${inspection.id}`)}
     >
@@ -159,8 +159,8 @@ export default function HomeScreen() {
             neverAssigned
               ? 'Nothing assigned to you yet'
               : assigned.length + inProgress.length > 0
-                ? 'Ready for your inspections today'
-                : 'No inspections pending right now'
+                ? 'Ready for your jobs today'
+                : 'No jobs pending right now'
           }
           title={`${greeting}, ${firstName}`}
         />
@@ -206,7 +206,7 @@ export default function HomeScreen() {
 
         {inProgress.length > 0 ? (
           <View className="mt-6">
-            <SectionHeader title="Continue Inspection" />
+            <SectionHeader title="Continue job" />
             {inProgress.map((inspection) => (
               <Pressable
                 key={inspection.id}
@@ -220,7 +220,7 @@ export default function HomeScreen() {
                   inspectionDate(inspection),
                 ].join(', ')}
                 accessibilityRole="button"
-                accessibilityHint="Opens this inspection"
+                accessibilityHint="Opens this job"
                 className="mx-5 mb-3 rounded-2xl bg-card p-4 active:scale-[0.98]"
                 onPress={() => router.push(`/inspections/${inspection.id}`)}
               >
@@ -261,7 +261,7 @@ export default function HomeScreen() {
           <SectionHeader
             action={
               <Pressable
-                accessibilityLabel="See all inspections"
+                accessibilityLabel="See all jobs"
                 accessibilityRole="button"
                 className={`min-h-11 justify-center px-1 ${PRESS_ROW}`}
                 onPress={() => router.push('/inspections')}
@@ -290,7 +290,7 @@ export default function HomeScreen() {
                 key={inspection.id}
                 accessibilityLabel={`${inspection.property.address}, completed, ${inspection.progress.completed} of ${inspection.progress.total} rooms`}
                 accessibilityRole="button"
-                accessibilityHint="Opens this inspection"
+                accessibilityHint="Opens this job"
                 className="mx-5 min-h-14 flex-row items-center gap-3 py-3 active:opacity-60"
                 onPress={() => router.push(`/inspections/${inspection.id}`)}
               >

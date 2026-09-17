@@ -40,6 +40,7 @@ import {
   requireBuilding,
   resolveInspectionPlan,
 } from './inspection-creation';
+import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import {
@@ -1638,48 +1639,17 @@ export class AdminService {
   /**
    * The tenancy and lease a booking's prefill is read from.
    *
-   * The tenant report records a building and nothing finer, so a tenancy is
-   * matched to the lease by name, which the report's own key is built from. A
-   * building with one tenancy and at most one unit needs no match. Anything
-   * less certain prefills nothing: typing a plan is better than correcting
-   * somebody else's.
+   * `tenancyOnFile` is shared with the handset's job screen, which shows the
+   * same file to the technician standing at the door. The matching rules, and
+   * why they refuse to guess, are documented there.
    */
-  private async bookingTenancy(
+  private bookingTenancy(
     organizationId: string,
     buildingId: string,
     unitId: string | null,
     leaseId: string | null,
   ) {
-    const leases =
-      leaseId || unitId
-        ? await this.prisma.propertywareLease.findMany({
-            where: leaseId
-              ? { id: leaseId, organizationId, buildingId }
-              : { organizationId, buildingId, unitId, isActive: true },
-            select: { leaseName: true, tenantDisplayNames: true },
-            take: 2,
-          })
-        : [];
-    const lease = leases.length === 1 ? leases[0]! : null;
-    const [tenancies, units] = await Promise.all([
-      this.prisma.propertywareTenant.findMany({
-        where: { organizationId, propertywareBuildingId: buildingId, isActive: true },
-        select: {
-          leaseName: true,
-          zone: true,
-          managementPlan: true,
-          hvacPlan: true,
-          hvacFilterLocation: true,
-          hvacFilterSizes: true,
-          tbpEnrollment: true,
-        },
-      }),
-      this.prisma.propertywareUnit.count({ where: { organizationId, buildingId, isActive: true } }),
-    ]);
-    const named = lease?.leaseName ? tenancies.filter((tenancy) => tenancy.leaseName === lease.leaseName) : [];
-    const tenancy =
-      named.length === 1 ? named[0]! : tenancies.length === 1 && units <= 1 ? tenancies[0]! : null;
-    return { tenancy, tenantNames: lease?.tenantDisplayNames ?? [] };
+    return tenancyOnFile(this.prisma, { organizationId, buildingId, unitId, leaseId });
   }
 
   /**
