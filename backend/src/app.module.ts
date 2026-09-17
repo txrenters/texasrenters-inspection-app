@@ -12,6 +12,7 @@ import { RequestPerformanceInterceptor } from './common/request-performance.inte
 import { validateEnvironment } from './config/environment';
 import { ClientErrorsModule } from './client-errors/client-errors.module';
 import { DatabaseModule } from './database/database.module';
+import { DeploymentsModule } from './deployments/deployments.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { TenantScopeInterceptor } from './database/tenant-scope.interceptor';
 import { HealthController } from './health/health.controller';
@@ -53,6 +54,7 @@ import { PlanningModule } from './planning/planning.module';
     OpenApiModule,
     GatewayModule,
     ClientErrorsModule,
+    DeploymentsModule,
   ],
   controllers: [HealthController],
   providers: [
