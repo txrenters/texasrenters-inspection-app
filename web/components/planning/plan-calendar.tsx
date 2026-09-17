@@ -189,12 +189,15 @@ export function PlanCalendar({
                               {entries.map((day) => {
                                 const outside = dayOutsideRules(day, settings);
                                 const zones = zonesOf(day);
+                                const moveOuts = day.anchors?.length ?? 0;
                                 const name = day.technician.displayName;
                                 const label = `${LONG_DAY.format(new Date(`${date}T00:00:00Z`))}: ${name}, ${day.stopCount} ${
                                   day.stopCount === 1 ? 'visit' : 'visits'
                                 }${day.hvacStopCount ? ` (${day.hvacStopCount} HVAC)` : ''}${
                                   zones.length ? `, ${zones.length === 1 ? 'zone' : 'zones'} ${zones.join(', ')}` : ''
-                                }, ${formatMinutes(day.onSiteMinutes)} inspecting${outside ? ', outside the rules' : ''}`;
+                                }${moveOuts ? `, built around ${moveOuts === 1 ? 'a move-out' : `${moveOuts} move-outs`}` : ''}, ${formatMinutes(
+                                  day.onSiteMinutes,
+                                )} inspecting${outside ? ', outside the rules' : ''}`;
                                 return (
                                   <button
                                     aria-current={day.id === selectedDayId || undefined}
@@ -214,6 +217,8 @@ export function PlanCalendar({
                                     {zones.length ? (
                                       <span className="text-muted-foreground shrink-0 font-mono">Z{zones.join(',')}</span>
                                     ) : null}
+                                    {/* The move-out's diamond, as on the day's map. */}
+                                    {moveOuts ? <span aria-hidden className="bg-warning size-2 shrink-0 rotate-45 rounded-[1px]" /> : null}
                                     <span
                                       className={cn('ml-auto shrink-0 font-mono tabular-nums', outside && 'text-destructive')}
                                     >
