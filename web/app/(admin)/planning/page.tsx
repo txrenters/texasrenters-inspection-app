@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
+import { PlanCalendar } from '@/components/planning/plan-calendar';
 import { PlanDays } from '@/components/planning/plan-days';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
@@ -30,15 +31,13 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
-import { formatMinutes, formatShortDay, quarterChoices, quarterKey, quarterName } from '@/lib/planning';
+import { dayOutsideRules, formatMinutes, formatShortDay, quarterChoices, quarterKey, quarterName } from '@/lib/planning';
 import {
   usePlanDays,
   usePlanQuarters,
   usePlanRotation,
   usePlanStops,
   usePlanningMutations,
-  type PlanDay,
-  type PlanSettings,
   type PlanStatus,
 } from '@/lib/planning-queries';
 import { useUrlState } from '@/lib/url-state';
@@ -68,10 +67,6 @@ const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' 
   CANCELLED: { label: 'Cancelled', variant: 'outline' },
 };
 
-/** A day with fewer or more visits than the office's rule, or more time inspecting than a day holds. */
-const outsideRules = (day: PlanDay, rules: PlanSettings) =>
-  day.stopCount < rules.minStopsPerDay || day.stopCount > rules.maxStopsPerDay || day.onSiteMinutes > rules.maxOnSiteMinutes;
-
 export default function PlanningPage() {
   const { has } = usePermissions();
   const canChange = has('planning:publish');
@@ -96,7 +91,7 @@ export default function PlanningPage() {
     (stop) => stop.inspectionTypeNeedsReview && stop.status !== 'EXCLUDED' && stop.status !== 'PUBLISHED',
   );
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
-  const daysOutsideRules = plan ? (days.data ?? []).filter((day) => outsideRules(day, plan)) : [];
+  const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
   const openStop = openStopId ? ((stops.data ?? []).find((stop) => stop.id === openStopId) ?? null) : null;
@@ -311,6 +306,7 @@ export default function PlanningPage() {
           <Tabs onValueChange={(tab) => setState({ tab })} value={state.tab}>
             <TabsList>
               <TabsTrigger value="days">Days ({(days.data?.length ?? 0).toLocaleString()})</TabsTrigger>
+              <TabsTrigger value="calendar">Calendar</TabsTrigger>
               <TabsTrigger value="visits">Visits ({(stops.data?.length ?? 0).toLocaleString()})</TabsTrigger>
               <TabsTrigger value="attention">Needs attention ({attentionIds.size.toLocaleString()})</TabsTrigger>
             </TabsList>
@@ -333,6 +329,30 @@ export default function PlanningPage() {
                   rotation={rotation.data ?? null}
                   onSelect={(day) => setState({ day })}
                   planId={plan.id}
+                  selectedDayId={state.day}
+                  settings={plan}
+                />
+              )}
+            </TabsContent>
+
+            <TabsContent className="mt-3" value="calendar">
+              {days.isLoading ? (
+                <PageSkeleton cards={1} />
+              ) : days.isError ? (
+                <ErrorState error={days.error} retry={() => void days.refetch()} />
+              ) : !days.data?.length ? (
+                <EmptyState
+                  description="No visit has a day yet. Rebuild the plan to place them."
+                  icon={CalendarRangeIcon}
+                  title="No technician-days"
+                />
+              ) : (
+                // A day chosen here opens in the Days tab, with its route and visits.
+                <PlanCalendar
+                  days={days.data}
+                  onSelect={(day) => setState({ tab: 'days', day })}
+                  quarter={quarter}
+                  rotation={rotation.data ?? null}
                   selectedDayId={state.day}
                   settings={plan}
                 />

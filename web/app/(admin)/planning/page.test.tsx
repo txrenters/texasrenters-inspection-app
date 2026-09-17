@@ -16,8 +16,8 @@ const hooks = vi.hoisted(() => ({
 
 vi.mock('@/lib/planning-queries', () => hooks);
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
-const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: '' } }));
-vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, vi.fn()] }));
+const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: '' }, set: vi.fn() }));
+vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
 // The map loads Google's script; the page around it is what is under test.
 vi.mock('@/components/planning/plan-day-map', () => ({ PlanDayMap: () => <div data-testid="plan-day-map" /> }));
 
@@ -225,6 +225,16 @@ describe('the benefit package plan page', () => {
       id: 'plan-build-2026-4',
       description: 'The Q4 2026 plan is already being built, since 1:48 PM Central.',
     });
+  });
+
+  /** The office asked for the quarter as a calendar too (2026-09-17). */
+  it('shows the plan as a calendar, and opens a day picked there in the Days tab', () => {
+    url.state = { quarter: '2026-4', tab: 'calendar', day: '' };
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Thursday, October 1: Moses Rivera, 3 visits/ }));
+
+    expect(url.set).toHaveBeenCalledWith({ tab: 'days', day: 'day-1' });
   });
 
   it('states the working days and the day limits in plain words', () => {
