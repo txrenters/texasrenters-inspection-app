@@ -26,11 +26,14 @@ import { applyAreaOrder, loadAreaOrder, saveAreaOrder } from '@/src/areas/area-o
 import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
+import { JobFileCard } from '@/src/components/JobFileCard';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
+import { useLocalNow } from '@/src/features/useLocalNow';
 import { useThemeColors } from '@/src/lib/theme-colors';
+import { jobClock, jobClockLabel } from '@/src/utils/job-clock';
 import { buildPriorityChecklist, summaryCoverage } from '@/src/utils/inspection-audit';
 import {
   INSPECTION_STATUS_TONE_CLASS,
@@ -192,6 +195,9 @@ export default function InspectionOverviewScreen() {
   const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
+  // Ticks by the minute, and again on foregrounding, so a job left open all
+  // morning does not still read as eight minutes old.
+  const now = useLocalNow();
 
   /**
    * The technician's own sequence for this inspection, if they have set one.
@@ -257,6 +263,8 @@ export default function InspectionOverviewScreen() {
   // report on itself.
   const priorityItems = buildPriorityChecklist(findingList);
   const coverage = summaryCoverage(roomList, findingList);
+  // Null until the job is started, which is when the button below says so.
+  const clock = jobClock(item, now.getTime());
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -287,7 +295,7 @@ export default function InspectionOverviewScreen() {
           </Pressable>
           <View className="min-w-0 flex-1">
             <Text numberOfLines={1} className="text-lg font-bold text-foreground">
-              Inspection Overview
+              Job Overview
             </Text>
           </View>
           <HomeButton />
@@ -345,6 +353,20 @@ export default function InspectionOverviewScreen() {
               · {item.type.replaceAll('_', ' ').toLowerCase()}
             </Text>
           </View>
+          {/* The job's clock: one for the whole visit, from Start job to
+              submitting (the office, 2026-09-18). Both ends are the server's
+              stamps, so this is the time the office will read. */}
+          {clock ? (
+            <View accessibilityLabel={jobClockLabel(clock)} className="flex-row items-center gap-1.5">
+              <ClockIcon size={14} className={clock.running ? 'text-chart-2' : 'text-chart-3'} />
+              <Text
+                className={`text-xs font-semibold ${clock.running ? 'text-chart-2' : 'text-chart-3'}`}
+              >
+                {clock.running ? 'Running' : 'Took'} {clock.worked}
+              </Text>
+              <Text className="text-xs text-muted-foreground">· started {clock.startedAt}</Text>
+            </View>
+          ) : null}
           {/* Why the office sent this back, above the property notes and styled
               as something to act on rather than background. Before this the
               reason lived only in the audit log, so a reopened inspection
@@ -375,6 +397,11 @@ export default function InspectionOverviewScreen() {
           details={item.visitDetails}
           className="mx-5 mt-5"
         />
+
+        {/* The office's own file, under what the coordinator wrote for this
+            visit: the plan, the filters it holds on record, and anything the
+            last visit asked to be looked at. */}
+        <JobFileCard file={item.onFile} lastVisit={item.lastVisit} className="mx-5 mt-5" />
 
         <View className="mx-5 mt-5 gap-3 rounded-2xl bg-card p-5">
           <View className="flex-row items-center justify-between">
@@ -565,9 +592,7 @@ export default function InspectionOverviewScreen() {
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
         {item.status === 'SCHEDULED' ? (
           <Pressable
-            accessibilityLabel={
-              actions.start.isPending ? 'Starting inspection' : 'Start inspection'
-            }
+            accessibilityLabel={actions.start.isPending ? 'Starting job' : 'Start job'}
             accessibilityRole="button"
             accessibilityState={{
               busy: actions.start.isPending,
@@ -590,7 +615,7 @@ export default function InspectionOverviewScreen() {
             <View className="flex-row items-center gap-2">
               <PlayCircleIcon size={20} className="text-primary-foreground" />
               <Text className="text-base font-bold text-primary-foreground">
-                {actions.start.isPending ? 'Starting…' : 'Start Inspection'}
+                {actions.start.isPending ? 'Starting…' : 'Start job'}
               </Text>
             </View>
           </Pressable>
@@ -642,7 +667,7 @@ export default function InspectionOverviewScreen() {
                     {needsAttention
                       ? 'Follow-up Needed'
                       : item.status === 'COMPLETED'
-                        ? 'Inspection Complete'
+                        ? 'Job Complete'
                         : 'Submitted to Office'}
                   </Text>
                   <Text className="text-xs text-muted-foreground">

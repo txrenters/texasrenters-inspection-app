@@ -178,7 +178,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="inspections"
         options={{
-          title: 'Inspections',
+          title: 'Jobs',
           // Undefined rather than 0: React Navigation renders a badge for any
           // defined value, so zero would leave an empty dot sitting there
           // permanently.
@@ -195,8 +195,8 @@ export default function TabsLayout() {
           },
           tabBarAccessibilityLabel:
             assignedCount > 0
-              ? `Inspections, ${assignedCount} assigned and not started`
-              : 'Inspections',
+              ? `Jobs, ${assignedCount} assigned and not started`
+              : 'Jobs',
           tabBarIcon: tabGlyph(ClipboardListIcon),
         }}
       />

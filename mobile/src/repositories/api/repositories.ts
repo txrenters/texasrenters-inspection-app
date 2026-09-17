@@ -80,6 +80,35 @@ const propertySchema = z.object({
   notes: z.string(),
   imageTone: z.enum(['teal', 'navy', 'sand', 'sage']),
 });
+/**
+ * What the office holds on the tenancy a job was booked for.
+ *
+ * Every field nullable: the tenant report records a building rather than a
+ * unit, so a duplex often resolves to nothing at all, and a job is not broken
+ * for want of it.
+ */
+const jobFileSchema = z.object({
+  tenantNames: z.array(z.string()).default([]),
+  plan: nullableString,
+  hvacPlan: nullableString,
+  benefitPackage: nullableString,
+  filterSizes: z.array(z.string()).default([]),
+  filterLocation: nullableString,
+  lastFilterDelivery: nullableString,
+  lastHvacInspection: nullableString,
+  lastOccupiedInspection: nullableString,
+  movedIn: nullableString,
+  leaseEnds: nullableString,
+});
+
+/** What the last visit here left the office to pass on. */
+const lastVisitSchema = z.object({
+  scheduledAt: z.string(),
+  type: z.string(),
+  nextInspectionAlert: nullableString,
+  maintenanceComments: nullableString,
+});
+
 const inspectionSchema = z.object({
   id: z.string(),
   externalInspectionId: z.string(),
@@ -99,6 +128,10 @@ const inspectionSchema = z.object({
   // older backend does not send these fields at all.
   scheduledStartAt: nullableString,
   scheduledEndAt: nullableString,
+  // The job's clock: absent until the technician presses Start, and absent
+  // again for a cached job written before the field existed.
+  startedAt: nullableString,
+  submittedAt: nullableString,
   assignedUserId: z.string(),
   // Permissive for the same reason as captureType, and it had already broken:
   // this enum listed six statuses while the server has ten. TECHNICIAN_SUBMITTED,
@@ -123,6 +156,11 @@ const inspectionSchema = z.object({
   // before these existed still parses; nullable, for one booked here.
   visitTitle: z.string().nullable().optional(),
   visitDetails: z.string().nullable().optional(),
+  // Only the single job carries these; the list never does, because reading
+  // them costs two queries a row. Optional for exactly that reason, as well as
+  // for a job cached before they existed.
+  onFile: jobFileSchema.nullish().transform((value) => value ?? undefined),
+  lastVisit: lastVisitSchema.nullish().transform((value) => value ?? undefined),
   property: propertySchema.pick({ id: true, address: true, cityStateZip: true, imageTone: true }),
   progress: z.object({
     completed: z.number(),
