@@ -27,6 +27,9 @@ import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
 import { AddAreaSheet } from '@/src/components/AddAreaSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { JobFileCard } from '@/src/components/JobFileCard';
+import { JobTasksCard } from '@/src/components/JobTasksCard';
+import { NoAccessSheet } from '@/src/components/NoAccessSheet';
+import { ServiceAnswerSheet } from '@/src/components/ServiceAnswerSheet';
 import { PriorityAuditList } from '@/src/components/PriorityAuditList';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
@@ -34,6 +37,7 @@ import { usePullToRefresh } from '@/src/features/usePullToRefresh';
 import { useLocalNow } from '@/src/features/useLocalNow';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import { jobClock, jobClockLabel } from '@/src/utils/job-clock';
+import { jobTasks, withServiceAnswer, type JobTask } from '@/src/utils/job-tasks';
 import { buildPriorityChecklist, summaryCoverage } from '@/src/utils/inspection-audit';
 import {
   INSPECTION_STATUS_TONE_CLASS,
@@ -195,6 +199,10 @@ export default function InspectionOverviewScreen() {
   const theme = useThemeColors();
   const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
   const [addAreaOpen, setAddAreaOpen] = useState(false);
+  // Which service the technician is answering, and whether they are reporting
+  // that nobody let them in at all.
+  const [answering, setAnswering] = useState<JobTask | null>(null);
+  const [noAccessOpen, setNoAccessOpen] = useState(false);
   // Ticks by the minute, and again on foregrounding, so a job left open all
   // morning does not still read as eight minutes old.
   const now = useLocalNow();
@@ -265,6 +273,25 @@ export default function InspectionOverviewScreen() {
   const coverage = summaryCoverage(roomList, findingList);
   // Null until the job is started, which is when the button below says so.
   const clock = jobClock(item, now.getTime());
+  /**
+   * The job's checklist, as the office numbers it.
+   *
+   * From the visit's Details and the areas, so a visit that books only a filter
+   * change shows only that, and the inspection is one row among them.
+   */
+  const tasks = jobTasks({
+    visitDetails: item.visitDetails,
+    inspectionType: item.type,
+    report: item.servicesReport,
+    areas: { completed: completedRooms, total: roomList.length },
+  });
+  const open = (task: JobTask) => {
+    if (task.kind === 'FILTERS') router.push(`/job-filters/${id}`);
+    else if (task.kind === 'SERVICE') setAnswering(task);
+    // The inspection is the areas: straight to the one worth doing next.
+    else if (nextRoom) router.push(`/areas/${nextRoom.id}`);
+    else router.push(`/review/${id}`);
+  };
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -389,6 +416,17 @@ export default function InspectionOverviewScreen() {
             </View>
           ) : null}
         </View>
+
+        {/* The checklist, above everything the office wrote: this is the work
+            itself, and the office asked for it at the front of the job
+            (2026-09-18). Inert until the job is started, because there is
+            nothing to answer for a job nobody has begun. */}
+        <JobTasksCard
+          className="mx-5 mt-5"
+          disabled={item.status === 'SCHEDULED'}
+          onOpen={open}
+          tasks={tasks}
+        />
 
         {/* Before the progress card: the filters to bring and who to call are
             needed before the first area is opened, not after. */}
@@ -590,6 +628,20 @@ export default function InspectionOverviewScreen() {
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
+        {/* The way out of a job nobody can get into. Quiet, under the work
+            itself: it ends the visit and asks the office to rebook, which is
+            not a thing to press by accident. */}
+        {item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS' ? (
+          <Pressable
+            accessibilityHint="Ends this job and asks the office to book it again"
+            accessibilityLabel="Could not get in"
+            accessibilityRole="button"
+            className="mb-2 min-h-9 items-center justify-center rounded-lg py-1.5 active:opacity-70"
+            onPress={() => setNoAccessOpen(true)}
+          >
+            <Text className="text-xs font-semibold text-muted-foreground">Could not get in?</Text>
+          </Pressable>
+        ) : null}
         {item.status === 'SCHEDULED' ? (
           <Pressable
             accessibilityLabel={actions.start.isPending ? 'Starting job' : 'Start job'}
@@ -683,6 +735,38 @@ export default function InspectionOverviewScreen() {
           })()
         )}
       </View>
+
+      {/* The service the technician tapped: one answer, and no photograph —
+          the office asked for those only for the filters. */}
+      <ServiceAnswerSheet
+        answer={(() => {
+          const current = answering?.key && answering.key !== 'inspection'
+            ? item.servicesReport?.services[answering.key]
+            : undefined;
+          return current
+            ? { done: current.done, reason: current.reason, reschedule: current.reschedule }
+            : undefined;
+        })()}
+        onAnswer={(next) => {
+          if (answering && answering.key !== 'inspection')
+            actions.saveServices.mutate(withServiceAnswer(item.servicesReport, answering.key, next));
+          setAnswering(null);
+        }}
+        onClose={() => setAnswering(null)}
+        title={answering?.title ?? ''}
+        visible={Boolean(answering && answering.kind === 'SERVICE')}
+      />
+
+      <NoAccessSheet
+        busy={actions.couldNotAccess.isPending}
+        onClose={() => setNoAccessOpen(false)}
+        onReport={(reason) =>
+          actions.couldNotAccess.mutate(reason, {
+            onSettled: () => setNoAccessOpen(false),
+          })
+        }
+        visible={noAccessOpen}
+      />
 
       <AddAreaSheet
         inspectionId={id}

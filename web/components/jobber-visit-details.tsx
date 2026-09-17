@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  filterLabel,
+  installedSizes,
   parseVisitDetails,
   REPORTABLE_VISIT_SERVICES,
   servicesToReschedule,
@@ -264,11 +266,35 @@ export function JobberVisitDetails({
                 );
               })}
             </ul>
-            {servicesReport.filtersInstalled.length ? (
+            {installedSizes(servicesReport).length ? (
               <p className="text-sm">
                 Filters installed:{' '}
-                <span className="font-mono">{servicesReport.filtersInstalled.join(', ')}</span>
+                <span className="font-mono">{installedSizes(servicesReport).join(', ')}</span>
               </p>
+            ) : null}
+            {/* Each register the technician answered for, once the office asked
+                for a photograph of each (2026-09-18). One marked changed whose
+                photograph has not arrived says so, rather than reading as
+                evidenced. */}
+            {servicesReport.filters?.length ? (
+              <ul aria-label="Filter registers" className="grid gap-1.5 text-sm">
+                {servicesReport.filters.map((filter) => (
+                  <li
+                    className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+                    key={`${filter.size}-${filter.location ?? ''}-${filter.slot}`}
+                  >
+                    <Badge variant={filter.changed ? 'success' : 'warning'}>
+                      {filter.changed ? 'Changed' : 'Not changed'}
+                    </Badge>
+                    <span className="font-mono">{filterLabel(filter)}</span>
+                    {filter.booked ? null : <Badge variant="outline">Found on site</Badge>}
+                    {filter.reason ? <span className="text-muted-foreground">{filter.reason}</span> : null}
+                    {filter.changed && !filter.photoId ? (
+                      <span className="text-warning text-xs">Photograph still uploading</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
             ) : null}
             {servicesReport.notes ? (
               <p className="text-sm whitespace-pre-wrap">{servicesReport.notes}</p>

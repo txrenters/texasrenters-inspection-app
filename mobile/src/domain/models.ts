@@ -1,4 +1,4 @@
-import type { EntitySyncMetadata, InspectionType } from '@texasrenters/shared';
+import type { EntitySyncMetadata, InspectionType, VisitServicesReport } from '@texasrenters/shared';
 import type { GuidedCaptureSummary, SnapshotCaptureSource } from '../capture/guided-capture';
 
 export type DemoRole = 'TECHNICIAN' | 'REVIEWER' | 'ADMINISTRATOR';
@@ -221,6 +221,14 @@ export interface Inspection {
    */
   onFile?: JobFile;
   lastVisit?: JobLastVisit;
+  /**
+   * The job's checklist as it has been answered so far.
+   *
+   * Saved as each task is ticked rather than written once at submission, so a
+   * technician who reinstalled — or picked up another handset — sees what they
+   * already answered. Absent on a job nobody has ticked.
+   */
+  servicesReport?: VisitServicesReport;
   property: Pick<Property, 'id' | 'address' | 'cityStateZip' | 'imageTone'>;
   progress: { completed: number; total: number; hasFailedUpload: boolean };
   updatedAt?: string;

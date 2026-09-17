@@ -5,6 +5,7 @@ import { environment } from '../../config/environment';
 import { pushDeviceStorage } from '../../realtime/push-device-storage';
 import type {
   ChecklistAssessment,
+  Inspection,
   InspectionStatus,
   LocalMedia,
   PhotoCaptureType,
@@ -109,6 +110,41 @@ const lastVisitSchema = z.object({
   maintenanceComments: nullableString,
 });
 
+/** What the API answers when the checklist is saved mid-job. */
+const filtersAreaSchema = z.object({ areaId: z.string() });
+
+/**
+ * The checklist as the server holds it.
+ *
+ * Nulls are kept rather than normalised to undefined, unlike the strings
+ * elsewhere here: this is round-tripped back to the API on the next tick and on
+ * submission, and `reason: null` is how "done, so nothing to explain" is
+ * written. Permissive about the service keys for the usual reason — the office
+ * adding a service must not make a whole job unreadable on the phone.
+ */
+const serviceOutcomeSchema = z.object({
+  done: z.boolean(),
+  reason: z.string().nullable().default(null),
+  reschedule: z.boolean().default(false),
+});
+
+const filterOutcomeSchema = z.object({
+  size: z.string(),
+  location: z.string().nullable().default(null),
+  slot: z.number().int().min(1),
+  changed: z.boolean(),
+  reason: z.string().nullable().default(null),
+  photoId: z.string().nullable().default(null),
+  booked: z.boolean().default(false),
+});
+
+const servicesReportSchema = z.object({
+  services: z.record(z.string(), serviceOutcomeSchema).default({}),
+  filters: z.array(filterOutcomeSchema).optional(),
+  filtersInstalled: z.array(z.string()).default([]),
+  notes: z.string().nullable().default(null),
+});
+
 const inspectionSchema = z.object({
   id: z.string(),
   externalInspectionId: z.string(),
@@ -161,6 +197,9 @@ const inspectionSchema = z.object({
   // for a job cached before they existed.
   onFile: jobFileSchema.nullish().transform((value) => value ?? undefined),
   lastVisit: lastVisitSchema.nullish().transform((value) => value ?? undefined),
+  // What the technician has ticked so far. Absent on a job with nothing ticked,
+  // and on a job cached before the checklist moved to the front.
+  servicesReport: servicesReportSchema.nullish().transform((value) => value ?? undefined),
   property: propertySchema.pick({ id: true, address: true, cityStateZip: true, imageTone: true }),
   progress: z.object({
     completed: z.number(),
@@ -169,6 +208,9 @@ const inspectionSchema = z.object({
   }),
   updatedAt: nullableString,
 });
+/** What the API answers when the checklist is saved: the job, as it now stands. */
+const savedServicesSchema = z.object({ inspection: inspectionSchema });
+
 /**
  * A page of inspections, `total` included.
  *
@@ -768,6 +810,85 @@ export class ApiInspectionRepository implements InspectionRepository {
       })),
     ]);
     return inspection;
+  }
+  /**
+   * The checklist as it stands, saved while the job is still being walked.
+   *
+   * Every tick, because the checklist is answered at the start of the job now
+   * (the office, 2026-09-18) and a phone that dies at noon must not lose the
+   * morning. Held on the device when the signal is gone, and the cached job is
+   * patched so the screen shows what was ticked either way.
+   */
+  async saveServices(id: string, servicesReport: VisitServicesReport) {
+    try {
+      const saved = savedServicesSchema.parse(
+        await queueOnConnectionFailure(
+          { id: `services:${id}`, kind: 'job-services', payload: { inspectionId: id, servicesReport } },
+          () =>
+            writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/services`, 'PATCH', {
+              servicesReport,
+            }),
+        ),
+      );
+      await this.storeInspection(id, saved.inspection);
+      return saved.inspection;
+    } catch (error) {
+      if (!(error instanceof QueuedOfflineError)) throw error;
+      // The tick is kept, so the checklist has to read as ticked.
+      await this.patchCachedInspection(id, { servicesReport });
+      throw error;
+    }
+  }
+  /** The area a job's filter photographs are filed under, made on the first one. */
+  async filtersArea(id: string) {
+    const area = filtersAreaSchema.parse(
+      await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/filters-area`, 'POST'),
+    );
+    return area.areaId;
+  }
+  /** Nobody let the technician in: the office books the whole visit again. */
+  async couldNotAccess(id: string, reason: string) {
+    try {
+      const inspection = inspectionSchema.parse(
+        await queueOnConnectionFailure(
+          { id: `no-access:${id}`, kind: 'job-no-access', payload: { inspectionId: id, reason } },
+          () =>
+            writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/no-access`, 'POST', {
+              reason,
+            }),
+        ),
+      );
+      await this.storeInspection(id, inspection);
+      return inspection;
+    } catch (error) {
+      if (!(error instanceof QueuedOfflineError)) throw error;
+      // Off the technician's list, held or not: they cannot get in, and the
+      // job must stop asking them to walk it.
+      await this.patchCachedInspection(id, { status: 'TECHNICIAN_SUBMITTED' });
+      throw error;
+    }
+  }
+  /** Keeps the cached job and the cached context in step, as `start` does. */
+  private async storeInspection(id: string, inspection: Inspection) {
+    await Promise.all([
+      storeApiRecord(`inspection:${id}`, inspectionSchema, inspection),
+      updateExistingApiRecord(`inspection-context:${id}`, inspectionContextSchema, (current) => ({
+        ...current,
+        inspection,
+      })),
+    ]);
+  }
+  private async patchCachedInspection(id: string, patch: Partial<Inspection>) {
+    await Promise.all([
+      updateExistingApiRecord(`inspection:${id}`, inspectionSchema, (current) => ({
+        ...current,
+        ...patch,
+      })),
+      updateExistingApiRecord(`inspection-context:${id}`, inspectionContextSchema, (current) => ({
+        ...current,
+        inspection: { ...current.inspection, ...patch },
+      })),
+    ]);
   }
   async complete(id: string, servicesReport?: VisitServicesReport, closingComments?: Partial<ClosingComments>) {
     // The closing comments sit beside the services report on the body, as the

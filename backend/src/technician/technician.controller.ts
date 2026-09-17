@@ -36,6 +36,7 @@ import {
   RemoveMobilePushDeviceDto,
   TechnicianAdditionalVideoDto,
   TechnicianCompleteInspectionDto,
+  TechnicianCouldNotAccessDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -43,6 +44,7 @@ import {
   TechnicianNoteDto,
   TechnicianPhotoUploadDto,
   TechnicianReasonDto,
+  TechnicianSaveServicesDto,
   TechnicianUpdateAreaDto,
   TechnicianHomeDto,
   TechnicianLocationBatchDto,
@@ -185,6 +187,35 @@ export class TechnicianController {
     @Body() body: TechnicianCompleteInspectionDto,
   ) {
     return this.service.completeInspection(request.user, id, body);
+  }
+  /**
+   * The job's checklist as it stands, saved while it is still being walked.
+   *
+   * Every tick, rather than the whole report at submission: the checklist is
+   * answered at the start of the job now, and a phone that dies at noon must
+   * not lose the morning.
+   */
+  @Patch('inspections/:inspectionId/services') saveServices(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: TechnicianSaveServicesDto,
+  ) {
+    return this.service.saveServicesReport(request.user, id, body);
+  }
+  /** The area a job's filter photographs are filed under, made on the first one. */
+  @Post('inspections/:inspectionId/filters-area') filtersArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.service.filtersArea(request.user, id);
+  }
+  /** Nobody let the technician in: the office books the whole visit again. */
+  @Post('inspections/:inspectionId/no-access') couldNotAccess(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: TechnicianCouldNotAccessDto,
+  ) {
+    return this.service.couldNotAccess(request.user, id, body);
   }
   @Get('inspections/:inspectionId/rooms') rooms(
     @Req() request: AuthenticatedRequest,

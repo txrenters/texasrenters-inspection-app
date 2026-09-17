@@ -180,6 +180,17 @@ export interface InspectionRepository {
     servicesReport?: VisitServicesReport,
     closingComments?: Partial<ClosingComments>,
   ): Promise<Inspection>;
+  /**
+   * The job's checklist as it stands, saved while the job is still walked.
+   *
+   * Every tick, because the office asks the checklist at the start of the job
+   * now (2026-09-18): a phone that dies at noon must not lose the morning.
+   */
+  saveServices(id: string, servicesReport: VisitServicesReport): Promise<Inspection>;
+  /** The area this job's filter photographs are filed under, made on the first one. */
+  filtersArea(id: string): Promise<string>;
+  /** Nobody let the technician in, so the office books the whole visit again. */
+  couldNotAccess(id: string, reason: string): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
   addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;

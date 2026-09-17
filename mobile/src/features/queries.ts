@@ -6,6 +6,7 @@ import type {
   ChecklistItemWithAssessment,
   DemoRole,
   FindingStatus,
+  Inspection,
   InspectionStatus,
   LocalMedia,
 } from '../domain/models';
@@ -337,6 +338,53 @@ export function useInspectionActions(id: string) {
         'PROCESSING',
         (input) => repositories.inspections.complete(id, input?.servicesReport, input?.closingComments),
       ),
+    ),
+    /**
+     * A tick on the job's checklist.
+     *
+     * Not wrapped in `action`, which puts the job into PROCESSING while it
+     * runs: a technician ticking pest control is not waiting on the job's
+     * state, and flashing "Processing" on the whole job for each tick would
+     * read as something going wrong. The answer is written straight into the
+     * cached job so the checklist redraws at once, held or sent.
+     */
+    saveServices: useMutation({
+      /**
+       * One at a time, per job.
+       *
+       * The checklist is stored as one document, so two answers sent at once
+       * would each carry the report as it was when that tap happened and the
+       * later reply would drop the earlier answer. A scope makes the second
+       * wait, and it then reads the cache the first one wrote.
+       */
+      scope: { id: `job-services:${id}` },
+      mutationFn: (servicesReport: VisitServicesReport) =>
+        repositories.inspections.saveServices(id, servicesReport),
+      onSuccess: (inspection) => {
+        client.setQueryData(queryKeys.inspection(id), inspection);
+        void refresh();
+      },
+      onError: (error: unknown, servicesReport) => {
+        // Held on the device: the repository has already kept it, so the
+        // screen must show it rather than the answer springing back.
+        if (error instanceof QueuedOfflineError)
+          client.setQueryData(queryKeys.inspection(id), (current?: Inspection) =>
+            current ? { ...current, servicesReport } : current,
+          );
+        else void refresh();
+      },
+    }),
+    /**
+     * The area this job's filter photographs are filed under.
+     *
+     * Made on the first photograph rather than when the job is created: there
+     * are hundreds of jobs already booked, and a job whose filters nobody
+     * photographs never grows an area at all.
+     */
+    filtersArea: useMutation({ mutationFn: () => repositories.inspections.filtersArea(id) }),
+    /** Nobody let the technician in: the office books the whole visit again. */
+    couldNotAccess: useMutation(
+      action<string>('PROCESSING', (reason) => repositories.inspections.couldNotAccess(id, reason)),
     ),
   };
 }

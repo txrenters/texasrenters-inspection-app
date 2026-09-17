@@ -163,6 +163,73 @@ describe('the Jobber visit on an inspection', () => {
     expect(screen.getByRole('button', { name: 'Edit visit' })).toBeInTheDocument();
   });
 
+  it('shows each filter register the technician answered for', () => {
+    // The office asked for a photograph of every register (2026-09-18), so the
+    // console has to show which ones were changed and which were missed —
+    // "Filter Change: done" over an unreachable register is the failure.
+    render(
+      <JobberVisitDetails
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        servicesReport={{
+          services: { filterChange: { done: true, reason: null, reschedule: false } },
+          filters: [
+            {
+              size: '20x25x1',
+              location: 'upstairs hallway',
+              slot: 1,
+              changed: true,
+              reason: null,
+              photoId: 'photo-1',
+              booked: true,
+            },
+            {
+              size: '20x25x1',
+              location: 'upstairs hallway',
+              slot: 2,
+              changed: true,
+              reason: null,
+              photoId: null,
+              photoKey: 'snapshot-2',
+              booked: true,
+            },
+            {
+              size: '12x12x1',
+              location: 'downstairs',
+              slot: 1,
+              changed: false,
+              reason: 'Register painted over',
+              photoId: null,
+              booked: true,
+            },
+            {
+              size: '16x20x1',
+              location: null,
+              slot: 1,
+              changed: true,
+              reason: null,
+              photoId: 'photo-4',
+              booked: false,
+            },
+          ],
+          filtersInstalled: [],
+          notes: null,
+        }}
+        title={TITLE}
+      />,
+    );
+
+    const registers = screen.getByRole('list', { name: 'Filter registers' });
+    expect(within(registers).getAllByText('Changed')).toHaveLength(3);
+    expect(within(registers).getByText('Register painted over')).toBeInTheDocument();
+    // One register's photograph is still in the handset's upload queue.
+    expect(within(registers).getByText('Photograph still uploading')).toBeInTheDocument();
+    // A register the visit never listed, so the office can correct its record.
+    expect(within(registers).getByText('Found on site')).toBeInTheDocument();
+    // Read from the registers rather than the old flat list.
+    expect(screen.getByText(/20x25x1, 16x20x1/)).toBeInTheDocument();
+  });
+
   it('shows nothing for an inspection that did not come from Jobber', () => {
     const { container } = render(<JobberVisitDetails inspectionType="MOVE_IN" />);
     expect(container).toBeEmptyDOMElement();

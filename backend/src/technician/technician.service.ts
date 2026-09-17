@@ -1,11 +1,14 @@
 import {
   answerWithChoices,
+  bookedFilters,
   checklistKindFor,
   hvacSectionOf,
   hvacUnansweredItems,
   hvacUnansweredMessage,
   checklistTemplateFor,
   choicesInAnswer,
+  filterKey,
+  installedSizes,
   inspectionComparesToBaseline,
   inspectionEstablishesBaseline,
   STANDARD_LAYOUT_SOURCE,
@@ -16,6 +19,8 @@ import {
   parseVisitDetails,
   reportableServices,
   servicesReportProblems,
+  type BookedFilter,
+  type VisitFilterOutcome,
   type VisitServicesReport,
 } from '@texasrenters/shared';
 import {
@@ -28,7 +33,9 @@ import { rm } from 'node:fs/promises';
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
+  AreaCategory,
   AreaChecklistItemKind,
+  AreaEnvironment,
   EvidenceRequestStatus,
   FloorPlanStatus,
   InspectionAreaCompletionStatus,
@@ -40,7 +47,6 @@ import {
   PropertyAreaStatus,
   VideoRecordingType,
 } from '@prisma/client';
-import type { AreaCategory, AreaEnvironment } from '@prisma/client';
 import type { FindingReviewStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -63,11 +69,14 @@ import {
 import type {
   TechnicianAdditionalVideoDto,
   TechnicianCompleteInspectionDto,
+  TechnicianCouldNotAccessDto,
   TechnicianCreateAreaDto,
+  TechnicianFilterOutcomeDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
   TechnicianMediaUploadDto,
   TechnicianPhotoUploadDto,
+  TechnicianSaveServicesDto,
 } from './technician.dto';
 
 export interface UploadedRoomVideo {
@@ -95,6 +104,57 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * have a lease ending the evening before in Texas.
  */
 const isoDay = (value: Date | null | undefined) => value?.toISOString().slice(0, 10) ?? null;
+
+/**
+ * The area a job's filter photographs are filed under.
+ *
+ * Named for the office rather than for the code: it appears in the report
+ * beside the rooms, and "AC filters" is what the office calls the service.
+ */
+const FILTERS_AREA_NAME = 'AC filters';
+
+/**
+ * The filter registers as they are stored: normalised, and each said to be
+ * booked or found on site.
+ *
+ * `booked` is decided here rather than taken from the phone, because it is a
+ * fact about the visit's Details and not about the answer: a register the
+ * coordinator listed cannot become "found on site" by a client sending a flag.
+ *
+ * A function rather than a method, because `servicesReportFor` is called
+ * unbound in the tests and would have no `this`.
+ */
+function filterOutcomesFor(
+  answers: TechnicianFilterOutcomeDto[] | undefined,
+  booked: readonly BookedFilter[],
+): VisitFilterOutcome[] {
+  if (!answers?.length) return [];
+  const bookedKeys = new Set(booked.map((filter) => filterKey(filter)));
+  const seen = new Set<string>();
+  const outcomes: VisitFilterOutcome[] = [];
+  for (const answer of answers) {
+    const outcome: VisitFilterOutcome = {
+      size: normalizeFilterSize(answer.size),
+      location: answer.location?.trim() || null,
+      slot: answer.slot,
+      changed: answer.changed,
+      reason: answer.changed ? null : (answer.reason ?? '').trim() || null,
+      photoId: answer.changed ? (answer.photoId ?? null) : null,
+      // The key the handset gave the photograph, which is what it can offer
+      // while the image is still in its upload queue.
+      photoKey: answer.changed ? (answer.photoKey ?? null) : null,
+      booked: false,
+    };
+    const key = filterKey(outcome);
+    // One answer per register: the last one sent wins, which is what a
+    // technician correcting a tick expects.
+    if (seen.has(key)) outcomes.splice(outcomes.findIndex((entry) => filterKey(entry) === key), 1);
+    seen.add(key);
+    outcomes.push({ ...outcome, booked: bookedKeys.has(key) });
+  }
+  return outcomes;
+}
+
 
 const allowedVideoMimeTypes = new Set([
   'video/mp4',
@@ -293,6 +353,9 @@ const technicianInspectionSummarySelect = {
   // Which tenancy the office booked this for, so the job screen can show the
   // file it holds on them.
   propertywareLeaseId: true,
+  // The checklist as it stands. Read back by the phone so a technician who
+  // reinstalled, or picked up another handset, sees what they already ticked.
+  servicesReport: true,
   // What the coordinator wrote on the Jobber visit. A technician only ever
   // receives inspections assigned to them, which is who these are for.
   jobberVisitTitle: true,
@@ -731,30 +794,261 @@ export class TechnicianService {
   private servicesReportFor(
     inspection: { jobberVisitDetails: string | null },
     report: TechnicianCompleteInspectionDto['servicesReport'],
+    /** False while the job is still being walked, when the checklist is part-answered. */
+    whole = true,
   ): VisitServicesReport | null {
     if (!report) return null;
-    const booked = reportableServices(parseVisitDetails(inspection.jobberVisitDetails));
-    const problems = servicesReportProblems(booked, report as VisitServicesReport);
-    if (problems.length)
-      throw new ApplicationError(422, 'SERVICES_REPORT_INCOMPLETE', problems.join(' '));
+    const details = parseVisitDetails(inspection.jobberVisitDetails);
+    const booked = reportableServices(details);
+    const filters = bookedFilters(details);
+    if (whole) {
+      const problems = servicesReportProblems(booked, report as VisitServicesReport, filters);
+      if (problems.length)
+        throw new ApplicationError(422, 'SERVICES_REPORT_INCOMPLETE', problems.join(' '));
+    }
     const notes = report.notes?.trim() || null;
-    if (!booked.length && !notes) return null;
     const services: VisitServicesReport['services'] = {};
     for (const service of booked) {
-      const outcome = report.services[service]!;
+      const outcome = report.services[service];
+      // Part-answered while the job runs: a service nobody has ticked yet is
+      // left out rather than recorded as not done.
+      if (!outcome) continue;
       services[service] = {
         done: outcome.done,
         reason: outcome.done ? null : (outcome.reason ?? '').trim(),
         reschedule: !outcome.done && Boolean(outcome.reschedule),
       };
     }
+    const answered = filterOutcomesFor(report.filters, filters);
+    if (!booked.length && !notes && !answered.length) return null;
     return {
       services,
+      ...(answered.length ? { filters: answered } : {}),
+      // The sizes the office reads back. From the per-register answers where
+      // the phone sent them, and from the old flat list otherwise.
       filtersInstalled: services.filterChange?.done
-        ? [...new Set(report.filtersInstalled.map(normalizeFilterSize))]
+        ? answered.length
+          ? installedSizes({ filters: answered, filtersInstalled: [] })
+          : [...new Set(report.filtersInstalled.map(normalizeFilterSize))]
         : [],
       notes,
     };
+  }
+
+  /**
+   * Fills in the photograph a register was answered with, once it has arrived.
+   *
+   * The handset answers with the key it gave the photograph, because the image
+   * itself travels in the upload queue and may still be sitting on the device.
+   * The upload carries that key as its idempotency key, so the moment it lands
+   * the register can point at the photograph — which is what puts it in front
+   * of the office and in the report.
+   *
+   * Called on every save and on submission, so a register answered in a
+   * basement is resolved by whichever of those happens after the photograph
+   * arrives.
+   */
+  private async resolveFilterPhotos(inspectionId: string, report: VisitServicesReport | null) {
+    const waiting = (report?.filters ?? []).filter((filter) => filter.photoKey && !filter.photoId);
+    if (!report || !waiting.length) return report;
+    const photos = await this.prisma.inspectionPhoto.findMany({
+      where: {
+        inspectionId,
+        idempotencyKey: { in: waiting.map((filter) => filter.photoKey!) },
+      },
+      select: { id: true, idempotencyKey: true },
+    });
+    if (!photos.length) return report;
+    const byKey = new Map(photos.map((photo) => [photo.idempotencyKey, photo.id]));
+    return {
+      ...report,
+      filters: report.filters?.map((filter) =>
+        filter.photoKey && !filter.photoId
+          ? { ...filter, photoId: byKey.get(filter.photoKey) ?? null }
+          : filter,
+      ),
+    };
+  }
+
+  /**
+   * Saves the checklist as it stands, while the job is still being walked.
+   *
+   * The whole report used to be written once, at submission. The office asked
+   * for the checklist at the start of the job instead (2026-09-18), so a phone
+   * that dies at noon must not lose a morning of ticks. Checked for shape, not
+   * for completeness: what still has to be answered is decided at submission,
+   * by the same rule the phone's submit button runs.
+   */
+  async saveServicesReport(user: AuthenticatedUser, id: string, input: TechnicianSaveServicesDto) {
+    const inspection = await this.assignedInspection(user, id);
+    if (inspection.status !== InspectionStatus.IN_PROGRESS)
+      throw new ApplicationError(
+        409,
+        'JOB_NOT_IN_PROGRESS',
+        'Start the job before answering its checklist.',
+      );
+    const report = await this.resolveFilterPhotos(
+      id,
+      this.servicesReportFor(inspection, input.servicesReport, false),
+    );
+    const updated = await this.prisma.inspection.update({
+      where: { id },
+      data: {
+        servicesReport: (report ?? null) as unknown as Prisma.InputJsonValue,
+        servicesReportedAt: report ? new Date() : null,
+      },
+      select: technicianInspectionSummarySelect,
+    });
+    this.notifyInspectionChanged(user, id);
+    return { inspection: this.mapInspection(updated, user.id), servicesReport: report };
+  }
+
+  /**
+   * The area a job's filter photographs belong to, created the first time one is taken.
+   *
+   * Photographs belong to an area — the column is not nullable — and a filter
+   * change is not a room. So the job gets one area named "AC filters", made the
+   * way an HVAC visit's sections are: `source` SYSTEM and no floor, so nothing
+   * counts it as part of a floor plan, and one per building and unit, reused by
+   * every later visit there.
+   *
+   * Lazily, on the first photograph, rather than when the visit is created:
+   * there are hundreds of jobs already booked, and none of them would have it.
+   */
+  async filtersArea(user: AuthenticatedUser, id: string) {
+    const inspection = await this.assignedInspection(user, id);
+    if (inspection.status !== InspectionStatus.IN_PROGRESS)
+      throw new ApplicationError(
+        409,
+        'JOB_NOT_IN_PROGRESS',
+        'Start the job before photographing its filters.',
+      );
+    const buildingId = inspection.propertywareBuilding?.id;
+    if (!buildingId)
+      throw new ApplicationError(
+        409,
+        'JOB_HAS_NO_PROPERTY',
+        'This job has no property to file the photographs under.',
+      );
+    const building = inspection.propertywareBuilding!;
+    return this.prisma.$transaction(async (tx) => {
+      // The area's property row, which carries the building's own id — the same
+      // upsert `ensureAreaProperty` does when the office creates an inspection,
+      // because a building that has never had an area has no Property row yet.
+      await tx.property.upsert({
+        where: { id: buildingId },
+        update: {},
+        create: {
+          id: buildingId,
+          organizationId: user.organizationId,
+          name: building.name,
+          addressLine1: building.addressLine1 || 'Address not provided',
+          city: building.city || 'Not provided',
+          state: building.state || 'TX',
+          postalCode: building.postalCode || 'Not provided',
+        },
+      });
+      const where = {
+        propertyId: buildingId,
+        unitId: inspection.propertywareUnit?.id ?? null,
+        floorId: null,
+        name: FILTERS_AREA_NAME,
+      };
+      const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
+      const propertyAreaId =
+        existing?.id ??
+        (
+          await tx.propertyArea.create({
+            data: {
+              ...where,
+              inspectionOrder: 0,
+              // Never part of the walk: the checklist asks for these
+              // photographs, and the completion gate must not also demand them.
+              isRequired: false,
+              status: PropertyAreaStatus.APPROVED,
+              source: 'SYSTEM',
+              environment: AreaEnvironment.INDOOR,
+              category: AreaCategory.UTILITY,
+              notes: 'Created automatically for AC filter photographs. Not part of the floor plan.',
+            },
+            select: { id: true },
+          })
+        ).id;
+      const area = await tx.inspectionArea.upsert({
+        where: { inspectionId_propertyAreaId: { inspectionId: id, propertyAreaId } },
+        create: { inspectionId: id, propertyAreaId },
+        update: {},
+        select: { id: true },
+      });
+      return { areaId: area.id };
+    });
+  }
+
+  /**
+   * Nobody let the technician in, so the office books the visit again.
+   *
+   * The office's decision (2026-09-18): a refused entry, a locked gate or an
+   * empty house ends the whole job rather than each task separately. Every
+   * service the visit booked is recorded as not done, with the technician's
+   * reason and marked to reschedule, which is what the Jobber note then says —
+   * so a coordinator reads why and rebooks without anyone ringing them.
+   *
+   * Submitted, not cancelled: the visit was attempted, the attempt is part of
+   * the record, and cancelling is the office's decision rather than the
+   * technician's. The area gate is deliberately not applied — there is nothing
+   * to photograph in a house nobody entered.
+   */
+  async couldNotAccess(user: AuthenticatedUser, id: string, input: TechnicianCouldNotAccessDto) {
+    const inspection = await this.assignedInspection(user, id);
+    if (
+      inspection.status !== InspectionStatus.IN_PROGRESS &&
+      inspection.status !== InspectionStatus.SCHEDULED
+    )
+      throw new ApplicationError(
+        409,
+        'JOB_NOT_OPEN',
+        'Only a job that is scheduled or in progress can be reported as no access.',
+      );
+    const reason = input.reason.trim();
+    const booked = reportableServices(parseVisitDetails(inspection.jobberVisitDetails));
+    const services: VisitServicesReport['services'] = {};
+    for (const service of booked) services[service] = { done: false, reason, reschedule: true };
+    const report: VisitServicesReport = {
+      services,
+      filtersInstalled: [],
+      notes: `Could not get in: ${reason}`,
+    };
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.inspection.update({
+        where: { id },
+        data: {
+          status: InspectionStatus.TECHNICIAN_SUBMITTED,
+          // Stamped where it is missing, so the office can see the visit was
+          // attempted and when, even though nothing was walked.
+          startedAt: inspection.startedAt ?? now,
+          submittedAt: now,
+          servicesReport: report as unknown as Prisma.InputJsonValue,
+          servicesReportedAt: now,
+          // What the office reads before rebooking, and what stops this from
+          // looking like a visit that simply found nothing.
+          completionBlockedReason: `Could not get in: ${reason}`,
+          reopenReason: null,
+        },
+        select: technicianInspectionSummarySelect,
+      });
+      // Jobber hears the same account: every service not done, needing a
+      // rebooking. The visit is closed there with that note rather than left
+      // open for somebody to chase.
+      await enqueueJobberCompletion(tx, {
+        organizationId: user.organizationId,
+        inspectionId: id,
+        reportOwnerId: null,
+      });
+      return row;
+    });
+    this.notifyInspectionChanged(user, id);
+    return this.mapInspection(updated, user.id);
   }
 
   async completeInspection(
@@ -791,7 +1085,10 @@ export class TechnicianService {
     // administrator finalizes *this inspection*. Record the submission and let
     // the AI pipeline advance it to REVIEW_REQUIRED once processing finishes.
     // The Jobber push below is a separate claim — see the comment on it.
-    const servicesReport = this.servicesReportFor(inspection, input.servicesReport);
+    const servicesReport = await this.resolveFilterPhotos(
+      id,
+      this.servicesReportFor(inspection, input.servicesReport),
+    );
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.inspection.update({
         where: { id },
@@ -2956,6 +3253,8 @@ export class TechnicianService {
       // there is something to read.
       reopenReason: record.reopenReason ?? undefined,
       propertyNotes: record.internalNotes ?? '',
+      // What has been answered so far. Null on a job nobody has ticked yet.
+      servicesReport: (record.servicesReport ?? null) as VisitServicesReport | null,
       // Null for anything booked here, so the app can tell "no Jobber visit"
       // from a response built before the field existed.
       visitTitle: record.jobberVisitTitle ?? null,
