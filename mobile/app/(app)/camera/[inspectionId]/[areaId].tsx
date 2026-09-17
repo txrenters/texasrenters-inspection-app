@@ -38,6 +38,7 @@ import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { goBack } from '@/src/lib/navigation';
+import { withFilterAnswer } from '@/src/utils/job-tasks';
 import { HomeButton } from '@/src/components/HomeButton';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
@@ -115,10 +116,28 @@ export default function RoomCameraScreen() {
     inspectionId = '',
     areaId = '',
     recordingType,
+    filterSize,
+    filterLocation,
+    filterSlot,
+    filterBooked,
+    filterLabel: filterLabelParam,
   } = useLocalSearchParams<{
     inspectionId: string;
     areaId: string;
     recordingType?: string;
+    /**
+     * This shot is one filter register's photograph.
+     *
+     * Sent by the job's filter screen, which has already resolved the area
+     * these are filed under. The shutter then takes one picture, attaches it to
+     * that register and comes straight back — the office asked for a
+     * photograph of each register (2026-09-18), not a walk of an area.
+     */
+    filterSize?: string;
+    filterLocation?: string;
+    filterSlot?: string;
+    filterBooked?: string;
+    filterLabel?: string;
   }>();
   const room = useRoom(areaId);
   /**
@@ -237,7 +256,23 @@ export default function RoomCameraScreen() {
   const [seconds, setSeconds] = useState(0);
   const [torch, setTorch] = useState(false);
   const [facing, setFacing] = useState<CameraType>('back');
-  const [captureType, setCaptureType] = useState<PhotoCaptureType>('AREA_OVERVIEW');
+  /**
+   * The filter register this shot belongs to, when the job's filter screen sent
+   * one. Null for the ordinary case: photographing an area.
+   */
+  const filterRegister = filterSize
+    ? {
+        size: filterSize,
+        location: filterLocation?.trim() ? filterLocation.trim() : null,
+        slot: Number(filterSlot ?? '1') || 1,
+      }
+    : null;
+  const saveServices = inspectionActions.saveServices;
+  // SERIAL_OR_LABEL, because the office asked for the size printed on the
+  // filter to be in shot: the photograph is of a label, not of a room.
+  const [captureType, setCaptureType] = useState<PhotoCaptureType>(
+    filterSize ? 'SERIAL_OR_LABEL' : 'AREA_OVERVIEW',
+  );
   const [photoCount, setPhotoCount] = useState(0);
   /** The shot just taken, while it is still held from upload. */
   const [discardable, setDiscardable] = useState<RoomSnapshot | null>(null);
@@ -1013,6 +1048,35 @@ export default function RoomCameraScreen() {
        * deleting it afterwards would put a test shot on the server and take a
        * round trip to remove it.
        */
+      /**
+       * A filter register's photograph is one shot, and the answer goes with it.
+       *
+       * The snapshot's id is the key its upload carries, so the register can
+       * point at the photograph before the image has left the device — which is
+       * the ordinary case in a utility cupboard with no signal.
+       */
+      if (filterRegister) {
+        /**
+         * Only against a checklist this screen has actually read.
+         *
+         * The report is stored as one document, so writing one built from a
+         * job that had not loaded would drop every other register's answer.
+         * Without it the photograph is still saved and queued — the register is
+         * simply still unanswered, which the filter screen shows and a retake
+         * fixes.
+         */
+        if (inspection.data) {
+          saveServices.mutate(
+            withFilterAnswer(
+              inspection.data.servicesReport ?? null,
+              filterRegister,
+              { changed: true, photoKey: snapshot.id },
+              { booked: filterBooked !== 'false' },
+            ),
+          );
+        }
+        goBack();
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
     } finally {
@@ -1123,14 +1187,16 @@ export default function RoomCameraScreen() {
             </Pressable>
             <View className="min-w-0 flex-1">
               <Text numberOfLines={1} className="text-xl font-bold text-white">
-                {room.data?.name ?? 'Room'}
+                {filterLabelParam ?? room.data?.name ?? 'Room'}
               </Text>
               <Text className="text-xs text-white/70">
-                {isAdditional
-                  ? 'Additional evidence clip'
-                  : primary === 'PHOTO'
-                    ? 'Room photos'
-                    : 'Primary room walkthrough'}
+                {filterRegister
+                  ? 'Show the size printed on the filter'
+                  : isAdditional
+                    ? 'Additional evidence clip'
+                    : primary === 'PHOTO'
+                      ? 'Room photos'
+                      : 'Primary room walkthrough'}
               </Text>
             </View>
             {/* Hidden mid-take: a technician one turn into a walkthrough must not

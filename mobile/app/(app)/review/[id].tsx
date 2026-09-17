@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   AlertTriangleIcon,
   CameraIcon,
@@ -30,14 +30,8 @@ import {
 } from '@/src/utils/submission-gate';
 import { ClosingCommentsCard } from '@/src/components/ClosingCommentsCard';
 import { HomeButton } from '@/src/components/HomeButton';
-import { ServicesDoneCard } from '@/src/components/ServicesDoneCard';
-import {
-  draftProblems,
-  EMPTY_SERVICES_DRAFT,
-  reportFromDraft,
-  servicesToReport,
-  type ServicesDraft,
-} from '@/src/utils/services-report';
+import { JobTasksCard } from '@/src/components/JobTasksCard';
+import { jobChecklistProblems, jobTasks } from '@/src/utils/job-tasks';
 import { registerIcons } from '@/src/lib/icons';
 import {
   asksClosingComments,
@@ -154,21 +148,16 @@ export default function InspectionReviewScreen() {
   const report = useInspectionReport(id);
   const actions = useInspectionActions(id);
   const skipAreas = useSkipAreas(id);
-  // The services checklist. Held in state so typing a reason updates the submit
-  // gate as it is typed, and written to the store after a pause -- the store is
-  // persisted as one document, and a write per keystroke is a rewrite per key.
-  const storedServicesDraft = useDemoStore((state) => state.servicesDraftByInspection?.[id]);
-  const setStoredServicesDraft = useDemoStore((state) => state.setServicesDraft);
-  const [servicesDraft, setServicesDraft] = useState<ServicesDraft>(
-    () => storedServicesDraft ?? EMPTY_SERVICES_DRAFT,
-  );
+  /**
+   * The checklist is answered on the job screen now, not here.
+   *
+   * The office moved it to the front of the job (2026-09-18), and each answer
+   * is saved as it is made — so this screen reads what the job holds rather
+   * than keeping a draft of its own, and submitting sends exactly what the
+   * technician has already been shown.
+   */
   // An HVAC report's closing comments, typed here just before submitting.
   const [closingComments, setClosingComments] = useState<ClosingComments>(EMPTY_CLOSING_COMMENTS);
-  useEffect(() => {
-    if (servicesDraft === EMPTY_SERVICES_DRAFT) return;
-    const timer = setTimeout(() => setStoredServicesDraft(id, servicesDraft), 500);
-    return () => clearTimeout(timer);
-  }, [id, servicesDraft, setStoredServicesDraft]);
   // Only the *pending* count comes from the device: an item still in the
   // local queue is by definition not yet on the server. Everything else reads
   // from the report, so a reinstalled or replacement handset does not report
@@ -221,8 +210,7 @@ export default function InspectionReviewScreen() {
   const { inspection, property, rooms, totals, generatedAt } = report.data;
   // The services the visit booked, and what still stops the checklist. Pure
   // reads, so they sit after the early returns without breaking hook order.
-  const servicesAsked = servicesToReport(inspection.visitDetails);
-  const servicesBlocked = draftProblems(servicesAsked, servicesDraft);
+  const servicesBlocked = jobChecklistProblems(inspection.visitDetails, inspection.servicesReport);
   const {
     canSubmit: areasReady,
     blockedReason: areasBlockedReason,
@@ -313,19 +301,16 @@ export default function InspectionReviewScreen() {
           onPress: () =>
             actions.complete.mutate(
               {
-                servicesReport: servicesAsked.services.length
-                  ? reportFromDraft(servicesAsked, servicesDraft)
-                  : undefined,
+                // What the technician ticked during the job, as the server
+                // already holds it. Sent back so the submission and the note to
+                // Jobber are written in one request, as they always were.
+                servicesReport: inspection.servicesReport,
                 closingComments: asksClosingComments(inspection.type)
                   ? closingCommentsToSend(closingComments)
                   : undefined,
               },
               {
                 onSuccess: () => {
-                  // Local state first, so the pending write-back is cancelled
-                  // rather than putting the answers back after they are cleared.
-                  setServicesDraft(EMPTY_SERVICES_DRAFT);
-                  setStoredServicesDraft(id, null);
                   setClosingComments(EMPTY_CLOSING_COMMENTS);
                   showSubmitted();
                 },
@@ -514,12 +499,18 @@ export default function InspectionReviewScreen() {
           </View>
         </View>
 
+        {/* What was ticked on the job, read-only: a row opens the job screen,
+            which is where an answer is changed. */}
         {inspection.status === 'IN_PROGRESS' ? (
-          <ServicesDoneCard
-            ask={servicesAsked}
-            draft={servicesDraft}
-            onChange={setServicesDraft}
+          <JobTasksCard
             className="mx-5 mt-4"
+            onOpen={() => router.push(`/inspections/${id}`)}
+            tasks={jobTasks({
+              visitDetails: inspection.visitDetails,
+              inspectionType: inspection.type,
+              report: inspection.servicesReport,
+              areas: { completed: totals.finishedRooms, total: rooms.length },
+            })}
           />
         ) : null}
 

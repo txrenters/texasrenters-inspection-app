@@ -1,5 +1,10 @@
 import { AreaCategory, AreaEnvironment, PhotoCaptureType } from '@prisma/client';
-import { FILTER_SIZE_PATTERN, MAX_LOCATION_BATCH, MAX_SERVICE_REASON } from '@texasrenters/shared';
+import {
+  FILTER_SIZE_PATTERN,
+  MAX_BOOKED_FILTERS,
+  MAX_LOCATION_BATCH,
+  MAX_SERVICE_REASON,
+} from '@texasrenters/shared';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -496,15 +501,75 @@ export class TechnicianServiceOutcomesDto {
   fleaTreatment?: TechnicianServiceOutcomeDto;
 }
 
+/**
+ * One filter register, as the technician answers for it during the job.
+ *
+ * A photograph of each register, showing the size printed on the filter (the
+ * office, 2026-09-18). `photoId` is a photograph already uploaded into the
+ * job's AC filters area, so this carries a reference and never an image.
+ */
+export class TechnicianFilterOutcomeDto {
+  @IsString() @Matches(FILTER_SIZE_PATTERN) size!: string;
+  @IsOptional() @IsString() @MaxLength(120) location?: string | null;
+  @IsInt() @Min(1) @Max(MAX_BOOKED_FILTERS) slot!: number;
+  @IsBoolean() changed!: boolean;
+  /** Why it was not changed. The service requires one whenever `changed` is false. */
+  @IsOptional() @IsString() @MaxLength(MAX_SERVICE_REASON) reason?: string | null;
+  @IsOptional() @IsUUID() photoId?: string | null;
+  /**
+   * The key the handset gave the photograph, which is the idempotency key its
+   * upload carries. Sent while the image itself is still in the upload queue,
+   * and resolved to `photoId` here once it has arrived.
+   */
+  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/u) photoKey?: string | null;
+  /** Listed by the visit's Details, rather than found on site. */
+  @IsOptional() @IsBoolean() booked?: boolean;
+}
+
 /** `VisitServicesReport` in shared, as it arrives. */
 export class TechnicianServicesReportDto {
   @ValidateNested() @Type(() => TechnicianServiceOutcomesDto) services!: TechnicianServiceOutcomesDto;
+  /**
+   * Each filter register answered for. Optional, because a phone built before
+   * the office asked for a photograph of each still submits the old shape.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_BOOKED_FILTERS)
+  @ValidateNested({ each: true })
+  @Type(() => TechnicianFilterOutcomeDto)
+  filters?: TechnicianFilterOutcomeDto[];
   @IsArray()
   @ArrayMaxSize(20)
   @IsString({ each: true })
   @Matches(FILTER_SIZE_PATTERN, { each: true })
   filtersInstalled!: string[];
   @IsOptional() @IsString() @MaxLength(1000) notes?: string | null;
+}
+
+/**
+ * The checklist as it stands, saved while the job is still being walked.
+ *
+ * The whole report used to be written once, at submission. Asked at the start
+ * of the job instead (the office, 2026-09-18), a phone that dies at noon would
+ * lose a morning of ticks — so each answer is saved as it is made, and this is
+ * the same shape as the submission's, checked for shape and not for
+ * completeness. What still has to be answered is decided at submission.
+ */
+export class TechnicianSaveServicesDto {
+  @ValidateNested() @Type(() => TechnicianServicesReportDto)
+  servicesReport!: TechnicianServicesReportDto;
+}
+
+/**
+ * Nobody let the technician in, so the whole job has to be booked again.
+ *
+ * The office's decision (2026-09-18): a refused entry is not a task-by-task
+ * answer but the end of the visit. The reason is required — it is what the
+ * office reads in Jobber before rebooking.
+ */
+export class TechnicianCouldNotAccessDto {
+  @IsString() @MinLength(3) @MaxLength(MAX_SERVICE_REASON) reason!: string;
 }
 
 /**

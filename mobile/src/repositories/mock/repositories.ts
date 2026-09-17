@@ -216,6 +216,15 @@ export class MockInspectionRepository implements InspectionRepository {
   async complete(id: string, _servicesReport?: unknown, _closingComments?: unknown) {
     return this.get(id);
   }
+  async saveServices(id: string, _servicesReport?: unknown) {
+    return this.get(id);
+  }
+  async filtersArea(id: string) {
+    return `mock-filters-area:${id}`;
+  }
+  async couldNotAccess(id: string, _reason?: string) {
+    return this.get(id);
+  }
   async rooms(inspectionId: string) {
     await mockDelay();
     ensureMockAvailable();
