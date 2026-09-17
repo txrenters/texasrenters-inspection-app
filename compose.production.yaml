@@ -63,6 +63,16 @@ services:
         required: true
     environment:
       NODE_ENV: production
+      # Where the backend leaves a deploy request from the image workflow, for
+      # scripts/deploy/systemd/texasrenters-update.path. Set here, beside the
+      # mount below, so the one is never configured without the other.
+      DEPLOY_REQUEST_DIR: /deploy-requests
+    volumes:
+      # The one directory of the host this container can write to. It holds
+      # deploy requests and nothing else, and a request can only make the host
+      # check for the newest release early. Created and owned for the container's
+      # user by scripts/deploy/install-auto-update.sh.
+      - /var/lib/texasrenters/deploy-requests:/deploy-requests
     # No published port at all. Caddy reaches this over the project network by
     # service name, so the API has no path from the internet that does not pass
     # through TLS termination. To reach it for debugging:

@@ -95,6 +95,12 @@ const environmentSchema = z
     // would appear to come from the proxy. An API client IP allowlist is only
     // meaningful once this matches the real deployment.
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+    // Where a deploy request from the image workflow is left for the host to
+    // pick up: a directory the host shares with this container, watched by
+    // texasrenters-update.path. Unset everywhere but production, where
+    // compose.production.yaml sets it beside the mount it names, so the one
+    // cannot exist without the other.
+    DEPLOY_REQUEST_DIR: z.string().optional(),
     // Turns off per-query tenant scoping AND relaxes the RLS policies with it,
     // so it degrades rather than locking the application out.
     RLS_TENANT_SCOPE_ENABLED: z.enum(['true', 'false']).default('true'),

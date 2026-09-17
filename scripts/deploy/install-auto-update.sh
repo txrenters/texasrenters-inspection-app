@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Installs the auto-update timer on the production host. Run as root, on the
+# Installs the auto-update timer, and the path unit that deploys a release as
+# soon as its images are published, on the production host. Run as root, on the
 # VPS, from the deployment checkout:
 #
 #   sudo GITHUB_TOKEN=ghp_xxx /opt/texasrenters/scripts/deploy/install-auto-update.sh
@@ -99,11 +100,38 @@ echo "${TOKEN}" | docker login ghcr.io -u x-access-token --password-stdin >/dev/
 step "Installing the systemd units"
 install -m 0644 "${SRC}/systemd/texasrenters-update.service" "${UNIT_DIR}/texasrenters-update.service"
 install -m 0644 "${SRC}/systemd/texasrenters-update.timer"   "${UNIT_DIR}/texasrenters-update.timer"
+install -m 0644 "${SRC}/systemd/texasrenters-update.path"    "${UNIT_DIR}/texasrenters-update.path"
 systemctl daemon-reload
 # The timer is enabled, not the service: enabling the service would run a deploy
 # at every boot instead of on a schedule.
 systemctl enable --now texasrenters-update.timer >/dev/null
 ok "texasrenters-update.timer enabled and started"
+
+step "Preparing for deploy requests from the image workflow"
+# *Publish images* tells the backend when a release's images are in the
+# registry; the backend leaves a file in this directory (compose.production.yaml
+# mounts it at /deploy-requests), and texasrenters-update.path starts the update.
+# The directory is owned by the backend container's user, because that is who
+# writes to it, and it is the only part of the host the container can write to.
+REQUEST_DIR=/var/lib/texasrenters/deploy-requests
+grep -q "${REQUEST_DIR}" "${DEPLOY_DIR}/compose.production.yaml" \
+  || die "compose.production.yaml does not mount ${REQUEST_DIR}. This checkout predates deploy requests; update compose.production.yaml first."
+REGISTRY="$(sed -n 's/^IMAGE_REGISTRY=//p' "${ENV_FILE}" | tail -1)"
+BACKEND_IMAGE="${REGISTRY:-ghcr.io/txrenters/texasrenters-inspection-app}/backend:${CURRENT_TAG}"
+# Read from the image rather than assumed, so a change of base image cannot
+# leave the directory owned by somebody the container is not.
+BACKEND_UID="$(docker run --rm --pull never --entrypoint id "${BACKEND_IMAGE}" -u 2>/dev/null)" \
+  || die "Could not read the backend's user from ${BACKEND_IMAGE}. Is that image on this host?"
+BACKEND_GID="$(docker run --rm --pull never --entrypoint id "${BACKEND_IMAGE}" -g 2>/dev/null)" \
+  || die "Could not read the backend's group from ${BACKEND_IMAGE}."
+install -d -m 0700 "${REQUEST_DIR}"
+# Owner set explicitly even when the directory exists: Docker creates a missing
+# bind-mount source as root, which the backend cannot write to.
+chown "${BACKEND_UID}:${BACKEND_GID}" "${REQUEST_DIR}"
+chmod 0700 "${REQUEST_DIR}"
+ok "${REQUEST_DIR} (owned by uid ${BACKEND_UID}, mode 700)"
+systemctl enable --now texasrenters-update.path >/dev/null
+ok "texasrenters-update.path enabled and watching"
 
 step "Verifying, without deploying anything"
 # --check compares the running tag to the newest release and changes nothing, so
@@ -115,10 +143,12 @@ printf '\n== Installed\n'
 systemctl list-timers texasrenters-update.timer --no-pager 2>/dev/null | sed -n '1,3p'
 cat <<'NEXT'
 
-  Next release published on GitHub deploys within ~15 minutes, and rolls back
-  automatically if readiness does not come up.
+  A release deploys as soon as Publish images has pushed its images, or within
+  5 minutes if that request never arrives, and rolls back automatically if
+  readiness does not come up.
 
-    systemctl list-timers texasrenters-update.timer   # when it next fires
+    systemctl list-timers texasrenters-update.timer   # when it next checks
+    systemctl status texasrenters-update.path         # watching for requests
     journalctl -u texasrenters-update.service -n 50   # what the last run did
     /opt/texasrenters/scripts/deploy/auto-update.sh --check   # report only
     /opt/texasrenters/scripts/deploy/auto-update.sh --force   # redeploy now

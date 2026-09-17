@@ -1,23 +1,23 @@
 [Unit]
-Description=Check for a new TexasRenters release every 15 minutes
+Description=Check for a new TexasRenters release every 5 minutes
 Documentation=file:///opt/texasrenters/scripts/deploy/auto-update.sh
 
 [Timer]
-# Fifteen minutes is the gap between cutting a release and it being live. Most
-# runs do nothing at all: the script compares the running tag to the newest
-# release and exits, which is one API call.
-OnBootSec=5min
-OnUnitActiveSec=15min
+# The fallback, not the fast path. A release deploys as soon as its images are
+# published: the image workflow tells the backend, and texasrenters-update.path
+# starts the update at once. This catches whatever that misses (the backend
+# restarting just as the workflow called, or the call never arriving) within
+# five minutes. Most runs do nothing at all: the script compares the running
+# tag to the newest release and exits, which is one API call.
+OnBootSec=2min
+OnUnitActiveSec=5min
 
-# Without this every check lands on the quarter hour. It costs nothing to
-# scatter them, and it keeps a deploy from colliding with anything else on the
-# host that also runs on a round number.
-RandomizedDelaySec=120
-
-# If the host was off when a run was due, run once after boot rather than
-# skipping the window. A release published overnight should not wait for the
-# next quarter hour.
-Persistent=true
+# Scattered by up to half a minute, so a check does not keep landing on the
+# same second as anything else on the host that runs on a round number.
+#
+# There is no Persistent= here: it only ever applied to OnCalendar= timers, and
+# after a reboot OnBootSec= already checks within two minutes.
+RandomizedDelaySec=30
 
 [Install]
 WantedBy=timers.target
