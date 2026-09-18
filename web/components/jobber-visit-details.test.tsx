@@ -23,6 +23,26 @@ Instruction for completion
 • Indicate in the notes which services were completed by using the corresponding numbers:
 • Check for any potential repairs and create a work order if needed.`;
 
+describe('the services on an inspection that is not in Jobber', () => {
+  it('names the card for what it is, and says Jobber needs the services too', () => {
+    render(
+      <JobberVisitDetails
+        details="Filter Change: 20x25x1 + Pest Control + HVAC Inspection"
+        inJobber={false}
+        inspectionType="HVAC"
+      />,
+    );
+
+    expect(screen.getByText('Visit details')).toBeInTheDocument();
+    expect(screen.queryByText('Jobber visit')).not.toBeInTheDocument();
+    expect(screen.getByText(/isn.t booked in Jobber from here/)).toBeInTheDocument();
+    const services = screen.getByRole('region', { name: 'Services' });
+    for (const service of ['Filter change', 'Pest control', 'HVAC Inspection'])
+      expect(within(services).getByText(service)).toBeInTheDocument();
+    expect(screen.getByText('As written')).toBeInTheDocument();
+  });
+});
+
 describe('the Jobber visit on an inspection', () => {
   it('shows the services, the plan and the filters to bring', () => {
     render(<JobberVisitDetails title={TITLE} details={DETAILS} inspectionType="OCCUPIED" />);

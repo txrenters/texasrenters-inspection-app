@@ -2,7 +2,7 @@ import { parseVisitDetails, type JobberBookingContext } from '@texasrenters/shar
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { bookingForm, bookingFromForm, bookingUnavailableReason } from '@/lib/jobber-booking';
+import { bookingForm, bookingFromForm, bookingUnavailableReason, servicesFromForm } from '@/lib/jobber-booking';
 
 import { JobberBookingCard } from './jobber-booking-card';
 
@@ -47,27 +47,29 @@ const card = (props: Partial<Parameters<typeof JobberBookingCard>[0]> = {}) => {
 };
 
 describe('booking the other kinds of inspection', () => {
-  it("asks no services on a move-out, and previews the office's move-out steps", () => {
-    render(card({ inspectionType: 'MOVE_OUT' }));
+  it("leaves the services to their own card, and previews the office's move-out steps", () => {
+    const ready = context();
+    render(card({ inspectionType: 'MOVE_OUT', form: bookingForm(ready.prefill, 'MOVE_OUT') }));
 
-    expect(screen.queryByText('Filter change')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /pest control/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Filter 1 size')).not.toBeInTheDocument();
     expect(screen.queryByText('Tenant Benefit Package visit')).not.toBeInTheDocument();
     const preview = screen.getByRole('region', { name: 'What Jobber receives' });
     expect(within(preview).getByText('100 Main Street - Zone 3 - Move out inspection')).toBeInTheDocument();
     expect(within(preview).getByText(/- Thoroughly check for any damages and Make work order/)).toBeInTheDocument();
-    expect(within(preview).queryByText(/Occupied Inspection/i)).not.toBeInTheDocument();
+    expect(within(preview).queryByText(/Occupied Inspection|Filter Change/i)).not.toBeInTheDocument();
   });
 
-  it('does not hold a move-in back on a filter size it will never write', () => {
+  it('previews the services an HVAC visit books at the top of its Details', () => {
     const ready = context();
-    render(
-      card({
-        inspectionType: 'MOVE_IN',
-        form: { ...bookingForm(ready.prefill), filters: [{ size: 'UPDATE', quantity: '', media: false, location: '' }] },
-      }),
-    );
-    expect(screen.queryByText('Fix before creating')).not.toBeInTheDocument();
+    const form = bookingForm(ready.prefill, 'HVAC');
+    render(card({ inspectionType: 'HVAC', form: { ...form, services: { ...form.services, pestControl: true } } }));
+
+    const preview = screen.getByRole('region', { name: 'What Jobber receives' });
+    expect(within(preview).getByText(/^Pest Control \+ HVAC Inspection/)).toBeInTheDocument();
+    expect(
+      within(preview).getByText(/• Mark the pest control done or not done in the Texas Renters inspection app/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -94,12 +96,6 @@ describe('the Jobber booking on the create form', () => {
   it('warns that a technician it cannot match is booked unassigned', () => {
     render(card({ context: context({ technicianInJobber: false }) }));
     expect(screen.getByText(/booked unassigned\. Assign it in Jobber\./)).toBeInTheDocument();
-  });
-
-  it('lists what the server would refuse', () => {
-    const ready = context();
-    render(card({ form: { ...bookingForm(ready.prefill), filters: [{ size: 'UPDATE', quantity: '', media: false, location: '' }] } }));
-    expect(screen.getByText('"UPDATE" is not a filter size like 20x25x1.')).toBeInTheDocument();
   });
 
   it('shows only a sentence when the coordinator turns the booking off', () => {
@@ -142,6 +138,16 @@ describe('the booking form as sent', () => {
       tenants: [],
       contactTenantsBeforeArrival: true,
     });
+    expect(bookingForm(null, 'OCCUPIED').services).toEqual(bookingForm(null).services);
+  });
+
+  it('starts every other kind of visit with no services, and the filters from the tenant report', () => {
+    const ready = context();
+    for (const type of ['MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'HVAC']) {
+      const form = bookingForm(ready.prefill, type);
+      expect(form.services).toEqual({ filterChange: false, pestControl: false, fleaTreatment: false });
+      expect(servicesFromForm(form).filters).toEqual([{ size: '20x25x1', media: false, location: 'Hallway' }]);
+    }
   });
 
   it('reads back through the parser the office visits go through', () => {

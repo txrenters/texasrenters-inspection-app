@@ -49,6 +49,17 @@ export interface OccupiedVisitBooking {
 }
 
 /**
+ * What a visit books besides its inspection: the filter change with the filters
+ * to bring, pest control and a flea treatment.
+ *
+ * Offered on every kind of visit the console creates (the office, 2026-09-19).
+ * A move-in or an HVAC visit made by hand carries them in Jobber's Details the
+ * way a benefit-package visit does, and the phone lists the job's services from
+ * there.
+ */
+export type VisitServicesBooking = Pick<OccupiedVisitBooking, 'services' | 'filters'>;
+
+/**
  * The office's completion steps, pointed at the app.
  *
  * The first step used to ask technicians to type the service numbers into
@@ -89,6 +100,67 @@ const VISIT_KIND: Record<Exclude<BookableInspectionType, 'OCCUPIED'>, string> = 
   BACK_TO_MARKET: 'BTM Inspection',
   HVAC: 'HVAC Inspection',
 };
+
+/** The inspection a services line ends with, as each kind of visit names it. */
+const INSPECTION_ON_SERVICES_LINE: Record<BookableInspectionType, string> = {
+  OCCUPIED: 'Occupied Inspection',
+  ...VISIT_KIND,
+};
+
+/** Whether a visit books anything besides its inspection. */
+export function booksAnyService(services: VisitServicesBooking['services']): boolean {
+  return services.filterChange || services.pestControl || services.fleaTreatment;
+}
+
+/** "(2 pcs) 20x25x4 MEDIA (upstairs hallway)", as the office lists a filter. */
+function filterText(filter: OccupiedVisitFilter): string {
+  return [
+    filter.quantity && filter.quantity > 1 ? `(${filter.quantity} pcs) ` : '',
+    filter.size.trim(),
+    filter.media ? ' MEDIA' : '',
+    filter.location?.trim() ? ` (${filter.location.trim()})` : '',
+  ].join('');
+}
+
+/**
+ * The services line: "Filter Change: 20x25x1 + Pest Control + HVAC Inspection".
+ *
+ * Each booked service in the office's order, then the inspection. The
+ * inspection is always there: it names the visit, and it is what gives a line
+ * with a single service the "+" the parser finds a services line by.
+ */
+export function visitServicesLine(inspection: string, booking: VisitServicesBooking): string {
+  const filters = booking.filters.filter((filter) => filter.size.trim()).map(filterText);
+  return [
+    booking.services.filterChange
+      ? `Filter Change: ${filters.length ? filters.join('; ') : 'Update filter sizes'}`
+      : null,
+    booking.services.pestControl ? 'Pest Control' : null,
+    booking.services.fleaTreatment ? 'Flea Treatment' : null,
+    inspection,
+  ]
+    .filter(Boolean)
+    .join(' + ');
+}
+
+/**
+ * The Details of a visit created in the console but not booked in Jobber from
+ * it: the services line alone, or null when it books no service.
+ *
+ * What the phone lists the job's services from, and the line the console asks
+ * the coordinator to put at the top of the visit's Details in Jobber, so the
+ * two say the same.
+ */
+export function visitServicesDetails(
+  inspectionType: BookableInspectionType,
+  booking: VisitServicesBooking,
+): string | null {
+  if (!booksAnyService(booking.services)) return null;
+  return visitServicesLine(INSPECTION_ON_SERVICES_LINE[inspectionType], {
+    ...booking,
+    filters: booking.filters.map((filter) => ({ ...filter, size: normalizeFilterSize(filter.size) })),
+  });
+}
 
 /** Where the office's steps said to upload to Inspect Cloud, which the app replaces. */
 const SUBMIT_IN_APP = 'Submit it in the Texas Renters inspection app';
@@ -140,6 +212,31 @@ export const COMPLETION_BLOCKS: Record<Exclude<BookableInspectionType, 'OCCUPIED
 };
 
 /**
+ * A kind's completion block, asking first for the services the visit books.
+ *
+ * As a bullet straight under the heading, so the office's numbered steps keep
+ * their numbers.
+ */
+function completionBlock(
+  inspectionType: Exclude<BookableInspectionType, 'OCCUPIED'>,
+  services: VisitServicesBooking['services'],
+): readonly string[] {
+  const named = [
+    services.filterChange ? 'filter change' : null,
+    services.pestControl ? 'pest control' : null,
+    services.fleaTreatment ? 'flea treatment' : null,
+  ].filter((service): service is string => service !== null);
+  if (!named.length) return COMPLETION_BLOCKS[inspectionType];
+  const list = named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}` : named[0];
+  const [heading, ...steps] = COMPLETION_BLOCKS[inspectionType];
+  return [
+    heading!,
+    `• Mark the ${list} done or not done in the Texas Renters inspection app before submitting.`,
+    ...steps,
+  ];
+}
+
+/**
  * The visit title, in the shape the office already reads.
  *
  * A benefit-package visit is "<address> - Zone 4 - Q4 2026 Tenant Benefit
@@ -175,17 +272,22 @@ export function occupiedJobTitle(input: { zone: string | null; scheduledOn: stri
 /**
  * The Details for a kind of visit other than occupied.
  *
- * Who to call, how to get in and anything else the coordinator wrote, then a
- * link back to the inspection, then the office's completion block for that
- * kind. There is no services line: filters, pest control and the plan are the
- * benefit-package visit's business. And nothing here may say "occupied
+ * The services line when the visit books any -- "Filter Change: 20x25x1 + Pest
+ * Control + HVAC Inspection", the office's own shape -- then who to call, how
+ * to get in and anything else the coordinator wrote, a link back to the
+ * inspection, and the office's completion block for that kind. The plan stays
+ * the benefit-package visit's business. And nothing here may say "occupied
  * inspection" -- the sync would read the visit as one.
  */
 export function formatVisitDetails(
   inspectionType: Exclude<BookableInspectionType, 'OCCUPIED'>,
-  booking: Pick<OccupiedVisitBooking, 'contactTenantsBeforeArrival' | 'tenants' | 'accessNotes' | 'notes' | 'inspectionUrl'>,
+  booking: Pick<
+    OccupiedVisitBooking,
+    'services' | 'filters' | 'contactTenantsBeforeArrival' | 'tenants' | 'accessNotes' | 'notes' | 'inspectionUrl'
+  >,
 ): string {
   const paragraphs = [
+    booksAnyService(booking.services) ? visitServicesLine(VISIT_KIND[inspectionType], booking) : null,
     [
       booking.contactTenantsBeforeArrival ? 'Make sure to contact tenants that you are on your way.' : null,
       ...tenantLines(booking.tenants),
@@ -195,7 +297,7 @@ export function formatVisitDetails(
     booking.accessNotes.map((note) => note.trim()).filter(Boolean).join('\n'),
     ...booking.notes.map((note) => note.trim()).filter(Boolean),
     booking.inspectionUrl ? `Texas Renters inspection: ${booking.inspectionUrl}` : null,
-    COMPLETION_BLOCKS[inspectionType].join('\n'),
+    completionBlock(inspectionType, booking.services).join('\n'),
   ];
   return paragraphs.filter((paragraph) => paragraph && paragraph.trim()).join('\n\n');
 }
@@ -217,27 +319,8 @@ export function formatOccupiedVisitDetails(booking: OccupiedVisitBooking): strin
     tier ? (/plan|\)$/i.test(tier) ? tier : `${tier} Plan`) : null,
     booking.hvacOptedOut ? 'Opted Out HVAC Plan' : null,
   ].filter(Boolean);
-  const filters = booking.filters
-    .filter((filter) => filter.size.trim())
-    .map((filter) =>
-      [
-        filter.quantity && filter.quantity > 1 ? `(${filter.quantity} pcs) ` : '',
-        filter.size.trim(),
-        filter.media ? ' MEDIA' : '',
-        filter.location?.trim() ? ` (${filter.location.trim()})` : '',
-      ].join(''),
-    );
-  const services = [
-    booking.services.filterChange
-      ? `Filter Change: ${filters.length ? filters.join('; ') : 'Update filter sizes'}`
-      : null,
-    booking.services.pestControl ? 'Pest Control' : null,
-    booking.services.fleaTreatment ? 'Flea Treatment' : null,
-    // Always, and always on this line: it is what the sync reads.
-    `Occupied Inspection${plan.length ? ` (${plan.join(' - ')})` : ''}`,
-  ]
-    .filter(Boolean)
-    .join(' + ');
+  // Always, and always on this line: it is what the sync reads.
+  const services = visitServicesLine(`Occupied Inspection${plan.length ? ` (${plan.join(' - ')})` : ''}`, booking);
 
   const tenants = tenantLines(booking.tenants);
 
@@ -342,20 +425,15 @@ export interface JobberBookingInput extends Omit<OccupiedVisitBooking, 'inspecti
 export const MAX_BOOKING_FILTER_QUANTITY = 20;
 
 /**
- * What stops a booking from being sent, in words for the coordinator.
+ * What stops a visit's services from being written, in words for the coordinator.
  *
- * Empty when it can go. The console disables its button on this and the API
- * refuses on it, so the two cannot disagree about what is bookable.
+ * Empty when they can be. Only the filters can be wrong, and only when the
+ * filter change is booked: without it, none are written.
  */
-export function jobberBookingProblems(
-  input: JobberBookingInput,
-  inspectionType: BookableInspectionType = 'OCCUPIED',
-): string[] {
+export function visitServicesProblems(booking: VisitServicesBooking): string[] {
   const problems: string[] = [];
-  // Sizes only matter on a benefit-package visit that books the filter change;
-  // anywhere else, none are written.
-  if (inspectionType !== 'OCCUPIED' || !input.services.filterChange) return problems;
-  for (const filter of input.filters) {
+  if (!booking.services.filterChange) return problems;
+  for (const filter of booking.filters) {
     if (!FILTER_SIZE_PATTERN.test(filter.size))
       problems.push(`"${filter.size.trim() || 'blank'}" is not a filter size like 20x25x1.`);
     if (
@@ -365,6 +443,17 @@ export function jobberBookingProblems(
       problems.push(`Filter ${filter.size.trim()} needs a quantity from 1 to ${MAX_BOOKING_FILTER_QUANTITY}.`);
   }
   return problems;
+}
+
+/**
+ * What stops a booking from being sent, in words for the coordinator.
+ *
+ * Empty when it can go. The console disables its button on this and the API
+ * refuses on it, so the two cannot disagree about what is bookable. The same
+ * for every kind of visit, now that each can book the filter change.
+ */
+export function jobberBookingProblems(input: JobberBookingInput): string[] {
+  return visitServicesProblems(input);
 }
 
 /** Everything a booking writes in Jobber. */
@@ -392,12 +481,14 @@ export function jobberBookingText(
 ): JobberBookingText {
   const zone = input.zone?.trim() || null;
   const type = visit.inspectionType ?? 'OCCUPIED';
+  // One spelling of a size, whatever was typed.
+  const filters = input.filters.map((filter) => ({ ...filter, size: normalizeFilterSize(filter.size) }));
   if (type !== 'OCCUPIED') {
     const kind = VISIT_KIND[type];
     return {
       jobTitle: [zone, kind].filter(Boolean).join(' - '),
       visitTitle: [visit.address.trim() || 'Unknown address', zone, kind].filter(Boolean).join(' - '),
-      visitDetails: formatVisitDetails(type, { ...input, inspectionUrl: visit.inspectionUrl }),
+      visitDetails: formatVisitDetails(type, { ...input, filters, inspectionUrl: visit.inspectionUrl }),
     };
   }
   return {
@@ -408,11 +499,7 @@ export function jobberBookingText(
       scheduledOn: visit.scheduledOn,
       benefitPackage: input.benefitPackage,
     }),
-    visitDetails: formatOccupiedVisitDetails({
-      ...input,
-      filters: input.filters.map((filter) => ({ ...filter, size: normalizeFilterSize(filter.size) })),
-      inspectionUrl: visit.inspectionUrl,
-    }),
+    visitDetails: formatOccupiedVisitDetails({ ...input, filters, inspectionUrl: visit.inspectionUrl }),
   };
 }
 

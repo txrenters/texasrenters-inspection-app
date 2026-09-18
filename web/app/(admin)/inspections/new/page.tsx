@@ -5,8 +5,9 @@ import {
   AreaScope,
   InspectionType,
   areaScopeFor,
+  booksAnyService,
   isBookableInspectionType,
-  jobberBookingProblems,
+  visitServicesProblems,
   type AdminProperty,
 } from '@texasrenters/shared';
 import { TriangleAlertIcon } from 'lucide-react';
@@ -44,8 +45,15 @@ import {
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
+import { VisitServicesCard } from '@/components/visit-services-card';
 import { ApiError } from '@/lib/api';
-import { bookingForm, bookingFromForm, bookingUnavailableReason } from '@/lib/jobber-booking';
+import {
+  bookingForm,
+  bookingFromForm,
+  bookingUnavailableReason,
+  defaultVisitServices,
+  servicesFromForm,
+} from '@/lib/jobber-booking';
 import { propertyOptionLabel } from '@/lib/property-label';
 import {
   useAdminMutations,
@@ -246,15 +254,24 @@ function CreateInspectionForm() {
     bookable,
   );
   const [bookInJobber, setBookInJobber] = useState(true);
-  const [bookingFormState, setBookingFormState] = useState(() => bookingForm(null));
+  const [bookingFormState, setBookingFormState] = useState(() => bookingForm(null, defaultType));
   const [prefilledFor, setPrefilledFor] = useState('');
   const bookingPlace = [propertyId, unitId ?? '', leaseId ?? ''].join('|');
   useEffect(() => {
     // Placeholder data is the previous property's answer, not this one's.
     if (!bookingContext.data || bookingContext.isPlaceholderData || prefilledFor === bookingPlace) return;
-    setBookingFormState(bookingForm(bookingContext.data.prefill));
+    const prefill = bookingContext.data.prefill;
+    // The services are the coordinator's choice, not the tenancy's: kept.
+    setBookingFormState((current) => ({ ...bookingForm(prefill), services: current.services }));
     setPrefilledFor(bookingPlace);
   }, [bookingContext.data, bookingContext.isPlaceholderData, bookingPlace, prefilledFor]);
+  /**
+   * Each kind of visit starts with its own services: an occupied visit with the
+   * filter change and pest control, any other with none.
+   */
+  useEffect(() => {
+    setBookingFormState((current) => ({ ...current, services: defaultVisitServices(inspectionType) }));
+  }, [inspectionType]);
   // The answer for this property, unit and lease. A kept placeholder stands in
   // only while the technician alone changed; for another property it is wrong.
   const bookingContextHere =
@@ -267,8 +284,8 @@ function CreateInspectionForm() {
     bookInJobber &&
     bookingContextHere !== undefined &&
     bookingUnavailableReason(bookingContextHere) === null;
-  const bookingProblems =
-    bookingActive && bookable ? jobberBookingProblems(bookingFromForm(bookingFormState), inspectionType) : [];
+  // Written whether or not the visit is booked here, so checked either way.
+  const servicesProblems = bookable ? visitServicesProblems(servicesFromForm(bookingFormState)) : [];
 
   const approvedAreas =
     propertyAreas.data?.filter(
@@ -364,6 +381,12 @@ function CreateInspectionForm() {
         // the record says what was decided.
         allowTechnicianAreaCapture: technicianWillCapture || undefined,
         jobberBooking: bookingActive ? bookingFromForm(bookingFormState) : undefined,
+        // Not booked from here, the services are still the technician's to do:
+        // the inspection carries them for the phone.
+        visitServices:
+          bookable && !bookingActive && booksAnyService(bookingFormState.services)
+            ? servicesFromForm(bookingFormState)
+            : undefined,
         // Only when it is genuinely a subset. Sending every id would be
         // refused for a move-in or move-out, and says nothing extra otherwise.
         areaIds:
@@ -739,6 +762,15 @@ function CreateInspectionForm() {
         </Card>
 
         {bookable ? (
+          <VisitServicesCard
+            booked={bookingActive}
+            form={bookingFormState}
+            inspectionType={inspectionType}
+            onChange={setBookingFormState}
+          />
+        ) : null}
+
+        {bookable ? (
           <JobberBookingCard
             inspectionType={inspectionType}
             book={bookInJobber}
@@ -966,9 +998,9 @@ function CreateInspectionForm() {
               units.isLoading ||
               (requiresUnit && !unitId) ||
               // Not created while it is still unknown whether it will be booked,
-              // or while the booking it would send is one the server refuses.
+              // or while the services it would write are ones the server refuses.
               bookingPending ||
-              bookingProblems.length > 0
+              servicesProblems.length > 0
             }
             type="submit"
           >
