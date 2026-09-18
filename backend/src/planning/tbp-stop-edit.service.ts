@@ -18,7 +18,7 @@ import { TbpPlanService, planVisitDetails, visitTitle } from './tbp-plan.service
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */
 export interface PlanStopEdit {
-  /** `YYYY-MM-DD`, inside the plan's quarter. */
+  /** `YYYY-MM-DD`, from the plan's first day to its quarter's last. */
   scheduledOn?: string;
   assignedTechnicianId?: string;
   /** One of the building's units. */
@@ -57,21 +57,25 @@ const NAMED: Record<TbpInspectionType, string> = { OCCUPIED: 'an occupied inspec
 const dateOf = (value: Date | null) => (value ? value.toISOString().slice(0, 10) : null);
 
 /**
- * A day of the plan's quarter, as `YYYY-MM-DD`, or the reason it is not one.
+ * A day of the plan, as `YYYY-MM-DD`, or the reason it is not one.
  *
- * Any day of the quarter: a weekend, a holiday or a Monday kept for
- * rescheduled visits is the office's to choose for one visit, and the console
- * says what the day is.
+ * Any day from the plan's first -- the quarter's, or up to fifteen days either
+ * side of it (the office, 2026-09-19) -- to the quarter's last: a weekend, a
+ * holiday or a Monday kept for rescheduled visits is the office's to choose for
+ * one visit, and the console says what the day is.
  */
-export function dayInQuarter(value: string, quarter: Quarter): string {
+export function dayInQuarter(value: string, quarter: Quarter, startsOn?: string | null): string {
   const day = new Date(`${value}T00:00:00.000Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(day.getTime()) || dateOf(day) !== value)
     throw new ApplicationError(422, 'INVALID_DATE', 'Choose a day on the calendar.');
-  if (day < quarterStart(quarter) || day >= quarterStart(nextQuarter(quarter)))
+  const first = startsOn ? new Date(`${startsOn}T00:00:00.000Z`) : quarterStart(quarter);
+  if (day < first || day >= quarterStart(nextQuarter(quarter)))
     throw new ApplicationError(
       422,
       'DATE_OUTSIDE_QUARTER',
-      `Choose a day in ${quarterLabel(quarter)}: this plan holds that quarter’s visits.`,
+      startsOn
+        ? `Choose a day from ${startsOn} to the end of ${quarterLabel(quarter)}: this plan holds that quarter’s visits.`
+        : `Choose a day in ${quarterLabel(quarter)}: this plan holds that quarter’s visits.`,
     );
   return value;
 }
@@ -131,7 +135,7 @@ export class TbpStopEditService {
         visitDetailsOverriddenAt: true,
         onSiteMinutes: true,
         hvacFilterSizes: true,
-        plan: { select: { status: true, quarterYear: true, quarterNumber: true, maxOnSiteMinutes: true } },
+        plan: { select: { status: true, quarterYear: true, quarterNumber: true, maxOnSiteMinutes: true, startsOn: true } },
         tenant: {
           select: {
             addressLine1: true,
@@ -166,7 +170,7 @@ export class TbpStopEditService {
     // leaves the visit as it was.
     const date =
       input.scheduledOn !== undefined && input.scheduledOn !== dateOf(stop.scheduledOn)
-        ? dayInQuarter(input.scheduledOn, quarter)
+        ? dayInQuarter(input.scheduledOn, quarter, dateOf(stop.plan.startsOn))
         : dateOf(stop.scheduledOn);
     const technicianId =
       input.assignedTechnicianId !== undefined && input.assignedTechnicianId !== stop.assignedTechnicianId

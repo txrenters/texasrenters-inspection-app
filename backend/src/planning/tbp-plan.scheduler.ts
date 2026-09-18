@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } f
 import { type Quarter, quarterDueForPlanning, quarterLabel } from '@texasrenters/shared';
 import { CronJob } from 'cron';
 
+import { businessDate } from '../common/business-day';
 import { withTenant } from '../database/tenant-context';
 import { PlanBuildGuard } from './plan-build-guard';
 import { QuarterPlannerService } from './quarter-planner.service';
@@ -124,9 +125,11 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     // Extra closed days from the environment only when it names some: weekends
     // and US federal holidays are always left out, and an empty list would
     // wipe any days already set on the plan.
+    // The crew and the start a coordinator chose are kept on the plan, so a
+    // nightly rebuild lays the days out for them, from today on.
     const holidays = this.holidays();
     const routed = await withTenant(organizationId, () =>
-      this.planner.route(organizationId, result.planId, holidays.length ? { holidays } : {}),
+      this.planner.route(organizationId, result.planId, holidays.length ? { holidays } : {}, { today: businessDate() }),
     );
 
     if (routed.unplaced.length > 0)
