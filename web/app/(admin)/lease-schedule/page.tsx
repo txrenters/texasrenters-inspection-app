@@ -40,10 +40,11 @@ import { useLeaseSchedule, useLeaseScheduleRun } from '@/lib/lease-schedule-quer
  * Move-outs and move-ins, booked from Propertyware's leases (the office, 2026-09-18).
  *
  * The office used to book these in Jobber by hand. Now a daily run books a
- * move-out sixty days before every lease ends, for whoever handles move-outs,
- * and a move-in twenty-two days after a leaving tenant goes, for whoever handles
- * move-ins -- nothing more than ninety days ahead. This page is what it booked,
- * what it could not, and a way to preview or run it now.
+ * move-out for the day after every lease ends, sixty days ahead, for whoever
+ * handles move-outs, and a move-in twenty-two days after a leaving tenant goes,
+ * up to ninety days ahead, for whoever handles move-ins. What the office books
+ * in Jobber comes first. This page is what it booked, what it could not, and a
+ * way to preview or run it now.
  */
 
 const KIND: Record<LeaseInspectionKind, string> = { MOVE_OUT: 'Move-out', MOVE_IN: 'Move-in' };
@@ -214,7 +215,7 @@ export default function LeaseSchedulePage() {
           </>
         ) : null
       }
-      description="Booked from Propertyware's leases: a move-out 60 days before every lease ends, for whoever handles move-outs, and a move-in 22 days after a leaving tenant goes, for whoever handles move-ins. Nothing is booked more than 90 days ahead, and one the office already booked near the day is linked rather than doubled."
+      description="Booked from Propertyware's leases: a move-out the day after every lease ends, booked 60 days ahead, for whoever handles move-outs, and a move-in 22 days after a leaving tenant goes, booked up to 90 days ahead, for whoever handles move-ins. What the office books in Jobber comes first: one near the day is linked, never doubled, and one booked here gives way to it."
       title="Move-ins & move-outs"
     />
   );
@@ -250,7 +251,7 @@ export default function LeaseSchedulePage() {
           <Stat
             label="Move-outs"
             value={comingUp.filter((item) => item.kind === 'MOVE_OUT').length.toLocaleString()}
-            detail="60 days before the lease ends"
+            detail="the day after the lease ends"
           />
           <Stat
             label="Move-ins"
@@ -280,7 +281,7 @@ export default function LeaseSchedulePage() {
               value={`${formatRelative(state.lastRun.at)}: ${countsSentence(state.lastRun.counts, false)}`}
             />
           ) : null}
-          <StatStripItem label="Ahead" value="up to 90 days; a missed move-out goes on the next working day" />
+          <StatStripItem label="Booked" value="move-outs 60 days ahead, move-ins 90; a missed move-in goes on the next working day" />
         </StatStrip>
 
         <Tabs onValueChange={setTab} value={tab}>
@@ -336,7 +337,8 @@ export default function LeaseSchedulePage() {
             <AlertDialogTitle>Book the move-ins and move-outs now?</AlertDialogTitle>
             <AlertDialogDescription>
               Each one the leases call for is created as an inspection and put on its technician’s phone. Ones the office
-              already booked are linked, not doubled. Preview first to see the list.
+              already booked are linked, not doubled, and one booked here that the office has since booked itself is
+              called off. Preview first to see the list.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
