@@ -4,8 +4,11 @@
  * The office's rules (2026-09-18), now that this system books them from
  * Propertyware's leases rather than the office booking them in Jobber:
  *
- * - **Every lease gets a move-out sixty days before its tenancy ends**, whether
- *   or not the tenant has given notice. The tenancy ends on Propertyware's
+ * - **Every lease gets a move-out on the day after its tenancy ends**, booked
+ *   sixty days before, whether or not the tenant has given notice. That is the
+ *   day the office books in Jobber -- eight of the nine move-outs it had coming
+ *   up were the day after the lease ended -- and "sixty days before" is when it
+ *   is booked, not when it is walked. The tenancy ends on Propertyware's
  *   scheduled move-out where it has one, and otherwise on the lease's end date.
  *   Moses takes the move-outs.
  * - **A tenant who is leaving gets a move-in twenty-two days after they go**,
@@ -13,20 +16,29 @@
  *   has had. Leaving means notice given, an eviction, or the lease gone from
  *   Propertyware's report without a lease under the same name taking its place
  *   -- a lease that renews or goes month-to-month gets no move-in. Amy takes the
- *   move-ins.
- * - **Nothing is booked more than ninety days ahead**, so each quarter's
- *   benefit-package plan is built knowing Moses's move-out days.
- * - A move-out whose day has passed while the tenant is still there goes on the
- *   next working day; a move-in whose day passed more than two weeks ago is left
- *   to the office. Every day is a working day: a weekday that is not a US
+ *   move-ins, booked up to ninety days ahead.
+ * - A lease whose end has already passed with the tenant still there -- gone
+ *   month-to-month, or Propertyware not yet told -- gets no move-out: that one
+ *   is the office's. A move-in whose day passed more than two weeks ago is left
+ *   to the office too. Every day is a working day: a weekday that is not a US
  *   federal holiday, the next one when the rule lands on a day off.
  */
 
 import { usFederalHolidays } from '../contracts/quarter-plan.js';
 
-export const MOVE_OUT_DAYS_BEFORE_END = 60;
+/** The move-out is the day after the tenancy ends. */
+export const MOVE_OUT_DAYS_AFTER_END = 1;
+/** ...and is booked this many days before it. */
+export const MOVE_OUT_BOOKED_DAYS_AHEAD = 60;
 export const MOVE_IN_DAYS_AFTER_LEAVING = 22;
-export const LEASE_INSPECTION_HORIZON_DAYS = 90;
+/** How far ahead a move-in is booked. */
+export const MOVE_IN_BOOKED_DAYS_AHEAD = 90;
+
+/** How far ahead each kind is booked. */
+export const BOOKED_DAYS_AHEAD: Record<LeaseInspectionKind, number> = {
+  MOVE_OUT: MOVE_OUT_BOOKED_DAYS_AHEAD,
+  MOVE_IN: MOVE_IN_BOOKED_DAYS_AHEAD,
+};
 /** How long after its day a move-in the rules missed is still booked. */
 export const MOVE_IN_GRACE_DAYS = 14;
 
@@ -99,23 +111,25 @@ export function leavingOn(lease: LeaseDates): string | null {
 const bookableDay = (dueOn: string, today: string) =>
   dueOn < today ? workingDayOnOrAfter(addDays(today, 1)) : workingDayOnOrAfter(dueOn);
 
-/** The move-out and move-in a lease calls for today, if any, within the ninety days ahead. */
+/** The day a lease's move-out falls on by the rule, before it is moved to a working day, if it has one to come. */
+export function moveOutDueOn(lease: LeaseDates, today: string): string | null {
+  const ends = tenancyEndsOn(lease);
+  // Not once the end has passed with the tenant still there: that one is the office's.
+  return lease.isActive && ends && ends >= today ? addDays(ends, MOVE_OUT_DAYS_AFTER_END) : null;
+}
+
+/** The move-out and move-in a lease calls for today, if any: each once it is near enough to book. */
 export function inspectionsDue(lease: LeaseDates, today: string): DueInspection[] {
-  const horizon = addDays(today, LEASE_INSPECTION_HORIZON_DAYS);
   const due: DueInspection[] = [];
 
-  const ends = tenancyEndsOn(lease);
-  if (lease.isActive && ends && ends > today) {
-    const dueOn = addDays(ends, -MOVE_OUT_DAYS_BEFORE_END);
-    const scheduledOn = bookableDay(dueOn, today);
-    // While the tenant is still there: a move-out after they have gone is not one.
-    if (dueOn <= horizon && scheduledOn <= ends) due.push({ kind: 'MOVE_OUT', dueOn, scheduledOn });
-  }
+  const moveOut = moveOutDueOn(lease, today);
+  if (moveOut && moveOut <= addDays(today, MOVE_OUT_BOOKED_DAYS_AHEAD))
+    due.push({ kind: 'MOVE_OUT', dueOn: moveOut, scheduledOn: bookableDay(moveOut, today) });
 
   const leaving = tenantIsLeaving(lease) ? leavingOn(lease) : null;
   if (leaving) {
     const dueOn = addDays(leaving, MOVE_IN_DAYS_AFTER_LEAVING);
-    if (dueOn <= horizon && dueOn >= addDays(today, -MOVE_IN_GRACE_DAYS))
+    if (dueOn <= addDays(today, MOVE_IN_BOOKED_DAYS_AHEAD) && dueOn >= addDays(today, -MOVE_IN_GRACE_DAYS))
       due.push({ kind: 'MOVE_IN', dueOn, scheduledOn: bookableDay(dueOn, today) });
   }
   return due;
@@ -129,18 +143,15 @@ export interface OverdueInspection {
   key: string;
   kind: LeaseInspectionKind;
   dueOn: string;
-  /** The last day it can go -- a move-out while the tenant is still there -- or null for any. */
-  latest: string | null;
 }
 
 /**
  * Working days for inspections whose day has already passed, a few a day.
  *
- * Fourteen leases were past their sixty days when the schedule started, and the
- * next working day would have put all fourteen move-outs on one technician's
- * Monday. So they go three a day from the next working day, soonest due first,
- * each kind on its own -- they are different technicians' days. One whose turn
- * would come after the tenant leaves goes on the next working day instead.
+ * A move-out never has -- its day is always after today -- but move-ins missed
+ * by up to two weeks do, and the next working day would put them all on one
+ * morning. So they go three a day from the next working day, soonest due first,
+ * each kind on its own: they are different technicians' days.
  */
 export function spreadOverdue(
   overdue: readonly OverdueInspection[],
@@ -160,7 +171,7 @@ export function spreadOverdue(
         day = workingDayOnOrAfter(addDays(day, 1));
         taken = 0;
       }
-      days.set(entry.key, entry.latest && day > entry.latest ? first : day);
+      days.set(entry.key, day);
       taken += 1;
     }
   }

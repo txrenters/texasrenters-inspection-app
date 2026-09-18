@@ -5,6 +5,7 @@ import {
   inspectionsDue,
   isWorkingDay,
   leavingOn,
+  moveOutDueOn,
   spreadOverdue,
   tenantIsLeaving,
   workingDayOnOrAfter,
@@ -39,47 +40,43 @@ describe('working days', () => {
   });
 });
 
-/** The office (2026-09-18): every lease, sixty days before it ends; Moses. */
+/** The office (2026-09-18): every lease, the day after it ends, booked sixty days before; Moses. */
 describe('a move-out', () => {
-  it('is sixty days before the lease ends, for every lease, notice or not', () => {
-    // Ends Sunday 20 December 2026: sixty days before is Wednesday 21 October.
-    expect(inspectionsDue(lease({ endDate: '2026-12-20' }), TODAY)).toEqual([
+  it('is the day after the lease ends, for every lease, notice or not', () => {
+    // Ends Tuesday 20 October 2026: the move-out is Wednesday the 21st.
+    expect(inspectionsDue(lease({ endDate: '2026-10-20' }), TODAY)).toEqual([
       { kind: 'MOVE_OUT', dueOn: '2026-10-21', scheduledOn: '2026-10-21' },
     ]);
   });
 
   it('counts from the scheduled move-out where Propertyware has one', () => {
-    const due = inspectionsDue(lease({ endDate: '2027-03-31', scheduledMoveOutDate: '2026-12-20' }), TODAY);
+    const due = inspectionsDue(lease({ endDate: '2027-03-31', scheduledMoveOutDate: '2026-10-20' }), TODAY);
     expect(due.find((entry) => entry.kind === 'MOVE_OUT')).toMatchObject({ dueOn: '2026-10-21' });
   });
 
   it('goes on the next working day when its day is not one', () => {
-    // Ends Thursday 31 December: sixty days before is Sunday 1 November, so Monday the 2nd.
-    expect(inspectionsDue(lease({ endDate: '2026-12-31' }), TODAY)).toEqual([
-      { kind: 'MOVE_OUT', dueOn: '2026-11-01', scheduledOn: '2026-11-02' },
+    // Ends Friday 30 October: the day after is Saturday the 31st, so Monday 2 November.
+    expect(inspectionsDue(lease({ endDate: '2026-10-30' }), TODAY)).toEqual([
+      { kind: 'MOVE_OUT', dueOn: '2026-10-31', scheduledOn: '2026-11-02' },
     ]);
   });
 
-  it('is not booked more than ninety days ahead', () => {
-    // Ends in April: its move-out is in February, beyond the ninety days.
-    expect(inspectionsDue(lease({ endDate: '2027-04-30' }), TODAY)).toEqual([]);
+  it('is booked sixty days before its day, not sooner', () => {
+    // 17 November is sixty days from Friday 18 September.
+    expect(inspectionsDue(lease({ endDate: '2026-11-16' }), TODAY).map((entry) => entry.scheduledOn)).toEqual(['2026-11-17']);
+    expect(inspectionsDue(lease({ endDate: '2026-11-17' }), TODAY)).toEqual([]);
   });
 
-  it('goes on the next working day when its day has passed and the tenant is still there', () => {
-    // Ends 20 October: sixty days before was 21 August.
-    expect(inspectionsDue(lease({ endDate: '2026-10-20' }), TODAY)).toEqual([
-      { kind: 'MOVE_OUT', dueOn: '2026-08-21', scheduledOn: '2026-09-21' },
+  it('is the next working day for a lease ending today', () => {
+    expect(inspectionsDue(lease({ endDate: '2026-09-18' }), TODAY)).toEqual([
+      { kind: 'MOVE_OUT', dueOn: '2026-09-19', scheduledOn: '2026-09-21' },
     ]);
   });
 
   it('is not booked once the lease has ended, nor for a tenancy that has already gone month-to-month', () => {
     expect(inspectionsDue(lease({ endDate: '2026-09-10' }), TODAY)).toEqual([]);
     expect(inspectionsDue(lease({ status: 'Going MTM', endDate: '2026-06-30' }), TODAY)).toEqual([]);
-  });
-
-  it('is not booked after the tenant will have gone', () => {
-    // Ends Saturday 19 September: the next working day after today is Monday the 21st.
-    expect(inspectionsDue(lease({ endDate: '2026-09-19' }), TODAY)).toEqual([]);
+    expect(moveOutDueOn(lease({ endDate: '2026-09-17' }), TODAY)).toBeNull();
   });
 });
 
@@ -116,23 +113,21 @@ describe('a move-in', () => {
     expect(inspectionsDue(lease({ isActive: false, endDate: '2026-07-31', droppedOn: '2026-08-01' }), TODAY)).toEqual([]);
   });
 
-  it('is not booked more than ninety days ahead', () => {
+  it('is booked up to ninety days ahead, sooner than the move-out before it', () => {
+    // Out Friday 20 November: the move-in on Saturday 12 December (so Monday the 14th) is inside the
+    // ninety days, the move-out on the 21st not yet inside the sixty.
     expect(
-      inspectionsDue(lease({ status: 'Active - Notice Given', noticeGivenDate: '2026-09-01', endDate: '2027-01-31' }), TODAY).map(
-        (entry) => entry.kind,
-      ),
-    ).toEqual(['MOVE_OUT']);
+      inspectionsDue(lease({ status: 'Active - Notice Given', noticeGivenDate: '2026-09-01', endDate: '2026-11-20' }), TODAY),
+    ).toEqual([{ kind: 'MOVE_IN', dueOn: '2026-12-12', scheduledOn: '2026-12-14' }]);
+    expect(
+      inspectionsDue(lease({ status: 'Active - Notice Given', noticeGivenDate: '2026-09-01', endDate: '2027-01-31' }), TODAY),
+    ).toEqual([]);
   });
 });
 
 /** The office (2026-09-18): the overdue ones three a day, not all on one Monday. */
-describe('move-outs whose day has already passed', () => {
-  const overdue = (key: string, dueOn: string, latest: string | null = null, kind: 'MOVE_OUT' | 'MOVE_IN' = 'MOVE_OUT') => ({
-    key,
-    kind,
-    dueOn,
-    latest,
-  });
+describe('inspections whose day has already passed', () => {
+  const overdue = (key: string, dueOn: string, kind: 'MOVE_OUT' | 'MOVE_IN' = 'MOVE_IN') => ({ key, kind, dueOn });
 
   it('go three a working day from the next one, soonest due first', () => {
     const days = spreadOverdue(
@@ -153,17 +148,9 @@ describe('move-outs whose day has already passed', () => {
 
   it('count each kind on its own', () => {
     const days = spreadOverdue(
-      [overdue('out-1', '2026-09-01'), overdue('out-2', '2026-09-02'), overdue('out-3', '2026-09-03'), overdue('in-1', '2026-09-04', null, 'MOVE_IN')],
+      [overdue('in-1', '2026-09-01'), overdue('in-2', '2026-09-02'), overdue('in-3', '2026-09-03'), overdue('out-1', '2026-09-04', 'MOVE_OUT')],
       TODAY,
     );
-    expect(days.get('in-1')).toBe('2026-09-21');
-  });
-
-  it('go on the next working day when their turn would come after the tenant leaves', () => {
-    const days = spreadOverdue(
-      [overdue('a', '2026-09-01'), overdue('b', '2026-09-02'), overdue('c', '2026-09-03'), overdue('leaving-soon', '2026-09-04', '2026-09-21')],
-      TODAY,
-    );
-    expect(days.get('leaving-soon')).toBe('2026-09-21');
+    expect(days.get('out-1')).toBe('2026-09-21');
   });
 });

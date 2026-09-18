@@ -16,6 +16,7 @@ const NOW = new Date('2026-09-18T15:00:00Z');
 
 const date = (value: string) => new Date(`${value}T00:00:00.000Z`);
 
+/** Ends Tuesday 20 October: its move-out is Wednesday the 21st, inside the sixty days. */
 const lease = (over: Record<string, unknown> = {}) => ({
   id: 'lease-1',
   buildingId: 'building-1',
@@ -23,7 +24,7 @@ const lease = (over: Record<string, unknown> = {}) => ({
   leaseName: 'Tenant - Tenant',
   sourceStatus: 'Active',
   isActive: true,
-  endDate: date('2026-12-20'),
+  endDate: date('2026-10-20'),
   scheduledMoveOutDate: null,
   noticeGivenDate: null,
   deactivatedAt: null,
@@ -43,7 +44,24 @@ const row = (over: Record<string, unknown> = {}, inspection: Record<string, unkn
   inspection:
     inspection === null
       ? null
-      : { id: 'inspection-1', status: InspectionStatus.SCHEDULED, startedAt: null, scheduledAt: date('2026-10-14'), ...inspection },
+      : {
+          id: 'inspection-1',
+          status: InspectionStatus.SCHEDULED,
+          startedAt: null,
+          scheduledAt: date('2026-10-14'),
+          internalNotes: 'Booked from Propertyware: the tenancy ends Tue, Oct 20, 2026, and its move-out is sixty days before.',
+          ...inspection,
+        },
+  ...over,
+});
+
+/** A move-out or move-in on the books, as the schedule reads them. */
+const booking = (id: string, scheduledAt: string, over: Record<string, unknown> = {}) => ({
+  id,
+  inspectionType: 'MOVE_OUT',
+  propertywareBuildingId: 'building-1',
+  propertywareUnitId: null,
+  scheduledAt: date(scheduledAt),
   ...over,
 });
 
@@ -51,7 +69,7 @@ function build(
   options: {
     leases?: unknown[];
     rows?: unknown[];
-    existing?: { id: string; scheduledAt: Date } | null;
+    bookings?: unknown[];
     units?: number;
     handlers?: { moveOuts: string | null; moveIns: string | null };
   } = {},
@@ -80,7 +98,7 @@ function build(
         return Promise.resolve(technicianId ? { technicianId } : null);
       }),
     },
-    inspection: { findFirst: jest.fn().mockResolvedValue(options.existing ?? null) },
+    inspection: { findMany: jest.fn().mockResolvedValue(options.bookings ?? []) },
     propertywareUnit: { count: jest.fn().mockResolvedValue(options.units ?? 0) },
     $transaction: jest.fn((run: (client: unknown) => unknown) => run(tx)),
   };
@@ -92,9 +110,9 @@ beforeEach(() => {
   jest.mocked(insertInspection).mockReset().mockResolvedValue({ id: 'inspection-new' } as never);
 });
 
-/** The office (2026-09-18): a move-out sixty days before every lease ends, for Moses. */
+/** The office (2026-09-18): a move-out the day after every lease ends, booked sixty days before, for Moses. */
 describe('booking the move-outs and move-ins the leases call for', () => {
-  it('books a move-out sixty days before the lease ends, for whoever handles move-outs', async () => {
+  it('books a move-out on the day after the lease ends, for whoever handles move-outs', async () => {
     const { service, tx } = build();
 
     const run = await service.run('org-1', { now: NOW });
@@ -112,7 +130,7 @@ describe('booking the move-outs and move-ins the leases call for', () => {
     expect(insertInspection).toHaveBeenCalledWith(
       tx,
       {},
-      expect.objectContaining({ createdById: null, status: InspectionStatus.SCHEDULED, internalNotes: expect.stringContaining('Booked from Propertyware') }),
+      expect.objectContaining({ createdById: null, status: InspectionStatus.SCHEDULED, internalNotes: expect.stringContaining('the day after') }),
     );
     expect(tx.inspectionAssignment.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ inspectionId: 'inspection-new', technicianId: 'moses', assignedById: null, idempotencyKey: 'lease:lease-1:MOVE_OUT:2026-10-21' }),
@@ -125,6 +143,12 @@ describe('booking the move-outs and move-ins the leases call for', () => {
     });
   });
 
+  it('does not book a move-out more than sixty days ahead', async () => {
+    const run = await build({ leases: [lease({ endDate: date('2026-12-20') })] }).service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([]);
+  });
+
   it('books a move-in twenty-two days after a leaving tenant goes, for whoever handles move-ins', async () => {
     const { service, tx } = build({
       leases: [lease({ sourceStatus: 'Active - Notice Given', noticeGivenDate: date('2026-09-01'), endDate: date('2026-10-31') })],
@@ -132,23 +156,36 @@ describe('booking the move-outs and move-ins the leases call for', () => {
 
     const run = await service.run('org-1', { now: NOW });
 
+    // Out Saturday 31 October: the move-out on Sunday the 1st goes on Monday the 2nd.
     expect(run.changes.map((change) => `${change.kind} ${change.action} ${change.scheduledOn}`)).toEqual([
-      'MOVE_OUT BOOK 2026-09-21',
+      'MOVE_OUT BOOK 2026-11-02',
       'MOVE_IN BOOK 2026-11-23',
     ]);
     expect(tx.inspectionAssignment.create.mock.calls.map((call) => call[0].data.technicianId)).toEqual(['moses', 'amy']);
   });
 
   it('links a move-out the office already booked near the day, rather than booking a second', async () => {
-    const { service, prisma } = build({ existing: { id: 'office-booked', scheduledAt: date('2026-10-19') } });
+    const { service, prisma } = build({ bookings: [booking('office-booked', '2026-10-22')] });
 
     const run = await service.run('org-1', { now: NOW });
 
-    expect(run.changes[0]).toMatchObject({ action: 'ALREADY_BOOKED', inspectionId: 'office-booked' });
+    expect(run.changes[0]).toMatchObject({ action: 'ALREADY_BOOKED', inspectionId: 'office-booked', scheduledOn: '2026-10-22' });
     expect(insertInspection).not.toHaveBeenCalled();
     expect(prisma.leaseScheduledInspection.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ create: expect.objectContaining({ outcome: LeaseInspectionOutcome.ALREADY_BOOKED, inspectionId: 'office-booked' }) }),
     );
+  });
+
+  it('does not take a booking of its own for another lease at the property as the office’s', async () => {
+    const { service } = build({
+      leases: [lease(), lease({ id: 'lease-2' })],
+      rows: [row({ dueOn: date('2026-10-21'), scheduledOn: date('2026-10-21') }, { scheduledAt: date('2026-10-21') })],
+      bookings: [booking('inspection-1', '2026-10-21')],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([expect.objectContaining({ leaseId: 'lease-2', action: 'BOOK' })]);
   });
 
   it('says so when the building has several units and the lease does not say which', async () => {
@@ -181,18 +218,56 @@ describe('booking the move-outs and move-ins the leases call for', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.leaseScheduledInspection.upsert).not.toHaveBeenCalled();
   });
+
+  it('says in a dry run what a booking would refuse, like a property with no floor plan', async () => {
+    // 11 of the first run's bookings failed this way while its preview had said none would.
+    jest
+      .mocked(resolveInspectionPlan)
+      .mockRejectedValue(new ApplicationError(409, 'NO_APPROVED_AREAS', 'Upload or define the property floor plan and approve its areas before creating an inspection.'));
+    const { service, prisma } = build();
+
+    const run = await service.run('org-1', { now: NOW, dryRun: true });
+
+    expect(run.changes[0]).toMatchObject({ action: 'NOT_BOOKABLE', detail: expect.stringContaining('floor plan') });
+    expect(resolveInspectionPlan).toHaveBeenCalledWith(prisma, expect.objectContaining({ inspectionType: 'MOVE_OUT' }));
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe('keeping them in step with the leases', () => {
-  it('moves the inspection it booked when the lease’s dates move', async () => {
-    // Booked for 14 October; the lease now ends 20 December, so its move-out is 21 October.
-    const { service, tx } = build({ rows: [row()] });
+  it('moves one booked on the old rule, sixty days before the lease ends, to the day after it ends', async () => {
+    const { service, tx } = build({
+      rows: [row({ dueOn: date('2026-08-21'), scheduledOn: date('2026-09-21') }, { scheduledAt: date('2026-09-21') })],
+    });
 
     const run = await service.run('org-1', { now: NOW });
 
     expect(run.changes[0]).toMatchObject({ action: 'MOVE', scheduledOn: '2026-10-21', inspectionId: 'inspection-1' });
-    expect(tx.inspection.update).toHaveBeenCalledWith({ where: { id: 'inspection-1' }, data: { scheduledAt: date('2026-10-21') } });
+    expect(tx.inspection.update).toHaveBeenCalledWith({
+      where: { id: 'inspection-1' },
+      data: { scheduledAt: date('2026-10-21'), internalNotes: expect.stringContaining('its move-out is the day after') },
+    });
     expect(tx.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({ action: 'INSPECTION_MOVED_WITH_LEASE' }) });
+  });
+
+  it('keeps a note the office rewrote when it moves the inspection', async () => {
+    const { service, tx } = build({ rows: [row({}, { internalNotes: 'Gate code with the office.' })] });
+
+    await service.run('org-1', { now: NOW });
+
+    expect(tx.inspection.update).toHaveBeenCalledWith({ where: { id: 'inspection-1' }, data: { scheduledAt: date('2026-10-21') } });
+  });
+
+  it('calls off one whose move-out is now more than sixty days away, until it is near', async () => {
+    const { service, tx } = build({ leases: [lease({ endDate: date('2026-12-20') })], rows: [row()] });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes[0]).toMatchObject({ action: 'CALL_OFF', detail: expect.stringContaining('booked 60 days before') });
+    expect(tx.inspection.update).toHaveBeenCalledWith({
+      where: { id: 'inspection-1' },
+      data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: expect.stringContaining('Mon, Dec 21, 2026') }),
+    });
   });
 
   it('leaves alone one that was moved by hand, and notes the lease’s new day', async () => {
@@ -255,6 +330,36 @@ describe('keeping them in step with the leases', () => {
     });
   });
 
+  it('books again one it called off, once the lease asks for it again', async () => {
+    const { service } = build({
+      rows: [
+        row(
+          { dueOn: date('2026-10-21'), scheduledOn: date('2026-10-21'), outcome: LeaseInspectionOutcome.CALLED_OFF },
+          { status: InspectionStatus.CANCELLED, scheduledAt: date('2026-10-21') },
+        ),
+      ],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([expect.objectContaining({ action: 'BOOK', scheduledOn: '2026-10-21' })]);
+  });
+
+  it('clears one it could not book once the lease no longer asks for it yet', async () => {
+    const { service, prisma } = build({
+      leases: [lease({ endDate: date('2026-12-20') })],
+      rows: [row({ outcome: LeaseInspectionOutcome.NOT_BOOKABLE, inspectionId: null }, null)],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([]);
+    expect(prisma.leaseScheduledInspection.update).toHaveBeenCalledWith({
+      where: { id: 'row-1' },
+      data: { outcome: LeaseInspectionOutcome.CALLED_OFF, detail: expect.stringContaining('booked 60 days before') },
+    });
+  });
+
   it('books a move-in when a lease leaves the report unrenewed, and not when it came back under its name', async () => {
     const gone = lease({ id: 'gone', isActive: false, endDate: date('2026-08-31'), deactivatedAt: new Date('2026-09-02T12:00:00Z') });
 
@@ -263,6 +368,46 @@ describe('keeping them in step with the leases', () => {
 
     const renewed = await build({ leases: [gone, lease({ id: 'renewal', endDate: date('2027-08-31') })] }).service.run('org-1', { now: NOW });
     expect(renewed.changes).toEqual([]);
+  });
+});
+
+/** The office (2026-09-18): "what we want to automate is the upcoming that has not yet scheduled on the jobber". */
+describe('what the office books itself', () => {
+  it('comes first: one booked here gives way when the office books the same move-out after it', async () => {
+    const { service, tx } = build({
+      rows: [row({ dueOn: date('2026-10-21'), scheduledOn: date('2026-10-21') }, { scheduledAt: date('2026-10-21') })],
+      bookings: [booking('inspection-1', '2026-10-21'), booking('from-jobber', '2026-10-22')],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([
+      expect.objectContaining({ action: 'ALREADY_BOOKED', inspectionId: 'from-jobber', scheduledOn: '2026-10-22' }),
+    ]);
+    expect(tx.inspection.update).toHaveBeenCalledWith({
+      where: { id: 'inspection-1' },
+      data: expect.objectContaining({ status: InspectionStatus.CANCELLED, cancellationReason: 'The office booked this move-out itself, for Thu, Oct 22, 2026.' }),
+    });
+    expect(tx.leaseScheduledInspection.update).toHaveBeenCalledWith({
+      where: { id: 'row-1' },
+      data: expect.objectContaining({ outcome: LeaseInspectionOutcome.ALREADY_BOOKED, inspectionId: 'from-jobber' }),
+    });
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'INSPECTION_CALLED_OFF_WITH_LEASE', metadata: expect.objectContaining({ bookedByOffice: 'from-jobber' }) }),
+    });
+    expect(insertInspection).not.toHaveBeenCalled();
+  });
+
+  it('is not given way to when it is weeks from the lease’s day', async () => {
+    const { service, prisma } = build({
+      rows: [row({ dueOn: date('2026-10-21'), scheduledOn: date('2026-10-21') }, { scheduledAt: date('2026-10-21') })],
+      bookings: [booking('old-move-out', '2026-09-01')],
+    });
+
+    const run = await service.run('org-1', { now: NOW });
+
+    expect(run.changes).toEqual([]);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
 
@@ -279,20 +424,27 @@ describe('running it from the console', () => {
   });
 });
 
-/** The office (2026-09-18): fourteen overdue move-outs would have landed on one Monday. */
-describe('move-outs already past their sixty days', () => {
-  it('go three a working day from the next one, soonest lease end first', async () => {
-    const overdue = ['2026-10-05', '2026-10-01', '2026-10-09', '2026-10-07'].map((ends, index) =>
-      lease({ id: `lease-${index + 1}`, buildingId: `building-${index + 1}`, endDate: date(ends) }),
+/** The office (2026-09-18): the overdue ones three a day, not all on one morning. */
+describe('move-ins already past their day', () => {
+  it('go three a working day from the next one, soonest first', async () => {
+    // Out 20-23 August: each move-in was due 11-14 September, inside the two weeks' grace.
+    const gone = ['2026-08-22', '2026-08-20', '2026-08-23', '2026-08-21'].map((ends, index) =>
+      lease({
+        id: `lease-${index + 1}`,
+        buildingId: `building-${index + 1}`,
+        isActive: false,
+        endDate: date(ends),
+        deactivatedAt: new Date(`${ends}T12:00:00Z`),
+      }),
     );
-    const { service } = build({ leases: overdue });
+    const { service } = build({ leases: gone });
 
     const run = await service.run('org-1', { now: NOW });
 
     expect(Object.fromEntries(run.changes.map((change) => [change.leaseId, change.scheduledOn]))).toEqual({
       'lease-2': '2026-09-21',
-      'lease-1': '2026-09-21',
       'lease-4': '2026-09-21',
+      'lease-1': '2026-09-21',
       'lease-3': '2026-09-22',
     });
   });
