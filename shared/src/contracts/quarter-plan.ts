@@ -141,15 +141,42 @@ export function usFederalHolidays(year: number): string[] {
     .sort();
 }
 
+/** The quarter's first day, `YYYY-MM-DD`. */
+export const quarterFirstDay = (quarter: Quarter) => isoDate(quarterStart(quarter).getTime());
+
 /**
- * The weekdays a quarter loses, `YYYY-MM-DD` in order: its US federal holidays,
- * and any other day the office names as closed. A named day on a weekend or
- * outside the quarter loses nothing, so it is not listed.
+ * How far either side of its quarter's first day a plan may start: fifteen days
+ * (the office, 2026-09-19: "there's a +-15 days rule ... for the q4 we can start
+ * as early as september").
  */
-export function closedDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
-  const start = isoDate(quarterStart(quarter).getTime());
+export const PLAN_START_LEEWAY_DAYS = 15;
+
+/** The days a quarter's plan may start on, `YYYY-MM-DD`: fifteen either side of the quarter's first. */
+export function planStartRange(quarter: Quarter): { earliest: string; latest: string } {
+  const first = quarterStart(quarter).getTime();
+  return {
+    earliest: isoDate(first - PLAN_START_LEEWAY_DAYS * MS_PER_DAY),
+    latest: isoDate(first + PLAN_START_LEEWAY_DAYS * MS_PER_DAY),
+  };
+}
+
+/**
+ * The weekdays a plan loses, `YYYY-MM-DD` in order: the US federal holidays
+ * and any other day the office names as closed, from the plan's first day --
+ * the quarter's, unless the plan starts up to fifteen days either side of it
+ * (`startsOn`) -- to the quarter's last. A named day on a weekend or outside
+ * that loses nothing, so it is not listed.
+ */
+export function closedDaysOfQuarter(
+  quarter: Quarter,
+  closedDays: readonly string[] = [],
+  startsOn?: string | null,
+): string[] {
+  const start = startsOn ?? quarterFirstDay(quarter);
   const end = isoDate(quarterEnd(quarter).getTime());
-  return [...new Set([...usFederalHolidays(quarter.year), ...closedDays])]
+  // A plan for January can start in December: that year's holidays count too.
+  const years = [...new Set([Number(start.slice(0, 4)), quarter.year])];
+  return [...new Set([...years.flatMap(usFederalHolidays), ...closedDays])]
     .filter((date) => {
       const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
       return date >= start && date < end && weekday !== 0 && weekday !== 6;
@@ -160,20 +187,25 @@ export function closedDaysOfQuarter(quarter: Quarter, closedDays: readonly strin
 /**
  * The days of a quarter somebody could actually be sent out on.
  *
- * Weekdays, less the quarter's US federal holidays and any other day the office
- * names as closed (`closedDaysOfQuarter`). Nobody has to type the holidays in.
+ * Weekdays, less the US federal holidays and any other day the office names as
+ * closed (`closedDaysOfQuarter`), from the plan's first day to the quarter's
+ * last. Nobody has to type the holidays in.
  *
  * Returned as `YYYY-MM-DD` strings, which is what `Inspection.scheduledAt`
  * stores and what the console reads back — a `Date` here would invite a
  * timezone to creep into a calendar fact.
  */
-export function workingDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
-  const closed = new Set(closedDaysOfQuarter(quarter, closedDays));
+export function workingDaysOfQuarter(
+  quarter: Quarter,
+  closedDays: readonly string[] = [],
+  startsOn?: string | null,
+): string[] {
+  const closed = new Set(closedDaysOfQuarter(quarter, closedDays, startsOn));
   const days: string[] = [];
   const end = quarterEnd(quarter);
 
   for (
-    let cursor = quarterStart(quarter);
+    let cursor = startsOn ? new Date(`${startsOn}T00:00:00.000Z`) : quarterStart(quarter);
     cursor < end;
     cursor = new Date(cursor.getTime() + MS_PER_DAY)
   ) {
