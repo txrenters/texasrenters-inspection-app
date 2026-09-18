@@ -63,3 +63,25 @@ export function jobClock(job: Clocked, now: number = Date.now()): JobClock | nul
 export function jobClockLabel(clock: JobClock): string {
   return `Started ${clock.startedAt}, ${clock.running ? 'running' : 'took'} ${clock.worked}`;
 }
+
+/**
+ * The time tracker on a running job, to the second: "00:12:45" (the office,
+ * 2026-09-18: "if they confirm time tracker starts").
+ *
+ * From the server's start stamp, like the clock above, and never below zero for
+ * a handset whose own clock runs behind the server's.
+ */
+export function formatTimer(milliseconds: number): string {
+  const total = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':');
+}
+
+/** How long a job has run, or ran, in milliseconds; null for one nobody has started. */
+export function jobElapsed(job: Clocked, now: number = Date.now()): number | null {
+  const started = instant(job.startedAt);
+  if (started === null) return null;
+  return (instant(job.submittedAt) ?? now) - started;
+}
