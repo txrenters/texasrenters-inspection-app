@@ -385,6 +385,7 @@ model Organization {
   tbpQuarterPlanStops             TbpQuarterPlanStop[]
   tbpQuarterPlanDays              TbpQuarterPlanDay[]
   tbpQuarterPlanAnchors           TbpQuarterPlanAnchor[]
+  leaseScheduledInspections       LeaseScheduledInspection[]
   technicianPlanningProfiles      TechnicianPlanningProfile[]
 }
 
@@ -1296,6 +1297,7 @@ model Inspection {
   reportShares               InspectionReportShare[]
   areaEvidenceRequests       AreaEvidenceRequest[]
   tbpPlanAnchors             TbpQuarterPlanAnchor[]
+  leaseSchedule              LeaseScheduledInspection[]
 
   /// One inspection per Jobber visit. Postgres allows many NULLs in a unique
   /// index, so every manually booked inspection is unaffected — but a visit
@@ -1507,6 +1509,7 @@ model PropertywareUnit {
 
 model PropertywareLease {
   tbpPlanStops TbpQuarterPlanStop[]
+  scheduledInspections LeaseScheduledInspection[]
   id                   String                @id @default(uuid()) @db.Uuid
   organizationId       String                @db.Uuid
   externalId           String
@@ -3261,8 +3264,14 @@ model TechnicianPlanningProfile {
 
   /// The technician who handles move-outs: Moses (the office, 2026-09-17). On a
   /// day they have a move-out, their benefit-package visits are the ones nearest
-  /// it, from any zone. Nobody marked means move-outs anchor nothing.
+  /// it, from any zone. Nobody marked means move-outs anchor nothing. The
+  /// move-outs booked from the leases are assigned to them.
   handlesMoveOuts Boolean @default(false)
+
+  /// The technician who handles move-ins: Amy (the office, 2026-09-18). The
+  /// move-ins booked from the leases are assigned to them; nobody marked leaves
+  /// them for the office to assign.
+  handlesMoveIns Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3354,4 +3363,53 @@ model TbpQuarterPlanAnchor {
   @@unique([planId, inspectionId])
   @@index([planId, technicianId, date])
   @@index([organizationId, date])
+}
+
+/// What the lease schedule did about one lease's move-out or move-in.
+enum LeaseInspectionOutcome {
+  /// Booked here: the inspection is the schedule's own, moved or called off
+  /// with the lease.
+  SCHEDULED
+  /// The office had already booked one near the day; that one is linked.
+  ALREADY_BOOKED
+  /// The building has several units and nothing says which is the tenancy's.
+  NEEDS_UNIT
+  /// Could not be booked; `detail` says why.
+  NOT_BOOKABLE
+  /// Called off here because the lease no longer calls for it; booked again if
+  /// it does.
+  CALLED_OFF
+  /// Cancelled by the office in the console: that day is not booked again.
+  CANCELLED
+}
+
+/// A move-out or move-in a lease's dates call for, and what came of it.
+///
+/// The office's rules (2026-09-18): every lease gets a move-out sixty days
+/// before its tenancy ends, and a leaving tenant a move-in twenty-two days
+/// after they go (`inspectionsDue` in shared). One row per lease and kind, so
+/// the daily run books each once, moves it when the lease's dates move, and
+/// says why when it could not book one.
+model LeaseScheduledInspection {
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @db.Uuid
+  leaseId        String                 @db.Uuid
+  inspectionType InspectionType
+  /// The day the rule gives, before it is moved to a working day.
+  dueOn          DateTime               @db.Date
+  /// The day it was booked for.
+  scheduledOn    DateTime               @db.Date
+  outcome        LeaseInspectionOutcome
+  /// The inspection booked here, or the one the office had already booked.
+  inspectionId   String?                @db.Uuid
+  detail         String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lease        PropertywareLease @relation(fields: [leaseId], references: [id], onDelete: Cascade)
+  inspection   Inspection?       @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+
+  @@unique([leaseId, inspectionType])
+  @@index([organizationId, outcome, scheduledOn])
 }

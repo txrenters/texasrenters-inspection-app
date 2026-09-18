@@ -4,6 +4,7 @@ export * from './http/api-url.js';
 export * from './rbac/permissions.js';
 export * from './integrations/propertyware-entities.js';
 export * from './leases/lease-expiry.js';
+export * from './leases/lease-inspections.js';
 export * from './report/report-view.js';
 export * from './schemas/area-checklist-generation.js';
 export * from './schemas/finding.js';
