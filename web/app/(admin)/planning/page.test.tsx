@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import PlanningPage from './page';
 
@@ -46,8 +46,19 @@ const PLAN = {
   maxDriveMinutes: 90,
   minStopsPerDay: 9,
   maxStopsPerDay: 12,
+  maxLegMinutes: 20,
   holidays: ['2026-11-26'],
+  startsOn: null as string | null,
+  crewTechnicianIds: [] as string[],
 };
+
+/** Who can be sent out: the crew first, in its order, then everyone else. */
+const TECHNICIANS = [
+  { id: 'tech-1', displayName: 'Moses Rivera', crewOrder: 1, hasHome: true },
+  { id: 'tech-2', displayName: 'Kevin Grant', crewOrder: 2, hasHome: true },
+  { id: 'tech-3', displayName: 'Emanuel Hall', crewOrder: 3, hasHome: true },
+  { id: 'tech-4', displayName: 'Amy Wilson', crewOrder: null, hasHome: false },
+];
 
 const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
@@ -163,7 +174,7 @@ function mount({
       ],
     },
   });
-  hooks.usePlanTechnicians.mockReturnValue({ data: [] });
+  hooks.usePlanTechnicians.mockReturnValue({ data: TECHNICIANS, isLoading: false });
   hooks.usePlanningMutations.mockReturnValue({
     build,
     editStop,
@@ -178,6 +189,13 @@ function mount({
 beforeEach(() => {
   vi.clearAllMocks();
   url.state = { quarter: '2026-4', tab: 'days', day: '' };
+  // Saturday 19 September 2026 in Texas: Q4 may start from today to 16 October.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-19T15:00:00.000Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('the benefit package plan page', () => {
@@ -188,23 +206,57 @@ describe('the benefit package plan page', () => {
     expect(screen.getByRole('button', { name: /Build the Q4 2026 plan/ })).toBeTruthy();
   });
 
-  /** The office found a form of visit minutes and closed days confusing (2026-09-16): building asks nothing. */
-  it('builds a quarter in one click, with nothing to fill in', () => {
+  /**
+   * The office (2026-09-19): "before generating ... it should ask for the
+   * technicians ... with check box we can select who", and the first day. Nothing
+   * else: a form of visit minutes and closed days was confusing (2026-09-16).
+   */
+  it('asks who goes out and the first day before it builds a quarter, the crew ticked', () => {
     mount({ plans: [] });
 
     fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
 
-    expect(build.mutate).toHaveBeenCalledWith({ year: 2026, quarter: 4 }, expect.anything());
-    expect(screen.queryByRole('dialog')).toBeNull();
+    const dialog = screen.getByRole('dialog', { name: 'Build the Q4 2026 plan' });
+    expect(build.mutate).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole('checkbox', { name: /Moses Rivera/ }).getAttribute('data-state')).toBe('checked');
+    expect(within(dialog).getByRole('checkbox', { name: /Amy Wilson/ }).getAttribute('data-state')).toBe('unchecked');
+    expect(within(dialog).getByText(/Up to 15 days either side of Oct 1/)).toBeTruthy();
+    expect(within(dialog).queryByText(/minutes a visit|closed days/i)).toBeNull();
+
+    // Emanuel is off this quarter, and Amy is sent instead.
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Emanuel Hall/ }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Amy Wilson/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      { year: 2026, quarter: 4, technicianIds: ['tech-1', 'tech-2', 'tech-4'], startsOn: '2026-10-01' },
+      expect.anything(),
+    );
   });
 
-  it('rebuilds a draft in one click', () => {
-    mount();
+  it('will not build for nobody', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    for (const name of [/Moses Rivera/, /Kevin Grant/, /Emanuel Hall/]) fireEvent.click(within(dialog).getByRole('checkbox', { name }));
+
+    expect((within(dialog).getByRole('button', { name: 'Build for 0 technicians' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('rebuilds a draft for the technicians and the first day it was built for, unless changed', () => {
+    mount({ plans: [{ ...PLAN, crewTechnicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21T00:00:00.000Z' }] });
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
 
-    expect(build.mutate).toHaveBeenCalledWith({ year: 2026, quarter: 4 }, expect.anything());
-    expect(screen.queryByRole('dialog')).toBeNull();
+    const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
+    expect(within(dialog).getByRole('checkbox', { name: /Emanuel Hall/ }).getAttribute('data-state')).toBe('unchecked');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 2 technicians' }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      { year: 2026, quarter: 4, technicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21' },
+      expect.anything(),
+    );
     expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
   });
 
@@ -214,6 +266,7 @@ describe('the benefit package plan page', () => {
     mount();
 
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Rebuild for 3 technicians' }));
 
     expect(loading).toHaveBeenCalledWith('Building Q4 2026', {
       id: 'plan-build-2026-4',
@@ -243,9 +296,12 @@ describe('the benefit package plan page', () => {
 
     // The quarter's US holidays, found by the planner rather than typed in.
     expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
-    expect(screen.getByText('9 to 12 visits and up to 6 hr inspecting a day')).toBeTruthy();
-    expect(screen.getByText('9 to 12 every day, the whole crew every day until every visit has one')).toBeTruthy();
-    // Driving has no limit to show (2026-09-17).
+    expect(screen.getByText("Oct 1, the quarter's first day")).toBeTruthy();
+    // Days of nine, room for the office's own, and no drive over twenty minutes between properties (2026-09-19).
+    expect(screen.getByText('Over 12 visits, 6 hr inspecting, or 20 min between properties')).toBeTruthy();
+    expect(screen.getByText('9, grouped for the least driving; up to 12 with visits you add')).toBeTruthy();
+    expect(screen.getByText('never more than 20 min from one to the next; fewer visits where they are further apart')).toBeTruthy();
+    // How far the crew's homes may be from a zone is not a limit on a day.
     expect(screen.queryByText(/90 min/)).toBeNull();
     expect(screen.queryByText(/360/)).toBeNull();
     // Thanksgiving is on the plan as well, and is a holiday rather than another closed day.
@@ -384,8 +440,20 @@ describe('the benefit package plan page', () => {
     const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
     expect(within(day).getByText('35 min · 42 km · leave 8:25 AM')).toBeTruthy();
     expect(within(day).getByText('35 min from home')).toBeTruthy();
-    expect(within(day).getByText(/20 min between properties/)).toBeTruthy();
+    expect(within(day).getByText(/^20 min between properties/)).toBeTruthy();
     expect(within(day).getByText(/the drive from home is shown apart/)).toBeTruthy();
+  });
+
+  /** The office (2026-09-19): no drive over twenty minutes from one property to the next. */
+  it('shows a drive between properties over the limit, and counts its day outside the rules', () => {
+    const long = { ...DAY, stops: DAY.stops.map((entry) => (entry.id === 's3' ? { ...entry, driveSecondsForecast: 25 * 60 } : entry)) };
+    mount({ day: long });
+
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
+    expect(within(day).getByText('25 min drive · over the 20 min between properties')).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Planned technician-days' }).textContent).toContain('a 25 min drive between properties');
+    const stat = screen.getByText('Days outside the rules').parentElement!.parentElement!;
+    expect(within(stat).getByText('1').className).toContain('text-destructive');
   });
 
   /** A plan built before days started from home, or for a technician with no home on file. */
@@ -453,7 +521,7 @@ describe('the benefit package plan page', () => {
   it('shows the crew, who has which zone each week, and the Mondays kept for reschedules', () => {
     mount();
 
-    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · a zone each, moving weekly')).toBeTruthy();
+    expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · the crew on the planning profiles · a zone each, moving weekly')).toBeTruthy();
     // Four zones and three people: the zone nobody has this week waits its turn.
     expect(screen.getByText('Zone 1 Moses · Zone 2 Kevin · Zone 3 Emanuel · Zone 4 no one')).toBeTruthy();
     // Too far for a day's drive, so a trip -- planned when the quarter is rebuilt.

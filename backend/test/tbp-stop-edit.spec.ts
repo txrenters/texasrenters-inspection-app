@@ -187,6 +187,13 @@ describe('a coordinator editing a visit in a draft', () => {
     expect(() => dayInQuarter('2026-09-30', { year: 2026, quarter: 4 })).toThrow();
   });
 
+  /** A plan may start up to fifteen days either side of its quarter's first day (the office, 2026-09-19). */
+  it('takes any day from a plan’s own start', () => {
+    expect(dayInQuarter('2026-09-21', { year: 2026, quarter: 4 }, '2026-09-21')).toBe('2026-09-21');
+    expect(() => dayInQuarter('2026-09-18', { year: 2026, quarter: 4 }, '2026-09-21')).toThrow('from 2026-09-21');
+    expect(() => dayInQuarter('2026-10-02', { year: 2026, quarter: 4 }, '2026-10-05')).toThrow();
+  });
+
   it('keeps “Tenant Benefit Package” in a title a coordinator writes', async () => {
     const { service, stopUpdate, planner } = build();
     await expect(service.edit(USER, 's1', { visitTitle: '5009 N Main St - Zone 1' })).rejects.toMatchObject({

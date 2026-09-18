@@ -221,6 +221,12 @@ describe('changing a draft visit in its window', () => {
     expect(screen.getByText("Aug 11 · the quarter's second month")).toBeTruthy();
   });
 
+  /** A plan may start before its quarter (2026-09-19): 25 September was Q4's first month. */
+  it('says the month the visit was in when a plan started early, not the day’s', () => {
+    mount({ stop: stop({ previousVisitOn: '2026-09-25T00:00:00.000Z', previousVisitMonth: 1 }) });
+    expect(screen.getByText("Sep 25 · the quarter's first month")).toBeTruthy();
+  });
+
   it('says a visit new this quarter goes in the month with fewest visits', () => {
     mount({ stop: stop({ previousVisitOn: null, previousSequence: null, orderSource: 'NEW_ENROLLMENT' }) });
     expect(screen.getByText('None: it goes in the month with fewest visits')).toBeTruthy();

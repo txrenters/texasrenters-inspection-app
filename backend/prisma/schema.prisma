@@ -3028,21 +3028,35 @@ model TbpQuarterPlan {
   unverifiedEnrollmentCount Int @default(0)
 
   /// The office's rules for a technician-day, and the visit lengths a day is
-  /// measured with (2026-09-17: nine to twelve visits every day, twenty minutes a
-  /// visit of either kind, six hours inspecting at most, and the drive between
-  /// the properties kept short rather than capped). Kept on the plan so its
-  /// forecast is explained by the numbers it was routed with; a re-route with new
-  /// numbers replaces them.
+  /// measured with (2026-09-19: days of nine grouped for the least driving, up
+  /// to twelve with the visits the office adds, never more than twenty minutes
+  /// from one property to the next; twenty minutes a visit of either kind, six
+  /// hours inspecting at most). Kept on the plan so its forecast is explained by
+  /// the numbers it was routed with; a re-route with new numbers replaces them.
   occupiedVisitMinutes Int      @default(20)
   hvacVisitMinutes     Int      @default(20)
   maxOnSiteMinutes     Int      @default(360)
   /// How far a zone's middle may be from the nearest crew member's home for the
-  /// crew to work it. No longer a limit on a day's driving (2026-09-17).
+  /// crew to work it. Not a limit on a day's driving (2026-09-17).
   maxDriveMinutes      Int      @default(90)
+  /// The visits the planner groups into a day (2026-09-19): nine.
   minStopsPerDay       Int      @default(9)
+  /// The most a day may hold, with the visits the office adds by hand: twelve.
   maxStopsPerDay       Int      @default(12)
+  /// The longest drive between two of a day's properties, in minutes: twenty
+  /// (2026-09-19). The drive from home is not held to it.
+  maxLegMinutes        Int      @default(20)
   /// The days the office is closed this quarter, `YYYY-MM-DD`.
   holidays             String[] @default([])
+  /// The plan's first day, when it is not the quarter's: up to fifteen days
+  /// either side of it (the office, 2026-09-19, "for the q4 we can start as
+  /// early as september"). Days before the quarter take its first month's
+  /// visits. Null: the quarter's first day.
+  startsOn             DateTime? @db.Date
+  /// Who the coordinator chose to send out on this plan's days, asked each time
+  /// it is built (2026-09-19). Empty: the benefit-package crew set on the
+  /// technicians' planning profiles.
+  crewTechnicianIds    String[]  @default([]) @db.Uuid
 
   /// The office's sheet of visit Details for the quarter, as imported:
   /// `[{ address, city, postalCode, details }]`. Kept whole rather than only
@@ -3094,6 +3108,10 @@ model TbpQuarterPlanStop {
   /// visit goes in the same month of its quarter (the office, 2026-09-18: Q3's
   /// first month is Q4's first month, and so on). Null: no visit to go by.
   previousVisitOn  DateTime?      @db.Date
+  /// The month of its own quarter that visit was in, 1 to 3. The day alone
+  /// cannot say: a plan may start fifteen days before its quarter, so a visit on
+  /// 25 September can be Q4's first month. Null: read the month from the day.
+  previousVisitMonth Int?
   orderSource      TbpOrderSource
   zone             String?
 

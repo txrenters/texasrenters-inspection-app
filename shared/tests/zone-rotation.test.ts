@@ -35,6 +35,12 @@ describe('the weeks of a quarter', () => {
     expect(quarterWeekIndex('2026-10-16', Q4_2026)).toBe(2);
     expect(weekStartOf('2026-10-16')).toBe('2026-10-12');
   });
+
+  /** A plan may start up to fifteen days either side of its quarter's first day (the office, 2026-09-19). */
+  it('counts from the week a plan starts in when it starts on a day of its own', () => {
+    expect(quarterWeekIndex('2026-09-21', Q4_2026, '2026-09-21')).toBe(0);
+    expect(quarterWeekIndex('2026-10-01', Q4_2026, '2026-09-21')).toBe(1);
+  });
 });
 
 /**
@@ -52,6 +58,19 @@ describe('the Mondays kept for rescheduled visits', () => {
     // Q2 2026 starts on Wednesday 1 April; Q3 2025 on Tuesday 1 July. Q2 2024 starts on Monday 1 April.
     expect(isRescheduleMonday('2024-04-01', { year: 2024, quarter: 2 })).toBe(false);
     expect(isRescheduleMonday('2024-04-08', { year: 2024, quarter: 2 })).toBe(true);
+  });
+
+  it('keeps them from the second week of a plan that starts on a day of its own', () => {
+    expect(isRescheduleMonday('2026-09-21', Q4_2026, '2026-09-21')).toBe(false);
+    expect(isRescheduleMonday('2026-09-28', Q4_2026, '2026-09-21')).toBe(true);
+    expect(plannedVisitDaysOfQuarter(Q4_2026, [], '2026-09-21').slice(0, 6)).toEqual([
+      '2026-09-21',
+      '2026-09-22',
+      '2026-09-23',
+      '2026-09-24',
+      '2026-09-25',
+      '2026-09-29',
+    ]);
   });
 
   it('plans visits on the working days less those Mondays', () => {

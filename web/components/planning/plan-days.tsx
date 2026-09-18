@@ -16,7 +16,9 @@ import {
   formatMinutes,
   formatShortDay,
   leaveHomeAt,
+  legOverLimit,
   limitState,
+  longestLegSeconds,
   type LimitState,
 } from '@/lib/planning';
 import {
@@ -214,6 +216,11 @@ export function PlanDays({
                     {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
                     {day.anchors?.length ? ` · ${bookedInWords(day.anchors, 'bare')}` : ''}
                     {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
+                    {legOverLimit(longestLegSeconds(day), settings.maxLegMinutes) ? (
+                      <span className="text-destructive">
+                        {` · a ${Math.round(longestLegSeconds(day)! / 60)} min drive between properties`}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <Meter
@@ -242,10 +249,10 @@ export function PlanDays({
 }
 
 /** How the day's drives were measured, and what the driving shown covers. */
-function measuredText(day: PlanDay) {
+function measuredText(day: PlanDay, maxLegMinutes: number) {
   const fromHome = day.originKind === 'HOME';
   const counted = fromHome
-    ? 'The day is routed from the technician’s home, in the order that drives least; the driving shown is between its properties, and the drive from home is shown apart.'
+    ? `The day is routed from the technician’s home, in the order that drives least with no drive over ${maxLegMinutes} min between properties where any order manages it; the driving shown is between its properties, and the drive from home is shown apart.`
     : 'This day was built without the technician’s home, so it starts at its first job. Rebuild the plan to route days from home; the home comes from the technician’s planning profile.';
   switch (day.durationSource) {
     case 'GOOGLE_TRAFFIC_AWARE':
@@ -320,7 +327,7 @@ function DayDetail({
             </dd>
           </div>
         </dl>
-        <p className="text-muted-foreground text-xs">{measuredText(day)}</p>
+        <p className="text-muted-foreground text-xs">{measuredText(day, settings.maxLegMinutes)}</p>
       </div>
 
       <div className="h-80 lg:h-[26rem]">
@@ -344,9 +351,15 @@ function DayDetail({
         {clock.map((stop, index) => (
           <li className="grid gap-1 px-4 py-2.5" key={stop.id}>
             {index > 0 ? (
-              <span className="text-muted-foreground text-xs">
-                {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
-              </span>
+              legOverLimit(stop.driveSecondsForecast, settings.maxLegMinutes) ? (
+                <span className="text-destructive text-xs">
+                  {stop.driveMinutes} min drive · over the {settings.maxLegMinutes} min between properties
+                </span>
+              ) : (
+                <span className="text-muted-foreground text-xs">
+                  {stop.driveSecondsForecast === null ? 'Drive not measured' : `${stop.driveMinutes} min drive`}
+                </span>
+              )
             ) : homeMinutes !== null ? (
               <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
             ) : null}

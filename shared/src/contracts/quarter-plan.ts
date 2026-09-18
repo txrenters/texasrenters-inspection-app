@@ -141,15 +141,59 @@ export function usFederalHolidays(year: number): string[] {
     .sort();
 }
 
+/** The quarter's first day, `YYYY-MM-DD`. */
+export const quarterFirstDay = (quarter: Quarter) => isoDate(quarterStart(quarter).getTime());
+
+/** Which month of its quarter a day is in: 1 for January, April, July and October, and so on. */
+export const monthOfQuarter = (date: string) => ((Number(date.slice(5, 7)) - 1) % 3) + 1;
+
 /**
- * The weekdays a quarter loses, `YYYY-MM-DD` in order: its US federal holidays,
- * and any other day the office names as closed. A named day on a weekend or
- * outside the quarter loses nothing, so it is not listed.
+ * Which month of a quarter a day of its plan is in: by the calendar inside the
+ * quarter, the first for a day before it -- a plan may start up to fifteen days
+ * early (the office, 2026-09-19) -- and the last for one after it. Without the
+ * quarter, by the calendar alone.
  */
-export function closedDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
-  const start = isoDate(quarterStart(quarter).getTime());
+export function monthOfPlan(date: string, quarter?: Quarter): number {
+  if (quarter) {
+    if (date < quarterFirstDay(quarter)) return 1;
+    if (date >= isoDate(quarterEnd(quarter).getTime())) return 3;
+  }
+  return monthOfQuarter(date);
+}
+
+/**
+ * How far either side of its quarter's first day a plan may start: fifteen days
+ * (the office, 2026-09-19: "there's a +-15 days rule ... for the q4 we can start
+ * as early as september").
+ */
+export const PLAN_START_LEEWAY_DAYS = 15;
+
+/** The days a quarter's plan may start on, `YYYY-MM-DD`: fifteen either side of the quarter's first. */
+export function planStartRange(quarter: Quarter): { earliest: string; latest: string } {
+  const first = quarterStart(quarter).getTime();
+  return {
+    earliest: isoDate(first - PLAN_START_LEEWAY_DAYS * MS_PER_DAY),
+    latest: isoDate(first + PLAN_START_LEEWAY_DAYS * MS_PER_DAY),
+  };
+}
+
+/**
+ * The weekdays a plan loses, `YYYY-MM-DD` in order: the US federal holidays
+ * and any other day the office names as closed, from the plan's first day --
+ * the quarter's, unless the plan starts up to fifteen days either side of it
+ * (`startsOn`) -- to the quarter's last. A named day on a weekend or outside
+ * that loses nothing, so it is not listed.
+ */
+export function closedDaysOfQuarter(
+  quarter: Quarter,
+  closedDays: readonly string[] = [],
+  startsOn?: string | null,
+): string[] {
+  const start = startsOn ?? quarterFirstDay(quarter);
   const end = isoDate(quarterEnd(quarter).getTime());
-  return [...new Set([...usFederalHolidays(quarter.year), ...closedDays])]
+  // A plan for January can start in December: that year's holidays count too.
+  const years = [...new Set([Number(start.slice(0, 4)), quarter.year])];
+  return [...new Set([...years.flatMap(usFederalHolidays), ...closedDays])]
     .filter((date) => {
       const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
       return date >= start && date < end && weekday !== 0 && weekday !== 6;
@@ -160,20 +204,25 @@ export function closedDaysOfQuarter(quarter: Quarter, closedDays: readonly strin
 /**
  * The days of a quarter somebody could actually be sent out on.
  *
- * Weekdays, less the quarter's US federal holidays and any other day the office
- * names as closed (`closedDaysOfQuarter`). Nobody has to type the holidays in.
+ * Weekdays, less the US federal holidays and any other day the office names as
+ * closed (`closedDaysOfQuarter`), from the plan's first day to the quarter's
+ * last. Nobody has to type the holidays in.
  *
  * Returned as `YYYY-MM-DD` strings, which is what `Inspection.scheduledAt`
  * stores and what the console reads back — a `Date` here would invite a
  * timezone to creep into a calendar fact.
  */
-export function workingDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
-  const closed = new Set(closedDaysOfQuarter(quarter, closedDays));
+export function workingDaysOfQuarter(
+  quarter: Quarter,
+  closedDays: readonly string[] = [],
+  startsOn?: string | null,
+): string[] {
+  const closed = new Set(closedDaysOfQuarter(quarter, closedDays, startsOn));
   const days: string[] = [];
   const end = quarterEnd(quarter);
 
   for (
-    let cursor = quarterStart(quarter);
+    let cursor = startsOn ? new Date(`${startsOn}T00:00:00.000Z`) : quarterStart(quarter);
     cursor < end;
     cursor = new Date(cursor.getTime() + MS_PER_DAY)
   ) {
@@ -216,6 +265,13 @@ export interface PriorRank {
    * either: this quarter's visit goes in the same month of its quarter.
    */
   visitedOn?: string | null;
+  /**
+   * The month of its own quarter that visit was in, 1 to 3, when known
+   * (`monthOfPlan`). Kept beside the day because the day alone cannot say: a
+   * plan may start up to fifteen days before its quarter, so a visit on 25
+   * September can be Q4's first month as easily as Q3's last.
+   */
+  visitedMonth?: number | null;
 }
 
 export type OrderSource = 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';
@@ -228,6 +284,8 @@ export interface RankedStop {
   previousSequence: number | null;
   /** The day of the visit that position came from, when known. */
   previousVisitOn: string | null;
+  /** The month of its quarter that visit was in, 1 to 3, when known: this one's month. */
+  previousVisitMonth: number | null;
   orderSource: OrderSource;
 }
 
@@ -264,12 +322,20 @@ export function carryForwardOrder(
   const placed = candidates.map((candidate) => {
     const depth = ranks.findIndex((quarter) => quarter.has(candidate.tenantExternalId));
     if (depth === -1)
-      return { candidate, carried: null, visitedOn: null, depth: Number.MAX_SAFE_INTEGER, source: 'NEW_ENROLLMENT' as const };
+      return {
+        candidate,
+        carried: null,
+        visitedOn: null,
+        visitedMonth: null,
+        depth: Number.MAX_SAFE_INTEGER,
+        source: 'NEW_ENROLLMENT' as const,
+      };
     const prior = ranks[depth].get(candidate.tenantExternalId);
     return {
       candidate,
       carried: prior?.sequence ?? null,
       visitedOn: prior?.visitedOn ?? null,
+      visitedMonth: prior?.visitedMonth ?? null,
       depth,
       // Depth 0 is last quarter. Anything deeper means the tenancy was skipped,
       // blocked or excluded in between, and it keeps its place rather than
@@ -314,6 +380,7 @@ export function carryForwardOrder(
     sequence: index + 1,
     previousSequence: entry.carried,
     previousVisitOn: entry.visitedOn,
+    previousVisitMonth: entry.visitedMonth,
     orderSource: entry.source,
   }));
 }

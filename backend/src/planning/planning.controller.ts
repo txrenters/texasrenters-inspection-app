@@ -21,9 +21,10 @@ import {
   ApiAuthGuard,
   PermissionsGuard,
   RequirePermissions,
+  auditActor,
   type AuthenticatedRequest,
 } from '../common/auth';
-import { businessInstant } from '../common/business-day';
+import { businessDate, businessInstant } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { holdRequestOpen } from '../common/long-request';
 import { PrismaService } from '../common/prisma.service';
@@ -162,7 +163,10 @@ export class PlanningController {
           maxDriveMinutes: true,
           minStopsPerDay: true,
           maxStopsPerDay: true,
+          maxLegMinutes: true,
           holidays: true,
+          startsOn: true,
+          crewTechnicianIds: true,
           officeDetailsImportedAt: true,
         },
       }),
@@ -206,6 +210,7 @@ export class PlanningController {
         sequence: true,
         previousSequence: true,
         previousVisitOn: true,
+        previousVisitMonth: true,
         orderSource: true,
         zone: true,
         scheduledOn: true,
@@ -523,6 +528,11 @@ export class PlanningController {
    * nothing real: regenerating replaces the ordering a coordinator may have
    * been reviewing, and that is not a read.
    *
+   * The console asks who to send out and when to start before it builds (the
+   * office, 2026-09-19), and both are kept on the plan for the next rebuild;
+   * the choice is audited, as the crew is a coordinator's decision. Days are
+   * never laid out before today.
+   *
    * Minutes of work, because Google's drive times are paced. The request is
    * held open past the server's 30-second idle timeout, which cut the console
    * off with a 502 while the build carried on (2026-09-16), and a second build
@@ -537,7 +547,8 @@ export class PlanningController {
     holdRequestOpen(request);
     return this.builds.run(organizationId, quarterLabel(quarter), async () => {
       const generated = await this.plans.generate(organizationId, quarter);
-      const routed = await this.planner.route(organizationId, generated.planId, settings);
+      const routed = await this.planner.route(organizationId, generated.planId, settings, { today: businessDate() });
+      await this.auditBuild(request, generated.planId, routed);
       return { ...generated, routing: routed };
     });
   }
@@ -559,7 +570,41 @@ export class PlanningController {
     const label = plan
       ? quarterLabel({ year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] })
       : 'quarter';
-    return this.builds.run(organizationId, label, () => this.planner.route(organizationId, planId, body));
+    return this.builds.run(organizationId, label, async () => {
+      const routed = await this.planner.route(organizationId, planId, body, { today: businessDate() });
+      await this.auditBuild(request, planId, routed);
+      return routed;
+    });
+  }
+
+  /**
+   * Who a coordinator sent out on a plan and from when, and what that made:
+   * the crew is theirs to choose (2026-09-19), and "why is nobody on zone 3
+   * this quarter" is answered here.
+   */
+  private async auditBuild(
+    request: AuthenticatedRequest,
+    planId: string,
+    routed: Awaited<ReturnType<QuarterPlannerService['route']>>,
+  ) {
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: request.user.organizationId,
+        ...auditActor(request.user),
+        action: 'TBP_PLAN_BUILT',
+        entityType: 'TbpQuarterPlan',
+        entityId: planId,
+        metadata: {
+          quarter: quarterLabel(routed.quarter),
+          technicianIds: routed.settings.technicianIds,
+          startsOn: routed.settings.startsOn,
+          maxLegMinutes: routed.settings.maxLegMinutes,
+          placed: routed.placed,
+          unplaced: routed.unplaced.length,
+          days: routed.days,
+        },
+      },
+    });
   }
 
   /**
