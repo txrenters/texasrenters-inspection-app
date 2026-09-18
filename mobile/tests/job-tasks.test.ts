@@ -4,10 +4,12 @@ import {
   filterRows,
   jobChecklistProblems,
   jobTasks,
+  toggledService,
   withFilterAnswer,
   withServiceAnswer,
   withServicePhoto,
   withoutFilter,
+  withoutServiceAnswer,
 } from '../src/utils/job-tasks';
 
 /**
@@ -367,5 +369,35 @@ describe('writing an answer into the checklist', () => {
 
     expect(added.filters?.[0]).toMatchObject({ size: '16x20x1', booked: false });
     expect(withoutFilter(added, found).filters).toEqual([]);
+  });
+});
+
+/** The office (2026-09-18): "Pest control just a check box". */
+describe('pest control as a checkbox', () => {
+  it('ticks it done, and unticks it back to unanswered', () => {
+    const ticked = toggledService(null, 'pestControl');
+    expect(ticked.services.pestControl).toEqual({ done: true, reason: null, reschedule: false });
+
+    const unticked = toggledService(ticked, 'pestControl');
+    expect(unticked.services.pestControl).toBeUndefined();
+    expect(tasksFor({ report: unticked }).find((task) => task.key === 'pestControl')?.state).toBe('TODO');
+  });
+
+  it('ticks done a service that was answered not done', () => {
+    const notDone = withServiceAnswer(null, 'pestControl', { done: false, reason: 'Tenant refused', reschedule: true });
+
+    expect(toggledService(notDone, 'pestControl').services.pestControl).toEqual({ done: true, reason: null, reschedule: false });
+  });
+
+  it('takes one service’s answer away and leaves the rest of the report alone', () => {
+    const both = withServiceAnswer(withServiceAnswer(null, 'pestControl', { done: true, reason: null, reschedule: false }), 'fleaTreatment', {
+      done: true,
+      reason: null,
+      reschedule: false,
+    });
+
+    const left = withoutServiceAnswer(both, 'pestControl');
+    expect(Object.keys(left.services)).toEqual(['fleaTreatment']);
+    expect(left.filters).toEqual([]);
   });
 });

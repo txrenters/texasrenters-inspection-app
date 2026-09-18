@@ -1,4 +1,4 @@
-import { formatWorked, jobClock, jobClockLabel } from '../src/utils/job-clock';
+import { formatTimer, formatWorked, jobClock, jobClockLabel, jobElapsed } from '../src/utils/job-clock';
 
 /**
  * One clock for the whole job: Start job to Submit (the office, 2026-09-18).
@@ -62,5 +62,26 @@ describe('the job clock', () => {
       running: true,
       worked: '14 min',
     });
+  });
+});
+
+/** The office (2026-09-18): "if they confirm time tracker starts". */
+describe('the time tracker on a running job', () => {
+  it('reads hours, minutes and seconds', () => {
+    expect(formatTimer(0)).toBe('00:00:00');
+    expect(formatTimer(765_000)).toBe('00:12:45');
+    expect(formatTimer(3_723_999)).toBe('01:02:03');
+  });
+
+  it('never counts backwards', () => {
+    expect(formatTimer(-5_000)).toBe('00:00:00');
+  });
+
+  it('runs from the server’s start until the job is submitted', () => {
+    expect(jobElapsed({}, at(STARTED))).toBeNull();
+    expect(jobElapsed({ startedAt: STARTED }, at('2026-09-18T14:18:45.000Z'))).toBe(765_000);
+    expect(
+      jobElapsed({ startedAt: STARTED, submittedAt: '2026-09-18T14:48:00.000Z' }, at('2026-09-18T20:00:00.000Z')),
+    ).toBe(42 * 60_000);
   });
 });

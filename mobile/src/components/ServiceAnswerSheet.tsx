@@ -14,12 +14,13 @@ const DONE = 'Done';
 const NOT_DONE = 'Not done';
 
 /**
- * One service of the job, answered where the technician is standing.
+ * One service of the job, answered as a whole where the technician is standing:
+ * done, or not done with the reason and whether the office should book it again.
  *
- * Pest control and flea treatment are each a single answer: done, or not done
- * with the reason and whether the office should book it again. A photograph is
- * optional (the office, 2026-09-18): offered once the service is marked done,
- * never required.
+ * The filter screen answers the filter change with it when it did not happen at
+ * all. Pest control and flea treatment are checkboxes on the job's list now (the
+ * office, 2026-09-18), asked why at End job when left unticked (`NotDoneSheet`);
+ * the optional photograph (`onAddPhoto`) is no longer offered for them.
  *
  * The reason is required when it was not done, because that sentence is what a
  * coordinator reads in Jobber before rebooking. The submit button on the job

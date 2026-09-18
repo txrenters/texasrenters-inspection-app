@@ -1,80 +1,72 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
   AlertTriangleIcon,
-  CameraIcon,
   CheckCircle2Icon,
-  ChevronRightIcon,
-  CircleIcon,
   ClockIcon,
-  FileTextIcon,
+  FlagIcon,
   MapPinIcon,
   PlayCircleIcon,
-  PlusIcon,
-  Settings2Icon,
 } from 'lucide-react-native';
-import { Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
+import { Alert, Pressable, RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
-import { BackGlyph } from '@/src/components/ui/BackGlyph';
-import { goBack } from '@/src/lib/navigation';
-import type { Finding, InspectionRoom } from '@/src/domain/models';
-import { useFindings, useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
-import { registerIcons } from '@/src/lib/icons';
-import { formatVisitWindow } from '@/src/utils/visit-window';
-import { applyAreaOrder, loadAreaOrder, saveAreaOrder } from '@/src/areas/area-order';
-import { ReorderableAreaList } from '@/src/areas/ReorderableAreaList';
-import { AddAreaSheet } from '@/src/components/AddAreaSheet';
+import { EndJobSheet } from '@/src/components/EndJobSheet';
 import { HomeButton } from '@/src/components/HomeButton';
 import { JobFileCard } from '@/src/components/JobFileCard';
 import { JobTasksCard } from '@/src/components/JobTasksCard';
 import { NoAccessSheet } from '@/src/components/NoAccessSheet';
-import { ServiceAnswerSheet } from '@/src/components/ServiceAnswerSheet';
-import { PriorityAuditList } from '@/src/components/PriorityAuditList';
+import { NotDoneSheet } from '@/src/components/NotDoneSheet';
+import { StartJobSheet } from '@/src/components/StartJobSheet';
 import { VisitDetailsCard } from '@/src/components/VisitDetailsCard';
+import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { DetailSkeleton } from '@/src/components/ui/Skeleton';
+import { useInspection, useInspectionActions, useRooms } from '@/src/features/queries';
 import { usePullToRefresh } from '@/src/features/usePullToRefresh';
-import { useLocalNow } from '@/src/features/useLocalNow';
+import { useSecondNow } from '@/src/features/useSecondNow';
+import { registerIcons } from '@/src/lib/icons';
+import { goBack } from '@/src/lib/navigation';
 import { useThemeColors } from '@/src/lib/theme-colors';
-import { jobClock, jobClockLabel } from '@/src/utils/job-clock';
-import { jobTasks, withServiceAnswer, type JobTask } from '@/src/utils/job-tasks';
-import { buildPriorityChecklist, summaryCoverage } from '@/src/utils/inspection-audit';
+import { deriveAreaStatus } from '@/src/utils/area-status';
 import {
-  INSPECTION_STATUS_TONE_CLASS,
-  inspectionStatusPresentation,
-} from '@/src/utils/inspection-status';
+  asksClosingComments,
+  closingCommentsToSend,
+  EMPTY_CLOSING_COMMENTS,
+  type ClosingComments,
+} from '@/src/utils/closing-comments';
+import { planEndJob } from '@/src/utils/end-job';
+import { formatTimer, formatWorked, jobElapsed } from '@/src/utils/job-clock';
 import {
-  deriveAreaStatus,
-  pickUpNextArea,
-  type AreaStatusDescriptor,
-} from '@/src/utils/area-status';
+  jobChecklistProblems,
+  jobTasks,
+  toggledService,
+  withServiceAnswer,
+  type JobTask,
+} from '@/src/utils/job-tasks';
+import { INSPECTION_STATUS_TONE_CLASS, inspectionStatusPresentation } from '@/src/utils/inspection-status';
+import { evaluateSubmissionGate } from '@/src/utils/submission-gate';
+import { formatVisitWindow } from '@/src/utils/visit-window';
 
-registerIcons(
-  AlertTriangleIcon,
-  CameraIcon,
-  CheckCircle2Icon,
-  ChevronRightIcon,
-  CircleIcon,
-  ClockIcon,
-  FileTextIcon,
-  MapPinIcon,
-  PlayCircleIcon,
-  PlusIcon,
-  Settings2Icon,
-);
-
-function isRoomDone(room: InspectionRoom) {
-  const { status } = deriveAreaStatus(room);
-  return status === 'COMPLETED' || status === 'SKIPPED';
-}
+registerIcons(AlertTriangleIcon, CheckCircle2Icon, ClockIcon, FlagIcon, MapPinIcon, PlayCircleIcon);
 
 /**
- * What each kind of visit is called on the handset.
+ * One job, in the steps the office asked for (2026-09-18):
  *
- * Spelled out rather than de-underscored from the enum: "HVAC" should not
- * render as "Hvac", and "Back to market" reads better than "BACK TO MARKET"
- * shouted at a technician standing in someone's hallway.
+ * "once they click that property they should be able to see this screen start
+ * job then if they confirm time tracker starts then the list of the jobs screen
+ * appear -- Pest control just a check box, filter change can be clicked, then
+ * inspection can be clicked also -- on the bottom of it there's an end job
+ * button that submits the job."
+ *
+ * So a scheduled job shows the property, what is booked and the office's notes,
+ * with Start job under them, confirmed before the timer starts. A started job
+ * is its list and a running timer, with End job under it. End job is the
+ * submission: it sends the technician back to anything unfinished, asks why for
+ * a service left unticked, and submits once they confirm.
  */
+
+/** What each kind of visit is called on the handset. */
 const INSPECTION_TYPE_LABEL: Record<string, string> = {
   MOVE_IN: 'Move-in inspection',
   MOVE_OUT: 'Move-out inspection',
@@ -88,229 +80,142 @@ const INSPECTION_TYPE_LABEL: Record<string, string> = {
   AC_FILTER_DELIVERY: 'AC filter delivery',
 };
 
-const TONE_TEXT: Record<AreaStatusDescriptor['tone'], string> = {
-  neutral: 'text-muted-foreground',
-  info: 'text-chart-2',
-  progress: 'text-chart-2',
-  success: 'text-chart-3',
-  warning: 'text-chart-4',
-  danger: 'text-destructive',
-};
+const isService = (task: JobTask): task is JobTask & { key: ReportableVisitService } => task.key !== 'inspection';
 
-function RoomRow({
-  room,
-  findings,
-  dragging = false,
-}: {
-  room: InspectionRoom;
-  findings: Finding[];
-  /** Held by the technician right now. Only changes how it looks — a lifted row
-   * needs to read as picked up rather than merely selected. */
-  dragging?: boolean;
-}) {
-  // Derived rather than open-coded: a failed upload now surfaces on this row
-  // instead of reading as "not started", which is the one state a technician
-  // has to act on before leaving the property.
-  const derived = deriveAreaStatus(room);
-  const done = derived.status === 'COMPLETED' || derived.status === 'SKIPPED';
-  const active = derived.status !== 'NOT_STARTED' && !done;
-  const roomFindings = findings.filter((finding) => finding.roomId === room.id);
-  return (
-    <Pressable
-      // Status is otherwise conveyed only by a coloured bar and an icon, both
-      // invisible to a screen reader — it has to be said in words.
-      accessibilityLabel={[
-        room.name,
-        room.floorName,
-        room.isRequired ? 'Required' : 'Optional',
-        derived.label,
-        derived.detail,
-        roomFindings.length ? `${roomFindings.length} findings` : '',
-      ]
-        .filter(Boolean)
-        .join(', ')}
-      accessibilityRole="button"
-      accessibilityHint="Opens this area. Press and hold to move it in the list."
-      className={`mx-5 mb-2 min-h-14 overflow-hidden rounded-xl bg-card ${
-        // No press-scale while held: the row is already lifted by the drag, and
-        // two competing transforms read as a glitch.
-        dragging ? 'border border-primary/40 shadow-lg' : 'active:scale-[0.98]'
-      }`}
-      onPress={() => router.push(`/areas/${room.id}`)}
-    >
-      <View importantForAccessibility="no-hide-descendants" className="flex-row items-center">
-        <View
-          className={`w-1.5 self-stretch ${
-            derived.needsAttention
-              ? 'bg-chart-4'
-              : done
-                ? 'bg-chart-3'
-                : active
-                  ? 'bg-chart-2'
-                  : 'bg-muted'
-          }`}
-        />
-        <View className="flex-1 flex-row items-center gap-3 p-4">
-          <View
-            className={`h-9 w-9 items-center justify-center rounded-full ${
-              done ? 'bg-chart-3/15' : active ? 'bg-chart-2/15' : 'bg-muted'
-            }`}
-          >
-            {done ? (
-              <CheckCircle2Icon size={18} className="text-chart-3" />
-            ) : active ? (
-              <Settings2Icon size={18} className="text-chart-2" />
-            ) : (
-              <CircleIcon size={18} className="text-muted-foreground" />
-            )}
-          </View>
-          <View className="min-w-0 flex-1">
-            <Text className="text-base font-semibold text-foreground">{room.name}</Text>
-            <Text className="mt-0.5 text-xs text-muted-foreground">
-              {room.floorName} · {room.isRequired ? 'Required' : 'Optional'}
-              {roomFindings.length ? ` · ${roomFindings.length} findings` : ''}
-            </Text>
-            {/* Status in words as well as colour. */}
-            <Text className={`mt-0.5 text-xs font-medium ${TONE_TEXT[derived.tone]}`}>
-              {derived.label}
-            </Text>
-            {room.baseline?.summary ? (
-              <Text
-                numberOfLines={2}
-                className="mt-1 text-xs leading-relaxed text-muted-foreground"
-              >
-                {room.baseline.summary}
-              </Text>
-            ) : null}
-          </View>
-          <ChevronRightIcon size={16} className="text-muted-foreground" />
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
-export default function InspectionOverviewScreen() {
+export default function JobScreen() {
   const { id = '' } = useLocalSearchParams<{ id: string }>();
   const inspection = useInspection(id);
   const rooms = useRooms(id);
-  const findings = useFindings(id);
   const actions = useInspectionActions(id);
   const theme = useThemeColors();
-  const pull = usePullToRefresh([inspection.refetch, rooms.refetch, findings.refetch]);
-  const [addAreaOpen, setAddAreaOpen] = useState(false);
-  // Which service the technician is answering, and whether they are reporting
-  // that nobody let them in at all.
-  const [answering, setAnswering] = useState<JobTask | null>(null);
+  const pull = usePullToRefresh([inspection.refetch, rooms.refetch]);
+  const [startOpen, setStartOpen] = useState(false);
   const [noAccessOpen, setNoAccessOpen] = useState(false);
-  /** Why the camera could not open for a service's optional photograph. */
-  const [photoError, setPhotoError] = useState<string | null>(null);
-  // Ticks by the minute, and again on foregrounding, so a job left open all
-  // morning does not still read as eight minutes old.
-  const now = useLocalNow();
-
-  /**
-   * The technician's own sequence for this inspection, if they have set one.
-   *
-   * Up here with the other hooks, above the early returns below. A hook placed
-   * after one runs on some renders and not others, React counts a different
-   * number each time, and the whole screen goes down with error #310 — the
-   * same trap the import prompt fell into on the console's detail page.
-   *
-   * Applied by rewriting `order` rather than sorting here, because three
-   * separate places sort by it — this list, "Up next", and the room the camera
-   * advances to after a capture. Sorting in one would leave somebody looking at
-   * their order while the app kept offering the server's.
-   */
-  const [areaOrder, setAreaOrder] = useState<string[]>([]);
-  const [draggingArea, setDraggingArea] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    void loadAreaOrder(id).then((saved) => {
-      if (!cancelled) setAreaOrder(saved);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
-  const reorderAreas = useCallback(
-    async (ids: string[]) => {
-      // Applied immediately and persisted after. A reorder that waited on
-      // storage would feel broken on a slow handset, and the write is one small
-      // key — there is nothing to roll back if it fails.
-      setAreaOrder(ids);
-      await saveAreaOrder(id, ids);
-    },
-    [id],
-  );
+  /** Services End job is asking about, one at a time, and the report as answered so far. */
+  const [asking, setAsking] = useState<{ queue: JobTask[]; report: VisitServicesReport | null } | null>(null);
+  /** The report End job is about to submit, while the technician confirms it. */
+  const [ending, setEnding] = useState<{ report: VisitServicesReport | null } | null>(null);
+  const [closingComments, setClosingComments] = useState<ClosingComments>(EMPTY_CLOSING_COMMENTS);
+  const [endError, setEndError] = useState<string | null>(null);
+  // Up here with the other hooks, above the early return below.
+  const running = inspection.data?.status === 'IN_PROGRESS' && !inspection.data.submittedAt;
+  const now = useSecondNow(running);
 
   if (inspection.isLoading || !inspection.data) {
     return (
       <SafeAreaView edges={['top']} className="flex-1 bg-background">
-        <DetailSkeleton sections={4} />
+        <DetailSkeleton sections={3} />
       </SafeAreaView>
     );
   }
 
   const item = inspection.data;
-  const roomList = applyAreaOrder(rooms.data ?? [], areaOrder);
-  const findingList = findings.data ?? [];
-  // pickUpNextArea outranks a plain "first unfinished": it surfaces failed
-  // uploads and ready-to-complete areas ahead of untouched required work.
-  const nextRoom = pickUpNextArea(roomList);
-  const completedRooms = roomList.filter(isRoomDone).length;
-  const progress = roomList.length ? Math.round((completedRooms / roomList.length) * 100) : 0;
-  const pendingUploads = roomList.filter((room) =>
-    ['PENDING', 'UPLOADING', 'PAUSED', 'FAILED'].includes(room.uploadStatus),
-  ).length;
-  // Only while the inspection is still the technician's to work on. Once it is
-  // submitted the evidence set is fixed, and adding an area then would mean
-  // handing review a room nobody captured.
-  const canAddArea = item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS';
-  // The audit ordered by what still needs attention, plus the areas that
-  // finished without the AI producing anything — a gap the pipeline cannot
-  // report on itself.
-  const priorityItems = buildPriorityChecklist(findingList);
-  const coverage = summaryCoverage(roomList, findingList);
-  // Null until the job is started, which is when the button below says so.
-  const clock = jobClock(item, now.getTime());
-  /**
-   * The job's checklist, as the office numbers it.
-   *
-   * From the visit's Details and the areas, so a visit that books only a filter
-   * change shows only that, and the inspection is one row among them.
-   */
+  const roomList = rooms.data ?? [];
+  const completedRooms = roomList.filter((room) => {
+    const { status } = deriveAreaStatus(room);
+    return status === 'COMPLETED' || status === 'SKIPPED';
+  }).length;
+  /** The job's list, as the office numbers it, from the visit's Details and its areas. */
   const tasks = jobTasks({
     visitDetails: item.visitDetails,
     inspectionType: item.type,
     report: item.servicesReport,
     areas: { completed: completedRooms, total: roomList.length },
   });
+  const elapsed = jobElapsed(item, now);
+  const status = inspectionStatusPresentation(item.status);
+
+  const toggle = (task: JobTask) => {
+    if (isService(task)) actions.saveServices.mutate(toggledService(item.servicesReport, task.key));
+  };
   const open = (task: JobTask) => {
     if (task.kind === 'FILTERS') router.push(`/job-filters/${id}`);
-    else if (task.kind === 'SERVICE') setAnswering(task);
-    // The inspection is the areas: straight to the one worth doing next.
-    else if (nextRoom) router.push(`/areas/${nextRoom.id}`);
-    else router.push(`/review/${id}`);
+    else if (task.kind === 'INSPECTION') router.push(`/job-inspection/${id}`);
   };
+
+  /** The same rule the server runs, over the answers as they now stand, then the last confirmation. */
+  const confirmEnd = (report: VisitServicesReport | null) => {
+    const problems = jobChecklistProblems(item.visitDetails, report);
+    if (problems.length) {
+      Alert.alert('Not ready to end the job', problems[0]);
+      return;
+    }
+    setEndError(null);
+    setEnding({ report });
+  };
+
+  const endJob = () => {
+    const plan = planEndJob(tasks, evaluateSubmissionGate(roomList, item.status));
+    const first = plan.blockers[0];
+    if (first) {
+      Alert.alert(first.title, first.message, [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: first.opens === 'INSPECTION' ? 'Open the inspection' : 'Open the filters',
+          onPress: () => router.push(first.opens === 'INSPECTION' ? `/job-inspection/${id}` : `/job-filters/${id}`),
+        },
+      ]);
+      return;
+    }
+    const report = item.servicesReport ?? null;
+    if (plan.unticked.length) setAsking({ queue: plan.unticked, report });
+    else confirmEnd(report);
+  };
+
+  /** A service left unticked, answered: not done, with the reason. The next one, or on to ending. */
+  const answerUnticked = ({ reason, reschedule }: { reason: string; reschedule: boolean }) => {
+    if (!asking) return;
+    const [current, ...rest] = asking.queue;
+    if (!current || !isService(current)) return;
+    const report = withServiceAnswer(asking.report, current.key, { done: false, reason, reschedule });
+    // Saved as it is answered, like a tick, so it is on the job even if ending waits.
+    actions.saveServices.mutate(report);
+    if (rest.length) setAsking({ queue: rest, report });
+    else {
+      setAsking(null);
+      confirmEnd(report);
+    }
+  };
+
+  const submit = () => {
+    if (!ending) return;
+    setEndError(null);
+    actions.complete.mutate(
+      {
+        servicesReport: ending.report ?? undefined,
+        closingComments: asksClosingComments(item.type) ? closingCommentsToSend(closingComments) : undefined,
+      },
+      {
+        onSuccess: () => {
+          setEnding(null);
+          setClosingComments(EMPTY_CLOSING_COMMENTS);
+          Alert.alert('Job ended', 'It is with the office. Any photos still sending keep uploading.', [
+            { text: 'Done', onPress: () => router.replace('/(app)/(tabs)/inspections') },
+          ]);
+        },
+        onError: (error) =>
+          setEndError(error instanceof Error ? error.message : 'The job could not be ended. Try again.'),
+      },
+    );
+  };
+
+  // The job as End job will send it, for the sheet's summary.
+  const endingTasks = ending
+    ? jobTasks({
+        visitDetails: item.visitDetails,
+        inspectionType: item.type,
+        report: ending.report,
+        areas: { completed: completedRooms, total: roomList.length },
+      })
+    : tasks;
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
       <ScrollView
         className="flex-1"
-        contentContainerStyle={{ paddingBottom: 132 }}
-        // Off while a row is held, so a single finger cannot scroll the list and
-        // rearrange it at the same time.
-        scrollEnabled={!draggingArea}
+        contentContainerStyle={{ paddingBottom: 150 }}
         showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={pull.refreshing}
-            onRefresh={pull.onRefresh}
-            tintColor={theme.primary}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={pull.refreshing} onRefresh={pull.onRefresh} tintColor={theme.primary} />}
       >
         <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
           <Pressable
@@ -322,11 +227,9 @@ export default function InspectionOverviewScreen() {
           >
             <BackGlyph size={18} className="text-foreground" />
           </Pressable>
-          <View className="min-w-0 flex-1">
-            <Text numberOfLines={1} className="text-lg font-bold text-foreground">
-              Job Overview
-            </Text>
-          </View>
+          <Text numberOfLines={1} className="min-w-0 flex-1 text-lg font-bold text-foreground">
+            Job
+          </Text>
           <HomeButton />
         </View>
 
@@ -337,10 +240,7 @@ export default function InspectionOverviewScreen() {
             </View>
             <View className="min-w-0 flex-1">
               <Text className="text-lg font-bold text-foreground">{item.property.address}</Text>
-              {/* The kind of visit, first. It decides what the technician is
-                  being asked to do — an HVAC job and a move-out share an
-                  address and nothing else — and the screen previously named
-                  only the unit, so the two were indistinguishable. */}
+              {/* The kind of visit, first: an HVAC job and a move-out share an address and nothing else. */}
               <Text className="text-sm font-semibold text-primary">
                 {INSPECTION_TYPE_LABEL[item.type] ?? item.type.replaceAll('_', ' ')}
               </Text>
@@ -348,296 +248,73 @@ export default function InspectionOverviewScreen() {
                 {item.unitName ?? 'Entire property'} · {item.property.cityStateZip}
               </Text>
             </View>
-            <View
-              className={`rounded-full px-3 py-1 ${
-                INSPECTION_STATUS_TONE_CLASS[inspectionStatusPresentation(item.status).tone].bg
-              }`}
-            >
-              {/* Not `capitalize`: the label is already cased, and forcing it
-                  turned "With Office" into something a stylesheet chose. */}
-              <Text
-                className={`text-xs font-semibold ${
-                  INSPECTION_STATUS_TONE_CLASS[inspectionStatusPresentation(item.status).tone].text
-                }`}
-              >
-                {inspectionStatusPresentation(item.status).label}
+            <View className={`rounded-full px-3 py-1 ${INSPECTION_STATUS_TONE_CLASS[status.tone].bg}`}>
+              <Text className={`text-xs font-semibold ${INSPECTION_STATUS_TONE_CLASS[status.tone].text}`}>
+                {status.label}
               </Text>
             </View>
           </View>
-          <View className="flex-row flex-wrap gap-4">
-            <View className="flex-row items-center gap-1.5">
-              <ClockIcon size={14} className="text-muted-foreground" />
-              {/* The hour used to be formatted out of `scheduledAt`, which is a
-                  date — so this line read "12:00 AM" on every inspection. The
-                  window is shown only when the office actually booked one. */}
-              <Text className="text-xs text-muted-foreground">
-                {new Date(item.scheduledAt).toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                })}
-                {formatVisitWindow(item) ? ` · ${formatVisitWindow(item)}` : ''}
-              </Text>
-            </View>
-            <Text className="text-xs capitalize text-muted-foreground">
-              · {item.type.replaceAll('_', ' ').toLowerCase()}
+
+          <View className="flex-row items-center gap-1.5">
+            <ClockIcon size={14} className="text-muted-foreground" />
+            {/* The window only when the office booked one: `scheduledAt` is a date. */}
+            <Text className="text-xs text-muted-foreground">
+              {new Date(item.scheduledAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              {formatVisitWindow(item) ? ` · ${formatVisitWindow(item)}` : ''}
             </Text>
           </View>
-          {/* The job's clock: one for the whole visit, from Start job to
-              submitting (the office, 2026-09-18). Both ends are the server's
-              stamps, so this is the time the office will read. */}
-          {clock ? (
-            <View accessibilityLabel={jobClockLabel(clock)} className="flex-row items-center gap-1.5">
-              <ClockIcon size={14} className={clock.running ? 'text-chart-2' : 'text-chart-3'} />
-              <Text
-                className={`text-xs font-semibold ${clock.running ? 'text-chart-2' : 'text-chart-3'}`}
+
+          {/* The time tracker: from the server's Start job stamp, to the second while it runs. */}
+          {elapsed !== null ? (
+            running ? (
+              <View
+                accessibilityLabel={`Timer running, ${formatWorked(elapsed / 60_000)} so far`}
+                className="flex-row items-center gap-2 self-start rounded-full bg-chart-2/15 px-3 py-1.5"
               >
-                {clock.running ? 'Running' : 'Took'} {clock.worked}
-              </Text>
-              <Text className="text-xs text-muted-foreground">· started {clock.startedAt}</Text>
-            </View>
+                <ClockIcon size={16} className="text-chart-2" />
+                {/* Tabular digits, so the tracker does not jitter as the seconds change. */}
+                <Text className="text-base font-bold text-chart-2" style={{ fontVariant: ['tabular-nums'] }}>
+                  {formatTimer(elapsed)}
+                </Text>
+              </View>
+            ) : (
+              <View className="flex-row items-center gap-1.5">
+                <CheckCircle2Icon size={14} className="text-chart-3" />
+                <Text className="text-xs font-semibold text-chart-3">Took {formatWorked(elapsed / 60_000)}</Text>
+              </View>
+            )
           ) : null}
-          {/* Why the office sent this back, above the property notes and styled
-              as something to act on rather than background. Before this the
-              reason lived only in the audit log, so a reopened inspection
-              reappeared in the queue with no explanation at all. */}
+
+          {/* Why the office sent this back, styled as something to act on. */}
           {item.reopenReason ? (
             <View className="rounded-xl border border-chart-4/30 bg-chart-4/10 p-3">
-              <Text className="text-xs font-semibold uppercase tracking-wide text-chart-4">
-                Sent back by the office
-              </Text>
-              <Text className="mt-1 text-sm leading-relaxed text-foreground">
-                {item.reopenReason}
-              </Text>
+              <Text className="text-xs font-semibold uppercase tracking-wide text-chart-4">Sent back by the office</Text>
+              <Text className="mt-1 text-sm leading-relaxed text-foreground">{item.reopenReason}</Text>
             </View>
           ) : null}
           {item.propertyNotes ? (
             <View className="rounded-xl bg-muted p-3">
-              <Text className="text-xs leading-relaxed text-muted-foreground">
-                {item.propertyNotes}
-              </Text>
+              <Text className="text-xs leading-relaxed text-muted-foreground">{item.propertyNotes}</Text>
             </View>
           ) : null}
         </View>
 
-        {/* The checklist, above everything the office wrote: this is the work
-            itself, and the office asked for it at the front of the job
-            (2026-09-18). Inert until the job is started, because there is
-            nothing to answer for a job nobody has begun. */}
+        {/* The job's list: what is booked before the start, the work itself after it. */}
         <JobTasksCard
           className="mx-5 mt-5"
-          disabled={item.status === 'SCHEDULED'}
+          mode={item.status === 'SCHEDULED' ? 'preview' : item.status === 'IN_PROGRESS' ? 'working' : 'done'}
           onOpen={open}
+          onToggle={toggle}
           tasks={tasks}
         />
-        {photoError ? (
-          <Text className="mx-5 mt-3 text-xs text-destructive" accessibilityRole="alert">
-            {photoError}
-          </Text>
-        ) : null}
 
-        {/* Before the progress card: the filters to bring and who to call are
-            needed before the first area is opened, not after. */}
-        <VisitDetailsCard
-          title={item.visitTitle}
-          details={item.visitDetails}
-          className="mx-5 mt-5"
-        />
-
-        {/* The office's own file, under what the coordinator wrote for this
-            visit: the plan, the filters it holds on record, and anything the
-            last visit asked to be looked at. */}
-        <JobFileCard file={item.onFile} lastVisit={item.lastVisit} className="mx-5 mt-5" />
-
-        <View className="mx-5 mt-5 gap-3 rounded-2xl bg-card p-5">
-          <View className="flex-row items-center justify-between">
-            <Text className="text-base font-semibold text-foreground">Progress</Text>
-            <Text className="text-sm text-muted-foreground">
-              {completedRooms} of {roomList.length} areas
-            </Text>
-          </View>
-          <View className="h-2 overflow-hidden rounded-full bg-muted">
-            <View className="h-full rounded-full bg-primary" style={{ width: `${progress}%` }} />
-          </View>
-          <View className="flex-row justify-between">
-            <View className="flex-row items-center gap-1.5">
-              <CameraIcon size={13} className="text-muted-foreground" />
-              <Text className="text-xs text-muted-foreground">
-                {roomList.filter((room) => room.completionStatus === 'RECORDING_SAVED').length}{' '}
-                recordings saved
-              </Text>
-            </View>
-            <View className="flex-row items-center gap-1.5">
-              <FileTextIcon size={13} className="text-muted-foreground" />
-              <Text className="text-xs text-muted-foreground">{findingList.length} findings</Text>
-            </View>
-            {pendingUploads ? (
-              <View className="flex-row items-center gap-1.5">
-                <View className="h-2 w-2 rounded-full bg-chart-1" />
-                <Text className="text-xs text-chart-1">{pendingUploads} pending</Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-
-        <View className="mt-5">
-          <View className="mb-3 flex-row items-center justify-between px-5">
-            <Text className="text-lg font-semibold text-foreground">Areas</Text>
-            <View className="flex-row items-center gap-3">
-              <Text className="text-sm text-muted-foreground">{roomList.length} total</Text>
-              {canAddArea ? (
-                <Pressable
-                  accessibilityHint="For a space that is not on the floor plan"
-                  accessibilityLabel="Add an area"
-                  accessibilityRole="button"
-                  className="min-h-11 flex-row items-center gap-1 rounded-full bg-primary/10 px-3"
-                  onPress={() => setAddAreaOpen(true)}
-                >
-                  <PlusIcon size={14} className="text-primary" />
-                  <Text className="text-sm font-semibold text-primary">Add</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          </View>
-          {rooms.isError ? (
-            <Text className="mx-5 mb-3 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
-              {rooms.error instanceof Error ? rooms.error.message : 'Could not load areas.'}
-            </Text>
-          ) : null}
-          {/*
-            Reorderable while the inspection is still the technician's to work.
-            Once it is submitted the sequence is history, and letting somebody
-            shuffle a finished list would imply it still meant something.
-
-            The order is theirs alone — stored on this handset, never sent to
-            the server, and it does not touch the property layout the office
-            approved. What it does change is what the app offers next, which is
-            the point: a technician who decides to start upstairs should not be
-            sent back down by "Up next".
-          */}
-          <ReorderableAreaList
-            enabled={canAddArea}
-            items={roomList}
-            keyOf={(room) => room.id}
-            onDragStateChange={setDraggingArea}
-            onReorder={(ids) => void reorderAreas(ids)}
-            renderItem={(room, { dragging }) => (
-              <RoomRow dragging={dragging} findings={findingList} room={room} />
-            )}
-          />
-        </View>
-
-        {!roomList.length && !rooms.isLoading ? (
-          // Two different situations that look identical: a property whose
-          // areas nobody has approved yet, and one the administrator has asked
-          // this technician to survey. Telling the second to contact an
-          // administrator sends them back to the person who just asked them.
-          <View className="mx-5 mt-5 items-center gap-2 rounded-2xl bg-card p-5">
-            <FileTextIcon size={28} className="text-muted-foreground" />
-            {item.allowTechnicianAreaCapture ? (
-              <>
-                <Text className="text-sm font-semibold text-foreground">
-                  Add the areas as you walk the property
-                </Text>
-                <Text className="text-center text-sm text-muted-foreground">
-                  This property has no floor plan yet, so you are building the list. Add each room
-                  or outdoor space as you reach it, then record it as normal. What you add is saved
-                  to the property for an administrator to approve.
-                </Text>
-                {canAddArea ? (
-                  <Pressable
-                    accessibilityHint="Starts the list for a property with no floor plan"
-                    accessibilityLabel="Add the first area"
-                    accessibilityRole="button"
-                    className="mt-2 min-h-12 flex-row items-center gap-2 rounded-xl bg-primary px-5"
-                    onPress={() => setAddAreaOpen(true)}
-                  >
-                    <PlusIcon size={16} className="text-primary-foreground" />
-                    <Text className="font-semibold text-primary-foreground">
-                      Add the first area
-                    </Text>
-                  </Pressable>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <Text className="text-sm font-semibold text-foreground">
-                  No approved areas available
-                </Text>
-                <Text className="text-center text-sm text-muted-foreground">
-                  Contact an administrator to approve the property’s inspection areas.
-                </Text>
-              </>
-            )}
-          </View>
-        ) : null}
-
-        <PriorityAuditList
-          coverage={coverage}
-          items={priorityItems}
-          onOpenArea={(roomId) => router.push(`/areas/${roomId}`)}
-          onOpenFinding={(findingId) => router.push(`/findings/${findingId}?inspectionId=${id}`)}
-        />
-
-        <View className="mt-5">
-          <Text className="mb-3 px-5 text-lg font-semibold text-foreground">Findings</Text>
-          {findingList.length ? (
-            findingList.slice(0, 4).map((finding) => (
-              <View key={finding.id} className="mx-5 mb-2 gap-2 rounded-xl bg-card p-4">
-                <View className="flex-row items-start justify-between">
-                  <View className="mr-3 min-w-0 flex-1">
-                    <Text className="text-sm font-semibold text-foreground">{finding.title}</Text>
-                    <Text className="mt-0.5 text-xs text-muted-foreground">{finding.roomName}</Text>
-                  </View>
-                  <View
-                    className={`flex-row items-center gap-1 rounded-full px-2.5 py-0.5 ${
-                      finding.severity === 'HIGH'
-                        ? 'bg-destructive/15'
-                        : finding.severity === 'MEDIUM'
-                          ? 'bg-chart-1/15'
-                          : 'bg-chart-4/15'
-                    }`}
-                  >
-                    <AlertTriangleIcon
-                      size={10}
-                      className={
-                        finding.severity === 'HIGH'
-                          ? 'text-destructive'
-                          : finding.severity === 'MEDIUM'
-                            ? 'text-chart-1'
-                            : 'text-chart-4'
-                      }
-                    />
-                    <Text
-                      className={`text-xs font-semibold capitalize ${
-                        finding.severity === 'HIGH'
-                          ? 'text-destructive'
-                          : finding.severity === 'MEDIUM'
-                            ? 'text-chart-1'
-                            : 'text-chart-4'
-                      }`}
-                    >
-                      {finding.severity.toLowerCase()}
-                    </Text>
-                  </View>
-                </View>
-                <Text numberOfLines={2} className="text-xs leading-relaxed text-muted-foreground">
-                  {finding.observation || finding.aiSummary}
-                </Text>
-              </View>
-            ))
-          ) : (
-            <View className="mx-5 items-center gap-2 rounded-2xl bg-card p-5">
-              <CheckCircle2Icon size={28} className="text-muted-foreground" />
-              <Text className="text-sm text-muted-foreground">No findings documented yet</Text>
-            </View>
-          )}
-        </View>
+        {/* The office's notes: the filters to bring and who to call, then its file on the property. */}
+        <VisitDetailsCard className="mx-5 mt-5" details={item.visitDetails} title={item.visitTitle} />
+        <JobFileCard className="mx-5 mt-5" file={item.onFile} lastVisit={item.lastVisit} />
       </ScrollView>
 
       <View className="absolute bottom-0 left-0 right-0 border-t border-border bg-background px-5 pb-8 pt-3">
-        {/* The way out of a job nobody can get into. Quiet, under the work
-            itself: it ends the visit and asks the office to rebook, which is
-            not a thing to press by accident. */}
+        {/* The way out of a job nobody can get into: quiet, under the work itself. */}
         {item.status === 'SCHEDULED' || item.status === 'IN_PROGRESS' ? (
           <Pressable
             accessibilityHint="Ends this job and asks the office to book it again"
@@ -651,90 +328,48 @@ export default function InspectionOverviewScreen() {
         ) : null}
         {item.status === 'SCHEDULED' ? (
           <Pressable
-            accessibilityLabel={actions.start.isPending ? 'Starting job' : 'Start job'}
+            accessibilityLabel="Start job"
             accessibilityRole="button"
-            accessibilityState={{
-              busy: actions.start.isPending,
-              disabled: actions.start.isPending,
-            }}
             className="min-h-12 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
-            disabled={actions.start.isPending}
-            // Straight away, whatever the kind of visit. An occupied inspection
-            // used to ask photos or video here, once for every room; it is asked
-            // per area now, as each one's camera is first opened -- see
-            // `asksCaptureChoice` -- because the answer depends on the room.
-            onPress={() =>
-              actions.start.mutate(undefined, {
-                onSuccess: () => {
-                  if (nextRoom) router.push(`/areas/${nextRoom.id}`);
-                },
-              })
-            }
+            onPress={() => setStartOpen(true)}
           >
             <View className="flex-row items-center gap-2">
               <PlayCircleIcon size={20} className="text-primary-foreground" />
-              <Text className="text-base font-bold text-primary-foreground">
-                {actions.start.isPending ? 'Starting…' : 'Start job'}
-              </Text>
+              <Text className="text-base font-bold text-primary-foreground">Start job</Text>
             </View>
           </Pressable>
         ) : item.status === 'IN_PROGRESS' ? (
-          <View className="flex-row gap-3">
-            <Pressable
-              accessibilityLabel={
-                nextRoom ? `Continue to ${nextRoom.name}` : 'Go to review and submit'
-              }
-              accessibilityRole="button"
-              className="min-h-12 flex-1 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
-              onPress={() =>
-                nextRoom ? router.push(`/areas/${nextRoom.id}`) : router.push(`/review/${id}`)
-              }
-            >
-              <View className="flex-row items-center gap-2">
-                <CameraIcon size={18} className="text-primary-foreground" />
-                <Text className="text-sm font-bold text-primary-foreground">
-                  {nextRoom ? 'Continue' : 'Review'}
-                </Text>
-              </View>
-            </Pressable>
-            <Pressable
-              accessibilityLabel="Review and submit"
-              accessibilityRole="button"
-              className="min-h-12 flex-1 items-center justify-center rounded-xl border border-border bg-card py-3.5 active:scale-[0.98]"
-              onPress={() => router.push(`/review/${id}`)}
-            >
-              <Text className="text-sm font-bold text-foreground">Review & Submit</Text>
-            </Pressable>
-          </View>
+          <Pressable
+            accessibilityHint="Submits the job to the office once everything is done"
+            accessibilityLabel="End job"
+            accessibilityRole="button"
+            className="min-h-12 items-center justify-center rounded-xl bg-primary py-3.5 active:scale-[0.98]"
+            onPress={endJob}
+          >
+            <View className="flex-row items-center gap-2">
+              <FlagIcon size={18} className="text-primary-foreground" />
+              <Text className="text-base font-bold text-primary-foreground">End job</Text>
+            </View>
+          </Pressable>
         ) : (
-          // Every remaining status, and they do not all mean the same thing.
-          // This said "Inspection Complete" for all eight — including
-          // FOLLOW_UP_REQUIRED, so the screen showed a red "Follow-up Needed"
-          // pill at the top and declared the work finished at the bottom.
+          // Every remaining status, and they do not all mean the same thing: a
+          // follow-up is not finished work.
           (() => {
-            const presentation = inspectionStatusPresentation(item.status);
-            const needsAttention = presentation.tone === 'attention';
+            const needsAttention = status.tone === 'attention';
             const StatusIcon = needsAttention ? AlertTriangleIcon : CheckCircle2Icon;
             return (
               <View className="flex-row items-center gap-3 rounded-xl bg-card p-4">
-                <StatusIcon
-                  size={22}
-                  className={needsAttention ? 'text-destructive' : 'text-chart-3'}
-                />
+                <StatusIcon size={22} className={needsAttention ? 'text-destructive' : 'text-chart-3'} />
                 <View className="flex-1">
                   <Text className="text-sm font-semibold text-foreground">
-                    {needsAttention
-                      ? 'Follow-up Needed'
-                      : item.status === 'COMPLETED'
-                        ? 'Job Complete'
-                        : 'Submitted to Office'}
+                    {needsAttention ? 'Follow-up Needed' : item.status === 'COMPLETED' ? 'Job Complete' : 'Submitted to Office'}
                   </Text>
                   <Text className="text-xs text-muted-foreground">
                     {needsAttention
                       ? 'The office has asked for another visit. They will reopen this when it is ready for you.'
                       : item.status === 'COMPLETED'
                         ? 'All approved evidence remains available for review'
-                        : 'Your capture is in. Nothing further is needed from you unless the office reopens it.'}
+                        : 'Your job is in. Nothing further is needed from you unless the office reopens it.'}
                   </Text>
                 </View>
               </View>
@@ -743,75 +378,44 @@ export default function InspectionOverviewScreen() {
         )}
       </View>
 
-      {/* The service the technician tapped: one answer, and a photograph if
-          they want one — the office requires those only for the filters. */}
-      <ServiceAnswerSheet
-        answer={(() => {
-          const current = answering?.key && answering.key !== 'inspection'
-            ? item.servicesReport?.services[answering.key]
-            : undefined;
-          return current
-            ? { done: current.done, reason: current.reason, reschedule: current.reschedule }
-            : undefined;
-        })()}
-        hasPhoto={Boolean(
-          answering &&
-            answering.key !== 'inspection' &&
-            (item.servicesReport?.services[answering.key]?.photoId ||
-              item.servicesReport?.services[answering.key]?.photoKey),
-        )}
-        onAnswer={(next) => {
-          if (answering && answering.key !== 'inspection')
-            actions.saveServices.mutate(withServiceAnswer(item.servicesReport, answering.key, next));
-          setAnswering(null);
-        }}
-        onAddPhoto={(next) => {
-          if (!answering || answering.key === 'inspection') return;
-          const task = answering;
-          const service = answering.key;
-          // The answer first, so a camera that cannot open still leaves the
-          // service marked done — the photograph is the optional part.
-          actions.saveServices.mutate(withServiceAnswer(item.servicesReport, service, next));
-          setAnswering(null);
-          setPhotoError(null);
-          // The area it is filed under is made on the first one, as the
-          // filters' is; the camera then takes one shot and comes back.
-          actions.serviceArea.mutate(service, {
-            onSuccess: (areaId) =>
-              router.push({
-                pathname: '/camera/[inspectionId]/[areaId]',
-                params: { inspectionId: id, areaId, servicePhoto: service, filterLabel: task.title },
-              }),
+      <StartJobSheet
+        address={item.property.address}
+        busy={actions.start.isPending}
+        onClose={() => setStartOpen(false)}
+        onStart={() =>
+          actions.start.mutate(undefined, {
+            // The job's list takes over the screen once it has started.
+            onSettled: () => setStartOpen(false),
             onError: () =>
-              setPhotoError(
-                `${task.title} is saved as done, but the camera could not open for its photo. Try again in a moment.`,
-              ),
-          });
-        }}
-        onClose={() => setAnswering(null)}
-        title={answering?.title ?? ''}
-        visible={Boolean(answering && answering.kind === 'SERVICE')}
+              Alert.alert('The job did not start', 'Check the connection and press Start job again.'),
+          })
+        }
+        visible={startOpen}
+      />
+
+      <NotDoneSheet
+        onClose={() => setAsking(null)}
+        onSave={answerUnticked}
+        title={asking?.queue[0]?.title ?? ''}
+        visible={Boolean(asking?.queue.length)}
+      />
+
+      <EndJobSheet
+        busy={actions.complete.isPending}
+        comments={asksClosingComments(item.type) ? { draft: closingComments, onChange: setClosingComments } : undefined}
+        error={endError}
+        onClose={() => setEnding(null)}
+        onEnd={submit}
+        tasks={endingTasks}
+        took={formatWorked((elapsed ?? 0) / 60_000)}
+        visible={Boolean(ending)}
       />
 
       <NoAccessSheet
         busy={actions.couldNotAccess.isPending}
         onClose={() => setNoAccessOpen(false)}
-        onReport={(reason) =>
-          actions.couldNotAccess.mutate(reason, {
-            onSettled: () => setNoAccessOpen(false),
-          })
-        }
+        onReport={(reason) => actions.couldNotAccess.mutate(reason, { onSettled: () => setNoAccessOpen(false) })}
         visible={noAccessOpen}
-      />
-
-      <AddAreaSheet
-        inspectionId={id}
-        visible={addAreaOpen}
-        onClose={() => setAddAreaOpen(false)}
-        // Straight into the new area: the technician is standing in the room
-        // they just added, and the point of adding it here is to start
-        // recording without waiting on anyone.
-        onAdded={(roomId) => router.push(`/areas/${roomId}`)}
       />
     </SafeAreaView>
   );

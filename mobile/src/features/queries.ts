@@ -360,6 +360,19 @@ export function useInspectionActions(id: string) {
       scope: { id: `job-services:${id}` },
       mutationFn: (servicesReport: VisitServicesReport) =>
         repositories.inspections.saveServices(id, servicesReport),
+      /**
+       * Shown at once, before the server answers: pest control is a checkbox
+       * now (the office, 2026-09-18), and a box that ticks half a second after
+       * the tap reads as broken -- and a quick second tap would be worked out
+       * from the job as it was before the first. A failure puts the server's
+       * copy back (`refresh` below).
+       */
+      onMutate: async (servicesReport: VisitServicesReport) => {
+        await client.cancelQueries({ queryKey: queryKeys.inspection(id) });
+        client.setQueryData(queryKeys.inspection(id), (current?: Inspection) =>
+          current ? { ...current, servicesReport } : current,
+        );
+      },
       onSuccess: (inspection) => {
         client.setQueryData(queryKeys.inspection(id), inspection);
         void refresh();

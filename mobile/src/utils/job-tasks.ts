@@ -341,3 +341,31 @@ export function withoutFilter(
   const key = filterKey(filter);
   return { ...current, filters: (current.filters ?? []).filter((entry) => filterKey(entry) !== key) };
 }
+
+/**
+ * The report with a service's answer taken back: unticked, so End job asks
+ * about it again.
+ */
+export function withoutServiceAnswer(
+  report: VisitServicesReport | null | undefined,
+  service: ReportableVisitService,
+): VisitServicesReport {
+  const current = report ?? EMPTY_REPORT;
+  const services = { ...current.services };
+  delete services[service];
+  return { ...current, filters: current.filters ?? [], services };
+}
+
+/**
+ * Pest control's checkbox (the office, 2026-09-18: "Pest control just a check
+ * box"). Ticking it marks the service done; unticking takes the answer away,
+ * and a service answered not done is ticked done when it is tapped.
+ */
+export function toggledService(
+  report: VisitServicesReport | null | undefined,
+  service: ReportableVisitService,
+): VisitServicesReport {
+  return report?.services[service]?.done
+    ? withoutServiceAnswer(report, service)
+    : withServiceAnswer(report, service, { done: true, reason: null, reschedule: false });
+}
