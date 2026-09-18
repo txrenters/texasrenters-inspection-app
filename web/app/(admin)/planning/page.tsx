@@ -426,6 +426,7 @@ export default function PlanningPage() {
                 />
               ) : (
                 <PlanStopsTable
+                  allStops={stops.data ?? []}
                   editable={canChange && draft}
                   onOpen={setOpenStopId}
                   stops={(stops.data ?? []).filter((stop) => attentionIds.has(stop.id))}
