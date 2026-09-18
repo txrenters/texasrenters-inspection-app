@@ -26,6 +26,11 @@
  *   the group also."
  * - **A zone too far for a day's drive is a trip** (`tripZones`): its visits go on
  *   back-to-back days of the crew member living nearest it, driven down once.
+ * - **Each visit keeps its month of the quarter** (`layoutByMonth`, the office,
+ *   2026-09-18): a property visited in Q3's first month is visited in Q4's
+ *   first, the second in the second, and so on. Each month is laid out as a
+ *   quarter is above, from its own first day. A property with no visit last
+ *   quarter goes in the month with fewest visits.
  * - **Move-outs and move-ins are anchors** (`DayAnchor`): on a day a crew member
  *   has one, the day's visits are the ones nearest it, from any zone, and it is
  *   routed with them (the office, 2026-09-17: "we should be doing TBPs around
@@ -56,6 +61,8 @@ export interface PlannableStop {
   previousTechnicianId?: string | null;
   /** The zone it is in, as a number. */
   zone?: string | null;
+  /** The month of the quarter it goes in, 1 to 3: its visit's last quarter. Absent: new, any month. */
+  month?: number;
 }
 
 /** One working day, and who can be sent out on it. */
@@ -979,6 +986,65 @@ export function layoutEveryDay(
     })),
   );
   return { placed, crews, unplaced, skippedAnchors, capacity };
+}
+
+/** Which month of its quarter a day is in: 1 for January, April, July and October, and so on. */
+export const monthOfQuarter = (date: string) => ((Number(date.slice(5, 7)) - 1) % 3) + 1;
+
+/**
+ * The quarter laid out a month at a time, each visit in its month of the quarter.
+ *
+ * The office (2026-09-18): "if on q3 this property is scheduled ... the first
+ * month on q3 then on q4 it should be scheduled on the first month also, same
+ * goes if it is scheduled on the second month on the q3 then second month also
+ * on q4". So a tenant's visits stay about three months apart. Each month is
+ * laid out as `layoutEveryDay` lays out a quarter -- the whole crew every
+ * planned day from the month's first until its visits are done -- with the
+ * move-outs and move-ins on its days.
+ *
+ * A visit with no month (no visit last quarter) goes, in last quarter's order,
+ * to the month with fewest visits so far, so the months come out even and each
+ * keeps its month in the quarters after. With no visit at all to go by -- a
+ * first quarter -- there is no month to keep, and the quarter is laid out whole.
+ */
+export function layoutByMonth(
+  stops: readonly PlannableStop[],
+  days: readonly PlannableDay[],
+  options: LayoutOptions = {},
+): QuarterAssignment {
+  if (!stops.some((stop) => stop.month)) return layoutEveryDay(stops, days, options);
+  const months = [1, 2, 3] as const;
+  const ofMonth = new Map<number, PlannableStop[]>(months.map((month) => [month, []]));
+  for (const stop of stops) if (stop.month && ofMonth.has(stop.month)) ofMonth.get(stop.month)!.push(stop);
+  const place = new Map(stops.map((stop, index) => [stop.stopId, options.rotation?.position.get(stop.stopId) ?? index]));
+  const monthless = stops
+    .filter((stop) => !stop.month || !ofMonth.has(stop.month))
+    .sort((left, right) => place.get(left.stopId)! - place.get(right.stopId)! || left.sequence - right.sequence);
+  for (const stop of monthless) {
+    const lightest = [...months].sort((one, other) => ofMonth.get(one)!.length - ofMonth.get(other)!.length || one - other)[0]!;
+    ofMonth.get(lightest)!.push({ ...stop, month: lightest });
+  }
+
+  const results = months.map((month) =>
+    layoutEveryDay(
+      ofMonth.get(month)!,
+      days.filter((day) => monthOfQuarter(day.date) === month),
+      { ...options, anchors: (options.anchors ?? []).filter((anchor) => monthOfQuarter(anchor.date) === month) },
+    ),
+  );
+  const crews = results.flatMap((result) => result.crews);
+  crews.sort((one, other) => one.date.localeCompare(other.date) || one.technicianId.localeCompare(other.technicianId));
+  return {
+    placed: results.flatMap((result) => result.placed),
+    crews,
+    unplaced: results.flatMap((result) => result.unplaced),
+    skippedAnchors: results.flatMap((result) => result.skippedAnchors),
+    capacity: {
+      stops: stops.length,
+      onSiteMinutes: results.reduce((total, result) => total + result.capacity.onSiteMinutes, 0),
+      availableMinutes: results.reduce((total, result) => total + result.capacity.availableMinutes, 0),
+    },
+  };
 }
 
 /**

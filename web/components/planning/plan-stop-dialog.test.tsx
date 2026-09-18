@@ -214,4 +214,15 @@ describe('changing a draft visit in its window', () => {
     mount({ editable: false });
     expect(screen.queryByRole('button', { name: /^Change / })).toBeNull();
   });
+
+  /** The office (2026-09-18): each visit keeps its month of the quarter. */
+  it('says the day of last quarter’s visit and the month of this quarter it keeps', () => {
+    mount({ stop: stop({ previousVisitOn: '2026-08-11T00:00:00.000Z' }) });
+    expect(screen.getByText("Aug 11 · the quarter's second month")).toBeTruthy();
+  });
+
+  it('says a visit new this quarter goes in the month with fewest visits', () => {
+    mount({ stop: stop({ previousVisitOn: null, previousSequence: null, orderSource: 'NEW_ENROLLMENT' }) });
+    expect(screen.getByText('None: it goes in the month with fewest visits')).toBeTruthy();
+  });
 });

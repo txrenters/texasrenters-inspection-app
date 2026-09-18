@@ -53,6 +53,8 @@ export interface PlanStop {
   id: string;
   sequence: number;
   previousSequence: number | null;
+  /** The day of its visit last quarter, whose month of the quarter this one keeps; null for none. */
+  previousVisitOn?: string | null;
   orderSource: 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';
   zone: string | null;
   scheduledOn: string | null;

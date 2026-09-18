@@ -10,7 +10,9 @@ import {
   crewKey,
   dayVisitRange,
   estimatedDriveMinutes,
+  layoutByMonth,
   layoutEveryDay,
+  monthOfQuarter,
   nearestNeighbourOrder,
 } from '../src/contracts/quarter-assignment.js';
 
@@ -420,6 +422,64 @@ describe('days built around a move-out', () => {
     expect(anchorIdOf(stop)).toBe('move-out-1');
     expect(anchorIdOf(north[0]!)).toBeNull();
     expect(anchorAsStop(moveOut('move-in-1', '2026-10-03', 29.56, { kind: 'MOVE_IN' })).inspectionType).toBe('MOVE_IN');
+  });
+});
+
+/**
+ * The office (2026-09-18): "if on q3 this property is scheduled ... the first
+ * month on q3 then on q4 it should be scheduled on the first month also".
+ */
+describe('each visit in its month of the quarter', () => {
+  /** Every weekday of Q4 2026, for one technician. */
+  const quarter = Array.from({ length: 92 }, (_, index) => new Date(Date.UTC(2026, 9, 1 + index)).toISOString().slice(0, 10))
+    .filter((date) => ![0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay()))
+    .map((date) => ({ date, technicianIds: ['t1'] }));
+  const monthOf = (result: ReturnType<typeof layoutByMonth>, stopId: string) =>
+    monthOfQuarter(result.placed.find((placed) => placed.stopId === stopId)!.date);
+
+  it('knows the month of the quarter a day is in', () => {
+    expect(['2026-07-31', '2026-08-01', '2026-09-30', '2026-10-01', '2026-12-31'].map(monthOfQuarter)).toEqual([1, 2, 3, 1, 3]);
+  });
+
+  it('puts each visit in the month of the quarter it had last quarter, from that month’s first day', () => {
+    const stops = [
+      ...cluster('july', 9, 1, { month: 1 }),
+      ...cluster('august', 9, 10, { month: 2 }, 29.86),
+      ...cluster('september', 9, 20, { month: 3 }, 29.96),
+    ];
+
+    const result = layoutByMonth(stops, quarter);
+
+    expect(result.unplaced).toEqual([]);
+    expect(result.crews.map((day) => `${day.date} ${day.stops.length}`)).toEqual(['2026-10-01 9', '2026-11-02 9', '2026-12-01 9']);
+    expect(stops.every((stop) => monthOf(result, stop.stopId) === stop.month)).toBe(true);
+  });
+
+  it('puts a visit new this quarter in the month with fewest visits, so the months come out even', () => {
+    const stops = [
+      ...cluster('october', 18, 1, { month: 1 }),
+      ...cluster('december', 9, 30, { month: 3 }, 29.96),
+      ...cluster('new', 9, 60, {}, 29.86),
+    ];
+
+    const result = layoutByMonth(stops, quarter);
+
+    // November had none, so the nine new ones go there.
+    expect(new Set(stops.filter((stop) => stop.stopId.startsWith('new')).map((stop) => monthOf(result, stop.stopId)))).toEqual(new Set([2]));
+  });
+
+  it('builds a month’s days around the move-outs on them, and no other month’s', () => {
+    const anchor = (id: string, date: string): DayAnchor => ({ id, date, technicianId: 't1', latitude: 29.76, longitude: -95.37, onSiteMinutes: 60 });
+
+    const result = layoutByMonth(cluster('july', 9, 1, { month: 1 }), quarter, {
+      anchors: [anchor('october-move-out', '2026-10-01'), anchor('november-move-out', '2026-11-03')],
+    });
+
+    expect(result.crews.map((day) => [day.date, day.anchors?.map((one) => one.id) ?? [], day.stops.length])).toEqual([
+      ['2026-10-01', ['october-move-out'], 9],
+      ['2026-11-03', ['november-move-out'], 0],
+    ]);
+    expect(result.skippedAnchors).toEqual([]);
   });
 });
 
