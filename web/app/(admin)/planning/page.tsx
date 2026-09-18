@@ -1,6 +1,6 @@
 'use client';
 
-import { closedDaysOfQuarter, type Quarter } from '@texasrenters/shared';
+import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
 import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -31,7 +31,15 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
-import { dayOutsideRules, formatMinutes, formatShortDay, quarterChoices, quarterKey, quarterName } from '@/lib/planning';
+import {
+  dayOutsideRules,
+  formatMinutes,
+  formatShortDay,
+  needsUnit,
+  quarterChoices,
+  quarterKey,
+  quarterName,
+} from '@/lib/planning';
 import {
   usePlanDays,
   usePlanQuarters,
@@ -47,11 +55,14 @@ import { useUrlState } from '@/lib/url-state';
  *
  * The office's rules, as the planner applies them: whoever was first last
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
- * on the HVAC plan; the crew each covers a zone a week, moving on each week;
- * visits go on weekdays that are not US holidays, with Mondays from the second
- * week kept for rescheduled visits; and every technician-day holds nine to
- * twelve visits, laid out for the least driving, which has no limit (the office,
- * 2026-09-17). Building a quarter
+ * on the HVAC plan; the whole crew works every day from the quarter's start
+ * until every visit has a day, each starting in their zone of the week and
+ * moving on each week, with a property within five minutes of a day's visits
+ * joining it; a zone too far for a day's drive is a trip of days in a row for
+ * whoever lives nearest; visits go on weekdays that are not US holidays, with
+ * Mondays from the second week kept for rescheduled visits; and every
+ * technician-day holds nine to twelve visits, laid out for the least driving,
+ * which has no limit (the office, 2026-09-18). Building a quarter
  * applies all of it and asks the coordinator nothing (the office found a form
  * of minutes and closed days confusing, 2026-09-16). This page is where a
  * coordinator checks the days, changes any draft visit in its window -- the
@@ -86,7 +97,10 @@ export default function PlanningPage() {
 
   const draft = plan?.status === 'DRAFT';
   const building = mutations.build.isPending;
-  const attention = (stops.data ?? []).filter((stop) => stop.status === 'BLOCKED' || stop.status === 'FAILED');
+  // Blocked or failed, or on a day but still without the unit it is booked at.
+  const attention = (stops.data ?? []).filter(
+    (stop) => stop.status === 'BLOCKED' || stop.status === 'FAILED' || needsUnit(stop),
+  );
   const review = (stops.data ?? []).filter(
     (stop) => stop.inspectionTypeNeedsReview && stop.status !== 'EXCLUDED' && stop.status !== 'PUBLISHED',
   );
@@ -99,6 +113,18 @@ export default function PlanningPage() {
   );
   const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
+  // A zone too far for a day's drive is a trip (the office, 2026-09-18): who goes, and when.
+  const trips = (rotation.data?.outOfReach ?? []).map((zone) => {
+    const tripDays = (days.data ?? [])
+      .filter((day) => day.stops.length > 0 && day.stops.every((stop) => zoneNumberOf(stop.zone) === zone))
+      .sort((left, right) => left.date.localeCompare(right.date));
+    if (tripDays.length === 0) return `Zone ${zone}: a trip for whoever lives nearest, planned at the next Rebuild`;
+    const first = formatShortDay(tripDays[0]!.date.slice(0, 10));
+    const last = formatShortDay(tripDays[tripDays.length - 1]!.date.slice(0, 10));
+    return `Zone ${zone}: a ${tripDays.length}-day trip, ${tripDays[0]!.technician.displayName}, ${
+      tripDays.length > 1 ? `${first} – ${last}` : first
+    }`;
+  });
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
   const openStop = openStopId ? ((stops.data ?? []).find((stop) => stop.id === openStopId) ?? null) : null;
   const openStopDay = openStopId
@@ -199,7 +225,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each technician on the crew covers one zone a week and moves to the next zone the week after. Every day has 9 to 12 visits, laid out for the least driving, and a visit stays within 3 weeks of last quarter's week unless a day of 9 needs it further. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. The whole crew works every day from the start of the quarter until every visit has a day, 9 to 12 visits each, laid out for the least driving. Each technician starts in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a day's visits joins that day whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -302,8 +328,9 @@ export default function PlanningPage() {
             ) : null}
             <StatStripItem
               label="Visits a day"
-              value={`${plan.minStopsPerDay} to ${plan.maxStopsPerDay} every day, laid out for the least driving`}
+              value={`${plan.minStopsPerDay} to ${plan.maxStopsPerDay} every day, the whole crew every day until every visit has one`}
             />
+            <StatStripItem label="Neighbours" value="a property within 5 minutes of a day joins it, whatever its zone" />
             <StatStripItem label="Mondays" value="kept free for rescheduled visits from week 2" />
             {rotation.data ? (
               <StatStripItem
@@ -315,12 +342,7 @@ export default function PlanningPage() {
                 }
               />
             ) : null}
-            {rotation.data?.outOfReach.length ? (
-              <StatStripItem
-                label="Out of reach"
-                value={`${rotation.data.outOfReach.map((zone) => `Zone ${zone}`).join(', ')}: too far from every home`}
-              />
-            ) : null}
+            {trips.length ? <StatStripItem label={trips.length === 1 ? 'Trip' : 'Trips'} value={trips.join(' · ')} /> : null}
             <StatStripItem
               label="Details"
               value={plan.officeDetailsImportedAt ? `office sheet, ${formatRelative(plan.officeDetailsImportedAt)}` : 'from the tenant report'}

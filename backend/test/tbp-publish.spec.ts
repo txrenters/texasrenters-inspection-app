@@ -61,7 +61,7 @@ const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): 
 
 const build = (
   stops: StopRow[],
-  options: { blockedCount?: number; claimed?: number; existingInspectionId?: string | null } = {},
+  options: { blockedCount?: number; withoutUnit?: number; claimed?: number; existingInspectionId?: string | null } = {},
 ) => {
   const remaining = new Map(stops.map((row) => [row.id, row]));
 
@@ -91,7 +91,9 @@ const build = (
 
   const prisma = {
     tbpQuarterPlanStop: {
-      count: jest.fn().mockResolvedValue(options.blockedCount ?? 0),
+      count: jest.fn(({ where }: { where: { unitResolution?: string } }) =>
+        Promise.resolve(where.unitResolution ? (options.withoutUnit ?? 0) : (options.blockedCount ?? 0)),
+      ),
       findMany: jest.fn(({ take }: { take: number }) =>
         Promise.resolve([...remaining.values()].slice(0, take)),
       ),
@@ -174,6 +176,20 @@ describe('publishing a reviewed quarter', () => {
       code: 'PLAN_HAS_BLOCKED_STOPS',
     });
     // And it never claimed the plan, so a second attempt after fixing them works.
+    expect(planUpdateMany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A tenancy in a building of several units goes on a day at its building, but
+   * an inspection is booked at a door (the office, 2026-09-18).
+   */
+  it('refuses to publish while a visit in a building of several units has no unit', async () => {
+    const { service, planUpdateMany } = build([aStop('s1', 1)], { withoutUnit: 3 });
+
+    await expect(service.publish(USER, 'plan-1')).rejects.toMatchObject({
+      code: 'PLAN_HAS_STOPS_WITHOUT_UNIT',
+      message: expect.stringContaining('Choose each one’s unit'),
+    });
     expect(planUpdateMany).not.toHaveBeenCalled();
   });
 

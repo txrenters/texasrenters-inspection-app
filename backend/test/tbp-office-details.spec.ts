@@ -306,13 +306,14 @@ describe('a coordinator choosing a stop’s kind of visit', () => {
 /** 5009 N Main St: a building of three units, and a coordinator's choices on its visits. */
 describe('rebuilding a draft keeps what a coordinator edited', () => {
   const UNITS = [
-    { id: 'unit-house', name: 'House', addressLine1: '5009 N Main St' },
-    { id: 'unit-half', name: '1/2', addressLine1: '5009 1/2 N Main St' },
-    { id: 'unit-quarter', name: '1/4', addressLine1: '5009 1/4 N Main St' },
+    { id: 'unit-house', externalId: '9010', name: 'House', abbreviation: '5009NMAIN', addressLine1: '5009 N Main St' },
+    { id: 'unit-half', externalId: '9012', name: '1/2', abbreviation: '50091/2NM', addressLine1: '5009 1/2 N Main St' },
+    { id: 'unit-quarter', externalId: '9014', name: '1/4', abbreviation: '50091/4NM', addressLine1: '5009 1/4 N Main St' },
   ];
-  const build = (existing: Record<string, unknown>) => {
+  const build = (existing: Record<string, unknown>, fromReport: Record<string, unknown> = {}) => {
     const tenant = {
       ...tenancy('t1', '5009 N Main St', '77009'),
+      ...fromReport,
       managementPlan: 'Basic',
       hvacPlan: 'On our AC Plan',
       hvacFilterSizes: [
@@ -400,13 +401,52 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     expect(update.visitTitle).toBe('5009 1/2 N Main St - Zone 1 - Q4 2026 Tenant Benefit Package');
   });
 
-  it('still asks for the unit of a building of several when nobody has chosen it', async () => {
+  /**
+   * The office (2026-09-18): the visit still gets a day at its building -- the
+   * same drive whichever door it is -- and publishing waits for its unit.
+   */
+  it('plans a visit at its building when nobody has said which unit it is, without blocking it', async () => {
     const { service, stopUpsert } = build({});
 
     const result = await service.generate('org-1', { year: 2026, quarter: 4 });
 
-    expect(result.blockedCount).toBe(1);
-    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({ status: TbpStopStatus.BLOCKED, blockedCode: 'UNIT_REQUIRED' });
+    expect(result.blockedCount).toBe(0);
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({
+      status: TbpStopStatus.PLANNED,
+      blockedCode: null,
+      unitResolution: 'UNRESOLVED',
+      propertywareUnitId: null,
+    });
+  });
+
+  /** The office adds the unit to the tenant report (2026-09-18), so nobody has to choose it. */
+  it('takes the unit the tenant report names, and writes the title at its door', async () => {
+    const { service, stopUpsert } = build({}, { unitName: '1/2' });
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({
+      propertywareUnitId: 'unit-half',
+      unitResolution: 'REPORT_UNIT',
+      hvacFilterSizes: ['16x20x1', '14x18x1'],
+      visitTitle: '5009 1/2 N Main St - Zone 1 - Q4 2026 Tenant Benefit Package',
+    });
+  });
+
+  it('takes the unit by Propertyware’s own id where the report carries it', async () => {
+    const { service, stopUpsert } = build({}, { unitExternalId: '9014', unitName: 'something else' });
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({ propertywareUnitId: 'unit-quarter', unitResolution: 'REPORT_UNIT' });
+  });
+
+  it('leaves the unit to a person when the report names none of the building’s', async () => {
+    const { service, stopUpsert } = build({}, { unitName: 'Upstairs' });
+
+    await service.generate('org-1', { year: 2026, quarter: 4 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({ propertywareUnitId: null, unitResolution: 'UNRESOLVED' });
   });
 });
 

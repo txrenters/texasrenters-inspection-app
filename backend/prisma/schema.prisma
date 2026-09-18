@@ -2796,6 +2796,13 @@ model PropertywareTenant {
   managementPlan String?
   hvacPlan       String?
 
+  /// Which unit of its building the tenancy is in, where the report says:
+  /// Propertyware's own unit id (`Unit Entity ID`), or the unit as the office
+  /// names it ("North", "1/2"). Added for buildings of several units (the office,
+  /// 2026-09-18); without them a tenancy is only ever its building's.
+  unitExternalId String?
+  unitName       String?
+
   hvacFilterLocation String?
   /// Up to four, as the report publishes them. Kept as written — sizes are
   /// text like `20x25x1` and arithmetic is never done on them.
@@ -2976,6 +2983,8 @@ enum TbpUnitResolution {
   PRIOR_INSPECTION
   MANUAL
   UNRESOLVED
+  /// The tenant report names the unit.
+  REPORT_UNIT
 }
 
 /// One quarter's worth of benefit-package inspections, before they are real.

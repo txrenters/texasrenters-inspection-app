@@ -76,9 +76,24 @@ export const formatShortDay = (date: string) => SHORT_DAY.format(new Date(`${dat
 
 /** A day with fewer or more visits than the office's rule, or more time inspecting than a day holds. */
 export const dayOutsideRules = (
-  day: { stopCount: number; onSiteMinutes: number },
+  day: { stopCount: number; onSiteMinutes: number; anchors?: readonly unknown[] },
   rules: { minStopsPerDay: number; maxStopsPerDay: number; maxOnSiteMinutes: number },
-) => day.stopCount < rules.minStopsPerDay || day.stopCount > rules.maxStopsPerDay || day.onSiteMinutes > rules.maxOnSiteMinutes;
+) =>
+  // A move-out after the quarter's visits are all placed is a day of its own,
+  // not a benefit-package day short of its nine.
+  !(day.stopCount === 0 && day.anchors?.length) &&
+  (day.stopCount < rules.minStopsPerDay || day.stopCount > rules.maxStopsPerDay || day.onSiteMinutes > rules.maxOnSiteMinutes);
+
+/**
+ * A visit that has a day but not yet a door: its building has several units and
+ * nothing has said which is its (the office, 2026-09-18). Publishing waits for it.
+ */
+export const needsUnit = (stop: { status: string; unitResolution: string }) =>
+  stop.status === 'PLANNED' && stop.unitResolution === 'UNRESOLVED';
+
+/** What a visit waiting for its unit says, wherever it is listed. */
+export const NEEDS_UNIT_MESSAGE =
+  'Choose its unit before publishing: the building has several, and Propertyware does not say which this tenancy is in.';
 
 export type LimitState = 'within' | 'near' | 'over';
 

@@ -66,6 +66,8 @@ const TENANT_SELECT = {
   managementPlan: true,
   hvacPlan: true,
   propertywareBuildingId: true,
+  unitExternalId: true,
+  unitName: true,
 } satisfies Prisma.PropertywareTenantSelect;
 
 type PlanTenant = Prisma.PropertywareTenantGetPayload<{ select: typeof TENANT_SELECT }>;
@@ -86,6 +88,31 @@ export interface GenerationResult {
   blockedCount: number;
   unverifiedEnrollmentCount: number;
   regenerated: boolean;
+}
+
+/** A unit's name, abbreviation or address, compared without case or punctuation. */
+const unitKey = (label: string | null | undefined) =>
+  (label ?? '').toLowerCase().replace(/[^a-z0-9/]+/g, ' ').trim();
+
+/**
+ * The unit the tenant report says a tenancy is in, when it names one of its
+ * building's: by Propertyware's own id, or by a name, abbreviation or address
+ * only one of them answers to. Null when it says nothing, or nothing certain.
+ */
+export function unitFromReport<Unit extends { id: string; externalId: string; name: string; abbreviation: string | null; addressLine1: string | null }>(
+  units: readonly Unit[],
+  tenant: { unitExternalId: string | null; unitName: string | null },
+): Unit | null {
+  if (tenant.unitExternalId) {
+    const byId = units.find((unit) => unit.externalId === tenant.unitExternalId);
+    if (byId) return byId;
+  }
+  const wanted = unitKey(tenant.unitName);
+  if (!wanted) return null;
+  const answering = units.filter((unit) =>
+    [unit.name, unit.abbreviation, unit.addressLine1].some((label) => unitKey(label) === wanted),
+  );
+  return answering.length === 1 ? answering[0]! : null;
 }
 
 /** One row of the office's sheet of visit Details for a quarter. */
@@ -701,14 +728,12 @@ export class TbpPlanService {
         : await this.resolveUnit(organizationId, tenant)
       : { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
 
+    // A unit nobody can name yet does not hold the visit back: it goes on a day
+    // at its building, which is the same drive whichever door it is (the office,
+    // 2026-09-18), and publishing waits for the unit (`TbpPublishService`).
     const blocked = !tenant.propertywareBuildingId
       ? { code: 'NO_BUILDING', message: 'This tenancy is not linked to a building.' }
-      : unit.resolution === TbpUnitResolution.UNRESOLVED
-        ? {
-            code: 'UNIT_REQUIRED',
-            message: 'This building has several units, and Propertyware does not say which this tenancy is in. Open the visit and choose its unit.',
-          }
-        : null;
+      : null;
 
     // A coordinator who chose the type decided it; the rule does not get to
     // undo that on the next run.
@@ -754,9 +779,10 @@ export class TbpPlanService {
       ...(existing?.visitTitleOverriddenAt
         ? {}
         : {
-            // A unit a coordinator chose is the door the visit is for.
+            // A unit a coordinator chose, or the report names, is the door the visit is for.
             visitTitle: visitTitle(
-              unit.resolution === TbpUnitResolution.MANUAL && unit.unit?.addressLine1
+              (unit.resolution === TbpUnitResolution.MANUAL || unit.resolution === TbpUnitResolution.REPORT_UNIT) &&
+                unit.unit?.addressLine1
                 ? { ...tenant, addressLine1: unit.unit.addressLine1 }
                 : tenant,
               quarter,
@@ -798,9 +824,10 @@ export class TbpPlanService {
    * technician is sent to the wrong door that difference is the first thing
    * worth knowing.
    *
-   * Nothing here guesses. An unresolved tenancy is blocked and stays in the
-   * plan for a person to fix, because a tenancy dropped quietly is one nobody
-   * inspects for a year.
+   * Nothing here guesses. An unresolved tenancy stays in the plan, given a day
+   * at its building, and cannot be published until somebody chooses its unit --
+   * or the report names it -- because a tenancy dropped quietly is one nobody
+   * inspects for a year, and one booked at the wrong door is a wasted visit.
    */
   private async resolveUnit(organizationId: string, tenant: PlanTenant): Promise<ResolvedUnit> {
     const buildingId = tenant.propertywareBuildingId;
@@ -808,7 +835,7 @@ export class TbpPlanService {
 
     const units = await this.prisma.propertywareUnit.findMany({
       where: { organizationId, buildingId, isActive: true },
-      select: { id: true, name: true, addressLine1: true },
+      select: { id: true, name: true, addressLine1: true, externalId: true, abbreviation: true },
     });
     const named = (unitId: string | null) => {
       const found = units.find((candidate) => candidate.id === unitId);
@@ -841,6 +868,12 @@ export class TbpPlanService {
         resolution: TbpUnitResolution.LEASE_MATCH,
         ...named(leases[0].unitId),
       };
+
+    // The report names the unit, where the office added it for buildings of
+    // several: Propertyware's own unit id, or a name only one unit answers to.
+    const reported = unitFromReport(units, tenant);
+    if (reported)
+      return { unitId: reported.id, leaseId: null, resolution: TbpUnitResolution.REPORT_UNIT, ...named(reported.id) };
 
     if (units.length === 1)
       return { unitId: units[0].id, leaseId: null, resolution: TbpUnitResolution.SOLE_UNIT, ...named(units[0].id) };

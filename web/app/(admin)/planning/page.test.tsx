@@ -243,7 +243,7 @@ describe('the benefit package plan page', () => {
     // The quarter's US holidays, found by the planner rather than typed in.
     expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
     expect(screen.getByText('9 to 12 visits and up to 6 hr inspecting a day')).toBeTruthy();
-    expect(screen.getByText('9 to 12 every day, laid out for the least driving')).toBeTruthy();
+    expect(screen.getByText('9 to 12 every day, the whole crew every day until every visit has one')).toBeTruthy();
     // Driving has no limit to show (2026-09-17).
     expect(screen.queryByText(/90 min/)).toBeNull();
     expect(screen.queryByText(/360/)).toBeNull();
@@ -307,6 +307,14 @@ describe('the benefit package plan page', () => {
       stops: [stop('s1'), stop('s2', { status: 'BLOCKED', blockedCode: 'NOT_PLACED', blockedMessage: 'No day has room.' })],
     });
 
+    expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  /** The office (2026-09-18): a visit waiting for its unit has a day, but publishing waits for the unit. */
+  it('counts a visit still without its unit as needing attention, and will not publish', () => {
+    mount({ stops: [stop('s1'), stop('s2', { unitResolution: 'UNRESOLVED' })] });
+
+    expect(screen.getByRole('tab', { name: 'Needs attention (1)' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -389,7 +397,8 @@ describe('the benefit package plan page', () => {
     expect(screen.getByText('Moses Rivera, Kevin Grant, Emanuel Hall · a zone each, moving weekly')).toBeTruthy();
     // Four zones and three people: the zone nobody has this week waits its turn.
     expect(screen.getByText('Zone 1 Moses · Zone 2 Kevin · Zone 3 Emanuel · Zone 4 no one')).toBeTruthy();
-    expect(screen.getByText('Zone 5: too far from every home')).toBeTruthy();
+    // Too far for a day's drive, so a trip -- planned when the quarter is rebuilt.
+    expect(screen.getByText('Zone 5: a trip for whoever lives nearest, planned at the next Rebuild')).toBeTruthy();
     expect(screen.getByText('kept free for rescheduled visits from week 2')).toBeTruthy();
     expect(screen.getByText(/1 HVAC · Zone 1/)).toBeTruthy();
   });

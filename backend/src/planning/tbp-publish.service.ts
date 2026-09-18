@@ -8,6 +8,7 @@ import {
   Prisma,
   TbpPlanStatus,
   TbpStopStatus,
+  TbpUnitResolution,
 } from '@prisma/client';
 import { withInspectionLink } from '@texasrenters/shared';
 
@@ -153,6 +154,25 @@ export class TbpPublishService {
         409,
         'PLAN_HAS_BLOCKED_STOPS',
         `${blocked} stop(s) still need attention. Resolve or exclude them before publishing.`,
+      );
+
+    // A tenancy in a building of several units that nothing has said the unit of
+    // yet. Its visit has a day, but an inspection is booked at a door: the unit
+    // is chosen on the visit, or read from the report's Unit column.
+    const withoutUnit = await this.prisma.tbpQuarterPlanStop.count({
+      where: {
+        planId,
+        organizationId: user.organizationId,
+        status: TbpStopStatus.PLANNED,
+        unitResolution: TbpUnitResolution.UNRESOLVED,
+        inspectionId: null,
+      },
+    });
+    if (withoutUnit > 0)
+      throw new ApplicationError(
+        409,
+        'PLAN_HAS_STOPS_WITHOUT_UNIT',
+        `${withoutUnit} visit(s) are in buildings of several units. Choose each one’s unit before publishing.`,
       );
 
     const { count } = await this.prisma.tbpQuarterPlan.updateMany({
