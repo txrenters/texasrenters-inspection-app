@@ -1,4 +1,4 @@
-import { InspectionStatus } from '@prisma/client';
+import { InspectionStatus, InspectionType } from '@prisma/client';
 
 import { PlanBuildGuard } from '../src/planning/plan-build-guard';
 import { PlanningController } from '../src/planning/planning.controller';
@@ -22,7 +22,10 @@ const day = {
   departureAssumedAt: null,
 };
 
-const anchor = (id: string, overrides: { assigned?: string | null; scheduledAt?: string; status?: InspectionStatus } = {}) => ({
+const anchor = (
+  id: string,
+  overrides: { assigned?: string | null; scheduledAt?: string; status?: InspectionStatus; kind?: InspectionType } = {},
+) => ({
   id,
   inspectionId: `inspection-${id}`,
   technicianId: 'moses',
@@ -31,6 +34,7 @@ const anchor = (id: string, overrides: { assigned?: string | null; scheduledAt?:
   positionInDay: 4,
   driveSecondsForecast: 420,
   inspection: {
+    inspectionType: overrides.kind ?? InspectionType.MOVE_OUT,
     scheduledAt: new Date(`${overrides.scheduledAt ?? '2026-10-14'}T00:00:00.000Z`),
     status: overrides.status ?? InspectionStatus.SCHEDULED,
     propertywareBuilding: { addressLine1: '9 Move Out Ln', city: 'Katy', latitude: 29.7, longitude: -95.7 },
@@ -59,8 +63,8 @@ function controllerWith(anchors: ReturnType<typeof anchor>[]) {
   );
 }
 
-/** The office (2026-09-17): move-outs are Moses's, and his days are built around them. */
-describe('the move-outs a planned day is built around', () => {
+/** The office (2026-09-17): move-outs are Moses's, and his days are built around them; and move-ins (2026-09-18). */
+describe('the move-outs and move-ins a planned day is built around', () => {
   it('comes with its day, in its place in the route', async () => {
     const [result] = await controllerWith([anchor('a1')]).days(request, 'plan-1');
 
@@ -68,6 +72,7 @@ describe('the move-outs a planned day is built around', () => {
       {
         id: 'a1',
         inspectionId: 'inspection-a1',
+        kind: 'MOVE_OUT',
         positionInDay: 4,
         onSiteMinutes: 60,
         driveSecondsForecast: 420,
@@ -93,6 +98,12 @@ describe('the move-outs a planned day is built around', () => {
       ['amy', true],
       ['nobody', true],
     ]);
+  });
+
+  it('never asks to reassign a move-in: it is on the day of whoever it is booked for', async () => {
+    const [result] = await controllerWith([anchor('in', { kind: InspectionType.MOVE_IN, assigned: 'amy' })]).days(request, 'plan-1');
+
+    expect(result!.anchors.map((entry) => [entry.id, entry.kind, entry.needsReassigning])).toEqual([['in', 'MOVE_IN', false]]);
   });
 
   it('says when a move-out moved or was cancelled after the plan was laid out', async () => {

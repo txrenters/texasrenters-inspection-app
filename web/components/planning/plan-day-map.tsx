@@ -14,15 +14,18 @@ import { memo, useEffect, useMemo } from 'react';
 
 import { strokeFrom } from '@/components/technician-map';
 
-/** A stop on the day's map: a visit, or a move-out the day is built around. */
+/** A stop on the day's map: a visit, or a move-out or move-in the day is built around. */
 export interface DayMapStop {
   id: string;
   positionInDay: number | null;
   latitude: number | null;
   longitude: number | null;
   address: string | null;
-  kind: 'HVAC' | 'OCCUPIED' | 'MOVE_OUT';
+  kind: 'HVAC' | 'OCCUPIED' | 'MOVE_OUT' | 'MOVE_IN';
 }
+
+/** A move-out or move-in: its own inspection, booked already, not one of the plan's visits. */
+const isBooked = (kind: DayMapStop['kind']) => kind === 'MOVE_OUT' || kind === 'MOVE_IN';
 
 /**
  * One planned technician-day on the map: the technician's home, the day's stops
@@ -41,17 +44,17 @@ type LatLng = readonly [number, number];
 /**
  * A numbered stop, shaped by its kind.
  *
- * An HVAC inspection is a square, an occupied one a circle, and the move-out a
- * day is built around a diamond, each in its own colour: shape carries it for
+ * An HVAC inspection is a square, an occupied one a circle, and a move-out or
+ * move-in the day is built around a diamond, each in its own colour: shape carries it for
  * anyone who cannot tell the colours apart, on a map full of green parks and
  * red roads.
  */
 const StopPin = memo(function StopPin({ order, kind }: { order: number; kind: DayMapStop['kind'] }) {
   return (
-    <svg aria-hidden className={kind === 'MOVE_OUT' ? undefined : 'cursor-pointer'} height="26" viewBox="0 0 26 26" width="26">
+    <svg aria-hidden className={isBooked(kind) ? undefined : 'cursor-pointer'} height="26" viewBox="0 0 26 26" width="26">
       {kind === 'HVAC' ? (
         <rect className="fill-map-property" height="20" rx="4" stroke="#fff" strokeWidth="2" width="20" x="3" y="3" />
-      ) : kind === 'MOVE_OUT' ? (
+      ) : isBooked(kind) ? (
         <polygon className="fill-warning" points="13,1 25,13 13,25 1,13" stroke="#fff" strokeWidth="2" />
       ) : (
         <circle className="fill-map-route" cx="13" cy="13" r="10" stroke="#fff" strokeWidth="2" />
@@ -263,15 +266,15 @@ export function PlanDayMap({
             </AdvancedMarker>
           ) : null}
           {placed.map((stop, index) => {
-            // A move-out is its own inspection, not one of the plan's visits: nothing to open here.
-            const opens = Boolean(onSelectStop) && stop.kind !== 'MOVE_OUT';
+            // A move-out or move-in is its own inspection, not one of the plan's visits: nothing to open here.
+            const opens = Boolean(onSelectStop) && !isBooked(stop.kind);
             return (
               <AdvancedMarker
                 clickable={opens}
                 key={stop.id}
                 onClick={opens ? () => onSelectStop?.(stop.id) : undefined}
                 position={{ lat: stop.latitude, lng: stop.longitude }}
-                title={`${stop.positionInDay ?? index + 1}. ${stop.kind === 'MOVE_OUT' ? 'Move-out: ' : ''}${stop.address ?? 'Unknown address'}${opens ? ' (open its details)' : ''}`}
+                title={`${stop.positionInDay ?? index + 1}. ${stop.kind === 'MOVE_OUT' ? 'Move-out: ' : stop.kind === 'MOVE_IN' ? 'Move-in: ' : ''}${stop.address ?? 'Unknown address'}${opens ? ' (open its details)' : ''}`}
                 zIndex={10 + index}
               >
                 <StopPin kind={stop.kind} order={stop.positionInDay ?? index + 1} />

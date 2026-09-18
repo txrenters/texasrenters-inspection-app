@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
 import { PlanCalendar } from '@/components/planning/plan-calendar';
-import { moveOutProblem, PlanDays } from '@/components/planning/plan-days';
+import { bookedProblem, PlanDays } from '@/components/planning/plan-days';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
 import { PlanStopsTable } from '@/components/planning/plan-stops-table';
 import { PageHeader } from '@/components/page-header';
@@ -32,6 +32,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
 import {
+  bookedInWords,
   dayOutsideRules,
   formatMinutes,
   formatShortDay,
@@ -105,9 +106,9 @@ export default function PlanningPage() {
     (stop) => stop.inspectionTypeNeedsReview && stop.status !== 'EXCLUDED' && stop.status !== 'PUBLISHED',
   );
   const attentionIds = new Set([...attention, ...review].map((stop) => stop.id));
-  const moveOutsToCheck = (days.data ?? []).flatMap((day) =>
+  const bookedToCheck = (days.data ?? []).flatMap((day) =>
     (day.anchors ?? []).flatMap((anchor) => {
-      const problem = moveOutProblem(day, anchor);
+      const problem = bookedProblem(day, anchor, anchor.kind);
       return problem ? [{ day, anchor, problem }] : [];
     }),
   );
@@ -225,7 +226,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. The whole crew works every day from the start of the quarter until every visit has a day, 9 to 12 visits each, laid out for the least driving. Each technician starts in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a day's visits joins that day whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. The whole crew works every day from the start of the quarter until every visit has a day, 9 to 12 visits each, laid out for the least driving. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician starts in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a day's visits joins that day whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -274,16 +275,14 @@ export default function PlanningPage() {
             </Alert>
           ) : null}
 
-          {moveOutsToCheck.length ? (
-            // Days are built around move-outs (the office, 2026-09-17), so one that moved, was
-            // cancelled or is not with the day's technician makes that day wrong until fixed.
+          {bookedToCheck.length ? (
+            // Days are built around move-outs and move-ins (the office, 2026-09-17 and -18), so one that
+            // moved, was cancelled or is not with the day's technician makes that day wrong until fixed.
             <Alert>
-              <AlertTitle>
-                {moveOutsToCheck.length} {moveOutsToCheck.length === 1 ? 'move-out' : 'move-outs'} to check
-              </AlertTitle>
+              <AlertTitle>{bookedInWords(bookedToCheck.map(({ anchor }) => anchor), 'count')} to check</AlertTitle>
               <AlertDescription>
                 <ul className="grid gap-0.5">
-                  {moveOutsToCheck.map(({ day, anchor, problem }) => (
+                  {bookedToCheck.map(({ day, anchor, problem }) => (
                     <li key={anchor.id}>
                       {formatShortDay(day.date.slice(0, 10))}, {day.technician.displayName} · {anchor.address ?? 'Unknown address'}: {problem}
                     </li>

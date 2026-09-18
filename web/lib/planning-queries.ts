@@ -138,14 +138,21 @@ export interface PlanDay {
   durationSource: 'GOOGLE_TRAFFIC_AWARE' | 'OSRM_FREE_FLOW' | 'HAVERSINE' | null;
   departureAssumedAt: string | null;
   stops: PlanDayStop[];
-  /** The move-outs the day is built around; `onSiteMinutes` includes theirs, `stopCount` does not. */
+  /**
+   * The move-outs and move-ins the day is built around; `onSiteMinutes` includes
+   * theirs, `stopCount` does not, and each takes the place of three visits.
+   */
   anchors?: PlanDayAnchor[];
 }
 
-/** A move-out a planned day is built around (the office, 2026-09-17: TBPs are done around move-outs). */
+/**
+ * A move-out or move-in a planned day is built around (the office, 2026-09-17:
+ * TBPs are done around move-outs; 2026-09-18: move-ins too, three visits fewer each).
+ */
 export interface PlanDayAnchor {
   id: string;
   inspectionId: string;
+  kind: 'MOVE_OUT' | 'MOVE_IN';
   /** 1-based among all the day's stops, visits included. */
   positionInDay: number | null;
   onSiteMinutes: number;
@@ -155,9 +162,9 @@ export interface PlanDayAnchor {
   latitude: number | null;
   longitude: number | null;
   assignedTechnician: { id: string; displayName: string } | null;
-  /** Assigned to someone other than the day's technician, or nobody: move-outs are theirs, so reassign it in Jobber. */
+  /** A move-out assigned to someone other than the day's technician, or nobody: move-outs are theirs, so reassign it. */
   needsReassigning: boolean;
-  /** `YYYY-MM-DD`, the move-out's date now: another day's than this one when it moved after the plan was laid out. */
+  /** `YYYY-MM-DD`, its date now: another day's than this one when it moved after the plan was laid out. */
   scheduledOn: string;
   cancelled: boolean;
 }

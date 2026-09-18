@@ -14,7 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { InspectionStatus, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { InspectionStatus, InspectionType, PlanOriginKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 import { haversineMeters, type Quarter, quarterLabel } from '@texasrenters/shared';
 
 import {
@@ -355,6 +355,7 @@ export class PlanningController {
           driveSecondsForecast: true,
           inspection: {
             select: {
+              inspectionType: true,
               scheduledAt: true,
               status: true,
               propertywareBuilding: { select: { addressLine1: true, city: true, latitude: true, longitude: true } },
@@ -392,13 +393,15 @@ export class PlanningController {
         latitude: stop.propertywareBuilding?.latitude === null || stop.propertywareBuilding?.latitude === undefined ? null : Number(stop.propertywareBuilding.latitude),
         longitude: stop.propertywareBuilding?.longitude === null || stop.propertywareBuilding?.longitude === undefined ? null : Number(stop.propertywareBuilding.longitude),
       })),
-      // The move-outs the day is built around (the office, 2026-09-17).
+      // The move-outs and move-ins the day is built around (the office, 2026-09-17 and -18).
       anchors: (anchorsByDay.get(`${day.date.toISOString().slice(0, 10)}|${day.technicianId}`) ?? []).map((anchor) => {
         const building = anchor.inspection.propertywareBuilding;
         const assigned = anchor.inspection.assignments[0]?.technician ?? null;
+        const kind = anchor.inspection.inspectionType === InspectionType.MOVE_IN ? ('MOVE_IN' as const) : ('MOVE_OUT' as const);
         return {
           id: anchor.id,
           inspectionId: anchor.inspectionId,
+          kind,
           positionInDay: anchor.positionInDay,
           onSiteMinutes: anchor.onSiteMinutes,
           driveSecondsForecast: anchor.driveSecondsForecast,
@@ -407,8 +410,9 @@ export class PlanningController {
           latitude: building?.latitude == null ? null : Number(building.latitude),
           longitude: building?.longitude == null ? null : Number(building.longitude),
           assignedTechnician: assigned,
-          // Move-outs are this technician's: one assigned to anyone else, or nobody, is for the office to reassign.
-          needsReassigning: assigned?.id !== day.technicianId,
+          // Move-outs are this technician's: one assigned to anyone else, or nobody, is for the office to
+          // reassign. A move-in is on the day of whoever it is booked for, so it never is.
+          needsReassigning: kind === 'MOVE_OUT' && assigned?.id !== day.technicianId,
           // Moved or cancelled since the plan was laid out: a rebuild places the day again.
           scheduledOn: anchor.inspection.scheduledAt.toISOString().slice(0, 10),
           cancelled: anchor.inspection.status === InspectionStatus.CANCELLED,

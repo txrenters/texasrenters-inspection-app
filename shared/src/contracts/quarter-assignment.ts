@@ -26,10 +26,12 @@
  *   the group also."
  * - **A zone too far for a day's drive is a trip** (`tripZones`): its visits go on
  *   back-to-back days of the crew member living nearest it, driven down once.
- * - **Move-outs are anchors** (`DayAnchor`): on a day the technician who handles
- *   move-outs has one, the day's visits are the ones nearest it, from any zone,
- *   and the move-out counts an hour on site (the office, 2026-09-17: "we should
- *   be doing TBPs around those").
+ * - **Move-outs and move-ins are anchors** (`DayAnchor`): on a day a crew member
+ *   has one, the day's visits are the ones nearest it, from any zone, and it is
+ *   routed with them (the office, 2026-09-17: "we should be doing TBPs around
+ *   those"). Each counts an hour on site and **takes the place of three visits**
+ *   (`ANCHOR_VISITS`, the office, 2026-09-18: "we will adjust the number of TBP
+ *   on that day"): nine to twelve besides none, six to nine besides one.
  *
  * Each day is grown nearest first, and the days are then improved together
  * (`improveWorking`): a visit moves, or two visits trade places, between days
@@ -132,7 +134,7 @@ export interface AssignedCrew {
 }
 
 /**
- * A fixed appointment a technician-day is built around: a move-out already booked.
+ * A fixed appointment a technician-day is built around: a move-out or move-in already booked.
  *
  * Not a stop to place -- it has its day and its technician already -- but a place
  * the day's visits gather round, and time on site. Routed with the visits
@@ -147,10 +149,31 @@ export interface DayAnchor {
   latitude: number;
   longitude: number;
   onSiteMinutes: number;
+  /** What it is: a move-out unless it says. */
+  kind?: 'MOVE_OUT' | 'MOVE_IN';
 }
 
 /** Why no day was built around an anchor. */
 export type AnchorSkipReason = 'NOT_A_PLANNED_DAY' | 'TECHNICIAN_NOT_WORKING' | 'DAY_TAKEN';
+
+/**
+ * How many benefit-package visits each move-out or move-in takes the place of
+ * on its day: the hour it counts, in visits planned at twenty minutes (the
+ * office, 2026-09-18).
+ */
+export const ANCHOR_VISITS = 3;
+
+/**
+ * The visits a day holds beside its move-outs and move-ins: the office's nine to
+ * twelve, three fewer at each end for each one, and never fewer than none.
+ */
+export function dayVisitRange(limits: DayLimits, anchors: number): { min: number; max: number } {
+  const fewer = ANCHOR_VISITS * Math.max(0, anchors);
+  return {
+    min: Math.max(0, limits.minStopsPerDay - fewer),
+    max: Math.max(0, Math.min(limits.maxStopsPerDay, MAX_STOPS_PER_DAY) - fewer),
+  };
+}
 
 const ANCHOR_STOP_PREFIX = 'anchor:';
 
@@ -162,7 +185,7 @@ export function anchorAsStop(anchor: DayAnchor): PlannableStop {
     latitude: anchor.latitude,
     longitude: anchor.longitude,
     onSiteMinutes: anchor.onSiteMinutes,
-    inspectionType: 'MOVE_OUT',
+    inspectionType: anchor.kind ?? 'MOVE_OUT',
     zone: null,
   };
 }
@@ -340,9 +363,9 @@ function acrossTown(day: Draft, added: number, limits: DayLimits) {
  * A day built around its anchors: the visits nearest them, nearest first, up to
  * the day's maximum -- and once it has its minimum, not a visit across town.
  *
- * The anchors count their time on site but not toward the number of visits: a
- * move-out day still holds nine to twelve benefit-package visits besides it (the
- * office, 2026-09-17).
+ * The anchors count their time on site, and each takes the place of three of the
+ * day's visits (`dayVisitRange`, the office, 2026-09-18): Moses's day with three
+ * move-outs holds up to three benefit-package visits, not nine to twelve.
  */
 function fillAroundAnchors(
   anchors: readonly DayAnchor[],
@@ -350,12 +373,13 @@ function fillAroundAnchors(
   limits: DayLimits,
   drive: DriveEstimate,
 ): { visits: PlannableStop[]; drive: number; onSite: number } {
+  const range = dayVisitRange(limits, anchors.length);
   let path = polished(anchors.map(anchorAsStop), drive).path;
   let driven = pathMinutes(path, drive);
   let onSite = anchors.reduce((total, anchor) => total + anchor.onSiteMinutes, 0);
   const visits: PlannableStop[] = [];
   const left = new Set(candidates);
-  while (visits.length < stopsCap(limits)) {
+  while (visits.length < range.max) {
     let best: { stop: PlannableStop; at: number; added: number } | null = null;
     for (const stop of left) {
       if (onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
@@ -364,7 +388,7 @@ function fillAroundAnchors(
     }
     if (!best) break;
     const averageLeg = path.length > 1 ? driven / (path.length - 1) : 0;
-    if (visits.length >= limits.minStopsPerDay && best.added > Math.max(LOCAL_HOP_MINUTES, 2 * averageLeg)) break;
+    if (visits.length >= range.min && best.added > Math.max(LOCAL_HOP_MINUTES, 2 * averageLeg)) break;
     path = [...path.slice(0, best.at), best.stop, ...path.slice(best.at)];
     driven += best.added;
     onSite += best.stop.onSiteMinutes;
@@ -783,8 +807,9 @@ function planTrip(
  *
  * 0. A far zone's visits are a trip, on back-to-back days fixed first
  *    (`planTrip`).
- * 1. Then day by day. First each crew member with a move-out that day, whose day
- *    takes the visits nearest it from any zone (`fillAroundAnchors`); then
+ * 1. Then day by day. First each crew member with a move-out or move-in that
+ *    day, whose day takes the visits nearest it from any zone, three fewer for
+ *    each (`fillAroundAnchors`); then
  *    whoever still has visits in their zone of the week, and then everyone
  *    else, each day grown from the earliest visit left in their zone, taking
  *    neighbours from other zones as it goes (`growDay`, `zoneForDay`); and last,

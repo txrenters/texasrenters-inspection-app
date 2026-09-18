@@ -277,6 +277,7 @@ describe('the benefit package plan page', () => {
           {
             id: 'anchor-1',
             inspectionId: 'insp-9',
+            kind: 'MOVE_OUT',
             positionInDay: 2,
             onSiteMinutes: 60,
             driveSecondsForecast: 600,
@@ -300,6 +301,40 @@ describe('the benefit package plan page', () => {
     // Ten minutes from the first property, and an hour there.
     expect(within(day).getByText('9:40 AM – 10:40 AM')).toBeTruthy();
     expect(screen.getByText('1 move-out to check')).toBeTruthy();
+  });
+
+  /** The office (2026-09-18): a move-in is on the day of the crew member it is booked for. */
+  it('shows a move-in a day is built around, and asks nothing of it while it is still that technician’s', () => {
+    mount({
+      day: {
+        ...DAY,
+        onSiteMinutes: 165,
+        stops: DAY.stops.map((stop, index) => ({ ...stop, positionInDay: index === 0 ? 1 : index + 2 })),
+        anchors: [
+          {
+            id: 'anchor-2',
+            inspectionId: 'insp-10',
+            kind: 'MOVE_IN',
+            positionInDay: 2,
+            onSiteMinutes: 60,
+            driveSecondsForecast: 600,
+            address: '10 Move In Ct',
+            city: 'Katy',
+            latitude: 29.705,
+            longitude: -95.7,
+            assignedTechnician: { id: DAY.technician.id, displayName: DAY.technician.displayName },
+            needsReassigning: false,
+            scheduledOn: '2026-10-01',
+            cancelled: false,
+          },
+        ],
+      },
+    });
+
+    const day = screen.getByRole('region', { name: /Thursday, October 1, Moses Rivera/ });
+    expect(within(day).getByText('Move-in')).toBeTruthy();
+    expect(within(day).getByRole('link', { name: '10 Move In Ct' }).getAttribute('href')).toBe('/inspections/insp-10');
+    expect(screen.queryByText(/to check$/)).toBeNull();
   });
 
   /** A blocked stop is a tenancy nobody would inspect; the API refuses too, and the button says so first. */

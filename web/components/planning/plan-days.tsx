@@ -9,7 +9,16 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDistance } from '@/lib/format';
 import type { DayMapStop } from '@/components/planning/plan-day-map';
-import { dayClock, formatClock, formatMinutes, formatShortDay, leaveHomeAt, limitState, type LimitState } from '@/lib/planning';
+import {
+  bookedInWords,
+  dayClock,
+  formatClock,
+  formatMinutes,
+  formatShortDay,
+  leaveHomeAt,
+  limitState,
+  type LimitState,
+} from '@/lib/planning';
 import {
   usePlanDayRoute,
   type PlanDay,
@@ -44,15 +53,19 @@ const LIMIT_BAR: Record<LimitState, string> = {
   over: 'bg-destructive',
 };
 
-type TimelineEntry = (PlanDayStop & { kind: 'visit' }) | (PlanDayAnchor & { kind: 'move-out' });
+type TimelineEntry =
+  | (PlanDayStop & { kind: 'visit' })
+  | (Omit<PlanDayAnchor, 'kind'> & { kind: 'booked'; booking: PlanDayAnchor['kind'] });
 
-/** A day's visits and the move-outs it is built around, in driving order. */
+/** A day's visits and the move-outs and move-ins it is built around, in driving order. */
 function dayTimeline(day: PlanDay): TimelineEntry[] {
   return [
     ...day.stops.map((stop) => ({ ...stop, kind: 'visit' as const })),
-    ...(day.anchors ?? []).map((anchor) => ({ ...anchor, kind: 'move-out' as const })),
+    ...(day.anchors ?? []).map((anchor) => ({ ...anchor, kind: 'booked' as const, booking: anchor.kind })),
   ].sort((left, right) => (left.positionInDay ?? Number.MAX_SAFE_INTEGER) - (right.positionInDay ?? Number.MAX_SAFE_INTEGER));
 }
+
+const BOOKING_LABEL: Record<PlanDayAnchor['kind'], string> = { MOVE_OUT: 'Move-out', MOVE_IN: 'Move-in' };
 
 const mapStopOf = (entry: TimelineEntry): DayMapStop => ({
   id: entry.id,
@@ -60,15 +73,22 @@ const mapStopOf = (entry: TimelineEntry): DayMapStop => ({
   latitude: entry.latitude,
   longitude: entry.longitude,
   address: entry.address,
-  kind: entry.kind === 'move-out' ? 'MOVE_OUT' : entry.inspectionType,
+  kind: entry.kind === 'booked' ? entry.booking : entry.inspectionType,
 });
 
-/** What the office needs to do about a move-out a day is built around, if anything. */
-export function moveOutProblem(day: PlanDay, anchor: PlanDayAnchor): string | null {
+/** What the office needs to do about a move-out or move-in a day is built around, if anything. */
+export function bookedProblem(
+  day: PlanDay,
+  anchor: Pick<PlanDayAnchor, 'cancelled' | 'scheduledOn' | 'needsReassigning' | 'assignedTechnician'>,
+  kind: PlanDayAnchor['kind'],
+): string | null {
   if (anchor.cancelled) return 'Cancelled since the plan was laid out · rebuild';
   if (anchor.scheduledOn !== day.date.slice(0, 10)) return `Moved to ${formatShortDay(anchor.scheduledOn)} · rebuild`;
   if (anchor.needsReassigning)
     return `${anchor.assignedTechnician ? `Assigned to ${anchor.assignedTechnician.displayName}` : 'Not assigned'} · reassign in Jobber`;
+  // A move-in is on the day of whoever it was booked for; booked for someone else since, the day no longer holds it.
+  if (kind === 'MOVE_IN' && anchor.assignedTechnician?.id !== day.technician.id)
+    return `${anchor.assignedTechnician ? `Now ${anchor.assignedTechnician.displayName}’s` : 'Not assigned now'} · rebuild`;
   return null;
 }
 
@@ -192,7 +212,7 @@ export function PlanDays({
                   <div className="text-muted-foreground text-xs">
                     {day.stopCount} {day.stopCount === 1 ? 'visit' : 'visits'}
                     {day.hvacStopCount ? ` · ${day.hvacStopCount} HVAC` : ''}
-                    {day.anchors?.length ? ` · ${day.anchors.length === 1 ? 'move-out' : `${day.anchors.length} move-outs`}` : ''}
+                    {day.anchors?.length ? ` · ${bookedInWords(day.anchors, 'bare')}` : ''}
                     {zonesOf(day) ? ` · ${zonesOf(day)}` : ''}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -330,7 +350,7 @@ function DayDetail({
             ) : homeMinutes !== null ? (
               <span className="text-muted-foreground text-xs">{homeMinutes} min from home</span>
             ) : null}
-            {stop.kind === 'move-out' ? (
+            {stop.kind === 'booked' ? (
               <div className="-mx-2 flex items-start gap-3 rounded-md px-2 py-1">
                 <span
                   aria-hidden
@@ -349,9 +369,11 @@ function DayDetail({
                   </div>
                   <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
                     {stop.city ? <span>{stop.city}</span> : null}
-                    <Badge variant="warning">Move-out</Badge>
+                    <Badge variant="warning">{BOOKING_LABEL[stop.booking]}</Badge>
                     <span>{formatMinutes(stop.onSiteMinutes)}</span>
-                    {moveOutProblem(day, stop) ? <span className="text-destructive">{moveOutProblem(day, stop)}</span> : null}
+                    {bookedProblem(day, stop, stop.booking) ? (
+                      <span className="text-destructive">{bookedProblem(day, stop, stop.booking)}</span>
+                    ) : null}
                   </div>
                 </div>
               </div>

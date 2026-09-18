@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bookedInWords,
   dayClock,
+  dayOutsideRules,
   formatClock,
   formatMinutes,
   formatShortDay,
@@ -63,6 +65,29 @@ describe('a day against the office’s limits', () => {
     expect(limitState(90, 90)).toBe('near');
     expect(limitState(81, 90)).toBe('near');
     expect(limitState(60, 90)).toBe('within');
+  });
+
+  /** The office (2026-09-18): nine to twelve, three fewer at each end for each move-out or move-in. */
+  it('holds a day to nine to twelve visits, three fewer for each move-out or move-in on it', () => {
+    const rules = { minStopsPerDay: 9, maxStopsPerDay: 12, maxOnSiteMinutes: 360 };
+    const on = (stopCount: number, booked: number) =>
+      dayOutsideRules({ stopCount, onSiteMinutes: 300, anchors: Array.from({ length: booked }) }, rules);
+
+    expect([on(8, 0), on(9, 0), on(12, 0), on(13, 0)]).toEqual([true, false, false, true]);
+    expect([on(5, 1), on(6, 1), on(9, 1), on(10, 1)]).toEqual([true, false, false, true]);
+    expect([on(0, 3), on(3, 3), on(4, 3)]).toEqual([false, false, true]);
+    // A day of move-outs alone, after the quarter's visits are placed, is its own day.
+    expect(on(0, 1)).toBe(false);
+  });
+
+  it('names the move-outs and move-ins on a day', () => {
+    const outs = (count: number) => Array.from({ length: count }, () => ({ kind: 'MOVE_OUT' as const }));
+    const ins = (count: number) => Array.from({ length: count }, () => ({ kind: 'MOVE_IN' as const }));
+
+    expect(bookedInWords(outs(1))).toBe('a move-out');
+    expect(bookedInWords([...outs(2), ...ins(1)])).toBe('2 move-outs and a move-in');
+    expect(bookedInWords(ins(1), 'count')).toBe('1 move-in');
+    expect(bookedInWords([...outs(1), ...ins(2)], 'bare')).toBe('move-out and 2 move-ins');
   });
 });
 

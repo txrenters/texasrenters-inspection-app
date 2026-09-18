@@ -1,3 +1,5 @@
+import { dayVisitRange } from '@texasrenters/shared';
+
 /**
  * The arithmetic and reading behind the benefit-package plan page.
  *
@@ -74,15 +76,35 @@ const SHORT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numer
 /** "Oct 12" for `2026-10-12`. A calendar date, so read in UTC: in Manila, local time would show the day before. */
 export const formatShortDay = (date: string) => SHORT_DAY.format(new Date(`${date}T00:00:00Z`));
 
-/** A day with fewer or more visits than the office's rule, or more time inspecting than a day holds. */
-export const dayOutsideRules = (
+/**
+ * A day with fewer or more visits than the office's rule, or more time inspecting than a day holds.
+ *
+ * Nine to twelve, three fewer at each end for each move-out or move-in the day
+ * is built around (`dayVisitRange`, the office, 2026-09-18).
+ */
+export function dayOutsideRules(
   day: { stopCount: number; onSiteMinutes: number; anchors?: readonly unknown[] },
   rules: { minStopsPerDay: number; maxStopsPerDay: number; maxOnSiteMinutes: number },
-) =>
+) {
+  const booked = day.anchors?.length ?? 0;
   // A move-out after the quarter's visits are all placed is a day of its own,
-  // not a benefit-package day short of its nine.
-  !(day.stopCount === 0 && day.anchors?.length) &&
-  (day.stopCount < rules.minStopsPerDay || day.stopCount > rules.maxStopsPerDay || day.onSiteMinutes > rules.maxOnSiteMinutes);
+  // not a benefit-package day short of its visits.
+  if (day.stopCount === 0 && booked) return false;
+  const range = dayVisitRange(rules, booked);
+  return day.stopCount < range.min || day.stopCount > range.max || day.onSiteMinutes > rules.maxOnSiteMinutes;
+}
+
+/**
+ * The move-outs and move-ins in a list, in words: "a move-out", "2 move-outs
+ * and a move-in". `count` writes a single one as "1 move-out", `bare` as
+ * "move-out".
+ */
+export function bookedInWords(anchors: readonly { kind: 'MOVE_OUT' | 'MOVE_IN' }[], style: 'article' | 'count' | 'bare' = 'article') {
+  const part = (count: number, noun: string) =>
+    count === 0 ? null : count > 1 || style === 'count' ? `${count} ${noun}${count > 1 ? 's' : ''}` : style === 'article' ? `a ${noun}` : noun;
+  const outs = anchors.filter((anchor) => anchor.kind === 'MOVE_OUT').length;
+  return [part(outs, 'move-out'), part(anchors.length - outs, 'move-in')].filter(Boolean).join(' and ');
+}
 
 /**
  * A visit that has a day but not yet a door: its building has several units and
