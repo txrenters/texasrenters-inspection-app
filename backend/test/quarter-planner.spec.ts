@@ -886,7 +886,7 @@ describe('who a planned day goes to', () => {
     expect(assigned).toContain('tech-moses');
   });
 
-  it('blocks every visit when nobody is on the crew, saying where the crew is set', async () => {
+  it('blocks every visit when nobody is on the crew, saying to choose who goes out', async () => {
     const { service, stopUpdateMany } = build([stop('s1', 1)], {
       technicians: [{ technicianId: 'tech-1', isPlannable: true, tbpZoneOrder: null }],
     });
@@ -896,7 +896,7 @@ describe('who a planned day goes to', () => {
     expect(summary.unplaced).toEqual([{ stopId: 's1', reason: 'NO_QUALIFIED_TECHNICIAN' }]);
     expect(stopUpdateMany).toHaveBeenCalledWith({
       where: { id: { in: ['s1'] }, planId: 'plan-1' },
-      data: expect.objectContaining({ blockedMessage: expect.stringContaining('planning profiles') }),
+      data: expect.objectContaining({ blockedMessage: expect.stringContaining('Choose who goes out when you rebuild') }),
     });
   });
 
