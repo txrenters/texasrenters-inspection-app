@@ -16,7 +16,7 @@ import {
   crewKey,
   estimatedDriveMinutes,
   haversineMeters,
-  layoutFullDays,
+  layoutEveryDay,
   plannedVisitDaysOfQuarter,
   quarterEnd,
   quarterLabel,
@@ -86,7 +86,7 @@ export interface PlanRoutingSettings {
   holidays?: string[];
 }
 
-export type RoutingUnplacedReason = UnplacedReason | 'ZONE_OUT_OF_REACH';
+export type RoutingUnplacedReason = UnplacedReason;
 
 export interface RoutingSummary {
   planId: string;
@@ -112,7 +112,7 @@ export interface PlanRotation {
   crew: { technicianId: string; displayName: string | null; hasHome: boolean }[];
   /** The zones the crew goes round, in order. */
   zones: string[];
-  /** Zones no crew member's home is within the day's drive of. */
+  /** Zones too far for a day's drive from every crew member's home: each is a trip. */
   outOfReach: string[];
   weeks: { weekOf: string; zones: { zone: string; technicianId: string }[] }[];
 }
@@ -125,8 +125,8 @@ const UNPLACED_MESSAGE: Record<RoutingUnplacedReason, string> = {
   NO_CAPACITY:
     'No day near this visit’s week has room for it inside the day limits, with the technician who has its zone that week.',
   LONGER_THAN_A_DAY: 'This visit is longer than a whole day on site.',
-  ZONE_OUT_OF_REACH:
-    'No one on the benefit-package crew lives within the day’s drive of this zone, so the office needs to arrange these visits.',
+  NO_TRIP_DAYS:
+    'This zone is too far for a day’s drive, and no run of days in a row is free for a trip there, so the office needs to arrange these visits.',
 };
 
 /** A technician-day, measured on real roads where anything could measure it. */
@@ -183,14 +183,18 @@ export class QuarterPlannerService {
    * unavailable. Splitting them means a coordinator can fix a blocked tenancy
    * and re-route without rebuilding the rotation underneath it.
    *
-   * The office's rules (2026-09-17) hold for every day it writes:
-   * - the crew each has one zone a week, moving one zone on each week, and a
-   *   visit goes only to whoever has its zone (`weeklyZoneTechnicians`);
+   * The office's rules (2026-09-18) hold for every day it writes:
+   * - the whole crew works every planned day, from the quarter's first, until
+   *   every visit has a day, in last quarter's order (`layoutEveryDay`);
+   * - each has one zone a week, moving one zone on each week, and starts each day
+   *   in it (`weeklyZoneTechnicians`); a property within five minutes of a day's
+   *   visits joins the day whatever its zone;
    * - `minStopsPerDay` to `maxStopsPerDay` visits every day, nine to twelve, and
-   *   at most `maxOnSiteMinutes` inspecting;
-   * - the drive between the properties kept as short as that allows, with no
-   *   limit on it, each visit within three weeks of last quarter's week unless a
-   *   day of nine needs it further (`layoutFullDays`);
+   *   at most `maxOnSiteMinutes` inspecting, with the drive between the
+   *   properties kept as short as that allows and never capped;
+   * - a zone too far for a day's drive from any home is a trip: back-to-back
+   *   days of the crew member nearest it, the first driven from home and the
+   *   rest from where the trip is;
    * - each day driven from the technician's home, in the order that drives least;
    * - a move-out anchors a day of the technician who handles move-outs: on its
    *   date their visits are the ones nearest it, from any zone, and the move-out
@@ -268,28 +272,24 @@ export class QuarterPlannerService {
     const free = stops.filter((stop) => !pinned.has(stop.stopId));
     const placedByHand = pinnedCrews(stops, pins);
 
-    // A zone nobody on the crew lives within the day's drive of is a person's to
-    // arrange: its visits are blocked with that reason rather than attempted.
-    const outOfReach = new Set(zones.outOfReach);
-    const unreachable = free.filter((stop) => stop.zone && outOfReach.has(stop.zone));
-    const rotation = { position: new Map(stops.map((stop, index) => [stop.stopId, index])), size: stops.length };
-
+    // In last quarter's order. A zone too far for a day's drive from any home is
+    // a trip for the crew member living nearest it (the office, 2026-09-18).
     const moveOuts = await this.moveOutAnchors(organizationId, quarter);
-    const assignment = layoutFullDays(free.filter((stop) => !stop.zone || !outOfReach.has(stop.zone)), days, {
+    const assignment = layoutEveryDay(free, days, {
       limits,
-      rotation,
+      rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
       taken: new Set(placedByHand.map((crew) => crewKey(crew.date, crew.technicianId))),
       anchors: moveOuts.anchors,
+      homes: roster.homes,
+      tripZones: zones.outOfReach,
     });
-    const unplaced: RoutingSummary['unplaced'] = [
-      ...unreachable.map((stop) => ({ stopId: stop.stopId, reason: 'ZONE_OUT_OF_REACH' as const })),
-      ...assignment.unplaced,
-    ];
-    // A day's move-outs are routed and measured with its visits, as stops it drives to.
-    const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors'>) =>
+    const unplaced: RoutingSummary['unplaced'] = assignment.unplaced;
+    // A day's move-outs are routed and measured with its visits, as stops it
+    // drives to. A trip's later days start where the trip is, not at home.
+    const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors' | 'trip'>) =>
       this.measure(
         { date: crew.date, technicianId: crew.technicianId, stops: [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops] },
-        homes.get(crew.technicianId),
+        crew.trip && crew.trip.day > 1 ? undefined : homes.get(crew.technicianId),
       );
     const measured: MeasuredCrew[] = [];
     for (const crew of assignment.crews) measured.push(await measureCrew(crew));
@@ -341,6 +341,7 @@ export class QuarterPlannerService {
       crew: roster.technicianIds.length,
       zones: zones.circle,
       zonesOutOfReach: zones.outOfReach,
+      tripDays: assignment.crews.filter((crew) => crew.trip).length,
       durationSource: summary.durationSource,
     });
 
@@ -702,10 +703,12 @@ export class QuarterPlannerService {
   /**
    * Who can work each planned day, per zone and kind of visit.
    *
-   * Each day's zones come from the week it falls in: the crew each has one zone,
-   * and all move one zone on each week. Qualification still applies on top, per
-   * date and per kind of visit, because a certificate lapsing mid-quarter must
-   * take away the later days and leave the earlier ones alone.
+   * The whole crew works every planned day (the office, 2026-09-18). Each day's
+   * zones come from the week it falls in -- the crew each has one zone, and all
+   * move one zone on each week -- and say where each starts, not who works.
+   * Qualification still applies on top, per date and per kind of visit, because
+   * a certificate lapsing mid-quarter must take away the later days and leave
+   * the earlier ones alone.
    */
   private async availability(
     organizationId: string,
@@ -724,7 +727,7 @@ export class QuarterPlannerService {
       const zoneTechnicians = circle.length
         ? weeklyZoneTechnicians(roster.technicianIds, circle, quarterWeekIndex(date, quarter))
         : undefined;
-      const working = zoneTechnicians ? [...new Set(Object.values(zoneTechnicians))] : [...roster.technicianIds];
+      const working = [...roster.technicianIds];
       const qualified: Record<string, string[]> = {};
       for (const [type, calendar] of calendars) {
         const onCalendar = new Set((calendar.get(date) ?? []).map((candidate) => candidate.technicianId));
@@ -1016,9 +1019,10 @@ export function withZones<T extends PlannableStop>(stops: readonly T[]): T[] {
  * A zone is out of reach when every crew member's home is further from its
  * middle than the day's drive allows even to get there -- zone 5, some 200 km
  * from the three homes in Q4 2026. Left in the circle, it would take a person's
- * week and leave another zone without anybody; out of it, its visits are
- * blocked with the reason for the office to arrange. A crew member with no home
- * on file starts at their first job, so reaches anywhere.
+ * week and leave another zone without anybody; out of it, its visits are a trip
+ * of back-to-back days for the crew member living nearest it (the office,
+ * 2026-09-18). A crew member with no home on file starts at their first job, so
+ * reaches anywhere.
  */
 export function zoneCircle(
   stops: readonly PlannableStop[],

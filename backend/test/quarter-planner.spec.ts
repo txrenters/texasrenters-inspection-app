@@ -836,29 +836,44 @@ describe('zones, weeks and Mondays', () => {
     { technicianId: 'emanuel', isPlannable: true, tbpZoneOrder: 3 },
   ];
 
-  it('gives each zone to its technician for the week, and moves everyone one zone on each week', async () => {
-    // Thursday 1 October is in the first week and Friday 16 October in the
-    // third. Eighteen visits a zone are too many for one day of twelve, so each
-    // zone has a day on both.
+  it('starts each crew member in their zone of the week, and moves everyone one zone on each week', async () => {
+    // Thursday 1 October is in the first week and Tuesday 6 October in the
+    // second. Twenty-four visits a zone are two days of twelve, so each zone
+    // has a day in both weeks.
     const zone = (name: string, offset: number) =>
-      Array.from({ length: 18 }, (_, index) => stop(`z${name}-${index + 1}`, 0, offset + index * 0.01, { zone: name }));
+      Array.from({ length: 24 }, (_, index) => stop(`z${name}-${index + 1}`, 0, offset + index * 0.01, { zone: name }));
     const stops = [...zone('1', 0), ...zone('2', 5)].map((row, index) => ({ ...row, sequence: index + 1 }));
-    const { service, stopUpdate } = build(stops, { technicians: CREW });
+    const { service, stopUpdate } = build(stops, { technicians: CREW.slice(0, 2) });
 
-    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-16') });
+    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-06') });
 
-    // Two zones and three people: the first week Moses has 1 and Kevin 2; two
-    // weeks on, everyone has moved on two -- Kevin to 1, Emanuel to 2.
+    // Two zones and two people: the first week Moses has 1 and Kevin 2, and the
+    // week after the other way round.
     const owners = stops.map((row) => {
       const update = updateFor(stopUpdate, row.id);
       return `zone ${row.zone} on ${(update?.scheduledOn as Date).toISOString().slice(0, 10)}: ${String(update?.assignedTechnicianId)}`;
     });
     expect([...new Set(owners)].sort()).toEqual([
       'zone 1 on 2026-10-01: moses',
-      'zone 1 on 2026-10-16: kevin',
+      'zone 1 on 2026-10-06: kevin',
       'zone 2 on 2026-10-01: kevin',
-      'zone 2 on 2026-10-16: emanuel',
+      'zone 2 on 2026-10-06: moses',
     ]);
+  });
+
+  /** The office (2026-09-18): "all 3 should have schedules per day". */
+  it('gives the whole crew a day on each planned day, not only whoever has a zone that week', async () => {
+    // One zone and three people: two of them have no zone of their own.
+    const stops = Array.from({ length: 36 }, (_, index) => stop(`s${index + 1}`, index + 1, index * 0.01));
+    const { service, dayCreate } = build(stops, { technicians: CREW });
+
+    await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
+
+    const firstDay = dayCreate.mock.calls
+      .map((call) => call[0].data)
+      .filter((data) => (data.date as Date).toISOString().startsWith('2026-10-01'));
+    expect(firstDay.map((data) => data.technicianId).sort()).toEqual(['emanuel', 'kevin', 'moses']);
+    expect(firstDay.map((data) => data.stopCount)).toEqual([12, 12, 12]);
   });
 
   it('plans no visit on a Monday from the second week on', async () => {
@@ -915,22 +930,36 @@ describe('zones, weeks and Mondays', () => {
     });
   });
 
-  /** Zone 5 is some 200 km from the crew's homes: no day can even reach it. */
-  it('blocks the visits of a zone nobody on the crew lives within the day’s drive of', async () => {
-    const homes = CREW.map((row) => ({ ...row, homeLatitude: 29.7, homeLongitude: -95.37 }));
-    const { service, stopUpdateMany, stopUpdate } = build(
-      [stop('near', 1, 1, { zone: '1' }), stop('far', 2, 180, { zone: '5' })],
-      { technicians: homes },
-    );
-
-    const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01') });
-
-    expect(summary.unplaced).toEqual([{ stopId: 'far', reason: 'ZONE_OUT_OF_REACH' }]);
-    expect(updateFor(stopUpdate, 'near')?.assignedTechnicianId).toBe('moses');
-    expect(stopUpdateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['far'] }, planId: 'plan-1' },
-      data: expect.objectContaining({ blockedMessage: expect.stringContaining('within the day’s drive of this zone') }),
+  /** Zone 5 is some 200 km from the crew's homes (2026-09-18): "a 3-day trip for one person". */
+  it('lays a zone too far for a day’s drive out as a trip for the crew member living nearest it', async () => {
+    const homes = [
+      { ...CREW[0]!, homeLatitude: 29.7, homeLongitude: -95.37 },
+      { ...CREW[1]!, homeLatitude: 30.2, homeLongitude: -95.37 },
+      { ...CREW[2]!, homeLatitude: 29.7, homeLongitude: -95.37 },
+    ];
+    // Fourteen visits: two days of the trip.
+    const far = Array.from({ length: 14 }, (_, index) => stop(`far-${index + 1}`, 10 + index, 180 + index * 0.01, { zone: '5' }));
+    const { service, stopUpdate, dayCreate } = build([stop('near', 1, 1, { zone: '1' }), ...far], {
+      technicians: homes,
+      googleSeconds: fiveMinutes,
     });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
+
+    expect(summary.unplaced).toEqual([]);
+    // Kevin lives nearest, and goes on the two days in a row.
+    const trip = far.map((row) => {
+      const update = updateFor(stopUpdate, row.id);
+      return `${(update?.scheduledOn as Date).toISOString().slice(0, 10)} ${String(update?.assignedTechnicianId)}`;
+    });
+    expect([...new Set(trip)].sort()).toEqual(['2026-10-01 kevin', '2026-10-02 kevin']);
+    // Driven down from home the first day; the second starts where the trip is.
+    const kevinsDays = dayCreate.mock.calls
+      .map((call) => call[0].data)
+      .filter((data) => data.technicianId === 'kevin')
+      .sort((left, right) => (left.date as Date).getTime() - (right.date as Date).getTime());
+    expect(kevinsDays.map((data) => data.originKind)).toEqual([PlanOriginKind.HOME, PlanOriginKind.FIRST_STOP]);
+    expect(updateFor(stopUpdate, 'near')?.assignedTechnicianId).toBe('moses');
   });
 });
 

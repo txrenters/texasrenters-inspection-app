@@ -27,6 +27,7 @@ import { Field, FieldLabel } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { EMPTY, formatScheduledDate } from '@/lib/format';
+import { NEEDS_UNIT_MESSAGE, needsUnit } from '@/lib/planning';
 import { usePlanningMutations, type PlanStop, type PlanStopStatus } from '@/lib/planning-queries';
 
 export const STOP_STATUS: Record<PlanStopStatus, { label: string; variant: 'secondary' | 'warning' | 'outline' | 'success' | 'destructive' }> = {
@@ -118,6 +119,7 @@ const COLUMNS: Array<Column<PlanStop>> = [
       <div className="grid gap-1">
         <Badge variant={STOP_STATUS[stop.status].variant}>{STOP_STATUS[stop.status].label}</Badge>
         {stop.blockedMessage ? <span className="text-muted-foreground text-xs text-pretty">{stop.blockedMessage}</span> : null}
+        {needsUnit(stop) ? <span className="text-warning text-xs text-pretty">{NEEDS_UNIT_MESSAGE}</span> : null}
       </div>
     ),
   },

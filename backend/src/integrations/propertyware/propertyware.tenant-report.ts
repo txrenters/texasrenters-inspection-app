@@ -47,6 +47,10 @@ export interface TenantReportRow {
   city: string | null;
   state: string | null;
   postalCode: string | null;
+  /** Propertyware's own id for the tenancy's unit, when the report carries it. */
+  unitExternalId: string | null;
+  /** The unit as the office names it ("North", "1/2"), when the report carries it. */
+  unitName: string | null;
 }
 
 /**
@@ -137,6 +141,8 @@ export function parseTenantReport(payload: unknown): TenantReportRow[] {
         city: opt(record, 'city'),
         state: opt(record, 'state'),
         postalCode: opt(record, 'postalCode'),
+        unitExternalId: opt(record, 'unitExternalId'),
+        unitName: opt(record, 'unitName') ?? opt(record, 'unit') ?? opt(record, 'unitAbbreviation'),
       },
     ];
   });

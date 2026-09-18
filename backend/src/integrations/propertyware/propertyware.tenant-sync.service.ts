@@ -131,6 +131,8 @@ export class PropertywareTenantSyncService {
         city: row.city,
         state: row.state,
         postalCode: row.postalCode,
+        unitExternalId: row.unitExternalId,
+        unitName: row.unitName,
         propertywareBuildingId: buildingId,
         isActive: true,
         deactivatedAt: null,

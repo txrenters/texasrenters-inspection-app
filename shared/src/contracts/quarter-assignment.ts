@@ -5,37 +5,36 @@
  * can be argued with in a test rather than inferred from a plan somebody has
  * already published.
  *
- * ## The office's rules (2026-09-17)
+ * ## The office's rules (2026-09-18)
  *
- * - **Nine to twelve visits every day** (`minStopsPerDay`, `maxStopsPerDay`). A
- *   visit takes eight to fifteen minutes, twenty at most, so nine a day is always
- *   doable: the days are made full first, and the driving is what is kept as
- *   short as the visits allow. There is no limit on the drive between a day's
- *   properties; a day is never left short of nine to keep it down.
- * - At most six hours inspecting, which twelve twenty-minute visits never reach.
- * - Each week each technician on the crew has one zone (`zoneTechnicians`, from
- *   `weeklyZoneTechnicians`), and a visit goes only to whoever has its zone.
- * - A visit stays within three weeks of last quarter's week (`WINDOW_DAYS`), so a
- *   tenant's visits stay about ninety days apart. Only a visit that would
- *   otherwise leave a day short of nine goes further.
+ * - **The whole crew, every planned day, from the quarter's first**, until every
+ *   visit has a day (`layoutEveryDay`). The office would rather the crew's days
+ *   were full than the quarter's visits spread thin across it: "all 3 should
+ *   have schedules per day, it doesn't matter if they can finish all the TBP in
+ *   a month". So a quarter's visits are done in its first weeks, in last
+ *   quarter's order.
+ * - **Nine to twelve visits a day** (`minStopsPerDay`, `maxStopsPerDay`), at most
+ *   six hours inspecting, and the driving between them kept as short as that
+ *   allows, never capped.
+ * - **Each crew member has one zone a week** (`zoneTechnicians`, from
+ *   `weeklyZoneTechnicians`), and each day starts from the earliest visit left in
+ *   it. A crew member whose zone has nothing left takes the zone nobody has that
+ *   week, and then the zone nearest their home.
+ * - **A property within five minutes of a day's visits joins the day**, whatever
+ *   zone it is in (`NEIGHBOUR_MINUTES`): "we will still follow the zoning but if
+ *   there's a property that is near ... like 5 mins away then let's add it to
+ *   the group also."
+ * - **A zone too far for a day's drive is a trip** (`tripZones`): its visits go on
+ *   back-to-back days of the crew member living nearest it, driven down once.
  * - **Move-outs are anchors** (`DayAnchor`): on a day the technician who handles
  *   move-outs has one, the day's visits are the ones nearest it, from any zone,
  *   and the move-out counts an hour on site (the office, 2026-09-17: "we should
  *   be doing TBPs around those").
  *
- * ## Full days, then the least driving
- *
- * Each zone's days are grown nearest first from the visit due earliest, a short
- * day is folded into the zone's others, and each day is given a day of the week.
- * Grown greedily, a day takes whatever is near at the time: with the old ninety
- * minutes lifted, that alone made days of up to 204 minutes between properties
- * on the Q4 2026 visits. So the days are then improved (`improveDays`): a visit
- * moves, or two visits trade places, between a zone's days near their weeks
- * whenever that shortens the driving, and a day still short of nine takes the
- * cheapest visits from its zone's fuller days. The same visits came out as 37
- * days of 10.6 visits and 89 minutes between properties a day, where the
- * ninety-minute limit had made 47 days of 8.3, 24 of them short of nine (dry run
- * on the production plan, 2026-09-17).
+ * Each day is grown nearest first, and the days are then improved together
+ * (`improveWorking`): a visit moves, or two visits trade places, between days
+ * that may take them whenever that shortens the driving, and a day still short
+ * of nine takes the cheapest visits from fuller ones.
  */
 
 import { haversineMeters } from './route-plan.js';
@@ -53,7 +52,7 @@ export interface PlannableStop {
   inspectionType: string;
   /** Who took this tenancy's visit last quarter. */
   previousTechnicianId?: string | null;
-  /** The zone it is in, as a number. Only whoever has the zone that day can take it. */
+  /** The zone it is in, as a number. */
   zone?: string | null;
 }
 
@@ -69,9 +68,8 @@ export interface PlannableDay {
    */
   qualified?: Readonly<Record<string, readonly string[]>>;
   /**
-   * Who has each zone that day, `zone -> technician`. A stop in a zone goes only
-   * to that zone's technician, and a zone missing here has nobody that day.
-   * Absent: days are not given out by zone, and anyone available can take a stop.
+   * Who has each zone that day, `zone -> technician`: whose zone each day of
+   * theirs starts in. Absent: days are not given out by zone.
    */
   zoneTechnicians?: Readonly<Record<string, string>>;
 }
@@ -88,11 +86,10 @@ export interface DayLimits {
 export const DEFAULT_DAY_LIMITS: DayLimits = { maxOnSiteMinutes: 6 * 60, minStopsPerDay: 9, maxStopsPerDay: 12 };
 
 /**
- * How far a visit may move from its day in last quarter's rotation, in calendar
- * days: three weeks (the office, 2026-09-17). Two left the thin zones unable to
- * make days of nine.
+ * How near, by the estimated drive, a property in another zone has to be to a
+ * day's visits to join them: five minutes (the office, 2026-09-18).
  */
-export const WINDOW_DAYS = 21;
+export const NEIGHBOUR_MINUTES = 5;
 
 /**
  * The most stops one day can hold, whatever the office's own maximum says.
@@ -111,6 +108,15 @@ export interface PlacedStop {
   position: number;
 }
 
+/** A day of a trip to a zone too far for a day's drive. */
+export interface TripDay {
+  zone: string;
+  /** Which day of the trip: 1 is the day driven down. */
+  day: number;
+  /** How many days the trip is. */
+  days: number;
+}
+
 export interface AssignedCrew {
   date: string;
   technicianId: string;
@@ -121,6 +127,8 @@ export interface AssignedCrew {
   driveMinutes: number;
   /** The appointments the day is built around, when it is. `onSiteMinutes` includes theirs. */
   anchors?: DayAnchor[];
+  /** Set on the days of a trip to a far zone. */
+  trip?: TripDay;
 }
 
 /**
@@ -164,7 +172,13 @@ export function anchorIdOf(stop: Pick<PlannableStop, 'stopId'>): string | null {
   return stop.stopId.startsWith(ANCHOR_STOP_PREFIX) ? stop.stopId.slice(ANCHOR_STOP_PREFIX.length) : null;
 }
 
-export type UnplacedReason = 'NO_WORKING_DAYS' | 'NO_QUALIFIED_TECHNICIAN' | 'NO_CAPACITY' | 'LONGER_THAN_A_DAY';
+export type UnplacedReason =
+  | 'NO_WORKING_DAYS'
+  | 'NO_QUALIFIED_TECHNICIAN'
+  | 'NO_CAPACITY'
+  | 'LONGER_THAN_A_DAY'
+  /** A far zone's trip found no run of days in a row to go on. */
+  | 'NO_TRIP_DAYS';
 
 export interface QuarterAssignment {
   placed: PlacedStop[];
@@ -205,21 +219,21 @@ export function estimatedDriveMinutes(from: Point, to: Point): number {
 export interface LayoutOptions {
   limits?: DayLimits;
   driveMinutes?: DriveEstimate;
-  /**
-   * Each stop's place in the whole quarter's rotation, and the rotation's size:
-   * a stop at position i of n is due i/n of the way through the quarter's days.
-   * Without it, the stops given are the rotation, in the order given.
-   */
-  rotation?: { position: ReadonlyMap<string, number>; size: number };
-  /** How far a visit may move from its day in the rotation, in calendar days. */
-  windowDays?: number;
+  /** Each stop's place in last quarter's order. Without it, the stops given are the order. */
+  rotation?: { position: ReadonlyMap<string, number> };
   /** Technician-days already taken, as `date|technicianId`: a coordinator's own days. */
   taken?: ReadonlySet<string>;
   /**
    * Appointments days are built around. On each one's date its technician's day
-   * takes the visits nearest it, from any zone, before the zones are laid out.
+   * takes the visits nearest it, from any zone.
    */
   anchors?: readonly DayAnchor[];
+  /** Where each crew member lives: for the zone nearest home, and who makes a trip. */
+  homes?: ReadonlyMap<string, Point>;
+  /** Zones too far for a day's drive from home, laid out as trips. */
+  tripZones?: readonly string[];
+  /** How near a property in another zone has to be to join a day, by the estimated drive. */
+  neighbourMinutes?: number;
 }
 
 const DAY_MS = 86_400_000;
@@ -227,8 +241,8 @@ const DAY_MS = 86_400_000;
 /**
  * What a day that already has its nine may still take: a visit adding no more
  * driving than this, or twice the day's average leg where the day is spread
- * out. A visit across town starts a day of its own instead of stretching a
- * full day to twelve and leaving its neighbours a short one.
+ * out. A visit across town waits for a day of its own instead of stretching a
+ * full day to twelve.
  */
 const LOCAL_HOP_MINUTES = 15;
 
@@ -237,15 +251,6 @@ const SAVING_MINUTES = 0.5;
 
 /** Changes made across one set of days. Each only ever shortens the driving; this bounds a pathological case. */
 const MAX_IMPROVEMENT_ROUNDS = 2000;
-
-/**
- * How many windows from its week a visit may go to keep a day from falling short
- * of the minimum: two, six weeks. Unbounded, a move-out day that took a thin
- * zone's December visits pushed the last three to October, 49 to 76 days early,
- * and a tenant visited that far off their cycle is worse off than a short day
- * (dry run on the production Q4 plan, 2026-09-17).
- */
-const LEFTOVER_REACH = 2;
 
 /** Candidates tried against the days, best estimate first, before a round gives up. */
 const CONFIRMED_PER_ROUND = 25;
@@ -325,6 +330,12 @@ function withVisit(day: Draft, stop: PlannableStop, limits: DayLimits, drive: Dr
   };
 }
 
+/** Whether, once a day has its minimum, the next visit would take it across town. */
+function acrossTown(day: Draft, added: number, limits: DayLimits) {
+  const averageLeg = day.path.length > 1 ? day.drive / (day.path.length - 1) : 0;
+  return day.path.length >= limits.minStopsPerDay && added > Math.max(LOCAL_HOP_MINUTES, 2 * averageLeg);
+}
+
 /**
  * A day built around its anchors: the visits nearest them, nearest first, up to
  * the day's maximum -- and once it has its minimum, not a visit across town.
@@ -364,35 +375,40 @@ function fillAroundAnchors(
   return { visits: ordered.path.filter((stop) => anchorIdOf(stop) === null), drive: ordered.drive, onSite };
 }
 
-/** When each stop is due: its share of the rotation, as a day of the quarter. */
-function dueDates(stops: readonly PlannableStop[], days: readonly PlannableDay[], rotation: LayoutOptions['rotation']) {
-  const size = Math.max(1, rotation?.size ?? stops.length);
-  return new Map(
-    stops.map((stop, index) => {
-      const position = rotation?.position.get(stop.stopId) ?? index;
-      const day = days[Math.min(days.length - 1, Math.max(0, Math.floor((position * days.length) / size)))]!;
-      return [stop.stopId, Date.parse(`${day.date}T00:00:00Z`)];
-    }),
-  );
-}
-
-const midpoint = (values: readonly number[]) => [...values].sort((left, right) => left - right)[Math.floor(values.length / 2)]!;
-
 const dayTime = (date: string) => Date.parse(`${date}T00:00:00Z`);
 
-/** Whether a technician may take a stop on a day: available, qualified for its kind, and holding its zone. */
-function canTake(day: PlannableDay, technicianId: string, stop: PlannableStop) {
-  const list = day.qualified?.[stop.inspectionType];
-  if (!day.technicianIds.includes(technicianId) || (list && !list.includes(technicianId))) return false;
-  return !day.zoneTechnicians || day.zoneTechnicians[stop.zone ?? ''] === technicianId;
+const zoneOf = (stop: PlannableStop) => stop.zone ?? '';
+
+/**
+ * The same estimate, worked out once per pair of places.
+ *
+ * Improving a quarter's days asks for the same drives many thousands of times,
+ * and each is a great-circle distance. Keyed by the objects themselves, which
+ * stay the same for a whole layout.
+ */
+function remembered(drive: DriveEstimate): DriveEstimate {
+  const cache = new Map<Point, Map<Point, number>>();
+  return (from, to) => {
+    let row = cache.get(from);
+    if (!row) cache.set(from, (row = new Map()));
+    let minutes = row.get(to);
+    if (minutes === undefined) row.set(to, (minutes = drive(from, to)));
+    return minutes;
+  };
 }
 
-/** A technician-day being improved. */
+/** Whether a technician may take a stop on a day: working it, and qualified for its kind. */
+function qualified(day: PlannableDay, technicianId: string, stop: PlannableStop) {
+  const list = day.qualified?.[stop.inspectionType];
+  return day.technicianIds.includes(technicianId) && (!list || list.includes(technicianId));
+}
+
+/** A technician-day being improved, with the zone it was built for (null: not given out by zone). */
 interface Working {
   date: string;
   technicianId: string;
   day: PlannableDay;
-  time: number;
+  zone: string | null;
   path: PlannableStop[];
   drive: number;
   onSite: number;
@@ -401,25 +417,22 @@ interface Working {
 interface ImproveContext {
   limits: DayLimits;
   drive: DriveEstimate;
-  window: number;
-  dueOf: (stop: PlannableStop) => number;
+  /** Whether a day may take a visit. */
+  allows: (stop: PlannableStop, day: Working) => boolean;
 }
 
 /**
  * Shorten the driving across a set of days, and bring short ones up to the minimum.
  *
  * 1. A visit moves to another day, or two visits trade days, whenever that
- *    shortens the two days' driving together -- to a day whose technician can
- *    take it and that is near the visit's week, never taking a day under the
- *    minimum or over the maximum.
- * 2. A day still short takes the cheapest visits from fuller days near their
- *    weeks, when they have enough to bring it to the minimum. Otherwise its
- *    visits go to days with room: near their weeks if they can, and otherwise the
- *    day nearest in time up to `LEFTOVER_REACH` windows away -- a day of nine
- *    comes first, but not at the cost of a tenant's quarterly rhythm.
+ *    shortens the two days' driving together -- to a day that may take it, never
+ *    taking a day under the minimum or over the maximum.
+ * 2. A day still short takes the cheapest visits from fuller days, when they have
+ *    enough to bring it to the minimum; otherwise its visits go to days with
+ *    room, and the short day goes.
  * 3. The moves and swaps again, around what that changed.
  */
-function improveWorking(days: Working[], { limits, drive, window, dueOf }: ImproveContext) {
+function improveWorking(days: Working[], { limits, drive, allows }: ImproveContext) {
   const cap = stopsCap(limits);
   const shortest = new Map<string, Omit<Draft, 'onSite'>>();
   // The best order found from any first stop, 2-opt from each, remembered by the set of stops.
@@ -451,8 +464,6 @@ function improveWorking(days: Working[], { limits, drive, window, dueOf }: Impro
     day.drive = found.drive;
     day.onSite = stops.reduce((total, stop) => total + stop.onSiteMinutes, 0);
   };
-  const near = (stop: PlannableStop, day: Working, span = window) =>
-    canTake(day.day, day.technicianId, stop) && Math.abs(day.time - dueOf(stop)) <= span;
   const roomFor = (day: Working, stop: PlannableStop) =>
     day.path.length < cap && day.onSite + stop.onSiteMinutes <= limits.maxOnSiteMinutes;
 
@@ -473,7 +484,7 @@ function improveWorking(days: Working[], { limits, drive, window, dueOf }: Impro
         for (const stop of from.path) {
           const saved = removalSaving(from.path, stop, drive);
           for (const to of days) {
-            if (to === from || to.path.length === 0 || !roomFor(to, stop) || !near(stop, to)) continue;
+            if (to === from || to.path.length === 0 || !roomFor(to, stop) || !allows(stop, to)) continue;
             const estimate = cheapestInsertion(to.path, stop, drive).added - saved;
             if (estimate >= -SAVING_MINUTES) continue;
             changes.push({
@@ -494,12 +505,12 @@ function improveWorking(days: Working[], { limits, drive, window, dueOf }: Impro
         for (const right of days.slice(index + 1)) {
           if (left.path.length === 0 || right.path.length === 0) continue;
           for (const one of left.path) {
-            if (!near(one, right)) continue;
+            if (!allows(one, right)) continue;
             const outOfLeft = removalSaving(left.path, one, drive);
             const intoRight = cheapestInsertion(right.path, one, drive).added;
             for (const other of right.path) {
               if (
-                !near(other, left) ||
+                !allows(other, left) ||
                 left.onSite - one.onSiteMinutes + other.onSiteMinutes > limits.maxOnSiteMinutes ||
                 right.onSite - other.onSiteMinutes + one.onSiteMinutes > limits.maxOnSiteMinutes
               )
@@ -535,7 +546,11 @@ function improveWorking(days: Working[], { limits, drive, window, dueOf }: Impro
       (total, donor) =>
         donor === short
           ? total
-          : total + Math.min(Math.max(0, donor.path.length - limits.minStopsPerDay), donor.path.filter((stop) => near(stop, short)).length),
+          : total +
+            Math.min(
+              Math.max(0, donor.path.length - limits.minStopsPerDay),
+              donor.path.filter((stop) => allows(stop, short)).length,
+            ),
       0,
     );
     if (spare >= needed)
@@ -544,7 +559,7 @@ function improveWorking(days: Working[], { limits, drive, window, dueOf }: Impro
         for (const donor of days) {
           if (donor === short || donor.path.length <= limits.minStopsPerDay) continue;
           for (const stop of donor.path) {
-            if (!near(stop, short) || !roomFor(short, stop)) continue;
+            if (!allows(stop, short) || !roomFor(short, stop)) continue;
             const price = cheapestInsertion(short.path, stop, drive).added - removalSaving(donor.path, stop, drive);
             if (!pick || price < pick.price) pick = { stop, donor, price };
           }
@@ -556,118 +571,236 @@ function improveWorking(days: Working[], { limits, drive, window, dueOf }: Impro
       }
     if (short.path.length >= limits.minStopsPerDay) continue;
 
-    for (const span of [window, LEFTOVER_REACH * window]) {
-      const room = new Map(days.map((day) => [day, { count: day.path.length, onSite: day.onSite }]));
-      const moves: [PlannableStop, Working][] = [];
-      for (const stop of short.path) {
-        const target = days
-          .filter((day) => {
-            const left = room.get(day)!;
-            return (
-              day !== short &&
-              day.path.length > 0 &&
-              near(stop, day, span) &&
-              left.count < cap &&
-              left.onSite + stop.onSiteMinutes <= limits.maxOnSiteMinutes
-            );
-          })
-          .map((day) => ({
-            day,
-            // Near its week first; beyond it, the day nearest in time.
-            weeks: Math.abs(day.time - dueOf(stop)) <= window ? 0 : Math.abs(day.time - dueOf(stop)),
-            added: cheapestInsertion(day.path, stop, drive).added,
-          }))
-          .sort((left, right) => left.weeks - right.weeks || left.added - right.added)[0]?.day;
-        if (!target) break;
-        room.get(target)!.count += 1;
-        room.get(target)!.onSite += stop.onSiteMinutes;
-        moves.push([stop, target]);
-      }
-      if (moves.length !== short.path.length) continue;
-      for (const [stop, target] of moves) set(target, [...target.path, stop]);
-      set(short, []);
-      break;
+    // Still short: its visits go to days with room, if every one of them can.
+    const room = new Map(days.map((day) => [day, { count: day.path.length, onSite: day.onSite }]));
+    const moves: [PlannableStop, Working][] = [];
+    for (const stop of short.path) {
+      const target = days
+        .filter((day) => {
+          const left = room.get(day)!;
+          return (
+            day !== short &&
+            day.path.length > 0 &&
+            allows(stop, day) &&
+            left.count < cap &&
+            left.onSite + stop.onSiteMinutes <= limits.maxOnSiteMinutes
+          );
+        })
+        .map((day) => ({ day, added: cheapestInsertion(day.path, stop, drive).added }))
+        .sort((left, right) => left.added - right.added)[0]?.day;
+      if (!target) break;
+      room.get(target)!.count += 1;
+      room.get(target)!.onSite += stop.onSiteMinutes;
+      moves.push([stop, target]);
     }
+    if (moves.length !== short.path.length) continue;
+    for (const [stop, target] of moves) set(target, [...target.path, stop]);
+    set(short, []);
   }
 
   search();
 }
 
 /**
- * Days made better where they stand: the driving shortened, and short days
- * brought up to the minimum, without a day moving date or technician.
- *
- * What `layoutFullDays` does last, for days a caller already has. A stop is due
- * on its rotation day when a rotation is given, and otherwise on the day it is
- * on now, so none moves further than the window from where it is.
+ * Which zone a crew member's day starts in: their own for the week while it has
+ * visits left, then the zone nobody has that week, then the zone nearest their
+ * home -- or, with no home on file, the zone with most visits left.
  */
-export function improveDays(
-  crews: readonly AssignedCrew[],
-  days: readonly PlannableDay[],
-  options: LayoutOptions = {},
-): AssignedCrew[] {
-  const limits = options.limits ?? DEFAULT_DAY_LIMITS;
-  const drive = options.driveMinutes ?? estimatedDriveMinutes;
-  const dayOf = new Map(days.map((day) => [day.date, day]));
-  const rotationDue = options.rotation
-    ? dueDates(
-        crews.flatMap((crew) => crew.stops),
-        days,
-        options.rotation,
-      )
-    : null;
-  const current = new Map(crews.flatMap((crew) => crew.stops.map((stop) => [stop.stopId, dayTime(crew.date)] as const)));
-  // A day built around an anchor is left as it is: its visits are there for the anchor.
-  const anchored = (crew: AssignedCrew) => Boolean(crew.anchors?.length);
-  const working: Working[] = crews.flatMap((crew) => {
-    const day = dayOf.get(crew.date);
-    return day && !anchored(crew)
-      ? [{ date: crew.date, technicianId: crew.technicianId, day, time: dayTime(crew.date), path: [...crew.stops], drive: crew.driveMinutes, onSite: crew.onSiteMinutes }]
-      : [];
-  });
-  improveWorking(working, {
-    limits,
-    drive,
-    window: (options.windowDays ?? WINDOW_DAYS) * DAY_MS,
-    dueOf: (stop) => rotationDue?.get(stop.stopId) ?? current.get(stop.stopId)!,
-  });
-  const untouched = crews.filter((crew) => !dayOf.has(crew.date) || anchored(crew));
-  return [
-    ...working
-      .filter((day) => day.path.length > 0)
-      .map((day) => ({ date: day.date, technicianId: day.technicianId, stops: day.path, onSiteMinutes: day.onSite, driveMinutes: day.drive })),
-    ...untouched,
-  ].sort((left, right) => left.date.localeCompare(right.date) || left.technicianId.localeCompare(right.technicianId));
+function zoneForDay(
+  day: PlannableDay,
+  technicianId: string,
+  pool: readonly PlannableStop[],
+  home: Point | undefined,
+): string {
+  const withVisits = new Set(pool.map(zoneOf));
+  const owners = day.zoneTechnicians ?? {};
+  const own = Object.keys(owners).find((zone) => owners[zone] === technicianId);
+  if (own !== undefined && withVisits.has(own)) return own;
+  const idle = [...withVisits].filter((zone) => owners[zone] === undefined);
+  const choices = idle.length ? idle : [...withVisits];
+  const score = (zone: string) => {
+    const members = pool.filter((stop) => zoneOf(stop) === zone);
+    return home ? Math.min(...members.map((stop) => haversineMeters(home, stop))) : -members.length;
+  };
+  return choices.sort((left, right) => score(left) - score(right) || left.localeCompare(right))[0]!;
 }
 
 /**
- * Give every stop a day and a technician: full days, by zone, near their week,
- * for the least driving.
+ * One day, grown nearest first from the earliest visit left in its zone.
  *
- * 0. A day with an anchor comes first: its technician's day on the anchor's date
- *    takes the visits nearest the anchor that are due inside the window, from
- *    any zone (`fillAroundAnchors`), and those visits and that day are out of
- *    the zones' layout.
- *
- * Then each zone on its own, because only its technician of the week can take it:
- * 1. Days are grown from the stop due earliest, adding whichever stop due inside
- *    the window adds least driving, until the day is full -- or, once it has its
- *    nine, until the next would take it across town (`LOCAL_HOP_MINUTES`).
- * 2. A day short of `minStopsPerDay` gives its stops to the zone's other days when
- *    all of them fit, moving one stop of a full day on to a third to make room;
- *    or joins another short day when the two fit as one.
- * 3. Each day then takes the day of the week its zone's technician works that is
- *    nearest the middle of its stops' due dates.
- * 4. The zone's days are improved (`improveDays`).
+ * It takes, whichever adds least driving, a visit of its zone or one of any zone
+ * within the neighbour drive of the visits it has; and once it has its minimum,
+ * it stops at a visit across town.
  */
-export function layoutFullDays(
+function growDay(
+  zone: string | null,
+  pool: readonly PlannableStop[],
+  limits: DayLimits,
+  drive: DriveEstimate,
+  neighbourMinutes: number,
+): Draft {
+  const own = zone === null ? pool : pool.filter((stop) => zoneOf(stop) === zone);
+  const others = zone === null ? [] : pool.filter((stop) => zoneOf(stop) !== zone);
+  const seed = own[0]!;
+  let day: Draft = { path: [seed], drive: 0, onSite: seed.onSiteMinutes };
+  const taken = new Set([seed]);
+  const near = new Set<PlannableStop>();
+  const meet = (added: PlannableStop) => {
+    for (const stop of others) if (!near.has(stop) && drive(stop, added) <= neighbourMinutes) near.add(stop);
+  };
+  meet(seed);
+
+  for (;;) {
+    let best: { stop: PlannableStop; next: Draft } | null = null;
+    for (const stop of [...own, ...near]) {
+      if (taken.has(stop)) continue;
+      const next = withVisit(day, stop, limits, drive);
+      if (next && (!best || next.drive < best.next.drive)) best = { stop, next };
+    }
+    if (!best || acrossTown(day, best.next.drive - day.drive, limits)) break;
+    day = best.next;
+    taken.add(best.stop);
+    meet(best.stop);
+  }
+  return day;
+}
+
+/**
+ * A day short of the minimum, brought up to it with the nearest of what nobody
+ * else's zone needed that day: a crew member whose zone ran out still has a full
+ * day, as the office wants, rather than going home at lunch.
+ */
+function toppedUp(day: Draft, pool: readonly PlannableStop[], limits: DayLimits, drive: DriveEstimate): Draft {
+  let topped = day;
+  const left = new Set(pool);
+  while (topped.path.length < limits.minStopsPerDay) {
+    let best: { stop: PlannableStop; next: Draft } | null = null;
+    for (const stop of left) {
+      const next = withVisit(topped, stop, limits, drive);
+      if (next && (!best || next.drive < best.next.drive)) best = { stop, next };
+    }
+    if (!best) break;
+    topped = best.next;
+    left.delete(best.stop);
+  }
+  return topped;
+}
+
+/** The first run of `count` planned days in a row -- no weekend or closed day between -- that `usable` accepts. */
+function firstRun(days: readonly PlannableDay[], count: number, usable: (day: PlannableDay) => boolean) {
+  for (let start = 0; start + count <= days.length; start += 1) {
+    const run = days.slice(start, start + count);
+    const inARow = run.every((day, index) => index === 0 || dayTime(day.date) - dayTime(run[index - 1]!.date) === DAY_MS);
+    if (inARow && run.every(usable)) return run;
+  }
+  return null;
+}
+
+/** The visits in a chain, each the nearest to the one before, from the one nearest `start`. */
+function chained(stops: readonly PlannableStop[], start: Point | undefined, drive: DriveEstimate) {
+  const left = new Set(stops);
+  let from: Point | undefined = start;
+  const chain: PlannableStop[] = [];
+  while (left.size) {
+    let next: PlannableStop | null = null;
+    for (const stop of left) if (!next || (from && drive(from, stop) < drive(from, next))) next = stop;
+    chain.push(next!);
+    left.delete(next!);
+    from = next!;
+  }
+  return chain;
+}
+
+/**
+ * A far zone's visits as a trip: back-to-back days of one crew member.
+ *
+ * The crew member living nearest the zone goes, on the first run of days in a
+ * row they are free and qualified for all of it; with no run for them, the next
+ * nearest. The visits are chained nearest to nearest from the one nearest their
+ * home, cut into the trip's days, and the days improved together.
+ */
+function planTrip(
+  zone: string,
+  members: readonly PlannableStop[],
+  days: readonly PlannableDay[],
+  crew: readonly string[],
+  context: {
+    limits: DayLimits;
+    drive: DriveEstimate;
+    homes: ReadonlyMap<string, Point> | undefined;
+    unavailable: (key: string) => boolean;
+  },
+): AssignedCrew[] | null {
+  const { limits, drive, homes } = context;
+  const onSite = members.reduce((total, stop) => total + stop.onSiteMinutes, 0);
+  const count = Math.max(Math.ceil(members.length / stopsCap(limits)), Math.ceil(onSite / limits.maxOnSiteMinutes));
+  const middle = {
+    latitude: members.reduce((total, stop) => total + stop.latitude, 0) / members.length,
+    longitude: members.reduce((total, stop) => total + stop.longitude, 0) / members.length,
+  };
+  const fromHome = (technicianId: string) => {
+    const home = homes?.get(technicianId);
+    return home ? haversineMeters(home, middle) : Number.POSITIVE_INFINITY;
+  };
+  // Stable, so the crew's own order settles a tie and puts anyone without a home last.
+  for (const technicianId of [...crew].sort((left, right) => fromHome(left) - fromHome(right))) {
+    const run = firstRun(
+      days,
+      count,
+      (day) =>
+        !context.unavailable(crewKey(day.date, technicianId)) &&
+        members.every((stop) => qualified(day, technicianId, stop)),
+    );
+    if (!run) continue;
+    const chain = chained(members, homes?.get(technicianId), drive);
+    const size = Math.ceil(chain.length / count);
+    const working: Working[] = run.map((day, index) => ({
+      date: day.date,
+      technicianId,
+      day,
+      zone,
+      path: chain.slice(index * size, (index + 1) * size),
+      drive: 0,
+      onSite: 0,
+    }));
+    improveWorking(working, { limits, drive, allows: () => true });
+    const trip = working.filter((day) => day.path.length > 0);
+    return trip.map((day, index) => ({
+      date: day.date,
+      technicianId,
+      stops: day.path,
+      onSiteMinutes: day.onSite,
+      driveMinutes: day.drive,
+      trip: { zone, day: index + 1, days: trip.length },
+    }));
+  }
+  return null;
+}
+
+/**
+ * Give every stop a day and a technician: the whole crew every planned day, from
+ * the quarter's first, until every visit has one.
+ *
+ * 0. A far zone's visits are a trip, on back-to-back days fixed first
+ *    (`planTrip`).
+ * 1. Then day by day. First each crew member with a move-out that day, whose day
+ *    takes the visits nearest it from any zone (`fillAroundAnchors`); then
+ *    whoever still has visits in their zone of the week, and then everyone
+ *    else, each day grown from the earliest visit left in their zone, taking
+ *    neighbours from other zones as it goes (`growDay`, `zoneForDay`); and last,
+ *    a day short of the minimum topped up with the nearest of what is left
+ *    (`toppedUp`).
+ * 2. The days are improved together (`improveWorking`): a visit may move to a day
+ *    of its own zone, or to one where it is a neighbour.
+ */
+export function layoutEveryDay(
   stops: readonly PlannableStop[],
   days: readonly PlannableDay[],
   options: LayoutOptions = {},
 ): QuarterAssignment {
   const limits = options.limits ?? DEFAULT_DAY_LIMITS;
-  const drive = options.driveMinutes ?? estimatedDriveMinutes;
-  const window = (options.windowDays ?? WINDOW_DAYS) * DAY_MS;
+  const drive = remembered(options.driveMinutes ?? estimatedDriveMinutes);
+  const neighbourMinutes = options.neighbourMinutes ?? NEIGHBOUR_MINUTES;
   const capacity = {
     stops: stops.length,
     onSiteMinutes: stops.reduce((total, stop) => total + stop.onSiteMinutes, 0),
@@ -681,27 +814,28 @@ export function layoutFullDays(
     return { placed: [], crews: [], unplaced, skippedAnchors, capacity };
   }
 
-  const due = dueDates(stops, days, options.rotation);
-  const dueOf = (stop: PlannableStop) => due.get(stop.stopId)!;
-  const byRotation = [...stops].sort((left, right) => dueOf(left) - dueOf(right) || left.sequence - right.sequence);
-  const zoned = days.some((day) => day.zoneTechnicians);
-  const qualified = (day: PlannableDay, technicianId: string, stop: PlannableStop) => {
-    const list = day.qualified?.[stop.inspectionType];
-    return day.technicianIds.includes(technicianId) && (!list || list.includes(technicianId));
-  };
+  // Last quarter's order: whoever was first then is first now.
+  const place = new Map(stops.map((stop, index) => [stop.stopId, options.rotation?.position.get(stop.stopId) ?? index]));
+  const ordered = [...stops].sort(
+    (left, right) => place.get(left.stopId)! - place.get(right.stopId)! || left.sequence - right.sequence,
+  );
+  const left = new Set<PlannableStop>();
+  for (const stop of ordered) {
+    if (stop.onSiteMinutes > limits.maxOnSiteMinutes) unplaced.push({ stopId: stop.stopId, reason: 'LONGER_THAN_A_DAY' });
+    else if (!days.some((day) => day.technicianIds.some((technicianId) => qualified(day, technicianId, stop))))
+      unplaced.push({ stopId: stop.stopId, reason: 'NO_QUALIFIED_TECHNICIAN' });
+    else left.add(stop);
+  }
 
-  const crews: AssignedCrew[] = [];
-
-  // 0. Days built around anchors, earliest first.
+  // The move-outs a day can be built around; the rest say why not.
   const dayOn = new Map(days.map((day) => [day.date, day]));
-  const anchorDays = new Map<string, DayAnchor[]>();
+  const byDay = new Map<string, DayAnchor[]>();
   for (const anchor of options.anchors ?? []) {
     const key = crewKey(anchor.date, anchor.technicianId);
-    anchorDays.set(key, [...(anchorDays.get(key) ?? []), anchor]);
+    byDay.set(key, [...(byDay.get(key) ?? []), anchor]);
   }
-  const anchoredDays = new Set<string>();
-  const anchoredVisits = new Set<PlannableStop>();
-  for (const [key, dayAnchors] of [...anchorDays].sort(([left], [right]) => left.localeCompare(right))) {
+  const anchored = new Map<string, DayAnchor[]>();
+  for (const [key, dayAnchors] of [...byDay].sort(([one], [other]) => one.localeCompare(other))) {
     const { date, technicianId } = dayAnchors[0]!;
     const day = dayOn.get(date);
     // A weekend, a holiday or a Monday kept for rescheduled visits has no planned day to build.
@@ -712,171 +846,112 @@ export function layoutFullDays(
         : options.taken?.has(key)
           ? 'DAY_TAKEN'
           : null;
-    if (reason || !day) {
-      for (const anchor of dayAnchors) skippedAnchors.push({ anchorId: anchor.id, reason: reason ?? 'NOT_A_PLANNED_DAY' });
+    if (reason) for (const anchor of dayAnchors) skippedAnchors.push({ anchorId: anchor.id, reason });
+    else anchored.set(key, dayAnchors);
+  }
+
+  const crews: AssignedCrew[] = [];
+
+  // 0. Trips, on days fixed before anything else is laid out.
+  const crew = [...new Set(days.flatMap((day) => day.technicianIds))];
+  const onTrip = new Set<string>();
+  for (const zone of [...new Set(options.tripZones ?? [])].sort()) {
+    const members = [...left].filter((stop) => zoneOf(stop) === zone);
+    if (members.length === 0) continue;
+    for (const stop of members) left.delete(stop);
+    const trip = planTrip(zone, members, days, crew, {
+      limits,
+      drive,
+      homes: options.homes,
+      unavailable: (key) => Boolean(options.taken?.has(key)) || anchored.has(key) || onTrip.has(key),
+    });
+    if (!trip) {
+      for (const stop of members) unplaced.push({ stopId: stop.stopId, reason: 'NO_TRIP_DAYS' });
       continue;
     }
-    const time = dayTime(date);
-    const candidates = byRotation.filter(
-      (stop) =>
-        !anchoredVisits.has(stop) &&
-        stop.onSiteMinutes <= limits.maxOnSiteMinutes &&
-        qualified(day, technicianId, stop) &&
-        Math.abs(dueOf(stop) - time) <= window,
-    );
-    const filled = fillAroundAnchors(dayAnchors, candidates, limits, drive);
-    for (const visit of filled.visits) anchoredVisits.add(visit);
-    anchoredDays.add(key);
-    crews.push({
-      date,
-      technicianId,
-      stops: filled.visits,
-      onSiteMinutes: filled.onSite,
-      driveMinutes: filled.drive,
-      anchors: dayAnchors,
-    });
+    for (const day of trip) onTrip.add(crewKey(day.date, day.technicianId));
+    crews.push(...trip);
   }
 
-  const groups = [...new Set(byRotation.map((stop) => (zoned ? (stop.zone ?? '') : '')))];
-  for (const group of groups) {
-    const slots = days.flatMap((day) =>
-      (zoned ? (day.zoneTechnicians?.[group] ? [day.zoneTechnicians[group]!] : []) : day.technicianIds)
-        .filter(
-          (technicianId) =>
-            day.technicianIds.includes(technicianId) &&
-            !options.taken?.has(crewKey(day.date, technicianId)) &&
-            !anchoredDays.has(crewKey(day.date, technicianId)),
-        )
-        .map((technicianId) => ({ day, technicianId, time: dayTime(day.date) })),
-    );
-    const members = byRotation.filter(
-      (stop) => (zoned ? (stop.zone ?? '') : '') === group && !anchoredVisits.has(stop),
-    );
-    const placeable: PlannableStop[] = [];
-    for (const stop of members) {
-      if (stop.onSiteMinutes > limits.maxOnSiteMinutes) unplaced.push({ stopId: stop.stopId, reason: 'LONGER_THAN_A_DAY' });
-      else if (!slots.some((slot) => qualified(slot.day, slot.technicianId, stop)))
-        unplaced.push({ stopId: stop.stopId, reason: 'NO_QUALIFIED_TECHNICIAN' });
-      else placeable.push(stop);
-    }
-
-    // 1. Grow full days from the stop due earliest.
-    const left = new Set(placeable);
-    let drafts: Draft[] = [];
-    for (const seed of placeable) {
-      if (!left.has(seed)) continue;
-      left.delete(seed);
-      let day: Draft = { path: [seed], drive: 0, onSite: seed.onSiteMinutes };
-      const candidates = placeable.filter((stop) => left.has(stop) && Math.abs(dueOf(stop) - dueOf(seed)) <= window);
-      for (;;) {
-        let best: { stop: PlannableStop; next: Draft } | null = null;
-        for (const stop of candidates) {
-          if (!left.has(stop)) continue;
-          const next = withVisit(day, stop, limits, drive);
-          if (next && (!best || next.drive - day.drive < best.next.drive - day.drive)) best = { stop, next };
-        }
-        if (!best) break;
-        const averageLeg = day.path.length > 1 ? day.drive / (day.path.length - 1) : 0;
-        if (day.path.length >= limits.minStopsPerDay && best.next.drive - day.drive > Math.max(LOCAL_HOP_MINUTES, 2 * averageLeg)) break;
-        day = best.next;
-        left.delete(best.stop);
-      }
-      drafts.push(day);
-    }
-
-    // 2. Fold short days away.
-    const middle = (day: Draft) => midpoint(day.path.map(dueOf));
-    const inWindow = (stop: PlannableStop, day: Draft) => Math.abs(dueOf(stop) - middle(day)) <= window;
-    const nearestOther = (stop: PlannableStop, others: readonly Draft[]) =>
-      Math.min(...others.flatMap((day) => day.path.map((other) => haversineMeters(stop, other))));
-    for (let changed = true; changed; ) {
-      changed = false;
-      const shorts = drafts.filter((day) => day.path.length < limits.minStopsPerDay).sort((a, b) => a.path.length - b.path.length);
-      for (const short of shorts) {
-        if (!drafts.includes(short)) continue;
-        const others = drafts.filter((day) => day !== short);
-        if (others.length === 0) break;
-        const trial = new Map(others.map((day) => [day, { ...day, path: [...day.path] }]));
-        // The stop hardest to place first: the one farthest from every other day.
-        const toMove = [...short.path].sort((a, b) => nearestOther(b, others) - nearestOther(a, others));
-        let folded = true;
-        for (const stop of toMove) {
-          let best: { day: Draft; next: Draft } | null = null;
-          for (const day of others) {
-            const state = trial.get(day)!;
-            if (!inWindow(stop, state)) continue;
-            const next = withVisit(state, stop, limits, drive);
-            if (next && (!best || next.drive - state.drive < best.next.drive - trial.get(best.day)!.drive)) best = { day, next };
-          }
-          if (!best)
-            // Room made in a full day: one of its stops moves on to a third day.
-            for (const day of others) {
-              const state = trial.get(day)!;
-              if (!inWindow(stop, state)) continue;
-              for (const bumped of state.path) {
-                const rest = polished(state.path.filter((other) => other !== bumped), drive);
-                const next = withVisit({ ...rest, onSite: state.onSite - bumped.onSiteMinutes }, stop, limits, drive);
-                if (!next) continue;
-                const third = others.find(
-                  (other) => other !== day && inWindow(bumped, trial.get(other)!) && withVisit(trial.get(other)!, bumped, limits, drive),
-                );
-                if (!third) continue;
-                trial.set(third, withVisit(trial.get(third)!, bumped, limits, drive)!);
-                best = { day, next };
-                break;
-              }
-              if (best) break;
-            }
-          if (!best) {
-            folded = false;
-            break;
-          }
-          trial.set(best.day, best.next);
-        }
-        if (folded) {
-          drafts = others.map((day) => trial.get(day)!);
-          changed = true;
-          continue;
-        }
-        for (const other of drafts.filter((day) => day !== short && day.path.length < limits.minStopsPerDay)) {
-          const merged = polished([...short.path, ...other.path], drive);
-          const onSite = short.onSite + other.onSite;
-          if (merged.path.length > stopsCap(limits) || onSite > limits.maxOnSiteMinutes) continue;
-          const day = { ...merged, onSite };
-          if (!day.path.every((stop) => inWindow(stop, day))) continue;
-          drafts = [...drafts.filter((existing) => existing !== short && existing !== other), day];
-          changed = true;
-          break;
-        }
-      }
-    }
-
-    // 3. A day of the week for each: the zone's technician's, nearest its stops' middle due date.
-    const free = [...slots];
-    const working: Working[] = [];
-    for (const day of [...drafts].sort((a, b) => middle(a) - middle(b))) {
-      const fits = free.filter((slot) => day.path.every((stop) => qualified(slot.day, slot.technicianId, stop)));
-      if (fits.length === 0) {
-        const reason = free.length ? 'NO_QUALIFIED_TECHNICIAN' : 'NO_CAPACITY';
-        for (const stop of day.path) unplaced.push({ stopId: stop.stopId, reason });
+  // 1. Every crew member, every planned day, until nothing is left: each day's
+  // move-outs and zones first -- whoever still has visits in their own zone
+  // before anyone helping out -- and then short days topped up with the rest.
+  const zoned = days.some((day) => day.zoneTechnicians);
+  const working: Working[] = [];
+  const poolFor = (day: PlannableDay, technicianId: string) => [...left].filter((stop) => qualified(day, technicianId, stop));
+  for (const day of days) {
+    const owners = day.zoneTechnicians ?? {};
+    const hasOwnZone = (technicianId: string) =>
+      [...left].some((stop) => owners[zoneOf(stop)] === technicianId && qualified(day, technicianId, stop));
+    const free = day.technicianIds.filter((technicianId) => {
+      const key = crewKey(day.date, technicianId);
+      return !options.taken?.has(key) && !onTrip.has(key);
+    });
+    const order = [
+      ...free.filter((technicianId) => anchored.has(crewKey(day.date, technicianId))),
+      ...free.filter((technicianId) => !anchored.has(crewKey(day.date, technicianId)) && hasOwnZone(technicianId)),
+      ...free.filter((technicianId) => !anchored.has(crewKey(day.date, technicianId)) && !hasOwnZone(technicianId)),
+    ];
+    const todays: Working[] = [];
+    for (const technicianId of order) {
+      const pool = poolFor(day, technicianId);
+      const dayAnchors = anchored.get(crewKey(day.date, technicianId));
+      if (dayAnchors) {
+        const filled = fillAroundAnchors(dayAnchors, pool, limits, drive);
+        for (const visit of filled.visits) left.delete(visit);
+        crews.push({
+          date: day.date,
+          technicianId,
+          stops: filled.visits,
+          onSiteMinutes: filled.onSite,
+          driveMinutes: filled.drive,
+          anchors: dayAnchors,
+        });
         continue;
       }
-      const want = middle(day);
-      const slot = fits.reduce((best, candidate) => (Math.abs(candidate.time - want) < Math.abs(best.time - want) ? candidate : best));
-      free.splice(free.indexOf(slot), 1);
-      working.push({ date: slot.day.date, technicianId: slot.technicianId, day: slot.day, time: slot.time, ...day });
+      if (pool.length === 0) continue;
+      const zone = zoned ? zoneForDay(day, technicianId, pool, options.homes?.get(technicianId)) : null;
+      const grown = growDay(zone, pool, limits, drive, neighbourMinutes);
+      for (const visit of grown.path) left.delete(visit);
+      todays.push({ date: day.date, technicianId, day, zone, ...grown });
     }
-
-    // 4. The least driving, and every day brought up to the minimum where the zone's visits allow it.
-    improveWorking(working, { limits, drive, window, dueOf });
-    for (const day of working)
-      if (day.path.length)
-        crews.push({ date: day.date, technicianId: day.technicianId, stops: day.path, onSiteMinutes: day.onSite, driveMinutes: day.drive });
+    for (const today of todays) {
+      if (today.path.length >= limits.minStopsPerDay) continue;
+      const topped = toppedUp(today, poolFor(day, today.technicianId), limits, drive);
+      for (const visit of topped.path) left.delete(visit);
+      Object.assign(today, topped);
+    }
+    working.push(...todays);
   }
+  for (const stop of left) unplaced.push({ stopId: stop.stopId, reason: 'NO_CAPACITY' });
 
-  crews.sort((left, right) => left.date.localeCompare(right.date) || left.technicianId.localeCompare(right.technicianId));
-  const placed = crews.flatMap((crew) =>
-    crew.stops.map((stop, index) => ({ stopId: stop.stopId, date: crew.date, technicianId: crew.technicianId, position: index + 1 })),
+  // 2. The least driving, and every day brought up to the minimum where it can
+  // be: a zone's days together, as a visit moves only to a day of its own zone
+  // or one it is a neighbour of -- which, but for a day's edges, is its zone's.
+  const neighbour = (stop: PlannableStop, path: readonly PlannableStop[]) =>
+    path.some((other) => other !== stop && drive(stop, other) <= neighbourMinutes);
+  const byZone = new Map<string, Working[]>();
+  for (const day of working) byZone.set(day.zone ?? '', [...(byZone.get(day.zone ?? '') ?? []), day]);
+  for (const zoneDays of byZone.values())
+    improveWorking(zoneDays, {
+      limits,
+      drive,
+      allows: (stop, day) =>
+        qualified(day.day, day.technicianId, stop) &&
+        (day.zone === null || zoneOf(stop) === day.zone || neighbour(stop, day.path)),
+    });
+  for (const day of working)
+    if (day.path.length)
+      crews.push({ date: day.date, technicianId: day.technicianId, stops: day.path, onSiteMinutes: day.onSite, driveMinutes: day.drive });
+
+  crews.sort((one, other) => one.date.localeCompare(other.date) || one.technicianId.localeCompare(other.technicianId));
+  const placed = crews.flatMap((crewDay) =>
+    crewDay.stops.map((stop, index) => ({
+      stopId: stop.stopId,
+      date: crewDay.date,
+      technicianId: crewDay.technicianId,
+      position: index + 1,
+    })),
   );
   return { placed, crews, unplaced, skippedAnchors, capacity };
 }
