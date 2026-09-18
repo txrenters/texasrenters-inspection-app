@@ -1,4 +1,4 @@
-import { CheckIcon, CircleIcon } from 'lucide-react-native';
+import { CameraIcon, CheckIcon, CircleIcon } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
@@ -8,7 +8,7 @@ import { Button } from '@/src/components/ui';
 import { registerIcons } from '@/src/lib/icons';
 import { useThemeColors } from '@/src/lib/theme-colors';
 
-registerIcons(CheckIcon, CircleIcon);
+registerIcons(CameraIcon, CheckIcon, CircleIcon);
 
 const DONE = 'Done';
 const NOT_DONE = 'Not done';
@@ -17,8 +17,9 @@ const NOT_DONE = 'Not done';
  * One service of the job, answered where the technician is standing.
  *
  * Pest control and flea treatment are each a single answer: done, or not done
- * with the reason and whether the office should book it again. No photograph —
- * the office asked for one only for the filters (2026-09-18).
+ * with the reason and whether the office should book it again. A photograph is
+ * optional (the office, 2026-09-18): offered once the service is marked done,
+ * never required.
  *
  * The reason is required when it was not done, because that sentence is what a
  * coordinator reads in Jobber before rebooking. The submit button on the job
@@ -28,15 +29,21 @@ export function ServiceAnswerSheet({
   title,
   visible,
   answer,
+  hasPhoto = false,
   onClose,
   onAnswer,
+  onAddPhoto,
 }: {
   title: string;
   visible: boolean;
   /** What was answered before, when the technician is correcting it. */
   answer?: { done: boolean; reason: string | null; reschedule: boolean };
+  /** A photograph was already taken for this service. */
+  hasPhoto?: boolean;
   onClose: () => void;
   onAnswer: (next: { done: boolean; reason: string | null; reschedule: boolean }) => void;
+  /** Saves the answer as done, then opens the camera for the optional photograph. */
+  onAddPhoto?: (next: { done: boolean; reason: string | null; reschedule: boolean }) => void;
 }) {
   const theme = useThemeColors();
   const [done, setDone] = useState<boolean | null>(answer?.done ?? null);
@@ -95,6 +102,17 @@ export function ServiceAnswerSheet({
               <Text className="text-sm text-foreground">Ask the office to book it again</Text>
             </Pressable>
           </View>
+        ) : null}
+
+        {/* Only for a service that happened: a photograph of a treatment
+            nobody gave would evidence the wrong thing. */}
+        {done === true && onAddPhoto ? (
+          <Button
+            icon={<CameraIcon size={18} className="text-foreground" />}
+            label={hasPhoto ? 'Save and retake the photo' : 'Save and add a photo (optional)'}
+            onPress={() => onAddPhoto({ done: true, reason: null, reschedule: false })}
+            variant="secondary"
+          />
         ) : null}
 
         <View className="flex-row gap-3">

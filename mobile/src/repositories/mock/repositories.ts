@@ -222,6 +222,9 @@ export class MockInspectionRepository implements InspectionRepository {
   async filtersArea(id: string) {
     return `mock-filters-area:${id}`;
   }
+  async serviceArea(id: string, service: string) {
+    return `mock-${service}-area:${id}`;
+  }
   async couldNotAccess(id: string, _reason?: string) {
     return this.get(id);
   }

@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { VisitServicesReport } from '@texasrenters/shared';
+import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import type {
   ChecklistAssessment,
@@ -382,6 +382,10 @@ export function useInspectionActions(id: string) {
      * photographs never grows an area at all.
      */
     filtersArea: useMutation({ mutationFn: () => repositories.inspections.filtersArea(id) }),
+    /** The area a service's optional photographs are filed under, made on the first one. */
+    serviceArea: useMutation({
+      mutationFn: (service: ReportableVisitService) => repositories.inspections.serviceArea(id, service),
+    }),
     /** Nobody let the technician in: the office books the whole visit again. */
     couldNotAccess: useMutation(
       action<string>('PROCESSING', (reason) => repositories.inspections.couldNotAccess(id, reason)),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { jobWorked } from './job-time';
+import { inspectionTime, jobWorked } from './job-time';
 
 /**
  * The technician's own clock, from Start job to submitting (the office,
@@ -40,5 +40,18 @@ describe('how long a job took', () => {
 
   it('ignores a stamp that is not a time', () => {
     expect(jobWorked({ startedAt: 'yesterday' })).toBeNull();
+  });
+});
+
+describe('how long the inspection itself took', () => {
+  it('is the span of its evidence, in the console’s own wording', () => {
+    expect(inspectionTime({ from: '2026-09-18T14:20:00.000Z', to: '2026-09-18T14:58:00.000Z' })).toBe('38 min');
+    expect(inspectionTime({ from: '2026-09-18T14:20:00.000Z', to: '2026-09-18T15:32:00.000Z' })).toBe('1 hr 12 min');
+  });
+
+  it('is nothing before there is a span to read', () => {
+    expect(inspectionTime(null)).toBeNull();
+    expect(inspectionTime({ from: '2026-09-18T14:20:00.000Z', to: '2026-09-18T14:20:00.000Z' })).toBeNull();
+    expect(inspectionTime({ from: 'yesterday', to: '2026-09-18T14:20:00.000Z' })).toBeNull();
   });
 });

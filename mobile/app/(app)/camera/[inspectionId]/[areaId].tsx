@@ -38,7 +38,7 @@ import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
 import { goBack } from '@/src/lib/navigation';
-import { withFilterAnswer } from '@/src/utils/job-tasks';
+import { withFilterAnswer, withServicePhoto } from '@/src/utils/job-tasks';
 import { HomeButton } from '@/src/components/HomeButton';
 import { GuidedCaptureOverlay } from '@/src/capture/GuidedCaptureOverlay';
 import { ShutterFlash } from '@/src/capture/ShutterFlash';
@@ -121,6 +121,7 @@ export default function RoomCameraScreen() {
     filterSlot,
     filterBooked,
     filterLabel: filterLabelParam,
+    servicePhoto,
   } = useLocalSearchParams<{
     inspectionId: string;
     areaId: string;
@@ -138,6 +139,11 @@ export default function RoomCameraScreen() {
     filterSlot?: string;
     filterBooked?: string;
     filterLabel?: string;
+    /**
+     * This shot is a service's optional photograph — pest control or a flea
+     * treatment — and is attached to that service's answer the same way.
+     */
+    servicePhoto?: string;
   }>();
   const room = useRoom(areaId);
   /**
@@ -267,11 +273,15 @@ export default function RoomCameraScreen() {
         slot: Number(filterSlot ?? '1') || 1,
       }
     : null;
+  /** The service this shot belongs to, when the job screen sent one. */
+  const serviceForPhoto =
+    servicePhoto === 'pestControl' || servicePhoto === 'fleaTreatment' ? servicePhoto : null;
   const saveServices = inspectionActions.saveServices;
   // SERIAL_OR_LABEL, because the office asked for the size printed on the
-  // filter to be in shot: the photograph is of a label, not of a room.
+  // filter to be in shot: the photograph is of a label, not of a room. A
+  // treatment's photograph is of neither.
   const [captureType, setCaptureType] = useState<PhotoCaptureType>(
-    filterSize ? 'SERIAL_OR_LABEL' : 'AREA_OVERVIEW',
+    filterSize ? 'SERIAL_OR_LABEL' : serviceForPhoto ? 'OTHER' : 'AREA_OVERVIEW',
   );
   const [photoCount, setPhotoCount] = useState(0);
   /** The shot just taken, while it is still held from upload. */
@@ -1076,6 +1086,14 @@ export default function RoomCameraScreen() {
           );
         }
         goBack();
+      } else if (serviceForPhoto) {
+        // The same for a service's optional photograph, on the same condition.
+        if (inspection.data) {
+          saveServices.mutate(
+            withServicePhoto(inspection.data.servicesReport ?? null, serviceForPhoto, snapshot.id),
+          );
+        }
+        goBack();
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
@@ -1192,11 +1210,13 @@ export default function RoomCameraScreen() {
               <Text className="text-xs text-white/70">
                 {filterRegister
                   ? 'Show the size printed on the filter'
-                  : isAdditional
-                    ? 'Additional evidence clip'
-                    : primary === 'PHOTO'
-                      ? 'Room photos'
-                      : 'Primary room walkthrough'}
+                  : serviceForPhoto
+                    ? 'One photo of the treatment (optional)'
+                    : isAdditional
+                      ? 'Additional evidence clip'
+                      : primary === 'PHOTO'
+                        ? 'Room photos'
+                        : 'Primary room walkthrough'}
               </Text>
             </View>
             {/* Hidden mid-take: a technician one turn into a walkthrough must not

@@ -230,6 +230,53 @@ describe('the Jobber visit on an inspection', () => {
     expect(screen.getByText(/20x25x1, 16x20x1/)).toBeInTheDocument();
   });
 
+  it('puts each photograph beside what it shows, and only the ones that have arrived', () => {
+    render(
+      <JobberVisitDetails
+        details={DETAILS}
+        inspectionType="OCCUPIED"
+        servicesReport={{
+          services: {
+            filterChange: { done: true, reason: null, reschedule: false },
+            pestControl: { done: true, reason: null, reschedule: false, photoKey: 'snapshot-p', photoId: 'photo-pest' },
+          },
+          filters: [
+            {
+              size: '20x25x1',
+              location: 'upstairs hallway',
+              slot: 1,
+              changed: true,
+              reason: null,
+              photoId: 'photo-1',
+              booked: true,
+            },
+            {
+              size: '12x12x1',
+              location: 'downstairs',
+              slot: 1,
+              changed: true,
+              reason: null,
+              photoId: null,
+              photoKey: 'snapshot-2',
+              booked: true,
+            },
+          ],
+          filtersInstalled: [],
+          notes: null,
+        }}
+        title={TITLE}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Open Serial or label of this job - 20x25x1 · upstairs hallway' }),
+    ).toBeInTheDocument();
+    // Pest control's photograph is optional, and shown when there is one.
+    expect(screen.getByRole('button', { name: 'Open Photo of this job - Pest control' })).toBeInTheDocument();
+    // Still in the technician's upload queue: said in words, not shown as a picture.
+    expect(screen.queryByRole('button', { name: /12x12x1/ })).not.toBeInTheDocument();
+  });
+
   it('shows nothing for an inspection that did not come from Jobber', () => {
     const { container } = render(<JobberVisitDetails inspectionType="MOVE_IN" />);
     expect(container).toBeEmptyDOMElement();

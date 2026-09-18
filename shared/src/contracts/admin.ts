@@ -461,6 +461,12 @@ export interface AdminInspection {
   scheduledAt: string;
   startedAt?: string | null;
   submittedAt?: string | null;
+  /**
+   * The inspection itself, apart from the job's other tasks: its first
+   * photograph or recording to its last, on the phone's own clock where the
+   * phone gave one. Null before there are two moments to measure between.
+   */
+  inspectionWorked?: { from: string; to: string; clock: 'DEVICE' | 'SERVER' } | null;
   completedAt?: string | null;
   finalizedAt?: string | null;
   finalizedBy?: { id: string; displayName: string } | null;

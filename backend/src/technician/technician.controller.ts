@@ -21,13 +21,18 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@texasrenters/shared';
+import {
+  REPORTABLE_VISIT_SERVICES,
+  UserRole,
+  type ReportableVisitService,
+} from '@texasrenters/shared';
 import { diskStorage } from 'multer';
 
 import { ChargeService } from '../admin/charge.service';
 import { PetObservationDto } from '../admin/admin.dto';
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
 import { businessDayFromQuery } from '../common/business-day';
+import { ApplicationError } from '../common/errors';
 import { MobilePushService } from '../realtime/mobile-push.service';
 import { MediaProcessingService } from './media-processing.service';
 import {
@@ -202,12 +207,27 @@ export class TechnicianController {
   ) {
     return this.service.saveServicesReport(request.user, id, body);
   }
-  /** The area a job's filter photographs are filed under, made on the first one. */
+  /**
+   * The area a job's filter photographs are filed under, made on the first one.
+   *
+   * Kept beside `service-area/:service`: phones on v2.5.75 ask for it by this
+   * name, and an OTA is not guaranteed to have reached every one of them.
+   */
   @Post('inspections/:inspectionId/filters-area') filtersArea(
     @Req() request: AuthenticatedRequest,
     @Param('inspectionId') id: string,
   ) {
     return this.service.filtersArea(request.user, id);
+  }
+  /** The area a service's photographs are filed under: the filters, pest control, or flea treatment. */
+  @Post('inspections/:inspectionId/service-area/:service') serviceArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Param('service') service: string,
+  ) {
+    if (!(REPORTABLE_VISIT_SERVICES as readonly string[]).includes(service))
+      throw new ApplicationError(404, 'SERVICE_NOT_FOUND', 'There is no such service on a job.');
+    return this.service.serviceArea(request.user, id, service as ReportableVisitService);
   }
   /** Nobody let the technician in: the office books the whole visit again. */
   @Post('inspections/:inspectionId/no-access') couldNotAccess(

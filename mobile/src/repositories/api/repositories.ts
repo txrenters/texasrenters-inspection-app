@@ -46,7 +46,7 @@ import { runStreamUpload, type StreamUploadSession } from '../../media/stream-up
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import type { ClosingComments } from '../../utils/closing-comments';
 import { resolveApiUrl } from '@texasrenters/shared';
-import type { InspectionType, VisitServicesReport } from '@texasrenters/shared';
+import type { InspectionType, ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import { z } from 'zod';
 
@@ -843,6 +843,16 @@ export class ApiInspectionRepository implements InspectionRepository {
   async filtersArea(id: string) {
     const area = filtersAreaSchema.parse(
       await writeJson(`/api/v1/technician/inspections/${encodeURIComponent(id)}/filters-area`, 'POST'),
+    );
+    return area.areaId;
+  }
+  /** The area a service's optional photographs are filed under, made on the first one. */
+  async serviceArea(id: string, service: ReportableVisitService) {
+    const area = filtersAreaSchema.parse(
+      await writeJson(
+        `/api/v1/technician/inspections/${encodeURIComponent(id)}/service-area/${encodeURIComponent(service)}`,
+        'POST',
+      ),
     );
     return area.areaId;
   }

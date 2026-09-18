@@ -236,6 +236,86 @@ describe('technician photo evidence', () => {
     ).rejects.toMatchObject({ status: 415, code: 'PHOTO_TYPE_UNSUPPORTED' });
   });
 
+  describe('a job photograph that arrives after the checklist was answered', () => {
+    const reportedAt = new Date('2026-09-18T15:00:00.000Z');
+    const filtersArea = { ...area, propertyArea: { name: 'AC filters' } };
+    const waitingReport = {
+      services: { filterChange: { done: true, reason: null, reschedule: false } },
+      filters: [
+        {
+          size: '20x25x1',
+          location: 'hallway',
+          slot: 1,
+          changed: true,
+          reason: null,
+          photoKey: 'photo-key-filter-1',
+          photoId: null,
+          booked: true,
+        },
+      ],
+    };
+
+    function buildJob(options: { area?: unknown; counts?: number[] } = {}) {
+      const counts = [...(options.counts ?? [1])];
+      const inspection = {
+        findUnique: jest.fn().mockResolvedValue({ servicesReport: waitingReport, servicesReportedAt: reportedAt }),
+        updateMany: jest.fn().mockImplementation(() => Promise.resolve({ count: counts.shift() ?? 1 })),
+      };
+      return { inspection, ...build({
+        inspectionArea: { findFirst: jest.fn().mockResolvedValue(options.area ?? filtersArea) },
+        inspection,
+        inspectionPhoto: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue(photoRecord({ id: 'photo-9', inspectionAreaId: 'area-1' })),
+          findUniqueOrThrow: jest.fn(),
+          // What `resolveFilterPhotos` reads: the photograph is now stored under its key.
+          findMany: jest.fn().mockResolvedValue([{ id: 'photo-9', idempotencyKey: 'photo-key-filter-1' }]),
+        },
+      }) };
+    }
+
+    const upload = (service: TechnicianService, key = 'photo-key-filter-1') =>
+      service.uploadPhoto(technician, 'area-1', { idempotencyKey: key, captureType: 'SERIAL_OR_LABEL' as never }, jpeg());
+
+    it('fills in the register that was waiting on its key, without moving the time it was reported', async () => {
+      const { service, inspection } = buildJob();
+      await upload(service);
+
+      expect(inspection.updateMany).toHaveBeenCalledTimes(1);
+      const [{ where, data }] = inspection.updateMany.mock.calls[0];
+      // Only if nothing was saved since it was read.
+      expect(where).toEqual({ id: 'insp-1', servicesReportedAt: reportedAt });
+      expect(data).toEqual({
+        servicesReport: expect.objectContaining({ filters: [expect.objectContaining({ photoId: 'photo-9' })] }),
+      });
+    });
+
+    it('leaves a report alone when nothing in it is waiting on that photograph', async () => {
+      const { service, inspection } = buildJob();
+      await upload(service, 'photo-key-something-else');
+      expect(inspection.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('never overwrites a save that landed in between: it reads again and resolves that', async () => {
+      const { service, inspection } = buildJob({ counts: [0, 1] });
+      await upload(service);
+      expect(inspection.findUnique).toHaveBeenCalledTimes(2);
+      expect(inspection.updateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('still returns the stored photograph when the checklist cannot be updated', async () => {
+      const { service, inspection } = buildJob();
+      inspection.updateMany.mockRejectedValue(new Error('connection reset'));
+      await expect(upload(service)).resolves.toMatchObject({ id: 'photo-9' });
+    });
+
+    it('does not read the job at all for a photograph of an ordinary room', async () => {
+      const { service, inspection } = buildJob({ area: { ...area, propertyArea: { name: 'Kitchen' } } });
+      await upload(service);
+      expect(inspection.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a finding link that does not belong to the area', async () => {
     const { service } = build({
       inspectionArea: { findFirst: jest.fn().mockResolvedValue(area) },

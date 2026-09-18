@@ -19,7 +19,8 @@ import {
  * Change 2.Pest Control 3.HVAC / Occupied Inspection", and asks for the numbers
  * back in the Jobber notes. The checklist on the phone is that list (the office,
  * 2026-09-18): ticked as the work happens rather than remembered at the end,
- * with a photograph of each filter register and none for pest control.
+ * with a photograph of each filter register, and an optional one for pest
+ * control or a flea treatment.
  *
  * Which tasks a job has comes from the visit's Details, so a visit that books
  * only a filter change shows only that, and the inspection is a task like the
@@ -174,7 +175,16 @@ export function jobTasks(input: JobTasksInput): JobTask[] {
       title: VISIT_SERVICE_LABEL[service],
       kind: 'SERVICE',
       state: !outcome ? 'TODO' : outcome.done ? 'DONE' : 'NOT_DONE',
-      detail: outcome && !outcome.done ? outcome.reason || 'Not done' : null,
+      detail: !outcome
+        ? null
+        : !outcome.done
+          ? outcome.reason || 'Not done'
+          : // The photograph is optional, so it is mentioned only when there is one.
+            outcome.photoId
+            ? 'Done · photo'
+            : outcome.photoKey
+              ? 'Done · photo sending'
+              : null,
     });
   }
 
@@ -235,10 +245,45 @@ export function withServiceAnswer(
   answer: { done: boolean; reason: string | null; reschedule: boolean },
 ): VisitServicesReport {
   const current = report ?? EMPTY_REPORT;
+  const existing = current.services[service];
   return {
     ...current,
     filters: current.filters ?? [],
-    services: { ...current.services, [service]: answer },
+    services: {
+      ...current.services,
+      [service]: {
+        ...answer,
+        // A photograph already taken stays with a service still done, and goes
+        // with one now said not to have happened: it would evidence nothing.
+        ...(answer.done && (existing?.photoKey || existing?.photoId)
+          ? { photoKey: existing.photoKey ?? null, photoId: existing.photoId ?? null }
+          : {}),
+      },
+    },
+  };
+}
+
+/**
+ * The report with a service's optional photograph attached.
+ *
+ * Taking one means the service happened, so the service is marked done if it
+ * was not already. The photograph travels in the upload queue like every other
+ * one, and the key the handset gave it is what the answer carries meanwhile.
+ */
+export function withServicePhoto(
+  report: VisitServicesReport | null | undefined,
+  service: ReportableVisitService,
+  photoKey: string,
+): VisitServicesReport {
+  const current = report ?? EMPTY_REPORT;
+  const existing = current.services[service];
+  return {
+    ...current,
+    filters: current.filters ?? [],
+    services: {
+      ...current.services,
+      [service]: { done: true, reason: null, reschedule: false, ...(existing?.done ? existing : {}), photoKey, photoId: null },
+    },
   };
 }
 

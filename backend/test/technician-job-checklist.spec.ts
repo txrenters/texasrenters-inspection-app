@@ -65,6 +65,14 @@ const job = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+const JOB_PHOTOS = [
+  { id: '30000000-0000-4000-8000-000000000001', idempotencyKey: 'snapshot-1758100000-aa11b' },
+  { id: '30000000-0000-4000-8000-000000000002', idempotencyKey: 'snapshot-1758100001-bb22c' },
+];
+
+/** A photograph of the same unit, from last quarter's visit. */
+const ANOTHER_JOBS_PHOTO = '30000000-0000-4000-8000-0000000000ff';
+
 function build(record = job()) {
   const prisma: Record<string, never> & {
     inspection: { findFirst: jest.Mock; update: jest.Mock };
@@ -88,7 +96,8 @@ function build(record = job()) {
       create: jest.fn().mockResolvedValue({ id: 'property-area-1' }),
     },
     property: { upsert: jest.fn().mockResolvedValue({ id: 'building-1' }) },
-    inspectionPhoto: { findMany: jest.fn().mockResolvedValue([]) },
+    // The photographs this job holds, which the fixtures' registers point at.
+    inspectionPhoto: { findMany: jest.fn().mockResolvedValue(JOB_PHOTOS) },
     jobberOutboundTask: { create: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn(async (run: (tx: unknown) => unknown) => run(prisma)),
   } as never;
@@ -353,6 +362,24 @@ describe('submitting a job whose registers were answered one by one', () => {
     ).rejects.toMatchObject({ code: 'SERVICES_REPORT_INCOMPLETE' });
   });
 
+  it('refuses a register pointed at a photograph from another job', async () => {
+    const { service, prisma } = build();
+
+    await expect(
+      service.completeInspection(technician, 'job-1', {
+        servicesReport: {
+          services: { filterChange: { done: true }, pestControl: { done: true } },
+          filters: [filter({ photoId: ANOTHER_JOBS_PHOTO }), answered[1], answered[2]],
+          filtersInstalled: [],
+        } as never,
+      }),
+    ).rejects.toMatchObject({ code: 'SERVICES_REPORT_INCOMPLETE' });
+    // Looked for among this job's photographs only.
+    expect(prisma.inspectionPhoto.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ inspectionId: 'job-1' }) }),
+    );
+  });
+
   it('refuses when a register the visit listed was never answered', async () => {
     const { service } = build();
 
@@ -410,10 +437,7 @@ describe('the photograph a register was answered with', () => {
 
     expect(prisma.inspectionPhoto.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({
-          inspectionId: 'job-1',
-          idempotencyKey: { in: ['snapshot-1758200000-ab12c'] },
-        }),
+        where: { inspectionId: 'job-1', OR: [{ idempotencyKey: { in: ['snapshot-1758200000-ab12c'] } }] },
       }),
     );
     const filters = (written(prisma).servicesReport as unknown as { filters: unknown[] }).filters;
@@ -451,5 +475,103 @@ describe('the photograph a register was answered with', () => {
     // Submitted rather than refused: the answer is the technician's, and the
     // image follows from the queue.
     expect(written(prisma).status).toBe(InspectionStatus.TECHNICIAN_SUBMITTED);
+  });
+});
+
+/**
+ * Pest control and flea treatment may carry one photograph, optionally — the
+ * office's choice (2026-09-18) — filed in an area of their own.
+ */
+describe('a service’s optional photograph', () => {
+  it('is filed in an area named for the service', async () => {
+    const { service, prisma } = build();
+
+    await service.serviceArea(technician, 'job-1', 'pestControl');
+
+    expect(prisma.propertyArea.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ name: 'Pest control', source: 'SYSTEM', isRequired: false }),
+      }),
+    );
+  });
+
+  it('keeps the AC filters area where phones on the last update ask for it', async () => {
+    const { service, prisma } = build();
+
+    await service.filtersArea(technician, 'job-1');
+
+    expect(prisma.propertyArea.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ name: 'AC filters' }) }),
+    );
+  });
+
+  it('is kept with a service that was done, and resolved once its upload lands', async () => {
+    const { service, prisma } = build();
+    prisma.inspectionPhoto.findMany.mockResolvedValue([
+      { id: '50000000-0000-4000-8000-000000000001', idempotencyKey: 'snapshot-pest-01' },
+    ]);
+
+    await service.saveServicesReport(technician, 'job-1', {
+      servicesReport: {
+        services: { pestControl: { done: true, photoKey: 'snapshot-pest-01' } },
+        filters: [],
+        filtersInstalled: [],
+      } as never,
+    });
+
+    expect((written(prisma).servicesReport as unknown as { services: object }).services).toEqual({
+      pestControl: {
+        done: true,
+        reason: null,
+        reschedule: false,
+        photoKey: 'snapshot-pest-01',
+        photoId: '50000000-0000-4000-8000-000000000001',
+      },
+    });
+  });
+
+  it('is dropped from a service that was not done, which it could not be evidence of', async () => {
+    const { service, prisma } = build();
+
+    await service.saveServicesReport(technician, 'job-1', {
+      servicesReport: {
+        services: { pestControl: { done: false, reason: 'Newborn in the house', photoKey: 'snapshot-pest-01' } },
+        filters: [],
+        filtersInstalled: [],
+      } as never,
+    });
+
+    expect((written(prisma).servicesReport as unknown as { services: object }).services).toEqual({
+      pestControl: { done: false, reason: 'Newborn in the house', reschedule: false },
+    });
+  });
+
+  it('is let go when it is not this job’s, rather than shown as this visit’s', async () => {
+    const { service, prisma } = build();
+
+    await service.saveServicesReport(technician, 'job-1', {
+      servicesReport: {
+        services: { pestControl: { done: true, photoId: ANOTHER_JOBS_PHOTO } },
+        filters: [],
+        filtersInstalled: [],
+      } as never,
+    });
+
+    expect((written(prisma).servicesReport as unknown as { services: object }).services).toEqual({
+      pestControl: { done: true, reason: null, reschedule: false },
+    });
+  });
+
+  it('is never asked for: a service done without one is answered', async () => {
+    const { service } = build();
+
+    await expect(
+      service.completeInspection(technician, 'job-1', {
+        servicesReport: {
+          services: { filterChange: { done: false, reason: 'Nobody home' }, pestControl: { done: true } },
+          filtersInstalled: [],
+        } as never,
+      }),
+    ).resolves.toBeDefined();
   });
 });

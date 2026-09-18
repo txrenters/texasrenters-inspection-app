@@ -13,11 +13,15 @@
  * "Cannot read properties of undefined (reading 'count')" — not one of them
  * about evidence. Spread this into a prisma mock so the mock models the client
  * rather than the single call the test happens to make.
+ *
+ * The same read also times the inspection from its evidence (2026-09-18,
+ * `inspection-timing.ts`), which lists photograph and recording times — hence
+ * the `findMany` beside each `count`, answering that there is nothing to time.
  */
 export const ZERO_EVIDENCE = {
   inspectionArea: { count: jest.fn().mockResolvedValue(0) },
   inspectionFinding: { count: jest.fn().mockResolvedValue(0) },
-  inspectionPhoto: { count: jest.fn().mockResolvedValue(0) },
-  inspectionMedia: { count: jest.fn().mockResolvedValue(0) },
+  inspectionPhoto: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
+  inspectionMedia: { count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
   inspectionAreaChecklistResponse: { count: jest.fn().mockResolvedValue(0) },
 };
