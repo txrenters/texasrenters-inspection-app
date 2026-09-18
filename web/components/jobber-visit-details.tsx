@@ -18,7 +18,23 @@ import { useMemo, type ReactNode } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { formatDateTime } from '@/lib/format';
+
+/** Every photograph the technician took for the job's services, labelled by what it shows. */
+function servicePhotos(report: VisitServicesReport): ServicePhoto[] {
+  const registers = (report.filters ?? [])
+    .filter((filter) => filter.photoId)
+    .map((filter): ServicePhoto => ({ id: filter.photoId!, label: filterLabel(filter), captureType: 'SERIAL_OR_LABEL' }));
+  const services = REPORTABLE_VISIT_SERVICES.filter((service) => report.services[service]?.photoId).map(
+    (service): ServicePhoto => ({
+      id: report.services[service]!.photoId!,
+      label: VISIT_SERVICE_LABEL[service],
+      captureType: 'OTHER',
+    }),
+  );
+  return [...registers, ...services];
+}
 
 /**
  * What the coordinator wrote on the Jobber visit, read into what the office needs.
@@ -29,6 +45,7 @@ import { formatDateTime } from '@/lib/format';
  * written is a reading of free text, and a reading can be wrong where the text
  * cannot, so the text is always one click away.
  */
+
 export function JobberVisitDetails({
   title,
   details,
@@ -296,6 +313,10 @@ export function JobberVisitDetails({
                 ))}
               </ul>
             ) : null}
+            {/* The photographs themselves, beside the answers they evidence:
+                each filter's, and pest control's or flea treatment's where the
+                technician took one. */}
+            <ServicePhotos areaName="this job" photos={servicePhotos(servicesReport)} />
             {servicesReport.notes ? (
               <p className="text-sm whitespace-pre-wrap">{servicesReport.notes}</p>
             ) : null}

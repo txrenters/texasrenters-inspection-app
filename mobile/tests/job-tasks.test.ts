@@ -6,6 +6,7 @@ import {
   jobTasks,
   withFilterAnswer,
   withServiceAnswer,
+  withServicePhoto,
   withoutFilter,
 } from '../src/utils/job-tasks';
 
@@ -147,6 +148,15 @@ describe('how a task reads as the work happens', () => {
       report: report({ services: { pestControl: { done: false, reason: 'Newborn in the house', reschedule: true } } }),
     });
     expect(not[1]).toMatchObject({ state: 'NOT_DONE', detail: 'Newborn in the house' });
+  });
+
+  it("mentions pest control's optional photograph only when there is one", () => {
+    const pestControl = { done: true, reason: null, reschedule: false, photoKey: 'snapshot-3' };
+    const sending = tasksFor({ report: report({ services: { pestControl: { ...pestControl, photoId: null } } }) });
+    expect(sending[1]).toMatchObject({ state: 'DONE', detail: 'Done · photo sending' });
+
+    const arrived = tasksFor({ report: report({ services: { pestControl: { ...pestControl, photoId: 'photo-3' } } }) });
+    expect(arrived[1]).toMatchObject({ state: 'DONE', detail: 'Done · photo' });
   });
 
   it('follows the areas for the inspection', () => {
@@ -296,6 +306,59 @@ describe('writing an answer into the checklist', () => {
       reason: 'Nobody home',
       reschedule: true,
     });
+  });
+
+  it('attaches an optional photograph to a service, which means it was done', () => {
+    expect(withServicePhoto(null, 'pestControl', 'snapshot-4').services.pestControl).toEqual({
+      done: true,
+      reason: null,
+      reschedule: false,
+      photoKey: 'snapshot-4',
+      photoId: null,
+    });
+
+    const notDone = withServiceAnswer(null, 'pestControl', { done: false, reason: 'Dog loose', reschedule: true });
+    expect(withServicePhoto(notDone, 'pestControl', 'snapshot-5').services.pestControl).toEqual({
+      done: true,
+      reason: null,
+      reschedule: false,
+      photoKey: 'snapshot-5',
+      photoId: null,
+    });
+  });
+
+  it('replaces a service photograph that is retaken, until the new one arrives', () => {
+    const first = withServicePhoto(null, 'pestControl', 'snapshot-4');
+    const arrived = report({ services: { pestControl: { ...first.services.pestControl!, photoId: 'photo-4' } } });
+
+    expect(withServicePhoto(arrived, 'pestControl', 'snapshot-6').services.pestControl).toMatchObject({
+      photoKey: 'snapshot-6',
+      photoId: null,
+    });
+  });
+
+  it("keeps a service's photograph when it is ticked done again, and drops it when it was not done after all", () => {
+    const photographed = withServicePhoto(null, 'fleaTreatment', 'snapshot-7');
+    const again = withServiceAnswer(photographed, 'fleaTreatment', { done: true, reason: null, reschedule: false });
+    expect(again.services.fleaTreatment).toMatchObject({ done: true, photoKey: 'snapshot-7' });
+
+    const undone = withServiceAnswer(photographed, 'fleaTreatment', {
+      done: false,
+      reason: 'Tenant refused',
+      reschedule: true,
+    });
+    // A photograph of a treatment that did not happen would evidence nothing.
+    expect(undone.services.fleaTreatment).toEqual({ done: false, reason: 'Tenant refused', reschedule: true });
+  });
+
+  it('never asks for a service photograph before the job can be submitted', () => {
+    const noFilters = withServiceAnswer(null, 'filterChange', {
+      done: false,
+      reason: 'No filters on the truck',
+      reschedule: true,
+    });
+    const done = withServiceAnswer(noFilters, 'pestControl', { done: true, reason: null, reschedule: false });
+    expect(jobChecklistProblems(DETAILS, done)).toEqual([]);
   });
 
   it('records a register found on site as not booked, and can drop it again', () => {

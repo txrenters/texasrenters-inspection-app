@@ -203,6 +203,8 @@ export default function InspectionOverviewScreen() {
   // that nobody let them in at all.
   const [answering, setAnswering] = useState<JobTask | null>(null);
   const [noAccessOpen, setNoAccessOpen] = useState(false);
+  /** Why the camera could not open for a service's optional photograph. */
+  const [photoError, setPhotoError] = useState<string | null>(null);
   // Ticks by the minute, and again on foregrounding, so a job left open all
   // morning does not still read as eight minutes old.
   const now = useLocalNow();
@@ -427,6 +429,11 @@ export default function InspectionOverviewScreen() {
           onOpen={open}
           tasks={tasks}
         />
+        {photoError ? (
+          <Text className="mx-5 mt-3 text-xs text-destructive" accessibilityRole="alert">
+            {photoError}
+          </Text>
+        ) : null}
 
         {/* Before the progress card: the filters to bring and who to call are
             needed before the first area is opened, not after. */}
@@ -736,8 +743,8 @@ export default function InspectionOverviewScreen() {
         )}
       </View>
 
-      {/* The service the technician tapped: one answer, and no photograph —
-          the office asked for those only for the filters. */}
+      {/* The service the technician tapped: one answer, and a photograph if
+          they want one — the office requires those only for the filters. */}
       <ServiceAnswerSheet
         answer={(() => {
           const current = answering?.key && answering.key !== 'inspection'
@@ -747,10 +754,39 @@ export default function InspectionOverviewScreen() {
             ? { done: current.done, reason: current.reason, reschedule: current.reschedule }
             : undefined;
         })()}
+        hasPhoto={Boolean(
+          answering &&
+            answering.key !== 'inspection' &&
+            (item.servicesReport?.services[answering.key]?.photoId ||
+              item.servicesReport?.services[answering.key]?.photoKey),
+        )}
         onAnswer={(next) => {
           if (answering && answering.key !== 'inspection')
             actions.saveServices.mutate(withServiceAnswer(item.servicesReport, answering.key, next));
           setAnswering(null);
+        }}
+        onAddPhoto={(next) => {
+          if (!answering || answering.key === 'inspection') return;
+          const task = answering;
+          const service = answering.key;
+          // The answer first, so a camera that cannot open still leaves the
+          // service marked done — the photograph is the optional part.
+          actions.saveServices.mutate(withServiceAnswer(item.servicesReport, service, next));
+          setAnswering(null);
+          setPhotoError(null);
+          // The area it is filed under is made on the first one, as the
+          // filters' is; the camera then takes one shot and comes back.
+          actions.serviceArea.mutate(service, {
+            onSuccess: (areaId) =>
+              router.push({
+                pathname: '/camera/[inspectionId]/[areaId]',
+                params: { inspectionId: id, areaId, servicePhoto: service, filterLabel: task.title },
+              }),
+            onError: () =>
+              setPhotoError(
+                `${task.title} is saved as done, but the camera could not open for its photo. Try again in a moment.`,
+              ),
+          });
         }}
         onClose={() => setAnswering(null)}
         title={answering?.title ?? ''}

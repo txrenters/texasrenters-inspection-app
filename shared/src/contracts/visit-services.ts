@@ -36,7 +36,30 @@ export interface VisitServiceOutcome {
   reason: string | null;
   /** The office should book this service again. Only ever true when not done. */
   reschedule: boolean;
+  /**
+   * A photograph of the service, when the technician took one.
+   *
+   * Optional, unlike the filters' (the office, 2026-09-18): pest control does
+   * not always leave anything to photograph. The same pair as a filter
+   * register: the key the handset gave it, then the photograph once it lands.
+   */
+  photoKey?: string | null;
+  photoId?: string | null;
 }
+
+/**
+ * The area each service's photographs are filed under, named the way the office
+ * names the service.
+ *
+ * One per building and unit, made on the first photograph and reused by every
+ * later visit there, like an HVAC visit's sections. Also what the console leaves
+ * out when it times the inspection: these are the job's other tasks, not rooms.
+ */
+export const SERVICE_PHOTO_AREA: Record<ReportableVisitService, string> = {
+  filterChange: 'AC filters',
+  pestControl: 'Pest control',
+  fleaTreatment: 'Flea treatment',
+};
 
 /**
  * One filter register, as the technician answered for it.

@@ -46,3 +46,20 @@ export function jobWorked(
     window: submitted === null ? `from ${from}` : `${from} – ${businessTimeOfDay(job.submittedAt)}`,
   };
 }
+
+/**
+ * How long the inspection itself took, apart from the job's other tasks.
+ *
+ * The server reads it from the evidence (its first photograph or recording to
+ * its last), because the inspection has no button of its own to time it by. So
+ * it leaves out walking in before the first room and packing up after the last.
+ */
+export function inspectionTime(
+  span: { from: string; to: string } | null | undefined,
+): string | null {
+  if (!span) return null;
+  const from = new Date(span.from).getTime();
+  const to = new Date(span.to).getTime();
+  if (Number.isNaN(from) || Number.isNaN(to) || to <= from) return null;
+  return formatDuration((to - from) / 1000);
+}

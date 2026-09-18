@@ -40,6 +40,7 @@ import {
   requireBuilding,
   resolveInspectionPlan,
 } from './inspection-creation';
+import { inspectionEvidenceTimes, inspectionSpan } from './inspection-timing';
 import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
@@ -1367,6 +1368,9 @@ export class AdminService {
     const { jobberVisitId, jobberOutboundTasks, ...detail } = inspection;
     // Optional-chained for the test doubles that stand in for this read without it.
     const consoleTasks = jobberOutboundTasks ?? [];
+    // The inspection itself, read from its evidence rather than from a button
+    // nobody presses: see inspection-timing.ts.
+    const span = inspectionSpan(await inspectionEvidenceTimes(this.prisma, user.organizationId, id));
     const booking = consoleTasks.find((task) => task.kind === JobberOutboundKind.VISIT_CREATE);
     return {
       ...detail,
@@ -1380,6 +1384,9 @@ export class AdminService {
         .map((task) => ({ kind: task.kind, status: task.status, attempts: task.attempts, lastError: task.lastError })),
       // Whether a change made here reaches Jobber, so the edit form can say so.
       jobberEditsPushed: getJobberConfig().pushEditsEnabled,
+      inspectionWorked: span
+        ? { from: span.from.toISOString(), to: span.to.toISOString(), clock: span.clock }
+        : null,
     };
   }
 

@@ -45,7 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
-import { jobWorked } from '@/lib/job-time';
+import { inspectionTime, jobWorked } from '@/lib/job-time';
 import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 import {
   useAssignments,
@@ -384,6 +384,13 @@ function InspectionDetail() {
               {worked ? `${worked.worked}${worked.running ? ' so far' : ''}` : 'Not started'}
             </dd>
             {worked ? <dd className="text-muted-foreground mt-0.5 text-xs">{worked.window}</dd> : null}
+            {/* The inspection on its own, read from its first photograph or
+                recording to its last: where a job's time goes. */}
+            {inspectionTime(item.inspectionWorked) ? (
+              <dd className="text-muted-foreground mt-0.5 text-xs">
+                Inspection {inspectionTime(item.inspectionWorked)}
+              </dd>
+            ) : null}
           </div>
         </dl>
 

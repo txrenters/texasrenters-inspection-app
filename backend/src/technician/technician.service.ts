@@ -17,9 +17,12 @@ import {
   keywordsFromLabel,
   normalizeFilterSize,
   parseVisitDetails,
+  REPORTABLE_VISIT_SERVICES,
   reportableServices,
   servicesReportProblems,
+  SERVICE_PHOTO_AREA,
   type BookedFilter,
+  type ReportableVisitService,
   type VisitFilterOutcome,
   type VisitServicesReport,
 } from '@texasrenters/shared';
@@ -79,6 +82,21 @@ import type {
   TechnicianSaveServicesDto,
 } from './technician.dto';
 
+/** The areas a job's service photographs are filed under, by name. */
+const SERVICE_PHOTO_AREA_NAMES = new Set<string>(Object.values(SERVICE_PHOTO_AREA));
+
+/** One photograph a checklist points at: the handset's key for it, then the photograph once it lands. */
+interface PhotoReference {
+  photoKey?: string | null;
+  photoId?: string | null;
+}
+
+/** A checklist as the phone sends it or as it is stored: both carry photographs alike. */
+interface ReportWithPhotos {
+  services: { [Service in ReportableVisitService]?: PhotoReference };
+  filters?: PhotoReference[];
+}
+
 export interface UploadedRoomVideo {
   path: string;
   mimetype: string;
@@ -104,14 +122,6 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * have a lease ending the evening before in Texas.
  */
 const isoDay = (value: Date | null | undefined) => value?.toISOString().slice(0, 10) ?? null;
-
-/**
- * The area a job's filter photographs are filed under.
- *
- * Named for the office rather than for the code: it appears in the report
- * beside the rooms, and "AC filters" is what the office calls the service.
- */
-const FILTERS_AREA_NAME = 'AC filters';
 
 /**
  * The filter registers as they are stored: normalised, and each said to be
@@ -817,6 +827,11 @@ export class TechnicianService {
         done: outcome.done,
         reason: outcome.done ? null : (outcome.reason ?? '').trim(),
         reschedule: !outcome.done && Boolean(outcome.reschedule),
+        // Optional, and kept only for a service that happened: a photograph of
+        // a treatment nobody gave would be evidence of the wrong thing.
+        ...(outcome.done && (outcome.photoKey || outcome.photoId)
+          ? { photoKey: outcome.photoKey ?? null, photoId: outcome.photoId ?? null }
+          : {}),
       };
     }
     const answered = filterOutcomesFor(report.filters, filters);
@@ -836,38 +851,72 @@ export class TechnicianService {
   }
 
   /**
-   * Fills in the photograph a register was answered with, once it has arrived.
+   * The photographs a checklist points at: this job's own, and filled in once
+   * they have arrived.
    *
    * The handset answers with the key it gave the photograph, because the image
    * itself travels in the upload queue and may still be sitting on the device.
    * The upload carries that key as its idempotency key, so the moment it lands
    * the register can point at the photograph — which is what puts it in front
-   * of the office and in the report.
+   * of the office and in the report. A register's photograph and a service's
+   * optional one are resolved alike.
    *
-   * Called on every save and on submission, so a register answered in a
-   * basement is resolved by whichever of those happens after the photograph
-   * arrives.
+   * And only this job's: a photograph from another visit — last quarter's
+   * filter at the same unit, say — is no evidence of this one, whatever the
+   * handset sends. One it does not own is let go, so a register marked changed
+   * on the strength of it is refused at submission like one never photographed.
+   *
+   * Run on what the phone sent, before the checklist is judged whole; on every
+   * save and on submission, so a register answered in a basement is resolved by
+   * whichever of those happens after the photograph arrives; and as each
+   * photograph arrives, for one that lands after the last (`attachLatePhoto`).
    */
-  private async resolveFilterPhotos(inspectionId: string, report: VisitServicesReport | null) {
-    const waiting = (report?.filters ?? []).filter((filter) => filter.photoKey && !filter.photoId);
-    if (!report || !waiting.length) return report;
-    const photos = await this.prisma.inspectionPhoto.findMany({
-      where: {
-        inspectionId,
-        idempotencyKey: { in: waiting.map((filter) => filter.photoKey!) },
-      },
-      select: { id: true, idempotencyKey: true },
-    });
-    if (!photos.length) return report;
+  private async resolveJobPhotos<Report extends ReportWithPhotos>(
+    inspectionId: string,
+    report: Report | undefined,
+  ): Promise<Report | undefined> {
+    if (!report) return report;
+    const entries = [
+      ...(report.filters ?? []),
+      ...REPORTABLE_VISIT_SERVICES.flatMap((service) => report.services[service] ?? []),
+    ];
+    if (!entries.some((entry) => entry.photoKey || entry.photoId)) return report;
+    const keys = [...new Set(entries.flatMap((entry) => (entry.photoKey ? [entry.photoKey] : [])))];
+    const ids = [...new Set(entries.flatMap((entry) => (entry.photoId ? [entry.photoId] : [])))].filter((id) =>
+      UUID_PATTERN.test(id),
+    );
+    const photos =
+      keys.length || ids.length
+        ? await this.prisma.inspectionPhoto.findMany({
+            where: {
+              inspectionId,
+              OR: [
+                ...(keys.length ? [{ idempotencyKey: { in: keys } }] : []),
+                ...(ids.length ? [{ id: { in: ids } }] : []),
+              ],
+            },
+            select: { id: true, idempotencyKey: true },
+          })
+        : [];
+    const ours = new Set(photos.map((photo) => photo.id));
     const byKey = new Map(photos.map((photo) => [photo.idempotencyKey, photo.id]));
+    const resolve = <Entry extends PhotoReference>(entry: Entry): Entry => {
+      if (!entry.photoKey && !entry.photoId) return entry;
+      const photoId =
+        (entry.photoId && ours.has(entry.photoId) ? entry.photoId : null) ??
+        (entry.photoKey ? (byKey.get(entry.photoKey) ?? null) : null);
+      return photoId === (entry.photoId ?? null) ? entry : { ...entry, photoId };
+    };
+    const services: Record<string, PhotoReference | undefined> = { ...report.services };
+    for (const service of REPORTABLE_VISIT_SERVICES) {
+      const outcome = report.services[service];
+      if (outcome) services[service] = resolve(outcome);
+    }
     return {
       ...report,
-      filters: report.filters?.map((filter) =>
-        filter.photoKey && !filter.photoId
-          ? { ...filter, photoId: byKey.get(filter.photoKey) ?? null }
-          : filter,
-      ),
-    };
+      services,
+      ...(report.filters ? { filters: report.filters.map(resolve) } : {}),
+    } as Report;
   }
 
   /**
@@ -887,9 +936,10 @@ export class TechnicianService {
         'JOB_NOT_IN_PROGRESS',
         'Start the job before answering its checklist.',
       );
-    const report = await this.resolveFilterPhotos(
-      id,
-      this.servicesReportFor(inspection, input.servicesReport, false),
+    const report = this.servicesReportFor(
+      inspection,
+      await this.resolveJobPhotos(id, input.servicesReport),
+      false,
     );
     const updated = await this.prisma.inspection.update({
       where: { id },
@@ -903,25 +953,31 @@ export class TechnicianService {
     return { inspection: this.mapInspection(updated, user.id), servicesReport: report };
   }
 
+  /** The AC filters area: what phones on v2.5.75 ask for by this name. */
+  filtersArea(user: AuthenticatedUser, id: string) {
+    return this.serviceArea(user, id, 'filterChange');
+  }
+
   /**
-   * The area a job's filter photographs belong to, created the first time one is taken.
+   * The area a service's photographs belong to, created the first time one is taken.
    *
    * Photographs belong to an area — the column is not nullable — and a filter
-   * change is not a room. So the job gets one area named "AC filters", made the
-   * way an HVAC visit's sections are: `source` SYSTEM and no floor, so nothing
-   * counts it as part of a floor plan, and one per building and unit, reused by
-   * every later visit there.
+   * change or a pest treatment is not a room. So each service gets one area,
+   * named as the office names it (`SERVICE_PHOTO_AREA`), made the way an HVAC
+   * visit's sections are: `source` SYSTEM and no floor, so nothing counts it as
+   * part of a floor plan, and one per building and unit, reused by every later
+   * visit there.
    *
    * Lazily, on the first photograph, rather than when the visit is created:
    * there are hundreds of jobs already booked, and none of them would have it.
    */
-  async filtersArea(user: AuthenticatedUser, id: string) {
+  async serviceArea(user: AuthenticatedUser, id: string, service: ReportableVisitService) {
     const inspection = await this.assignedInspection(user, id);
     if (inspection.status !== InspectionStatus.IN_PROGRESS)
       throw new ApplicationError(
         409,
         'JOB_NOT_IN_PROGRESS',
-        'Start the job before photographing its filters.',
+        'Start the job before photographing its services.',
       );
     const buildingId = inspection.propertywareBuilding?.id;
     if (!buildingId)
@@ -952,7 +1008,7 @@ export class TechnicianService {
         propertyId: buildingId,
         unitId: inspection.propertywareUnit?.id ?? null,
         floorId: null,
-        name: FILTERS_AREA_NAME,
+        name: SERVICE_PHOTO_AREA[service],
       };
       const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
       const propertyAreaId =
@@ -969,7 +1025,7 @@ export class TechnicianService {
               source: 'SYSTEM',
               environment: AreaEnvironment.INDOOR,
               category: AreaCategory.UTILITY,
-              notes: 'Created automatically for AC filter photographs. Not part of the floor plan.',
+              notes: `Created automatically for ${SERVICE_PHOTO_AREA[service]} photographs. Not part of the floor plan.`,
             },
             select: { id: true },
           })
@@ -1085,9 +1141,11 @@ export class TechnicianService {
     // administrator finalizes *this inspection*. Record the submission and let
     // the AI pipeline advance it to REVIEW_REQUIRED once processing finishes.
     // The Jobber push below is a separate claim — see the comment on it.
-    const servicesReport = await this.resolveFilterPhotos(
-      id,
-      this.servicesReportFor(inspection, input.servicesReport),
+    // Its photographs checked first, so one from another job cannot make a
+    // register look answered: see `resolveJobPhotos`.
+    const servicesReport = this.servicesReportFor(
+      inspection,
+      await this.resolveJobPhotos(id, input.servicesReport),
     );
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.inspection.update({
@@ -2628,10 +2686,16 @@ export class TechnicianService {
           // Decides where a tagged checklist item is stored, below; and no
           // photograph of it can have been taken before it existed.
           inspection: { select: { inspectionType: true, createdAt: true } },
+          // A job's service area holds photographs its checklist points at.
+          propertyArea: { select: { name: true } },
         },
       });
       if (!area)
         throw new ApplicationError(404, 'ASSIGNED_ROOM_NOT_FOUND', 'Assigned room was not found.');
+      const attachToChecklist = () =>
+        SERVICE_PHOTO_AREA_NAMES.has(area.propertyArea?.name ?? '')
+          ? this.attachLatePhoto(user, area.inspectionId, dto.idempotencyKey)
+          : Promise.resolve();
 
       /**
        * The item has to belong to *this* area.
@@ -2667,7 +2731,11 @@ export class TechnicianService {
 
       // Retried uploads reuse the client key and return the stored photo.
       const stored = await this.photoStoredUnder(dto.idempotencyKey, area.id);
-      if (stored) return stored;
+      if (stored) {
+        // A retry after a lost response may be the first chance to attach it.
+        await attachToChecklist();
+        return stored;
+      }
 
       if (dto.findingId) {
         const finding = await this.prisma.inspectionFinding.findFirst({
@@ -2752,9 +2820,52 @@ export class TechnicianService {
         }
         throw error;
       }
+      await attachToChecklist();
       return this.mapPhoto(record);
     } finally {
       if (file) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Points the job's checklist at a photograph that arrived after its answer.
+   *
+   * Saves and the submission resolve a photograph by the key the handset gave
+   * it (`resolveJobPhotos`), but a job can be submitted with photographs
+   * still queued — the review screen says so — and nothing is saved after
+   * that. Without this, a filter photographed in a cupboard with no signal
+   * read "still uploading" in the console for good.
+   *
+   * Compare-and-set on `servicesReportedAt`, which every save moves: a save
+   * that lands in between is never overwritten, and the next pass resolves
+   * what that save wrote instead. Best effort — the photograph is stored
+   * either way, and a save still to come resolves it too.
+   */
+  private async attachLatePhoto(user: AuthenticatedUser, inspectionId: string, photoKey: string) {
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const inspection = await this.prisma.inspection.findUnique({
+          where: { id: inspectionId },
+          select: { servicesReport: true, servicesReportedAt: true },
+        });
+        const report = (inspection?.servicesReport ?? null) as VisitServicesReport | null;
+        if (!report || !inspection?.servicesReportedAt) return;
+        const waiting = [...(report.filters ?? []), ...Object.values(report.services ?? {})].some(
+          (entry) => entry?.photoKey === photoKey && !entry.photoId,
+        );
+        if (!waiting) return;
+        const resolved = await this.resolveJobPhotos(inspectionId, report);
+        const { count } = await this.prisma.inspection.updateMany({
+          where: { id: inspectionId, servicesReportedAt: inspection.servicesReportedAt },
+          data: { servicesReport: resolved as unknown as Prisma.InputJsonValue },
+        });
+        if (count) {
+          this.notifyInspectionChanged(user, inspectionId);
+          return;
+        }
+      }
+    } catch {
+      // Best effort, as above: never fail an upload that is already stored.
     }
   }
 

@@ -1,4 +1,4 @@
-import type { VisitServicesReport } from '@texasrenters/shared';
+import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type { ClosingComments } from '../utils/closing-comments';
@@ -189,6 +189,8 @@ export interface InspectionRepository {
   saveServices(id: string, servicesReport: VisitServicesReport): Promise<Inspection>;
   /** The area this job's filter photographs are filed under, made on the first one. */
   filtersArea(id: string): Promise<string>;
+  /** The area a service's optional photographs are filed under, made on the first one. */
+  serviceArea(id: string, service: ReportableVisitService): Promise<string>;
   /** Nobody let the technician in, so the office books the whole visit again. */
   couldNotAccess(id: string, reason: string): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;

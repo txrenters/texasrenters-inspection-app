@@ -490,6 +490,12 @@ export class TechnicianServiceOutcomeDto {
   @IsOptional() @IsString() @MaxLength(MAX_SERVICE_REASON) reason?: string | null;
   /** The office should book this service again. */
   @IsOptional() @IsBoolean() reschedule?: boolean;
+  /**
+   * An optional photograph of the service, as the handset keyed it. Resolved to
+   * `photoId` once its upload lands, like a filter register's.
+   */
+  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/u) photoKey?: string | null;
+  @IsOptional() @IsUUID() photoId?: string | null;
 }
 
 export class TechnicianServiceOutcomesDto {
