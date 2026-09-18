@@ -310,7 +310,7 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     { id: 'unit-half', externalId: '9012', name: '1/2', abbreviation: '50091/2NM', addressLine1: '5009 1/2 N Main St' },
     { id: 'unit-quarter', externalId: '9014', name: '1/4', abbreviation: '50091/4NM', addressLine1: '5009 1/4 N Main St' },
   ];
-  const build = (existing: Record<string, unknown>, fromReport: Record<string, unknown> = {}) => {
+  const build = (existing: Record<string, unknown>, fromReport: Record<string, unknown> = {}, priorPlans: unknown[] = []) => {
     const tenant = {
       ...tenancy('t1', '5009 N Main St', '77009'),
       ...fromReport,
@@ -327,7 +327,7 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     const prisma = {
       tbpQuarterPlan: {
         findUnique: jest.fn().mockResolvedValue({ id: 'plan-1', status: TbpPlanStatus.DRAFT }),
-        findMany: jest.fn().mockResolvedValue([]),
+        findMany: jest.fn().mockResolvedValue(priorPlans),
         upsert: jest.fn().mockResolvedValue({ id: 'plan-1', officeDetailsRows: null }),
         update: jest.fn().mockResolvedValue({}),
       },
@@ -399,6 +399,28 @@ describe('rebuilding a draft keeps what a coordinator edited', () => {
     expect(update.inspectionType).toBe('HVAC');
     expect(update.visitDetails).toBe('Filter Change: 16x20x1 + HVAC Inspection\nCall the tenant first');
     expect(update.visitTitle).toBe('5009 1/2 N Main St - Zone 1 - Q4 2026 Tenant Benefit Package');
+  });
+
+  /**
+   * A plan may start fifteen days before its quarter (the office, 2026-09-19):
+   * Q4's visit on 25 September was its first month, and Q1's goes in January,
+   * not in March as the day alone would say.
+   */
+  it('keeps the month of the quarter an early visit was in, beside its day', async () => {
+    const published = {
+      quarterYear: 2026,
+      quarterNumber: 4,
+      stops: [{ tenantExternalId: 'ext-t1', sequence: 1, assignedTechnicianId: 'moses', scheduledOn: new Date('2026-09-25T00:00:00.000Z') }],
+    };
+    const { service, stopUpsert } = build({}, {}, [published]);
+
+    await service.generate('org-1', { year: 2027, quarter: 1 });
+
+    expect(stopUpsert.mock.calls[0][0].update).toMatchObject({
+      previousVisitOn: new Date('2026-09-25T00:00:00.000Z'),
+      previousVisitMonth: 1,
+      orderSource: 'PRIOR_QUARTER',
+    });
   });
 
   /**
