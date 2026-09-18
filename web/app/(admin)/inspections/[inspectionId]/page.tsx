@@ -443,6 +443,7 @@ function InspectionDetail() {
         servicesReportedAt={item.servicesReportedAt}
         booking={item.jobberBooking}
         pushes={item.jobberPushes}
+        inJobber={Boolean(item.scheduledInJobber || item.jobberBooking)}
         action={
           // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
           !finalized &&

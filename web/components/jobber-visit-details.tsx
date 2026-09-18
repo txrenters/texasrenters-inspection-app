@@ -55,6 +55,7 @@ export function JobberVisitDetails({
   booking,
   pushes,
   action,
+  inJobber = true,
 }: {
   title?: string | null;
   details?: string | null;
@@ -68,6 +69,12 @@ export function JobberVisitDetails({
   pushes?: AdminInspection['jobberPushes'];
   /** A control for the header: "Edit visit", where the viewer may. */
   action?: ReactNode;
+  /**
+   * The visit is in Jobber, or being booked there from here. False for an
+   * inspection created here without a booking, whose Details are only the
+   * services chosen for it.
+   */
+  inJobber?: boolean;
 }) {
   const read = useMemo(() => parseVisitDetails(details), [details]);
   if (!title && !read.raw) return null;
@@ -90,7 +97,7 @@ export function JobberVisitDetails({
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div className="grid gap-1.5">
         <CardTitle id="jobber-visit-title" className="flex flex-wrap items-center gap-2">
-          Jobber visit
+          {inJobber ? 'Jobber visit' : 'Visit details'}
           {booking?.status === 'SENT' ? <Badge variant="success">Booked from this console</Badge> : null}
           {booking?.status === 'PENDING' || booking?.status === 'FAILED' ? (
             <Badge variant="info">Booking in Jobber</Badge>
@@ -104,6 +111,12 @@ export function JobberVisitDetails({
             ))}
         </CardTitle>
         {title ? <CardDescription>{title}</CardDescription> : null}
+        {inJobber ? null : (
+          <CardDescription>
+            Chosen when this inspection was created. It isn&apos;t booked in Jobber from here, so the visit in
+            Jobber needs these services at the top of its Details.
+          </CardDescription>
+        )}
         </div>
         {action}
       </CardHeader>
@@ -349,7 +362,7 @@ export function JobberVisitDetails({
         {read.raw ? (
           <details>
             <summary className="text-muted-foreground cursor-pointer text-sm select-none">
-              As written in Jobber
+              {inJobber ? 'As written in Jobber' : 'As written'}
             </summary>
             <p className="bg-muted mt-2 rounded-lg p-3 text-sm whitespace-pre-wrap">{read.raw}</p>
           </details>

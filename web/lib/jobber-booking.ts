@@ -1,4 +1,9 @@
-import type { BookingPrefill, JobberBookingContext, JobberBookingInput } from '@texasrenters/shared';
+import type {
+  BookingPrefill,
+  JobberBookingContext,
+  JobberBookingInput,
+  VisitServicesBooking,
+} from '@texasrenters/shared';
 
 /**
  * The Jobber booking form, as typed.
@@ -23,16 +28,28 @@ export interface BookingFormState {
 }
 
 /**
- * A form started from the tenant report and the lease.
+ * The services a kind of visit starts with.
  *
- * Filter change and pest control are ticked because nearly every visit the
- * office books has both; the coordinator unticks what this one does not.
+ * An occupied visit starts with the filter change and pest control ticked,
+ * because nearly every one the office books has both; the coordinator unticks
+ * what this one does not. Every other kind starts with none: a move-in or an
+ * HVAC visit carries them only when somebody asks, and a box ticked by default
+ * would put work on a technician's list that nobody booked.
  */
-export function bookingForm(prefill: BookingPrefill | null | undefined): BookingFormState {
+export function defaultVisitServices(inspectionType?: string | null): JobberBookingInput['services'] {
+  const occupied = !inspectionType || inspectionType === 'OCCUPIED';
+  return { filterChange: occupied, pestControl: occupied, fleaTreatment: false };
+}
+
+/** A form started from the tenant report and the lease, for a kind of visit (occupied when omitted). */
+export function bookingForm(
+  prefill: BookingPrefill | null | undefined,
+  inspectionType?: string | null,
+): BookingFormState {
   return {
     zone: prefill?.zone ?? '',
     benefitPackage: prefill?.benefitPackage ?? false,
-    services: { filterChange: true, pestControl: true, fleaTreatment: false },
+    services: defaultVisitServices(inspectionType),
     filters: (prefill?.filters ?? []).map((filter) => ({
       size: filter.size,
       quantity: filter.quantity ? String(filter.quantity) : '',
@@ -52,20 +69,30 @@ export function bookingForm(prefill: BookingPrefill | null | undefined): Booking
   };
 }
 
+/** The filters as sent: blank rows dropped, a quantity a number once typed. */
+function filtersFromForm(form: BookingFormState): JobberBookingInput['filters'] {
+  return form.filters
+    .filter((filter) => filter.size.trim())
+    .map((filter) => ({
+      size: filter.size.trim(),
+      ...(filter.quantity.trim() ? { quantity: Number(filter.quantity) } : {}),
+      media: filter.media,
+      location: filter.location.trim() || null,
+    }));
+}
+
+/** The services as sent for a visit not booked in Jobber from here. */
+export function servicesFromForm(form: BookingFormState): VisitServicesBooking {
+  return { services: form.services, filters: filtersFromForm(form) };
+}
+
 /** What is sent: blank rows dropped, text split into the lines and paragraphs it holds. */
 export function bookingFromForm(form: BookingFormState): JobberBookingInput {
   return {
     zone: form.zone.trim() || null,
     benefitPackage: form.benefitPackage,
     services: form.services,
-    filters: form.filters
-      .filter((filter) => filter.size.trim())
-      .map((filter) => ({
-        size: filter.size.trim(),
-        ...(filter.quantity.trim() ? { quantity: Number(filter.quantity) } : {}),
-        media: filter.media,
-        location: filter.location.trim() || null,
-      })),
+    filters: filtersFromForm(form),
     planTier: form.planTier.trim() || null,
     hvacOptedOut: form.hvacOptedOut,
     contactTenantsBeforeArrival: form.contactTenantsBeforeArrival,

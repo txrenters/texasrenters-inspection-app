@@ -17,13 +17,17 @@ import {
 import {
   LEASE_EXPIRING_SOON_DAYS,
   bookingFromTenancy,
+  booksAnyService,
   daysUntilLeaseEnd,
   isBookableInspectionType,
   jobberBookingProblems,
   jobberBookingText,
   leaseExpiryStatus,
+  visitServicesDetails,
+  visitServicesProblems,
   type JobberBookingContext,
   type JobberBookingInput,
+  type VisitServicesBooking,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -92,6 +96,13 @@ import type {
   UpdateAdminInspectionDto,
   UpdateJobberVisitDto,
 } from './admin.dto';
+
+/** The services a visit books, by name, for an audit entry: never the Details. */
+function bookedServiceNames(services: VisitServicesBooking['services']): string[] {
+  return Object.entries(services)
+    .filter(([, booked]) => booked)
+    .map(([service]) => service);
+}
 
 /** The street address a booked visit's title starts with: the unit's, else the building's. */
 function bookingAddress(
@@ -1414,6 +1425,9 @@ export class AdminService {
 
   async createInspection(user: AuthenticatedUser, input: CreateAdminInspectionDto) {
     const booking = input.jobberBooking ? this.bookableRequest(input) : null;
+    // A booking writes its services into the Details it sends; without one they
+    // are the whole of the Details.
+    const unbookedServices = booking ? null : this.unbookedServicesDetails(input);
     const inspection = await this.prisma.$transaction(async (tx) => {
       // Every rule about what an inspection may be lives in inspection-creation.ts,
       // so a Jobber-scheduled visit is held to the same ones — including the area
@@ -1434,6 +1448,7 @@ export class AdminService {
         priority: input.priority,
         internalNotes: input.internalNotes,
         createdById: user.id,
+        ...(unbookedServices ? { jobberVisitDetails: unbookedServices.details } : {}),
       });
       await this.audit(tx, user, 'INSPECTION_CREATED', inspection.id, {
         priority: input.priority,
@@ -1446,6 +1461,7 @@ export class AdminService {
         areasFromApprovedPlan: plan.approvedAreas.length,
         // What the inspection actually covers, which differs when scoped.
         areasInspected: plan.scopedAreas.length,
+        ...(unbookedServices ? { services: unbookedServices.services } : {}),
       });
       if (input.technicianId)
         await this.createAssignment(
@@ -1497,9 +1513,39 @@ export class AdminService {
         'Booking visits in Jobber is switched off on this server. Book the visit in Jobber instead.',
       );
     const booking = input.jobberBooking as JobberBookingInput;
-    const problems = jobberBookingProblems(booking, input.inspectionType);
+    const problems = jobberBookingProblems(booking);
     if (problems.length) throw new ApplicationError(422, 'JOBBER_BOOKING_INVALID', problems.join(' '));
     return booking;
+  }
+
+  /**
+   * The services a visit not booked in Jobber from here books, as its Details.
+   *
+   * The services line alone -- "Pest Control + HVAC Inspection" -- because that
+   * is what the phone lists the job's services from, and what the console asks
+   * the coordinator to put in the visit's Details in Jobber. Null when nothing
+   * is booked, so an inspection created without services is created exactly as
+   * before. Checked before anything is written, like a booking.
+   */
+  private unbookedServicesDetails(
+    input: CreateAdminInspectionDto,
+  ): { details: string; services: string[] } | null {
+    const requested = input.visitServices as VisitServicesBooking | undefined;
+    if (!requested || !booksAnyService(requested.services)) return null;
+    // The kinds whose Details this system writes: a lockbox, a roof or a filter
+    // delivery has no services line to add them to.
+    if (!isBookableInspectionType(input.inspectionType))
+      throw new ApplicationError(
+        422,
+        'VISIT_SERVICES_TYPE_UNSUPPORTED',
+        'Services can be added to an occupied, move-in, move-out, back-to-market or HVAC inspection only.',
+      );
+    const problems = visitServicesProblems(requested);
+    if (problems.length) throw new ApplicationError(422, 'VISIT_SERVICES_INVALID', problems.join(' '));
+    return {
+      details: visitServicesDetails(input.inspectionType, requested)!,
+      services: bookedServiceNames(requested.services),
+    };
   }
 
   /**
@@ -1576,12 +1622,8 @@ export class AdminService {
       jobberPropertyId: link.jobberPropertyId,
       inspectionType,
       benefitPackage: inspectionType === 'OCCUPIED' && booking.benefitPackage,
-      services:
-        inspectionType === 'OCCUPIED'
-          ? Object.entries(booking.services)
-              .filter(([, booked]) => booked)
-              .map(([service]) => service)
-          : [],
+      // Every kind of visit can book them now, and writes them when it does.
+      services: bookedServiceNames(booking.services),
     });
   }
 
