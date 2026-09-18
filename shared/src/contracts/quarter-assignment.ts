@@ -44,7 +44,7 @@
  *   (`ANCHOR_VISITS`, 2026-09-18): six besides one, three besides two.
  */
 
-import { quarterEnd, quarterStart, type Quarter } from './quarter-plan.js';
+import { monthOfPlan, type Quarter } from './quarter-plan.js';
 import { haversineMeters } from './route-plan.js';
 
 /** A stop that can be placed: it has a rotation position, a location and a length. */
@@ -1016,22 +1016,6 @@ export function layoutEveryDay(
     })),
   );
   return { placed, crews, unplaced, skippedAnchors, capacity };
-}
-
-/** Which month of its quarter a day is in: 1 for January, April, July and October, and so on. */
-export const monthOfQuarter = (date: string) => ((Number(date.slice(5, 7)) - 1) % 3) + 1;
-
-/**
- * Which month of its quarter a plan's day is in: by the calendar inside the
- * quarter, the first for a day before it -- a plan may start up to fifteen days
- * early (the office, 2026-09-19) -- and the last for one after it.
- */
-export function monthOfPlan(date: string, quarter?: Quarter): number {
-  if (quarter) {
-    if (date < quarterStart(quarter).toISOString().slice(0, 10)) return 1;
-    if (date >= quarterEnd(quarter).toISOString().slice(0, 10)) return 3;
-  }
-  return monthOfQuarter(date);
 }
 
 /**

@@ -144,6 +144,23 @@ export function usFederalHolidays(year: number): string[] {
 /** The quarter's first day, `YYYY-MM-DD`. */
 export const quarterFirstDay = (quarter: Quarter) => isoDate(quarterStart(quarter).getTime());
 
+/** Which month of its quarter a day is in: 1 for January, April, July and October, and so on. */
+export const monthOfQuarter = (date: string) => ((Number(date.slice(5, 7)) - 1) % 3) + 1;
+
+/**
+ * Which month of a quarter a day of its plan is in: by the calendar inside the
+ * quarter, the first for a day before it -- a plan may start up to fifteen days
+ * early (the office, 2026-09-19) -- and the last for one after it. Without the
+ * quarter, by the calendar alone.
+ */
+export function monthOfPlan(date: string, quarter?: Quarter): number {
+  if (quarter) {
+    if (date < quarterFirstDay(quarter)) return 1;
+    if (date >= isoDate(quarterEnd(quarter).getTime())) return 3;
+  }
+  return monthOfQuarter(date);
+}
+
 /**
  * How far either side of its quarter's first day a plan may start: fifteen days
  * (the office, 2026-09-19: "there's a +-15 days rule ... for the q4 we can start
@@ -248,6 +265,13 @@ export interface PriorRank {
    * either: this quarter's visit goes in the same month of its quarter.
    */
   visitedOn?: string | null;
+  /**
+   * The month of its own quarter that visit was in, 1 to 3, when known
+   * (`monthOfPlan`). Kept beside the day because the day alone cannot say: a
+   * plan may start up to fifteen days before its quarter, so a visit on 25
+   * September can be Q4's first month as easily as Q3's last.
+   */
+  visitedMonth?: number | null;
 }
 
 export type OrderSource = 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';
@@ -260,6 +284,8 @@ export interface RankedStop {
   previousSequence: number | null;
   /** The day of the visit that position came from, when known. */
   previousVisitOn: string | null;
+  /** The month of its quarter that visit was in, 1 to 3, when known: this one's month. */
+  previousVisitMonth: number | null;
   orderSource: OrderSource;
 }
 
@@ -296,12 +322,20 @@ export function carryForwardOrder(
   const placed = candidates.map((candidate) => {
     const depth = ranks.findIndex((quarter) => quarter.has(candidate.tenantExternalId));
     if (depth === -1)
-      return { candidate, carried: null, visitedOn: null, depth: Number.MAX_SAFE_INTEGER, source: 'NEW_ENROLLMENT' as const };
+      return {
+        candidate,
+        carried: null,
+        visitedOn: null,
+        visitedMonth: null,
+        depth: Number.MAX_SAFE_INTEGER,
+        source: 'NEW_ENROLLMENT' as const,
+      };
     const prior = ranks[depth].get(candidate.tenantExternalId);
     return {
       candidate,
       carried: prior?.sequence ?? null,
       visitedOn: prior?.visitedOn ?? null,
+      visitedMonth: prior?.visitedMonth ?? null,
       depth,
       // Depth 0 is last quarter. Anything deeper means the tenancy was skipped,
       // blocked or excluded in between, and it keeps its place rather than
@@ -346,6 +380,7 @@ export function carryForwardOrder(
     sequence: index + 1,
     previousSequence: entry.carried,
     previousVisitOn: entry.visitedOn,
+    previousVisitMonth: entry.visitedMonth,
     orderSource: entry.source,
   }));
 }
