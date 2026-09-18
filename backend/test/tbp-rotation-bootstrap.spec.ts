@@ -50,10 +50,11 @@ describe('recovering last quarter’s order from Jobber visits', () => {
       byStreet({ 'first ave': 't-1', 'second st': 't-2', 'third rd': 't-3' }),
     );
 
+    // Each with its day, for the month of the quarter the next visit keeps (the office, 2026-09-18).
     expect(ranks).toEqual([
-      { tenantExternalId: 't-1', sequence: 1 },
-      { tenantExternalId: 't-2', sequence: 2 },
-      { tenantExternalId: 't-3', sequence: 3 },
+      { tenantExternalId: 't-1', sequence: 1, visitedOn: '2026-07-02' },
+      { tenantExternalId: 't-2', sequence: 2, visitedOn: '2026-08-11' },
+      { tenantExternalId: 't-3', sequence: 3, visitedOn: '2026-09-30' },
     ]);
   });
 
@@ -73,8 +74,8 @@ describe('recovering last quarter’s order from Jobber visits', () => {
     );
 
     expect(ranks).toEqual([
-      { tenantExternalId: 't-1', sequence: 1 },
-      { tenantExternalId: 't-3', sequence: 2 },
+      { tenantExternalId: 't-1', sequence: 1, visitedOn: '2026-07-02' },
+      { tenantExternalId: 't-3', sequence: 2, visitedOn: '2026-09-30' },
     ]);
     expect(unmatchedAddress).toBe(1);
   });
@@ -112,8 +113,8 @@ describe('recovering last quarter’s order from Jobber visits', () => {
     );
 
     expect(ranks).toEqual([
-      { tenantExternalId: 't-1', sequence: 1 },
-      { tenantExternalId: 't-2', sequence: 2 },
+      { tenantExternalId: 't-1', sequence: 1, visitedOn: '2026-07-02' },
+      { tenantExternalId: 't-2', sequence: 2, visitedOn: '2026-08-11' },
     ]);
   });
 

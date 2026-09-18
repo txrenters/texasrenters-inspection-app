@@ -23,6 +23,8 @@ interface StopRow {
   onSiteMinutesOverriddenAt?: Date | null;
   /** As the tenant report writes it. */
   zone?: string | null;
+  /** `YYYY-MM-DD`, the day of its visit last quarter. */
+  previousVisitOn?: string | null;
 }
 
 interface Point {
@@ -131,6 +133,7 @@ const build = (
           zone: row.zone === undefined ? '1' : row.zone,
           inspectionType: row.inspectionType ?? InspectionType.OCCUPIED,
           previousTechnicianId: row.previousTechnicianId ?? null,
+          previousVisitOn: row.previousVisitOn ? new Date(`${row.previousVisitOn}T00:00:00.000Z`) : null,
           scheduledOn: row.scheduledOn ? new Date(`${row.scheduledOn}T00:00:00.000Z`) : null,
           assignedTechnicianId: row.assignedTechnicianId ?? null,
           scheduleOverriddenAt: row.scheduleOverriddenAt ?? null,
@@ -688,6 +691,27 @@ describe('days built around move-outs and move-ins', () => {
     await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
 
     expect(anchorDeleteMany).toHaveBeenCalledWith({ where: { planId: 'plan-1' } });
+  });
+});
+
+/**
+ * The office (2026-09-18): "if on q3 this property is scheduled ... the first
+ * month on q3 then on q4 it should be scheduled on the first month also".
+ */
+describe('each visit in its month of the quarter', () => {
+  it('keeps the month of the quarter the visit had last quarter, from that month’s first planned day', async () => {
+    const stops = [
+      ...Array.from({ length: 9 }, (_, index) => stop(`july-${index + 1}`, index + 1, index * 0.01, { previousVisitOn: '2026-07-14' })),
+      ...Array.from({ length: 9 }, (_, index) => stop(`sept-${index + 1}`, 10 + index, index * 0.01, { previousVisitOn: '2026-09-02' })),
+    ];
+    const { service, stopUpdate } = build(stops);
+
+    const summary = await service.route('org-1', 'plan-1', {});
+
+    expect(summary.unplaced).toEqual([]);
+    const dayOf = (id: string) => (updateFor(stopUpdate, id)!.scheduledOn as Date).toISOString().slice(0, 10);
+    expect(new Set(stops.filter((row) => row.id.startsWith('july')).map((row) => dayOf(row.id)))).toEqual(new Set(['2026-10-01']));
+    expect(new Set(stops.filter((row) => row.id.startsWith('sept')).map((row) => dayOf(row.id)))).toEqual(new Set(['2026-12-01']));
   });
 });
 

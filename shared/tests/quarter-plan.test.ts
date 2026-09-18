@@ -208,6 +208,7 @@ describe('carrying the tenant order forward', () => {
       tenantExternalId: 'new',
       sequence: 3,
       previousSequence: null,
+      previousVisitOn: null,
       orderSource: 'NEW_ENROLLMENT',
     });
   });
@@ -221,8 +222,8 @@ describe('carrying the tenant order forward', () => {
     const stops = carryForwardOrder([tenant('a'), tenant('c')], [order('a', 'b', 'c')]);
 
     expect(stops).toEqual([
-      { tenantExternalId: 'a', sequence: 1, previousSequence: 1, orderSource: 'PRIOR_QUARTER' },
-      { tenantExternalId: 'c', sequence: 2, previousSequence: 3, orderSource: 'PRIOR_QUARTER' },
+      { tenantExternalId: 'a', sequence: 1, previousSequence: 1, previousVisitOn: null, orderSource: 'PRIOR_QUARTER' },
+      { tenantExternalId: 'c', sequence: 2, previousSequence: 3, previousVisitOn: null, orderSource: 'PRIOR_QUARTER' },
     ]);
   });
 
@@ -242,8 +243,26 @@ describe('carrying the tenant order forward', () => {
       tenantExternalId: 'skipped',
       sequence: 2,
       previousSequence: 2,
+      previousVisitOn: null,
       orderSource: 'CARRIED_SKIP',
     });
+  });
+
+  /** The office (2026-09-18): each visit keeps its month of the quarter, so the day is carried with the place. */
+  it('carries the day of the visit a place came from', () => {
+    const stops = carryForwardOrder(
+      [tenant('a'), tenant('skipped'), tenant('new')],
+      [
+        [{ tenantExternalId: 'a', sequence: 1, visitedOn: '2026-08-12' }],
+        [{ tenantExternalId: 'skipped', sequence: 1, visitedOn: '2026-05-04' }],
+      ],
+    );
+
+    expect(stops.map((stop) => [stop.tenantExternalId, stop.previousVisitOn])).toEqual([
+      ['skipped', '2026-05-04'],
+      ['a', '2026-08-12'],
+      ['new', null],
+    ]);
   });
 
   it('stops looking back after four quarters', () => {

@@ -660,7 +660,7 @@ export class TbpPlanService {
           // a position in the queue. Including it would hand next quarter a
           // rank for work that never happened.
           where: { status: { not: TbpStopStatus.EXCLUDED } },
-          select: { tenantExternalId: true, sequence: true, assignedTechnicianId: true },
+          select: { tenantExternalId: true, sequence: true, assignedTechnicianId: true, scheduledOn: true },
           orderBy: { sequence: 'asc' },
         },
       },
@@ -673,6 +673,8 @@ export class TbpPlanService {
           tenantExternalId: stop.tenantExternalId,
           sequence: stop.sequence,
           technicianId: stop.assignedTechnicianId,
+          // Its day, whose month of the quarter the next quarter's visit keeps.
+          visitedOn: stop.scheduledOn ? stop.scheduledOn.toISOString().slice(0, 10) : null,
         })),
       ]),
     );
@@ -690,7 +692,7 @@ export class TbpPlanService {
     organizationId: string,
     planId: string,
     tenant: PlanTenant,
-    ranked: { sequence: number; previousSequence: number | null; orderSource: string },
+    ranked: { sequence: number; previousSequence: number | null; previousVisitOn: string | null; orderSource: string },
     quarter: Quarter,
     context: { officeDetails: string | null; previousTechnicianId: string | null },
   ) {
@@ -764,6 +766,7 @@ export class TbpPlanService {
 
     const shared = {
       previousSequence: ranked.previousSequence,
+      previousVisitOn: ranked.previousVisitOn ? new Date(`${ranked.previousVisitOn}T00:00:00.000Z`) : null,
       orderSource: ranked.orderSource as TbpOrderSource,
       zone: tenant.zone,
       propertywareBuildingId: tenant.propertywareBuildingId,
@@ -969,7 +972,7 @@ export function rankBootstrapVisits(
   visits: readonly BootstrapVisit[],
   resolveTenant: (visit: BootstrapVisit) => BootstrapResolution,
 ) {
-  const ranks: { tenantExternalId: string; sequence: number; technicianEmail?: string }[] = [];
+  const ranks: { tenantExternalId: string; sequence: number; visitedOn: string; technicianEmail?: string }[] = [];
   const seen = new Set<string>();
   let unmatchedAddress = 0;
   let ambiguousBuilding = 0;
@@ -992,6 +995,8 @@ export function rankBootstrapVisits(
     ranks.push({
       tenantExternalId: resolved,
       sequence: ranks.length + 1,
+      // Its day as the Jobber import dates a visit, for the month the next one keeps.
+      visitedOn: visit.startAt.slice(0, 10),
       // Who ran it, carried for the planner to prefer again -- not part of the order.
       ...(visit.technicianEmail ? { technicianEmail: visit.technicianEmail } : {}),
     });

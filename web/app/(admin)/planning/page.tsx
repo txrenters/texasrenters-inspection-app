@@ -226,7 +226,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. The whole crew works every day from the start of the quarter until every visit has a day, 9 to 12 visits each, laid out for the least driving. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician starts in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a day's visits joins that day whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each visit stays in the month of the quarter it had last quarter (July's in October, August's in November, September's in December), and a visit new this quarter goes in the month with fewest. In each month, the whole crew works every day from its start until that month's visits have a day, 9 to 12 visits each, laid out for the least driving. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician starts in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a day's visits joins that day whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );

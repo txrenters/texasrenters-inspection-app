@@ -211,6 +211,11 @@ export interface PriorRank {
    * prefers the same technician again when it lays the day out.
    */
   technicianId?: string | null;
+  /**
+   * The day of that visit, `YYYY-MM-DD`, when known. Not part of the ordering
+   * either: this quarter's visit goes in the same month of its quarter.
+   */
+  visitedOn?: string | null;
 }
 
 export type OrderSource = 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';
@@ -221,6 +226,8 @@ export interface RankedStop {
   sequence: number;
   /** The position carried forward, or null for a tenancy with no history. */
   previousSequence: number | null;
+  /** The day of the visit that position came from, when known. */
+  previousVisitOn: string | null;
   orderSource: OrderSource;
 }
 
@@ -252,17 +259,17 @@ export function carryForwardOrder(
   priorQuarters: readonly (readonly PriorRank[])[],
 ): RankedStop[] {
   const lookback = priorQuarters.slice(0, MAX_CARRY_BACK_QUARTERS);
-  const ranks = lookback.map(
-    (quarter) => new Map(quarter.map((entry) => [entry.tenantExternalId, entry.sequence])),
-  );
+  const ranks = lookback.map((quarter) => new Map(quarter.map((entry) => [entry.tenantExternalId, entry])));
 
   const placed = candidates.map((candidate) => {
     const depth = ranks.findIndex((quarter) => quarter.has(candidate.tenantExternalId));
     if (depth === -1)
-      return { candidate, carried: null, depth: Number.MAX_SAFE_INTEGER, source: 'NEW_ENROLLMENT' as const };
+      return { candidate, carried: null, visitedOn: null, depth: Number.MAX_SAFE_INTEGER, source: 'NEW_ENROLLMENT' as const };
+    const prior = ranks[depth].get(candidate.tenantExternalId);
     return {
       candidate,
-      carried: ranks[depth].get(candidate.tenantExternalId) ?? null,
+      carried: prior?.sequence ?? null,
+      visitedOn: prior?.visitedOn ?? null,
       depth,
       // Depth 0 is last quarter. Anything deeper means the tenancy was skipped,
       // blocked or excluded in between, and it keeps its place rather than
@@ -306,6 +313,7 @@ export function carryForwardOrder(
     tenantExternalId: entry.candidate.tenantExternalId,
     sequence: index + 1,
     previousSequence: entry.carried,
+    previousVisitOn: entry.visitedOn,
     orderSource: entry.source,
   }));
 }

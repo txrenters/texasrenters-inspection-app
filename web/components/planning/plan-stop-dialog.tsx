@@ -1,6 +1,6 @@
 'use client';
 
-import { isRescheduleMonday, quarterEnd, quarterStart, type Quarter } from '@texasrenters/shared';
+import { isRescheduleMonday, monthOfQuarter, quarterEnd, quarterStart, type Quarter } from '@texasrenters/shared';
 import Link from 'next/link';
 import { Fragment, useMemo, type ReactNode } from 'react';
 
@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { EMPTY, formatDistance, formatScheduledDate } from '@/lib/format';
-import { dayClock, formatClock, formatMinutes, leaveHomeAt } from '@/lib/planning';
+import { dayClock, formatClock, formatMinutes, formatShortDay, leaveHomeAt } from '@/lib/planning';
 import {
   usePlanTechnicians,
   usePlanningMutations,
@@ -30,6 +30,19 @@ import {
 
 /** A planned day is a DATE, so it is read in UTC: in Manila, local time would show the day before. */
 const LONG_DAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+
+const MONTH_OF_QUARTER = ['first', 'second', 'third'];
+
+/**
+ * Its visit last quarter, and the month of this quarter it keeps (the office,
+ * 2026-09-18): "Jul 14 · the quarter's first month". A visit with none goes in
+ * the month with fewest visits.
+ */
+function lastVisitText(previousVisitOn: string | null | undefined) {
+  if (!previousVisitOn) return 'None: it goes in the month with fewest visits';
+  const day = previousVisitOn.slice(0, 10);
+  return `${formatShortDay(day)} · the quarter's ${MONTH_OF_QUARTER[monthOfQuarter(day) - 1]} month`;
+}
 
 const ORDER_SOURCE: Record<PlanStop['orderSource'], string> = {
   PRIOR_QUARTER: 'last quarter',
@@ -341,6 +354,7 @@ export function PlanStopDialog({
                 'Order',
                 `#${stop.sequence}${stop.previousSequence ? ` · #${stop.previousSequence} last quarter` : ` · ${ORDER_SOURCE[stop.orderSource]}`}`,
               ],
+              ['Last visit', lastVisitText(stop.previousVisitOn)],
               ['Last technician', stop.previousTechnician?.displayName ?? null],
               ['Placed by', stop.scheduleOverriddenAt || stop.technicianOverriddenAt ? 'A coordinator' : 'The planner'],
             ]}

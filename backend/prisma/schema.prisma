@@ -3090,6 +3090,10 @@ model TbpQuarterPlanStop {
   /// application code at publish instead.
   sequence         Int
   previousSequence Int?
+  /// The day of this tenancy's visit last quarter, when known. This quarter's
+  /// visit goes in the same month of its quarter (the office, 2026-09-18: Q3's
+  /// first month is Q4's first month, and so on). Null: no visit to go by.
+  previousVisitOn  DateTime?      @db.Date
   orderSource      TbpOrderSource
   zone             String?
 

@@ -476,8 +476,8 @@ describe('who took a tenancy’s visit last', () => {
     );
 
     expect(ranks).toEqual([
-      { tenantExternalId: 't-1', sequence: 1, technicianEmail: 'moses@example.com' },
-      { tenantExternalId: 't-2', sequence: 2 },
+      { tenantExternalId: 't-1', sequence: 1, visitedOn: '2026-07-02', technicianEmail: 'moses@example.com' },
+      { tenantExternalId: 't-2', sequence: 2, visitedOn: '2026-07-03' },
     ]);
   });
 });

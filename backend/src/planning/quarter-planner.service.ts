@@ -16,7 +16,8 @@ import {
   crewKey,
   estimatedDriveMinutes,
   haversineMeters,
-  layoutEveryDay,
+  layoutByMonth,
+  monthOfQuarter,
   plannedVisitDaysOfQuarter,
   quarterEnd,
   quarterLabel,
@@ -185,8 +186,12 @@ export class QuarterPlannerService {
    * and re-route without rebuilding the rotation underneath it.
    *
    * The office's rules (2026-09-18) hold for every day it writes:
-   * - the whole crew works every planned day, from the quarter's first, until
-   *   every visit has a day, in last quarter's order (`layoutEveryDay`);
+   * - each visit in the month of the quarter it had last quarter -- July's in
+   *   October, August's in November -- and one with no visit last quarter in the
+   *   month with fewest (`layoutByMonth`, 2026-09-18);
+   * - in each month, the whole crew works every planned day from its first,
+   *   until that month's visits have a day, in last quarter's order
+   *   (`layoutEveryDay`);
    * - each has one zone a week, moving one zone on each week, and starts each day
    *   in it (`weeklyZoneTechnicians`); a property within five minutes of a day's
    *   visits joins the day whatever its zone;
@@ -277,7 +282,7 @@ export class QuarterPlannerService {
     // In last quarter's order. A zone too far for a day's drive from any home is
     // a trip for the crew member living nearest it (the office, 2026-09-18).
     const booked = await this.dayAnchors(organizationId, quarter, roster.technicianIds);
-    const assignment = layoutEveryDay(free, days, {
+    const assignment = layoutByMonth(free, days, {
       limits,
       rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
       taken: new Set(placedByHand.map((crew) => crewKey(crew.date, crew.technicianId))),
@@ -609,6 +614,7 @@ export class QuarterPlannerService {
         zone: true,
         inspectionType: true,
         previousTechnicianId: true,
+        previousVisitOn: true,
         scheduledOn: true,
         assignedTechnicianId: true,
         scheduleOverriddenAt: true,
@@ -647,6 +653,8 @@ export class QuarterPlannerService {
               : settings.occupiedVisitMinutes,
         previousTechnicianId: row.previousTechnicianId ?? null,
         zone: zoneNumberOf(row.zone),
+        // The month of the quarter its last visit was in, which this one keeps.
+        ...(row.previousVisitOn ? { month: monthOfQuarter(row.previousVisitOn.toISOString().slice(0, 10)) } : {}),
       });
     }
 
