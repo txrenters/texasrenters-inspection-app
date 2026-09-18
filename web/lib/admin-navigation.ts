@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CalendarRange,
   ClipboardCheck,
+  DoorOpen,
   FileWarning,
   Gauge,
   KeyRound,
@@ -136,6 +137,14 @@ export const adminNavigation: AdminNavigationGroup[] = [
         href: '/planning',
         icon: CalendarRange,
         permission: 'planning:read',
+      },
+      {
+        // The other work booked rather than typed in: the move-outs and move-ins
+        // the leases call for (the office, 2026-09-18).
+        title: 'Move-ins & move-outs',
+        href: '/lease-schedule',
+        icon: DoorOpen,
+        permission: 'inspections:read',
       },
       {
         // Beside assignments rather than under People: this answers "where is
