@@ -1,4 +1,4 @@
-import { dayVisitRange } from '@texasrenters/shared';
+import { dayVisitRange, planStartRange, quarterFirstDay, type Quarter } from '@texasrenters/shared';
 
 /**
  * The arithmetic and reading behind the benefit-package plan page.
@@ -76,22 +76,75 @@ const SHORT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numer
 /** "Oct 12" for `2026-10-12`. A calendar date, so read in UTC: in Manila, local time would show the day before. */
 export const formatShortDay = (date: string) => SHORT_DAY.format(new Date(`${date}T00:00:00Z`));
 
+interface MeasuredLegs {
+  stops: readonly { driveSecondsForecast: number | null }[];
+  anchors?: readonly { driveSecondsForecast: number | null }[];
+}
+
 /**
- * A day with fewer or more visits than the office's rule, or more time inspecting than a day holds.
+ * The longest measured drive from one of a day's stops to the next, in seconds,
+ * or null when none was measured. The drive from home is not one of them.
+ */
+export function longestLegSeconds(day: MeasuredLegs): number | null {
+  const legs = [...day.stops, ...(day.anchors ?? [])]
+    .map((stop) => stop.driveSecondsForecast)
+    .filter((seconds): seconds is number => seconds !== null);
+  return legs.length ? Math.max(...legs) : null;
+}
+
+/** Whether a drive between two properties is longer than the plan allows (the office, 2026-09-19: twenty minutes). */
+export const legOverLimit = (seconds: number | null, maxLegMinutes: number) =>
+  seconds !== null && Math.round(seconds / 60) > maxLegMinutes;
+
+/**
+ * A day outside the office's rules: more visits than a day may hold, more time
+ * inspecting than a day holds, or a drive from one property to the next longer
+ * than the plan allows.
  *
- * Nine to twelve, three fewer at each end for each move-out or move-in the day
- * is built around (`dayVisitRange`, the office, 2026-09-18).
+ * Twelve visits at most, three fewer for each move-out or move-in the day is
+ * built around (`dayVisitRange`, 2026-09-18), and never more than twenty
+ * minutes between properties (2026-09-19). A day of fewer than nine is inside
+ * them: the planner makes one only where the properties are too far apart for
+ * more, and the office fills it as it likes.
  */
 export function dayOutsideRules(
-  day: { stopCount: number; onSiteMinutes: number; anchors?: readonly unknown[] },
-  rules: { minStopsPerDay: number; maxStopsPerDay: number; maxOnSiteMinutes: number },
+  day: MeasuredLegs & { stopCount: number; onSiteMinutes: number },
+  rules: { minStopsPerDay: number; maxStopsPerDay: number; maxOnSiteMinutes: number; maxLegMinutes: number },
 ) {
-  const booked = day.anchors?.length ?? 0;
-  // A move-out after the quarter's visits are all placed is a day of its own,
-  // not a benefit-package day short of its visits.
-  if (day.stopCount === 0 && booked) return false;
-  const range = dayVisitRange(rules, booked);
-  return day.stopCount < range.min || day.stopCount > range.max || day.onSiteMinutes > rules.maxOnSiteMinutes;
+  const range = dayVisitRange(rules, day.anchors?.length ?? 0);
+  return (
+    day.stopCount > range.max ||
+    day.onSiteMinutes > rules.maxOnSiteMinutes ||
+    legOverLimit(longestLegSeconds(day), rules.maxLegMinutes)
+  );
+}
+
+/**
+ * The first days a quarter's plan may be built from, `YYYY-MM-DD`: fifteen days
+ * either side of the quarter's first (the office, 2026-09-19), and never before
+ * today -- a day already gone is not planned. Null when that window is over.
+ */
+export function planStartChoice(quarter: Quarter, today: string): { min: string; max: string } | null {
+  const { earliest, latest } = planStartRange(quarter);
+  const min = today > earliest ? today : earliest;
+  return min > latest ? null : { min, max: latest };
+}
+
+/** The first day to offer: the plan's own, else the quarter's -- inside the days it may start on. */
+export function defaultPlanStart(quarter: Quarter, startsOn: string | null | undefined, today: string): string | null {
+  const choice = planStartChoice(quarter, today);
+  if (!choice) return null;
+  const wanted = startsOn?.slice(0, 10) ?? quarterFirstDay(quarter);
+  return wanted < choice.min ? choice.min : wanted > choice.max ? choice.max : wanted;
+}
+
+/** "Sep 21, 10 days before the quarter", or the quarter's own first day. */
+export function planStartText(quarter: Quarter, startsOn: string | null | undefined): string {
+  const first = quarterFirstDay(quarter);
+  const start = startsOn?.slice(0, 10) ?? first;
+  const days = Math.round((Date.parse(`${first}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000);
+  if (days === 0) return `${formatShortDay(start)}, the quarter's first day`;
+  return `${formatShortDay(start)}, ${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'} ${days > 0 ? 'before' : 'after'} the quarter's first`;
 }
 
 /**

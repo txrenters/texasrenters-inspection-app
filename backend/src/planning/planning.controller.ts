@@ -210,6 +210,7 @@ export class PlanningController {
         sequence: true,
         previousSequence: true,
         previousVisitOn: true,
+        previousVisitMonth: true,
         orderSource: true,
         zone: true,
         scheduledOn: true,

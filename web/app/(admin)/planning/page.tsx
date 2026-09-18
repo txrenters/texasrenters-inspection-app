@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
+import { PlanBuildDialog, type PlanBuildChoice } from '@/components/planning/plan-build-dialog';
 import { PlanCalendar } from '@/components/planning/plan-calendar';
 import { bookedProblem, PlanDays } from '@/components/planning/plan-days';
 import { PlanStopDialog } from '@/components/planning/plan-stop-dialog';
@@ -37,6 +38,7 @@ import {
   formatMinutes,
   formatShortDay,
   needsUnit,
+  planStartText,
   quarterChoices,
   quarterKey,
   quarterName,
@@ -56,19 +58,21 @@ import { useUrlState } from '@/lib/url-state';
  *
  * The office's rules, as the planner applies them: whoever was first last
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
- * on the HVAC plan; the whole crew works every day from the quarter's start
- * until every visit has a day, each starting in their zone of the week and
- * moving on each week, with a property within five minutes of a day's visits
- * joining it; a zone too far for a day's drive is a trip of days in a row for
- * whoever lives nearest; visits go on weekdays that are not US holidays, with
- * Mondays from the second week kept for rescheduled visits; and every
- * technician-day holds nine to twelve visits, laid out for the least driving,
- * which has no limit (the office, 2026-09-18). Building a quarter
- * applies all of it and asks the coordinator nothing (the office found a form
- * of minutes and closed days confusing, 2026-09-16). This page is where a
- * coordinator checks the days, changes any draft visit in its window -- the
- * day, technician, unit, title, Details -- and publishes, which creates the
- * inspections and queues their visits for Jobber.
+ * on the HVAC plan; the visits are grouped into days of nine for the least
+ * driving, never more than twenty minutes from one property to the next, so
+ * the office can add its own up to twelve (2026-09-19); everyone chosen works
+ * every day from the plan's first until every visit has a day, each taking a
+ * group in their zone of the week and moving on each week, with a property
+ * within five minutes of a group joining it; a zone too far for a day's drive
+ * is a trip of days in a row for whoever lives nearest; visits go on weekdays
+ * that are not US holidays, with Mondays from the second week kept for
+ * rescheduled visits. Building a quarter asks two things only -- who goes out,
+ * and the first day, up to fifteen days either side of the quarter's
+ * (2026-09-19) -- and applies the rest (the office found a form of minutes and
+ * closed days confusing, 2026-09-16). This page is where a coordinator checks
+ * the days, changes any draft visit in its window -- the day, technician, unit,
+ * title, Details -- and publishes, which creates the inspections and queues
+ * their visits for Jobber.
  */
 
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
@@ -93,6 +97,8 @@ export default function PlanningPage() {
   const rotation = usePlanRotation(plan?.id);
   const mutations = usePlanningMutations();
   const [publishing, setPublishing] = useState(false);
+  // Build and Rebuild ask who goes out and the first day before anything is laid out (2026-09-19).
+  const [choosing, setChoosing] = useState(false);
   // The visit whose details are open, from its pin, its row in a day, or the tables.
   const [openStopId, setOpenStopId] = useState<string | null>(null);
 
@@ -135,10 +141,12 @@ export default function PlanningPage() {
   // The weekdays the planner skipped: the quarter's US holidays, and any other
   // day closed on the plan, listed apart so a holiday is never mislabelled.
   const quarter: Quarter = { year: choice.year, quarter: choice.quarter as Quarter['quarter'] };
-  const holidays = closedDaysOfQuarter(quarter);
-  const alsoClosed = closedDaysOfQuarter(quarter, plan?.holidays ?? []).filter((day) => !holidays.includes(day));
+  const startsOn = plan?.startsOn ? plan.startsOn.slice(0, 10) : null;
+  const holidays = closedDaysOfQuarter(quarter, [], startsOn);
+  const alsoClosed = closedDaysOfQuarter(quarter, plan?.holidays ?? [], startsOn).filter((day) => !holidays.includes(day));
 
-  const build = () => {
+  const build = (picked: PlanBuildChoice) => {
+    setChoosing(false);
     // One toast from the click to the result. A build takes minutes, and a
     // spinner on a small button alone reads as a page that has hung.
     const id = `plan-build-${choice.key}`;
@@ -147,7 +155,7 @@ export default function PlanningPage() {
       description: 'Drive times come from Google at a steady pace, so this takes a few minutes. Keep this page open.',
     });
     mutations.build.mutate(
-      { year: choice.year, quarter: choice.quarter },
+      { year: choice.year, quarter: choice.quarter, ...picked },
       {
         onSuccess: (result) => {
           toast.success(`${choice.label} is planned`, {
@@ -198,9 +206,9 @@ export default function PlanningPage() {
               <OfficeSheetImport planId={plan.id} />
               <Button
                 disabled={building}
-                onClick={build}
+                onClick={() => setChoosing(true)}
                 size="sm"
-                title="Reads the tenant report again and lays the days out again. Every kind of visit a coordinator chose is kept."
+                title="Reads the tenant report again and lays the days out again, for the technicians and from the first day you choose. Every change a coordinator made to a visit is kept."
                 variant="outline"
               >
                 {building ? <Spinner /> : <RefreshCwIcon />}
@@ -226,7 +234,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Each visit stays in the month of the quarter it had last quarter (July's in October, August's in November, September's in December), and a visit new this quarter goes in the month with fewest. In each month, the whole crew works every day from its start until that month's visits have a day, 9 to 12 visits each, laid out for the least driving. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician starts in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a day's visits joins that day whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next, so you can add up to 3 more by hand; a day holds fewer only where the properties are further apart. Each visit stays in the month of the quarter it had last quarter (July's in October, August's in November, September's in December), and a visit new this quarter goes in the month with fewest. In each month, everyone chosen works every day from its start until that month's visits have a day. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -260,7 +268,7 @@ export default function PlanningPage() {
           title={`No plan for ${choice.label} yet`}
         >
           {canChange ? (
-            <Button disabled={building} onClick={build}>
+            <Button disabled={building} onClick={() => setChoosing(true)}>
               {building ? <Spinner /> : <RouteIcon />}
               Build the {choice.label} plan
             </Button>
@@ -310,7 +318,7 @@ export default function PlanningPage() {
               value={attention.length.toLocaleString()}
             />
             <Stat
-              detail={`${plan.minStopsPerDay} to ${plan.maxStopsPerDay} visits and up to ${formatMinutes(plan.maxOnSiteMinutes)} inspecting a day`}
+              detail={`Over ${plan.maxStopsPerDay} visits, ${formatMinutes(plan.maxOnSiteMinutes)} inspecting, or ${plan.maxLegMinutes} min between properties`}
               label="Days outside the rules"
               tone={daysOutsideRules.length ? 'destructive' : 'success'}
               value={daysOutsideRules.length.toLocaleString()}
@@ -318,6 +326,7 @@ export default function PlanningPage() {
           </StatGroup>
 
           <StatStrip>
+            <StatStripItem label="First day" value={planStartText(quarter, startsOn)} />
             <StatStripItem
               label="Working days"
               value={`Weekdays except US holidays${holidays.length ? `: ${holidays.map(formatShortDay).join(', ')}` : ''}`}
@@ -327,17 +336,23 @@ export default function PlanningPage() {
             ) : null}
             <StatStripItem
               label="Visits a day"
-              value={`${plan.minStopsPerDay} to ${plan.maxStopsPerDay} every day, the whole crew every day until every visit has one`}
+              value={`${plan.minStopsPerDay}, grouped for the least driving; up to ${plan.maxStopsPerDay} with visits you add`}
             />
-            <StatStripItem label="Neighbours" value="a property within 5 minutes of a day joins it, whatever its zone" />
+            <StatStripItem
+              label="Between properties"
+              value={`never more than ${plan.maxLegMinutes} min from one to the next; fewer visits where they are further apart`}
+            />
+            <StatStripItem label="Neighbours" value="a property within 5 minutes of a group joins it, whatever its zone" />
             <StatStripItem label="Mondays" value="kept free for rescheduled visits from week 2" />
             {rotation.data ? (
               <StatStripItem
                 label="Crew"
                 value={
                   rotation.data.crew.length
-                    ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · a zone each, moving weekly`
-                    : 'nobody yet: set on the technicians’ planning profiles'
+                    ? `${rotation.data.crew.map((member) => member.displayName ?? 'Someone').join(', ')} · ${
+                        plan.crewTechnicianIds?.length ? 'chosen for this plan' : 'the crew on the planning profiles'
+                      } · a zone each, moving weekly`
+                    : 'nobody yet: choose who goes out when you rebuild'
                 }
               />
             ) : null}
@@ -401,6 +416,7 @@ export default function PlanningPage() {
                   rotation={rotation.data ?? null}
                   selectedDayId={state.day}
                   settings={plan}
+                  startsOn={startsOn}
                 />
               )}
             </TabsContent>
@@ -437,12 +453,25 @@ export default function PlanningPage() {
       )}
 
       <PlanStopDialog
-        closedDays={closedDaysOfQuarter(quarter, plan?.holidays ?? [])}
+        closedDays={closedDaysOfQuarter(quarter, plan?.holidays ?? [], startsOn)}
         day={openStopDay}
         editable={canChange && draft}
         onOpenChange={(open) => !open && setOpenStopId(null)}
         quarter={quarter}
+        startsOn={startsOn}
         stop={openStop}
+      />
+
+      <PlanBuildDialog
+        chosen={plan?.crewTechnicianIds ?? []}
+        label={choice.label}
+        onBuild={build}
+        onOpenChange={setChoosing}
+        open={choosing}
+        pending={building}
+        quarter={quarter}
+        rebuild={Boolean(plan)}
+        startsOn={startsOn}
       />
 
       <AlertDialog onOpenChange={setPublishing} open={publishing}>
