@@ -79,10 +79,10 @@ const build = (
       tbpZoneOrder?: number | null;
       handlesMoveOuts?: boolean;
     }[];
-    /** Move-outs booked in the quarter, as the inspections query answers. */
-    moveOuts?: { id: string; scheduledAt: string; latitude: number | null }[];
-    /** A day's move-outs recorded by an earlier layout, for measuring it again. */
-    anchorRows?: { inspectionId: string; onSiteMinutes: number; latitude: number }[];
+    /** Move-outs and move-ins booked in the quarter, as the inspections query answers. */
+    booked?: { id: string; scheduledAt: string; latitude: number | null; kind?: 'MOVE_OUT' | 'MOVE_IN'; assignedTo?: string }[];
+    /** A day's move-outs and move-ins recorded by an earlier layout, for measuring it again. */
+    anchorRows?: { inspectionId: string; onSiteMinutes: number; latitude: number; kind?: 'MOVE_OUT' | 'MOVE_IN' }[];
     qualified?: string[];
     qualifiedFor?: Partial<Record<InspectionType, string[]>>;
     /** Seconds between two points, as Google would say. Null: Google is not configured. */
@@ -109,10 +109,12 @@ const build = (
   const anchorUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
   const anchorDeleteMany = jest.fn().mockResolvedValue({ count: 0 });
   const inspectionFindMany = jest.fn().mockResolvedValue(
-    (options.moveOuts ?? []).map((row) => ({
+    (options.booked ?? []).map((row) => ({
       id: row.id,
+      inspectionType: row.kind ?? InspectionType.MOVE_OUT,
       scheduledAt: new Date(`${row.scheduledAt}T00:00:00.000Z`),
       propertywareBuilding: row.latitude === null ? null : { latitude: row.latitude, longitude: -95.37 },
+      assignments: row.assignedTo ? [{ technicianId: row.assignedTo }] : [],
     })),
   );
 
@@ -169,7 +171,7 @@ const build = (
         (options.anchorRows ?? []).map((row) => ({
           inspectionId: row.inspectionId,
           onSiteMinutes: row.onSiteMinutes,
-          inspection: { propertywareBuilding: { latitude: row.latitude, longitude: -95.37 } },
+          inspection: { inspectionType: row.kind ?? InspectionType.MOVE_OUT, propertywareBuilding: { latitude: row.latitude, longitude: -95.37 } },
         })),
       ),
     },
@@ -573,9 +575,10 @@ describe('routing a draft quarter', () => {
 
 /**
  * The office (2026-09-17): move-outs are Moses's, and "we should be doing TBPs
- * around those". On a day he has one, his visits are the ones nearest it.
+ * around those". On a day he has one, his visits are the ones nearest it -- and
+ * (2026-09-18) three fewer for each move-out or move-in the day has.
  */
-describe('days built around move-outs', () => {
+describe('days built around move-outs and move-ins', () => {
   const CREW = [
     { technicianId: 'moses', isPlannable: true, tbpZoneOrder: 1, handlesMoveOuts: true },
     { technicianId: 'kevin', isPlannable: true, tbpZoneOrder: 2 },
@@ -589,14 +592,17 @@ describe('days built around move-outs', () => {
   it('gives the move-out’s day to whoever handles move-outs, with the visits nearest it', async () => {
     const { service, stopUpdate, anchorCreate, dayCreate, inspectionFindMany } = build(stops, {
       technicians: CREW,
-      moveOuts: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96 }],
+      booked: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96 }],
     });
 
     const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
 
     expect(inspectionFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ inspectionType: InspectionType.MOVE_OUT, status: { not: 'CANCELLED' } }),
+        where: expect.objectContaining({
+          inspectionType: { in: [InspectionType.MOVE_OUT, InspectionType.MOVE_IN] },
+          status: { not: 'CANCELLED' },
+        }),
       }),
     );
     expect(summary.anchored).toBe(1);
@@ -614,30 +620,53 @@ describe('days built around move-outs', () => {
       const update = updateFor(stopUpdate, row.id);
       return update?.assignedTechnicianId === 'moses' && (update.scheduledOn as Date).toISOString().startsWith('2026-10-01');
     });
-    expect(mosesOnTheFirst.length).toBeGreaterThanOrEqual(9);
+    // Six to nine besides the move-out: three fewer than a day without one.
+    expect(mosesOnTheFirst.length).toBeGreaterThanOrEqual(6);
+    expect(mosesOnTheFirst.length).toBeLessThanOrEqual(9);
     expect(mosesOnTheFirst.every((row) => row.id.startsWith('north'))).toBe(true);
     const day = dayCreate.mock.calls.map((call) => call[0].data).find((data) => data.technicianId === 'moses' && data.date.toISOString().startsWith('2026-10-01'));
     // The visits, and the move-out's hour on top of their time on site.
     expect(day).toMatchObject({ stopCount: mosesOnTheFirst.length, onSiteMinutes: mosesOnTheFirst.length * 30 + 60 });
   });
 
-  it('anchors nothing when nobody is marked as handling move-outs', async () => {
+  it('anchors no move-out when nobody is marked as handling move-outs', async () => {
     const { service, anchorCreate, inspectionFindMany } = build(stops, {
       technicians: CREW.map((row) => ({ ...row, handlesMoveOuts: false })),
-      moveOuts: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96 }],
+      booked: [{ id: 'move-out-1', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'moses' }],
     });
 
     const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
 
-    expect(inspectionFindMany).not.toHaveBeenCalled();
+    expect(inspectionFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ inspectionType: { in: [InspectionType.MOVE_IN] } }) }),
+    );
     expect(anchorCreate).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ anchored: 0, anchorsSkipped: [] });
+  });
+
+  it('builds a crew member’s day around a move-in booked for them, not one booked for somebody off the crew', async () => {
+    const { service, anchorCreate } = build(stops, {
+      technicians: CREW,
+      booked: [
+        { id: 'kevins-move-in', kind: 'MOVE_IN', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'kevin' },
+        // Amy takes the move-ins and has no benefit-package days: not the plan's.
+        { id: 'amys-move-in', kind: 'MOVE_IN', scheduledAt: '2026-10-01', latitude: 29.96, assignedTo: 'amy' },
+      ],
+    });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-01', '2026-10-02') });
+
+    expect(summary.anchored).toBe(1);
+    expect(anchorCreate).toHaveBeenCalledTimes(1);
+    expect(anchorCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ inspectionId: 'kevins-move-in', technicianId: 'kevin', onSiteMinutes: 60 }),
+    });
   });
 
   it('says which move-outs no day could be built around, and why', async () => {
     const { service, anchorCreate } = build(stops, {
       technicians: CREW,
-      moveOuts: [
+      booked: [
         { id: 'no-location', scheduledAt: '2026-10-01', latitude: null },
         // A Monday from the second week, kept for rescheduled visits.
         { id: 'kept-free-monday', scheduledAt: '2026-10-05', latitude: 29.96 },

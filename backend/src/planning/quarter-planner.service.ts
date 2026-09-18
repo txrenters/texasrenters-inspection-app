@@ -55,10 +55,11 @@ const DAY_STARTS_AT = '09:00:00';
 const HOME_END_TOLERANCE_SECONDS = 120;
 
 /**
- * How long a move-out anchoring a day counts on site: an hour (the office,
- * 2026-09-17), on top of the day's nine to twelve benefit-package visits.
+ * How long a move-out or move-in anchoring a day counts on site: an hour (the
+ * office, 2026-09-17). It also takes the place of three of the day's visits
+ * (`dayVisitRange`, 2026-09-18).
  */
-const MOVE_OUT_ANCHOR_MINUTES = 60;
+const MOVE_ANCHOR_MINUTES = 60;
 
 /** Block codes routing owns, cleared whenever the plan is routed again. */
 const ROUTING_BLOCK_CODES = ['NO_COORDINATES', 'NOT_PLACED'];
@@ -196,9 +197,10 @@ export class QuarterPlannerService {
    *   days of the crew member nearest it, the first driven from home and the
    *   rest from where the trip is;
    * - each day driven from the technician's home, in the order that drives least;
-   * - a move-out anchors a day of the technician who handles move-outs: on its
-   *   date their visits are the ones nearest it, from any zone, and the move-out
-   *   is routed with them (`moveOutAnchors`);
+   * - a move-out anchors a day of the technician who handles move-outs, and a
+   *   move-in the day of the crew member it is booked for: on its date their
+   *   visits are the ones nearest it, from any zone, three fewer for each, and it
+   *   is routed with them (`dayAnchors`);
    * - no planned visit on a Monday from the quarter's second week on, which is
    *   kept for rescheduled visits;
    * - a visit a coordinator placed by hand stays on the day and with the
@@ -274,18 +276,18 @@ export class QuarterPlannerService {
 
     // In last quarter's order. A zone too far for a day's drive from any home is
     // a trip for the crew member living nearest it (the office, 2026-09-18).
-    const moveOuts = await this.moveOutAnchors(organizationId, quarter);
+    const booked = await this.dayAnchors(organizationId, quarter, roster.technicianIds);
     const assignment = layoutEveryDay(free, days, {
       limits,
       rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
       taken: new Set(placedByHand.map((crew) => crewKey(crew.date, crew.technicianId))),
-      anchors: moveOuts.anchors,
+      anchors: booked.anchors,
       homes: roster.homes,
       tripZones: zones.outOfReach,
     });
     const unplaced: RoutingSummary['unplaced'] = assignment.unplaced;
-    // A day's move-outs are routed and measured with its visits, as stops it
-    // drives to. A trip's later days start where the trip is, not at home.
+    // A day's move-outs and move-ins are routed and measured with its visits,
+    // as stops it drives to. A trip's later days start where the trip is, not at home.
     const measureCrew = (crew: Pick<AssignedCrew, 'date' | 'technicianId' | 'stops' | 'anchors' | 'trip'>) =>
       this.measure(
         { date: crew.date, technicianId: crew.technicianId, stops: [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops] },
@@ -312,7 +314,7 @@ export class QuarterPlannerService {
       settings,
       anchored: assignment.crews.reduce((total, crew) => total + (crew.anchors?.length ?? 0), 0),
       anchorsSkipped: [
-        ...moveOuts.withoutLocation.map((inspectionId) => ({ inspectionId, reason: 'NO_LOCATION' as const })),
+        ...booked.withoutLocation.map((inspectionId) => ({ inspectionId, reason: 'NO_LOCATION' as const })),
         ...assignment.skippedAnchors.map(({ anchorId, reason }) => ({ inspectionId: anchorId, reason })),
       ],
     };
@@ -470,14 +472,16 @@ export class QuarterPlannerService {
             ],
       );
 
-      // The move-outs the day is built around are still its stops.
+      // The move-outs and move-ins the day is built around are still its stops.
       const anchors = (
         await this.prisma.tbpQuarterPlanAnchor.findMany({
           where: { planId, organizationId, technicianId, date: on },
           select: {
             inspectionId: true,
             onSiteMinutes: true,
-            inspection: { select: { propertywareBuilding: { select: { latitude: true, longitude: true } } } },
+            inspection: {
+              select: { inspectionType: true, propertywareBuilding: { select: { latitude: true, longitude: true } } },
+            },
           },
         })
       ).flatMap((row) => {
@@ -492,6 +496,7 @@ export class QuarterPlannerService {
                 latitude: Number(building.latitude),
                 longitude: Number(building.longitude),
                 onSiteMinutes: row.onSiteMinutes,
+                kind: row.inspection.inspectionType === InspectionType.MOVE_IN ? 'MOVE_IN' : 'MOVE_OUT',
               }),
             ];
       });
@@ -519,51 +524,65 @@ export class QuarterPlannerService {
   }
 
   /**
-   * The move-outs the quarter's days are built around (the office, 2026-09-17).
+   * The move-outs and move-ins the quarter's days are built around.
    *
    * Every move-out booked inside the quarter and not cancelled anchors a day of
    * the technician who handles move-outs -- Moses -- whoever it is assigned to
    * now: move-outs are his, and the console shows one assigned to anybody else
-   * for the office to reassign in Jobber. With nobody marked, nothing anchors. A
-   * move-out whose building has no coordinates has nowhere to gather visits
-   * round, so it is reported instead.
+   * for the office to reassign (the office, 2026-09-17). With nobody marked, no
+   * move-out anchors. A move-in anchors the day of the crew member it is booked
+   * for; one booked for somebody off the crew -- Amy takes the move-ins, and
+   * has no benefit-package days -- is not the plan's (2026-09-18). One whose
+   * building has no coordinates has nowhere to gather visits round, so it is
+   * reported instead.
    */
-  private async moveOutAnchors(
+  private async dayAnchors(
     organizationId: string,
     quarter: Quarter,
+    crew: readonly string[],
   ): Promise<{ anchors: DayAnchor[]; withoutLocation: string[] }> {
     const handler = await this.prisma.technicianPlanningProfile.findFirst({
       where: { organizationId, isPlannable: true, handlesMoveOuts: true },
       orderBy: [{ tbpZoneOrder: 'asc' }, { technicianId: 'asc' }],
       select: { technicianId: true },
     });
-    if (!handler) return { anchors: [], withoutLocation: [] };
 
-    const moveOuts = await this.prisma.inspection.findMany({
+    const booked = await this.prisma.inspection.findMany({
       where: {
         organizationId,
-        inspectionType: InspectionType.MOVE_OUT,
+        inspectionType: { in: handler ? [InspectionType.MOVE_OUT, InspectionType.MOVE_IN] : [InspectionType.MOVE_IN] },
         status: { not: InspectionStatus.CANCELLED },
         scheduledAt: { gte: quarterStart(quarter), lt: quarterEnd(quarter) },
       },
       orderBy: { scheduledAt: 'asc' },
-      select: { id: true, scheduledAt: true, propertywareBuilding: { select: { latitude: true, longitude: true } } },
+      select: {
+        id: true,
+        inspectionType: true,
+        scheduledAt: true,
+        propertywareBuilding: { select: { latitude: true, longitude: true } },
+        assignments: { where: { isCurrent: true }, select: { technicianId: true }, take: 1 },
+      },
     });
     const anchors: DayAnchor[] = [];
     const withoutLocation: string[] = [];
-    for (const moveOut of moveOuts) {
-      const building = moveOut.propertywareBuilding;
+    for (const inspection of booked) {
+      const moveIn = inspection.inspectionType === InspectionType.MOVE_IN;
+      const assigned = inspection.assignments[0]?.technicianId ?? null;
+      const technicianId = moveIn ? (assigned && crew.includes(assigned) ? assigned : null) : (handler?.technicianId ?? null);
+      if (!technicianId) continue;
+      const building = inspection.propertywareBuilding;
       if (building?.latitude == null || building.longitude == null) {
-        withoutLocation.push(moveOut.id);
+        withoutLocation.push(inspection.id);
         continue;
       }
       anchors.push({
-        id: moveOut.id,
-        date: moveOut.scheduledAt.toISOString().slice(0, 10),
-        technicianId: handler.technicianId,
+        id: inspection.id,
+        date: inspection.scheduledAt.toISOString().slice(0, 10),
+        technicianId,
         latitude: Number(building.latitude),
         longitude: Number(building.longitude),
-        onSiteMinutes: MOVE_OUT_ANCHOR_MINUTES,
+        onSiteMinutes: MOVE_ANCHOR_MINUTES,
+        kind: moveIn ? 'MOVE_IN' : 'MOVE_OUT',
       });
     }
     return { anchors, withoutLocation };

@@ -8,6 +8,7 @@ import {
   anchorAsStop,
   anchorIdOf,
   crewKey,
+  dayVisitRange,
   estimatedDriveMinutes,
   layoutEveryDay,
   nearestNeighbourOrder,
@@ -349,16 +350,43 @@ describe('days built around a move-out', () => {
     expect(anchored.anchors!.map((anchor) => anchor.id)).toEqual(['move-out-1']);
     // Kevin's zone that day, because that is where the move-out is.
     expect(new Set(anchored.stops.map((stop) => stop.zone))).toEqual(new Set(['2']));
-    expect(anchored.stops.length).toBeGreaterThanOrEqual(9);
+    expect(anchored.stops.length).toBeGreaterThanOrEqual(6);
   });
 
-  it('counts the move-out’s hour on site, but not toward the nine visits', () => {
+  it('counts the move-out’s hour on site, and three visits fewer (the office, 2026-09-18)', () => {
     const { crews } = layoutEveryDay([...north, ...south], zoned(10), { anchors: [moveOut('move-out-1', '2026-10-01', 29.56)] });
 
     const anchored = crews.find((day) => day.anchors?.length)!;
+    expect(anchored.stops.length).toBeLessThanOrEqual(9);
     expect(anchored.onSiteMinutes).toBe(60 + anchored.stops.length * 30);
-    expect(anchored.onSiteMinutes).toBeLessThanOrEqual(360);
     expect(anchored.stops.every((stop) => anchorIdOf(stop) === null)).toBe(true);
+  });
+
+  it('takes three visits fewer for each move-out or move-in on the day', () => {
+    const on = (count: number) =>
+      layoutEveryDay([...north, ...south], zoned(10), {
+        anchors: Array.from({ length: count }, (_, index) =>
+          moveOut(`booked-${index}`, '2026-10-01', 29.56, index % 2 ? { kind: 'MOVE_IN' } : {}),
+        ),
+      }).crews.find((day) => day.anchors?.length)!;
+
+    expect(on(2).stops.length).toBeLessThanOrEqual(6);
+    expect(on(2).stops.length).toBeGreaterThanOrEqual(3);
+    expect(on(3).stops.length).toBeLessThanOrEqual(3);
+    // Four take the whole day: Moses's move-outs and nothing else.
+    expect(on(4)).toMatchObject({ stops: [], onSiteMinutes: 240 });
+  });
+
+  it('holds nine to twelve visits besides none, three fewer at each end for each', () => {
+    const limits = { maxOnSiteMinutes: 360, minStopsPerDay: 9, maxStopsPerDay: 12 };
+
+    expect([0, 1, 2, 3, 4].map((anchors) => dayVisitRange(limits, anchors))).toEqual([
+      { min: 9, max: 12 },
+      { min: 6, max: 9 },
+      { min: 3, max: 6 },
+      { min: 0, max: 3 },
+      { min: 0, max: 0 },
+    ]);
   });
 
   it('keeps a move-out’s day after the visits are done, with the move-out alone', () => {
@@ -385,12 +413,13 @@ describe('days built around a move-out', () => {
     expect(crews.some((day) => day.anchors?.length)).toBe(false);
   });
 
-  it('routes a move-out as a stop of its day, told apart from the visits', () => {
+  it('routes a move-out or move-in as a stop of its day, told apart from the visits', () => {
     const stop = anchorAsStop(moveOut('move-out-1', '2026-10-03', 29.56));
 
-    expect(stop).toMatchObject({ latitude: 29.56, onSiteMinutes: 60, zone: null });
+    expect(stop).toMatchObject({ latitude: 29.56, onSiteMinutes: 60, zone: null, inspectionType: 'MOVE_OUT' });
     expect(anchorIdOf(stop)).toBe('move-out-1');
     expect(anchorIdOf(north[0]!)).toBeNull();
+    expect(anchorAsStop(moveOut('move-in-1', '2026-10-03', 29.56, { kind: 'MOVE_IN' })).inspectionType).toBe('MOVE_IN');
   });
 });
 

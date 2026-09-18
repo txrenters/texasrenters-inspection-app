@@ -11,7 +11,7 @@ import {
 import { useMemo } from 'react';
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { dayOutsideRules, formatMinutes } from '@/lib/planning';
+import { bookedInWords, dayOutsideRules, formatMinutes } from '@/lib/planning';
 import type { PlanDay, PlanRotation, PlanSettings } from '@/lib/planning-queries';
 import { cn } from '@/lib/utils';
 
@@ -189,13 +189,13 @@ export function PlanCalendar({
                               {entries.map((day) => {
                                 const outside = dayOutsideRules(day, settings);
                                 const zones = zonesOf(day);
-                                const moveOuts = day.anchors?.length ?? 0;
+                                const booked = day.anchors ?? [];
                                 const name = day.technician.displayName;
                                 const label = `${LONG_DAY.format(new Date(`${date}T00:00:00Z`))}: ${name}, ${day.stopCount} ${
                                   day.stopCount === 1 ? 'visit' : 'visits'
                                 }${day.hvacStopCount ? ` (${day.hvacStopCount} HVAC)` : ''}${
                                   zones.length ? `, ${zones.length === 1 ? 'zone' : 'zones'} ${zones.join(', ')}` : ''
-                                }${moveOuts ? `, built around ${moveOuts === 1 ? 'a move-out' : `${moveOuts} move-outs`}` : ''}, ${formatMinutes(
+                                }${booked.length ? `, built around ${bookedInWords(booked)}` : ''}, ${formatMinutes(
                                   day.onSiteMinutes,
                                 )} inspecting${outside ? ', outside the rules' : ''}`;
                                 return (
@@ -217,8 +217,8 @@ export function PlanCalendar({
                                     {zones.length ? (
                                       <span className="text-muted-foreground shrink-0 font-mono">Z{zones.join(',')}</span>
                                     ) : null}
-                                    {/* The move-out's diamond, as on the day's map. */}
-                                    {moveOuts ? <span aria-hidden className="bg-warning size-2 shrink-0 rotate-45 rounded-[1px]" /> : null}
+                                    {/* The diamond of a move-out or move-in, as on the day's map. */}
+                                    {booked.length ? <span aria-hidden className="bg-warning size-2 shrink-0 rotate-45 rounded-[1px]" /> : null}
                                     <span
                                       className={cn('ml-auto shrink-0 font-mono tabular-nums', outside && 'text-destructive')}
                                     >

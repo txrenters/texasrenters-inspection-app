@@ -119,11 +119,28 @@ describe('the benefit-package calendar', () => {
   it('marks a day built around a move-out', () => {
     const anchored = {
       ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 10, '3'),
-      anchors: [{ id: 'anchor-1', inspectionId: 'move-out-1' }],
+      anchors: [{ id: 'anchor-1', inspectionId: 'move-out-1', kind: 'MOVE_OUT' }],
     } as unknown as PlanDay;
     render(<PlanCalendar days={[anchored]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
 
     expect(screen.getByRole('button', { name: /^Wednesday, October 14: Moses Rodriguez, 10 visits.*, built around a move-out, / })).toBeTruthy();
+  });
+
+  /** The office (2026-09-18): three visits fewer for each move-out or move-in on the day. */
+  it('names the move-outs and move-ins a day is built around, and holds it to three visits fewer for each', () => {
+    const anchored = {
+      ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 3, '3'),
+      anchors: [
+        { id: 'anchor-1', inspectionId: 'move-out-1', kind: 'MOVE_OUT' },
+        { id: 'anchor-2', inspectionId: 'move-out-2', kind: 'MOVE_OUT' },
+        { id: 'anchor-3', inspectionId: 'move-in-1', kind: 'MOVE_IN' },
+      ],
+    } as unknown as PlanDay;
+    render(<PlanCalendar days={[anchored]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+
+    // Three of them leave room for up to three visits: inside the rules.
+    const button = screen.getByRole('button', { name: /built around 2 move-outs and a move-in, / });
+    expect(button.getAttribute('aria-label')).not.toContain('outside the rules');
   });
 
   it('keys each technician’s colour and totals', () => {
