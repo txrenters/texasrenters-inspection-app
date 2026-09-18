@@ -2,7 +2,7 @@
 
 import { TBP_INSPECTION_REASON_TEXT, type TbpInspectionReason } from '@texasrenters/shared';
 import { AlertTriangleIcon, MoreHorizontalIcon, PanelRightOpenIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { DataTable, type Column } from '@/components/data-table';
@@ -23,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { EditablePick, type PickOption } from '@/components/planning/inline-edit';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
@@ -125,17 +126,51 @@ const COLUMNS: Array<Column<PlanStop>> = [
   },
 ];
 
+/** Which building a visit is in, as far as the list can tell: the set of its building's units. */
+const buildingOf = (stop: PlanStop) =>
+  stop.buildingUnits
+    .map((unit) => unit.id)
+    .sort()
+    .join(',');
+
+/**
+ * The units a visit can be in, each saying whether another visit in the building
+ * already has it: three tenancies in one building are three different doors.
+ */
+function unitOptions(stop: PlanStop, building: readonly PlanStop[]): PickOption[] {
+  const takenBy = new Map(
+    building
+      .filter((other) => other.id !== stop.id && other.propertywareUnit)
+      .map((other) => [other.propertywareUnit!.id, other.sequence]),
+  );
+  return stop.buildingUnits.map((unit) => ({
+    value: unit.id,
+    label: unit.name,
+    hint:
+      [unit.addressLine1, takenBy.has(unit.id) ? `already chosen for visit ${takenBy.get(unit.id)}` : null]
+        .filter(Boolean)
+        .join(' · ') || undefined,
+    group: takenBy.has(unit.id) ? 'Already chosen for another visit here' : 'Not chosen yet',
+  }));
+}
+
 export function PlanStopsTable({
   stops,
+  allStops,
   editable,
   onOpen,
 }: {
   stops: PlanStop[];
+  /**
+   * The whole plan's visits, when `stops` is only some of them: the unit a
+   * visit elsewhere in the list already has still counts as taken.
+   */
+  allStops?: PlanStop[];
   editable: boolean;
   /** Opens a visit's details, as its pin on the map does. */
   onOpen?: (stopId: string) => void;
 }) {
-  const { setType, exclude } = usePlanningMutations();
+  const { setType, exclude, editStop } = usePlanningMutations();
   const [excluding, setExcluding] = useState<PlanStop | null>(null);
   const [reason, setReason] = useState('');
 
@@ -174,6 +209,48 @@ export function PlanStopsTable({
 
   const editableStop = (stop: PlanStop) => editable && !stop.inspectionId && stop.status !== 'PUBLISHED' && stop.status !== 'EXCLUDED';
 
+  // The visits of each building of several units, for which units are taken.
+  const buildings = useMemo(() => {
+    const byBuilding = new Map<string, PlanStop[]>();
+    for (const stop of allStops ?? stops)
+      if (stop.buildingUnits.length > 1) byBuilding.set(buildingOf(stop), [...(byBuilding.get(buildingOf(stop)) ?? []), stop]);
+    return byBuilding;
+  }, [allStops, stops]);
+
+  /**
+   * A visit waiting for its unit is fixed where it is listed (the office,
+   * 2026-09-18: "there's no function or control to fix it"). The same choice as
+   * the unit in the visit's details, which stays there for changing it later.
+   */
+  const columns = COLUMNS.map((column) =>
+    column.key !== 'status'
+      ? column
+      : {
+          ...column,
+          cell: (stop: PlanStop) => (
+            <div className="grid gap-1">
+              {column.cell(stop)}
+              {needsUnit(stop) && editableStop(stop) && stop.buildingUnits.length > 1 ? (
+                <EditablePick
+                  className="relative z-10"
+                  display={<span className="text-primary font-medium">Choose its unit</span>}
+                  label={`the unit of visit ${stop.sequence}`}
+                  onSave={async (unitId) => {
+                    await editStop.mutateAsync({ stopId: stop.id, propertywareUnitId: unitId });
+                    const unit = stop.buildingUnits.find((candidate) => candidate.id === unitId);
+                    toast.success(`Visit ${stop.sequence} is at ${unit?.addressLine1 ?? unit?.name ?? 'its unit'}`, {
+                      description: 'Its title, Details and filter sizes now follow the unit.',
+                    });
+                  }}
+                  options={unitOptions(stop, buildings.get(buildingOf(stop)) ?? [stop])}
+                  value={stop.propertywareUnit?.id ?? null}
+                />
+              ) : null}
+            </div>
+          ),
+        },
+  );
+
   return (
     <>
       <DataTable
@@ -199,6 +276,11 @@ export function PlanStopsTable({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {stop.buildingUnits.length > 1 && onOpen ? (
+                  <DropdownMenuItem onSelect={() => onOpen(stop.id)}>
+                    {stop.propertywareUnit ? 'Change its unit…' : 'Choose its unit…'}
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem disabled={setType.isPending} onSelect={() => changeType(stop)}>
                   {stop.inspectionType === 'HVAC' ? 'Make it an occupied inspection' : 'Make it an HVAC inspection'}
                 </DropdownMenuItem>
@@ -211,7 +293,7 @@ export function PlanStopsTable({
             ) : null}
           </div>
         )}
-        columns={COLUMNS}
+        columns={columns}
         label="Visits in this quarter's plan"
         rowKey={(stop) => stop.id}
         rows={stops}

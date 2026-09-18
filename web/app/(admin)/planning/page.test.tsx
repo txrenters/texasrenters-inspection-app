@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -127,6 +127,7 @@ function mount({
   plans = [PLAN],
   stops = [stop('s1'), stop('s2', { inspectionType: 'HVAC' }), stop('s3')],
   day = DAY as Record<string, unknown>,
+  editStop = idle as unknown,
 } = {}) {
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
@@ -165,7 +166,7 @@ function mount({
   hooks.usePlanTechnicians.mockReturnValue({ data: [] });
   hooks.usePlanningMutations.mockReturnValue({
     build,
-    editStop: idle,
+    editStop,
     importOfficeDetails: idle,
     setType: idle,
     exclude: idle,
@@ -316,6 +317,29 @@ describe('the benefit package plan page', () => {
 
     expect(screen.getByRole('tab', { name: 'Needs attention (1)' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  /**
+   * The office (2026-09-18): "there's no function or control to fix it". The
+   * unit is chosen right in the list, and a unit another visit in the building
+   * already has says so.
+   */
+  it('chooses the unit of a visit waiting for one where it is listed', async () => {
+    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    const units = [
+      { id: 'unit-house', name: 'House', addressLine1: '5009 N Main St' },
+      { id: 'unit-half', name: '1/2', addressLine1: '5009 1/2 N Main St' },
+    ];
+    const chosen = stop('s1', { buildingUnits: units, unitResolution: 'MANUAL', propertywareUnit: units[0] });
+    const waiting = stop('s2', { buildingUnits: units, unitResolution: 'UNRESOLVED', propertywareUnit: null });
+    const editStop = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: false };
+    mount({ stops: [chosen, waiting], editStop });
+
+    fireEvent.click(screen.getByRole('button', { name: /Change the unit of visit 2/ }));
+    expect(await screen.findByText('Already chosen for another visit here')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('option', { name: /1\/2/ }));
+
+    await waitFor(() => expect(editStop.mutateAsync).toHaveBeenCalledWith({ stopId: 's2', propertywareUnitId: 'unit-half' }));
   });
 
   /** A day starts from home; its driving between the properties is shown apart from the drive from home. */
