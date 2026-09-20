@@ -110,7 +110,8 @@ export function PlanBuildDialog({
           <DialogTitle>{rebuild ? `Rebuild ${label}` : `Build the ${label} plan`}</DialogTitle>
           <DialogDescription>
             Choose who goes out and when the quarter starts. The visits are grouped into days of 9 for the least
-            driving, never more than 20 minutes from one property to the next, and everyone chosen takes a group a day.
+            driving — up to 15 where the properties are within 5 minutes of each other — and never more than 20 minutes
+            from one property to the next.
           </DialogDescription>
         </DialogHeader>
 
