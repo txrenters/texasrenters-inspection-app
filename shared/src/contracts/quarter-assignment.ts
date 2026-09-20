@@ -43,6 +43,11 @@
  *   a property visited in Q3's first month is visited in Q4's first, and so on.
  *   A plan may start up to fifteen days either side of its quarter's first day
  *   (2026-09-19), and days before the quarter are its first month's.
+ * - **A visit with nowhere left to go joins the day that adds least driving**
+ *   (`squeezeIn`, 2026-09-20): sooner a day of twelve or fifteen than a tenancy
+ *   nobody visits. Only after everything else, and still never more than the
+ *   longest drive allowed between two properties, or past the day's visits and
+ *   its six hours.
  * - **Move-outs and move-ins are anchors** (`DayAnchor`): on a day a crew member
  *   has one, the day's visits are the ones nearest it, from any zone, and it is
  *   routed with them (2026-09-17: "we should be doing TBPs around those"). Each
@@ -1001,6 +1006,45 @@ function planTrip(
 }
 
 /**
+ * The visits nothing could group, squeezed into the days that have room.
+ *
+ * The last thing tried. A visit no group could take -- the crew's days in its
+ * month are all full, or it sits between two areas -- joins whichever day adds
+ * least driving, move-outs and all. The office would rather a day ran to twelve
+ * or fifteen than leave a tenancy unvisited (2026-09-20), so the five minutes
+ * and the zoning do not apply here; the longest drive allowed between two
+ * properties, the day's visits and its six hours still do.
+ */
+function squeezeIn(
+  crews: AssignedCrew[],
+  left: Set<PlannableStop>,
+  dayOn: ReadonlyMap<string, PlannableDay>,
+  limits: DayLimits,
+  cost: DriveEstimate,
+  drive: DriveEstimate,
+) {
+  for (const stop of [...left]) {
+    let best: { crew: AssignedCrew; path: PlannableStop[]; added: number } | null = null;
+    for (const crew of crews) {
+      const day = dayOn.get(crew.date);
+      if (!day || !qualified(day, crew.technicianId, stop)) continue;
+      if (crew.stops.length >= dayVisitRange(limits, crew.anchors?.length ?? 0).max) continue;
+      if (crew.onSiteMinutes + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
+      const path = [...(crew.anchors ?? []).map(anchorAsStop), ...crew.stops];
+      const { at, added } = cheapestInsertion(path, stop, cost);
+      if (overLong(added) || (best && added >= best.added)) continue;
+      best = { crew, path: [...path.slice(0, at), stop, ...path.slice(at)], added };
+    }
+    if (!best) continue;
+    const ordered = polished(best.path, cost).path;
+    best.crew.stops = ordered.filter((one) => anchorIdOf(one) === null);
+    best.crew.onSiteMinutes += stop.onSiteMinutes;
+    best.crew.driveMinutes = pathMinutes(ordered, drive);
+    left.delete(stop);
+  }
+}
+
+/**
  * Give every stop a day and a technician: the whole crew every planned day, a
  * group of nine each, from the first day until every visit has one.
  *
@@ -1163,6 +1207,8 @@ export function layoutEveryDay(
       });
     }
   }
+  // Sooner a fuller day than a tenancy nobody visits (the office, 2026-09-20).
+  if (left.size) squeezeIn(crews, left, dayOn, limits, cost, drive);
   for (const stop of left) unplaced.push({ stopId: stop.stopId, reason: 'NO_CAPACITY' });
 
   crews.sort((one, other) => one.date.localeCompare(other.date) || one.technicianId.localeCompare(other.technicianId));

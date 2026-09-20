@@ -276,6 +276,16 @@ export function PlanStopsTable({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                {/*
+                  A visit the planner could not place is given a day and a technician in its own
+                  window, and the office looked for that here first (2026-09-20: "how can we resolve
+                  this if we can't assign this?").
+                */}
+                {onOpen ? (
+                  <DropdownMenuItem onSelect={() => onOpen(stop.id)}>
+                    {stop.scheduledOn && stop.assignedTechnician ? 'Change its day or technician…' : 'Give it a day and a technician…'}
+                  </DropdownMenuItem>
+                ) : null}
                 {stop.buildingUnits.length > 1 && onOpen ? (
                   <DropdownMenuItem onSelect={() => onOpen(stop.id)}>
                     {stop.propertywareUnit ? 'Change its unit…' : 'Choose its unit…'}
