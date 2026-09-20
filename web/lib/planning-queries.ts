@@ -65,6 +65,9 @@ export interface PlanStop {
   previousVisitMonth?: number | null;
   orderSource: 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';
   zone: string | null;
+  /** The property, for the map: null where Propertyware has no location for it. */
+  latitude: number | null;
+  longitude: number | null;
   scheduledOn: string | null;
   positionInDay: number | null;
   assignedTechnicianId: string | null;

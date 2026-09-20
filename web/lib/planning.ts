@@ -194,6 +194,46 @@ export const needsUnit = (stop: { status: string; unitResolution: string }) =>
 export const NEEDS_UNIT_MESSAGE =
   'Choose its unit before publishing: the building has several, and Propertyware does not say which this tenancy is in.';
 
+/** What a visit needing attention is waiting for, and how it is drawn on the map. */
+export type AttentionKind = 'NO_DAY' | 'NO_TECHNICIAN' | 'NEEDS_UNIT' | 'KIND_TO_CHECK' | 'FAILED';
+
+export interface AttentionStop {
+  status: string;
+  unitResolution: string;
+  scheduledOn: string | null;
+  assignedTechnicianId: string | null;
+  inspectionTypeNeedsReview: boolean;
+}
+
+const ATTENTION_TEXT: Record<AttentionKind, string> = {
+  NO_DAY: 'No day yet',
+  NO_TECHNICIAN: 'No technician yet',
+  NEEDS_UNIT: 'Needs its unit',
+  KIND_TO_CHECK: 'Kind of visit to check',
+  FAILED: 'Publishing failed',
+};
+
+/**
+ * What a visit is waiting for, or null when it is waiting for nothing.
+ *
+ * The office asked to see these on a map, as Jobber shows its unscheduled
+ * appointments (2026-09-20): "kaning naka needs attention pwede nato ni ma latag
+ * tanan sa map para makita ni sila asa dapita?" -- so the first thing a visit is
+ * missing is the one named, the day before the technician.
+ */
+export function attentionOf(stop: AttentionStop): AttentionKind | null {
+  if (stop.status === 'EXCLUDED' || stop.status === 'PUBLISHED') return null;
+  if (stop.status === 'FAILED') return 'FAILED';
+  if (!stop.scheduledOn) return 'NO_DAY';
+  if (!stop.assignedTechnicianId) return 'NO_TECHNICIAN';
+  if (needsUnit(stop)) return 'NEEDS_UNIT';
+  if (stop.inspectionTypeNeedsReview) return 'KIND_TO_CHECK';
+  return null;
+}
+
+/** The same, in the words the map and the list use. */
+export const attentionText = (kind: AttentionKind) => ATTENTION_TEXT[kind];
+
 export type LimitState = 'within' | 'near' | 'over';
 
 /**

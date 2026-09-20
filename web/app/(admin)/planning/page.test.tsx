@@ -18,8 +18,18 @@ vi.mock('@/lib/planning-queries', () => hooks);
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => true }) }));
 const url = vi.hoisted(() => ({ state: { quarter: '2026-4', tab: 'days', day: '' }, set: vi.fn() }));
 vi.mock('@/lib/url-state', () => ({ useUrlState: () => [url.state, url.set] }));
-// The map loads Google's script; the page around it is what is under test.
+// The maps load Google's script; the page around them is what is under test.
 vi.mock('@/components/planning/plan-day-map', () => ({ PlanDayMap: () => <div data-testid="plan-day-map" /> }));
+vi.mock('@/components/planning/plan-attention-map', () => ({
+  PlanAttentionMap: ({ stops, planned }: { stops: { id: string; attention: string | null }[]; planned: { id: string }[] }) => (
+    <div data-testid="plan-attention-map">
+      {stops.map((stop) => (
+        <span key={stop.id}>{`${stop.id}: ${stop.attention}`}</span>
+      ))}
+      <span>{`planned behind: ${planned.map((stop) => stop.id).join(', ') || 'none'}`}</span>
+    </div>
+  ),
+}));
 
 const idle = { mutate: vi.fn(), isPending: false };
 const build = { mutate: vi.fn(), isPending: false };
@@ -66,6 +76,8 @@ const stop = (id: string, overrides: Record<string, unknown> = {}) => ({
   previousSequence: null,
   orderSource: 'PRIOR_QUARTER',
   zone: '1',
+  latitude: 29.76,
+  longitude: -95.37,
   scheduledOn: '2026-10-01T00:00:00.000Z',
   positionInDay: Number(id.slice(1)),
   assignedTechnicianId: 'tech-1',
@@ -452,6 +464,38 @@ describe('the benefit package plan page', () => {
     fireEvent.click(await screen.findByRole('option', { name: /1\/2/ }));
 
     await waitFor(() => expect(editStop.mutateAsync).toHaveBeenCalledWith({ stopId: 's2', propertywareUnitId: 'unit-half' }));
+  });
+
+  /**
+   * The office (2026-09-20), beside Jobber's unscheduled appointments and its
+   * map: "kaning naka needs attention pwede nato ni ma latag tanan sa map para
+   * makita ni sila asa dapita?"
+   */
+  it('lays every visit needing attention out on a map, the planned ones behind them', () => {
+    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    const noDay = stop('s2', {
+      status: 'BLOCKED',
+      blockedCode: 'NOT_PLACED',
+      blockedMessage: 'No day has room.',
+      scheduledOn: null,
+      assignedTechnicianId: null,
+      assignedTechnician: null,
+    });
+    const noTechnician = stop('s3', { assignedTechnicianId: null, assignedTechnician: null, status: 'BLOCKED' });
+    mount({ stops: [stop('s1'), noDay, noTechnician] });
+
+    const map = screen.getByTestId('plan-attention-map');
+    expect(within(map).getByText('s2: NO_DAY')).toBeTruthy();
+    expect(within(map).getByText('s3: NO_TECHNICIAN')).toBeTruthy();
+    expect(within(map).getByText('planned behind: s1')).toBeTruthy();
+  });
+
+  it('says how many visits needing attention have no location to put on the map', () => {
+    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    const nowhere = stop('s2', { status: 'BLOCKED', scheduledOn: null, assignedTechnicianId: null, latitude: null, longitude: null });
+    mount({ stops: [stop('s1'), nowhere] });
+
+    expect(screen.getByText(/1 is not on the map: Propertyware has no location for the property\./)).toBeTruthy();
   });
 
   /**

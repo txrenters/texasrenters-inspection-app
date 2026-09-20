@@ -241,9 +241,12 @@ export class PlanningController {
         onSiteMinutesOverriddenAt: true,
         unitOverriddenAt: true,
         propertywareUnit: { select: { id: true, name: true, addressLine1: true } },
-        // A building of several units: the ones a coordinator can choose from.
         propertywareBuilding: {
           select: {
+            // Where it is, for the map of the visits that need attention.
+            latitude: true,
+            longitude: true,
+            // A building of several units: the ones a coordinator can choose from.
             units: {
               where: { isActive: true },
               select: { id: true, name: true, addressLine1: true },
@@ -285,6 +288,9 @@ export class PlanningController {
     const names = new Map(previous.map((technician) => [technician.id, technician.displayName]));
     return stops.map(({ previousTechnicianId, propertywareBuilding, ...stop }) => ({
       ...stop,
+      // Prisma gives a decimal; the console wants a number it can put on a map.
+      latitude: propertywareBuilding?.latitude == null ? null : Number(propertywareBuilding.latitude),
+      longitude: propertywareBuilding?.longitude == null ? null : Number(propertywareBuilding.longitude),
       buildingUnits: propertywareBuilding?.units ?? [],
       previousTechnician: previousTechnicianId
         ? { id: previousTechnicianId, displayName: names.get(previousTechnicianId) ?? null }
