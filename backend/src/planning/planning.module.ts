@@ -6,6 +6,7 @@ import { RoutingModule } from '../routing/routing.module';
 import { LeaseInspectionsController } from './lease-inspections.controller';
 import { LeaseInspectionScheduler } from './lease-inspections.scheduler';
 import { LeaseInspectionService } from './lease-inspections.service';
+import { PlanAdvisorService } from './plan-advisor.service';
 import { TbpPlanScheduler } from './tbp-plan.scheduler';
 import { PlanBuildGuard } from './plan-build-guard';
 import { PlanningController } from './planning.controller';
@@ -23,6 +24,7 @@ import { TbpStopEditService } from './tbp-stop-edit.service';
     TbpPublishService,
     TbpPlanScheduler,
     TbpStopEditService,
+    PlanAdvisorService,
     PlanBuildGuard,
     LeaseInspectionService,
     LeaseInspectionScheduler,

@@ -109,6 +109,23 @@ export class PlanStopEditDto {
   @IsOptional() @IsIn(TBP_INSPECTION_TYPES) inspectionType?: TbpInspectionType;
 }
 
+/** One move the office took from the advice, as the advice gave it. */
+export class PlanAdviceMoveDto {
+  @IsUUID('all') stopId!: string;
+  /** The day it joins, `YYYY-MM-DD`: one the plan already has. */
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) toDate!: string;
+  @IsUUID('all') toTechnicianId!: string;
+}
+
+/** The moves the office chose from the advice. Each is judged again before it is written. */
+export class PlanAdviceApplyDto {
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => PlanAdviceMoveDto)
+  moves!: PlanAdviceMoveDto[];
+}
+
 /** One row of the office's sheet: the property and the services line written for it. */
 export class OfficeDetailsRowDto {
   @IsString() @MaxLength(200) address!: string;

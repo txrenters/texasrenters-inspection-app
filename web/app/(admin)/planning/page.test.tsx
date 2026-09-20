@@ -151,6 +151,8 @@ function mount({
   stops = [stop('s1'), stop('s2', { inspectionType: 'HVAC' }), stop('s3')],
   day = DAY as Record<string, unknown>,
   editStop = idle as unknown,
+  advice = null as unknown,
+  applyAdvice = null as unknown,
 } = {}) {
   hooks.usePlanQuarters.mockReturnValue({ isLoading: false, isError: false, data: plans });
   hooks.usePlanStops.mockReturnValue({ isLoading: false, isError: false, data: stops });
@@ -194,6 +196,8 @@ function mount({
     setType: idle,
     exclude: idle,
     publish: idle,
+    advice: advice ?? idle,
+    applyAdvice: applyAdvice ?? idle,
   });
   return render(<PlanningPage />);
 }
@@ -514,6 +518,52 @@ describe('the benefit package plan page', () => {
     mount({ stops: [stop('s1'), nowhere] });
 
     expect(screen.getByText(/1 is not on the map: Propertyware has no location for the property\./)).toBeTruthy();
+  });
+
+  /**
+   * The office (2026-09-20): "can you integrate ai into this also cause I have
+   * openai integrated already with the system". What it says, and the moves the
+   * rules allowed -- applied only when the office takes them.
+   */
+  it('shows what AI makes of the quarter, and applies the moves the office takes', async () => {
+    const advice = {
+      mutate: vi.fn((_planId: string, handlers: { onSuccess: (result: unknown) => void }) =>
+        handlers.onSuccess({
+          notes: ['Thu 1 Oct mixes four visits in one neighbourhood with one fifteen kilometres north.'],
+          proposed: 2,
+          moves: [
+            {
+              stopId: 's3',
+              address: '3 Any St',
+              fromDate: '2026-10-01',
+              toDate: '2026-10-02',
+              toTechnicianId: 'tech-2',
+              toTechnicianName: 'Kevin Grant',
+              savedMinutes: 14,
+              why: 'It is next to Kevin’s day.',
+            },
+          ],
+          refused: [{ stopId: 's2', address: '2 Any St', toDate: '2026-10-05', refused: 'It would not shorten the driving.' }],
+          savedMinutes: 14,
+          provider: 'OPENAI',
+          modelId: 'gpt-5.6-terra',
+          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+        }),
+      ),
+      isPending: false,
+    };
+    const applyAdvice = { mutate: vi.fn(), isPending: false };
+    mount({ advice, applyAdvice });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
+
+    expect(await screen.findByText(/mixes four visits in one neighbourhood/)).toBeTruthy();
+    expect(screen.getByText(/saves 14 min/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 move/ }));
+    expect(applyAdvice.mutate.mock.calls[0][0]).toEqual({
+      planId: 'plan-1',
+      moves: [{ stopId: 's3', toDate: '2026-10-02', toTechnicianId: 'tech-2' }],
+    });
   });
 
   /**
