@@ -15,7 +15,7 @@ import type { OfficeSheetRow } from './planning';
 const PLANNING = '/api/v1/admin/planning';
 
 export type PlanStatus = 'DRAFT' | 'PUBLISHING' | 'PUBLISHED' | 'PUBLISH_FAILED' | 'CANCELLED';
-export type PlanStopStatus = 'PLANNED' | 'BLOCKED' | 'EXCLUDED' | 'PUBLISHED' | 'FAILED';
+export type PlanStopStatus = 'PLANNED' | 'BLOCKED' | 'UNSCHEDULED' | 'EXCLUDED' | 'PUBLISHED' | 'FAILED';
 export type PlanInspectionType = 'OCCUPIED' | 'HVAC';
 
 export interface PlanSettings {
@@ -266,6 +266,8 @@ export interface PublishSummary {
   planId: string;
   published: number;
   adopted: number;
+  /** Sent to Jobber with no day on them, for the office to schedule there. */
+  unscheduled: number;
   failed: number;
   status: PlanStatus;
 }

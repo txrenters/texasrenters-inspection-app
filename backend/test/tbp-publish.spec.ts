@@ -165,32 +165,36 @@ describe('publishing a reviewed quarter', () => {
   });
 
   /**
-   * A blocked stop is a tenancy nobody will inspect this quarter. Publishing
-   * around it makes that invisible — excluding it is a decision with a reason
-   * attached, and that is what the coordinator should have to make.
+   * The office (2026-09-20): "let's not make the needs attention as blocker for
+   * publishing the TBP ... those needs to an attention should be reflected also
+   * into the unscheduled appointment". A quarter used to be refused outright
+   * while any visit was blocked or still without its unit.
    */
-  it('refuses to publish while any stop is still blocked', async () => {
-    const { service, planUpdateMany } = build([aStop('s1', 1)], { blockedCount: 3 });
+  it('publishes a quarter that still has visits needing attention', async () => {
+    const { service, planUpdateMany } = build([aStop('s1', 1)], { blockedCount: 3, withoutUnit: 2 });
 
-    await expect(service.publish(USER, 'plan-1')).rejects.toMatchObject({
-      code: 'PLAN_HAS_BLOCKED_STOPS',
-    });
-    // And it never claimed the plan, so a second attempt after fixing them works.
-    expect(planUpdateMany).not.toHaveBeenCalled();
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary).toMatchObject({ published: 1, failed: 0 });
+    expect(planUpdateMany).toHaveBeenCalled();
   });
 
-  /**
-   * A tenancy in a building of several units goes on a day at its building, but
-   * an inspection is booked at a door (the office, 2026-09-18).
-   */
-  it('refuses to publish while a visit in a building of several units has no unit', async () => {
-    const { service, planUpdateMany } = build([aStop('s1', 1)], { withoutUnit: 3 });
+  it('sends a visit with no day to Jobber with no day on it, and creates no inspection for it', async () => {
+    const { service, outboundCreate, stopUpdate } = build([aStop('s1', 1), aStop('s2', 2, { scheduledOn: null })]);
 
-    await expect(service.publish(USER, 'plan-1')).rejects.toMatchObject({
-      code: 'PLAN_HAS_STOPS_WITHOUT_UNIT',
-      message: expect.stringContaining('Choose each one’s unit'),
-    });
-    expect(planUpdateMany).not.toHaveBeenCalled();
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary).toMatchObject({ published: 1, unscheduled: 1, failed: 0 });
+    expect(summary.status).toBe(TbpPlanStatus.PUBLISHED);
+    // One inspection, for the visit that has a day.
+    expect(creation.insertInspection).toHaveBeenCalledTimes(1);
+    const queued = outboundCreate.mock.calls.find(
+      (call) => call[0].data.kind === JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+    );
+    expect(queued![0].data).toMatchObject({ tbpStopId: 's2', organizationId: 'org-1' });
+    expect(queued![0].data.inspectionId).toBeUndefined();
+    const marked = stopUpdate.mock.calls.find((call) => call[0].where.id === 's2');
+    expect(marked![0].data.status).toBe(TbpStopStatus.UNSCHEDULED);
   });
 
   /**
@@ -289,8 +293,8 @@ describe('publishing a reviewed quarter', () => {
     });
   });
 
-  it('fails a stop that was never routed instead of inventing a date', async () => {
-    const { service, stopUpdate } = build([aStop('s1', 1, { scheduledOn: null })]);
+  it('fails a stop with no property rather than inventing one', async () => {
+    const { service, stopUpdate } = build([aStop('s1', 1, { scheduledOn: null, propertywareBuildingId: null })]);
 
     const summary = await service.publish(USER, 'plan-1');
 

@@ -132,6 +132,10 @@ export default function PlanningPage() {
   );
   const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
+  // A visit the planner could not place is published too, with no day on it: it
+  // goes to Jobber's unscheduled work for the office to put on the calendar
+  // there (2026-09-20).
+  const unplaced = (stops.data ?? []).filter((stop) => stop.status === 'BLOCKED' && !stop.scheduledOn);
   // A zone too far for a day's drive is a trip (the office, 2026-09-18): who goes, and when.
   const trips = (rotation.data?.outOfReach ?? []).map((zone) => {
     const tripDays = (days.data ?? [])
@@ -207,7 +211,12 @@ export default function PlanningPage() {
           toast.error(`${result.failed} visits could not be published`, {
             description: 'Their reasons are on the visits; publishing again picks up where this stopped.',
           });
-        else toast.success(`${(result.published + result.adopted).toLocaleString()} inspections created for ${choice.label}`);
+        else
+          toast.success(`${(result.published + result.adopted).toLocaleString()} inspections created for ${choice.label}`, {
+            description: result.unscheduled
+              ? `${result.unscheduled.toLocaleString()} visits with no day went to Jobber unscheduled.`
+              : undefined,
+          });
       },
       onError: (error) => toast.error(`${choice.label} could not be published`, { description: error.message }),
     });
@@ -243,10 +252,14 @@ export default function PlanningPage() {
                 Rebuild
               </Button>
               <Button
-                disabled={building || attention.length > 0 || planned.length === 0}
+                disabled={building || planned.length + unplaced.length === 0}
                 onClick={() => setPublishing(true)}
                 size="sm"
-                title={attention.length ? 'Resolve or leave out every visit that needs attention first.' : undefined}
+                title={
+                  unplaced.length
+                    ? `${unplaced.length.toLocaleString()} visits with no day go to Jobber unscheduled.`
+                    : undefined
+                }
               >
                 <SendIcon />
                 Publish
@@ -523,7 +536,11 @@ export default function PlanningPage() {
               {planned.filter((stop) => stop.inspectionType === 'HVAC').length.toLocaleString()} HVAC and{' '}
               {planned.filter((stop) => stop.inspectionType === 'OCCUPIED').length.toLocaleString()} occupied — on their
               planned days, assigned to their technicians, and queues each visit to be booked in Jobber with the
-              office&rsquo;s Details. There is no bulk undo.
+              office&rsquo;s Details.
+              {unplaced.length
+                ? ` The ${unplaced.length.toLocaleString()} visits with no day go to Jobber with no day on them, for you to schedule there; each comes back here as an inspection once it has one.`
+                : ''}{' '}
+              There is no bulk undo.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -537,6 +554,7 @@ export default function PlanningPage() {
             >
               {mutations.publish.isPending ? <Spinner /> : null}
               Publish {planned.length.toLocaleString()} inspections
+              {unplaced.length ? ` and ${unplaced.length.toLocaleString()} unscheduled` : ''}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -8,7 +8,6 @@ import {
   Prisma,
   TbpPlanStatus,
   TbpStopStatus,
-  TbpUnitResolution,
 } from '@prisma/client';
 import { withInspectionLink } from '@texasrenters/shared';
 
@@ -36,6 +35,8 @@ export interface PublishSummary {
   planId: string;
   published: number;
   adopted: number;
+  /** Sent to Jobber with no day on them, for the office to schedule there. */
+  unscheduled: number;
   failed: number;
   status: TbpPlanStatus;
 }
@@ -59,6 +60,7 @@ export class TbpPublishService {
 
     let published = 0;
     let adopted = 0;
+    let unscheduled = 0;
     let failed = 0;
 
     // Re-read each round rather than paging a snapshot: a stop published in the
@@ -69,7 +71,10 @@ export class TbpPublishService {
         where: {
           planId,
           organizationId: user.organizationId,
-          status: TbpStopStatus.PLANNED,
+          // A visit the planner could not place is published too, with no day
+          // on it (the office, 2026-09-20). Only one a coordinator excluded
+          // deliberately stays out.
+          status: { in: [TbpStopStatus.PLANNED, TbpStopStatus.BLOCKED] },
           inspectionId: null,
         },
         orderBy: { sequence: 'asc' },
@@ -91,15 +96,18 @@ export class TbpPublishService {
       if (batch.length === 0) break;
 
       for (const stop of batch) {
-        const outcome = await this.publishStop(user, planId, stop);
+        const outcome = stop.scheduledOn
+          ? await this.publishStop(user, planId, stop)
+          : await this.queueUnscheduled(user, planId, stop);
         if (outcome === 'PUBLISHED') published += 1;
         else if (outcome === 'ADOPTED') adopted += 1;
+        else if (outcome === 'UNSCHEDULED') unscheduled += 1;
         else failed += 1;
       }
 
       await this.prisma.tbpQuarterPlan.update({
         where: { id: planId },
-        data: { publishedCount: published + adopted },
+        data: { publishedCount: published + adopted + unscheduled },
       });
     }
 
@@ -109,7 +117,7 @@ export class TbpPublishService {
       data: {
         status,
         publishedAt: failed > 0 ? null : new Date(),
-        publishedCount: published + adopted,
+        publishedCount: published + adopted + unscheduled,
         lastError: failed > 0 ? `${failed} stop(s) could not be published.` : null,
       },
     });
@@ -120,11 +128,12 @@ export class TbpPublishService {
       planId,
       published,
       adopted,
+      unscheduled,
       failed,
       status,
     });
 
-    return { planId, published, adopted, failed, status };
+    return { planId, published, adopted, unscheduled, failed, status };
   }
 
   /**
@@ -142,39 +151,6 @@ export class TbpPublishService {
    * keep it: the claim only took a DRAFT, and the loop only a PLANNED stop.
    */
   private async claim(user: AuthenticatedUser, planId: string) {
-    const blocked = await this.prisma.tbpQuarterPlanStop.count({
-      where: { planId, organizationId: user.organizationId, status: TbpStopStatus.BLOCKED },
-    });
-    if (blocked > 0)
-      // Refused rather than skipped. A blocked stop is a tenancy nobody will
-      // inspect this quarter, and publishing around it makes that invisible —
-      // the coordinator can exclude it deliberately, which is a decision with
-      // a reason attached.
-      throw new ApplicationError(
-        409,
-        'PLAN_HAS_BLOCKED_STOPS',
-        `${blocked} stop(s) still need attention. Resolve or exclude them before publishing.`,
-      );
-
-    // A tenancy in a building of several units that nothing has said the unit of
-    // yet. Its visit has a day, but an inspection is booked at a door: the unit
-    // is chosen on the visit, or read from the report's Unit column.
-    const withoutUnit = await this.prisma.tbpQuarterPlanStop.count({
-      where: {
-        planId,
-        organizationId: user.organizationId,
-        status: TbpStopStatus.PLANNED,
-        unitResolution: TbpUnitResolution.UNRESOLVED,
-        inspectionId: null,
-      },
-    });
-    if (withoutUnit > 0)
-      throw new ApplicationError(
-        409,
-        'PLAN_HAS_STOPS_WITHOUT_UNIT',
-        `${withoutUnit} visit(s) are in buildings of several units. Choose each one’s unit before publishing.`,
-      );
-
     const { count } = await this.prisma.tbpQuarterPlan.updateMany({
       where: {
         id: planId,
@@ -201,6 +177,72 @@ export class TbpPublishService {
     });
   }
 
+  /**
+   * A visit with no day, put in Jobber's unscheduled work instead.
+   *
+   * The office (2026-09-20): "let's not make the needs attention as blocker for
+   * publishing the TBP ... those needs to an attention should be reflected also
+   * into the unscheduled appointment". Nothing is inspected until it has a day,
+   * so no inspection is created here: the task carries the plan stop, the job
+   * appears in Jobber with no day on it, and the visit comes back as an
+   * inspection through the ordinary sync once the office schedules it there.
+   *
+   * The task is unique on (organization, stop, kind), so publishing a plan a
+   * second time cannot make a second job in somebody's calendar.
+   */
+  private async queueUnscheduled(
+    user: AuthenticatedUser,
+    planId: string,
+    stop: { id: string; sequence: number; propertywareBuildingId: string | null; visitTitle: string | null },
+  ): Promise<'UNSCHEDULED' | 'FAILED'> {
+    if (!stop.propertywareBuildingId || !stop.visitTitle)
+      return this.fail(stop.id, 'NOT_ROUTED', 'This visit has no property or no title to book with.');
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.jobberOutboundTask.create({
+          data: {
+            organizationId: user.organizationId,
+            tbpStopId: stop.id,
+            kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+            status: JobberOutboundStatus.PENDING,
+          },
+        });
+
+        await tx.tbpQuarterPlanStop.update({
+          where: { id: stop.id },
+          data: { status: TbpStopStatus.UNSCHEDULED, blockedCode: null, blockedMessage: null },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            organizationId: user.organizationId,
+            ...auditActor(user),
+            action: 'TBP_STOP_SENT_UNSCHEDULED',
+            entityType: 'TbpQuarterPlanStop',
+            entityId: stop.id,
+            metadata: { planId, sequence: stop.sequence },
+          },
+        });
+      });
+      return 'UNSCHEDULED';
+    } catch (error) {
+      // Queued by an earlier publish: the stop is already Jobber's to schedule.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        await this.prisma.tbpQuarterPlanStop.update({
+          where: { id: stop.id },
+          data: { status: TbpStopStatus.UNSCHEDULED, blockedCode: null, blockedMessage: null },
+        });
+        return 'UNSCHEDULED';
+      }
+      return this.fail(
+        stop.id,
+        error instanceof ApplicationError ? error.code : 'PUBLISH_FAILED',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
   private async publishStop(
     user: AuthenticatedUser,
     planId: string,
@@ -218,8 +260,7 @@ export class TbpPublishService {
       visitDetails: string | null;
     },
   ): Promise<'PUBLISHED' | 'ADOPTED' | 'FAILED'> {
-    if (!stop.propertywareBuildingId || !stop.scheduledOn)
-      return this.fail(stop.id, 'NOT_ROUTED', 'This stop has no property or no scheduled day.');
+    if (!stop.propertywareBuildingId) return this.fail(stop.id, 'NOT_ROUTED', 'This stop has no property.');
 
     try {
       await this.prisma.$transaction(async (tx) => {

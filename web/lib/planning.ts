@@ -222,7 +222,8 @@ const ATTENTION_TEXT: Record<AttentionKind, string> = {
  * missing is the one named, the day before the technician.
  */
 export function attentionOf(stop: AttentionStop): AttentionKind | null {
-  if (stop.status === 'EXCLUDED' || stop.status === 'PUBLISHED') return null;
+  // Unscheduled is Jobber's to schedule now, not the office's to fix here.
+  if (stop.status === 'EXCLUDED' || stop.status === 'PUBLISHED' || stop.status === 'UNSCHEDULED') return null;
   if (stop.status === 'FAILED') return 'FAILED';
   if (!stop.scheduledOn) return 'NO_DAY';
   if (!stop.assignedTechnicianId) return 'NO_TECHNICIAN';

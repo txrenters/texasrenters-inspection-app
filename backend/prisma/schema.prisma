@@ -2576,6 +2576,14 @@ model JobberVisitImport {
 /// one is foreseeable and a boolean column would have to be migrated away.
 enum JobberOutboundKind {
   VISIT_COMPLETED
+  /// Put a benefit-package visit in Jobber with no day on it, for a visit the
+  /// planner could not place (the office, 2026-09-20: "those needs to an
+  /// attention should be reflected also into the unscheduled appointment").
+  ///
+  /// The only kind with no inspection behind it: there is nothing to inspect
+  /// until the office gives the visit a day, in Jobber or here, so this task
+  /// carries the plan stop instead.
+  TBP_JOB_UNSCHEDULED
   /// Book a benefit-package visit in Jobber for a published quarter plan.
   ///
   /// The only kind that has no `jobberVisitId` when it is enqueued -- it is
@@ -2629,7 +2637,11 @@ enum JobberOutboundStatus {
 model JobberOutboundTask {
   id             String               @id @default(uuid()) @db.Uuid
   organizationId String               @db.Uuid
-  inspectionId   String               @db.Uuid
+  /// Null only for TBP_JOB_UNSCHEDULED, which has a plan stop and no
+  /// inspection: a visit with no day is not an inspection yet.
+  inspectionId   String?              @db.Uuid
+  /// The plan stop this task is for. Only TBP_JOB_UNSCHEDULED sets it.
+  tbpStopId      String?              @db.Uuid
   /// Null only for TBP_VISIT_CREATE before it has been sent: that task is
   /// creating the visit, so Jobber supplies the id and this is written back
   /// on success. Identity is (organization, inspection, kind), so nothing
@@ -2665,11 +2677,15 @@ model JobberOutboundTask {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  inspection     Inspection           @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  inspection     Inspection?          @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  tbpStop        TbpQuarterPlanStop?  @relation(fields: [tbpStopId], references: [id], onDelete: Cascade)
 
   /// One completion push per inspection. A re-finalize must not tell Jobber
   /// twice, and the enqueue relies on this rather than on reading first.
   @@unique([organizationId, inspectionId, kind])
+  /// The same for a visit with no inspection: one unscheduled job per stop, so
+  /// publishing a plan again cannot make a second job in somebody's calendar.
+  @@unique([organizationId, tbpStopId, kind])
   @@index([organizationId, status, nextAttemptAt])
 }
 
@@ -2955,10 +2971,15 @@ enum TbpPlanStatus {
 
 enum TbpStopStatus {
   PLANNED
-  /// Something is wrong that a person has to fix -- most often an unresolvable
-  /// unit. The stop stays in the plan and publish refuses while any remain,
-  /// because a tenancy dropped quietly is one nobody inspects for a year.
+  /// Something is wrong that a person has to fix -- most often no day the
+  /// planner could give it. The stop stays in the plan, and publishing sends it
+  /// to Jobber with no day rather than refusing the whole quarter (the office,
+  /// 2026-09-20).
   BLOCKED
+  /// Published to Jobber with no day: it is in their unscheduled work, waiting
+  /// for the office to put it on the calendar. No inspection exists yet -- one
+  /// is created when the visit comes back from Jobber with a day on it.
+  UNSCHEDULED
   /// A coordinator decided this tenancy is not in this quarter, with a reason.
   EXCLUDED
   PUBLISHED
@@ -3208,6 +3229,8 @@ model TbpQuarterPlanStop {
   /// SetNull, not Cascade: `inspections:delete` hard-deletes an inspection, and
   /// that must not also erase the record that this quarter planned it.
   inspection           Inspection?           @relation("TbpStopInspection", fields: [inspectionId], references: [id], onDelete: SetNull)
+  /// The unscheduled job this stop was sent to Jobber as, while it has no day.
+  jobberTasks          JobberOutboundTask[]
 
   /// One stop per tenancy per plan. This is what makes a regeneration a diff
   /// rather than a second copy of the quarter.
