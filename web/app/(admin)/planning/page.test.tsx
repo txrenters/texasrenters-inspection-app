@@ -489,6 +489,52 @@ describe('the benefit package plan page', () => {
   });
 
   /**
+   * The office (2026-09-20), after publishing a quarter with visits that had no
+   * day: "then create an unscheduled also in the console". Jobber lists them;
+   * so does this.
+   */
+  it('lists the visits published to Jobber with no day, and opens one to place it', () => {
+    url.state = { quarter: '2026-4', tab: 'unscheduled', day: '' };
+    const waiting = stop('s2', {
+      status: 'UNSCHEDULED',
+      scheduledOn: null,
+      positionInDay: null,
+      assignedTechnicianId: null,
+      assignedTechnician: null,
+    });
+    mount({ plans: [{ ...PLAN, status: 'PUBLISHED' }], stops: [stop('s1'), waiting] });
+
+    expect(screen.getByRole('tab', { name: 'Unscheduled (1)' })).toBeTruthy();
+    expect(screen.getByText(/In Jobber with no day on them/)).toBeTruthy();
+    expect(within(screen.getByTestId('plan-attention-map')).getByText('s2: NO_DAY')).toBeTruthy();
+  });
+
+  /**
+   * The office (2026-09-20), on a quarter whose publish had failed: "opening
+   * this dialougue wont let me edit it". A visit with no inspection stays
+   * changeable whatever the quarter's state.
+   */
+  it('still lets a visit with no day be changed after the quarter is published', () => {
+    url.state = { quarter: '2026-4', tab: 'visits', day: '' };
+    const failed = stop('s2', {
+      status: 'FAILED',
+      scheduledOn: null,
+      positionInDay: null,
+      assignedTechnicianId: null,
+      assignedTechnician: null,
+      blockedMessage: 'This stop has no property or no scheduled day.',
+    });
+    mount({ plans: [{ ...PLAN, status: 'PUBLISH_FAILED' }], stops: [failed] });
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Change the visit at s2 Any St' }), {
+      button: 0,
+      pointerId: 1,
+      pointerType: 'mouse',
+    });
+    expect(screen.getByRole('menuitem', { name: /Give it a day and a technician/ })).toBeTruthy();
+  });
+
+  /**
    * The office (2026-09-20), beside Jobber's unscheduled appointments and its
    * map: "kaning naka needs attention pwede nato ni ma latag tanan sa map para
    * makita ni sila asa dapita?"
@@ -660,7 +706,7 @@ describe('the benefit package plan page', () => {
   });
 
   /** The office edits a draft visit where it reads it (2026-09-16): each value is its own control. */
-  it('lets a coordinator change a draft visit’s values in its window, and nothing of a published plan', async () => {
+  it('lets a coordinator change a draft visit’s values in its window, and nothing of a visit already published', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Details of stop 2, 2 Any St' }));
     const dialog = await screen.findByRole('dialog');
@@ -668,7 +714,11 @@ describe('the benefit package plan page', () => {
       expect(within(dialog).getByRole('button', { name: new RegExp(`Change ${value}`) })).toBeTruthy();
     fireEvent.keyDown(dialog, { key: 'Escape' });
 
-    mount({ plans: [{ ...PLAN, status: 'PUBLISHED' }] });
+    // Its inspection exists: the day is the inspection's now, not the plan's.
+    mount({
+      plans: [{ ...PLAN, status: 'PUBLISHED' }],
+      stops: [stop('s1'), stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1' }), stop('s3')],
+    });
     fireEvent.click(screen.getAllByRole('button', { name: 'Details of stop 2, 2 Any St' }).at(-1)!);
     const published = (await screen.findAllByRole('dialog')).at(-1)!;
     expect(within(published).queryByRole('button', { name: /Change the date/ })).toBeNull();

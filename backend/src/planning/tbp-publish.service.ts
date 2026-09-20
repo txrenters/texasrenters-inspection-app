@@ -178,6 +178,70 @@ export class TbpPublishService {
   }
 
   /**
+   * One visit given a day after the quarter was published, made real at once.
+   *
+   * The office (2026-09-20) publishes a quarter with visits that have no day --
+   * they go to Jobber's unscheduled work -- and then gives one a day here. The
+   * plan is past publishing by then, so nothing else would ever create its
+   * inspection: this does, the moment it has a day and somebody to take it.
+   *
+   * A visit already sitting in Jobber unscheduled is refused. Its job and visit
+   * exist there; scheduling it in Jobber is what gives it a day, and the sync
+   * brings it back here as an inspection on this same stop. Creating a second
+   * job from here would put the same work in the calendar twice.
+   */
+  async placeOne(user: AuthenticatedUser, stopId: string): Promise<'PUBLISHED' | 'ADOPTED' | 'FAILED' | null> {
+    const stop = await this.prisma.tbpQuarterPlanStop.findFirst({
+      where: { id: stopId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        planId: true,
+        sequence: true,
+        status: true,
+        inspectionId: true,
+        jobberVisitId: true,
+        scheduledOn: true,
+        assignedTechnicianId: true,
+        propertywareBuildingId: true,
+        propertywareUnitId: true,
+        propertywareLeaseId: true,
+        jobberJobId: true,
+        inspectionType: true,
+        visitTitle: true,
+        visitDetails: true,
+      },
+    });
+    // Nothing to make real: it has its inspection, it was left out, or it still
+    // has no day. Each is a normal state, not a failure.
+    if (!stop || stop.inspectionId || stop.status === TbpStopStatus.EXCLUDED || !stop.scheduledOn) return null;
+    if (stop.jobberVisitId)
+      throw new ApplicationError(
+        409,
+        'VISIT_IS_IN_JOBBER',
+        'This visit is already in Jobber with no day on it. Give it a day there, and it comes back here with the day it was given.',
+      );
+
+    // The queued unscheduled job, dropped: it has a day now, and the booking
+    // that follows creates the job it belongs on.
+    await this.prisma.jobberOutboundTask.deleteMany({
+      where: {
+        organizationId: user.organizationId,
+        tbpStopId: stop.id,
+        kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+        status: { in: [JobberOutboundStatus.PENDING, JobberOutboundStatus.FAILED] },
+      },
+    });
+
+    const outcome = await this.publishStop(user, stop.planId, stop);
+    if (outcome !== 'FAILED')
+      await this.prisma.tbpQuarterPlan.update({
+        where: { id: stop.planId },
+        data: { publishedCount: { increment: 1 } },
+      });
+    return outcome;
+  }
+
+  /**
    * A visit with no day, put in Jobber's unscheduled work instead.
    *
    * The office (2026-09-20): "let's not make the needs attention as blocker for

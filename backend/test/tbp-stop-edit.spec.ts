@@ -4,6 +4,7 @@ import type { AuthenticatedUser } from '../src/common/auth';
 import type { PrismaService } from '../src/common/prisma.service';
 import type { QuarterPlannerService } from '../src/planning/quarter-planner.service';
 import type { TbpPlanService } from '../src/planning/tbp-plan.service';
+import type { TbpPublishService } from '../src/planning/tbp-publish.service';
 import { TbpStopEditService, dayInQuarter, detailsProblem } from '../src/planning/tbp-stop-edit.service';
 
 const USER = {
@@ -95,7 +96,18 @@ const build = (
   } as unknown as TbpPlanService;
   const planner = { measureDays: jest.fn().mockResolvedValue(undefined) } as unknown as QuarterPlannerService;
 
-  return { service: new TbpStopEditService(prisma, plans, planner), stopUpdate, auditCreate, planUpdate, plans, planner };
+  // A draft plan never reaches the publisher; a published one does.
+  const publisher = { placeOne: jest.fn().mockResolvedValue(null) } as unknown as TbpPublishService;
+
+  return {
+    service: new TbpStopEditService(prisma, plans, planner, publisher),
+    stopUpdate,
+    auditCreate,
+    planUpdate,
+    plans,
+    planner,
+    publisher,
+  };
 };
 
 const written = (stopUpdate: jest.Mock) => stopUpdate.mock.calls[0]![0].data as Record<string, unknown>;
@@ -316,16 +328,48 @@ describe('a coordinator editing a visit in a draft', () => {
     expect(stopUpdate).not.toHaveBeenCalled();
   });
 
-  it('refuses a visit already published, and any visit in a plan that is no longer a draft', async () => {
+  it('refuses a visit already published, whatever its plan', async () => {
     const published = build({ status: TbpStopStatus.PUBLISHED, inspectionId: 'insp-1' });
-    await expect(published.service.edit(USER, 's1', { onSiteMinutes: 60 })).rejects.toMatchObject({ code: 'STOP_NOT_EDITABLE' });
 
-    const publishedPlan = build({}, { plan: { status: TbpPlanStatus.PUBLISHED } });
-    await expect(publishedPlan.service.edit(USER, 's1', { onSiteMinutes: 60 })).rejects.toMatchObject({
-      code: 'STOP_NOT_EDITABLE',
-    });
+    await expect(published.service.edit(USER, 's1', { onSiteMinutes: 60 })).rejects.toMatchObject({ code: 'STOP_NOT_EDITABLE' });
     expect(published.stopUpdate).not.toHaveBeenCalled();
-    expect(publishedPlan.stopUpdate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The office (2026-09-20), on a quarter whose publish had failed: "opening
+   * this dialougue wont let me edit it". A visit the quarter could not place
+   * has no inspection, and giving it a day is the whole way out of that state.
+   */
+  it('lets a visit with no inspection be changed after the quarter is published', async () => {
+    const { service, stopUpdate } = build({}, { plan: { status: TbpPlanStatus.PUBLISHED } });
+
+    const result = await service.edit(USER, 's1', { onSiteMinutes: 60 });
+
+    expect(result.changed).toEqual(['onSiteMinutes']);
+    expect(stopUpdate).toHaveBeenCalled();
+  });
+
+  /** A visit given its day on a published quarter becomes its inspection at once. */
+  it('creates the inspection for a visit placed after the quarter is published', async () => {
+    const { service, publisher } = build(
+      { scheduledOn: null, assignedTechnicianId: null, status: TbpStopStatus.UNSCHEDULED },
+      { plan: { status: TbpPlanStatus.PUBLISHED } },
+    );
+    (publisher.placeOne as jest.Mock).mockResolvedValue('PUBLISHED');
+
+    const result = await service.edit(USER, 's1', { scheduledOn: '2026-10-06', assignedTechnicianId: 'tech-1' });
+
+    expect(publisher.placeOne).toHaveBeenCalledWith(USER, 's1');
+    expect(result.placed).toBe(true);
+  });
+
+  /** A draft's visits are published by the quarter, not one at a time. */
+  it('leaves a draft’s visit to the quarter’s own publish', async () => {
+    const { service, publisher } = build();
+
+    await service.edit(USER, 's1', { scheduledOn: '2026-10-07' });
+
+    expect(publisher.placeOne).not.toHaveBeenCalled();
   });
 
   it('writes nothing for an edit that changes nothing', async () => {
@@ -363,7 +407,12 @@ describe('the technicians a visit can be given to', () => {
         ]),
       },
     } as unknown as PrismaService;
-    const service = new TbpStopEditService(prisma, {} as TbpPlanService, {} as QuarterPlannerService);
+    const service = new TbpStopEditService(
+      prisma,
+      {} as TbpPlanService,
+      {} as QuarterPlannerService,
+      {} as TbpPublishService,
+    );
 
     const technicians = await service.technicians('org-1');
 
