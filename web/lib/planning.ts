@@ -119,23 +119,47 @@ export function dayOutsideRules(
   );
 }
 
-/**
- * The first days a quarter's plan may be built from, `YYYY-MM-DD`: fifteen days
- * either side of the quarter's first (the office, 2026-09-19), and never before
- * today -- a day already gone is not planned. Null when that window is over.
- */
-export function planStartChoice(quarter: Quarter, today: string): { min: string; max: string } | null {
-  const { earliest, latest } = planStartRange(quarter);
-  const min = today > earliest ? today : earliest;
-  return min > latest ? null : { min, max: latest };
+/** One of the three starts the office picks between when a quarter is built, and what it means. */
+export interface PlanStartOption {
+  value: 'EARLY' | 'ON_TIME' | 'LATE' | 'KEPT';
+  label: string;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  /** Before today: the plan starts on it, and the days already gone are skipped. */
+  past: boolean;
 }
 
-/** The first day to offer: the plan's own, else the quarter's -- inside the days it may start on. */
-export function defaultPlanStart(quarter: Quarter, startsOn: string | null | undefined, today: string): string | null {
-  const choice = planStartChoice(quarter, today);
-  if (!choice) return null;
-  const wanted = startsOn?.slice(0, 10) ?? quarterFirstDay(quarter);
-  return wanted < choice.min ? choice.min : wanted > choice.max ? choice.max : wanted;
+/**
+ * The starts a quarter can be built from: fifteen days early, on time, or
+ * fifteen days late (the office, 2026-09-19: "the +-15 days ... if we will apply
+ * the +15 or -15 or on time quarter schedule").
+ *
+ * A start already past is still offered -- the plan begins from it and the days
+ * gone are simply not planned -- so a quarter can still be started as soon as
+ * possible. A plan built from some other day keeps that day as a fourth choice,
+ * so rebuilding never moves it by accident.
+ */
+export function planStartOptions(quarter: Quarter, startsOn: string | null | undefined, today: string): PlanStartOption[] {
+  const { earliest, latest } = planStartRange(quarter);
+  const option = (value: PlanStartOption['value'], label: string, date: string): PlanStartOption => ({
+    value,
+    label,
+    date,
+    past: date < today,
+  });
+  const choices = [
+    option('EARLY', '15 days early', earliest),
+    option('ON_TIME', 'On time', quarterFirstDay(quarter)),
+    option('LATE', '15 days late', latest),
+  ];
+  const kept = startsOn?.slice(0, 10);
+  return kept && !choices.some((choice) => choice.date === kept) ? [...choices, option('KEPT', 'As built', kept)] : choices;
+}
+
+/** Which start a plan is on now: its own day, or on time for a plan not built yet. */
+export function planStartValue(options: readonly PlanStartOption[], startsOn: string | null | undefined): PlanStartOption['value'] {
+  const kept = startsOn?.slice(0, 10);
+  return (kept && options.find((option) => option.date === kept)?.value) || 'ON_TIME';
 }
 
 /** "Sep 21, 10 days before the quarter", or the quarter's own first day. */
