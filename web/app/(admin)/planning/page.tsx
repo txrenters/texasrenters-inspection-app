@@ -59,12 +59,13 @@ import { useUrlState } from '@/lib/url-state';
  * The office's rules, as the planner applies them: whoever was first last
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
  * on the HVAC plan; the visits are grouped into days of nine for the least
- * driving, never more than twenty minutes from one property to the next, and up
- * to fifteen where they are within five minutes of each other (2026-09-19 and
- * -20); everyone chosen works
- * every day from the plan's first until every visit has a day, each taking a
- * group in their zone of the week and moving on each week, with a property
- * within five minutes of a group joining it; a zone too far for a day's drive
+ * driving, never more than twenty minutes from one property to the next, and a
+ * tenth where it is within five minutes of the day (2026-09-19 and -20); a day
+ * short of nine fills from the fuller days near it; everyone chosen works every
+ * day from the plan's first until every visit has a day -- the quarter is
+ * finished as early as the crew can and the days after that stay empty
+ * (2026-09-20) -- each taking a group in their zone of the week and moving on
+ * each week, with a property within five minutes of a group joining it; a zone too far for a day's drive
  * is a trip of days in a row for whoever lives nearest; visits go on weekdays
  * that are not US holidays, with Mondays from the second week kept for
  * rescheduled visits. Building a quarter asks two things only -- who goes out,
@@ -235,7 +236,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next; a day takes more than 9, up to 15, while the next property is within 5 minutes of it, and holds fewer only where they are further apart. Each visit stays in the month of the quarter it had last quarter (July's in October, August's in November, September's in December), and a visit new this quarter goes in the month with fewest. In each month, everyone chosen works every day from its start until that month's visits have a day. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next; a day takes a 10th while that property is within 5 minutes of it, and a day short of 9 fills from the fuller days near it, so none is left with one or two. Everyone chosen works every day from the plan's first until every visit has a day: the quarter is finished as early as the crew can, and the days left at the end of it stay empty. Visits are taken up in last quarter's order, the month of the quarter they were visited in first. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );

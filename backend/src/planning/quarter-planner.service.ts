@@ -25,7 +25,7 @@ import {
   crewKey,
   estimatedDriveMinutes,
   haversineMeters,
-  layoutByMonth,
+  layoutEveryDay,
   monthOfQuarter,
   planStartRange,
   plannedVisitDaysOfQuarter,
@@ -230,13 +230,11 @@ export class QuarterPlannerService {
    * - the crew the coordinator chose when building the plan, or the one set on
    *   the planning profiles, from the plan's first day -- up to fifteen days
    *   either side of the quarter's -- and never on a day already gone;
-   * - each visit in the month of the quarter it had last quarter -- July's in
-   *   October, August's in November -- and one with no visit last quarter in the
-   *   month with fewest (`layoutByMonth`, 2026-09-18); days before the quarter
-   *   are its first month's;
-   * - in each month, the whole crew works every planned day from its first,
-   *   until that month's visits have a day, in last quarter's order
-   *   (`layoutEveryDay`);
+   * - the whole crew works every planned day from the plan's first until every
+   *   visit has a day, in last quarter's order -- the month of the quarter a
+   *   property was visited in orders it, it does not hold it back, and the days
+   *   left at the end of the quarter stay empty (`layoutEveryDay`, 2026-09-20:
+   *   "if they can finish it in a month then that's good");
    * - the visits are grouped into days of `minStopsPerDay`, nine, each as tight
    *   as the properties allow, and never more than `maxLegMinutes`, twenty, from
    *   one property to the next -- by the estimate as the days are laid out, and
@@ -342,7 +340,7 @@ export class QuarterPlannerService {
     // In last quarter's order. A zone too far for a day's drive from any home is
     // a trip for the crew member living nearest it (the office, 2026-09-18).
     const booked = await this.dayAnchors(organizationId, quarter, roster.technicianIds, settings.startsOn);
-    const assignment = layoutByMonth(free, days, {
+    const assignment = layoutEveryDay(free, days, {
       limits,
       rotation: { position: new Map(stops.map((stop, index) => [stop.stopId, index])) },
       taken: new Set(placedByHand.map((crew) => crewKey(crew.date, crew.technicianId))),

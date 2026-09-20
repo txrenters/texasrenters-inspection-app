@@ -3041,9 +3041,9 @@ model TbpQuarterPlan {
   maxDriveMinutes      Int      @default(90)
   /// The visits the planner groups into a day (2026-09-19): nine.
   minStopsPerDay       Int      @default(9)
-  /// The most a day may hold: fifteen (2026-09-20). Past its nine a day only
+  /// The most a day may hold: ten (2026-09-20). Past its nine a day only
   /// takes a visit within five minutes' drive of it.
-  maxStopsPerDay       Int      @default(15)
+  maxStopsPerDay       Int      @default(10)
   /// The longest drive between two of a day's properties, in minutes: twenty
   /// (2026-09-19). The drive from home is not held to it.
   maxLegMinutes        Int      @default(20)

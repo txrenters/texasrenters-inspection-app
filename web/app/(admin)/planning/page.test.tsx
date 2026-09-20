@@ -45,7 +45,7 @@ const PLAN = {
   maxOnSiteMinutes: 360,
   maxDriveMinutes: 90,
   minStopsPerDay: 9,
-  maxStopsPerDay: 15,
+  maxStopsPerDay: 10,
   maxLegMinutes: 20,
   holidays: ['2026-11-26'],
   startsOn: null as string | null,
@@ -319,8 +319,8 @@ describe('the benefit package plan page', () => {
     expect(screen.getByText('Weekdays except US holidays: Oct 12, Nov 11, Nov 26, Dec 25')).toBeTruthy();
     expect(screen.getByText("Oct 1, the quarter's first day")).toBeTruthy();
     // Days of nine, room for the office's own, and no drive over twenty minutes between properties (2026-09-19).
-    expect(screen.getByText('Over 15 visits, 6 hr inspecting, or 20 min between properties')).toBeTruthy();
-    expect(screen.getByText('9, and up to 15 where the properties are within 5 minutes of each other')).toBeTruthy();
+    expect(screen.getByText('Over 10 visits, 6 hr inspecting, or 20 min between properties')).toBeTruthy();
+    expect(screen.getByText('9, and up to 10 where the properties are within 5 minutes of each other')).toBeTruthy();
     expect(screen.getByText('never more than 20 min from one to the next; fewer visits where they are further apart')).toBeTruthy();
     // How far the crew's homes may be from a zone is not a limit on a day.
     expect(screen.queryByText(/90 min/)).toBeNull();

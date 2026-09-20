@@ -12,13 +12,20 @@
  *   that way we can still add more properties to the schedule". The visits are
  *   cut into groups of nine, each as tight as the properties allow (`groupsOf`),
  *   and a day is one group.
- * - **More than nine where the properties are on top of each other**
- *   (`maxStopsPerDay`, the office, 2026-09-20): "that should be 9-12-15 if all
- *   area's is just 2-5 mins away then we can assign at least 15 visits". Past
- *   its nine a day keeps taking visits, up to fifteen, while each one is within
- *   five minutes' drive of the day (`closeMinutes`) -- so a day in one
- *   neighbourhood is twelve or fifteen and a day across a spread-out zone stays
- *   at nine.
+ * - **A tenth where the properties are on top of each other**
+ *   (`maxStopsPerDay`, the office, 2026-09-20): "minimum of 9 vists maximum of
+ *   10". Past its nine a day takes a tenth visit only while it is within five
+ *   minutes' drive of the day (`closeMinutes`) -- so a day in one neighbourhood
+ *   is ten and a day across a spread-out zone stays at nine. The office asked
+ *   for twelve and fifteen earlier the same day and settled on ten, so the
+ *   maximum is a plan's own setting and not a constant here.
+ * - **No day starved while the day beside it is full** (`evenOut`,
+ *   2026-09-20): "some are just 6, some are just 1 some 4, 2 etc. this clearly
+ *   is not optimized". A group short of nine takes visits from fuller groups
+ *   near it while they keep more than it does, so a neighbourhood of
+ *   twenty-seven visits is three days of nine rather than ten, ten and seven.
+ *   A day holds fewer than nine only where there is nothing within the longest
+ *   drive allowed to fill it with.
  * - **Never more than twenty minutes between two properties**
  *   (`maxLegMinutes`): "I don't want to see a grouping that from one property to
  *   other property that will get more than 20mins of drive time". A property
@@ -39,13 +46,19 @@
  *   also."
  * - **A zone too far for a day's drive is a trip** (`tripZones`): its groups go
  *   on back-to-back days of the crew member living nearest it, driven down once.
- * - **Each visit keeps its month of the quarter** (`layoutByMonth`, 2026-09-18):
- *   a property visited in Q3's first month is visited in Q4's first, and so on.
- *   A plan may start up to fifteen days either side of its quarter's first day
- *   (2026-09-19), and days before the quarter are its first month's.
+ * - **The quarter is finished as early as the crew can** (2026-09-20): "if a
+ *   technician can finish the visits as early as possible that's good, if they
+ *   can finish it in a month then that's good, we don't realy need to fill out
+ *   all the month on each quarter". Every visit is laid out over every planned
+ *   day at once, days are filled from the plan's first, and the quarter ends
+ *   when the visits do. A property is still taken up in the order of its last
+ *   quarter -- the month it was visited in orders it (`month`), it no longer
+ *   holds it back -- so the visits done first last quarter are done first
+ *   again. This replaced a month-by-month layout (2026-09-18) that left the end
+ *   of each month a handful of visits, and days of one and two with it.
  * - **A visit with nowhere left to go joins the day that adds least driving**
- *   (`squeezeIn`, 2026-09-20): sooner a day of twelve or fifteen than a tenancy
- *   nobody visits. Only after everything else, and still never more than the
+ *   (`squeezeIn`, 2026-09-20): sooner a fuller day than a tenancy nobody
+ *   visits. Only after everything else, and still never more than the
  *   longest drive allowed between two properties, or past the day's visits and
  *   its six hours.
  * - **Move-outs and move-ins are anchors** (`DayAnchor`): on a day a crew member
@@ -55,7 +68,7 @@
  *   (`ANCHOR_VISITS`, 2026-09-18): six besides one, three besides two.
  */
 
-import { monthOfPlan, type Quarter } from './quarter-plan.js';
+import type { Quarter } from './quarter-plan.js';
 import { haversineMeters } from './route-plan.js';
 
 /** A stop that can be placed: it has a rotation position, a location and a length. */
@@ -73,7 +86,12 @@ export interface PlannableStop {
   previousTechnicianId?: string | null;
   /** The zone it is in, as a number. */
   zone?: string | null;
-  /** The month of the quarter it goes in, 1 to 3: its visit's last quarter. Absent: new, any month. */
+  /**
+   * The month of the quarter its visit was in last quarter, 1 to 3. It orders
+   * the visits -- last quarter's first month is taken up first -- and, since
+   * 2026-09-20, no longer holds a visit back to that month of this quarter.
+   * Absent: no visit last quarter, taken up with the second month's.
+   */
   month?: number;
 }
 
@@ -104,13 +122,14 @@ export interface DayLimits {
    */
   minStopsPerDay: number;
   /**
-   * The most visits a day may hold: fifteen (the office, 2026-09-20). Past its
-   * nine a day only takes a visit within `closeMinutes` of it.
+   * The most visits a day may hold: ten (the office, 2026-09-20, "minimum of 9
+   * vists maximum of 10"). Past its nine a day only takes a visit within
+   * `closeMinutes` of it.
    */
   maxStopsPerDay: number;
   /**
-   * How near a visit has to be for a day to take it past its nine, in minutes
-   * of estimated drive: five (the office, 2026-09-20, "2-5 mins away").
+   * How near a visit has to be for a day to take its tenth, in minutes of
+   * estimated drive: five (the office, 2026-09-20, "2-5 mins away").
    * Absent: `NEIGHBOUR_MINUTES`.
    */
   closeMinutes?: number;
@@ -126,15 +145,15 @@ export const MAX_LEG_MINUTES = 20;
 
 /**
  * How near, by the estimated drive, a property has to be to a group's visits to
- * join them from another zone (the office, 2026-09-18), or to be taken past the
- * day's nine (2026-09-20): five minutes.
+ * join them from another zone (the office, 2026-09-18), or to be the tenth on a
+ * day of nine (2026-09-20): five minutes.
  */
 export const NEIGHBOUR_MINUTES = 5;
 
 export const DEFAULT_DAY_LIMITS: DayLimits = {
   maxOnSiteMinutes: 6 * 60,
   minStopsPerDay: 9,
-  maxStopsPerDay: 15,
+  maxStopsPerDay: 10,
   maxLegMinutes: MAX_LEG_MINUTES,
   closeMinutes: NEIGHBOUR_MINUTES,
 };
@@ -211,9 +230,9 @@ export const ANCHOR_VISITS = 3;
 
 /**
  * The visits a day holds beside its move-outs and move-ins: `min` is the nine
- * the planner puts on it, and `max` the fifteen it may reach where the
- * properties are within five minutes of each other -- three fewer at each end
- * for each one, and never fewer than none.
+ * the planner puts on it, and `max` the ten it may reach where the properties
+ * are within five minutes of each other -- three fewer at each end for each
+ * one, and never fewer than none.
  */
 export function dayVisitRange(limits: DayLimits, anchors: number): { min: number; max: number } {
   const fewer = ANCHOR_VISITS * Math.max(0, anchors);
@@ -305,10 +324,7 @@ export interface LayoutOptions {
   tripZones?: readonly string[];
   /** How near a property in another zone has to be to join a group, by the estimated drive. */
   neighbourMinutes?: number;
-  /**
-   * The plan's quarter. A plan may start before it (the office, 2026-09-19): its
-   * days before the quarter's first are the first month's (`monthOfPlan`).
-   */
+  /** The plan's quarter, for whoever needs to name it. */
   quarter?: Quarter;
 }
 
@@ -316,6 +332,18 @@ const DAY_MS = 86_400_000;
 
 /** A saving smaller than this, in estimated minutes, is noise rather than a shorter day. */
 const SAVING_MINUTES = 0.5;
+
+/** Where a visit with no last quarter goes in the order: with the second month's. */
+const NEW_VISIT_MONTH = 2;
+
+/**
+ * How many times the groups are evened out (`evenOut`).
+ *
+ * Each round leaves the sizes closer together than the one before, so a few are
+ * enough: the first lifts the short groups, and the rest settle what filling
+ * them left short in turn.
+ */
+const EVENING_ROUNDS = 3;
 
 /** Changes made across one set of groups. Each only ever shortens the driving; this bounds a pathological case. */
 const MAX_IMPROVEMENT_ROUNDS = 2000;
@@ -470,8 +498,8 @@ function cheapestRunInsertion(path: readonly PlannableStop[], run: readonly Plan
 /**
  * A day built around its anchors: the visits nearest them, nearest first, as
  * many as the day takes beside them -- nine, three fewer for each
- * (`dayVisitRange`, the office, 2026-09-18) -- and more, up to its fifteen, while
- * the next one is within five minutes of the day (2026-09-20). None that would
+ * (`dayVisitRange`, the office, 2026-09-18) -- and its tenth while that one is
+ * within five minutes of the day (2026-09-20). None that would
  * make a drive between two of the day's stops longer than the office allows.
  */
 function fillAroundAnchors(
@@ -555,7 +583,7 @@ interface Group {
 interface GroupRules {
   /** The visits a group holds before it asks how near the next one is: the office's nine. */
   size: number;
-  /** The most a group holds at all, where the properties are close together: the office's fifteen. */
+  /** The most a group holds at all, where the properties are close together: the office's ten. */
   most: number;
   /** How near a visit must be, in minutes, for a group past its nine to take it. */
   close: number;
@@ -860,9 +888,62 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
       set(short, []);
     }
   };
-  dissolve(size - 1, false, false);
+  // A group short of nine is shared out even where the visits are not within
+  // five minutes of the group taking them (`however`): the office would rather
+  // drive a little further than send a technician out for six (2026-09-20).
+  /**
+   * A group short of nine fills from the fuller groups around it.
+   *
+   * The office (2026-09-20), on a quarter of days of six, four, two and one:
+   * "this clearly is not optimized". They were not short of properties -- each
+   * had dozens within the twenty minutes allowed, on days that were already
+   * full. A group gives up a visit only while it keeps its own nine and more
+   * than the group taking it, so twenty-seven visits are three days of nine
+   * rather than ten, ten and seven, and a day of nine is never broken up to
+   * make two of six. The visit moved is the one that costs least to move; zones
+   * and the longest drive allowed hold, so a day alone in its corner of the map
+   * stays as it is.
+   *
+   * It runs after the driving has been shortened, not before: a day of nine is
+   * what the office asked for, and a few minutes more driving is what it costs.
+   */
+  const evenOut = () => {
+    const fill = (into: Group) => {
+      let taken: { from: Group; stop: PlannableStop; estimate: number } | null = null;
+      for (const from of groups) {
+        // Only from a group that keeps its nine, and keeps more than this one:
+        // ten, ten and seven are three days of nine, and nine and three are not
+        // two days of six.
+        if (from === into || from.path.length <= size || from.path.length <= into.path.length + 1) continue;
+        for (const stop of from.path) {
+          if (!allows(stop, into) || into.onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
+          const added = cheapestInsertion(into.path, stop, cost).added;
+          if (overLong(added)) continue;
+          const estimate = added - removalSaving(from.path, stop, cost);
+          if (!taken || estimate < taken.estimate) taken = { from, stop, estimate };
+        }
+      }
+      if (!taken) return false;
+      const { from, stop } = taken;
+      set(into, [...into.path, stop]);
+      set(from, from.path.filter((other) => other !== stop));
+      return true;
+    };
+    for (let round = 0; round < EVENING_ROUNDS; round += 1) {
+      const short = groups
+        .filter((group) => group.path.length > 0 && group.path.length < size)
+        .sort((left, right) => left.path.length - right.path.length);
+      if (!short.length) return;
+      let moved = false;
+      for (const group of short) while (group.path.length < size && fill(group)) moved = true;
+      if (!moved) return;
+    }
+  };
+
+  dissolve(size - 1, false, true);
   dissolve(LEFTOVER_VISITS, true, true);
   search();
+  evenOut();
 
   return groups.filter((group) => group.path.length > 0);
 }
@@ -1010,9 +1091,9 @@ function planTrip(
  *
  * The last thing tried. A visit no group could take -- the crew's days in its
  * month are all full, or it sits between two areas -- joins whichever day adds
- * least driving, move-outs and all. The office would rather a day ran to twelve
- * or fifteen than leave a tenancy unvisited (2026-09-20), so the five minutes
- * and the zoning do not apply here; the longest drive allowed between two
+ * least driving, move-outs and all. The office would rather a day ran to its
+ * tenth than leave a tenancy unvisited (2026-09-20), so the five minutes and
+ * the zoning do not apply here; the longest drive allowed between two
  * properties, the day's visits and its six hours still do.
  */
 function squeezeIn(
@@ -1046,7 +1127,9 @@ function squeezeIn(
 
 /**
  * Give every stop a day and a technician: the whole crew every planned day, a
- * group of nine each, from the first day until every visit has one.
+ * group of nine each, from the first day until every visit has one -- and the
+ * days after that empty, because the office would rather the quarter were
+ * finished early than spread over it (2026-09-20).
  *
  * 0. A far zone's visits are a trip, on back-to-back days fixed first
  *    (`planTrip`).
@@ -1082,11 +1165,19 @@ export function layoutEveryDay(
     return { placed: [], crews: [], unplaced, skippedAnchors, capacity };
   }
 
-  // Last quarter's order: whoever was first then is first now.
-  const place = new Map(stops.map((stop, index) => [stop.stopId, options.rotation?.position.get(stop.stopId) ?? index]));
+  // Last quarter's order: whoever was first then is first now, and the month of
+  // the quarter they were visited in before the place within it. A visit with no
+  // month -- new this quarter -- goes with the second month's, so it is neither
+  // always first nor always last (2026-09-20).
+  const before = new Map(stops.map((stop, index) => [stop.stopId, options.rotation?.position.get(stop.stopId) ?? index]));
   const ordered = [...stops].sort(
-    (left, right) => place.get(left.stopId)! - place.get(right.stopId)! || left.sequence - right.sequence,
+    (left, right) =>
+      (left.month ?? NEW_VISIT_MONTH) - (right.month ?? NEW_VISIT_MONTH) ||
+      before.get(left.stopId)! - before.get(right.stopId)! ||
+      left.sequence - right.sequence,
   );
+  // Where each visit comes in that order: which group a day takes first (`rank`).
+  const place = new Map(ordered.map((stop, index) => [stop.stopId, index]));
   const left = new Set<PlannableStop>();
   for (const stop of ordered) {
     if (stop.onSiteMinutes > limits.maxOnSiteMinutes) unplaced.push({ stopId: stop.stopId, reason: 'LONGER_THAN_A_DAY' });
@@ -1221,64 +1312,6 @@ export function layoutEveryDay(
     })),
   );
   return { placed, crews, unplaced, skippedAnchors, capacity };
-}
-
-/**
- * The quarter laid out a month at a time, each visit in its month of the quarter.
- *
- * The office (2026-09-18): "if on q3 this property is scheduled ... the first
- * month on q3 then on q4 it should be scheduled on the first month also, same
- * goes if it is scheduled on the second month on the q3 then second month also
- * on q4". So a tenant's visits stay about three months apart. Each month is
- * laid out as `layoutEveryDay` lays out a quarter -- the whole crew every
- * planned day from the month's first until its visits are done -- with the
- * move-outs and move-ins on its days. A plan started before its quarter lays its
- * first month out from the plan's first day (`monthOfPlan`).
- *
- * A visit with no month (no visit last quarter) goes, in last quarter's order,
- * to the month with fewest visits so far, so the months come out even and each
- * keeps its month in the quarters after. With no visit at all to go by -- a
- * first quarter -- there is no month to keep, and the quarter is laid out whole.
- */
-export function layoutByMonth(
-  stops: readonly PlannableStop[],
-  days: readonly PlannableDay[],
-  options: LayoutOptions = {},
-): QuarterAssignment {
-  if (!stops.some((stop) => stop.month)) return layoutEveryDay(stops, days, options);
-  const months = [1, 2, 3] as const;
-  const ofMonth = new Map<number, PlannableStop[]>(months.map((month) => [month, []]));
-  for (const stop of stops) if (stop.month && ofMonth.has(stop.month)) ofMonth.get(stop.month)!.push(stop);
-  const place = new Map(stops.map((stop, index) => [stop.stopId, options.rotation?.position.get(stop.stopId) ?? index]));
-  const monthless = stops
-    .filter((stop) => !stop.month || !ofMonth.has(stop.month))
-    .sort((left, right) => place.get(left.stopId)! - place.get(right.stopId)! || left.sequence - right.sequence);
-  for (const stop of monthless) {
-    const lightest = [...months].sort((one, other) => ofMonth.get(one)!.length - ofMonth.get(other)!.length || one - other)[0]!;
-    ofMonth.get(lightest)!.push({ ...stop, month: lightest });
-  }
-
-  const monthOf = (date: string) => monthOfPlan(date, options.quarter);
-  const results = months.map((month) =>
-    layoutEveryDay(
-      ofMonth.get(month)!,
-      days.filter((day) => monthOf(day.date) === month),
-      { ...options, anchors: (options.anchors ?? []).filter((anchor) => monthOf(anchor.date) === month) },
-    ),
-  );
-  const crews = results.flatMap((result) => result.crews);
-  crews.sort((one, other) => one.date.localeCompare(other.date) || one.technicianId.localeCompare(other.technicianId));
-  return {
-    placed: results.flatMap((result) => result.placed),
-    crews,
-    unplaced: results.flatMap((result) => result.unplaced),
-    skippedAnchors: results.flatMap((result) => result.skippedAnchors),
-    capacity: {
-      stops: stops.length,
-      onSiteMinutes: results.reduce((total, result) => total + result.capacity.onSiteMinutes, 0),
-      availableMinutes: results.reduce((total, result) => total + result.capacity.availableMinutes, 0),
-    },
-  };
 }
 
 /**
