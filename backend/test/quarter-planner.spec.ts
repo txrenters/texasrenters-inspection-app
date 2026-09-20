@@ -392,9 +392,22 @@ describe('routing a draft quarter', () => {
     );
   });
 
-  /** A published stop is an inspection and a Jobber visit; routing it again would only disagree with both. */
-  it('refuses to route a plan that is no longer a draft', async () => {
+  /**
+   * The office (2026-09-20), on a quarter whose publish had failed: "I should
+   * be able to rebuild it". A published stop is an inspection and a Jobber
+   * visit, and routing only ever lays out PLANNED stops, so what a rebuild can
+   * reach is exactly the visits nobody has been sent to.
+   */
+  it('routes a published quarter again, for the visits it has not created', async () => {
     const { service, dayDeleteMany } = build([stop('s1', 1)], { plan: { status: TbpPlanStatus.PUBLISHED } });
+
+    await service.route('org-1', 'plan-1');
+
+    expect(dayDeleteMany).toHaveBeenCalled();
+  });
+
+  it('refuses to route a quarter that is publishing or cancelled', async () => {
+    const { service, dayDeleteMany } = build([stop('s1', 1)], { plan: { status: TbpPlanStatus.PUBLISHING } });
 
     await expect(service.route('org-1', 'plan-1')).rejects.toMatchObject({ code: 'PLAN_NOT_DRAFT' });
     expect(dayDeleteMany).not.toHaveBeenCalled();
@@ -577,12 +590,17 @@ describe('routing a draft quarter', () => {
     });
   });
 
-  it('puts back to planning the stops a previous run could not place', async () => {
+  it('puts back to planning the stops a previous run could not place, and the ones a publish could not create', async () => {
     const { service, stopUpdateMany } = build([stop('s1', 1)]);
 
     await service.route('org-1', 'plan-1');
 
+    // A visit a publish refused -- no approved areas, no unit -- is laid out again.
     expect(stopUpdateMany.mock.calls[0][0]).toEqual({
+      where: { planId: 'plan-1', organizationId: 'org-1', status: TbpStopStatus.FAILED, inspectionId: null },
+      data: { status: TbpStopStatus.PLANNED, blockedCode: null, blockedMessage: null },
+    });
+    expect(stopUpdateMany.mock.calls[1][0]).toEqual({
       where: {
         planId: 'plan-1',
         organizationId: 'org-1',

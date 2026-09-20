@@ -12,6 +12,7 @@ import {
 import { withInspectionLink } from '@texasrenters/shared';
 
 import { insertInspection, resolveInspectionPlan } from '../admin/inspection-creation';
+import { allowsTechnicianCapture } from '../integrations/jobber/jobber.visit-type';
 import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
@@ -155,7 +156,9 @@ export class TbpPublishService {
       where: {
         id: planId,
         organizationId: user.organizationId,
-        status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED] },
+        // A published quarter that was rebuilt has visits to create again
+        // (2026-09-20); one already publishing is left to the run that has it.
+        status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED, TbpPlanStatus.PUBLISHED] },
       },
       data: {
         status: TbpPlanStatus.PUBLISHING,
@@ -335,6 +338,19 @@ export class TbpPublishService {
           leaseId: stop.propertywareLeaseId,
           // HVAC or occupied, as the quarter's rule decided and the coordinator reviewed.
           inspectionType: stop.inspectionType,
+          /**
+           * The technician surveys a property whose areas nobody has approved.
+           *
+           * The same visit arriving from Jobber is created this way already
+           * (`allowsTechnicianCapture`, read by the sync): what the technician
+           * captures is a DRAFT against the property, and an administrator
+           * still approves what becomes its permanent layout. Publishing was
+           * stricter than the sync for no reason anyone chose -- it refused 41
+           * of the office's 429 Q4 visits with "approve its areas before
+           * creating an inspection" (2026-09-20), on properties whose tenants
+           * are visited this quarter either way.
+           */
+          allowTechnicianAreaCapture: allowsTechnicianCapture(stop.inspectionType),
           scheduledAt: stop.scheduledOn!,
         });
 
