@@ -10,6 +10,7 @@ import {
   JobberOutboundKind,
   JobberOutboundStatus,
   JobberVisitImportStatus,
+  TbpStopStatus,
 } from '@prisma/client';
 import { InspectionType } from '@prisma/client';
 
@@ -757,6 +758,20 @@ export class JobberSyncWorker {
               }
             : {}),
         });
+        // A benefit-package visit that was published with no day and has just
+        // been given one in Jobber (2026-09-20): the quarter's stop takes the
+        // inspection that came back, so the plan stops saying it is waiting.
+        await tx.tbpQuarterPlanStop.updateMany({
+          where: { organizationId, jobberVisitId: visit.id, inspectionId: null },
+          data: {
+            inspectionId: inspection.id,
+            status: TbpStopStatus.PUBLISHED,
+            scheduledOn: dayOf(visit.startAt!),
+            blockedCode: null,
+            blockedMessage: null,
+          },
+        });
+
         await tx.auditLog.create({
           data: {
             organizationId,

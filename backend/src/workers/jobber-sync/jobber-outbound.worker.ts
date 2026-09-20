@@ -9,6 +9,7 @@ import {
   JobberOutboundKind,
   JobberOutboundStatus,
   JobberVisitImportStatus,
+  TbpStopStatus,
   type Prisma,
 } from '@prisma/client';
 
@@ -172,7 +173,9 @@ export class JobberOutboundWorker {
    */
   private switchedOffKinds(): JobberOutboundKind[] {
     return [
-      ...(this.config.tbpBookingEnabled ? [] : [JobberOutboundKind.TBP_VISIT_CREATE]),
+      ...(this.config.tbpBookingEnabled
+        ? []
+        : [JobberOutboundKind.TBP_VISIT_CREATE, JobberOutboundKind.TBP_JOB_UNSCHEDULED]),
       ...(this.config.bookingEnabled ? [] : [JobberOutboundKind.VISIT_CREATE]),
       ...(this.config.pushEditsEnabled ? [] : VISIT_EDIT_KINDS),
     ];
@@ -182,7 +185,8 @@ export class JobberOutboundWorker {
     organizationId: string,
     task: {
       id: string;
-      inspectionId: string;
+      inspectionId: string | null;
+      tbpStopId: string | null;
       kind: JobberOutboundKind;
       jobberVisitId: string | null;
       jobberJobId: string | null;
@@ -191,13 +195,26 @@ export class JobberOutboundWorker {
       jobTitle: string | null;
     },
   ) {
+    // The one kind with no inspection behind it: a visit with no day.
+    if (task.kind === JobberOutboundKind.TBP_JOB_UNSCHEDULED) {
+      if (!task.tbpStopId)
+        throw new JobberError('This task has no plan stop to book from.', 'JOBBER_TASK_MISSING_STOP', 500);
+      return this.bookUnscheduledJob(organizationId, task.id, task.tbpStopId);
+    }
+    // Every other kind is about an inspection, and a row without one should
+    // never have been enqueued.
+    if (!task.inspectionId)
+      throw new JobberError('This task has no inspection to send.', 'JOBBER_TASK_MISSING_INSPECTION', 500);
+    const inspectionId = task.inspectionId;
+    const inspectionTask = { ...task, inspectionId };
+
     if (task.kind === JobberOutboundKind.TBP_VISIT_CREATE)
-      return this.bookVisit(organizationId, task.id, task.inspectionId);
-    if (task.kind === JobberOutboundKind.VISIT_CREATE) return this.bookInspectionVisit(organizationId, task);
-    if (task.kind === JobberOutboundKind.VISIT_RESCHEDULE) return this.pushSchedule(organizationId, task);
-    if (task.kind === JobberOutboundKind.VISIT_ASSIGN) return this.pushAssignment(organizationId, task);
-    if (task.kind === JobberOutboundKind.VISIT_EDIT) return this.pushVisitText(organizationId, task);
-    if (task.kind === JobberOutboundKind.VISIT_CANCEL) return this.pushCancellation(organizationId, task);
+      return this.bookVisit(organizationId, task.id, inspectionId);
+    if (task.kind === JobberOutboundKind.VISIT_CREATE) return this.bookInspectionVisit(organizationId, inspectionTask);
+    if (task.kind === JobberOutboundKind.VISIT_RESCHEDULE) return this.pushSchedule(organizationId, inspectionTask);
+    if (task.kind === JobberOutboundKind.VISIT_ASSIGN) return this.pushAssignment(organizationId, inspectionTask);
+    if (task.kind === JobberOutboundKind.VISIT_EDIT) return this.pushVisitText(organizationId, inspectionTask);
+    if (task.kind === JobberOutboundKind.VISIT_CANCEL) return this.pushCancellation(organizationId, inspectionTask);
 
     // Only a completion reaches here, and a completion without a visit id is a
     // row that should never have been enqueued.
@@ -211,7 +228,7 @@ export class JobberOutboundWorker {
     // Before the completion, the order a technician would have done it in, and
     // so that a completion which then fails does not leave a finished visit
     // with no word on what was done.
-    await this.sendServicesNote(organizationId, task);
+    await this.sendServicesNote(organizationId, inspectionTask);
     /**
      * Jobber is told when the work was signed off, not when the outbox drained.
      *
@@ -219,7 +236,7 @@ export class JobberOutboundWorker {
      * after an outage — and the second is not a fact about the inspection.
      */
     const finalizedAt = await this.prisma.inspection.findUnique({
-      where: { id: task.inspectionId },
+      where: { id: inspectionId },
       select: { finalizedAt: true },
     });
     const completion = await this.client.request<{ visitComplete: JobberUserErrors }>(
@@ -233,7 +250,7 @@ export class JobberOutboundWorker {
     this.assertNoUserErrors(completion.visitComplete);
 
     if (!this.config.pushReportLink || !task.jobberJobId) return;
-    const url = await this.reportLink(organizationId, task.inspectionId, task.createdById);
+    const url = await this.reportLink(organizationId, inspectionId, task.createdById);
     if (!url) return;
     const note = await this.client.request<{ jobCreateNote: JobberUserErrors }>(
       organizationId,
@@ -374,6 +391,59 @@ export class JobberOutboundWorker {
   }
 
   /**
+   * Puts a visit the planner could not place into Jobber's unscheduled work.
+   *
+   * The office (2026-09-20): "those needs to an attention should be reflected
+   * also into the unscheduled appointment". The job is created as any
+   * benefit-package job is, and its visit is created with no schedule on it, so
+   * it waits in Jobber's Unscheduled list for the office to drag it onto a day.
+   *
+   * The visit's title and instructions are ours for the same reason they are on
+   * a booked visit: `benefitPackageInspectionInDetails` reads the instructions
+   * to decide this is an occupied or an HVAC inspection, and that is how the
+   * visit comes back here as an inspection once it has a day.
+   *
+   * The job carries the visit's title rather than the plain zone one, because
+   * an unscheduled job is read in a list with no property beside it -- which is
+   * how the office's own unscheduled work is titled.
+   */
+  private async bookUnscheduledJob(organizationId: string, taskId: string, stopId: string) {
+    if (!this.config.tbpBookingEnabled)
+      throw new JobberError(
+        'Booking visits in Jobber is switched off (JOBBER_TBP_WRITE_ENABLED).',
+        'JOBBER_TBP_WRITE_DISABLED',
+        503,
+      );
+
+    const stop = await this.prisma.tbpQuarterPlanStop.findFirst({
+      where: { id: stopId, organizationId },
+      select: {
+        status: true,
+        visitTitle: true,
+        visitDetails: true,
+        propertywareBuildingId: true,
+        propertywareUnitId: true,
+        inspectionId: true,
+      },
+    });
+    if (!stop?.visitTitle || !stop.propertywareBuildingId)
+      throw new JobberError('This visit has nothing to book from.', 'JOBBER_TBP_STOP_MISSING', 500);
+    // Given a day here while the task waited: the ordinary booking has it now.
+    if (stop.inspectionId || stop.status !== TbpStopStatus.UNSCHEDULED) return;
+
+    const link = await this.bookableProperty(organizationId, {
+      buildingId: stop.propertywareBuildingId,
+      unitId: stop.propertywareUnitId,
+    });
+    await this.createUnscheduledVisitInJobber(organizationId, taskId, stopId, {
+      jobberPropertyId: link.jobberPropertyId,
+      jobTitle: stop.visitTitle,
+      visitTitle: stop.visitTitle,
+      instructions: stop.visitDetails,
+    });
+  }
+
+  /**
    * Books the visit a coordinator asked for when creating an occupied inspection.
    *
    * Read when it is sent rather than when it was queued: the day, and who is
@@ -451,6 +521,81 @@ export class JobberOutboundWorker {
           422,
         )
       : new JobberError('This property is not linked to a Jobber property.', 'JOBBER_PROPERTY_NOT_LINKED', 422);
+  }
+
+  /**
+   * Creates the job and a visit with no day on it.
+   *
+   * The same two mutations as a booked visit, with the schedule left off: a
+   * visit with no schedule is what Jobber lists as unscheduled work, which is
+   * where the office wanted the visits the planner could not place
+   * (2026-09-20). The title and the instructions are ours, so the visit carries
+   * the "+ Occupied Inspection" phrase the importer reads.
+   *
+   * The visit is deliberately **not** claimed as imported. A booked visit is
+   * marked ours so the sync leaves it alone; this one has to be picked up by
+   * the sync the moment the office gives it a day, because that is what creates
+   * the inspection.
+   */
+  private async createUnscheduledVisitInJobber(
+    organizationId: string,
+    taskId: string,
+    stopId: string,
+    booking: { jobberPropertyId: string; jobTitle: string; visitTitle: string; instructions: string | null },
+  ) {
+    const existing = await this.prisma.jobberOutboundTask.findUnique({
+      where: { id: taskId },
+      select: { jobberJobId: true },
+    });
+
+    // Reuse the job a previous attempt created, as a booked visit does: without
+    // it a failure between the two mutations leaves an orphan job behind.
+    let jobId = existing?.jobberJobId ?? null;
+    if (!jobId) {
+      const created = await this.client.request<{
+        jobCreate: JobberUserErrors & { job?: { id: string } | null };
+      }>(organizationId, JOB_CREATE_MUTATION, {
+        input: {
+          propertyId: booking.jobberPropertyId,
+          title: booking.jobTitle,
+          invoicing: TBP_JOB_INVOICING,
+        },
+      });
+      this.assertNoUserErrors(created.jobCreate);
+      jobId = created.jobCreate.job?.id ?? null;
+      if (!jobId) throw new JobberError('Jobber created no job.', 'JOBBER_JOB_NOT_CREATED', 502);
+      await this.prisma.jobberOutboundTask.update({ where: { id: taskId }, data: { jobberJobId: jobId } });
+    }
+
+    const booked = await this.client.request<{
+      visitCreate: JobberUserErrors & { createdVisits?: { id: string }[] | null };
+    }>(organizationId, VISIT_CREATE_MUTATION, {
+      jobId,
+      input: {
+        visits: [
+          {
+            title: booking.visitTitle,
+            instructions: booking.instructions,
+            // No schedule: this is the whole point of the kind.
+          },
+        ],
+      },
+    });
+    this.assertNoUserErrors(booked.visitCreate);
+
+    const visitId = booked.visitCreate.createdVisits?.[0]?.id;
+    if (!visitId) throw new JobberError('Jobber created no visit.', 'JOBBER_VISIT_NOT_CREATED', 502);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.jobberOutboundTask.update({ where: { id: taskId }, data: { jobberVisitId: visitId, jobberJobId: jobId } });
+      // On the stop, so the plan can say which Jobber visit is waiting for a
+      // day -- and so the sync can put the inspection back on this stop when it
+      // gets one.
+      await tx.tbpQuarterPlanStop.update({
+        where: { id: stopId },
+        data: { jobberVisitId: visitId, jobberJobId: jobId },
+      });
+    });
   }
 
   /**

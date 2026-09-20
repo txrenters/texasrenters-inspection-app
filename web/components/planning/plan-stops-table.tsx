@@ -31,9 +31,15 @@ import { EMPTY, formatScheduledDate } from '@/lib/format';
 import { NEEDS_UNIT_MESSAGE, needsUnit } from '@/lib/planning';
 import { usePlanningMutations, type PlanStop, type PlanStopStatus } from '@/lib/planning-queries';
 
-export const STOP_STATUS: Record<PlanStopStatus, { label: string; variant: 'secondary' | 'warning' | 'outline' | 'success' | 'destructive' }> = {
+export const STOP_STATUS: Record<
+  PlanStopStatus,
+  { label: string; variant: 'secondary' | 'info' | 'warning' | 'outline' | 'success' | 'destructive' }
+> = {
   PLANNED: { label: 'Planned', variant: 'secondary' },
   BLOCKED: { label: 'Needs attention', variant: 'warning' },
+  // Published to Jobber with no day: theirs to schedule, and it comes back here
+  // as an inspection when they do (the office, 2026-09-20).
+  UNSCHEDULED: { label: 'Unscheduled in Jobber', variant: 'info' },
   EXCLUDED: { label: 'Excluded', variant: 'outline' },
   PUBLISHED: { label: 'Published', variant: 'success' },
   FAILED: { label: 'Failed', variant: 'destructive' },

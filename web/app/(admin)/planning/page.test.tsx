@@ -426,21 +426,39 @@ describe('the benefit package plan page', () => {
     expect(screen.queryByText(/to check$/)).toBeNull();
   });
 
-  /** A blocked stop is a tenancy nobody would inspect; the API refuses too, and the button says so first. */
-  it('will not publish while a visit needs attention', () => {
+  /**
+   * The office (2026-09-20): "let's not make the needs attention as blocker for
+   * publishing the TBP ... those needs to an attention should be reflected also
+   * into the unscheduled appointment".
+   */
+  it('publishes while visits still need attention, and says where the ones with no day go', () => {
     mount({
-      stops: [stop('s1'), stop('s2', { status: 'BLOCKED', blockedCode: 'NOT_PLACED', blockedMessage: 'No day has room.' })],
+      stops: [
+        stop('s1'),
+        stop('s2', {
+          status: 'BLOCKED',
+          blockedCode: 'NOT_PLACED',
+          blockedMessage: 'No day has room.',
+          scheduledOn: null,
+          assignedTechnicianId: null,
+          assignedTechnician: null,
+        }),
+      ],
     });
 
-    expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
+    const publish = screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(false);
+    fireEvent.click(publish);
+    expect(screen.getByRole('button', { name: /Publish 1 inspections and 1 unscheduled/ })).toBeTruthy();
+    expect(screen.getByText(/go to Jobber with no day on them/)).toBeTruthy();
   });
 
-  /** The office (2026-09-18): a visit waiting for its unit has a day, but publishing waits for the unit. */
-  it('counts a visit still without its unit as needing attention, and will not publish', () => {
+  /** The office (2026-09-18): a visit waiting for its unit has a day, and still needs one chosen. */
+  it('counts a visit still without its unit as needing attention', () => {
     mount({ stops: [stop('s1'), stop('s2', { unitResolution: 'UNRESOLVED' })] });
 
     expect(screen.getByRole('tab', { name: 'Needs attention (1)' })).toBeTruthy();
-    expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Publish' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   /**

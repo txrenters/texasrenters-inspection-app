@@ -1,4 +1,4 @@
-import { InspectionStatus, JobberOutboundKind } from '@prisma/client';
+import { InspectionStatus, JobberOutboundKind, TbpStopStatus } from '@prisma/client';
 
 import type { PrismaService } from '../src/common/prisma.service';
 import type { JobberClient } from '../src/integrations/jobber/jobber.client';
@@ -269,5 +269,130 @@ describe('booking a published plan stop in Jobber', () => {
 
     expect(request).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ sent: 0 });
+  });
+});
+
+/**
+ * The visit the planner could not place, put in Jobber's unscheduled work.
+ *
+ * The office (2026-09-20): "let's not make the needs attention as blocker for
+ * publishing the TBP ... those needs to an attention should be reflected also
+ * into the unscheduled appointment".
+ */
+describe('a visit published with no day', () => {
+  const jobberEnvironment = {
+    JOBBER_CLIENT_ID: 'client-id',
+    JOBBER_CLIENT_SECRET: 'client-secret',
+    JOBBER_API_VERSION: '2025-01-20',
+    JOBBER_OAUTH_REDIRECT_URI: 'https://backend.example.com/api/v1/integrations/jobber/oauth/callback',
+    JOBBER_TBP_WRITE_ENABLED: 'true',
+  };
+
+  const withEnvironment = <T,>(build: () => T): T => {
+    const previous = { ...process.env };
+    Object.assign(process.env, jobberEnvironment);
+    try {
+      return build();
+    } finally {
+      process.env = previous;
+    }
+  };
+
+  const send = async (stop: Partial<{ status: TbpStopStatus; inspectionId: string | null }> = {}) => {
+    const tx = {
+      jobberOutboundTask: { update: jest.fn().mockResolvedValue({}) },
+      tbpQuarterPlanStop: { update: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      jobberOutboundTask: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'task-1',
+            inspectionId: null,
+            tbpStopId: 'stop-1',
+            kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+            jobberVisitId: null,
+            jobberJobId: null,
+            createdById: null,
+            servicesNoteSentAt: null,
+            jobTitle: null,
+            attempts: 0,
+          },
+        ]),
+        findUnique: jest.fn().mockResolvedValue({ jobberJobId: null }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      tbpQuarterPlanStop: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: stop.status ?? TbpStopStatus.UNSCHEDULED,
+          visitTitle: visitTitle({ addressLine1: '19803 Bolton Bridge Ln', zone: '1' }, Q4),
+          visitDetails: planVisitDetails(TENANCY, 'OCCUPIED'),
+          propertywareBuildingId: 'building-1',
+          propertywareUnitId: null,
+          inspectionId: stop.inspectionId ?? null,
+        }),
+      },
+      jobberPropertyLink: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { jobberPropertyId: 'property-9', jobberAddress: '19803 Bolton Bridge Ln', propertywareUnitId: null },
+          ]),
+      },
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
+    const request = jest
+      .fn()
+      .mockResolvedValueOnce({ jobCreate: { userErrors: [], job: { id: 'job-9' } } })
+      .mockResolvedValueOnce({ visitCreate: { userErrors: [], createdVisits: [{ id: 'visit-9' }] } });
+
+    const worker = withEnvironment(
+      () => new JobberOutboundWorker(prisma as unknown as PrismaService, { request } as unknown as JobberClient),
+    );
+
+    const outcome = await worker.run('org-1');
+    return { outcome, request, tx, visit: request.mock.calls[1]?.[2].input.visits[0], job: request.mock.calls[0]?.[2].input };
+  };
+
+  it('creates the visit with no day on it, titled as the office reads its unscheduled work', async () => {
+    const { outcome, job, visit } = await send();
+
+    expect(outcome).toMatchObject({ sent: 1, failed: 0 });
+    // The job carries the address here: an unscheduled job is read in a list
+    // with no property beside it.
+    expect(job.title).toBe('19803 Bolton Bridge Ln - Zone 1 - Q4 2026 Tenant Benefit Package');
+    expect(visit.title).toBe('19803 Bolton Bridge Ln - Zone 1 - Q4 2026 Tenant Benefit Package');
+    expect(visit.schedule).toBeUndefined();
+  });
+
+  /**
+   * The instructions are what `benefitPackageInspectionInDetails` reads, and
+   * that is how this visit comes back as an occupied inspection once the office
+   * gives it a day in Jobber.
+   */
+  it('carries the services line, so it is imported back as an inspection when it is scheduled', async () => {
+    const { visit } = await send();
+
+    expect(benefitPackageInspectionInDetails(visit.instructions)).toBe('OCCUPIED');
+  });
+
+  it('writes the job and visit onto the stop, and never claims the visit as imported', async () => {
+    const { tx } = await send();
+
+    expect(tx.tbpQuarterPlanStop.update).toHaveBeenCalledWith({
+      where: { id: 'stop-1' },
+      data: { jobberVisitId: 'visit-9', jobberJobId: 'job-9' },
+    });
+    // No `jobberVisitImport` row: the sync has to pick this visit up when it
+    // gets a day, because that is what creates the inspection.
+    expect(Object.keys(tx)).toEqual(['jobberOutboundTask', 'tbpQuarterPlanStop']);
+  });
+
+  /** Given a day here while the task waited: the ordinary booking has it now. */
+  it('sends nothing for a stop that has been published since', async () => {
+    const { request, outcome } = await send({ status: TbpStopStatus.PUBLISHED, inspectionId: 'inspection-1' });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ sent: 1, failed: 0 });
   });
 });
