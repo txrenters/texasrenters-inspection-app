@@ -5,15 +5,26 @@ import { InspectionType, TbpPlanStatus, TbpStopStatus, TbpUnitResolution } from 
 import type { Prisma, TbpOrderSource } from '@prisma/client';
 import {
   MAX_CARRY_BACK_QUARTERS,
+  type PriorRank,
   type Quarter,
   type RotationCandidate,
+  type TbpInspectionReason,
+  type TbpInspectionType,
   carryForwardOrder,
+  detailsNamingInspection,
+  monthOfPlan,
   previousQuarter,
   quarterLabel,
   quarterStart,
+  tbpInspectionFor,
+  tbpServicesLine,
+  tbpServicesLineFromTenancy,
+  tbpVisitDetails,
   tenancyZoneLabel,
+  unitFilterSizes,
 } from '@texasrenters/shared';
 
+import { type AuthenticatedUser, auditActor } from '../common/auth';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import {
@@ -38,10 +49,10 @@ const TBP_TITLE_MARKER = 'tenant benefit package';
 /**
  * The tenancy fields generation needs, and no more.
  *
- * Selected explicitly rather than taking the whole row because two of these —
- * `hvacFilterSizes` and `zone` — are copied onto the stop and frozen there, and
- * a reader should be able to see at a glance which parts of a tenancy a
- * published plan depends on.
+ * Selected explicitly rather than taking the whole row because several of these
+ * -- the filter sizes, the zone, the plans the visit's type is decided from --
+ * are copied onto the stop and frozen there, and a reader should be able to see
+ * at a glance which parts of a tenancy a published plan depends on.
  */
 const TENANT_SELECT = {
   id: true,
@@ -52,7 +63,12 @@ const TENANT_SELECT = {
   addressLine1: true,
   postalCode: true,
   hvacFilterSizes: true,
+  hvacFilterLocation: true,
+  managementPlan: true,
+  hvacPlan: true,
   propertywareBuildingId: true,
+  unitExternalId: true,
+  unitName: true,
 } satisfies Prisma.PropertywareTenantSelect;
 
 type PlanTenant = Prisma.PropertywareTenantGetPayload<{ select: typeof TENANT_SELECT }>;
@@ -61,6 +77,9 @@ interface ResolvedUnit {
   unitId: string | null;
   leaseId: string | null;
   resolution: TbpUnitResolution;
+  /** The unit's name and address, and every unit of its building, when a unit was found. */
+  unit?: { name: string; addressLine1: string | null } | null;
+  units?: { name: string; addressLine1: string | null }[];
 }
 
 export interface GenerationResult {
@@ -71,6 +90,55 @@ export interface GenerationResult {
   unverifiedEnrollmentCount: number;
   regenerated: boolean;
 }
+
+/** A unit's name, abbreviation or address, compared without case or punctuation. */
+const unitKey = (label: string | null | undefined) =>
+  (label ?? '').toLowerCase().replace(/[^a-z0-9/]+/g, ' ').trim();
+
+/**
+ * The unit the tenant report says a tenancy is in, when it names one of its
+ * building's: by Propertyware's own id, or by a name, abbreviation or address
+ * only one of them answers to. Null when it says nothing, or nothing certain.
+ */
+export function unitFromReport<Unit extends { id: string; externalId: string; name: string; abbreviation: string | null; addressLine1: string | null }>(
+  units: readonly Unit[],
+  tenant: { unitExternalId: string | null; unitName: string | null },
+): Unit | null {
+  if (tenant.unitExternalId) {
+    const byId = units.find((unit) => unit.externalId === tenant.unitExternalId);
+    if (byId) return byId;
+  }
+  const wanted = unitKey(tenant.unitName);
+  if (!wanted) return null;
+  const answering = units.filter((unit) =>
+    [unit.name, unit.abbreviation, unit.addressLine1].some((label) => unitKey(label) === wanted),
+  );
+  return answering.length === 1 ? answering[0]! : null;
+}
+
+/** One row of the office's sheet of visit Details for a quarter. */
+export interface OfficeDetailsRow {
+  address: string;
+  city?: string | null;
+  postalCode?: string | null;
+  details: string;
+}
+
+type OfficeDetailsAddress = Pick<OfficeDetailsRow, 'address' | 'city' | 'postalCode'>;
+
+/** What an import of the office's sheet matched, for the coordinator to check. */
+export interface OfficeDetailsImport {
+  planId: string;
+  rows: number;
+  matched: number;
+  unmatched: OfficeDetailsAddress[];
+  ambiguous: OfficeDetailsAddress[];
+  duplicates: OfficeDetailsAddress[];
+  stopsWithoutOfficeDetails: number;
+}
+
+/** The most rows one sheet may hold: the programme is a few hundred tenancies. */
+export const MAX_OFFICE_DETAILS_ROWS = 2000;
 
 @Injectable()
 export class TbpPlanService {
@@ -112,6 +180,7 @@ export class TbpPlanService {
     const { enrolled, unverified } = await this.enrolledTenancies(organizationId);
     const priorQuarters = await this.ordersForRotation(organizationId, quarter);
     const ranked = carryForwardOrder(enrolled.map(rotationCandidate), priorQuarters);
+    const previousTechnician = previousTechnicians(priorQuarters);
 
     const byExternalId = new Map(enrolled.map((tenant) => [tenant.externalId, tenant]));
     const generationRunId = randomUUID();
@@ -136,8 +205,10 @@ export class TbpPlanService {
         unverifiedEnrollmentCount: unverified,
       },
       update: { generationRunId, generatedAt: new Date(), unverifiedEnrollmentCount: unverified },
-      select: { id: true },
+      select: { id: true, officeDetailsRows: true },
     });
+
+    const office = matchOfficeDetails(officeRowsFrom(plan.officeDetailsRows), enrolled);
 
     let blockedCount = 0;
     // Sequentially, in chunks. Unit resolution is several queries per tenancy
@@ -147,7 +218,10 @@ export class TbpPlanService {
       for (const stop of batch) {
         const tenant = byExternalId.get(stop.tenantExternalId);
         if (!tenant) continue;
-        const blocked = await this.upsertStop(organizationId, plan.id, tenant, stop, quarter);
+        const blocked = await this.upsertStop(organizationId, plan.id, tenant, stop, quarter, {
+          officeDetails: office.byTenantId.get(tenant.id) ?? null,
+          previousTechnicianId: previousTechnician.get(tenant.externalId) ?? null,
+        });
         if (blocked) blockedCount += 1;
       }
     }
@@ -164,6 +238,11 @@ export class TbpPlanService {
         sequenceOverriddenAt: null,
         scheduleOverriddenAt: null,
         technicianOverriddenAt: null,
+        inspectionTypeOverriddenAt: null,
+        visitTitleOverriddenAt: null,
+        visitDetailsOverriddenAt: null,
+        onSiteMinutesOverriddenAt: null,
+        unitOverriddenAt: null,
       },
     });
 
@@ -183,6 +262,7 @@ export class TbpPlanService {
       blockedCount,
       unverifiedEnrollmentCount: unverified,
       removedUnenrolled: removed,
+      officeDetailsMatched: office.byTenantId.size,
     });
 
     return {
@@ -193,6 +273,192 @@ export class TbpPlanService {
       unverifiedEnrollmentCount: unverified,
       regenerated: Boolean(existing),
     };
+  }
+
+  /**
+   * Take the office's sheet of visit Details for the quarter.
+   *
+   * The office writes each tenancy's services line by hand -- "Filter Change:
+   * 20x25x1 + Pest Control + Occupied Inspection (Basic Plan - Opted Out HVAC
+   * Plan)" -- and those are the Details the quarter's visits carry (the office,
+   * 2026-09-16), with the inspection made an HVAC inspection where the rule
+   * applies. A tenancy the sheet does not cover gets a line written the same
+   * way from the tenant report.
+   *
+   * The rows are kept whole on the plan, so a regeneration matches them to the
+   * tenancies it adds; importing again replaces them. Only a draft takes a
+   * sheet: a published stop's Details are what Jobber was sent.
+   */
+  async importOfficeDetails(
+    user: AuthenticatedUser,
+    planId: string,
+    input: readonly OfficeDetailsRow[],
+  ): Promise<OfficeDetailsImport> {
+    const organizationId = user.organizationId;
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { id: true, status: true },
+    });
+    if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
+    if (plan.status !== TbpPlanStatus.DRAFT)
+      throw new ApplicationError(409, 'PLAN_NOT_DRAFT', 'Visit Details can only be imported into a draft plan.');
+    if (input.length > MAX_OFFICE_DETAILS_ROWS)
+      throw new ApplicationError(
+        422,
+        'TOO_MANY_ROWS',
+        `A sheet can hold at most ${MAX_OFFICE_DETAILS_ROWS} rows; this one has ${input.length}.`,
+      );
+
+    const rows = cleanOfficeRows(input);
+    await this.prisma.tbpQuarterPlan.update({
+      where: { id: plan.id },
+      data: { officeDetailsRows: rows as unknown as Prisma.InputJsonValue, officeDetailsImportedAt: new Date() },
+    });
+
+    const stops = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: { planId: plan.id, organizationId },
+      select: {
+        id: true,
+        status: true,
+        inspectionId: true,
+        inspectionType: true,
+        hvacFilterSizes: true,
+        visitDetailsOverriddenAt: true,
+        tenant: { select: TENANT_SELECT },
+      },
+    });
+    // Matched against every stop, published or not, so a row for a tenancy the
+    // coordinator excluded is not reported as an address nobody recognises.
+    const match = matchOfficeDetails(
+      rows,
+      stops.map((stop) => stop.tenant),
+    );
+
+    let withoutOfficeDetails = 0;
+    for (const stop of stops) {
+      if (!editableStop(stop)) continue;
+      const officeDetails = match.byTenantId.get(stop.tenant.id) ?? null;
+      if (!officeDetails) withoutOfficeDetails += 1;
+      await this.prisma.tbpQuarterPlanStop.update({
+        where: { id: stop.id },
+        // Details a coordinator wrote are sent as written; the sheet's line is
+        // still kept on the stop, beside them.
+        data: stop.visitDetailsOverriddenAt
+          ? { officeDetails }
+          : {
+              officeDetails,
+              visitDetails: planVisitDetails(
+                { ...stop.tenant, hvacFilterSizes: stop.hvacFilterSizes },
+                stop.inspectionType as TbpInspectionType,
+                officeDetails,
+              ),
+            },
+      });
+    }
+
+    const summary: OfficeDetailsImport = {
+      planId: plan.id,
+      rows: rows.length,
+      matched: match.byTenantId.size,
+      unmatched: match.unmatched.map(addressOf),
+      ambiguous: match.ambiguous.map(addressOf),
+      duplicates: match.duplicates.map(addressOf),
+      stopsWithoutOfficeDetails: withoutOfficeDetails,
+    };
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        ...auditActor(user),
+        action: 'TBP_PLAN_OFFICE_DETAILS_IMPORTED',
+        entityType: 'TbpQuarterPlan',
+        entityId: plan.id,
+        // Counts only: the rows carry addresses and whatever the office typed.
+        metadata: {
+          rows: summary.rows,
+          matched: summary.matched,
+          unmatched: summary.unmatched.length,
+          ambiguous: summary.ambiguous.length,
+          duplicates: summary.duplicates.length,
+          stopsWithoutOfficeDetails: withoutOfficeDetails,
+        },
+      },
+    });
+
+    return summary;
+  }
+
+  /**
+   * A coordinator deciding a stop is an HVAC or an occupied inspection.
+   *
+   * The rule reads a tenant report typed by hand, and some tenancies are
+   * flagged for exactly this -- a BX plan "On our AC Plan", say. The choice
+   * sticks through regeneration, and the Details follow it: Details a
+   * coordinator wrote keep their words, with only the inspection on their
+   * services line renamed. A length a coordinator set stays. The day it sits on
+   * is measured again by `TbpStopEditService`, which is how the console asks.
+   */
+  async setInspectionType(user: AuthenticatedUser, stopId: string, inspectionType: TbpInspectionType) {
+    const stop = await this.prisma.tbpQuarterPlanStop.findFirst({
+      where: { id: stopId, organizationId: user.organizationId },
+      select: {
+        id: true,
+        planId: true,
+        status: true,
+        inspectionId: true,
+        inspectionType: true,
+        officeDetails: true,
+        visitDetails: true,
+        visitDetailsOverriddenAt: true,
+        onSiteMinutesOverriddenAt: true,
+        hvacFilterSizes: true,
+        plan: { select: { status: true, occupiedVisitMinutes: true, hvacVisitMinutes: true } },
+        tenant: { select: TENANT_SELECT },
+      },
+    });
+    if (!stop) throw new ApplicationError(404, 'STOP_NOT_FOUND', 'This stop does not exist.');
+    if (stop.plan.status !== TbpPlanStatus.DRAFT || !editableStop(stop))
+      throw new ApplicationError(
+        409,
+        'STOP_NOT_EDITABLE',
+        'Only a stop in a draft plan that has not been published or excluded can change type.',
+      );
+
+    const reason: TbpInspectionReason = 'SET_BY_COORDINATOR';
+    const updated = await this.prisma.tbpQuarterPlanStop.update({
+      where: { id: stop.id },
+      data: {
+        inspectionType,
+        inspectionTypeReason: reason,
+        inspectionTypeNeedsReview: false,
+        inspectionTypeOverriddenAt: new Date(),
+        ...(stop.onSiteMinutesOverriddenAt
+          ? {}
+          : { onSiteMinutes: inspectionType === 'HVAC' ? stop.plan.hvacVisitMinutes : stop.plan.occupiedVisitMinutes }),
+        visitDetails:
+          stop.visitDetailsOverriddenAt && stop.visitDetails
+            ? detailsNamingInspection(
+                stop.visitDetails,
+                inspectionType,
+                servicesLineFor({ ...stop.tenant, hvacFilterSizes: stop.hvacFilterSizes }, inspectionType, stop.officeDetails),
+              )
+            : planVisitDetails({ ...stop.tenant, hvacFilterSizes: stop.hvacFilterSizes }, inspectionType, stop.officeDetails),
+      },
+      select: { id: true, inspectionType: true, inspectionTypeReason: true, onSiteMinutes: true, visitDetails: true },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        ...auditActor(user),
+        action: 'TBP_PLAN_STOP_TYPE_SET',
+        entityType: 'TbpQuarterPlanStop',
+        entityId: stop.id,
+        metadata: { planId: stop.planId, from: stop.inspectionType, to: inspectionType },
+      },
+    });
+
+    return updated;
   }
 
   /**
@@ -232,7 +498,7 @@ export class TbpPlanService {
    * different point in the year. That is the one quarter where getting it wrong
    * is most visible, and the data to get it right already exists.
    */
-  private async ordersForRotation(organizationId: string, quarter: Quarter) {
+  private async ordersForRotation(organizationId: string, quarter: Quarter): Promise<PriorRank[][]> {
     const published = await this.priorOrders(organizationId, quarter);
     if (published.length > 0) return published;
 
@@ -254,7 +520,7 @@ export class TbpPlanService {
    * Runs only when no plan of ours has been published. Once one has, that is a
    * better answer and this never runs again.
    */
-  private async bootstrapOrderFromJobber(organizationId: string, quarter: Quarter) {
+  private async bootstrapOrderFromJobber(organizationId: string, quarter: Quarter): Promise<PriorRank[]> {
     const previous = previousQuarter(quarter);
     const from = quarterStart(previous);
     const to = quarterStart(quarter);
@@ -264,18 +530,12 @@ export class TbpPlanService {
     // so the text sorts the same way the instants do. A mixed-offset feed would
     // silently interleave the quarter, so this is asserted below rather than
     // assumed.
-    const visits = await this.prisma.$queryRaw<
-      {
-        startAt: string;
-        street1: string | null;
-        street2: string | null;
-        postalCode: string | null;
-      }[]
-    >`
+    const visits = await this.prisma.$queryRaw<BootstrapVisit[]>`
       SELECT payload->>'startAt' AS "startAt",
              payload->'property'->'address'->>'street1'    AS street1,
              payload->'property'->'address'->>'street2'    AS street2,
-             payload->'property'->'address'->>'postalCode' AS "postalCode"
+             payload->'property'->'address'->>'postalCode' AS "postalCode",
+             payload->'assignedUsers'->'nodes'->0->'email'->>'raw' AS "technicianEmail"
       FROM "JobberVisitImport"
       WHERE "organizationId" = ${organizationId}::uuid
         AND lower(payload->>'title') LIKE ${`%${TBP_TITLE_MARKER}%`}
@@ -340,6 +600,23 @@ export class TbpPlanService {
       },
     );
 
+    // Who ran each visit, as one of our technicians. Matched by email, as the
+    // booking does; an assignee with no account here is simply not preferred.
+    const emails = [
+      ...new Set(ranks.map((rank) => rank.technicianEmail?.toLowerCase()).filter((email): email is string => Boolean(email))),
+    ];
+    const technicians = emails.length
+      ? await this.prisma.userProfile.findMany({
+          where: {
+            email: { in: emails, mode: 'insensitive' },
+            memberships: { some: { organizationId } },
+          },
+          select: { id: true, email: true },
+        })
+      : [];
+    const technicianByEmail = new Map(technicians.map((technician) => [technician.email.toLowerCase(), technician.id]));
+    const technicianOf = (email: string | undefined) => (email ? (technicianByEmail.get(email.toLowerCase()) ?? null) : null);
+
     this.logger.log({
       event: 'tbp_rotation_bootstrapped_from_jobber',
       organizationId,
@@ -348,9 +625,10 @@ export class TbpPlanService {
       ranked: ranks.length,
       unmatchedAddress,
       ambiguousBuilding,
+      withTechnician: ranks.filter((rank) => technicianOf(rank.technicianEmail)).length,
     });
 
-    return ranks;
+    return ranks.map(({ technicianEmail, ...rank }) => ({ ...rank, technicianId: technicianOf(technicianEmail) }));
   }
 
   /**
@@ -361,7 +639,7 @@ export class TbpPlanService {
    * cancelled or deleted afterwards. Only PUBLISHED plans count — a draft
    * somebody abandoned is not evidence of anything.
    */
-  private async priorOrders(organizationId: string, quarter: Quarter) {
+  private async priorOrders(organizationId: string, quarter: Quarter): Promise<PriorRank[][]> {
     const wanted: Quarter[] = [];
     let cursor = quarter;
     for (let index = 0; index < MAX_CARRY_BACK_QUARTERS; index += 1) {
@@ -383,14 +661,32 @@ export class TbpPlanService {
           // a position in the queue. Including it would hand next quarter a
           // rank for work that never happened.
           where: { status: { not: TbpStopStatus.EXCLUDED } },
-          select: { tenantExternalId: true, sequence: true },
+          select: { tenantExternalId: true, sequence: true, assignedTechnicianId: true, scheduledOn: true },
           orderBy: { sequence: 'asc' },
         },
       },
     });
 
     const byQuarter = new Map(
-      plans.map((plan) => [`${plan.quarterYear}-${plan.quarterNumber}`, plan.stops]),
+      plans.map((plan) => {
+        const planQuarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
+        return [
+          `${plan.quarterYear}-${plan.quarterNumber}`,
+          plan.stops.map((stop) => {
+            const visitedOn = stop.scheduledOn ? stop.scheduledOn.toISOString().slice(0, 10) : null;
+            return {
+              tenantExternalId: stop.tenantExternalId,
+              sequence: stop.sequence,
+              technicianId: stop.assignedTechnicianId,
+              // Its day, and the month of its own quarter the next quarter's visit
+              // keeps: a day before that quarter -- a plan may start fifteen days
+              // early (2026-09-19) -- was its first month.
+              visitedOn,
+              visitedMonth: visitedOn ? monthOfPlan(visitedOn, planQuarter) : null,
+            };
+          }),
+        ];
+      }),
     );
     return wanted
       .map((entry) => byQuarter.get(`${entry.year}-${entry.quarter}`) ?? [])
@@ -406,8 +702,15 @@ export class TbpPlanService {
     organizationId: string,
     planId: string,
     tenant: PlanTenant,
-    ranked: { sequence: number; previousSequence: number | null; orderSource: string },
+    ranked: {
+      sequence: number;
+      previousSequence: number | null;
+      previousVisitOn: string | null;
+      previousVisitMonth?: number | null;
+      orderSource: string;
+    },
     quarter: Quarter,
+    context: { officeDetails: string | null; previousTechnicianId: string | null },
   ) {
     const existing = await this.prisma.tbpQuarterPlanStop.findUnique({
       where: { planId_propertywareTenantId: { planId, propertywareTenantId: tenant.id } },
@@ -416,6 +719,13 @@ export class TbpPlanService {
         status: true,
         sequenceOverriddenAt: true,
         inspectionId: true,
+        inspectionType: true,
+        inspectionTypeOverriddenAt: true,
+        visitDetails: true,
+        visitTitleOverriddenAt: true,
+        visitDetailsOverriddenAt: true,
+        propertywareUnitId: true,
+        unitOverriddenAt: true,
       },
     });
 
@@ -429,30 +739,76 @@ export class TbpPlanService {
     )
       return false;
 
+    // The unit a coordinator chose stands: nothing in the reports can say better.
     const unit = tenant.propertywareBuildingId
-      ? await this.resolveUnit(organizationId, tenant)
+      ? existing?.unitOverriddenAt && existing.propertywareUnitId
+        ? await this.chosenUnit(organizationId, tenant.propertywareBuildingId, existing.propertywareUnitId)
+        : await this.resolveUnit(organizationId, tenant)
       : { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
 
+    // A unit nobody can name yet does not hold the visit back: it goes on a day
+    // at its building, which is the same drive whichever door it is (the office,
+    // 2026-09-18), and publishing waits for the unit (`TbpPublishService`).
     const blocked = !tenant.propertywareBuildingId
       ? { code: 'NO_BUILDING', message: 'This tenancy is not linked to a building.' }
-      : unit.resolution === TbpUnitResolution.UNRESOLVED
-        ? {
-            code: 'UNIT_REQUIRED',
-            message: 'This building has several units and none of them matched this tenancy.',
-          }
-        : null;
+      : null;
+
+    // A coordinator who chose the type decided it; the rule does not get to
+    // undo that on the next run.
+    const decided = existing?.inspectionTypeOverriddenAt
+      ? {
+          inspectionType: existing.inspectionType as TbpInspectionType,
+          reason: 'SET_BY_COORDINATOR' as const,
+          needsReview: false,
+        }
+      : tbpInspectionFor(quarter.quarter, tenant);
+
+    // In a building of several units, the unit's own filter sizes, where the
+    // office labels the building's by unit.
+    const sizes = unit.unit && unit.units ? (unitFilterSizes(tenant.hvacFilterSizes, unit.unit, unit.units) ?? tenant.hvacFilterSizes) : tenant.hvacFilterSizes;
+    const sized = { ...tenant, hvacFilterSizes: sizes };
+    // A coordinator's title and Details are sent as written; only the
+    // inspection on the Details' services line follows a new kind of visit.
+    const details =
+      existing?.visitDetailsOverriddenAt && existing.visitDetails
+        ? existing.inspectionType === decided.inspectionType
+          ? existing.visitDetails
+          : detailsNamingInspection(
+              existing.visitDetails,
+              decided.inspectionType,
+              servicesLineFor(sized, decided.inspectionType, context.officeDetails),
+            )
+        : planVisitDetails(sized, decided.inspectionType, context.officeDetails);
 
     const shared = {
       previousSequence: ranked.previousSequence,
+      previousVisitOn: ranked.previousVisitOn ? new Date(`${ranked.previousVisitOn}T00:00:00.000Z`) : null,
+      previousVisitMonth: ranked.previousVisitMonth ?? null,
       orderSource: ranked.orderSource as TbpOrderSource,
       zone: tenant.zone,
       propertywareBuildingId: tenant.propertywareBuildingId,
       propertywareUnitId: unit.unitId,
       propertywareLeaseId: unit.leaseId,
       unitResolution: unit.resolution,
-      hvacFilterSizes: tenant.hvacFilterSizes,
-      visitTitle: visitTitle(tenant, quarter),
-      visitDetails: visitDetails(tenant),
+      hvacFilterSizes: sizes,
+      inspectionType: decided.inspectionType,
+      inspectionTypeReason: decided.reason,
+      inspectionTypeNeedsReview: decided.needsReview,
+      previousTechnicianId: context.previousTechnicianId,
+      officeDetails: context.officeDetails,
+      ...(existing?.visitTitleOverriddenAt
+        ? {}
+        : {
+            // A unit a coordinator chose, or the report names, is the door the visit is for.
+            visitTitle: visitTitle(
+              (unit.resolution === TbpUnitResolution.MANUAL || unit.resolution === TbpUnitResolution.REPORT_UNIT) &&
+                unit.unit?.addressLine1
+                ? { ...tenant, addressLine1: unit.unit.addressLine1 }
+                : tenant,
+              quarter,
+            ),
+          }),
+      visitDetails: details,
       status: blocked ? TbpStopStatus.BLOCKED : TbpStopStatus.PLANNED,
       blockedCode: blocked?.code ?? null,
       blockedMessage: blocked?.message ?? null,
@@ -488,9 +844,10 @@ export class TbpPlanService {
    * technician is sent to the wrong door that difference is the first thing
    * worth knowing.
    *
-   * Nothing here guesses. An unresolved tenancy is blocked and stays in the
-   * plan for a person to fix, because a tenancy dropped quietly is one nobody
-   * inspects for a year.
+   * Nothing here guesses. An unresolved tenancy stays in the plan, given a day
+   * at its building, and cannot be published until somebody chooses its unit --
+   * or the report names it -- because a tenancy dropped quietly is one nobody
+   * inspects for a year, and one booked at the wrong door is a wasted visit.
    */
   private async resolveUnit(organizationId: string, tenant: PlanTenant): Promise<ResolvedUnit> {
     const buildingId = tenant.propertywareBuildingId;
@@ -498,8 +855,12 @@ export class TbpPlanService {
 
     const units = await this.prisma.propertywareUnit.findMany({
       where: { organizationId, buildingId, isActive: true },
-      select: { id: true },
+      select: { id: true, name: true, addressLine1: true, externalId: true, abbreviation: true },
     });
+    const named = (unitId: string | null) => {
+      const found = units.find((candidate) => candidate.id === unitId);
+      return found ? { unit: { name: found.name, addressLine1: found.addressLine1 }, units } : {};
+    };
 
     // A building with no units of its own is inspected as the building, which
     // `resolveInspectionPlan` accepts.
@@ -525,19 +886,27 @@ export class TbpPlanService {
         unitId: leases[0].unitId,
         leaseId: leases[0].id,
         resolution: TbpUnitResolution.LEASE_MATCH,
+        ...named(leases[0].unitId),
       };
 
+    // The report names the unit, where the office added it for buildings of
+    // several: Propertyware's own unit id, or a name only one unit answers to.
+    const reported = unitFromReport(units, tenant);
+    if (reported)
+      return { unitId: reported.id, leaseId: null, resolution: TbpUnitResolution.REPORT_UNIT, ...named(reported.id) };
+
     if (units.length === 1)
-      return { unitId: units[0].id, leaseId: null, resolution: TbpUnitResolution.SOLE_UNIT };
+      return { unitId: units[0].id, leaseId: null, resolution: TbpUnitResolution.SOLE_UNIT, ...named(units[0].id) };
 
     // Somebody has already inspected this tenancy and named a unit. That is a
-    // human answer to the same question, and it is better than none.
+    // human answer to the same question, and it is better than none -- an HVAC
+    // visit to the tenancy answers it as well as an occupied one.
     const prior = await this.prisma.inspection.findFirst({
       where: {
         organizationId,
         propertywareBuildingId: buildingId,
         propertywareUnitId: { not: null },
-        inspectionType: InspectionType.OCCUPIED,
+        inspectionType: { in: [InspectionType.OCCUPIED, InspectionType.HVAC] },
         propertywareLease: { leaseName: tenant.leaseName },
       },
       orderBy: { scheduledAt: 'desc' },
@@ -548,9 +917,30 @@ export class TbpPlanService {
         unitId: prior.propertywareUnitId,
         leaseId: prior.propertywareLeaseId,
         resolution: TbpUnitResolution.PRIOR_INSPECTION,
+        ...named(prior.propertywareUnitId),
       };
 
     return { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
+  }
+
+  /**
+   * The unit a coordinator chose for a tenancy, if it is still one of its
+   * building's. A unit Propertyware has since removed falls back to the ladder.
+   */
+  private async chosenUnit(organizationId: string, buildingId: string, unitId: string): Promise<ResolvedUnit> {
+    const units = await this.prisma.propertywareUnit.findMany({
+      where: { organizationId, buildingId, isActive: true },
+      select: { id: true, name: true, addressLine1: true },
+    });
+    const chosen = units.find((candidate) => candidate.id === unitId);
+    if (!chosen) return { unitId: null, leaseId: null, resolution: TbpUnitResolution.UNRESOLVED };
+    return {
+      unitId: chosen.id,
+      leaseId: null,
+      resolution: TbpUnitResolution.MANUAL,
+      unit: { name: chosen.name, addressLine1: chosen.addressLine1 },
+      units,
+    };
   }
 }
 
@@ -562,6 +952,8 @@ export interface BootstrapVisit {
   street1: string | null;
   street2: string | null;
   postalCode: string | null;
+  /** Whoever Jobber had on the visit first, when anybody. */
+  technicianEmail?: string | null;
 }
 
 /**
@@ -597,7 +989,7 @@ export function rankBootstrapVisits(
   visits: readonly BootstrapVisit[],
   resolveTenant: (visit: BootstrapVisit) => BootstrapResolution,
 ) {
-  const ranks: { tenantExternalId: string; sequence: number }[] = [];
+  const ranks: { tenantExternalId: string; sequence: number; visitedOn: string; technicianEmail?: string }[] = [];
   const seen = new Set<string>();
   let unmatchedAddress = 0;
   let ambiguousBuilding = 0;
@@ -617,10 +1009,27 @@ export function rankBootstrapVisits(
     // queue.
     if (seen.has(resolved)) continue;
     seen.add(resolved);
-    ranks.push({ tenantExternalId: resolved, sequence: ranks.length + 1 });
+    ranks.push({
+      tenantExternalId: resolved,
+      sequence: ranks.length + 1,
+      // Its day as the Jobber import dates a visit, for the month the next one keeps.
+      visitedOn: visit.startAt.slice(0, 10),
+      // Who ran it, carried for the planner to prefer again -- not part of the order.
+      ...(visit.technicianEmail ? { technicianEmail: visit.technicianEmail } : {}),
+    });
   }
 
   return { ranks, unmatchedAddress, ambiguousBuilding };
+}
+
+/** Each tenancy's last known technician, from the newest quarter that names one. */
+export function previousTechnicians(priorQuarters: readonly (readonly PriorRank[])[]): Map<string, string> {
+  const technicians = new Map<string, string>();
+  for (const quarter of priorQuarters)
+    for (const entry of quarter)
+      if (entry.technicianId && !technicians.has(entry.tenantExternalId))
+        technicians.set(entry.tenantExternalId, entry.technicianId);
+  return technicians;
 }
 
 const rotationCandidate = (tenant: PlanTenant): RotationCandidate => ({
@@ -631,6 +1040,71 @@ const rotationCandidate = (tenant: PlanTenant): RotationCandidate => ({
   // nothing to report it.
   addressKey: normalizeAddressKey(tenant.addressLine1, tenant.postalCode) || null,
 });
+
+/** A stop a person may still change: not published, not excluded, no inspection. */
+function editableStop(stop: { status: TbpStopStatus; inspectionId: string | null }) {
+  return !stop.inspectionId && stop.status !== TbpStopStatus.PUBLISHED && stop.status !== TbpStopStatus.EXCLUDED;
+}
+
+const addressOf = (row: OfficeDetailsRow): OfficeDetailsAddress => ({
+  address: row.address,
+  city: row.city ?? null,
+  postalCode: row.postalCode ?? null,
+});
+
+/** Rows as stored: trimmed, bounded, and only those carrying both an address and Details. */
+function cleanOfficeRows(rows: readonly OfficeDetailsRow[]): OfficeDetailsRow[] {
+  const clip = (value: unknown, length: number) => (typeof value === 'string' ? value.trim().slice(0, length) : '');
+  return rows
+    .map((row) => ({
+      address: clip(row?.address, 200),
+      city: clip(row?.city, 100) || null,
+      postalCode: clip(row?.postalCode, 20) || null,
+      details: clip(row?.details, 2000),
+    }))
+    .filter((row) => row.address && row.details);
+}
+
+/** The rows a plan holds, read back defensively: it is JSON a person's sheet produced. */
+function officeRowsFrom(value: Prisma.JsonValue | null): OfficeDetailsRow[] {
+  return Array.isArray(value) ? cleanOfficeRows(value as unknown as OfficeDetailsRow[]) : [];
+}
+
+/**
+ * The office's Details for each tenancy, matched by address.
+ *
+ * The same address rules as the Jobber sync -- strict first, then without the
+ * street type -- so a sheet and a visit cannot disagree about one house. A row
+ * matching two tenancies, which a building with two enrolled units would, is
+ * left out rather than handed to either; a second row for a tenancy already
+ * matched is left out too, and both are reported.
+ */
+export function matchOfficeDetails(
+  rows: readonly OfficeDetailsRow[],
+  tenancies: readonly { id: string; addressLine1: string | null; postalCode: string | null }[],
+) {
+  const strict = buildAddressIndex(tenancies);
+  const loose = buildLooseAddressIndex(tenancies);
+  const byTenantId = new Map<string, string>();
+  const unmatched: OfficeDetailsRow[] = [];
+  const ambiguous: OfficeDetailsRow[] = [];
+  const duplicates: OfficeDetailsRow[] = [];
+
+  for (const row of rows) {
+    const match = matchBuildingWithFallback(
+      strict,
+      loose,
+      addressKeyCandidates(row.address, null, row.postalCode),
+      looseAddressKey(row.address, row.postalCode),
+    );
+    if (match.outcome === 'AMBIGUOUS') ambiguous.push(row);
+    else if (match.outcome === 'NONE') unmatched.push(row);
+    else if (byTenantId.has(match.buildingId)) duplicates.push(row);
+    else byTenantId.set(match.buildingId, row.details.trim());
+  }
+
+  return { byTenantId, unmatched, ambiguous, duplicates };
+}
 
 /**
  * The title the office already reads in Jobber.
@@ -656,18 +1130,33 @@ export function visitTitle(
 }
 
 /**
- * The details line, which is what makes this an occupied inspection here.
+ * The Details a planned visit carries.
  *
- * `occupiedInspectionInDetails` looks for exactly this phrase — the title says
- * only "Tenant Benefit Package", which types as a filter delivery and is never
- * imported. Change the wording and the visits we create stop becoming
+ * The office's own services line where its sheet has one, otherwise one written
+ * the same way from the tenant report -- either way naming the inspection this
+ * quarter's rule chose -- and then the office's completion steps. The services
+ * line is what makes a benefit-package title an inspection here:
+ * `benefitPackageInspectionInDetails` reads "Occupied Inspection" or "HVAC
+ * Inspection" on it. Change the wording and the visits we create stop becoming
  * inspections, silently.
  */
-export function visitDetails(tenant: Pick<PlanTenant, 'hvacFilterSizes'>): string {
-  const filters = tenant.hvacFilterSizes.filter(Boolean).join(' + ');
-  return [filters ? `Filter Change: ${filters}` : 'Filter Change', 'Pest Control', 'Occupied Inspection'].join(
-    ' + ',
-  );
+export function planVisitDetails(
+  tenant: Pick<PlanTenant, 'hvacFilterSizes' | 'hvacFilterLocation' | 'managementPlan' | 'hvacPlan'>,
+  inspectionType: TbpInspectionType,
+  officeDetails?: string | null,
+): string {
+  return tbpVisitDetails(servicesLineFor(tenant, inspectionType, officeDetails));
+}
+
+/** The services line a planned visit's Details open with: the office's, or one written from the tenancy. */
+export function servicesLineFor(
+  tenant: Pick<PlanTenant, 'hvacFilterSizes' | 'hvacFilterLocation' | 'managementPlan' | 'hvacPlan'>,
+  inspectionType: TbpInspectionType,
+  officeDetails?: string | null,
+): string {
+  return officeDetails?.trim()
+    ? tbpServicesLine(officeDetails, inspectionType)
+    : tbpServicesLineFromTenancy(tenant, inspectionType);
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {

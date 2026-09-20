@@ -394,8 +394,9 @@ export function buildReportView(report: PublicInspectionReport): ReportView {
         : [];
       // The reviewer's own words lead; the findings follow rather than being
       // replaced by it, so writing one note never hides the rest.
-      // Anything but a three-axis verdict is one answer. Only occupied items
-      // carry one on a report today; see `PublicReportChecklistItem`.
+      // Anything but a three-axis verdict is one answer: an occupied room's
+      // choice, or an HVAC reading printed with its unit ("72 °F"); see
+      // `PublicReportChecklistItem`.
       const kind = item.responseType && item.responseType !== 'STATUS' ? 'ANSWER' : 'AXES';
       return {
         id: item.id,

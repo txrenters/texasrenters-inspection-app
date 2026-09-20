@@ -99,6 +99,33 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
       await flushRoomSnapshotsNow(roomId);
       return send(`/api/v1/technician/rooms/${encodeURIComponent(roomId)}/complete`, 'POST', {});
     },
+    /**
+     * The job's checklist as it stood when the signal went.
+     *
+     * Safe to replay: the route stores the checklist as sent, so a duplicate
+     * writes the same answers. Queued under one id per job
+     * (`services:<jobId>`), so a morning of ticks in a basement collapses to
+     * the last state rather than replaying twenty of them in order.
+     */
+    'job-services': (payload, send) =>
+      send(
+        `/api/v1/technician/inspections/${encodeURIComponent(String(payload.inspectionId))}/services`,
+        'PATCH',
+        { servicesReport: payload.servicesReport },
+      ),
+    /**
+     * Nobody let the technician in.
+     *
+     * Safe to replay: it writes the same submission and the same reason. The
+     * server refuses it for a job already submitted, which is a 4xx and so is
+     * dropped from the queue rather than retried forever.
+     */
+    'job-no-access': (payload, send) =>
+      send(
+        `/api/v1/technician/inspections/${encodeURIComponent(String(payload.inspectionId))}/no-access`,
+        'POST',
+        { reason: payload.reason },
+      ),
     // Safe to replay: the server keeps the first confirmation's timestamp, so a
     // duplicate cannot rewrite when the technician actually read the summary.
     'room-confirm-summary': (payload, send) =>

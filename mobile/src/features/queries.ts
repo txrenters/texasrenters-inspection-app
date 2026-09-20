@@ -1,17 +1,19 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { VisitServicesReport } from '@texasrenters/shared';
+import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import type {
   ChecklistAssessment,
   ChecklistItemWithAssessment,
   DemoRole,
   FindingStatus,
+  Inspection,
   InspectionStatus,
   LocalMedia,
 } from '../domain/models';
 import { isDemoMode } from '../config/environment';
 import { repositories } from '../repositories';
 import { QueuedOfflineError } from '../repositories/api/offline-writes';
+import type { ClosingComments } from '../utils/closing-comments';
 import { FIELD_ACTIVE_STATUSES } from '../utils/inspection-status';
 // Do not import the device store here. This module is inside the `repositories`
 // import graph, and adding `useDemoStore` left the binding undefined at
@@ -329,11 +331,77 @@ export function useInspectionActions(id: string) {
   return {
     start: useMutation(action<void>('PROCESSING', () => repositories.inspections.start(id))),
     // The services report rides with the submission, so the note to Jobber and
-    // "submitted" are written by the same request.
+    // "submitted" are written by the same request -- and so do an HVAC
+    // report's closing comments.
     complete: useMutation(
-      action<VisitServicesReport | undefined>('PROCESSING', (servicesReport) =>
-        repositories.inspections.complete(id, servicesReport),
+      action<{ servicesReport?: VisitServicesReport; closingComments?: Partial<ClosingComments> } | undefined>(
+        'PROCESSING',
+        (input) => repositories.inspections.complete(id, input?.servicesReport, input?.closingComments),
       ),
+    ),
+    /**
+     * A tick on the job's checklist.
+     *
+     * Not wrapped in `action`, which puts the job into PROCESSING while it
+     * runs: a technician ticking pest control is not waiting on the job's
+     * state, and flashing "Processing" on the whole job for each tick would
+     * read as something going wrong. The answer is written straight into the
+     * cached job so the checklist redraws at once, held or sent.
+     */
+    saveServices: useMutation({
+      /**
+       * One at a time, per job.
+       *
+       * The checklist is stored as one document, so two answers sent at once
+       * would each carry the report as it was when that tap happened and the
+       * later reply would drop the earlier answer. A scope makes the second
+       * wait, and it then reads the cache the first one wrote.
+       */
+      scope: { id: `job-services:${id}` },
+      mutationFn: (servicesReport: VisitServicesReport) =>
+        repositories.inspections.saveServices(id, servicesReport),
+      /**
+       * Shown at once, before the server answers: pest control is a checkbox
+       * now (the office, 2026-09-18), and a box that ticks half a second after
+       * the tap reads as broken -- and a quick second tap would be worked out
+       * from the job as it was before the first. A failure puts the server's
+       * copy back (`refresh` below).
+       */
+      onMutate: async (servicesReport: VisitServicesReport) => {
+        await client.cancelQueries({ queryKey: queryKeys.inspection(id) });
+        client.setQueryData(queryKeys.inspection(id), (current?: Inspection) =>
+          current ? { ...current, servicesReport } : current,
+        );
+      },
+      onSuccess: (inspection) => {
+        client.setQueryData(queryKeys.inspection(id), inspection);
+        void refresh();
+      },
+      onError: (error: unknown, servicesReport) => {
+        // Held on the device: the repository has already kept it, so the
+        // screen must show it rather than the answer springing back.
+        if (error instanceof QueuedOfflineError)
+          client.setQueryData(queryKeys.inspection(id), (current?: Inspection) =>
+            current ? { ...current, servicesReport } : current,
+          );
+        else void refresh();
+      },
+    }),
+    /**
+     * The area this job's filter photographs are filed under.
+     *
+     * Made on the first photograph rather than when the job is created: there
+     * are hundreds of jobs already booked, and a job whose filters nobody
+     * photographs never grows an area at all.
+     */
+    filtersArea: useMutation({ mutationFn: () => repositories.inspections.filtersArea(id) }),
+    /** The area a service's optional photographs are filed under, made on the first one. */
+    serviceArea: useMutation({
+      mutationFn: (service: ReportableVisitService) => repositories.inspections.serviceArea(id, service),
+    }),
+    /** Nobody let the technician in: the office books the whole visit again. */
+    couldNotAccess: useMutation(
+      action<string>('PROCESSING', (reason) => repositories.inspections.couldNotAccess(id, reason)),
     ),
   };
 }

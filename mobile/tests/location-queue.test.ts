@@ -45,6 +45,24 @@ describe('which queued fixes go next', () => {
     );
     expect(fixesToSend(many, NOW).length).toBeLessThanOrEqual(200);
   });
+
+  it('puts where the technician is now in the first batch of a backlog', () => {
+    // Strictly oldest-first held the newest point behind every batch of
+    // history, and the office map sat on an old position until the queue was
+    // empty. The server broadcasts the newest stored fix, so it has to be in
+    // the first request.
+    const many = Array.from({ length: 500 }, (_, index) =>
+      fix({ id: `fix-${index}`, recordedAt: at(500 - index) }),
+    );
+    const batch = fixesToSend(many, NOW);
+
+    expect(batch).toHaveLength(200);
+    expect(batch[0]?.id).toBe('fix-0');
+    expect(batch.at(-1)?.id).toBe('fix-499');
+    // Still in the order they were taken, so the trail is not drawn backwards.
+    const times = batch.map((item) => Date.parse(item.recordedAt));
+    expect([...times].sort((left, right) => left - right)).toEqual(times);
+  });
 });
 
 describe('what is not worth keeping', () => {

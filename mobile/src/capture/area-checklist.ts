@@ -2,6 +2,7 @@ import {
   OCCUPIED_CHECKLIST,
   checklistKindFor,
   checklistTemplateForKind,
+  hvacItemsForArea,
   keywordsFromLabel,
 } from '@texasrenters/shared';
 
@@ -131,6 +132,26 @@ export function checklistForArea(
       // condition of this room is Fair", and matching the bare word
       // "condition" would answer the question for the technician.
       keywords: [],
+    }));
+  /**
+   * An HVAC section asks its own rows, typed as the office's report types them.
+   *
+   * Read from the same `HVAC_CHECKLIST` the server writes its rows from and cut
+   * to the section by the area's name, so a technician with no signal in the
+   * Attic sees the Attic's rows -- and a reading as a reading, with its unit --
+   * rather than the whole list as three-axis rows. The single "HVAC System"
+   * area of an older inspection still gets every item.
+   */
+  if (kind === 'AIR_CONDITIONING')
+    return hvacItemsForArea(area.name).map((item) => ({
+      id: item.label,
+      label: item.label,
+      section: item.section,
+      responseType: item.responseType,
+      unit: item.unit ?? null,
+      // Only a scored row can be covered by talking about it: no phrasing in a
+      // transcript is a measurement.
+      keywords: item.responseType === 'STATUS' ? keywordsFromLabel(item.label) : [],
     }));
   return checklistTemplateForKind(
     { name: area.name, environment: area.environment, category: area.category },

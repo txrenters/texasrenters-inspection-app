@@ -1,0 +1,19 @@
+[Unit]
+Description=Deploy a TexasRenters release as soon as its images are published
+Documentation=file:///opt/texasrenters/scripts/deploy/auto-update.sh
+
+[Path]
+# The backend leaves a file here when the image workflow tells it a release's
+# images are in the registry (backend/src/deployments). The directory is the
+# only part of the host the backend container can write to, and writing to it
+# can only start this check early: the update decides for itself what to deploy,
+# from the newest GitHub release.
+#
+# DirectoryNotEmpty rather than PathChanged: a request that arrives while an
+# update is already running is still here when that update ends, and starts
+# another. The service clears the requests as it starts.
+DirectoryNotEmpty=/var/lib/texasrenters/deploy-requests
+Unit=texasrenters-update.service
+
+[Install]
+WantedBy=paths.target

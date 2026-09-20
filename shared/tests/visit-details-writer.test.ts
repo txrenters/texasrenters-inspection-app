@@ -11,6 +11,8 @@ import {
   occupiedVisitTitle,
   parseVisitDetails,
   tenancyZoneLabel,
+  visitServicesDetails,
+  visitServicesProblems,
   type JobberBookingInput,
   type OccupiedVisitBooking,
 } from '../src/index.js';
@@ -200,6 +202,44 @@ describe('a booking sent from the console', () => {
   });
 });
 
+describe('the services of a visit created here but not booked in Jobber from here', () => {
+  const services = (overrides: Partial<OccupiedVisitBooking['services']> = {}) => ({
+    filterChange: false,
+    pestControl: false,
+    fleaTreatment: false,
+    ...overrides,
+  });
+
+  it('is the services line alone, ending with the inspection', () => {
+    const details = visitServicesDetails('HVAC', {
+      services: services({ filterChange: true, pestControl: true }),
+      filters: [{ size: '16 x 25 x 1', media: true }, { size: '20x20x1', location: 'Upstairs' }],
+    });
+    expect(details).toBe('Filter Change: 16x25x1 MEDIA; 20x20x1 (Upstairs) + Pest Control + HVAC Inspection');
+    const read = parseVisitDetails(details);
+    expect(read.services).toMatchObject({ filterChange: true, pestControl: true, occupiedInspection: false });
+    expect(read.filters.map((filter) => filter.size)).toEqual(['16x25x1', '20x20x1']);
+  });
+
+  it('names an occupied inspection as the sync reads one, and asks for sizes it was not given', () => {
+    expect(visitServicesDetails('OCCUPIED', { services: services({ filterChange: true, fleaTreatment: true }), filters: [] })).toBe(
+      'Filter Change: Update filter sizes + Flea Treatment + Occupied Inspection',
+    );
+  });
+
+  it('is nothing when the visit books no service', () => {
+    expect(visitServicesDetails('MOVE_IN', { services: services(), filters: [{ size: '20x25x1' }] })).toBeNull();
+  });
+
+  it('checks the sizes only when the filter change is booked', () => {
+    const filters = [{ size: 'UPDATE' }];
+    expect(visitServicesProblems({ services: services({ filterChange: true }), filters })).toEqual([
+      '"UPDATE" is not a filter size like 20x25x1.',
+    ]);
+    expect(visitServicesProblems({ services: services({ pestControl: true }), filters })).toEqual([]);
+  });
+});
+
 describe('a zone read off the tenant report', () => {
   it('is written "Zone N", however the report typed the number', () => {
     expect(tenancyZoneLabel('4')).toBe('Zone 4');
@@ -299,12 +339,14 @@ describe('a booking for each other kind of inspection', () => {
     expect(text.jobTitle).toBe(jobTitle);
   });
 
+  const noServices = { filterChange: false, pestControl: false, fleaTreatment: false };
+
   it.each(['MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'HVAC'] as const)(
-    'writes %s Details without the benefit-package services, or anything the sync reads as occupied',
+    'writes %s Details with no services line when none is booked, and nothing the sync reads as occupied',
     (type) => {
-      const details = jobberBookingText(input(), visit(type)).visitDetails;
+      const details = jobberBookingText(input({ services: noServices }), visit(type)).visitDetails;
       expect(details).not.toMatch(/occupied\s+insp/i);
-      expect(details).not.toMatch(/Filter Change|Pest Control|Basic Plan|UPDATE/);
+      expect(details).not.toMatch(/Filter Change|Pest Control|Basic Plan|UPDATE|done or not done/);
       expect(details).not.toMatch(/Inspect Cloud/i);
       const read = parseVisitDetails(details);
       expect(read.services.occupiedInspection).toBe(false);
@@ -316,14 +358,48 @@ describe('a booking for each other kind of inspection', () => {
     },
   );
 
+  it.each([
+    ['MOVE_IN', 'Move in Inspection'],
+    ['MOVE_OUT', 'Move out inspection'],
+    ['BACK_TO_MARKET', 'BTM Inspection'],
+    ['HVAC', 'HVAC Inspection'],
+  ] as const)('opens %s Details with the services it books, the way the office writes them', (type, kind) => {
+    const details = jobberBookingText(
+      input({ filters: [{ size: '20 X 25 x 1', quantity: 2, location: 'Hallway' }] }),
+      visit(type),
+    ).visitDetails;
+    expect(details.split('\n')[0]).toBe(`Filter Change: (2 pcs) 20x25x1 (Hallway) + Pest Control + ${kind}`);
+    // The plan is still the benefit-package visit's business.
+    expect(details).not.toMatch(/occupied\s+insp|Basic Plan/i);
+    const read = parseVisitDetails(details);
+    expect(read.services).toMatchObject({ filterChange: true, pestControl: true, fleaTreatment: false, occupiedInspection: false });
+    expect(read.filters).toEqual([{ size: '20x25x1', quantity: 2, location: 'Hallway', media: false }]);
+    expect(read.tenants).toEqual([{ unit: null, name: 'Alex Doe', phones: ['(281) 555-0103'] }]);
+    // Asked for first, as a bullet, so the office's numbered steps keep their numbers.
+    expect(read.completionInstructions[0]).toBe(
+      'Mark the filter change and pest control done or not done in the Texas Renters inspection app before submitting.',
+    );
+    expect(details.endsWith(COMPLETION_BLOCKS[type].slice(1).join('\n'))).toBe(true);
+  });
+
+  it('names a lone service on a line the parser still finds, with the inspection after it', () => {
+    const details = jobberBookingText(
+      input({ services: { filterChange: false, pestControl: true, fleaTreatment: false } }),
+      visit('HVAC'),
+    ).visitDetails;
+    expect(details.split('\n')[0]).toBe('Pest Control + HVAC Inspection');
+    expect(parseVisitDetails(details).services).toMatchObject({ filterChange: false, pestControl: true });
+    expect(details).toContain('• Mark the pest control done or not done in the Texas Renters inspection app before submitting.');
+  });
+
   it("keeps the office's numbering on a move-in, with the app where Inspect Cloud was", () => {
     expect(COMPLETION_BLOCKS.MOVE_IN).toContain('2. Submit it in the Texas Renters inspection app.');
     expect(COMPLETION_BLOCKS.BACK_TO_MARKET).toContain('3. Place Sign, Supra, and Lockbox');
   });
 
-  it('checks filter sizes only where filters are written', () => {
-    expect(jobberBookingProblems(input(), 'MOVE_IN')).toEqual([]);
-    expect(jobberBookingProblems(input(), 'OCCUPIED')).toEqual(['"UPDATE" is not a filter size like 20x25x1.']);
+  it('checks filter sizes wherever the filter change is booked, and nowhere else', () => {
+    expect(jobberBookingProblems(input())).toEqual(['"UPDATE" is not a filter size like 20x25x1.']);
+    expect(jobberBookingProblems(input({ services: { ...noServices, pestControl: true } }))).toEqual([]);
   });
 
   it('books the five inspection types and nothing else', () => {

@@ -1,5 +1,8 @@
 import {
+  filterLabel,
+  filtersNotChanged,
   formatPhotoStamp,
+  installedSizes,
   parseVisitDetails,
   type ReportableVisitService,
   type VisitServicesReport,
@@ -48,11 +51,25 @@ export function jobberServicesNote(input: {
     const label = number ? `${number}. ${OFFICE_NAME[service]}` : OFFICE_NAME[service];
     if (outcome.done) {
       if (number) completed.push(number);
-      const installed =
-        service === 'filterChange' && input.report.filtersInstalled.length
-          ? ` (installed ${input.report.filtersInstalled.join(', ')})`
-          : '';
-      lines.push({ order: number ?? 10, text: `${label}: done${installed}` });
+      const sizes = service === 'filterChange' ? installedSizes(input.report) : [];
+      lines.push({
+        order: number ?? 10,
+        text: `${label}: done${sizes.length ? ` (installed ${sizes.join(', ')})` : ''}`,
+      });
+      /**
+       * And which register was missed, where the technician answered for each.
+       *
+       * "Filter Change: done" over a house whose upstairs register was painted
+       * over is how the office comes to believe a filter is being changed. The
+       * office asked for a photograph of each register (2026-09-18); this is
+       * the other half of that answer.
+       */
+      if (service === 'filterChange')
+        for (const filter of filtersNotChanged(input.report))
+          lines.push({
+            order: number ?? 10,
+            text: `   ${filterLabel(filter)}: NOT changed. ${filter.reason ?? ''}`.trimEnd(),
+          });
     } else {
       lines.push({
         order: number ?? 10,

@@ -7,9 +7,10 @@
 #   scripts/deploy/auto-update.sh --check    # report only, change nothing
 #   scripts/deploy/auto-update.sh --force    # redeploy even if the tag matches
 #
-# Intended to run unattended from the systemd timer beside this file. It is safe
-# to run by hand, and safe to run concurrently — a second invocation exits
-# rather than racing the first.
+# Intended to run unattended from the systemd units beside this file: the timer
+# every five minutes, and the path unit as soon as the image workflow says a
+# release's images are published. It is safe to run by hand, and safe to run
+# concurrently — a second invocation exits rather than racing the first.
 #
 # ---------------------------------------------------------------------------
 # What this does NOT do, and why
@@ -125,10 +126,39 @@ fi
 # A registry that is unreachable, a tag that does not exist, or an expired
 # docker login should all fail here — with the old release still serving —
 # rather than half way through a restart.
+#
+# Except a release whose images are still being built. *Publish images* starts
+# when the release is published and takes several minutes, so a check in that
+# gap finds a release with no images yet. That is not a failure, and checking
+# every five minutes it happens on nearly every release: this run leaves the
+# running release alone, and the workflow's request (texasrenters-update.path)
+# or the next check deploys it. It counts as a failure again once the release is
+# older than any build takes, so a registry that never gets the images still
+# says so. (2.5.73, 2026-09-17: FATAL "Could not pull backend:2.5.73" at 13:22,
+# deployed at 13:39.)
+IMAGE_WAIT_SECONDS="${IMAGE_WAIT_SECONDS:-2700}"
+PUBLISHED_AT="$(printf '%s' "${api_response}" | sed -n 's/.*"published_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+# No date reads as long ago, so a missing image is reported. `date -d ""` would
+# answer midnight today instead.
+published_epoch=0
+if [ -n "${PUBLISHED_AT}" ]; then
+  published_epoch="$(date -u -d "${PUBLISHED_AT}" +%s 2>/dev/null || echo 0)"
+fi
+release_age=$(( $(date -u +%s) - published_epoch ))
+
 log "Pulling ${REGISTRY}/{backend,web}:${LATEST_TAG}"
 for image in backend web; do
-  docker pull --quiet "${REGISTRY}/${image}:${LATEST_TAG}" >/dev/null \
-    || die "Could not pull ${image}:${LATEST_TAG}. Nothing was changed; ${CURRENT_TAG} is still serving."
+  if ! pull_error="$(docker pull --quiet "${REGISTRY}/${image}:${LATEST_TAG}" 2>&1 >/dev/null)"; then
+    case "${pull_error}" in
+      *'not found'*|*'manifest unknown'*)
+        if [ "${release_age}" -lt "${IMAGE_WAIT_SECONDS}" ]; then
+          log "${image}:${LATEST_TAG} is not in the registry yet (released ${release_age}s ago, images still publishing). ${CURRENT_TAG} keeps serving."
+          exit 0
+        fi
+        ;;
+    esac
+    die "Could not pull ${image}:${LATEST_TAG}: ${pull_error}. Nothing was changed; ${CURRENT_TAG} is still serving."
+  fi
 done
 
 # ---------------------------------------------------------------------------

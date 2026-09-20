@@ -170,10 +170,16 @@ describe('creating an occupied inspection booked in Jobber', () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it("books a move-out in the office's move-out format, with no benefit-package services", async () => {
+  it("books a move-out in the office's move-out format, with no services line when none is booked", async () => {
     const { service, tx } = build();
-    // Sizes that would be refused on a benefit-package visit are not written here at all.
-    await create(service, { inspectionType: 'MOVE_OUT', jobberBooking: booking({ filters: [{ size: 'UPDATE' }] }) });
+    // Sizes are not written without the filter change, so they are not checked either.
+    await create(service, {
+      inspectionType: 'MOVE_OUT',
+      jobberBooking: booking({
+        services: { filterChange: false, pestControl: false, fleaTreatment: false },
+        filters: [{ size: 'UPDATE' }],
+      }),
+    });
 
     const written = tx.inspection.update.mock.calls[0][0].data;
     expect(written.jobberVisitTitle).toBe('100 Main Street - Zone 3 - Move out inspection');
@@ -185,6 +191,25 @@ describe('creating an occupied inspection booked in Jobber', () => {
       .map((call) => call[0].data)
       .find((entry) => entry.action === 'JOBBER_VISIT_BOOKING_QUEUED');
     expect(queued.metadata).toMatchObject({ inspectionType: 'MOVE_OUT', benefitPackage: false, services: [] });
+  });
+
+  it('writes the services a move-out books first, the way the office writes them', async () => {
+    const { service, tx } = build();
+    await create(service, { inspectionType: 'MOVE_OUT' });
+
+    const written = tx.inspection.update.mock.calls[0][0].data;
+    expect(written.jobberVisitDetails.split('\n')[0]).toBe(
+      'Filter Change: (2 pcs) 20x25x1 + Pest Control + Move out inspection',
+    );
+    expect(parseVisitDetails(written.jobberVisitDetails).services).toMatchObject({
+      filterChange: true,
+      pestControl: true,
+      occupiedInspection: false,
+    });
+    const queued = tx.auditLog.create.mock.calls
+      .map((call) => call[0].data)
+      .find((entry) => entry.action === 'JOBBER_VISIT_BOOKING_QUEUED');
+    expect(queued.metadata).toMatchObject({ inspectionType: 'MOVE_OUT', services: ['filterChange', 'pestControl'] });
   });
 
   it('says what is wrong with a filter size rather than booking it', async () => {
@@ -199,6 +224,81 @@ describe('creating an occupied inspection booked in Jobber', () => {
     await create(service, { jobberBooking: undefined });
     expect(tx.jobberConnection.findUnique).not.toHaveBeenCalled();
     expect(tx.jobberOutboundTask.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('services on an inspection not booked in Jobber from here', () => {
+  const previous = { ...process.env };
+  beforeEach(() => {
+    process.env.JOBBER_BOOKING_ENABLED = 'true';
+    process.env.WEB_APP_ORIGIN = 'https://console.example.com/';
+  });
+  afterEach(() => {
+    process.env = { ...previous };
+  });
+
+  const services = (overrides: Record<string, unknown> = {}) => ({
+    services: { filterChange: true, pestControl: true, fleaTreatment: false },
+    filters: [{ size: '20 x 25 x 1', quantity: 2 }],
+    ...overrides,
+  });
+
+  it('writes them onto the inspection as the line the phone lists them from, and asks Jobber nothing', async () => {
+    const { service, tx } = build();
+    await create(service, { inspectionType: 'MOVE_OUT', jobberBooking: undefined, visitServices: services() });
+
+    const created = tx.inspection.create.mock.calls[0][0].data;
+    expect(created.jobberVisitDetails).toBe('Filter Change: (2 pcs) 20x25x1 + Pest Control + Move out inspection');
+    expect(parseVisitDetails(created.jobberVisitDetails).services).toMatchObject({ filterChange: true, pestControl: true });
+    expect(tx.jobberConnection.findUnique).not.toHaveBeenCalled();
+    expect(tx.jobberOutboundTask.create).not.toHaveBeenCalled();
+
+    const made = tx.auditLog.create.mock.calls
+      .map((call) => call[0].data)
+      .find((entry) => entry.action === 'INSPECTION_CREATED');
+    expect(made.metadata.services).toEqual(['filterChange', 'pestControl']);
+  });
+
+  it('writes nothing when none is ticked', async () => {
+    const { service, tx } = build();
+    await create(service, {
+      inspectionType: 'MOVE_OUT',
+      jobberBooking: undefined,
+      visitServices: services({ services: { filterChange: false, pestControl: false, fleaTreatment: false } }),
+    });
+    expect(tx.inspection.create.mock.calls[0][0].data.jobberVisitDetails).toBeUndefined();
+    const made = tx.auditLog.create.mock.calls
+      .map((call) => call[0].data)
+      .find((entry) => entry.action === 'INSPECTION_CREATED');
+    expect(made.metadata).not.toHaveProperty('services');
+  });
+
+  it('refuses a filter size it would write, before anything is created', async () => {
+    const { service, prisma } = build();
+    await expect(
+      create(service, {
+        inspectionType: 'MOVE_OUT',
+        jobberBooking: undefined,
+        visitServices: services({ filters: [{ size: 'UPDATE' }] }),
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'VISIT_SERVICES_INVALID', message: expect.stringContaining('UPDATE') });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses them on a kind of visit with no services line', async () => {
+    const { service, prisma } = build();
+    await expect(
+      create(service, { inspectionType: 'ROOF', jobberBooking: undefined, visitServices: services() }),
+    ).rejects.toMatchObject({ status: 422, code: 'VISIT_SERVICES_TYPE_UNSUPPORTED' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("leaves them to the booking's own Details when the visit is booked as well", async () => {
+    const { service, tx } = build();
+    // Not checked either: the size here is never written.
+    await create(service, { visitServices: services({ filters: [{ size: 'UPDATE' }] }) });
+    expect(tx.inspection.create.mock.calls[0][0].data.jobberVisitDetails).toBeUndefined();
+    expect(tx.inspection.update.mock.calls[0][0].data.jobberVisitDetails).toMatch(/^Filter Change: \(2 pcs\) 20x25x1/);
   });
 });
 

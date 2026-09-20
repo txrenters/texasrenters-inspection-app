@@ -1,40 +1,43 @@
 /**
- * The office's HVAC inspection checklist, transcribed from the printed form.
+ * The office's HVAC inspection, as its Inspect & Cloud report walks it.
  *
- * Source: "THMP HVAC Inspection Checklist" (PDF, signed off 2026-09-02). This
- * replaced a nine-item placeholder that was explicitly labelled a draft
- * "awaiting the office's sign-off … to be replaced wholesale the moment
- * somebody produces the real standard".
+ * Source: the "HVAC Inspection" template the office's reports were issued from
+ * in Inspect & Cloud (10118 Mariposa Green Ct, 2024-01-05), handed over on
+ * 2026-09-16 as the design the console and the handset both follow. Four
+ * sections -- Attic, Filters, A/C unit, Thermostat -- each a table of items
+ * scored Clean / Undamaged / Working with a comment, each item photographed, and
+ * the report closing on Next Inspection Alert, Maintenance Comments and General
+ * Comments.
  *
- * Ordered as the form is, which is the order a technician walks it: thermostat
- * first because it is inside the door, then the filter, indoor unit, ducts, and
- * outside last. Section names match the printed headings so a technician
- * holding the paper and a technician holding the phone are on the same line.
+ * It replaced the sixty-item transcription of the printed "THMP HVAC Inspection
+ * Checklist" signed off on 2026-09-02. The office kept that form's temperature
+ * and pressure readings: they ride along in the section where each is taken,
+ * typed rather than scored, and never required -- not every visit carries the
+ * gauges.
  *
- * Two sections of the form are deliberately absent:
- *
- * - **Equipment header** (system type, age, brand/model) describes the plant,
- *   not the inspection. It belongs on the property, not on one visit's
- *   checklist, and putting it here would re-ask it twice a year for ever.
- * - **Issues found** is five blank lines on paper. This app already has
- *   findings, which are reviewable, photographable and chargeable; a parallel
- *   list of free text would be a worse copy of them.
+ * Each section is an area of the inspection, named as the section is, so the
+ * handset walks them the way it walks rooms and the report prints them the way
+ * the old one did: a table per section, photographs beneath.
  */
 
 /** How one item is answered. */
 export type HvacResponseType =
-  /** The three condition flags plus a comment — the existing behaviour. */
+  /** Clean / Undamaged / Working plus a comment, as every row of the report is. */
   | 'STATUS'
   /** A number with a unit. Temperature split is diagnosis, not decoration. */
   | 'READING'
-  /** Free text where the form prints a blank line rather than a measurement. */
+  /** Free text. */
   | 'TEXT'
   /** Exactly one of `choices`. */
   | 'CHOICE';
 
+/** The report's sections, in the order it prints them -- and the names of the inspection's areas. */
+export const HVAC_SECTIONS = ['Attic', 'Filters', 'A/C unit', 'Thermostat'] as const;
+export type HvacSection = (typeof HVAC_SECTIONS)[number];
+
 export interface HvacChecklistItem {
-  /** The printed section heading, used to group the list on screen. */
-  section: string;
+  /** The report's section, which is also the area the item is answered in. */
+  section: HvacSection;
   label: string;
   responseType: HvacResponseType;
   /** READING only. Shown beside the field so nobody guesses Celsius. */
@@ -43,28 +46,13 @@ export interface HvacChecklistItem {
   choices?: string[];
 }
 
-/**
- * What the form offers for both "overall condition" and "recommended action".
- *
- * The printed section 11 has a heading and no visible options; the office
- * confirmed it reuses section 9's five. Kept as one constant so the two can
- * never drift apart.
- */
-export const HVAC_CONDITION_CHOICES = [
-  'Good — no action required',
-  'Maintenance recommended',
-  'Repair recommended',
-  'Immediate repair required',
-  'Replacement recommended',
-] as const;
-
-const STATUS = (section: string, label: string): HvacChecklistItem => ({
+const STATUS = (section: HvacSection, label: string): HvacChecklistItem => ({
   section,
   label,
   responseType: 'STATUS',
 });
 
-const READING = (section: string, label: string, unit: string): HvacChecklistItem => ({
+const READING = (section: HvacSection, label: string, unit: string): HvacChecklistItem => ({
   section,
   label,
   responseType: 'READING',
@@ -72,104 +60,102 @@ const READING = (section: string, label: string, unit: string): HvacChecklistIte
 });
 
 export const HVAC_CHECKLIST: readonly HvacChecklistItem[] = [
-  // The form opens with this, before any section number. Photographs already
-  // attach to a checklist item, so it is an item rather than a special case.
-  {
-    section: 'Data plate',
-    label: 'Data plate photographed (manufacturer, model, serial, refrigerant)',
-    responseType: 'STATUS',
-  },
+  STATUS('Attic', 'Float switch'),
+  STATUS('Attic', 'Drip pan'),
+  STATUS('Attic', 'Media filter'),
+  STATUS('Attic', 'Furnace condition'),
 
-  STATUS('Thermostat', 'Powers on'),
-  STATUS('Thermostat', 'Cooling tested'),
-  STATUS('Thermostat', 'Heating tested, if applicable'),
-  STATUS('Thermostat', 'Fan tested'),
-  READING('Thermostat', 'Indoor temperature', '°F'),
-  READING('Thermostat', 'Thermostat setting', '°F'),
+  // Four rows whatever the property has, as the report prints them. A property
+  // with one filter answers the other three "Not present".
+  STATUS('Filters', 'Filter 1'),
+  STATUS('Filters', 'Filter 2'),
+  STATUS('Filters', 'Filter 3'),
+  STATUS('Filters', 'Filter 4'),
 
-  STATUS('Air filter', 'Filter present'),
-  STATUS('Air filter', 'Correct size'),
-  { section: 'Air filter', label: 'Filter size', responseType: 'TEXT' },
-  {
-    section: 'Air filter',
-    label: 'Filter condition',
-    responseType: 'CHOICE',
-    // One choice rather than two booleans: the form prints "clean" and "dirty —
-    // replacement recommended" as separate ticks, and a filter cannot be both.
-    choices: ['Clean', 'Dirty — replacement recommended'],
-  },
-  STATUS('Air filter', 'Filter replaced during visit'),
-  STATUS('Air filter', 'Tested'),
+  // "R410A" is the comment on this row in the office's own report: the type is
+  // written, and the row scored like every other.
+  STATUS('A/C unit', 'Refrigerant type'),
+  STATUS('A/C unit', 'Coil guard'),
+  STATUS('A/C unit', 'Inlet/outlet lines'),
+  READING('A/C unit', 'Outdoor temperature', '°F'),
+  // The printed form's one "___ / ___ PSI" field, as two readings: they are two
+  // measurements, and a single string would have to be parsed by anything that
+  // ever compared them.
+  READING('A/C unit', 'Refrigerant pressure — suction', 'PSI'),
+  READING('A/C unit', 'Refrigerant pressure — liquid', 'PSI'),
 
-  STATUS('Indoor unit / air handler', 'Blower operating properly'),
-  STATUS('Indoor unit / air handler', 'Adequate airflow'),
-  STATUS('Indoor unit / air handler', 'Evaporator coil inspected'),
-  STATUS('Indoor unit / air handler', 'No unusual noise or vibration'),
-  STATUS('Indoor unit / air handler', 'No visible water leak'),
-  STATUS('Indoor unit / air handler', 'Drain pan inspected'),
-  STATUS('Indoor unit / air handler', 'Condensate drain inspected'),
-  STATUS('Indoor unit / air handler', 'Float switch tested, if installed'),
-
-  STATUS('Ductwork', 'Supply ducts visually inspected'),
-  STATUS('Ductwork', 'Return ducts visually inspected'),
-  STATUS('Ductwork', 'Duct connections secure'),
-  STATUS('Ductwork', 'No visible gaps or disconnected ducts'),
-  STATUS('Ductwork', 'No visible damage to ductwork'),
-  STATUS('Ductwork', 'Duct insulation in good condition'),
-  STATUS('Ductwork', 'No excessive air leakage observed'),
-  STATUS('Ductwork', 'No visible mould or excessive moisture'),
-  STATUS('Ductwork', 'Registers / supply vents secure'),
-  STATUS('Ductwork', 'Return grille secure and unobstructed'),
-  STATUS('Ductwork', 'Overall ductwork condition acceptable'),
-  { section: 'Ductwork', label: 'Ductwork issues / recommendations', responseType: 'TEXT' },
-
-  STATUS('Outdoor unit', 'Compressor operating'),
-  STATUS('Outdoor unit', 'Condenser fan operating'),
-  STATUS('Outdoor unit', 'Condenser coil inspected'),
-  STATUS('Outdoor unit', 'Electrical components inspected'),
-  STATUS('Outdoor unit', 'Capacitor checked'),
-  STATUS('Outdoor unit', 'Refrigerant lines inspected'),
-  STATUS('Outdoor unit', 'No visible refrigerant or oil leak'),
-  STATUS('Outdoor unit', 'Unit clean and unobstructed'),
-
-  READING('System performance', 'Return air temperature', '°F'),
-  READING('System performance', 'Supply air temperature', '°F'),
-  READING('System performance', 'Temperature split', '°F'),
-  READING('System performance', 'Outdoor temperature', '°F'),
-  // The form prints one "___ / ___ PSI" field. Two items rather than a pair
-  // type: they are two different readings, and a single string would have to be
-  // parsed by anything that ever wanted to compare them.
-  READING('System performance', 'Refrigerant pressure — suction', 'PSI'),
-  READING('System performance', 'Refrigerant pressure — liquid', 'PSI'),
-
-  STATUS('Heating, if applicable', 'Heating operation tested'),
-  STATUS('Heating, if applicable', 'Burner / ignition checked'),
-  STATUS('Heating, if applicable', 'Blower operating'),
-  STATUS('Heating, if applicable', 'No unusual noise or odour'),
-  STATUS('Heating, if applicable', 'Flue / vent visually inspected'),
-  STATUS('Heating, if applicable', 'No apparent safety concerns'),
-
-  STATUS('Condensate / drainage', 'Primary condensate drain clear'),
-  STATUS('Condensate / drainage', 'Secondary drain inspected'),
-  STATUS('Condensate / drainage', 'Condensate pump operating, if installed'),
-  STATUS('Condensate / drainage', 'Drain termination properly positioned'),
-  STATUS('Condensate / drainage', 'No signs of water damage'),
-
-  {
-    section: 'Overall condition',
-    label: 'Overall HVAC condition',
-    responseType: 'CHOICE',
-    choices: [...HVAC_CONDITION_CHOICES],
-  },
-  {
-    section: 'Recommended action',
-    label: 'Recommended action',
-    responseType: 'CHOICE',
-    choices: [...HVAC_CONDITION_CHOICES],
-  },
+  STATUS('Thermostat', 'Temperature'),
+  READING('Thermostat', 'Return air temperature', '°F'),
+  READING('Thermostat', 'Supply air temperature', '°F'),
+  READING('Thermostat', 'Temperature split', '°F'),
 ] as const;
 
-/** The section headings in the order the form prints them. */
+/** The section headings in the order the report prints them. */
 export function hvacChecklistSections(): string[] {
-  return [...new Set(HVAC_CHECKLIST.map((item) => item.section))];
+  return [...HVAC_SECTIONS];
+}
+
+/**
+ * The section an area of an HVAC inspection is, by its name, or null.
+ *
+ * Null for the single "HVAC System" area inspections were given before the
+ * report's sections became areas: those answer the whole list in one place.
+ */
+export function hvacSectionOf(areaName: string | null | undefined): HvacSection | null {
+  const name = (areaName ?? '').trim().toLowerCase();
+  return HVAC_SECTIONS.find((section) => section.toLowerCase() === name) ?? null;
+}
+
+/** The items an HVAC area asks: its section's, or every item for an area that is not one. */
+export function hvacItemsForArea(areaName: string | null | undefined): HvacChecklistItem[] {
+  const section = hvacSectionOf(areaName);
+  return HVAC_CHECKLIST.filter((item) => !section || item.section === section);
+}
+
+/** The comment "Not present" writes, for a row the property does not have -- the report's "Dont have". */
+export const HVAC_NOT_PRESENT = 'Not present';
+
+export interface HvacAnswer {
+  isClean?: boolean | null;
+  isUndamaged?: boolean | null;
+  isWorking?: boolean | null;
+  comment?: string | null;
+}
+
+/**
+ * Whether an item is answered well enough to finish its area.
+ *
+ * A scored row is all three of Clean, Undamaged and Working, as every graded row
+ * of the office's report is -- or a comment saying why it could not be, which
+ * is how the report records a media filter the property does not have. A
+ * reading is never required.
+ */
+export function hvacItemAnswered(
+  item: { responseType?: string | null },
+  answer: HvacAnswer | null | undefined,
+): boolean {
+  if ((item.responseType ?? 'STATUS') !== 'STATUS') return true;
+  if (!answer) return false;
+  const scored = answer.isClean != null && answer.isUndamaged != null && answer.isWorking != null;
+  return scored || Boolean(answer.comment?.trim());
+}
+
+/**
+ * The items still to answer before an HVAC area can be finished, in order.
+ *
+ * One rule for the handset's gate and the server's `completeRoom`, so the two
+ * cannot disagree about the same area.
+ */
+export function hvacUnansweredItems<T extends { label: string; responseType?: string | null }>(
+  items: readonly T[],
+  answerOf: (item: T) => HvacAnswer | null | undefined,
+): T[] {
+  return items.filter((item) => !hvacItemAnswered(item, answerOf(item)));
+}
+
+/** What to tell a technician who has items left, naming them. */
+export function hvacUnansweredMessage(labels: readonly string[]): string {
+  const named =
+    labels.length > 3 ? `${labels.slice(0, 3).join(', ')} and ${labels.length - 3} more` : labels.join(', ');
+  return `Score Clean, Undamaged and Working, or say why not, for ${named}.`;
 }

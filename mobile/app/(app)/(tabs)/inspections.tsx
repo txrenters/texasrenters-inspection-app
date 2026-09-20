@@ -259,7 +259,7 @@ export default function InspectionsScreen() {
                 printing both invites the reader to look for a difference. */}
             <ScreenHeader
               subtitle={`${total} total${rows.length < total ? ` · ${rows.length} loaded` : ''}`}
-              title="Inspections"
+              title="Jobs"
             />
             <View className="mx-5 mt-3 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
               <SearchIcon size={18} className="text-muted-foreground" />
@@ -307,7 +307,7 @@ export default function InspectionsScreen() {
                 <Text className="text-sm text-destructive">
                   {inspections.error instanceof Error
                     ? inspections.error.message
-                    : 'Could not load inspections.'}
+                    : 'Could not load jobs.'}
                 </Text>
               </View>
             ) : null}
@@ -325,9 +325,9 @@ export default function InspectionsScreen() {
           <View className="items-center gap-3 py-16">
             <SearchIcon size={36} className="text-muted-foreground" />
             <View className="items-center gap-1">
-              <Text className="text-base font-semibold text-foreground">No inspections found</Text>
+              <Text className="text-base font-semibold text-foreground">No jobs found</Text>
               <Text className="px-8 text-center text-sm text-muted-foreground">
-                {search ? 'Try a different search term.' : 'No inspections match this filter.'}
+                {search ? 'Try a different search term.' : 'No jobs match this filter.'}
               </Text>
             </View>
           </View>

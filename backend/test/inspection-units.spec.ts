@@ -59,7 +59,14 @@ function buildTx(overrides: Record<string, unknown> = {}) {
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
     },
-    areaChecklistItem: { createMany: jest.fn().mockResolvedValue({ count: 9 }) },
+    areaChecklistItem: {
+      createMany: jest.fn().mockResolvedValue({ count: 18 }),
+      // Items the office's report no longer asks are archived, and rows out of
+      // step with it are brought back in line.
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
+    },
     // PropertyArea.propertyId carries a building id but its foreign key points
     // at Property, a separate table populated lazily.
     property: { upsert: jest.fn().mockResolvedValue({ id: 'building-1' }) },
@@ -190,14 +197,17 @@ describe('multi-unit inspection creation', () => {
    * property. The flag was set on one area in the entire database, so every HVAC
    * inspection ever created covered nothing and reached the technician empty.
    */
-  it('attaches exactly one system-managed area, whatever the layout holds', async () => {
+  it('attaches the report’s four sections as system-managed areas, whatever the layout holds', async () => {
+    // Since 2026-09-16 an HVAC inspection is walked in the office's report's
+    // sections, each an area named as the report names it: the name decides
+    // which items the area asks.
     const tx = buildTx({
       propertyArea: {
         findMany: jest
           .fn()
           .mockResolvedValue([{ id: 'hall' }, { id: 'bathroom' }, { id: 'bedroom' }]),
         findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({ id: 'hvac-system-area' }),
+        create: jest.fn(({ data }: { data: { name: string } }) => Promise.resolve({ id: `area-${data.name}` })),
       },
     });
     const service = buildService(tx);
@@ -210,12 +220,41 @@ describe('multi-unit inspection creation', () => {
     } as never);
 
     const createData = tx.inspection.create.mock.calls[0][0].data;
+    expect(createData.areas.create).toEqual([
+      { propertyAreaId: 'area-Attic' },
+      { propertyAreaId: 'area-Filters' },
+      { propertyAreaId: 'area-A/C unit' },
+      { propertyAreaId: 'area-Thermostat' },
+    ]);
+    const areas = tx.propertyArea.create.mock.calls.map(
+      (call: [{ data: Record<string, unknown> }]) => call[0].data,
+    );
+    expect(areas.map((area: Record<string, unknown>) => area.inspectionOrder)).toEqual([0, 1, 2, 3]);
+    for (const area of areas) {
+      // Not part of the floor plan: no floor, and never shown in a room walk.
+      expect(area.floorId).toBeNull();
+      expect(area.source).toBe('SYSTEM');
+      expect(area.status).toBe('APPROVED');
+      // Every section is answered before the inspection is submitted.
+      expect(area.isRequired).toBe(true);
+    }
+  });
+
+  /** A delivery inspects nothing, and keeps the one area it has always hung off. */
+  it('gives a filter delivery its single system area, not the report’s sections', async () => {
+    const tx = buildTx();
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'AC_FILTER_DELIVERY',
+      priority: 'STANDARD',
+    } as never);
+
+    const createData = tx.inspection.create.mock.calls[0][0].data;
     expect(createData.areas.create).toEqual([{ propertyAreaId: 'hvac-system-area' }]);
-    // Not part of the floor plan: no floor, and never shown in a room walk.
-    const area = tx.propertyArea.create.mock.calls[0][0].data;
-    expect(area.floorId).toBeNull();
-    expect(area.source).toBe('SYSTEM');
-    expect(area.status).toBe('APPROVED');
+    expect(tx.propertyArea.create.mock.calls[0][0].data.name).toBe('HVAC System');
   });
 
   it("creates the Property row the area foreign key points at", async () => {
@@ -272,13 +311,15 @@ describe('multi-unit inspection creation', () => {
     );
   });
 
-  it("reuses the same system area on the next HVAC visit for that property", async () => {
+  it("reuses the property's section areas on the next HVAC visit", async () => {
     // Successive visits have to hang off one subject, or each one starts a new
     // history and the checklist answers of the last visit become unreachable.
     const tx = buildTx({
       propertyArea: {
         findMany: jest.fn().mockResolvedValue([]),
-        findFirst: jest.fn().mockResolvedValue({ id: 'existing-system-area' }),
+        findFirst: jest.fn(({ where }: { where: { name: string } }) =>
+          Promise.resolve({ id: `existing-${where.name}` }),
+        ),
         create: jest.fn(),
       },
     });
@@ -293,7 +334,12 @@ describe('multi-unit inspection creation', () => {
 
     expect(tx.propertyArea.create).not.toHaveBeenCalled();
     const createData = tx.inspection.create.mock.calls[0][0].data;
-    expect(createData.areas.create).toEqual([{ propertyAreaId: 'existing-system-area' }]);
+    expect(createData.areas.create).toEqual([
+      { propertyAreaId: 'existing-Attic' },
+      { propertyAreaId: 'existing-Filters' },
+      { propertyAreaId: 'existing-A/C unit' },
+      { propertyAreaId: 'existing-Thermostat' },
+    ]);
   });
 
   it('books an HVAC visit on a property with no floor plan at all', async () => {
@@ -348,6 +394,52 @@ describe('multi-unit inspection creation', () => {
     // Re-running must be free: two inspections created at once cannot produce
     // two sets, and answers already recorded against an item survive.
     expect(seeded.skipDuplicates).toBe(true);
+  });
+
+  /**
+   * The office's report replaced the sixty-item form on 2026-09-16. Rows once
+   * inserted were never touched again, so the old items would have gone on
+   * being asked beside the new ones.
+   */
+  it('archives the items the report no longer asks, and brings the rest in step', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'area' }),
+      },
+    });
+    // "Temperature split" was on the old form too, in another section.
+    tx.areaChecklistItem.findMany.mockResolvedValue([
+      {
+        id: 'old-split',
+        label: 'Temperature split',
+        section: 'System performance',
+        responseType: 'READING',
+        unit: '°F',
+        choices: [],
+        keywords: [],
+        sortOrder: 11,
+        archivedAt: null,
+      },
+    ]);
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'HVAC',
+      priority: 'STANDARD',
+    } as never);
+
+    const archived = tx.areaChecklistItem.updateMany.mock.calls[0][0];
+    expect(archived.where.archivedAt).toBeNull();
+    expect(archived.where.label.notIn).toContain('Float switch');
+    expect(archived.data.archivedAt).toBeInstanceOf(Date);
+    expect(tx.areaChecklistItem.update).toHaveBeenCalledWith({
+      where: { id: 'old-split' },
+      data: expect.objectContaining({ section: 'Thermostat', sortOrder: 17, archivedAt: null }),
+    });
   });
 
   /**

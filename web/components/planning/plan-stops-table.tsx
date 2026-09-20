@@ -1,0 +1,349 @@
+'use client';
+
+import { TBP_INSPECTION_REASON_TEXT, type TbpInspectionReason } from '@texasrenters/shared';
+import { AlertTriangleIcon, MoreHorizontalIcon, PanelRightOpenIcon } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { toast } from 'sonner';
+
+import { DataTable, type Column } from '@/components/data-table';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { EditablePick, type PickOption } from '@/components/planning/inline-edit';
+import { Field, FieldLabel } from '@/components/ui/field';
+import { Spinner } from '@/components/ui/spinner';
+import { Textarea } from '@/components/ui/textarea';
+import { EMPTY, formatScheduledDate } from '@/lib/format';
+import { NEEDS_UNIT_MESSAGE, needsUnit } from '@/lib/planning';
+import { usePlanningMutations, type PlanStop, type PlanStopStatus } from '@/lib/planning-queries';
+
+export const STOP_STATUS: Record<
+  PlanStopStatus,
+  { label: string; variant: 'secondary' | 'info' | 'warning' | 'outline' | 'success' | 'destructive' }
+> = {
+  PLANNED: { label: 'Planned', variant: 'secondary' },
+  BLOCKED: { label: 'Needs attention', variant: 'warning' },
+  // Published to Jobber with no day: theirs to schedule, and it comes back here
+  // as an inspection when they do (the office, 2026-09-20).
+  UNSCHEDULED: { label: 'Unscheduled in Jobber', variant: 'info' },
+  EXCLUDED: { label: 'Excluded', variant: 'outline' },
+  PUBLISHED: { label: 'Published', variant: 'success' },
+  FAILED: { label: 'Failed', variant: 'destructive' },
+};
+
+/** Why a stop is the kind of visit it is, in the office's words. */
+export function reasonText(reason: string | null) {
+  return reason && reason in TBP_INSPECTION_REASON_TEXT ? TBP_INSPECTION_REASON_TEXT[reason as TbpInspectionReason] : null;
+}
+
+const COLUMNS: Array<Column<PlanStop>> = [
+  {
+    key: 'sequence',
+    header: '#',
+    numeric: true,
+    className: 'w-0',
+    cell: (stop) => stop.sequence,
+  },
+  {
+    key: 'property',
+    header: 'Property',
+    primary: true,
+    cell: (stop) => (
+      <div className="min-w-0">
+        <div className="truncate">{stop.tenant.addressLine1 ?? EMPTY}</div>
+        <div className="text-muted-foreground truncate text-xs">
+          {[stop.tenant.city, stop.zone && /^\d+$/.test(stop.zone) ? `Zone ${stop.zone}` : null, stop.tenant.managementPlan]
+            .filter(Boolean)
+            .join(' · ')}
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: 'visit',
+    header: 'Visit',
+    cell: (stop) => (
+      <div className="grid gap-1">
+        <div className="flex items-center gap-1.5">
+          <Badge variant={stop.inspectionType === 'HVAC' ? 'info' : 'secondary'}>
+            {stop.inspectionType === 'HVAC' ? 'HVAC' : 'Occupied'}
+          </Badge>
+          {stop.inspectionTypeNeedsReview ? (
+            <AlertTriangleIcon aria-label="Worth checking" className="text-warning size-3.5" />
+          ) : null}
+        </div>
+        <span className="text-muted-foreground text-xs">
+          {reasonText(stop.inspectionTypeReason) ?? EMPTY}
+          {stop.tenant.hvacPlan ? ` (${stop.tenant.hvacPlan})` : ''}
+        </span>
+      </div>
+    ),
+  },
+  {
+    key: 'day',
+    header: 'Day',
+    hideBelow: 'md',
+    cell: (stop) =>
+      stop.scheduledOn ? (
+        <div className="min-w-0">
+          <div>{formatScheduledDate(stop.scheduledOn)}</div>
+          <div className="text-muted-foreground truncate text-xs">{stop.assignedTechnician?.displayName ?? 'Nobody yet'}</div>
+        </div>
+      ) : (
+        EMPTY
+      ),
+  },
+  {
+    key: 'details',
+    header: 'Details',
+    hideBelow: 'xl',
+    className: 'max-w-md',
+    cell: (stop) => (
+      <div className="min-w-0">
+        <div className="truncate text-xs">{stop.visitDetails?.split('\n')[0] ?? EMPTY}</div>
+        <div className="text-muted-foreground text-xs">{stop.officeDetails ? 'From the office’s sheet' : 'Written from the tenant report'}</div>
+      </div>
+    ),
+  },
+  {
+    key: 'status',
+    header: 'Status',
+    cell: (stop) => (
+      <div className="grid gap-1">
+        <Badge variant={STOP_STATUS[stop.status].variant}>{STOP_STATUS[stop.status].label}</Badge>
+        {stop.blockedMessage ? <span className="text-muted-foreground text-xs text-pretty">{stop.blockedMessage}</span> : null}
+        {needsUnit(stop) ? <span className="text-warning text-xs text-pretty">{NEEDS_UNIT_MESSAGE}</span> : null}
+      </div>
+    ),
+  },
+];
+
+/** Which building a visit is in, as far as the list can tell: the set of its building's units. */
+const buildingOf = (stop: PlanStop) =>
+  stop.buildingUnits
+    .map((unit) => unit.id)
+    .sort()
+    .join(',');
+
+/**
+ * The units a visit can be in, each saying whether another visit in the building
+ * already has it: three tenancies in one building are three different doors.
+ */
+function unitOptions(stop: PlanStop, building: readonly PlanStop[]): PickOption[] {
+  const takenBy = new Map(
+    building
+      .filter((other) => other.id !== stop.id && other.propertywareUnit)
+      .map((other) => [other.propertywareUnit!.id, other.sequence]),
+  );
+  return stop.buildingUnits.map((unit) => ({
+    value: unit.id,
+    label: unit.name,
+    hint:
+      [unit.addressLine1, takenBy.has(unit.id) ? `already chosen for visit ${takenBy.get(unit.id)}` : null]
+        .filter(Boolean)
+        .join(' · ') || undefined,
+    group: takenBy.has(unit.id) ? 'Already chosen for another visit here' : 'Not chosen yet',
+  }));
+}
+
+export function PlanStopsTable({
+  stops,
+  allStops,
+  editable,
+  onOpen,
+}: {
+  stops: PlanStop[];
+  /**
+   * The whole plan's visits, when `stops` is only some of them: the unit a
+   * visit elsewhere in the list already has still counts as taken.
+   */
+  allStops?: PlanStop[];
+  editable: boolean;
+  /** Opens a visit's details, as its pin on the map does. */
+  onOpen?: (stopId: string) => void;
+}) {
+  const { setType, exclude, editStop } = usePlanningMutations();
+  const [excluding, setExcluding] = useState<PlanStop | null>(null);
+  const [reason, setReason] = useState('');
+
+  const changeType = (stop: PlanStop) => {
+    const inspectionType = stop.inspectionType === 'HVAC' ? 'OCCUPIED' : 'HVAC';
+    setType.mutate(
+      { stopId: stop.id, inspectionType },
+      {
+        onSuccess: () =>
+          toast.success(`${stop.tenant.addressLine1 ?? 'The visit'} is now an ${inspectionType === 'HVAC' ? 'HVAC' : 'occupied'} inspection`, {
+            description: 'Its day is measured again with the new length.',
+          }),
+        onError: (error) => toast.error('The visit could not be changed', { description: error.message }),
+      },
+    );
+  };
+
+  const confirmExclude = () => {
+    if (!excluding) return;
+    exclude.mutate(
+      { stopId: excluding.id, reason: reason.trim() },
+      {
+        onSuccess: (result) => {
+          if (!result.excluded) {
+            toast.error(result.message ?? 'This visit can no longer be excluded.');
+            return;
+          }
+          toast.success(`${excluding.tenant.addressLine1 ?? 'The visit'} is left out of this quarter`);
+          setExcluding(null);
+          setReason('');
+        },
+        onError: (error) => toast.error('The visit could not be excluded', { description: error.message }),
+      },
+    );
+  };
+
+  const editableStop = (stop: PlanStop) => editable && !stop.inspectionId && stop.status !== 'PUBLISHED' && stop.status !== 'EXCLUDED';
+
+  // The visits of each building of several units, for which units are taken.
+  const buildings = useMemo(() => {
+    const byBuilding = new Map<string, PlanStop[]>();
+    for (const stop of allStops ?? stops)
+      if (stop.buildingUnits.length > 1) byBuilding.set(buildingOf(stop), [...(byBuilding.get(buildingOf(stop)) ?? []), stop]);
+    return byBuilding;
+  }, [allStops, stops]);
+
+  /**
+   * A visit waiting for its unit is fixed where it is listed (the office,
+   * 2026-09-18: "there's no function or control to fix it"). The same choice as
+   * the unit in the visit's details, which stays there for changing it later.
+   */
+  const columns = COLUMNS.map((column) =>
+    column.key !== 'status'
+      ? column
+      : {
+          ...column,
+          cell: (stop: PlanStop) => (
+            <div className="grid gap-1">
+              {column.cell(stop)}
+              {needsUnit(stop) && editableStop(stop) && stop.buildingUnits.length > 1 ? (
+                <EditablePick
+                  className="relative z-10"
+                  display={<span className="text-primary font-medium">Choose its unit</span>}
+                  label={`the unit of visit ${stop.sequence}`}
+                  onSave={async (unitId) => {
+                    await editStop.mutateAsync({ stopId: stop.id, propertywareUnitId: unitId });
+                    const unit = stop.buildingUnits.find((candidate) => candidate.id === unitId);
+                    toast.success(`Visit ${stop.sequence} is at ${unit?.addressLine1 ?? unit?.name ?? 'its unit'}`, {
+                      description: 'Its title, Details and filter sizes now follow the unit.',
+                    });
+                  }}
+                  options={unitOptions(stop, buildings.get(buildingOf(stop)) ?? [stop])}
+                  value={stop.propertywareUnit?.id ?? null}
+                />
+              ) : null}
+            </div>
+          ),
+        },
+  );
+
+  return (
+    <>
+      <DataTable
+        actions={(stop) => (
+          <div className="flex items-center justify-end gap-0.5">
+            {onOpen ? (
+              <Button
+                aria-label={`Details of the visit at ${stop.tenant.addressLine1 ?? 'this property'}`}
+                className="relative z-10"
+                onClick={() => onOpen(stop.id)}
+                size="icon-sm"
+                title="Details"
+                variant="ghost"
+              >
+                <PanelRightOpenIcon />
+              </Button>
+            ) : null}
+            {editableStop(stop) ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button aria-label={`Change the visit at ${stop.tenant.addressLine1 ?? 'this property'}`} className="relative z-10" size="icon-sm" variant="ghost">
+                  <MoreHorizontalIcon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {/*
+                  A visit the planner could not place is given a day and a technician in its own
+                  window, and the office looked for that here first (2026-09-20: "how can we resolve
+                  this if we can't assign this?").
+                */}
+                {onOpen ? (
+                  <DropdownMenuItem onSelect={() => onOpen(stop.id)}>
+                    {stop.scheduledOn && stop.assignedTechnician ? 'Change its day or technician…' : 'Give it a day and a technician…'}
+                  </DropdownMenuItem>
+                ) : null}
+                {stop.buildingUnits.length > 1 && onOpen ? (
+                  <DropdownMenuItem onSelect={() => onOpen(stop.id)}>
+                    {stop.propertywareUnit ? 'Change its unit…' : 'Choose its unit…'}
+                  </DropdownMenuItem>
+                ) : null}
+                <DropdownMenuItem disabled={setType.isPending} onSelect={() => changeType(stop)}>
+                  {stop.inspectionType === 'HVAC' ? 'Make it an occupied inspection' : 'Make it an HVAC inspection'}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setExcluding(stop)} variant="destructive">
+                  Leave out of this quarter…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            ) : null}
+          </div>
+        )}
+        columns={columns}
+        label="Visits in this quarter's plan"
+        rowKey={(stop) => stop.id}
+        rows={stops}
+      />
+
+      <Dialog onOpenChange={(open) => !open && setExcluding(null)} open={Boolean(excluding)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Leave {excluding?.tenant.addressLine1 ?? 'this visit'} out of the quarter?</DialogTitle>
+            <DialogDescription>
+              No inspection is created and no visit is booked for this tenancy this quarter. The reason stays on the plan.
+            </DialogDescription>
+          </DialogHeader>
+          <Field>
+            <FieldLabel htmlFor="exclude-reason">Why</FieldLabel>
+            <Textarea
+              id="exclude-reason"
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="Tenant moving out on Oct 15"
+              rows={3}
+              value={reason}
+            />
+          </Field>
+          <DialogFooter>
+            <Button onClick={() => setExcluding(null)} variant="outline">
+              Keep it
+            </Button>
+            <Button disabled={reason.trim().length < 2 || exclude.isPending} onClick={confirmExclude} variant="destructive">
+              {exclude.isPending ? <Spinner /> : null}
+              Leave it out
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

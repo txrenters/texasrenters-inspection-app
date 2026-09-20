@@ -43,6 +43,8 @@ function build(inspectionType = 'OCCUPIED') {
         id: ROOM_ID,
         inspectionId: INSPECTION_ID,
         propertyAreaId: PROPERTY_AREA_ID,
+        // The area's name is what an HVAC section's items are found by.
+        propertyArea: { name: 'Living room' },
         inspection: { inspectionType },
       }),
     },

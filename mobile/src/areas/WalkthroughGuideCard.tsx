@@ -15,9 +15,9 @@ registerIcons(RotateCwIcon);
  * screen now drops it once a recording lands.
  *
  * The two step lists are different jobs, not two wordings of one. A room is
- * filmed in a slow clockwise pass; an air conditioner is filmed standing at the
- * unit, so its steps are places on the equipment rather than points on a
- * circle.
+ * filmed in a slow clockwise pass. An HVAC inspection is not filmed at all: it
+ * is walked in the office's report's four sections, each photographed with
+ * every row answered (the office, 2026-09-16), so its steps are the report's.
  */
 const ROOM_STEPS = [
   ['1', 'Room overview', 'Capture the full room and primary circulation path'],
@@ -27,10 +27,10 @@ const ROOM_STEPS = [
 ] as const;
 
 const EQUIPMENT_STEPS = [
-  ['1', 'Indoor unit', 'Film the head unit, its filter and the coil behind it'],
-  ['2', 'Drain and tray', 'Show the condensate path and any standing water'],
-  ['3', 'Running check', 'Narrate airflow, noise and vibration with it running'],
-  ['4', 'Outdoor unit', 'Capture the condenser and the refrigerant lines'],
+  ['1', 'Photograph it', 'A clear photo of each thing this section asks about'],
+  ['2', 'Score every row', 'Clean, Undamaged and Working, or Not present'],
+  ['3', 'Take the readings', 'Temperatures and pressures, where this section has them'],
+  ['4', 'Submit the section', 'Submit Evidence opens once every row is answered'],
 ] as const;
 
 export function WalkthroughGuideCard({ isEquipmentVisit }: { isEquipmentVisit: boolean }) {
@@ -44,11 +44,11 @@ export function WalkthroughGuideCard({ isEquipmentVisit }: { isEquipmentVisit: b
         </View>
         <View className="min-w-0 flex-1">
           <Text className="text-base font-semibold text-foreground">
-            {isEquipmentVisit ? 'Equipment Walkthrough' : 'Clockwise Walkthrough'}
+            {isEquipmentVisit ? 'HVAC Inspection' : 'Clockwise Walkthrough'}
           </Text>
           <Text className="mt-1 text-xs leading-5 text-muted-foreground">
             {isEquipmentVisit
-              ? 'Cover the unit itself. There is no room sweep to complete: film what you are working on and narrate what you find.'
+              ? 'Walked in the report’s sections: Attic, Filters, A/C unit and Thermostat. No video — the photographs and the checklist are the report.'
               : 'Narrate one slow pass around the room. Use snapshots to document the overview and focused finding context without interrupting the video.'}
           </Text>
         </View>

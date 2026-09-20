@@ -1,15 +1,24 @@
 /**
- * `startShiftTracking` must never throw.
+ * Recording where a technician is, the whole time they are signed in.
  *
- * The caller is a switch in Settings. A throw there is not a handled failure —
- * it surfaced as the app's own error screen from tapping a toggle:
+ * Three field reports shaped this file:
  *
- *   Uncaught (in promise) Error: One of the `NSLocation*UsageDescription` keys
- *   must be present in Info.plist to be able to use geolocation.
+ * - `startShiftTracking` threw from a Settings switch and took the app to its
+ *   error screen, so it must never throw.
+ * - The office map showed technicians only while the app was open at a
+ *   property. Recording in the background had been made to depend on "Allow
+ *   all the time", which almost no phone had, so every drive fell back to a
+ *   watcher that stops when the app leaves the screen.
+ * - A recording the OS killed stayed "started" -- neither platform can tell a
+ *   registered task from a delivering one -- so nothing restarted it.
  */
+import * as TaskManager from 'expo-task-manager';
+
 import {
+  BACKGROUND_UPDATES,
   ensureShiftTracking,
   isShiftTrackingActive,
+  STALLED_AFTER_MS,
   startShiftTracking,
   stopShiftTracking,
 } from '../src/location/shift-tracking';
@@ -22,11 +31,14 @@ const mockStartUpdates = jest.fn();
 // `stopShiftTracking()` on its first line, before any of the assignments
 // below have run, so a mock with no implementation returns undefined and the
 // `.catch` on it throws before a single test starts.
-const mockHasStarted = jest.fn().mockResolvedValue(false);
 const mockStopUpdates = jest.fn().mockResolvedValue(undefined);
 const mockIsRegistered = jest.fn().mockResolvedValue(false);
+const mockTaskOptions = jest.fn().mockResolvedValue(null);
 const mockWatchPosition = jest.fn();
 const mockAppendFixes = jest.fn();
+const mockReadLastFixAt = jest.fn().mockResolvedValue(null);
+const mockSendRecorded = jest.fn();
+const mockAppState = { currentState: 'active' };
 
 jest.mock('expo-location', () => ({
   hasServicesEnabledAsync: () => mockHasServices(),
@@ -35,22 +47,56 @@ jest.mock('expo-location', () => ({
   startLocationUpdatesAsync: (...args: unknown[]) => mockStartUpdates(...args),
   watchPositionAsync: (...args: unknown[]) => mockWatchPosition(...args),
   stopLocationUpdatesAsync: (...args: unknown[]) => mockStopUpdates(...args),
-  // The question that distinguishes a task which is *delivering* from one that
-  // is merely registered. Its absence here is what the bug looked like.
-  hasStartedLocationUpdatesAsync: (...args: unknown[]) => mockHasStarted(...args),
-  Accuracy: { Balanced: 3 },
+  Accuracy: { Balanced: 3, High: 4 },
   ActivityType: { Other: 1 },
 }));
 
 jest.mock('expo-task-manager', () => ({
   defineTask: jest.fn(),
   isTaskRegisteredAsync: (...args: unknown[]) => mockIsRegistered(...args),
+  getTaskOptionsAsync: (...args: unknown[]) => mockTaskOptions(...args),
+}));
+
+// A getter, not the object itself: the factory runs when the module under test
+// is imported, before `mockAppState` has been initialised.
+jest.mock('react-native', () => ({
+  AppState: {
+    get currentState() {
+      return mockAppState.currentState;
+    },
+  },
 }));
 
 jest.mock('../src/location/location-storage', () => ({
   appendLocationFixes: (...args: unknown[]) => mockAppendFixes(...args),
+  readLastFixAt: () => mockReadLastFixAt(),
 }));
 
+jest.mock('../src/location/location-sender', () => ({
+  sendRecordedFixes: (...args: unknown[]) => mockSendRecorded(...args),
+}));
+
+/**
+ * The task the module defines at load, captured before any `clearAllMocks`
+ * forgets the call that registered it.
+ */
+const recordLocationsTask = (TaskManager.defineTask as unknown as jest.Mock).mock.calls[0][1] as (
+  body: { data?: unknown; error?: unknown },
+) => Promise<void>;
+
+const TASK = 'texasrenters-shift-location';
+
+/** The options an earlier build registered the task with. */
+const earlierBuild = {
+  accuracy: 3,
+  timeInterval: 15_000,
+  distanceInterval: 10,
+  foregroundService: {
+    notificationTitle: 'Recording your location',
+    notificationBody: 'TexasRenters Inspect is on. Close the app to stop.',
+    killServiceOnDestroy: true,
+  },
+};
 
 beforeEach(async () => {
   // The foreground watcher is module state, which `clearAllMocks` does not
@@ -63,13 +109,16 @@ beforeEach(async () => {
   mockRequestBackground.mockResolvedValue({ granted: true });
   mockStartUpdates.mockResolvedValue(undefined);
   mockWatchPosition.mockResolvedValue({ remove: jest.fn() });
-  mockHasStarted.mockResolvedValue(false);
   mockStopUpdates.mockResolvedValue(undefined);
   mockIsRegistered.mockResolvedValue(false);
+  mockTaskOptions.mockResolvedValue(null);
   mockAppendFixes.mockResolvedValue(undefined);
+  mockReadLastFixAt.mockResolvedValue(null);
+  mockSendRecorded.mockResolvedValue(undefined);
+  mockAppState.currentState = 'active';
 });
 
-describe('startShiftTracking', () => {
+describe('starting a shift', () => {
   it('reports UNSUPPORTED instead of throwing when the binary has no location keys', async () => {
     // The reported crash. A build made before expo-location was added has no
     // `NSLocation*UsageDescription`, and the permission request throws rather
@@ -86,14 +135,6 @@ describe('startShiftTracking', () => {
     });
   });
 
-  it('does not throw when the native module is missing entirely', async () => {
-    mockHasServices.mockImplementation(() => {
-      throw new Error("Cannot find native module 'ExpoLocation'");
-    });
-
-    await expect(startShiftTracking()).resolves.toMatchObject({ started: false });
-  });
-
   it('still reports switched-off services separately from an unsupported build', async () => {
     // These are fixed in different places, so collapsing them would send
     // somebody to the wrong settings screen.
@@ -105,7 +146,7 @@ describe('startShiftTracking', () => {
     });
   });
 
-  it('reports a refused foreground permission as denial, not as a failure', async () => {
+  it('reports a refused location permission as denial, and records nothing', async () => {
     mockRequestForeground.mockResolvedValue({ granted: false });
 
     await expect(startShiftTracking()).resolves.toEqual({
@@ -113,25 +154,33 @@ describe('startShiftTracking', () => {
       reason: 'FOREGROUND_DENIED',
     });
     expect(mockStartUpdates).not.toHaveBeenCalled();
+    expect(mockWatchPosition).not.toHaveBeenCalled();
   });
 
-  it('starts a foreground shift when background permission is refused', async () => {
-    // This used to refuse the shift outright, which meant a technician who
-    // granted "while using" got nothing at all -- and Expo Go, which cannot do
-    // background location under any circumstances, could never start one.
+  it('records in the background with location allowed only while using the app', async () => {
+    // The bug. "All the time" was required, almost no phone had it, and every
+    // drive fell back to a watcher that stops when the app leaves the screen.
     mockRequestBackground.mockResolvedValue({ granted: false });
 
-    await expect(startShiftTracking()).resolves.toEqual({
-      started: true,
-      mode: 'FOREGROUND_ONLY',
-    });
-    expect(mockWatchPosition).toHaveBeenCalled();
-    expect(mockStartUpdates).not.toHaveBeenCalled();
+    await expect(startShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+    expect(mockStartUpdates).toHaveBeenCalledWith(TASK, BACKGROUND_UPDATES);
+    expect(mockWatchPosition).not.toHaveBeenCalled();
   });
 
-  it('falls back to the foreground when the background task will not start', async () => {
-    // Permission held, but the task is refused -- Expo Go, or a binary with no
-    // background mode. Still a usable shift.
+  it('still asks for "all the time", which lets the phone restart a recording it closed', async () => {
+    await startShiftTracking();
+
+    expect(mockRequestBackground).toHaveBeenCalled();
+  });
+
+  it('does not let a failing "all the time" request stop the shift', async () => {
+    mockRequestBackground.mockRejectedValue(new Error('activity result lost'));
+
+    await expect(startShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+  });
+
+  it('watches in the foreground only when the task cannot start at all', async () => {
+    // Expo Go, or a binary with no background mode.
     mockStartUpdates.mockRejectedValue(new Error('Background location has not been configured'));
 
     await expect(startShiftTracking()).resolves.toEqual({
@@ -141,46 +190,35 @@ describe('startShiftTracking', () => {
     expect(mockWatchPosition).toHaveBeenCalled();
   });
 
-  it('queues a fix the foreground watcher delivers', async () => {
-    // The whole point of the fallback: fixes have to reach the same queue the
-    // background task writes to, or a foreground shift records nothing.
-    mockRequestBackground.mockResolvedValue({ granted: false });
+  it('records from satellites, which is what carries speed and heading', async () => {
     await startShiftTracking();
 
-    const onFix = mockWatchPosition.mock.calls[0][1] as (l: unknown) => void;
-    onFix({
-      coords: { latitude: 29.8665, longitude: -95.204, accuracy: 8.4 },
-      timestamp: Date.parse('2026-08-28T10:00:00.000Z'),
-    });
-
-    expect(mockAppendFixes).toHaveBeenCalledWith([
-      expect.objectContaining({
-        latitude: 29.8665,
-        longitude: -95.204,
-        accuracyMeters: 8,
-        recordedAt: '2026-08-28T10:00:00.000Z',
-      }),
-    ]);
+    expect(mockStartUpdates).toHaveBeenCalledWith(TASK, expect.objectContaining({ accuracy: 4 }));
   });
 
-  it('uses the background task when it is available', async () => {
-    await expect(startShiftTracking()).resolves.toEqual({
-      started: true,
-      mode: 'BACKGROUND',
-    });
-    expect(mockStartUpdates).toHaveBeenCalled();
-    expect(mockWatchPosition).not.toHaveBeenCalled();
+  it('keeps recording when the app is swiped away, with its notification up', async () => {
+    // Technicians clear their recent apps between visits; every swipe used to
+    // end the recording mid-day.
+    await startShiftTracking();
+
+    expect(mockStartUpdates).toHaveBeenCalledWith(
+      TASK,
+      expect.objectContaining({
+        foregroundService: expect.objectContaining({ killServiceOnDestroy: false }),
+      }),
+    );
   });
 
   it('never rejects, whatever the platform does', async () => {
-    // The guarantee the caller depends on: Settings wraps this in
-    // try/finally with no catch, so a rejection reaches nobody.
+    // Settings wraps this in try/finally with no catch, so a rejection reaches
+    // nobody.
     for (const boom of [
       mockHasServices,
       mockRequestForeground,
       mockRequestBackground,
       mockStartUpdates,
       mockWatchPosition,
+      mockIsRegistered,
     ]) {
       jest.clearAllMocks();
       mockHasServices.mockResolvedValue(true);
@@ -188,9 +226,8 @@ describe('startShiftTracking', () => {
       mockRequestBackground.mockResolvedValue({ granted: true });
       mockStartUpdates.mockResolvedValue(undefined);
       mockWatchPosition.mockResolvedValue({ remove: jest.fn() });
-  mockHasStarted.mockResolvedValue(false);
-  mockStopUpdates.mockResolvedValue(undefined);
-  mockIsRegistered.mockResolvedValue(false);
+      mockStopUpdates.mockResolvedValue(undefined);
+      mockIsRegistered.mockResolvedValue(false);
       boom.mockRejectedValue(new Error('native failure'));
 
       await expect(startShiftTracking()).resolves.toBeDefined();
@@ -198,81 +235,162 @@ describe('startShiftTracking', () => {
   });
 });
 
-/**
- * The hour-long holes in a technician's trail.
- *
- * Moses reported that tracking stopped while he was still working with the app
- * open. His trail bore it out: dense fixes with 4-100m accuracy, then nothing
- * for 30 to 60 minutes, repeatedly, recovering on its own. Not the network --
- * the gaps are in `recordedAt`, the handset's own clock, so the fixes were
- * never collected. Not the retry backoff either, which caps at ten minutes.
- *
- * An Android battery manager reclaiming the location service, or iOS
- * terminating it, leaves the task **registered**. The guard asked whether it
- * was registered, said yes, and returned early -- so nothing ever restarted
- * the updates, and the only recovery was relaunching the app.
- */
-describe('a background task the OS has stopped', () => {
-  it('is not treated as already running', async () => {
-    mockIsRegistered.mockResolvedValue(true);
-    mockHasStarted.mockResolvedValue(false);
+describe('a fix, as it is recorded', () => {
+  const fix = {
+    coords: { latitude: 29.5516, longitude: -95.1449, accuracy: 6, heading: 42, speed: 16.4 },
+    timestamp: Date.parse('2026-09-16T15:52:00.000Z'),
+  };
 
-    await startShiftTracking();
+  it('is queued and then sent from the location task itself', async () => {
+    const order: string[] = [];
+    mockAppendFixes.mockImplementation(async () => {
+      order.push('queued');
+    });
+    mockSendRecorded.mockImplementation(async () => {
+      order.push('sent');
+    });
 
-    expect(mockStartUpdates).toHaveBeenCalled();
+    await recordLocationsTask({ data: { locations: [fix] } });
+
+    expect(mockAppendFixes).toHaveBeenCalledWith([
+      expect.objectContaining({ headingDegrees: 42, speedMetersPerSecond: 16.4 }),
+    ]);
+    // Queued first, so a send that fails -- or never finishes -- loses nothing.
+    expect(order).toEqual(['queued', 'sent']);
   });
 
-  it('is cleared out before being started again', async () => {
-    // `startLocationUpdatesAsync` on a task that is still registered has
-    // nothing to do, so without this the stall survives the restart.
-    mockIsRegistered.mockResolvedValue(true);
-    mockHasStarted.mockResolvedValue(false);
+  it('is nothing to send when the OS delivered nothing', async () => {
+    await recordLocationsTask({ data: { locations: [] } });
+    await recordLocationsTask({ error: new Error('location unavailable') });
 
-    await startShiftTracking();
-
-    expect(mockStopUpdates).toHaveBeenCalled();
+    expect(mockAppendFixes).not.toHaveBeenCalled();
+    expect(mockSendRecorded).not.toHaveBeenCalled();
   });
 
-  it('is not reported as active tracking', async () => {
-    // Settings said "recording your location" while nothing had been sent for
-    // an hour, because it asked the same wrong question.
-    mockIsRegistered.mockResolvedValue(true);
-    mockHasStarted.mockResolvedValue(false);
+  it('reaches the same queue from the foreground watcher, and is sent', async () => {
+    mockStartUpdates.mockRejectedValue(new Error('no background mode'));
+    await startShiftTracking();
 
-    expect(await isShiftTrackingActive()).toBe(false);
+    const onFix = mockWatchPosition.mock.calls[0][1] as (location: unknown) => void;
+    onFix(fix);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mockAppendFixes).toHaveBeenCalledWith([
+      expect.objectContaining({ latitude: 29.5516, longitude: -95.1449, accuracyMeters: 6 }),
+    ]);
+    expect(mockSendRecorded).toHaveBeenCalled();
   });
 });
 
-describe('re-arming tracking', () => {
-  it('restarts updates that have stopped', async () => {
-    mockHasStarted.mockResolvedValue(false);
-
-    const result = await ensureShiftTracking();
-
-    expect(result).toEqual({ started: true, mode: 'BACKGROUND' });
-    expect(mockStartUpdates).toHaveBeenCalled();
+/**
+ * A recording the OS stopped, which neither platform will admit to.
+ *
+ * `hasStartedLocationUpdatesAsync` asks whether the task has a location
+ * consumer -- true for a task killed an hour ago. The last recorded fix is the
+ * evidence that can be trusted.
+ */
+describe('a registered recording', () => {
+  beforeEach(() => {
+    mockIsRegistered.mockResolvedValue(true);
+    mockTaskOptions.mockResolvedValue(BACKGROUND_UPDATES);
   });
 
-  it('does nothing at all when updates are already running', async () => {
-    /**
-     * This runs on every foreground and every two minutes while the app is
-     * open. Restarting a healthy watcher would drop the OS's accumulated fix
-     * state and cost battery for nothing, so the ordinary case must be one
-     * question and no action.
-     */
-    mockHasStarted.mockResolvedValue(true);
+  it('is restarted when nothing has been recorded for a while', async () => {
+    mockReadLastFixAt.mockResolvedValue(Date.now() - STALLED_AFTER_MS - 1_000);
 
-    const result = await ensureShiftTracking();
+    await expect(ensureShiftTracking()).resolves.toBeNull();
 
-    expect(result).toBeNull();
+    expect(mockStartUpdates).toHaveBeenCalledWith(TASK, BACKGROUND_UPDATES);
+    // In place: the Android service and its notification stay as they are.
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('is left alone while it is delivering', async () => {
+    mockReadLastFixAt.mockResolvedValue(Date.now() - 20_000);
+
+    await ensureShiftTracking();
+
     expect(mockStartUpdates).not.toHaveBeenCalled();
     expect(mockStopUpdates).not.toHaveBeenCalled();
   });
 
-  it('never throws, whatever the OS says', async () => {
+  it('is given this build’s options, updated in place when only the updates changed', async () => {
+    mockReadLastFixAt.mockResolvedValue(Date.now() - 20_000);
+    mockTaskOptions.mockResolvedValue({ ...BACKGROUND_UPDATES, accuracy: 3 });
+
+    await expect(startShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+
+    expect(mockStartUpdates).toHaveBeenCalledWith(TASK, BACKGROUND_UPDATES);
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('is stopped and started again when the service itself changed', async () => {
+    // Whether the service survives a swipe is read by Android when the service
+    // starts, so only a new service picks it up.
+    mockReadLastFixAt.mockResolvedValue(Date.now() - 20_000);
+    mockTaskOptions.mockResolvedValue(earlierBuild);
+
+    await startShiftTracking();
+
+    expect(mockStopUpdates).toHaveBeenCalledWith(TASK);
+    expect(mockStartUpdates).toHaveBeenCalledWith(TASK, BACKGROUND_UPDATES);
+    expect(mockStopUpdates.mock.invocationCallOrder[0]).toBeLessThan(
+      mockStartUpdates.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it('is not stopped over options it could not read, only restarted if quiet', async () => {
+    mockTaskOptions.mockResolvedValue(null);
+    mockReadLastFixAt.mockResolvedValue(Date.now() - 20_000);
+
+    await ensureShiftTracking();
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+
+    mockReadLastFixAt.mockResolvedValue(Date.now() - STALLED_AFTER_MS - 1_000);
+    await ensureShiftTracking();
+    expect(mockStartUpdates).toHaveBeenCalledWith(TASK, BACKGROUND_UPDATES);
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('is not touched from the background, where Android refuses to start a service', async () => {
+    mockAppState.currentState = 'background';
+    mockTaskOptions.mockResolvedValue(earlierBuild);
+
+    await ensureShiftTracking();
+
+    expect(mockStartUpdates).not.toHaveBeenCalled();
+    expect(mockStopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('keeps recording in the background when a restart is refused', async () => {
+    // Falling back to the foreground watcher here would stop the drive being
+    // recorded at all -- the opposite of the point.
+    mockTaskOptions.mockResolvedValue(earlierBuild);
+    mockStartUpdates.mockRejectedValue(new Error('ForegroundServiceStartNotAllowedException'));
+
+    await expect(startShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+    expect(mockWatchPosition).not.toHaveBeenCalled();
+  });
+
+  it('counts as a running shift', async () => {
+    expect(await isShiftTrackingActive()).toBe(true);
+  });
+});
+
+describe('a shift that is not running', () => {
+  it('is started by the foreground check', async () => {
+    await expect(ensureShiftTracking()).resolves.toEqual({ started: true, mode: 'BACKGROUND' });
+    expect(mockStartUpdates).toHaveBeenCalled();
+  });
+
+  it('is not reported as running', async () => {
+    expect(await isShiftTrackingActive()).toBe(false);
+  });
+
+  it('never throws from the check, whatever the OS says', async () => {
     // It is called from a timer and an AppState listener, neither of which has
     // anywhere to put an error.
-    mockHasStarted.mockRejectedValue(new Error('no location services'));
+    mockIsRegistered.mockRejectedValue(new Error('no location services'));
     mockRequestForeground.mockRejectedValue(new Error('no Info.plist keys'));
 
     await expect(ensureShiftTracking()).resolves.toBeDefined();
@@ -284,32 +402,29 @@ describe('re-arming tracking', () => {
  *
  * Production held two genuinely different fixes -- three to twenty-two metres
  * apart -- stamped with the same millisecond and uploaded in one batch, which
- * drew two markers for one technician. A background task registered in an
- * earlier session outlives the app, so falling through to the foreground
- * watcher could leave both delivering into the same queue.
+ * drew two markers for one technician.
  */
-describe('the two recording modes', () => {
-  it('stops the background task before watching in the foreground', async () => {
-    // Background refused, but a task from a previous session is still alive.
-    mockRequestBackground.mockResolvedValue({ granted: false });
-    mockIsRegistered.mockResolvedValue(true);
+describe('the two recorders', () => {
+  it('stops a registered task before watching in the foreground', async () => {
+    // The task refuses to start, and one from an earlier session is registered.
+    mockIsRegistered.mockResolvedValueOnce(false).mockResolvedValue(true);
+    mockStartUpdates.mockRejectedValue(new Error('no background mode'));
 
-    const result = await startShiftTracking();
+    await expect(startShiftTracking()).resolves.toEqual({
+      started: true,
+      mode: 'FOREGROUND_ONLY',
+    });
 
-    expect(result).toEqual({ started: true, mode: 'FOREGROUND_ONLY' });
-    expect(mockStopUpdates).toHaveBeenCalled();
+    expect(mockStopUpdates).toHaveBeenCalledWith(TASK);
     expect(mockWatchPosition).toHaveBeenCalled();
   });
 
   it('drops a foreground watch before starting the background task', async () => {
-    // The same duplicate arriving the other way round.
-    mockRequestBackground.mockResolvedValue({ granted: false });
-    mockIsRegistered.mockResolvedValue(false);
     const remove = jest.fn();
     mockWatchPosition.mockResolvedValue({ remove });
+    mockStartUpdates.mockRejectedValueOnce(new Error('no background mode'));
     await startShiftTracking();
 
-    mockRequestBackground.mockResolvedValue({ granted: true });
     await startShiftTracking();
 
     expect(remove).toHaveBeenCalled();
@@ -322,4 +437,3 @@ describe('the two recording modes', () => {
     expect(mockStopUpdates).toHaveBeenCalled();
   });
 });
-

@@ -29,11 +29,12 @@ export const AreaScope = {
    */
   CHOSEN: 'CHOSEN',
   /**
-   * The property's heating and cooling system, treated as one subject.
+   * The property's heating and cooling system, walked as the office's report
+   * walks it.
    *
-   * Not a set of rooms. An HVAC visit is a general inspection of the equipment
-   * against a standard checklist — it has no floor plan and no per-room walk,
-   * so the technician is never asked to pick or complete areas.
+   * Not a set of rooms. An HVAC visit is an inspection of the equipment against
+   * the office's standard -- it has no floor plan, so the office never picks
+   * areas for it.
    *
    * This replaced `AIR_CONDITIONED`, which covered every approved area flagged
    * `hasAirConditioning`. That model required an approved floor plan *and*
@@ -42,9 +43,11 @@ export const AreaScope = {
    * covered nothing and reached the technician empty. A rule that depends on
    * upkeep nobody performs is not a safe default, it is a silent failure.
    *
-   * Creation attaches exactly one system-managed area per property, so the
-   * evidence, checklist and finding tables keep the area they all require while
-   * nothing about it is shown to anybody.
+   * Creation attaches the report's four sections -- Attic, Filters, A/C unit,
+   * Thermostat (`HVAC_SECTIONS`) -- as system-managed areas of the property,
+   * each asking its own section of the checklist. Until 2026-09-16 it attached
+   * one "HVAC System" area holding the whole list; inspections created then keep
+   * it, because an inspection's areas are a snapshot.
    */
   HVAC_SYSTEM: 'HVAC_SYSTEM',
   /**
@@ -212,7 +215,9 @@ export function checklistKindFor(
 export function inspectionRequiresAreaRecording(
   inspectionType: string | null | undefined,
 ): boolean {
-  return !inspectionIsWalkedAsOccupied(inspectionType);
+  // HVAC since 2026-09-16: the office's report photographs every item and
+  // films nothing, and each section's checklist is the rest of the record.
+  return !inspectionIsWalkedAsOccupied(inspectionType) && inspectionType !== InspectionType.HVAC;
 }
 
 /**

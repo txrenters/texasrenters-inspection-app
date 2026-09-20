@@ -318,6 +318,16 @@ export const TENANT_REPORT_OPTIONAL_COLUMNS = {
   city: 'Building City',
   state: 'Building State',
   postalCode: 'Building Zip',
+  /**
+   * Which unit of a building of several the tenancy is in (the office,
+   * 2026-09-18). Propertyware's own unit id matches `propertyware_units.externalId`
+   * exactly, as the building's does; failing that, the unit as the office names
+   * it, under whichever of these labels the report uses.
+   */
+  unitExternalId: 'Unit Entity ID',
+  unitName: 'Unit Name',
+  unit: 'Unit',
+  unitAbbreviation: 'Unit Abbreviation',
 } as const;
 
 export type TenantReportColumnKey = keyof typeof TENANT_REPORT_COLUMNS;

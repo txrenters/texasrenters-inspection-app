@@ -230,3 +230,49 @@ describe('filming an occupied area', () => {
     expect(gate.canComplete).toBe(false);
   });
 });
+
+/**
+ * The office's HVAC report (2026-09-16): each section photographed, every row
+ * answered, no video. The same rule `completeRoom` applies on the server.
+ */
+describe('submitting a section of an HVAC inspection', () => {
+  const attic = (): InspectionRoom => ({ ...room(), name: 'Attic', inspectionType: 'HVAC' });
+
+  it('asks for photographs, not a walkthrough', () => {
+    const items = deriveAreaRequirements(attic(), evidence({ hasPrimaryRecording: false, photoCount: 0 }));
+    const evidenceItem = items.find((item) => item.key === 'evidence');
+
+    expect(items.map((item) => item.key)).not.toContain('recording');
+    expect(evidenceItem?.label).toBe('Photographs taken');
+    expect(evidenceItem?.met).toBe(false);
+  });
+
+  it('holds the section until every row is answered, naming the rows left', () => {
+    const gate = areaCompletionGate(
+      deriveAreaRequirements(
+        attic(),
+        evidence({ hasPrimaryRecording: false, photoCount: 4, unansweredItems: ['Drip pan', 'Media filter'] }),
+      ),
+    );
+
+    expect(gate.canComplete).toBe(false);
+    expect(gate.reason).toBe('Score Clean, Undamaged and Working, or say why not, for Drip pan, Media filter.');
+  });
+
+  it('opens once it is photographed and nothing is left', () => {
+    const gate = areaCompletionGate(
+      deriveAreaRequirements(attic(), evidence({ hasPrimaryRecording: false, photoCount: 4, unansweredItems: [] })),
+    );
+
+    expect(gate.canComplete).toBe(true);
+  });
+
+  /** Until the section's items arrive there is nothing to answer, and the server still checks. */
+  it('adds no checklist requirement when the rows are not known', () => {
+    const keys = deriveAreaRequirements(attic(), evidence({ hasPrimaryRecording: false, photoCount: 1 })).map(
+      (item) => item.key,
+    );
+
+    expect(keys).not.toContain('checklist');
+  });
+});

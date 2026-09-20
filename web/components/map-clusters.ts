@@ -150,13 +150,64 @@ export function clusterByGrid<T extends Clusterable>(
   return [...cells.entries()].map(([cell, members]) => {
     const latitude = members.reduce((sum, member) => sum + member.latitude, 0) / members.length;
     const longitude = members.reduce((sum, member) => sum + member.longitude, 0) / members.length;
+    const only = members.length === 1 ? members[0] : undefined;
     return {
-      // The cell, plus the members, so a cluster that gains or loses a point is
-      // a different React element rather than a mutated one.
-      key: `${cell}:${members.map((member) => member.id).join(',')}`,
+      // A property on its own is keyed by itself, so it keeps its marker from
+      // one zoom level to the next. Keyed by its grid cell -- which changes
+      // with every zoom -- every lone property was thrown away and drawn again
+      // each time the map settled, hundreds of markers at street level, and
+      // that was the stutter when zooming in and out.
+      //
+      // A group is keyed by its cell and its members, so one that gains or
+      // loses a property is a different React element rather than a mutated
+      // one still showing the old count.
+      key: only ? only.id : `${cell}:${members.map((member) => member.id).join(',')}`,
       latitude,
       longitude,
       members,
     };
   });
+}
+
+/** A lat/lng rectangle: the part of the world a map is showing. */
+export interface Box {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
+/**
+ * The box grown by a share of its own size on every side, and clamped to the
+ * world.
+ *
+ * Markers just outside the edge are drawn too, so a small pan does not reveal
+ * an empty strip that fills in only once the map settles.
+ */
+export function padBox(box: Box, share: number): Box {
+  const latPad = (box.north - box.south) * share;
+  const crossesDateLine = box.west > box.east;
+  const width = crossesDateLine ? 360 - (box.west - box.east) : box.east - box.west;
+  const lngPad = width * share;
+  if (crossesDateLine || width + 2 * lngPad >= 360)
+    return {
+      north: Math.min(90, box.north + latPad),
+      south: Math.max(-90, box.south - latPad),
+      east: 180,
+      west: -180,
+    };
+  return {
+    north: Math.min(90, box.north + latPad),
+    south: Math.max(-90, box.south - latPad),
+    east: Math.min(180, box.east + lngPad),
+    west: Math.max(-180, box.west - lngPad),
+  };
+}
+
+/** Whether a point is inside the box, including one that spans the date line. */
+export function inBox(point: { latitude: number; longitude: number }, box: Box) {
+  if (point.latitude > box.north || point.latitude < box.south) return false;
+  return box.west <= box.east
+    ? point.longitude >= box.west && point.longitude <= box.east
+    : point.longitude >= box.west || point.longitude <= box.east;
 }

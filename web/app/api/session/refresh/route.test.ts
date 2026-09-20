@@ -37,4 +37,21 @@ describe('POST /api/session/refresh', () => {
     expect(response.headers.getSetCookie().join(';')).toContain('tr_refresh=');
     expect(response.headers.getSetCookie().join(';')).toContain('tr_access=');
   });
+
+  /** A session signed in before the API marked console sessions is marked here, so a phone stops counting it. */
+  it('refreshes as the console', async () => {
+    process.env.API_INTERNAL_BASE_URL = 'http://backend:3000';
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const request = new NextRequest('https://inspection.texasrenters.com/api/session/refresh', {
+      headers: { cookie: 'tr_refresh=live-token' },
+    });
+
+    await POST(request);
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      refreshToken: 'live-token',
+      client: 'console',
+    });
+  });
 });

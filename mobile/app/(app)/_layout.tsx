@@ -48,10 +48,11 @@ export default function AppLayout() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="inspections/[id]" />
         <Stack.Screen name="areas/[id]" />
+        <Stack.Screen name="job-filters/[id]" />
+        <Stack.Screen name="job-inspection/[id]" />
         <Stack.Screen name="findings/[id]" />
         <Stack.Screen name="camera/[inspectionId]/[areaId]" />
         <Stack.Screen name="recording-review/[inspectionId]/[areaId]" />
-        <Stack.Screen name="review/[id]" />
         <Stack.Screen name="diagnostics" />
         <Stack.Screen name="home-address" />
       </Stack>

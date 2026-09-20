@@ -17,11 +17,21 @@ const STORAGE_KEY = 'texasrenters.session';
 /** Matches the web client. Refresh before expiry, not after. */
 const RENEW_MARGIN_SECONDS = 60;
 
+/**
+ * How much life a token needs to be used without renewing it.
+ *
+ * Inside the renewal margin, but not so close to the end that it expires on
+ * the way to the server.
+ */
+const UNRENEWED_MARGIN_SECONDS = 10;
+
 export interface MobileSession {
   accessToken: string;
   refreshToken: string;
   /** Epoch seconds, read from the token rather than stored separately. */
   expiresAt: number;
+  /** Epoch seconds the token was issued, when it says. */
+  issuedAt?: number;
   authUserId: string;
   mustChangePassword: boolean;
 }
@@ -52,6 +62,7 @@ function claimsOf(accessToken: string) {
     const claims = JSON.parse(decodeBase64Url(payload)) as {
       sub?: string;
       exp?: number;
+      iat?: number;
       app_metadata?: { must_change_password?: boolean };
     };
     if (!claims.sub || typeof claims.exp !== 'number') return null;
@@ -68,6 +79,7 @@ function toSession(accessToken: string, refreshToken: string): MobileSession | n
     accessToken,
     refreshToken,
     expiresAt: claims.exp!,
+    ...(typeof claims.iat === 'number' ? { issuedAt: claims.iat } : {}),
     authUserId: claims.sub!,
     mustChangePassword: claims.app_metadata?.must_change_password === true,
   };
@@ -106,8 +118,19 @@ async function persist(session: MobileSession | null) {
 
 async function load(): Promise<MobileSession | null> {
   if (cached !== undefined) return cached;
+  let raw: string | null;
   try {
-    const raw = await sessionStorage.getItem(STORAGE_KEY);
+    raw = await sessionStorage.getItem(STORAGE_KEY);
+  } catch {
+    // Storage that refused to answer, which is not the same as storage that
+    // holds no session -- and must not be remembered as one. An iPhone's
+    // keychain refuses every read while the phone is locked, and the location
+    // task reads the session from a pocket. Caching `null` here would leave
+    // this process signed out after the phone was unlocked, with a perfectly
+    // good session sitting in the keychain.
+    return null;
+  }
+  try {
     if (!raw) return (cached = null);
     const stored = JSON.parse(raw) as { accessToken?: string; refreshToken?: string };
     if (!stored.accessToken || !stored.refreshToken) return (cached = null);
@@ -133,16 +156,53 @@ function endpoint(path: string) {
  * firing several requests at once would otherwise present the same retired
  * token repeatedly — which the backend correctly treats as a stolen token and
  * answers by ending every session for the account.
+ *
+ * `renew: false` is for a caller that could not save a renewed session, and
+ * so must not ask for one: rotation retires the old refresh token either way,
+ * and offering it again later ends the session. It gets the token while the
+ * token still has a little life in it, and `null` after that.
  */
-export async function getSession(): Promise<MobileSession | null> {
+export async function getSession({ renew = true }: { renew?: boolean } = {}): Promise<
+  MobileSession | null
+> {
   const current = await load();
   if (!current) return null;
   if (!isExpired(current)) return current;
+  if (!renew) return isExpired(current, UNRENEWED_MARGIN_SECONDS) ? null : current;
 
   inFlightRefresh ??= refresh(current.refreshToken).finally(() => {
     inFlightRefresh = null;
   });
   return inFlightRefresh;
+}
+
+/**
+ * Renew early, while the app is on screen, once the token is past most of its
+ * life.
+ *
+ * For an iPhone in a pocket. The location task sends from the background, where
+ * iOS keeps the keychain locked, so it may not renew (see `getSession`) and it
+ * stops sending the moment the token expires. Tokens were renewed only a
+ * minute before expiry, so a technician could leave a property with minutes of
+ * token left and the drive went unsent. Renewing here once the token is past
+ * `RENEW_AHEAD_SHARE` of its life means leaving the app always leaves more than
+ * half of a token's life to send with -- over half an hour at the default.
+ *
+ * Only call this with the app on screen: the renewed token has to be saved.
+ */
+const RENEW_AHEAD_SHARE = 0.4;
+
+export async function renewSessionAhead(): Promise<void> {
+  const current = await load();
+  if (!current?.issuedAt) return;
+  const lifetime = current.expiresAt - current.issuedAt;
+  const used = Math.floor(Date.now() / 1000) - current.issuedAt;
+  if (lifetime <= 0 || used < lifetime * RENEW_AHEAD_SHARE) return;
+
+  inFlightRefresh ??= refresh(current.refreshToken).finally(() => {
+    inFlightRefresh = null;
+  });
+  await inFlightRefresh;
 }
 
 async function refresh(refreshToken: string): Promise<MobileSession | null> {

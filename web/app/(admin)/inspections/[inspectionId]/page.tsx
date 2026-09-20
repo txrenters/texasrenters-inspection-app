@@ -45,6 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatDateTime, formatScheduledDate, humanize } from '@/lib/format';
+import { inspectionTime, jobWorked } from '@/lib/job-time';
 import { attentionBanner, inspectionProgress, primaryAction } from '@/lib/inspection-progress';
 import {
   useAssignments,
@@ -187,6 +188,9 @@ function InspectionDetail() {
       : item.baselineInspection
         ? `Move-in inspection · ${formatScheduledDate(item.baselineInspection.scheduledAt)}`
         : 'No move-in baseline is linked';
+  // Recomputed on render rather than ticking: a job still running is read by
+  // somebody who refreshes, and a second timer on this page earns nothing.
+  const worked = jobWorked(item);
   /**
    * Deletion is deliberately *not* gated on `finalized`, unlike everything else
    * in this menu. Editing a closed inspection would quietly alter a report that
@@ -372,6 +376,22 @@ function InspectionDetail() {
             <dt className="text-muted-foreground text-xs">Comparison baseline</dt>
             <dd className="mt-0.5 text-sm font-medium">{baselineLabel}</dd>
           </div>
+          <div>
+            {/* The technician's own clock: Start job on the handset to
+                submitting. Nothing inferred from photographs or locations. */}
+            <dt className="text-muted-foreground text-xs">Time on the job</dt>
+            <dd className="mt-0.5 text-sm font-medium">
+              {worked ? `${worked.worked}${worked.running ? ' so far' : ''}` : 'Not started'}
+            </dd>
+            {worked ? <dd className="text-muted-foreground mt-0.5 text-xs">{worked.window}</dd> : null}
+            {/* The inspection on its own, read from its first photograph or
+                recording to its last: where a job's time goes. */}
+            {inspectionTime(item.inspectionWorked) ? (
+              <dd className="text-muted-foreground mt-0.5 text-xs">
+                Inspection {inspectionTime(item.inspectionWorked)}
+              </dd>
+            ) : null}
+          </div>
         </dl>
 
         {banner ? (
@@ -423,6 +443,7 @@ function InspectionDetail() {
         servicesReportedAt={item.servicesReportedAt}
         booking={item.jobberBooking}
         pushes={item.jobberPushes}
+        inJobber={Boolean(item.scheduledInJobber || item.jobberBooking)}
         action={
           // A visit Jobber has, when edits reach it; or one booked here and not sent yet.
           !finalized &&

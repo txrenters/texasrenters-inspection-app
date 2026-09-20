@@ -1,4 +1,4 @@
-import { JobberOutboundKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
+import { InspectionType, JobberOutboundKind, TbpPlanStatus, TbpStopStatus } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../src/common/auth';
 import { ApplicationError } from '../src/common/errors';
@@ -36,6 +36,9 @@ interface StopRow {
   propertywareUnitId: string | null;
   propertywareLeaseId: string | null;
   jobberJobId: string | null;
+  inspectionType: InspectionType;
+  visitTitle: string | null;
+  visitDetails: string | null;
 }
 
 const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): StopRow => ({
@@ -47,12 +50,18 @@ const aStop = (id: string, sequence: number, overrides: Partial<StopRow> = {}): 
   propertywareUnitId: null,
   propertywareLeaseId: null,
   jobberJobId: 'job-1',
+  inspectionType: InspectionType.OCCUPIED,
+  visitTitle: '1 Any St - Zone 1 - Q4 2026 Tenant Benefit Package',
+  visitDetails: [
+    'Filter Change: 20x25x1 + Pest Control + Occupied Inspection',
+    'Instruction for completion\n• Note the size of any filters that were not replaced.',
+  ].join('\n\n'),
   ...overrides,
 });
 
 const build = (
   stops: StopRow[],
-  options: { blockedCount?: number; claimed?: number; existingInspectionId?: string | null } = {},
+  options: { blockedCount?: number; withoutUnit?: number; claimed?: number; existingInspectionId?: string | null } = {},
 ) => {
   const remaining = new Map(stops.map((row) => [row.id, row]));
 
@@ -66,11 +75,14 @@ const build = (
       return Promise.resolve({});
     },
   );
+  const stopUpdateMany = jest.fn().mockResolvedValue({ count: 0 });
   const assignmentCreate = jest.fn().mockResolvedValue({});
   const outboundCreate = jest.fn().mockResolvedValue({});
   const auditCreate = jest.fn().mockResolvedValue({});
+  const inspectionUpdate = jest.fn().mockResolvedValue({});
 
   const tx = {
+    inspection: { update: inspectionUpdate },
     inspectionAssignment: { create: assignmentCreate },
     jobberOutboundTask: { create: outboundCreate },
     tbpQuarterPlanStop: { update: stopUpdate },
@@ -79,11 +91,14 @@ const build = (
 
   const prisma = {
     tbpQuarterPlanStop: {
-      count: jest.fn().mockResolvedValue(options.blockedCount ?? 0),
+      count: jest.fn(({ where }: { where: { unitResolution?: string } }) =>
+        Promise.resolve(where.unitResolution ? (options.withoutUnit ?? 0) : (options.blockedCount ?? 0)),
+      ),
       findMany: jest.fn(({ take }: { take: number }) =>
         Promise.resolve([...remaining.values()].slice(0, take)),
       ),
       update: stopUpdate,
+      updateMany: stopUpdateMany,
     },
     tbpQuarterPlan: { updateMany: planUpdateMany, update: planUpdate },
     inspection: {
@@ -104,6 +119,8 @@ const build = (
     assignmentCreate,
     outboundCreate,
     auditCreate,
+    inspectionUpdate,
+    stopUpdateMany,
   };
 };
 
@@ -148,18 +165,36 @@ describe('publishing a reviewed quarter', () => {
   });
 
   /**
-   * A blocked stop is a tenancy nobody will inspect this quarter. Publishing
-   * around it makes that invisible — excluding it is a decision with a reason
-   * attached, and that is what the coordinator should have to make.
+   * The office (2026-09-20): "let's not make the needs attention as blocker for
+   * publishing the TBP ... those needs to an attention should be reflected also
+   * into the unscheduled appointment". A quarter used to be refused outright
+   * while any visit was blocked or still without its unit.
    */
-  it('refuses to publish while any stop is still blocked', async () => {
-    const { service, planUpdateMany } = build([aStop('s1', 1)], { blockedCount: 3 });
+  it('publishes a quarter that still has visits needing attention', async () => {
+    const { service, planUpdateMany } = build([aStop('s1', 1)], { blockedCount: 3, withoutUnit: 2 });
 
-    await expect(service.publish(USER, 'plan-1')).rejects.toMatchObject({
-      code: 'PLAN_HAS_BLOCKED_STOPS',
-    });
-    // And it never claimed the plan, so a second attempt after fixing them works.
-    expect(planUpdateMany).not.toHaveBeenCalled();
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary).toMatchObject({ published: 1, failed: 0 });
+    expect(planUpdateMany).toHaveBeenCalled();
+  });
+
+  it('sends a visit with no day to Jobber with no day on it, and creates no inspection for it', async () => {
+    const { service, outboundCreate, stopUpdate } = build([aStop('s1', 1), aStop('s2', 2, { scheduledOn: null })]);
+
+    const summary = await service.publish(USER, 'plan-1');
+
+    expect(summary).toMatchObject({ published: 1, unscheduled: 1, failed: 0 });
+    expect(summary.status).toBe(TbpPlanStatus.PUBLISHED);
+    // One inspection, for the visit that has a day.
+    expect(creation.insertInspection).toHaveBeenCalledTimes(1);
+    const queued = outboundCreate.mock.calls.find(
+      (call) => call[0].data.kind === JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+    );
+    expect(queued![0].data).toMatchObject({ tbpStopId: 's2', organizationId: 'org-1' });
+    expect(queued![0].data.inspectionId).toBeUndefined();
+    const marked = stopUpdate.mock.calls.find((call) => call[0].where.id === 's2');
+    expect(marked![0].data.status).toBe(TbpStopStatus.UNSCHEDULED);
   });
 
   /**
@@ -176,7 +211,7 @@ describe('publishing a reviewed quarter', () => {
     expect(creation.insertInspection).not.toHaveBeenCalled();
   });
 
-  it('claims the plan by moving it out of DRAFT, and only from DRAFT', async () => {
+  it('claims the plan by moving it out of DRAFT, or out of a publish that failed', async () => {
     const { service, planUpdateMany } = build([aStop('s1', 1)]);
 
     await service.publish(USER, 'plan-1');
@@ -184,9 +219,21 @@ describe('publishing a reviewed quarter', () => {
     expect(planUpdateMany.mock.calls[0][0].where).toMatchObject({
       id: 'plan-1',
       organizationId: 'org-1',
-      status: TbpPlanStatus.DRAFT,
+      status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED] },
     });
     expect(planUpdateMany.mock.calls[0][0].data.status).toBe(TbpPlanStatus.PUBLISHING);
+  });
+
+  /** Publishing again after a failure picks up where it stopped, the failed stops included. */
+  it('tries the stops a failed publish could not create again', async () => {
+    const { service, stopUpdateMany } = build([aStop('s1', 1)]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(stopUpdateMany).toHaveBeenCalledWith({
+      where: { planId: 'plan-1', organizationId: 'org-1', status: TbpStopStatus.FAILED, inspectionId: null },
+      data: { status: TbpStopStatus.PLANNED, blockedCode: null, blockedMessage: null },
+    });
   });
 
   /**
@@ -246,8 +293,8 @@ describe('publishing a reviewed quarter', () => {
     });
   });
 
-  it('fails a stop that was never routed instead of inventing a date', async () => {
-    const { service, stopUpdate } = build([aStop('s1', 1, { scheduledOn: null })]);
+  it('fails a stop with no property rather than inventing one', async () => {
+    const { service, stopUpdate } = build([aStop('s1', 1, { scheduledOn: null, propertywareBuildingId: null })]);
 
     const summary = await service.publish(USER, 'plan-1');
 
@@ -275,5 +322,45 @@ describe('publishing a reviewed quarter', () => {
 
     expect(summary.published).toBe(1);
     expect(assignmentCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('publishing the quarter’s kinds of visit', () => {
+  /** Q2 and Q4: a tenancy on the HVAC plan gets an HVAC inspection, as the plan decided and a coordinator reviewed. */
+  it('creates an HVAC inspection for an HVAC stop', async () => {
+    const { service, auditCreate } = build([aStop('s1', 1, { inspectionType: InspectionType.HVAC })]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(creation.resolveInspectionPlan.mock.calls[0][1].inspectionType).toBe(InspectionType.HVAC);
+    expect(auditCreate.mock.calls[0][0].data.metadata.inspectionType).toBe(InspectionType.HVAC);
+  });
+
+  /** The phone shows the Details before the visit exists in Jobber, and the booking sends what is on the inspection. */
+  it('writes the visit’s title and Details on the inspection, linked back to it', async () => {
+    const { service, inspectionUpdate } = build([aStop('s1', 1)]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(creation.insertInspection.mock.calls[0][2]).toMatchObject({
+      jobberVisitTitle: '1 Any St - Zone 1 - Q4 2026 Tenant Benefit Package',
+    });
+    const details = inspectionUpdate.mock.calls[0][0].data.jobberVisitDetails as string;
+    const [services, link, completion] = details.split('\n\n');
+    expect(services).toBe('Filter Change: 20x25x1 + Pest Control + Occupied Inspection');
+    expect(link).toMatch(/^Texas Renters inspection: https?:\/\/\S+\/inspections\/insp-1$/);
+    expect(completion).toBe('Instruction for completion\n• Note the size of any filters that were not replaced.');
+  });
+
+  it('adopts only an existing inspection of the stop’s own kind', async () => {
+    const { service } = build([aStop('s1', 1, { inspectionType: InspectionType.HVAC })], {
+      existingInspectionId: 'insp-existing',
+    });
+    creation.insertInspection.mockRejectedValue(new ApplicationError(409, 'DUPLICATE_INSPECTION', 'already scheduled'));
+
+    await service.publish(USER, 'plan-1');
+
+    const prisma = (service as unknown as { prisma: { inspection: { findFirst: jest.Mock } } }).prisma;
+    expect(prisma.inspection.findFirst.mock.calls[0][0].where.inspectionType).toBe(InspectionType.HVAC);
   });
 });

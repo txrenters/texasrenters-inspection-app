@@ -1,20 +1,13 @@
 'use client';
 
-import {
-  jobberBookingProblems,
-  jobberBookingText,
-  type BookableInspectionType,
-  type JobberBookingContext,
-} from '@texasrenters/shared';
-import { PlusIcon, TriangleAlertIcon, XIcon } from 'lucide-react';
+import { jobberBookingText, type BookableInspectionType, type JobberBookingContext } from '@texasrenters/shared';
+import { TriangleAlertIcon } from 'lucide-react';
 import Link from 'next/link';
-import { useMemo, type ReactNode } from 'react';
+import { useMemo } from 'react';
 
+import { CheckRow, RemoveButton, Rows } from '@/components/booking-form-controls';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
@@ -30,8 +23,9 @@ const LINK_PLACEHOLDER = '(a link to this inspection)';
  *
  * The preview at the bottom is the text Jobber receives, built by the same
  * function the server sends with -- the office's format for that kind of visit,
- * a link back here, and completion steps pointing at the app. Services, filters
- * and the plan are asked only on an occupied visit, the only kind that books them.
+ * a link back here, and completion steps pointing at the app. The services and
+ * filters are chosen in the Services card beside this one, on every kind of
+ * visit; the plan and the benefit package are asked only on an occupied visit.
  */
 export function JobberBookingCard({
   inspectionType,
@@ -57,7 +51,6 @@ export function JobberBookingCard({
 }) {
   const unavailable = context ? bookingUnavailableReason(context) : null;
   const request = useMemo(() => bookingFromForm(form), [form]);
-  const problems = useMemo(() => jobberBookingProblems(request, inspectionType), [request, inspectionType]);
   const occupied = inspectionType === 'OCCUPIED';
   const preview = useMemo(
     () =>
@@ -120,31 +113,6 @@ export function JobberBookingCard({
         ) : (
           <>
             <div className="grid gap-5 md:grid-cols-2">
-              {occupied ? (
-              <Field>
-                <FieldLabel>Services</FieldLabel>
-                <div className="grid gap-2">
-                  <CheckRow
-                    checked={form.services.filterChange}
-                    label="Filter change"
-                    onChange={(checked) => set('services', { ...form.services, filterChange: checked })}
-                  />
-                  <CheckRow
-                    checked={form.services.pestControl}
-                    label="Pest control"
-                    onChange={(checked) => set('services', { ...form.services, pestControl: checked })}
-                  />
-                  <CheckRow
-                    checked={form.services.fleaTreatment}
-                    label="Flea treatment"
-                    onChange={(checked) => set('services', { ...form.services, fleaTreatment: checked })}
-                  />
-                  <span className="flex items-center gap-2 text-sm">
-                    <Badge variant="secondary">Always</Badge> Occupied inspection
-                  </span>
-                </div>
-              </Field>
-              ) : null}
               <div className="grid content-start gap-4">
                 <Field>
                   <FieldLabel htmlFor="booking-zone">Zone</FieldLabel>
@@ -182,51 +150,6 @@ export function JobberBookingCard({
                 ) : null}
               </div>
             </div>
-
-            {occupied && form.services.filterChange ? (
-              <Rows
-                addLabel="Add a filter"
-                description="Leave the list empty and the Details ask the technician to update the sizes."
-                label="Filters to bring"
-                onAdd={() => set('filters', [...form.filters, { size: '', quantity: '', media: false, location: '' }])}
-              >
-                {form.filters.map((filter, index) => {
-                  const update = (next: Partial<typeof filter>) =>
-                    set('filters', form.filters.map((row, at) => (at === index ? { ...row, ...next } : row)));
-                  return (
-                    <div className="grid gap-2 sm:grid-cols-[8rem_5rem_1fr_auto_auto] sm:items-center" key={index}>
-                      <Input
-                        aria-label={`Filter ${index + 1} size`}
-                        className="font-mono"
-                        onChange={(event) => update({ size: event.target.value })}
-                        placeholder="20x25x1"
-                        value={filter.size}
-                      />
-                      <Input
-                        aria-label={`Filter ${index + 1} quantity`}
-                        inputMode="numeric"
-                        min={1}
-                        onChange={(event) => update({ quantity: event.target.value })}
-                        placeholder="Qty"
-                        type="number"
-                        value={filter.quantity}
-                      />
-                      <Input
-                        aria-label={`Filter ${index + 1} location`}
-                        onChange={(event) => update({ location: event.target.value })}
-                        placeholder="Where it goes (optional)"
-                        value={filter.location}
-                      />
-                      <CheckRow checked={filter.media} label="Media" onChange={(media) => update({ media })} />
-                      <RemoveButton
-                        label={`Remove filter ${index + 1}`}
-                        onClick={() => set('filters', form.filters.filter((_, at) => at !== index))}
-                      />
-                    </div>
-                  );
-                })}
-              </Rows>
-            ) : null}
 
             <Rows
               addLabel="Add a tenant"
@@ -298,19 +221,6 @@ export function JobberBookingCard({
               </Alert>
             ) : null}
 
-            {problems.length ? (
-              <Alert variant="destructive">
-                <AlertTitle>Fix before creating</AlertTitle>
-                <AlertDescription>
-                  <ul className="list-disc pl-4">
-                    {problems.map((problem) => (
-                      <li key={problem}>{problem}</li>
-                    ))}
-                  </ul>
-                </AlertDescription>
-              </Alert>
-            ) : null}
-
             {preview ? (
               <section aria-label="What Jobber receives" className="grid gap-2">
                 <h3 className="text-muted-foreground text-xs">What Jobber receives</h3>
@@ -333,56 +243,5 @@ export function JobberBookingCard({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function CheckRow({
-  checked,
-  label,
-  onChange,
-}: {
-  checked: boolean;
-  label: string;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm">
-      <Checkbox checked={checked} onCheckedChange={(next) => onChange(next === true)} />
-      {label}
-    </label>
-  );
-}
-
-function Rows({
-  label,
-  description,
-  addLabel,
-  onAdd,
-  children,
-}: {
-  label: string;
-  description: string;
-  addLabel: string;
-  onAdd: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <fieldset className="grid gap-2">
-      <legend className="text-sm font-medium">{label}</legend>
-      <p className="text-muted-foreground text-xs">{description}</p>
-      {children}
-      <Button className="w-fit" onClick={onAdd} size="sm" type="button" variant="outline">
-        <PlusIcon />
-        {addLabel}
-      </Button>
-    </fieldset>
-  );
-}
-
-function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <Button aria-label={label} onClick={onClick} size="icon" type="button" variant="ghost">
-      <XIcon />
-    </Button>
   );
 }

@@ -68,7 +68,13 @@ describe('which finished visits are recovered', () => {
       WORKER.indexOf('const isRecoverable ='),
       WORKER.indexOf('if (isComplete && !isRecoverable)'),
     );
-    expect(guard).toContain('namesAnInspection(visit.title, visit.instructions)');
+    expect(guard).toContain('namedAnInspection');
+    // The one name both checks read, so they cannot drift apart: the title or
+    // details naming an inspection, or a benefit-package visit carrying one.
+    expect(WORKER).toContain(
+      'const namedAnInspection = namesAnInspection(visit.title, visit.instructions) || packaged !== null;',
+    );
+    expect(WORKER).toContain('if (!namedAnInspection) {');
   });
 
   it('requires a property and a date before recovering anything', () => {

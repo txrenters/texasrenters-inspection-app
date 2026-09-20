@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  filterLabel,
+  installedSizes,
   parseVisitDetails,
   REPORTABLE_VISIT_SERVICES,
   servicesToReschedule,
@@ -16,7 +18,23 @@ import { useMemo, type ReactNode } from 'react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ServicePhotos, type ServicePhoto } from '@/components/service-photos';
 import { formatDateTime } from '@/lib/format';
+
+/** Every photograph the technician took for the job's services, labelled by what it shows. */
+function servicePhotos(report: VisitServicesReport): ServicePhoto[] {
+  const registers = (report.filters ?? [])
+    .filter((filter) => filter.photoId)
+    .map((filter): ServicePhoto => ({ id: filter.photoId!, label: filterLabel(filter), captureType: 'SERIAL_OR_LABEL' }));
+  const services = REPORTABLE_VISIT_SERVICES.filter((service) => report.services[service]?.photoId).map(
+    (service): ServicePhoto => ({
+      id: report.services[service]!.photoId!,
+      label: VISIT_SERVICE_LABEL[service],
+      captureType: 'OTHER',
+    }),
+  );
+  return [...registers, ...services];
+}
 
 /**
  * What the coordinator wrote on the Jobber visit, read into what the office needs.
@@ -27,6 +45,7 @@ import { formatDateTime } from '@/lib/format';
  * written is a reading of free text, and a reading can be wrong where the text
  * cannot, so the text is always one click away.
  */
+
 export function JobberVisitDetails({
   title,
   details,
@@ -36,6 +55,7 @@ export function JobberVisitDetails({
   booking,
   pushes,
   action,
+  inJobber = true,
 }: {
   title?: string | null;
   details?: string | null;
@@ -49,6 +69,12 @@ export function JobberVisitDetails({
   pushes?: AdminInspection['jobberPushes'];
   /** A control for the header: "Edit visit", where the viewer may. */
   action?: ReactNode;
+  /**
+   * The visit is in Jobber, or being booked there from here. False for an
+   * inspection created here without a booking, whose Details are only the
+   * services chosen for it.
+   */
+  inJobber?: boolean;
 }) {
   const read = useMemo(() => parseVisitDetails(details), [details]);
   if (!title && !read.raw) return null;
@@ -71,7 +97,7 @@ export function JobberVisitDetails({
       <CardHeader className="flex flex-row items-start justify-between gap-4">
         <div className="grid gap-1.5">
         <CardTitle id="jobber-visit-title" className="flex flex-wrap items-center gap-2">
-          Jobber visit
+          {inJobber ? 'Jobber visit' : 'Visit details'}
           {booking?.status === 'SENT' ? <Badge variant="success">Booked from this console</Badge> : null}
           {booking?.status === 'PENDING' || booking?.status === 'FAILED' ? (
             <Badge variant="info">Booking in Jobber</Badge>
@@ -85,6 +111,12 @@ export function JobberVisitDetails({
             ))}
         </CardTitle>
         {title ? <CardDescription>{title}</CardDescription> : null}
+        {inJobber ? null : (
+          <CardDescription>
+            Chosen when this inspection was created. It isn&apos;t booked in Jobber from here, so the visit in
+            Jobber needs these services at the top of its Details.
+          </CardDescription>
+        )}
         </div>
         {action}
       </CardHeader>
@@ -264,12 +296,40 @@ export function JobberVisitDetails({
                 );
               })}
             </ul>
-            {servicesReport.filtersInstalled.length ? (
+            {installedSizes(servicesReport).length ? (
               <p className="text-sm">
                 Filters installed:{' '}
-                <span className="font-mono">{servicesReport.filtersInstalled.join(', ')}</span>
+                <span className="font-mono">{installedSizes(servicesReport).join(', ')}</span>
               </p>
             ) : null}
+            {/* Each register the technician answered for, once the office asked
+                for a photograph of each (2026-09-18). One marked changed whose
+                photograph has not arrived says so, rather than reading as
+                evidenced. */}
+            {servicesReport.filters?.length ? (
+              <ul aria-label="Filter registers" className="grid gap-1.5 text-sm">
+                {servicesReport.filters.map((filter) => (
+                  <li
+                    className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
+                    key={`${filter.size}-${filter.location ?? ''}-${filter.slot}`}
+                  >
+                    <Badge variant={filter.changed ? 'success' : 'warning'}>
+                      {filter.changed ? 'Changed' : 'Not changed'}
+                    </Badge>
+                    <span className="font-mono">{filterLabel(filter)}</span>
+                    {filter.booked ? null : <Badge variant="outline">Found on site</Badge>}
+                    {filter.reason ? <span className="text-muted-foreground">{filter.reason}</span> : null}
+                    {filter.changed && !filter.photoId ? (
+                      <span className="text-warning text-xs">Photograph still uploading</span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {/* The photographs themselves, beside the answers they evidence:
+                each filter's, and pest control's or flea treatment's where the
+                technician took one. */}
+            <ServicePhotos areaName="this job" photos={servicePhotos(servicesReport)} />
             {servicesReport.notes ? (
               <p className="text-sm whitespace-pre-wrap">{servicesReport.notes}</p>
             ) : null}
@@ -302,7 +362,7 @@ export function JobberVisitDetails({
         {read.raw ? (
           <details>
             <summary className="text-muted-foreground cursor-pointer text-sm select-none">
-              As written in Jobber
+              {inJobber ? 'As written in Jobber' : 'As written'}
             </summary>
             <p className="bg-muted mt-2 rounded-lg p-3 text-sm whitespace-pre-wrap">{read.raw}</p>
           </details>

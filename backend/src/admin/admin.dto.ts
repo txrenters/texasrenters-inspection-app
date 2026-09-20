@@ -144,6 +144,19 @@ export class JobberBookingDto {
   @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) @MaxLength(1000, { each: true }) notes!: string[];
 }
 
+/**
+ * The services a visit books besides its inspection, when it is not booked in
+ * Jobber from here: `VisitServicesBooking` in shared.
+ *
+ * Written onto the inspection as its Details' services line, which is what the
+ * phone lists the job's services from.
+ */
+export class VisitServicesDto {
+  @ValidateNested() @Type(() => JobberBookingServicesDto) services!: JobberBookingServicesDto;
+  @IsArray() @ArrayMaxSize(10) @ValidateNested({ each: true }) @Type(() => JobberBookingFilterDto)
+  filters!: JobberBookingFilterDto[];
+}
+
 /** Where a booking would go, asked before the inspection exists. */
 export class JobberBookingContextQueryDto {
   @IsUUID() propertyId!: string;
@@ -181,6 +194,11 @@ export class CreateAdminInspectionDto {
   @IsOptional() @IsBoolean() allowTechnicianAreaCapture?: boolean;
   /** Book the visit in Jobber too: occupied, move-in, move-out, back-to-market or HVAC. */
   @IsOptional() @ValidateNested() @Type(() => JobberBookingDto) jobberBooking?: JobberBookingDto;
+  /**
+   * The services the visit books, for one not booked in Jobber from here.
+   * Ignored alongside `jobberBooking`, which carries its own.
+   */
+  @IsOptional() @ValidateNested() @Type(() => VisitServicesDto) visitServices?: VisitServicesDto;
 }
 
 /** The visit's title and Details, as edited in the console. */

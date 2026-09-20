@@ -1,4 +1,4 @@
-import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
+import { hvacUnansweredMessage, inspectionRequiresAreaRecording } from '@texasrenters/shared';
 
 import type { InspectionRoom } from '../domain/models';
 
@@ -17,6 +17,12 @@ export type AreaEvidence = {
   photoCount: number;
   findingCount: number;
   uploadSettled: boolean;
+  /**
+   * The items of this area's checklist still to answer, by label, when its
+   * answers are required: a section of an HVAC inspection. Absent when the
+   * checklist is a guide, or when its items have not arrived yet.
+   */
+  unansweredItems?: readonly string[];
 };
 
 /**
@@ -42,16 +48,31 @@ export function deriveAreaRequirements(
    * neither should restate it.
    */
   const filmingOptional = !inspectionRequiresAreaRecording(room.inspectionType);
+  /**
+   * An HVAC section is photographed, never filmed: the office's rule for its
+   * report (2026-09-16) is every item and photographs, no video. The server
+   * still accepts a recording an older build made, so the test is the same --
+   * only what the technician is told to do differs.
+   */
+  const photographed = room.inspectionType === 'HVAC';
 
   const requirements: AreaRequirement[] = filmingOptional
     ? [
-        {
-          key: 'evidence',
-          label: 'Photograph or recording captured',
-          met: evidence.hasPrimaryRecording || evidence.photoCount > 0,
-          blocking: true,
-          hint: 'Photograph this area, or record a walkthrough. Skip it if there was nothing to capture.',
-        },
+        photographed
+          ? {
+              key: 'evidence',
+              label: 'Photographs taken',
+              met: evidence.hasPrimaryRecording || evidence.photoCount > 0,
+              blocking: true,
+              hint: 'Photograph this section before submitting it.',
+            }
+          : {
+              key: 'evidence',
+              label: 'Photograph or recording captured',
+              met: evidence.hasPrimaryRecording || evidence.photoCount > 0,
+              blocking: true,
+              hint: 'Photograph this area, or record a walkthrough. Skip it if there was nothing to capture.',
+            },
       ]
     : [
         {
@@ -77,6 +98,22 @@ export function deriveAreaRequirements(
       met: evidence.uploadSettled,
       blocking: true,
       hint: 'The recording has not reached the upload queue yet.',
+    });
+
+  /**
+   * Every row of an HVAC section, scored or said why not.
+   *
+   * The same shared rule `completeRoom` applies, so Submit Evidence opens
+   * exactly when the server will take it -- and names the rows left when it
+   * does not.
+   */
+  if (evidence.unansweredItems)
+    requirements.push({
+      key: 'checklist',
+      label: 'Every checklist item answered',
+      met: evidence.unansweredItems.length === 0,
+      blocking: true,
+      hint: evidence.unansweredItems.length ? hvacUnansweredMessage(evidence.unansweredItems) : undefined,
     });
 
   // A baseline only has to be acknowledged when one exists to review against.

@@ -49,7 +49,8 @@ const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
   MOVE_OUT: process.env.REPORT_TEMPLATE_LABEL_MOVE_OUT ?? 'Exit Inspection',
   OCCUPIED: process.env.REPORT_TEMPLATE_LABEL_OCCUPIED ?? 'Routine Inspection',
   BACK_TO_MARKET: process.env.REPORT_TEMPLATE_LABEL_BACK_TO_MARKET ?? 'Back to Market Inspection',
-  HVAC: process.env.REPORT_TEMPLATE_LABEL_HVAC ?? 'HVAC Maintenance Inspection',
+  // The name on the office's own HVAC report, which this one follows.
+  HVAC: process.env.REPORT_TEMPLATE_LABEL_HVAC ?? 'HVAC Inspection',
   ROOF: process.env.REPORT_TEMPLATE_LABEL_ROOF ?? 'Roof Inspection',
   SUPRA_LOCKBOX_PLACEMENT:
     process.env.REPORT_TEMPLATE_LABEL_SUPRA_LOCKBOX_PLACEMENT ?? 'Supra Lockbox Placement',
@@ -57,6 +58,13 @@ const INSPECTION_TEMPLATE_LABEL: Record<string, string> = {
     process.env.REPORT_TEMPLATE_LABEL_SUPRA_LOCKBOX_REMOVAL ?? 'Supra Lockbox Removal',
   AC_FILTER_DELIVERY: process.env.REPORT_TEMPLATE_LABEL_AC_FILTER_DELIVERY ?? 'AC Filter Delivery',
 };
+
+/** A reading as the report prints it: "72 °F", or nothing when none was taken. */
+function readingText(value: { toString(): string } | null, unit: string | null): string | null {
+  if (value === null) return null;
+  const number = Number(value.toString());
+  return [Number.isInteger(number) ? String(number) : String(Number(number.toFixed(2))), unit].filter(Boolean).join(' ');
+}
 
 @Injectable()
 export class ReportShareService {
@@ -242,13 +250,15 @@ export class ReportShareService {
                 // An occupied room's answer ("Clean", "Good") lives here, with
                 // all three axes null.
                 textValue: true,
+                // An HVAC reading, printed with its unit.
+                numericValue: true,
                 // `keywords` travels with the row so the report can attach the
                 // finding that explains a failed axis. They already exist to
                 // recognise the item in a transcript ("wall", "ceiling"), and
                 // that is precisely the vocabulary an AI-authored finding
                 // categorises itself with.
                 checklistItem: {
-                  select: { id: true, label: true, keywords: true, kind: true, responseType: true },
+                  select: { id: true, label: true, keywords: true, kind: true, responseType: true, unit: true },
                 },
               },
             },
@@ -365,16 +375,26 @@ export class ReportShareService {
           isWorking: response.isWorking,
           comment: response.comment,
           /*
-           * The answer, for an occupied room's questions.
+           * The answer, for anything that is not a three-axis verdict.
            *
-           * Scoped to occupied items so every other report is byte-for-byte
-           * what it was: room checklists are all three-axis verdicts, and HVAC
-           * answers -- readings, free text -- have never been printed on a
-           * report and are not published by this.
+           * An occupied room's question, and an HVAC reading or line of text.
+           * The office's HVAC report prints a section's table and nothing else
+           * of what was measured, so a reading is printed as the answer on its
+           * row -- "72 °F" -- rather than as three blank cells. Room checklists
+           * are all three-axis verdicts and print as they always have.
            */
           ...(response.checklistItem.kind === AreaChecklistItemKind.OCCUPIED
             ? { responseType: response.checklistItem.responseType, textValue: response.textValue }
-            : {}),
+            : response.checklistItem.kind === AreaChecklistItemKind.AIR_CONDITIONING &&
+                response.checklistItem.responseType !== 'STATUS'
+              ? {
+                  responseType: response.checklistItem.responseType,
+                  textValue:
+                    response.checklistItem.responseType === 'READING'
+                      ? readingText(response.numericValue, response.checklistItem.unit)
+                      : response.textValue,
+                }
+              : {}),
         })),
       })),
       findings: inspection.findings.map((finding) => ({

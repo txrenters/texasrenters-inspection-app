@@ -2,7 +2,9 @@ import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } f
 import { type Quarter, quarterDueForPlanning, quarterLabel } from '@texasrenters/shared';
 import { CronJob } from 'cron';
 
+import { businessDate } from '../common/business-day';
 import { withTenant } from '../database/tenant-context';
+import { PlanBuildGuard } from './plan-build-guard';
 import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanService } from './tbp-plan.service';
 
@@ -26,6 +28,7 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(TbpPlanService) private readonly plans: TbpPlanService,
     @Inject(QuarterPlannerService) private readonly planner: QuarterPlannerService,
+    @Inject(PlanBuildGuard) private readonly builds: PlanBuildGuard,
   ) {}
 
   onModuleInit() {
@@ -72,7 +75,17 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     try {
       const due = quarterDueForPlanning(new Date());
       if (!due) return;
-      await this.generate(organizationId, due);
+      // Never over a build a coordinator started from the console. The window
+      // is a fortnight wide, so tomorrow's tick tries again.
+      const building = this.builds.current(organizationId);
+      if (building) {
+        this.logger.log({
+          event: 'tbp_planning_skipped',
+          reason: `The ${building.quarter} plan is already being built.`,
+        });
+        return;
+      }
+      await this.builds.run(organizationId, quarterLabel(due), () => this.generate(organizationId, due));
     } catch (error) {
       // Never throw out of a cron callback: an unhandled rejection takes the
       // process down, and a missed planning run is not worth an outage. The
@@ -109,8 +122,14 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
     // a technician against every stop it *can* place is reviewable; one that
     // refused to route because a single tenancy is missing a unit is not, and
     // the coordinator has two weeks to fix that tenancy and re-route.
+    // Extra closed days from the environment only when it names some: weekends
+    // and US federal holidays are always left out, and an empty list would
+    // wipe any days already set on the plan.
+    // The crew and the start a coordinator chose are kept on the plan, so a
+    // nightly rebuild lays the days out for them, from today on.
+    const holidays = this.holidays();
     const routed = await withTenant(organizationId, () =>
-      this.planner.route(organizationId, result.planId, this.holidays()),
+      this.planner.route(organizationId, result.planId, holidays.length ? { holidays } : {}, { today: businessDate() }),
     );
 
     if (routed.unplaced.length > 0)
@@ -124,11 +143,10 @@ export class TbpPlanScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * The days the office is closed, as `YYYY-MM-DD`.
-   *
-   * Configuration rather than a derived calendar: a hardcoded list of US
-   * federal holidays would be wrong for the days this office actually closes
-   * and right for days it does not. Malformed entries are dropped rather than
+   * Days the office is closed besides weekends and US federal holidays, as
+   * `YYYY-MM-DD` -- the day after Thanksgiving, say. The planner leaves those
+   * two out whatever this says: the office works weekdays and not US holidays
+   * (2026-09-16). Malformed entries are dropped rather than
    * throwing — a typo in a holiday list should cost one working day, not the
    * quarter's plan.
    */

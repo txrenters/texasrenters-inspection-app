@@ -1,15 +1,24 @@
-import { JobberOutboundKind } from '@prisma/client';
+import { InspectionStatus, JobberOutboundKind, TbpStopStatus } from '@prisma/client';
 
 import type { PrismaService } from '../src/common/prisma.service';
 import type { JobberClient } from '../src/integrations/jobber/jobber.client';
 import {
+  benefitPackageInspectionInDetails,
+  hvacInspectionInDetails,
   occupiedInspectionInDetails,
   resolveVisitType,
 } from '../src/integrations/jobber/jobber.visit-type';
-import { visitDetails, visitTitle } from '../src/planning/tbp-plan.service';
+import { planVisitDetails, visitTitle } from '../src/planning/tbp-plan.service';
 import { JobberOutboundWorker } from '../src/workers/jobber-sync/jobber-outbound.worker';
 
 const Q4 = { year: 2026, quarter: 4 } as const;
+
+const TENANCY = {
+  hvacFilterSizes: ['18x36x1', '20x25x1'],
+  hvacFilterLocation: null,
+  managementPlan: 'Premium',
+  hvacPlan: 'Not Completed',
+};
 
 describe('the Jobber visit a quarterly plan will create', () => {
   /**
@@ -41,15 +50,25 @@ describe('the Jobber visit a quarterly plan will create', () => {
     );
   });
 
-  it('names the filters the tenancy actually has', () => {
-    expect(visitDetails({ hvacFilterSizes: ['18x36x1', '20x25x1'] })).toBe(
-      'Filter Change: 18x36x1 + 20x25x1 + Pest Control + Occupied Inspection',
+  /** "this is the details we are going to use" -- the office's Q4 sheet, 2026-09-16. */
+  it('carries the office’s own services line, with the inspection this quarter’s rule chose', () => {
+    const office = 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection';
+
+    expect(planVisitDetails(TENANCY, 'HVAC', office)).toMatch(
+      /^Filter Change: 20x25x1 \+ Pest Control \+ HVAC Inspection\n\nInstruction for completion\n/,
+    );
+    expect(planVisitDetails(TENANCY, 'OCCUPIED', office).split('\n')[0]).toBe(office);
+  });
+
+  it('names the filters the tenancy actually has where the sheet has no line for it', () => {
+    expect(planVisitDetails(TENANCY, 'OCCUPIED').split('\n')[0]).toBe(
+      'Filter Change: 18x36x1; 20x25x1 + Pest Control + Occupied Inspection',
     );
   });
 
   it('still asks for a filter change when no size is recorded', () => {
-    expect(visitDetails({ hvacFilterSizes: [] })).toBe(
-      'Filter Change + Pest Control + Occupied Inspection',
+    expect(planVisitDetails({ ...TENANCY, hvacFilterSizes: [] }, 'OCCUPIED').split('\n')[0]).toBe(
+      'Filter Change: Update filter sizes + Pest Control + Occupied Inspection',
     );
   });
 });
@@ -58,12 +77,11 @@ describe('the Jobber visit a quarterly plan will create', () => {
  * The round trip, and the most important test in this file.
  *
  * A benefit-package title types as `AC_FILTER_DELIVERY`, which is in
- * `TYPES_NOT_SYNCED` and never becomes an inspection. Only the phrase
- * "Occupied Inspection" in the details line rescues it. So a visit this
- * planner creates is one our own sync would throw away unless the details
- * match what `occupiedInspectionInDetails` looks for — and the failure is
- * silent: the visit exists in Jobber, the technician drives to it, and no
- * inspection ever appears here to record what they found.
+ * `TYPES_NOT_SYNCED` and never becomes an inspection. Only the inspection on
+ * the services line rescues it. So a visit this planner creates is one our own
+ * sync would throw away unless the details say what the sync looks for -- and
+ * the failure is silent: the visit exists in Jobber, the technician drives to
+ * it, and no inspection ever appears here to record what they found.
  */
 describe('a visit we create is one we would import back', () => {
   it('types the generated title as a filter delivery, as the office writes it', () => {
@@ -73,11 +91,31 @@ describe('a visit we create is one we would import back', () => {
   });
 
   it('rescues it to an occupied inspection through the details line', () => {
-    expect(occupiedInspectionInDetails(visitDetails({ hvacFilterSizes: ['18x36x1'] }))).toBe(true);
+    expect(occupiedInspectionInDetails(planVisitDetails(TENANCY, 'OCCUPIED'))).toBe(true);
+    expect(benefitPackageInspectionInDetails(planVisitDetails(TENANCY, 'OCCUPIED'))).toBe('OCCUPIED');
   });
 
   it('rescues it even when the tenancy has no filter sizes on record', () => {
-    expect(occupiedInspectionInDetails(visitDetails({ hvacFilterSizes: [] }))).toBe(true);
+    expect(benefitPackageInspectionInDetails(planVisitDetails({ ...TENANCY, hvacFilterSizes: [] }, 'OCCUPIED'))).toBe(
+      'OCCUPIED',
+    );
+  });
+
+  /**
+   * An HVAC visit carries the office's completion steps too, and they read
+   * "3.HVAC / Occupied Inspection". The services line decides.
+   */
+  it('reads an HVAC visit back as an HVAC inspection, completion steps and all', () => {
+    const details = planVisitDetails(TENANCY, 'HVAC', 'Filter Change: 20x25x1 + Pest Control + Occupied Inspection');
+
+    expect(occupiedInspectionInDetails(details)).toBe(true);
+    expect(benefitPackageInspectionInDetails(details)).toBe('HVAC');
+  });
+
+  it('does not read HVAC off anything but a services line', () => {
+    expect(hvacInspectionInDetails('Tenant asked about an HVAC inspection next month')).toBe(false);
+    expect(hvacInspectionInDetails('Instruction for completion\n1.Filter change 2.Pest control 3.HVAC / Occupied Inspection')).toBe(false);
+    expect(hvacInspectionInDetails('Filter Change: 16x25x1 + Pest Control + HVAC Inspection')).toBe(true);
   });
 });
 
@@ -107,7 +145,17 @@ describe('booking a published plan stop in Jobber', () => {
     }
   };
 
-  const book = async (zone: string | null) => {
+  const book = async (
+    zone: string | null,
+    inspection: Partial<{
+      status: InspectionStatus;
+      scheduledAt: Date;
+      jobberVisitId: string | null;
+      jobberVisitTitle: string | null;
+      jobberVisitDetails: string | null;
+      technicianEmail: string | null;
+    }> = {},
+  ) => {
     const tx = {
       jobberOutboundTask: { update: jest.fn().mockResolvedValue({}) },
       inspection: { update: jest.fn().mockResolvedValue({}) },
@@ -134,12 +182,154 @@ describe('booking a published plan stop in Jobber', () => {
       tbpQuarterPlanStop: {
         findUnique: jest.fn().mockResolvedValue({
           visitTitle: visitTitle({ addressLine1: '19803 Bolton Bridge Ln', zone }, Q4),
-          visitDetails: visitDetails({ hvacFilterSizes: ['18x36x1'] }),
+          visitDetails: planVisitDetails(TENANCY, 'OCCUPIED'),
           scheduledOn: new Date('2026-10-06T00:00:00.000Z'),
           zone,
           propertywareBuildingId: 'building-1',
           propertywareUnitId: null,
           plan: { quarterYear: 2026, quarterNumber: 4 },
+        }),
+      },
+      inspection: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: inspection.status ?? InspectionStatus.SCHEDULED,
+          scheduledAt: inspection.scheduledAt ?? new Date('2026-10-06T00:00:00.000Z'),
+          jobberVisitId: inspection.jobberVisitId ?? null,
+          jobberVisitTitle: inspection.jobberVisitTitle ?? null,
+          jobberVisitDetails: inspection.jobberVisitDetails ?? null,
+          assignments: inspection.technicianEmail ? [{ technician: { email: inspection.technicianEmail } }] : [],
+        }),
+      },
+      jobberPropertyLink: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { jobberPropertyId: 'property-9', jobberAddress: '19803 Bolton Bridge Ln', propertywareUnitId: null },
+          ]),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'jobber-user-7' }]),
+      $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
+    };
+    const request = jest
+      .fn()
+      .mockResolvedValueOnce({ jobCreate: { userErrors: [], job: { id: 'job-9' } } })
+      .mockResolvedValueOnce({ visitCreate: { userErrors: [], createdVisits: [{ id: 'visit-9' }] } });
+
+    const worker = withEnvironment(
+      () => new JobberOutboundWorker(prisma as unknown as PrismaService, { request } as unknown as JobberClient),
+    );
+
+    const outcome = await worker.run('org-1');
+    const visit = request.mock.calls[1]?.[2].input.visits[0];
+    return {
+      outcome,
+      request,
+      jobTitle: request.mock.calls[0]?.[2].input.title as string | undefined,
+      visitTitle: visit?.title as string | undefined,
+      visit,
+    };
+  };
+
+  it('writes a zone the report holds as a bare number as "Zone N" on the job and the visit', async () => {
+    const booked = await book('4');
+    expect(booked.outcome).toMatchObject({ sent: 1, failed: 0 });
+    expect({ jobTitle: booked.jobTitle, visitTitle: booked.visitTitle }).toEqual({
+      jobTitle: 'Zone 4 - Q4 2026 Tenant Benefit Package',
+      visitTitle: '19803 Bolton Bridge Ln - Zone 4 - Q4 2026 Tenant Benefit Package',
+    });
+  });
+
+  it('leaves "Not Set" off the job and the visit', async () => {
+    const booked = await book('Not Set');
+    expect({ jobTitle: booked.jobTitle, visitTitle: booked.visitTitle }).toEqual({
+      jobTitle: 'Q4 2026 Tenant Benefit Package',
+      visitTitle: '19803 Bolton Bridge Ln - Q4 2026 Tenant Benefit Package',
+    });
+  });
+
+  /** Between publish and booking the office may have moved the day or edited the Details on the inspection. */
+  it('books the inspection’s day and Details as they are when it is sent', async () => {
+    const { visit } = await book('4', {
+      scheduledAt: new Date('2026-10-09T00:00:00.000Z'),
+      jobberVisitDetails: 'Filter Change: 20x25x1 + Pest Control + HVAC Inspection',
+    });
+
+    expect(visit.schedule.startAt).toEqual({ date: '2026-10-09', timezone: 'America/Chicago' });
+    expect(visit.instructions).toBe('Filter Change: 20x25x1 + Pest Control + HVAC Inspection');
+  });
+
+  it('puts the planned technician on the visit when Jobber knows them', async () => {
+    const { visit } = await book('4', { technicianEmail: 'moses@example.com' });
+
+    expect(visit.schedule.teamMemberIdsToAssign).toEqual(['jobber-user-7']);
+  });
+
+  it('never books a visit for an inspection cancelled before it was sent', async () => {
+    const { request, outcome } = await book('4', { status: InspectionStatus.CANCELLED });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ sent: 0 });
+  });
+});
+
+/**
+ * The visit the planner could not place, put in Jobber's unscheduled work.
+ *
+ * The office (2026-09-20): "let's not make the needs attention as blocker for
+ * publishing the TBP ... those needs to an attention should be reflected also
+ * into the unscheduled appointment".
+ */
+describe('a visit published with no day', () => {
+  const jobberEnvironment = {
+    JOBBER_CLIENT_ID: 'client-id',
+    JOBBER_CLIENT_SECRET: 'client-secret',
+    JOBBER_API_VERSION: '2025-01-20',
+    JOBBER_OAUTH_REDIRECT_URI: 'https://backend.example.com/api/v1/integrations/jobber/oauth/callback',
+    JOBBER_TBP_WRITE_ENABLED: 'true',
+  };
+
+  const withEnvironment = <T,>(build: () => T): T => {
+    const previous = { ...process.env };
+    Object.assign(process.env, jobberEnvironment);
+    try {
+      return build();
+    } finally {
+      process.env = previous;
+    }
+  };
+
+  const send = async (stop: Partial<{ status: TbpStopStatus; inspectionId: string | null }> = {}) => {
+    const tx = {
+      jobberOutboundTask: { update: jest.fn().mockResolvedValue({}) },
+      tbpQuarterPlanStop: { update: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      jobberOutboundTask: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'task-1',
+            inspectionId: null,
+            tbpStopId: 'stop-1',
+            kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+            jobberVisitId: null,
+            jobberJobId: null,
+            createdById: null,
+            servicesNoteSentAt: null,
+            jobTitle: null,
+            attempts: 0,
+          },
+        ]),
+        findUnique: jest.fn().mockResolvedValue({ jobberJobId: null }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      tbpQuarterPlanStop: {
+        findFirst: jest.fn().mockResolvedValue({
+          status: stop.status ?? TbpStopStatus.UNSCHEDULED,
+          visitTitle: visitTitle({ addressLine1: '19803 Bolton Bridge Ln', zone: '1' }, Q4),
+          visitDetails: planVisitDetails(TENANCY, 'OCCUPIED'),
+          propertywareBuildingId: 'building-1',
+          propertywareUnitId: null,
+          inspectionId: stop.inspectionId ?? null,
         }),
       },
       jobberPropertyLink: {
@@ -160,24 +350,49 @@ describe('booking a published plan stop in Jobber', () => {
       () => new JobberOutboundWorker(prisma as unknown as PrismaService, { request } as unknown as JobberClient),
     );
 
-    await expect(worker.run('org-1')).resolves.toMatchObject({ sent: 1, failed: 0 });
-    return {
-      jobTitle: request.mock.calls[0][2].input.title as string,
-      visitTitle: request.mock.calls[1][2].input.visits[0].title as string,
-    };
+    const outcome = await worker.run('org-1');
+    return { outcome, request, tx, visit: request.mock.calls[1]?.[2].input.visits[0], job: request.mock.calls[0]?.[2].input };
   };
 
-  it('writes a zone the report holds as a bare number as "Zone N" on the job and the visit', async () => {
-    await expect(book('4')).resolves.toEqual({
-      jobTitle: 'Zone 4 - Q4 2026 Tenant Benefit Package',
-      visitTitle: '19803 Bolton Bridge Ln - Zone 4 - Q4 2026 Tenant Benefit Package',
-    });
+  it('creates the visit with no day on it, titled as the office reads its unscheduled work', async () => {
+    const { outcome, job, visit } = await send();
+
+    expect(outcome).toMatchObject({ sent: 1, failed: 0 });
+    // The job carries the address here: an unscheduled job is read in a list
+    // with no property beside it.
+    expect(job.title).toBe('19803 Bolton Bridge Ln - Zone 1 - Q4 2026 Tenant Benefit Package');
+    expect(visit.title).toBe('19803 Bolton Bridge Ln - Zone 1 - Q4 2026 Tenant Benefit Package');
+    expect(visit.schedule).toBeUndefined();
   });
 
-  it('leaves "Not Set" off the job and the visit', async () => {
-    await expect(book('Not Set')).resolves.toEqual({
-      jobTitle: 'Q4 2026 Tenant Benefit Package',
-      visitTitle: '19803 Bolton Bridge Ln - Q4 2026 Tenant Benefit Package',
+  /**
+   * The instructions are what `benefitPackageInspectionInDetails` reads, and
+   * that is how this visit comes back as an occupied inspection once the office
+   * gives it a day in Jobber.
+   */
+  it('carries the services line, so it is imported back as an inspection when it is scheduled', async () => {
+    const { visit } = await send();
+
+    expect(benefitPackageInspectionInDetails(visit.instructions)).toBe('OCCUPIED');
+  });
+
+  it('writes the job and visit onto the stop, and never claims the visit as imported', async () => {
+    const { tx } = await send();
+
+    expect(tx.tbpQuarterPlanStop.update).toHaveBeenCalledWith({
+      where: { id: 'stop-1' },
+      data: { jobberVisitId: 'visit-9', jobberJobId: 'job-9' },
     });
+    // No `jobberVisitImport` row: the sync has to pick this visit up when it
+    // gets a day, because that is what creates the inspection.
+    expect(Object.keys(tx)).toEqual(['jobberOutboundTask', 'tbpQuarterPlanStop']);
+  });
+
+  /** Given a day here while the task waited: the ordinary booking has it now. */
+  it('sends nothing for a stop that has been published since', async () => {
+    const { request, outcome } = await send({ status: TbpStopStatus.PUBLISHED, inspectionId: 'inspection-1' });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ sent: 1, failed: 0 });
   });
 });

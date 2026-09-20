@@ -32,9 +32,18 @@ import { BaselineCard } from '@/src/areas/BaselineCard';
 import { WalkthroughGuideCard } from '@/src/areas/WalkthroughGuideCard';
 import { areaStage, deriveAreaStatus, type AreaStatusDescriptor } from '@/src/utils/area-status';
 import { goBack } from '@/src/lib/navigation';
-import { checklistKindFor, inspectionRequiresAreaRecording } from '@texasrenters/shared';
+import {
+  checklistKindFor,
+  hvacSectionOf,
+  hvacUnansweredItems,
+  inspectionRequiresAreaRecording,
+} from '@texasrenters/shared';
 
-import { AreaChecklistSheet, checklistCoverage } from '@/src/capture/AreaChecklistSheet';
+import {
+  AreaChecklistSheet,
+  checklistCoverage,
+  type ChecklistAnswerPatch,
+} from '@/src/capture/AreaChecklistSheet';
 import { CaptureChoiceSheet } from '@/src/capture/CaptureChoiceSheet';
 import { asksCaptureChoice, type CapturePreference } from '@/src/capture/capture-intents';
 import { withAxes } from '@/src/capture/condition-answers';
@@ -248,6 +257,20 @@ export default function AreaDetailScreen() {
    * shape of job, filmed standing at one unit.
    */
   const isEquipmentVisit = item.inspectionType === 'HVAC';
+  /**
+   * A section of the office's HVAC report -- Attic, Filters, A/C unit or
+   * Thermostat -- whose rows all have to be answered before it is submitted.
+   *
+   * Null for the single "HVAC System" area of an inspection created before the
+   * sections became areas, which finishes as it always did. Asked only once
+   * the section's items have arrived: until then there is nothing to answer,
+   * and the server still refuses a section left unanswered.
+   */
+  const hvacSection = isEquipmentVisit ? hvacSectionOf(item.name) : null;
+  const unansweredItems =
+    hvacSection && conditionItems.data
+      ? hvacUnansweredItems(conditionItems.data, (entry) => entry).map((entry) => entry.label)
+      : undefined;
   const roomFindings = (findings.data ?? []).filter((finding) => finding.roomId === item.id);
   const hasRecording = Boolean(media.data?.length);
   // The primary walkthrough is what the pipeline analyses, so it is the one to
@@ -286,6 +309,7 @@ export default function AreaDetailScreen() {
     // completion on a finished upload would strand a technician with no signal
     // in a property they are trying to leave.
     uploadSettled: hasRecording && item.uploadStatus !== 'FAILED',
+    unansweredItems,
   });
   const gate = areaCompletionGate(requirements);
   // The same derivation the inspection list uses, rather than this screen's own
@@ -334,11 +358,15 @@ export default function AreaDetailScreen() {
    * already said "video", so that is never asked.
    */
   const openCamera = () => {
-    const asks = asksCaptureChoice({
-      requiresRecording,
-      chosen: chosenCapture,
-      additionalClip: hasRecording,
-    });
+    const asks =
+      // An HVAC section is photographed, never filmed, so there is no choice to
+      // put: the camera opens on photographs.
+      !isEquipmentVisit &&
+      asksCaptureChoice({
+        requiresRecording,
+        chosen: chosenCapture,
+        additionalClip: hasRecording,
+      });
     if (asks) return setCaptureChoice('open');
     router.push(
       hasRecording
@@ -362,10 +390,7 @@ export default function AreaDetailScreen() {
    * sending one field would clear the others. Nothing is being filmed on this
    * screen, so there is no moment in a recording to point the reviewer at.
    */
-  const recordAnswer = (
-    itemId: string,
-    patch: { numericValue?: number | null; textValue?: string | null; comment?: string | null },
-  ) => {
+  const recordAnswer = (itemId: string, patch: ChecklistAnswerPatch) => {
     const current = conditionAssessments.get(itemId);
     recordCondition.mutate({
       itemId,
@@ -399,6 +424,12 @@ export default function AreaDetailScreen() {
    * arrive.
    */
   const checklistAnswerable = Boolean(conditionItems.data?.length);
+  // A section's scored rows, and how many are still to answer. Readings are
+  // never required, so they are not counted.
+  const requiredRows = hvacSection
+    ? areaChecklist.filter((entry) => (entry.responseType ?? 'STATUS') === 'STATUS').length
+    : 0;
+  const answeredRows = Math.max(0, requiredRows - (unansweredItems?.length ?? requiredRows));
 
   return (
     <SafeAreaView edges={['top']} className="flex-1 bg-background">
@@ -496,7 +527,12 @@ export default function AreaDetailScreen() {
         {stage === 'NOT_FILMED' ? (
           <>
             {item.baseline ? <BaselineCard baseline={item.baseline} /> : null}
-            <WalkthroughGuideCard isEquipmentVisit={isEquipmentVisit} />
+            {/* An HVAC section is never filmed, so "before anything is filmed"
+                would keep its briefing up for good: it goes once there is
+                anything captured, as a room's goes once it is filmed. */}
+            {isEquipmentVisit && hasEvidence ? null : (
+              <WalkthroughGuideCard isEquipmentVisit={isEquipmentVisit} />
+            )}
           </>
         ) : null}
 
@@ -717,8 +753,16 @@ export default function AreaDetailScreen() {
               same reason as the card above. */}
           {offersChecklist ? (
             <Pressable
-              accessibilityHint="Opens this area's checklist. Optional."
-              accessibilityLabel={`Area checklist, ${coverage.covered} of ${coverage.total} covered`}
+              accessibilityHint={
+                hvacSection
+                  ? "Opens this section's checklist. Every row has to be answered."
+                  : "Opens this area's checklist. Optional."
+              }
+              accessibilityLabel={
+                hvacSection
+                  ? `${hvacSection} checklist, ${answeredRows} of ${requiredRows} answered`
+                  : `Area checklist, ${coverage.covered} of ${coverage.total} covered`
+              }
               accessibilityRole="button"
               className="mx-5 mt-4 min-h-14 flex-row items-center gap-3 rounded-xl border border-border bg-card p-4 active:scale-[0.98]"
               onPress={() => setChecklistOpen(true)}
@@ -727,9 +771,13 @@ export default function AreaDetailScreen() {
                 <ListChecksIcon size={18} className="text-primary" />
               </View>
               <View className="min-w-0 flex-1">
-                <Text className="text-base font-bold text-foreground">Area checklist</Text>
+                <Text className="text-base font-bold text-foreground">
+                  {hvacSection ? `${hvacSection} checklist` : 'Area checklist'}
+                </Text>
                 <Text className="mt-0.5 text-xs text-muted-foreground">
-                  {coverage.covered} of {coverage.total} covered · Optional
+                  {hvacSection
+                    ? `${answeredRows} of ${requiredRows} answered · Required`
+                    : `${coverage.covered} of ${coverage.total} covered · Optional`}
                 </Text>
               </View>
               <ChevronRightIcon size={16} className="text-muted-foreground" />
@@ -743,7 +791,7 @@ export default function AreaDetailScreen() {
                 className="mt-1 text-sm leading-5 text-muted-foreground"
                 nativeID="area-note-label"
               >
-                Anything the office should know about this room. Optional — findings and photographs
+                Anything the office should know about this {isEquipmentVisit ? 'section' : 'room'}. Optional — findings and photographs
                 carry most of it.
               </Text>
               <TextInput
@@ -1187,6 +1235,7 @@ export default function AreaDetailScreen() {
       {offersChecklist ? (
         <AreaChecklistSheet
           areaName={item.name}
+          required={Boolean(hvacSection)}
           // Keyed by item id so a row can read its own answers without scanning
           // the list once per render.
           assessments={conditionAssessments}

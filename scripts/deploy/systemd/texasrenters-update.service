@@ -24,6 +24,13 @@ Type=oneshot
 # private repository.
 EnvironmentFile=/etc/texasrenters/update.env
 
+# Started by the timer, or at once by texasrenters-update.path when the backend
+# leaves a request from the image workflow. Requests are cleared as the update
+# starts, because this run answers them; one that arrives while it runs is kept,
+# and the path unit starts another run when this one ends. `-` because the
+# directory not existing must not fail a run the timer started.
+ExecStartPre=-/usr/bin/find /var/lib/texasrenters/deploy-requests -mindepth 1 -maxdepth 1 -type f -print -delete
+
 ExecStart=/opt/texasrenters/scripts/deploy/auto-update.sh
 
 # The script exits 1 when it rolled back successfully — the deployment failed

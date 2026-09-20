@@ -1,6 +1,7 @@
-import type { VisitServicesReport } from '@texasrenters/shared';
+import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
 
 import type { VideoPlaybackResponse } from '../media/playback-source';
+import type { ClosingComments } from '../utils/closing-comments';
 import type {
   AreaEnvironment,
   ChecklistAssessment,
@@ -174,7 +175,24 @@ export interface InspectionRepository {
   report(id: string): Promise<InspectionReport>;
   start(id: string): Promise<Inspection>;
   /** `servicesReport` only for a visit that booked services; older builds sent none. */
-  complete(id: string, servicesReport?: VisitServicesReport): Promise<Inspection>;
+  complete(
+    id: string,
+    servicesReport?: VisitServicesReport,
+    closingComments?: Partial<ClosingComments>,
+  ): Promise<Inspection>;
+  /**
+   * The job's checklist as it stands, saved while the job is still walked.
+   *
+   * Every tick, because the office asks the checklist at the start of the job
+   * now (2026-09-18): a phone that dies at noon must not lose the morning.
+   */
+  saveServices(id: string, servicesReport: VisitServicesReport): Promise<Inspection>;
+  /** The area this job's filter photographs are filed under, made on the first one. */
+  filtersArea(id: string): Promise<string>;
+  /** The area a service's optional photographs are filed under, made on the first one. */
+  serviceArea(id: string, service: ReportableVisitService): Promise<string>;
+  /** Nobody let the technician in, so the office books the whole visit again. */
+  couldNotAccess(id: string, reason: string): Promise<Inspection>;
   rooms(inspectionId: string): Promise<InspectionRoom[]>;
   room(roomId: string): Promise<InspectionRoom>;
   addArea(inspectionId: string, input: AddAreaInput): Promise<InspectionRoom>;

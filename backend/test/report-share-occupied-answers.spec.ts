@@ -13,7 +13,15 @@ import { ReportShareService } from '../src/admin/report-share.service';
 function build(
   checklistResponses: Array<{
     textValue: string | null;
-    checklistItem: { id: string; label: string; keywords: string[]; kind: string; responseType: string };
+    numericValue?: string | null;
+    checklistItem: {
+      id: string;
+      label: string;
+      keywords: string[];
+      kind: string;
+      responseType: string;
+      unit?: string | null;
+    };
   }>,
 ) {
   const prisma = {
@@ -52,6 +60,7 @@ function build(
               isUndamaged: null,
               isWorking: null,
               comment: null,
+              numericValue: null,
               ...response,
             })),
             photos: [],
@@ -95,13 +104,50 @@ describe('the shared report of an occupied inspection', () => {
     expect(select.checklistItem.select).toMatchObject({ kind: true, responseType: true });
   });
 
-  it('publishes no HVAC answer, which has never appeared on a report', async () => {
-    // Readings and free text: scoped out so every other report stays exactly
-    // what it was.
+  /**
+   * The office's HVAC report prints what was measured on its section's table,
+   * so a reading is printed as the answer on its row, with its unit (2026-09-16).
+   */
+  it('prints an HVAC reading as the answer on its row, with its unit', async () => {
     const { service } = build([
       {
-        textValue: 'Filter replaced, coil dirty',
-        checklistItem: { id: 'ac-1', label: 'Notes', keywords: [], kind: 'AIR_CONDITIONING', responseType: 'TEXT' },
+        textValue: null,
+        numericValue: '18.50',
+        checklistItem: {
+          id: 'ac-1',
+          label: 'Temperature split',
+          keywords: [],
+          kind: 'AIR_CONDITIONING',
+          responseType: 'READING',
+          unit: '°F',
+        },
+      },
+      {
+        textValue: null,
+        numericValue: null,
+        checklistItem: {
+          id: 'ac-2',
+          label: 'Outdoor temperature',
+          keywords: [],
+          kind: 'AIR_CONDITIONING',
+          responseType: 'READING',
+          unit: '°F',
+        },
+      },
+    ]);
+
+    const report = await service.publicReport('valid-token');
+
+    expect(report.rooms[0].checklist[0]).toMatchObject({ responseType: 'READING', textValue: '18.5 °F' });
+    // Not taken: an empty row, never "0 °F".
+    expect(report.rooms[0].checklist[1]).toMatchObject({ responseType: 'READING', textValue: null });
+  });
+
+  it('prints an HVAC row scored on its three axes as every scored row is', async () => {
+    const { service } = build([
+      {
+        textValue: null,
+        checklistItem: { id: 'ac-3', label: 'Drip pan', keywords: [], kind: 'AIR_CONDITIONING', responseType: 'STATUS' },
       },
     ]);
 

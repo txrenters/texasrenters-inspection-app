@@ -147,6 +147,31 @@ describe('parsing the tenancy report', () => {
     const [tenant] = parseTenantReport(report([row()]));
     expect(tenant!.buildingExternalId).toBeNull();
     expect(tenant!.addressLine1).toBe('6341 Del Monte Dr');
+    expect(tenant).toMatchObject({ unitExternalId: null, unitName: null });
+  });
+
+  /** Added for buildings of several units (the office, 2026-09-18), under whichever label the report uses. */
+  it('carries the unit when the report names it', () => {
+    const withUnit = [
+      ...columns,
+      { index: '21', dataType: 'text', label: 'Unit Entity ID' },
+      { index: '22', dataType: 'text', label: 'Unit' },
+    ];
+    const [tenant] = parseTenantReport({
+      totalCount: 1,
+      columns: withUnit,
+      records: [{ ...row(), '21': '9012', '22': '1/2' }],
+    });
+    expect(tenant).toMatchObject({ unitExternalId: '9012', unitName: '1/2' });
+  });
+
+  it('reads the unit under the label "Unit Name" too', () => {
+    const [tenant] = parseTenantReport({
+      totalCount: 1,
+      columns: [...columns, { index: '21', dataType: 'text', label: 'Unit Name' }],
+      records: [{ ...row(), '21': 'North' }],
+    });
+    expect(tenant!.unitName).toBe('North');
   });
 });
 

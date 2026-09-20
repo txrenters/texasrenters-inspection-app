@@ -1,4 +1,5 @@
 import type { AreaChecklistItemKind, Prisma } from '@prisma/client';
+import { hvacSectionOf } from '@texasrenters/shared';
 
 /** What `checklistKindFor` can answer. Widened here so both helpers agree. */
 export type ChecklistKind = 'ROOM' | 'AIR_CONDITIONING' | 'OCCUPIED' | 'NONE';
@@ -35,4 +36,21 @@ export function checklistKindWhere(kind: ChecklistKind): Prisma.AreaChecklistIte
  */
 export function checklistItemsAreOrganizationWide(kind: ChecklistKind): boolean {
   return kind === 'AIR_CONDITIONING' || kind === 'OCCUPIED';
+}
+
+/**
+ * The part of an organization-wide list that one area asks.
+ *
+ * An HVAC inspection is walked in the office report's sections, one area each
+ * -- Attic, Filters, A/C unit, Thermostat -- and each area asks its own
+ * section's items, found by the area's name. Every other area asks the whole
+ * list: an occupied room, and the single "HVAC System" area of an inspection
+ * created before the sections were areas.
+ */
+export function checklistSectionWhere(
+  kind: ChecklistKind,
+  areaName: string | null | undefined,
+): Prisma.AreaChecklistItemWhereInput {
+  const section = kind === 'AIR_CONDITIONING' ? hvacSectionOf(areaName) : null;
+  return section ? { section } : {};
 }

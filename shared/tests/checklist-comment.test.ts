@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { choiceInvitesComment } from '../src/contracts/checklist-comment.js';
-import { HVAC_CONDITION_CHOICES } from '../src/contracts/hvac-checklist.js';
 
 /**
  * From the 2026-09-09 field feedback: "Comments: Required only when an issue is
@@ -46,9 +45,20 @@ describe('which answers invite the technician to explain', () => {
     expect(choiceInvitesComment('Something the office added later')).toBe(true);
   });
 
-  describe('against the HVAC form, which already ships these choices', () => {
+  /**
+   * The sixty-item HVAC form the office's report replaced on 2026-09-16. Its
+   * answers are still stored on the HVAC inspections walked before then, and
+   * still read back.
+   */
+  describe('against the old HVAC form’s answers, still stored on earlier inspections', () => {
     it('asks after every option except the one that means no action', () => {
-      const asked = HVAC_CONDITION_CHOICES.filter((choice) => choiceInvitesComment(choice));
+      const asked = [
+        'Good — no action required',
+        'Maintenance recommended',
+        'Repair recommended',
+        'Immediate repair required',
+        'Replacement recommended',
+      ].filter((choice) => choiceInvitesComment(choice));
       expect(asked).toEqual([
         'Maintenance recommended',
         'Repair recommended',
@@ -58,7 +68,7 @@ describe('which answers invite the technician to explain', () => {
     });
 
     it('matches the em dash the printed form uses', () => {
-      // Written with an em dash in `HVAC_CONDITION_CHOICES`. A hyphen is
+      // Written with an em dash on the old form. A hyphen is
       // accepted too, because the two spellings are exactly the kind of thing
       // that drifts when somebody retypes a form.
       expect(choiceInvitesComment('Good — no action required')).toBe(false);

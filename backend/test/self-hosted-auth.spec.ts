@@ -251,6 +251,48 @@ describe('one device per technician', () => {
     expect(prisma.authRefreshToken.findFirst).not.toHaveBeenCalled();
   });
 
+  /**
+   * The office (2026-09-17): only the technician app is held to one device. A
+   * coordinator who is a technician too was refused at the console with "take
+   * this device over" -- which the console cannot even offer.
+   */
+  it('never holds a sign-in to the console to one device, even a technician’s', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    prisma.authRefreshToken.findFirst.mockResolvedValue(liveSession);
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await expect(service.signIn('user@example.com', PASSWORD, { client: 'console' })).resolves.toMatchObject({
+      tokenType: 'Bearer',
+    });
+    // Not looked for, and the phone is not signed out.
+    expect(prisma.authRefreshToken.findFirst).not.toHaveBeenCalled();
+    expect(prisma.authRefreshToken.updateMany).not.toHaveBeenCalled();
+    expect(prisma.authRefreshToken.create.mock.calls[0][0].data).toMatchObject({ fromConsole: true });
+  });
+
+  it('never counts a console session as another device when a phone signs in', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await service.signIn('user@example.com', PASSWORD, { deviceId: 'handset-a' });
+
+    expect(prisma.authRefreshToken.findFirst.mock.calls[0][0].where).toMatchObject({ fromConsole: false });
+    expect(prisma.authRefreshToken.create.mock.calls[0][0].data).toMatchObject({ deviceId: 'handset-a', fromConsole: false });
+  });
+
+  it('leaves the console signed in when a phone takes the account over', async () => {
+    const prisma = prismaFor(credentialRow({ profile: TECHNICIAN }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await service.signIn('user@example.com', PASSWORD, { takeOverExistingSession: true });
+
+    expect(prisma.authRefreshToken.updateMany.mock.calls[0][0].where).toEqual({
+      authUserId: AUTH_USER_ID,
+      revokedAt: null,
+      fromConsole: false,
+    });
+  });
+
   it('still reads a wrong password as a wrong password', async () => {
     // The refusal must not become the answer to everything: a technician with
     // a live session and a typo needs to be told about the typo.
@@ -433,6 +475,25 @@ describe('refresh rotation', () => {
     // Expiry is normal, not an attack — signing every other device out would be
     // punishing a technician for leaving the app closed over a weekend.
     expect(prisma.authRefreshToken.updateMany).not.toHaveBeenCalled();
+  });
+
+  /** Dropping `deviceId` on rotation made a phone's own session look like another handset. */
+  it('keeps the session’s device and where it was signed in from through a rotation', async () => {
+    const { prisma, tx } = refreshPrisma(liveToken({ deviceId: 'handset-a', fromConsole: false }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await service.refresh('presented-token');
+
+    expect(tx.authRefreshToken.create.mock.calls[0][0].data).toMatchObject({ deviceId: 'handset-a', fromConsole: false });
+  });
+
+  it('marks a console session from before the mark when the console refreshes it', async () => {
+    const { prisma, tx } = refreshPrisma(liveToken({ deviceId: null, fromConsole: false }));
+    const service = new SessionService(prisma as never, new TokenService());
+
+    await service.refresh('presented-token', { client: 'console' });
+
+    expect(tx.authRefreshToken.create.mock.calls[0][0].data).toMatchObject({ fromConsole: true });
   });
 
   it('rejects an unknown token', async () => {

@@ -17,13 +17,17 @@ import {
 import {
   LEASE_EXPIRING_SOON_DAYS,
   bookingFromTenancy,
+  booksAnyService,
   daysUntilLeaseEnd,
   isBookableInspectionType,
   jobberBookingProblems,
   jobberBookingText,
   leaseExpiryStatus,
+  visitServicesDetails,
+  visitServicesProblems,
   type JobberBookingContext,
   type JobberBookingInput,
+  type VisitServicesBooking,
 } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../common/auth';
@@ -40,6 +44,8 @@ import {
   requireBuilding,
   resolveInspectionPlan,
 } from './inspection-creation';
+import { inspectionEvidenceTimes, inspectionSpan } from './inspection-timing';
+import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import {
@@ -90,6 +96,13 @@ import type {
   UpdateAdminInspectionDto,
   UpdateJobberVisitDto,
 } from './admin.dto';
+
+/** The services a visit books, by name, for an audit entry: never the Details. */
+function bookedServiceNames(services: VisitServicesBooking['services']): string[] {
+  return Object.entries(services)
+    .filter(([, booked]) => booked)
+    .map(([service]) => service);
+}
 
 /** The street address a booked visit's title starts with: the unit's, else the building's. */
 function bookingAddress(
@@ -1366,6 +1379,9 @@ export class AdminService {
     const { jobberVisitId, jobberOutboundTasks, ...detail } = inspection;
     // Optional-chained for the test doubles that stand in for this read without it.
     const consoleTasks = jobberOutboundTasks ?? [];
+    // The inspection itself, read from its evidence rather than from a button
+    // nobody presses: see inspection-timing.ts.
+    const span = inspectionSpan(await inspectionEvidenceTimes(this.prisma, user.organizationId, id));
     const booking = consoleTasks.find((task) => task.kind === JobberOutboundKind.VISIT_CREATE);
     return {
       ...detail,
@@ -1379,6 +1395,9 @@ export class AdminService {
         .map((task) => ({ kind: task.kind, status: task.status, attempts: task.attempts, lastError: task.lastError })),
       // Whether a change made here reaches Jobber, so the edit form can say so.
       jobberEditsPushed: getJobberConfig().pushEditsEnabled,
+      inspectionWorked: span
+        ? { from: span.from.toISOString(), to: span.to.toISOString(), clock: span.clock }
+        : null,
     };
   }
 
@@ -1406,6 +1425,9 @@ export class AdminService {
 
   async createInspection(user: AuthenticatedUser, input: CreateAdminInspectionDto) {
     const booking = input.jobberBooking ? this.bookableRequest(input) : null;
+    // A booking writes its services into the Details it sends; without one they
+    // are the whole of the Details.
+    const unbookedServices = booking ? null : this.unbookedServicesDetails(input);
     const inspection = await this.prisma.$transaction(async (tx) => {
       // Every rule about what an inspection may be lives in inspection-creation.ts,
       // so a Jobber-scheduled visit is held to the same ones — including the area
@@ -1426,6 +1448,7 @@ export class AdminService {
         priority: input.priority,
         internalNotes: input.internalNotes,
         createdById: user.id,
+        ...(unbookedServices ? { jobberVisitDetails: unbookedServices.details } : {}),
       });
       await this.audit(tx, user, 'INSPECTION_CREATED', inspection.id, {
         priority: input.priority,
@@ -1438,6 +1461,7 @@ export class AdminService {
         areasFromApprovedPlan: plan.approvedAreas.length,
         // What the inspection actually covers, which differs when scoped.
         areasInspected: plan.scopedAreas.length,
+        ...(unbookedServices ? { services: unbookedServices.services } : {}),
       });
       if (input.technicianId)
         await this.createAssignment(
@@ -1489,9 +1513,39 @@ export class AdminService {
         'Booking visits in Jobber is switched off on this server. Book the visit in Jobber instead.',
       );
     const booking = input.jobberBooking as JobberBookingInput;
-    const problems = jobberBookingProblems(booking, input.inspectionType);
+    const problems = jobberBookingProblems(booking);
     if (problems.length) throw new ApplicationError(422, 'JOBBER_BOOKING_INVALID', problems.join(' '));
     return booking;
+  }
+
+  /**
+   * The services a visit not booked in Jobber from here books, as its Details.
+   *
+   * The services line alone -- "Pest Control + HVAC Inspection" -- because that
+   * is what the phone lists the job's services from, and what the console asks
+   * the coordinator to put in the visit's Details in Jobber. Null when nothing
+   * is booked, so an inspection created without services is created exactly as
+   * before. Checked before anything is written, like a booking.
+   */
+  private unbookedServicesDetails(
+    input: CreateAdminInspectionDto,
+  ): { details: string; services: string[] } | null {
+    const requested = input.visitServices as VisitServicesBooking | undefined;
+    if (!requested || !booksAnyService(requested.services)) return null;
+    // The kinds whose Details this system writes: a lockbox, a roof or a filter
+    // delivery has no services line to add them to.
+    if (!isBookableInspectionType(input.inspectionType))
+      throw new ApplicationError(
+        422,
+        'VISIT_SERVICES_TYPE_UNSUPPORTED',
+        'Services can be added to an occupied, move-in, move-out, back-to-market or HVAC inspection only.',
+      );
+    const problems = visitServicesProblems(requested);
+    if (problems.length) throw new ApplicationError(422, 'VISIT_SERVICES_INVALID', problems.join(' '));
+    return {
+      details: visitServicesDetails(input.inspectionType, requested)!,
+      services: bookedServiceNames(requested.services),
+    };
   }
 
   /**
@@ -1568,12 +1622,8 @@ export class AdminService {
       jobberPropertyId: link.jobberPropertyId,
       inspectionType,
       benefitPackage: inspectionType === 'OCCUPIED' && booking.benefitPackage,
-      services:
-        inspectionType === 'OCCUPIED'
-          ? Object.entries(booking.services)
-              .filter(([, booked]) => booked)
-              .map(([service]) => service)
-          : [],
+      // Every kind of visit can book them now, and writes them when it does.
+      services: bookedServiceNames(booking.services),
     });
   }
 
@@ -1638,48 +1688,17 @@ export class AdminService {
   /**
    * The tenancy and lease a booking's prefill is read from.
    *
-   * The tenant report records a building and nothing finer, so a tenancy is
-   * matched to the lease by name, which the report's own key is built from. A
-   * building with one tenancy and at most one unit needs no match. Anything
-   * less certain prefills nothing: typing a plan is better than correcting
-   * somebody else's.
+   * `tenancyOnFile` is shared with the handset's job screen, which shows the
+   * same file to the technician standing at the door. The matching rules, and
+   * why they refuse to guess, are documented there.
    */
-  private async bookingTenancy(
+  private bookingTenancy(
     organizationId: string,
     buildingId: string,
     unitId: string | null,
     leaseId: string | null,
   ) {
-    const leases =
-      leaseId || unitId
-        ? await this.prisma.propertywareLease.findMany({
-            where: leaseId
-              ? { id: leaseId, organizationId, buildingId }
-              : { organizationId, buildingId, unitId, isActive: true },
-            select: { leaseName: true, tenantDisplayNames: true },
-            take: 2,
-          })
-        : [];
-    const lease = leases.length === 1 ? leases[0]! : null;
-    const [tenancies, units] = await Promise.all([
-      this.prisma.propertywareTenant.findMany({
-        where: { organizationId, propertywareBuildingId: buildingId, isActive: true },
-        select: {
-          leaseName: true,
-          zone: true,
-          managementPlan: true,
-          hvacPlan: true,
-          hvacFilterLocation: true,
-          hvacFilterSizes: true,
-          tbpEnrollment: true,
-        },
-      }),
-      this.prisma.propertywareUnit.count({ where: { organizationId, buildingId, isActive: true } }),
-    ]);
-    const named = lease?.leaseName ? tenancies.filter((tenancy) => tenancy.leaseName === lease.leaseName) : [];
-    const tenancy =
-      named.length === 1 ? named[0]! : tenancies.length === 1 && units <= 1 ? tenancies[0]! : null;
-    return { tenancy, tenantNames: lease?.tenantDisplayNames ?? [] };
+    return tenancyOnFile(this.prisma, { organizationId, buildingId, unitId, leaseId });
   }
 
   /**

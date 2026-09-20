@@ -4,14 +4,19 @@ import {
   type PriorRank,
   type RotationCandidate,
   carryForwardOrder,
+  closedDaysOfQuarter,
+  monthOfPlan,
   nextQuarter,
+  planStartRange,
   planningOpensOn,
   previousQuarter,
   quarterDueForPlanning,
   quarterEnd,
   quarterLabel,
   quarterOf,
+  quarterFirstDay,
   quarterStart,
+  usFederalHolidays,
   workingDaysOfQuarter,
 } from '../src/contracts/quarter-plan.js';
 
@@ -111,17 +116,22 @@ describe('the working days of a quarter', () => {
     expect(days).toContain('2026-10-05');
   });
 
-  /**
-   * Passed in rather than derived. A hardcoded list of US federal holidays
-   * would be wrong for the days this office actually closes and right for days
-   * it does not — their calendar is theirs to state.
-   */
-  it('leaves out the days the office says it is closed', () => {
-    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-26', '2026-12-25']);
+  /** The office works weekdays and not US holidays (2026-09-16), and nobody has to type them in. */
+  it('leaves out the US federal holidays that fall in it', () => {
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 });
 
-    expect(days).not.toContain('2026-11-26');
-    expect(days).not.toContain('2026-12-25');
+    // Columbus Day, Veterans Day, Thanksgiving and Christmas: 66 weekdays, less four.
+    expect(days).toHaveLength(62);
+    for (const holiday of ['2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25']) expect(days).not.toContain(holiday);
     expect(days).toContain('2026-11-27');
+  });
+
+  it('leaves out any other day the office names as closed', () => {
+    const days = workingDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-27', '2026-12-24']);
+
+    expect(days).toHaveLength(60);
+    expect(days).not.toContain('2026-11-27');
+    expect(days).not.toContain('2026-12-24');
   });
 
   it('ignores a holiday that falls outside the quarter', () => {
@@ -129,6 +139,82 @@ describe('the working days of a quarter', () => {
     const without = workingDaysOfQuarter({ year: 2026, quarter: 4 });
 
     expect(withStray).toEqual(without);
+  });
+});
+
+describe('the US federal holidays', () => {
+  it('lists the eleven as they are observed', () => {
+    expect(usFederalHolidays(2026)).toEqual([
+      '2026-01-01',
+      '2026-01-19',
+      '2026-02-16',
+      '2026-05-25',
+      '2026-06-19',
+      // 4 July 2026 is a Saturday, so it is observed on the Friday.
+      '2026-07-03',
+      '2026-09-07',
+      '2026-10-12',
+      '2026-11-11',
+      '2026-11-26',
+      '2026-12-25',
+    ]);
+  });
+
+  it('moves a Sunday holiday to the Monday and a Saturday one to the Friday', () => {
+    const holidays = usFederalHolidays(2027);
+
+    expect(holidays).toContain('2027-07-05');
+    expect(holidays).toContain('2027-12-24');
+  });
+
+  it('puts a Saturday New Year’s Day on the last day of the year before', () => {
+    expect(usFederalHolidays(2027)).toContain('2027-12-31');
+    expect(usFederalHolidays(2028)).not.toContain('2028-01-01');
+    expect(usFederalHolidays(2028)).toHaveLength(10);
+  });
+});
+
+describe('the days a quarter loses', () => {
+  it('lists its holidays and named closed days, only on weekdays inside it', () => {
+    // 26 November is Thanksgiving already, 4 July is in Q3 and 3 October is a Saturday.
+    const closed = closedDaysOfQuarter({ year: 2026, quarter: 4 }, ['2026-11-27', '2026-11-26', '2026-07-04', '2026-10-03']);
+
+    expect(closed).toEqual(['2026-10-12', '2026-11-11', '2026-11-26', '2026-11-27', '2026-12-25']);
+  });
+
+  it('counts from a plan’s own start, the year before’s holidays too', () => {
+    // Q1 2027 started on 17 December 2026: Christmas and New Year's Day are that plan's.
+    expect(closedDaysOfQuarter({ year: 2027, quarter: 1 }, [], '2026-12-17').slice(0, 2)).toEqual(['2026-12-25', '2027-01-01']);
+    // Q4 2026 started on 16 October: Columbus Day, on the 12th, is before it.
+    expect(closedDaysOfQuarter({ year: 2026, quarter: 4 }, [], '2026-10-16')[0]).toBe('2026-11-11');
+  });
+});
+
+/**
+ * The office (2026-09-19): "there's a +-15 days rule ... to schedule 15 days
+ * before the start of quarter ... for the q4 we can start as early as september".
+ */
+describe('a plan’s own start', () => {
+  const q4 = { year: 2026, quarter: 4 as const };
+
+  it('may be up to fifteen days either side of the quarter’s first day', () => {
+    expect(planStartRange(q4)).toEqual({ earliest: '2026-09-16', latest: '2026-10-16' });
+    expect(planStartRange({ year: 2027, quarter: 1 })).toEqual({ earliest: '2026-12-17', latest: '2027-01-16' });
+  });
+
+  it('gives the plan the working days from its own first', () => {
+    const days = workingDaysOfQuarter(q4, [], '2026-09-21');
+
+    expect(days.slice(0, 3)).toEqual(['2026-09-21', '2026-09-22', '2026-09-23']);
+    expect(days.at(-1)).toBe('2026-12-31');
+    expect(days).toHaveLength(62 + 8);
+    expect(workingDaysOfQuarter(q4, [], '2026-10-05')[0]).toBe('2026-10-05');
+  });
+
+  it('puts a day before the quarter in its first month', () => {
+    expect(['2026-09-21', '2026-10-01', '2026-11-30', '2026-12-31'].map((date) => monthOfPlan(date, q4))).toEqual([1, 1, 2, 3]);
+    expect(monthOfPlan('2027-01-04', q4)).toBe(3);
+    expect(quarterFirstDay(q4)).toBe('2026-10-01');
   });
 });
 
@@ -160,6 +246,8 @@ describe('carrying the tenant order forward', () => {
       tenantExternalId: 'new',
       sequence: 3,
       previousSequence: null,
+      previousVisitOn: null,
+      previousVisitMonth: null,
       orderSource: 'NEW_ENROLLMENT',
     });
   });
@@ -173,8 +261,8 @@ describe('carrying the tenant order forward', () => {
     const stops = carryForwardOrder([tenant('a'), tenant('c')], [order('a', 'b', 'c')]);
 
     expect(stops).toEqual([
-      { tenantExternalId: 'a', sequence: 1, previousSequence: 1, orderSource: 'PRIOR_QUARTER' },
-      { tenantExternalId: 'c', sequence: 2, previousSequence: 3, orderSource: 'PRIOR_QUARTER' },
+      { tenantExternalId: 'a', sequence: 1, previousSequence: 1, previousVisitOn: null, previousVisitMonth: null, orderSource: 'PRIOR_QUARTER' },
+      { tenantExternalId: 'c', sequence: 2, previousSequence: 3, previousVisitOn: null, previousVisitMonth: null, orderSource: 'PRIOR_QUARTER' },
     ]);
   });
 
@@ -194,8 +282,40 @@ describe('carrying the tenant order forward', () => {
       tenantExternalId: 'skipped',
       sequence: 2,
       previousSequence: 2,
+      previousVisitOn: null,
+      previousVisitMonth: null,
       orderSource: 'CARRIED_SKIP',
     });
+  });
+
+  /** A plan may start before its quarter (2026-09-19), so the day alone cannot say which month of it the visit was in. */
+  it('carries the month of its quarter the visit a place came from was in', () => {
+    const stops = carryForwardOrder(
+      [tenant('early'), tenant('new')],
+      [[{ tenantExternalId: 'early', sequence: 1, visitedOn: '2026-09-25', visitedMonth: 1 }]],
+    );
+
+    expect(stops.map((stop) => [stop.tenantExternalId, stop.previousVisitOn, stop.previousVisitMonth])).toEqual([
+      ['early', '2026-09-25', 1],
+      ['new', null, null],
+    ]);
+  });
+
+  /** The office (2026-09-18): each visit keeps its month of the quarter, so the day is carried with the place. */
+  it('carries the day of the visit a place came from', () => {
+    const stops = carryForwardOrder(
+      [tenant('a'), tenant('skipped'), tenant('new')],
+      [
+        [{ tenantExternalId: 'a', sequence: 1, visitedOn: '2026-08-12' }],
+        [{ tenantExternalId: 'skipped', sequence: 1, visitedOn: '2026-05-04' }],
+      ],
+    );
+
+    expect(stops.map((stop) => [stop.tenantExternalId, stop.previousVisitOn])).toEqual([
+      ['skipped', '2026-05-04'],
+      ['a', '2026-08-12'],
+      ['new', null],
+    ]);
   });
 
   it('stops looking back after four quarters', () => {

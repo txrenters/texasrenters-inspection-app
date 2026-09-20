@@ -5,7 +5,8 @@ import type { AuthenticatedUser } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
 import { PresenceService } from '../realtime/presence.service';
 import { TechnicianEventsGateway } from '../realtime/technician-events.gateway';
-import type { TechnicianLocationBatchDto } from './technician.dto';
+import type { TechnicianLocationBatchDto, TechnicianLocationStatusDto } from './technician.dto';
+import { TrackingStatusStore } from './tracking-status.store';
 
 /**
  * Where technicians have been, and where they are now.
@@ -26,7 +27,28 @@ export class TechnicianLocationService {
     @Optional()
     @Inject(PresenceService)
     private readonly presence?: PresenceService,
+    @Optional()
+    @Inject(TrackingStatusStore)
+    private readonly tracking?: TrackingStatusStore,
   ) {}
+
+  /** Keeps what the phone said about how it is recording. See the store. */
+  recordTrackingStatus(user: AuthenticatedUser, status: TechnicianLocationStatusDto) {
+    const reported = this.tracking?.record(user.id, {
+      recording: status.recording,
+      stoppedBecause: status.stoppedBecause ?? null,
+      foregroundPermission: status.foregroundPermission,
+      backgroundPermission: status.backgroundPermission,
+      servicesEnabled: status.servicesEnabled ?? null,
+      platform: status.platform,
+      appVersion: status.appVersion ?? null,
+      updateId: status.updateId ?? null,
+      appState: status.appState ?? null,
+      lastFixAt: status.lastFixAt ?? null,
+      queuedFixes: status.queuedFixes,
+    });
+    return { reportedAt: reported?.reportedAt ?? new Date().toISOString() };
+  }
 
   /**
    * Stores a batch of fixes and says what it did with them.
@@ -134,6 +156,7 @@ export class TechnicianLocationService {
         latitude: newest.latitude.toNumber(),
         longitude: newest.longitude.toNumber(),
         recordedAt: newest.recordedAt.toISOString(),
+        tracking: this.tracking?.get(user.id) ?? null,
       });
     } catch (error) {
       this.logger.warn({
@@ -240,6 +263,7 @@ export class TechnicianLocationService {
         longitude: row.longitude.toNumber(),
         recordedAt: row.recordedAt.toISOString(),
         app: presence ? { connected: presence.isOnline, lastSeenAt: presence.lastSeenAt } : null,
+        tracking: this.tracking?.get(row.technicianId) ?? null,
       };
     });
   }

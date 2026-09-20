@@ -44,20 +44,29 @@ export function trimQueue(queue: readonly QueuedFix[], max = MAX_QUEUE_LENGTH): 
 }
 
 /**
- * The next batch to send, oldest first.
+ * The next batch to send, oldest first -- and the newest, always.
  *
  * Filtered through the shared rule before it leaves the device: a fix the
  * server would refuse is not worth the radio, and on a handset in the field
  * signal is the scarce thing. Bounded by the same limit the API enforces, so a
  * queue drained after a long outage goes in whole batches rather than being
  * rejected wholesale.
+ *
+ * The newest fix rides with the first batch rather than the last. Strictly
+ * oldest-first held the one point the office is waiting for -- where the
+ * technician is now -- behind every batch of backlog, and the map sat on an
+ * old position until the queue had emptied. The server broadcasts whichever
+ * stored fix is newest, so including it moves the marker on the first request;
+ * the history in between still arrives, a batch at a time.
  */
 export function fixesToSend(queue: readonly QueuedFix[], now = Date.now()): QueuedFix[] {
   const due = queue.filter((fix) => {
     if (!fix.nextAttemptAt) return true;
     return new Date(fix.nextAttemptAt).getTime() <= now;
   });
-  return usableLocationFixes(due, now).slice(0, MAX_LOCATION_BATCH);
+  const usable = usableLocationFixes(due, now);
+  if (usable.length <= MAX_LOCATION_BATCH) return usable;
+  return [...usable.slice(0, MAX_LOCATION_BATCH - 1), ...usable.slice(-1)];
 }
 
 /**

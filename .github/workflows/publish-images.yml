@@ -100,3 +100,51 @@ jobs:
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Tell production the images are in
+  # ---------------------------------------------------------------------------
+  #
+  # The server deploys the newest release as soon as it hears this, rather than
+  # at its next five-minute check. What it trusts is a token GitHub signs for
+  # this job (OpenID Connect) naming this repository, this workflow and the
+  # event that ran it, so no secret is kept here or on the server. See
+  # backend/src/deployments and scripts/deploy/systemd/texasrenters-update.path.
+  #
+  # After both images, and only for a release: the server deploys releases and
+  # nothing else, and one with an image missing could not be pulled.
+  deploy:
+    needs: publish
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      # To ask GitHub for the token, and nothing else: this job reads no code.
+      id-token: write
+    steps:
+      - name: Ask production to deploy
+        env:
+          AUDIENCE: texasrenters-inspection-deploy
+          DEPLOY_REQUEST_URL: ${{ vars.DEPLOY_REQUEST_URL || 'https://inspection-api.texasrenters.com/api/v1/deploy-requests' }}
+        # Never fails the run. The images are published either way, and a
+        # request that does not land costs at most five minutes: the server's
+        # own check deploys the release. It is reported as a warning instead.
+        run: |
+          if ! token="$(curl -fsS --max-time 30 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}" | jq -er '.value')"; then
+            echo "::warning title=Production was not asked to deploy::GitHub issued no token for the request. The server deploys ${GITHUB_REF_NAME} at its next check instead, within five minutes."
+            exit 0
+          fi
+          echo "::add-mask::${token}"
+
+          # Retried while the server is briefly unreachable (a proxy restart, a
+          # 502), but a refusal is final.
+          status="$(curl -sS --max-time 30 --retry 4 --retry-delay 10 --retry-connrefused \
+            -o response.json -w '%{http_code}' \
+            -X POST -H "Authorization: Bearer ${token}" "${DEPLOY_REQUEST_URL}")" || true
+          if [ "${status}" = "202" ]; then
+            echo "Production is deploying ${GITHUB_REF_NAME}: $(cat response.json)"
+          else
+            echo "::warning title=Production was not asked to deploy::The server answered ${status:-nothing}. It deploys ${GITHUB_REF_NAME} at its next check instead, within five minutes."
+            cat response.json 2>/dev/null || true
+          fi

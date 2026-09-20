@@ -1,5 +1,6 @@
 import {
   MAX_MATRIX_ELEMENTS,
+  matrixWaitMs,
   parseDuration,
   parseRouteMatrix,
 } from '../src/routing/google-routes.client';
@@ -81,9 +82,15 @@ describe('reading a route matrix', () => {
   });
 
   it('ignores an index outside the matrix rather than growing it', () => {
-    const matrix = parseRouteMatrix([entry(0, 0, '0s', 0), entry(0, 9, '60s', 1000)], 1);
+    const matrix = parseRouteMatrix(
+      [entry(0, 0, '0s', 0), entry(0, 1, '60s', 1000), entry(1, 0, '60s', 1000), entry(1, 1, '0s', 0), entry(0, 9, '60s', 1000)],
+      2,
+    );
 
-    expect(matrix?.durations).toEqual([[0]]);
+    expect(matrix?.durations).toEqual([
+      [0, 60],
+      [60, 0],
+    ]);
   });
 
   /**
@@ -101,6 +108,39 @@ describe('reading a route matrix', () => {
 
   it('refuses a zero-sized matrix', () => {
     expect(parseRouteMatrix([entry(0, 0, '0s', 0)], 0)).toBeNull();
+  });
+});
+
+/**
+ * 2026-09-16: a Rebuild of full days got matrices back with only each point to
+ * itself answered, and an empty route took the quarter's routing down.
+ */
+describe('a matrix answered only on its diagonal', () => {
+  it('is no answer at all, so the caller falls back', () => {
+    const diagonalOnly = [0, 1, 2].map((index) => entry(index, index, '0s', 0));
+
+    expect(parseRouteMatrix(diagonalOnly, 3)).toBeNull();
+  });
+});
+
+describe('pacing route matrices under the per-minute quota', () => {
+  const at = (seconds: number, elements: number) => ({ at: seconds * 1000, elements });
+
+  it('asks straight away while the minute has room', () => {
+    expect(matrixWaitMs([at(0, 1000)], 900, 2000, 30_000)).toBe(0);
+  });
+
+  it('waits until enough of the minute’s earlier matrices fall out of it', () => {
+    // 1,900 asked for in the last minute; 169 more waits for the first 1,000 to age out at 60 s.
+    expect(matrixWaitMs([at(0, 1000), at(20, 900)], 169, 2000, 30_000)).toBe(30_000);
+  });
+
+  it('forgets matrices older than a minute', () => {
+    expect(matrixWaitMs([at(0, 2000)], 169, 2000, 61_000)).toBe(0);
+  });
+
+  it('never makes a matrix wait on an empty minute, however large', () => {
+    expect(matrixWaitMs([], 5000, 2000, 0)).toBe(0);
   });
 });
 

@@ -153,3 +153,29 @@ describe('checklistProgress', () => {
     expect(checklistProgress(items, ['a', 'a'])).toEqual({ covered: 1, total: 2 });
   });
 });
+
+/**
+ * The offline list of an HVAC section is its section of the office's report,
+ * typed as the server's rows are, so a technician with no signal in the Attic
+ * sees the Attic's four rows.
+ */
+describe('the fallback checklist of an HVAC section', () => {
+  it('asks a section its own rows', () => {
+    const items = checklistForArea({ name: 'Attic', inspectionType: 'HVAC' });
+
+    expect(items.map((item) => item.label)).toEqual(['Float switch', 'Drip pan', 'Media filter', 'Furnace condition']);
+    expect(items.every((item) => item.responseType === 'STATUS')).toBe(true);
+  });
+
+  it('keeps a reading a reading, with its unit, and never covers it by talk', () => {
+    const split = checklistForArea({ name: 'Thermostat', inspectionType: 'HVAC' }).find(
+      (item) => item.label === 'Temperature split',
+    );
+
+    expect(split).toMatchObject({ responseType: 'READING', unit: '°F', section: 'Thermostat', keywords: [] });
+  });
+
+  it('asks the single area of an older HVAC inspection every row', () => {
+    expect(checklistForArea({ name: 'HVAC System', inspectionType: 'HVAC' })).toHaveLength(18);
+  });
+});

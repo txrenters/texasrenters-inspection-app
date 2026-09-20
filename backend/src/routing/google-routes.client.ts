@@ -76,7 +76,47 @@ export const MAX_MATRIX_ELEMENTS = 625;
  * included because a route Google could not compute comes back as a row with no
  * duration rather than as an error.
  */
-const MATRIX_FIELD_MASK = 'originIndex,destinationIndex,duration,distanceMeters,condition';
+const MATRIX_FIELD_MASK = 'originIndex,destinationIndex,duration,distanceMeters,condition,status';
+
+/**
+ * How many route-matrix elements to ask Google for in any one minute.
+ *
+ * The Routes API meters route matrices in elements a minute. A quarter of full
+ * days is one matrix a day of up to thirteen points -- 169 elements -- asked for
+ * back to back, and on 2026-09-16 a Rebuild of forty-seven such days got
+ * matrices back with no drive from home answered, and failed. Paced below the
+ * quota, the same quarter takes a couple of minutes longer and is measured
+ * whole. `GOOGLE_ROUTES_MATRIX_ELEMENTS_PER_MINUTE` changes it for a project
+ * whose quota differs.
+ */
+function matrixElementsPerMinute(): number {
+  const configured = Number(process.env.GOOGLE_ROUTES_MATRIX_ELEMENTS_PER_MINUTE);
+  return Number.isInteger(configured) && configured > 0 ? configured : 2_000;
+}
+
+const MINUTE_MS = 60_000;
+
+/**
+ * How long to wait before asking for `elements` more, given what was asked for
+ * in the last minute (`history`, oldest first). Never waits for a matrix asked
+ * for into an empty minute, however large, so nothing can wait forever.
+ * Exported for tests.
+ */
+export function matrixWaitMs(
+  history: readonly { at: number; elements: number }[],
+  elements: number,
+  budget: number,
+  now: number,
+): number {
+  const recent = history.filter((entry) => now - entry.at < MINUTE_MS);
+  let used = recent.reduce((total, entry) => total + entry.elements, 0);
+  if (recent.length === 0 || used + elements <= budget) return 0;
+  for (const entry of recent) {
+    used -= entry.elements;
+    if (used + elements <= budget) return entry.at + MINUTE_MS - now;
+  }
+  return recent[recent.length - 1]!.at + MINUTE_MS - now;
+}
 
 export interface RouteMatrix {
   /** `[origin][destination]` seconds. Unreachable pairs are `Infinity`. */
@@ -117,8 +157,25 @@ export function parseRouteMatrix(body: unknown, size: number): RouteMatrix | nul
 
   // A response that filled nothing is not a matrix of unreachable pairs, it is
   // a response we failed to understand. Saying so lets the caller fall back.
-  const filled = durations.some((row) => row.some((value) => Number.isFinite(value)));
+  // Each point to itself is answered even when nothing else is, so it does not
+  // count as an answer.
+  const filled = durations.some((row, origin) => row.some((value, destination) => origin !== destination && Number.isFinite(value)));
   return filled ? { durations, distances } : null;
+}
+
+/** How many elements Google answered with each status other than a route, e.g. `{ "8: Quota exceeded": 144 }`. */
+function elementStatuses(body: unknown): Record<string, number> {
+  const counts: Record<string, number> = {};
+  if (!Array.isArray(body)) return counts;
+  for (const entry of body as Record<string, unknown>[]) {
+    if (entry?.condition === 'ROUTE_EXISTS') continue;
+    const status = entry?.status as { code?: unknown; message?: unknown } | undefined;
+    const key = `${typeof status?.code === 'number' ? status.code : '-'}: ${
+      typeof status?.message === 'string' ? status.message.slice(0, 80) : String(entry?.condition ?? 'no condition')
+    }`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
 }
 
 /**
@@ -244,6 +301,8 @@ export interface GoogleRoute {
 @Injectable()
 export class GoogleRoutesClient {
   private readonly logger = new Logger(GoogleRoutesClient.name);
+  /** Route-matrix elements asked for, oldest first, for pacing under the per-minute quota. */
+  private readonly matrixHistory: { at: number; elements: number }[] = [];
 
   /**
    * Absent configuration means traffic-aware routing is unavailable, which the
@@ -277,6 +336,8 @@ export class GoogleRoutesClient {
       return null;
     }
 
+    await this.paced(elements);
+
     // Google refuses a departureTime in the past. A plan regenerated after the
     // quarter has started would otherwise fail every remaining day at once.
     const departure = departureTime.getTime() > Date.now() ? departureTime : new Date(Date.now() + 60_000);
@@ -288,7 +349,39 @@ export class GoogleRoutesClient {
       routingPreference: 'TRAFFIC_AWARE',
       departureTime: departure.toISOString(),
     });
-    return body === null ? null : parseRouteMatrix(body, points.length);
+    if (body === null) return null;
+    const matrix = parseRouteMatrix(body, points.length);
+    const unanswered = matrix
+      ? matrix.durations.reduce(
+          (total, row, origin) => total + row.filter((value, destination) => origin !== destination && !Number.isFinite(value)).length,
+          0,
+        )
+      : points.length * (points.length - 1);
+    if (unanswered > 0)
+      // Why, in Google's words: a quota and a road Google cannot find want
+      // different fixes. Codes and messages only -- never the points.
+      this.logger.warn({
+        event: 'google_routes_matrix_incomplete',
+        points: points.length,
+        unanswered,
+        statuses: elementStatuses(body),
+      });
+    return matrix;
+  }
+
+  /** Waits while asking for `elements` more would break the per-minute quota (`matrixElementsPerMinute`). */
+  private async paced(elements: number): Promise<void> {
+    for (;;) {
+      const now = Date.now();
+      while (this.matrixHistory.length && now - this.matrixHistory[0]!.at >= MINUTE_MS) this.matrixHistory.shift();
+      const wait = matrixWaitMs(this.matrixHistory, elements, matrixElementsPerMinute(), now);
+      if (wait <= 0) {
+        this.matrixHistory.push({ at: now, elements });
+        return;
+      }
+      this.logger.log({ event: 'google_routes_matrix_paced', elements, waitMs: wait });
+      await new Promise((resolve) => setTimeout(resolve, wait + 25));
+    }
   }
 
   /**

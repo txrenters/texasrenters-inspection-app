@@ -48,6 +48,8 @@ export function CopyButton({
       className={className}
       onClick={() => void copy()}
       size="sm"
+      // Never a form's submit button: copying is not an answer to the form.
+      type="button"
       variant="ghost"
     >
       {copied ? <CheckIcon aria-hidden className="text-success" /> : <CopyIcon aria-hidden />}

@@ -192,6 +192,8 @@ describe('inspection status lifecycle (spec §11)', () => {
       // No console edit waiting for Jobber, and edits are not pushed here.
       jobberPushes: [],
       jobberEditsPushed: false,
+      // Nothing photographed or recorded, so no span to time the inspection by.
+      inspectionWorked: null,
     });
     expect(tx.inspection.update).toHaveBeenCalledWith(
       expect.objectContaining({

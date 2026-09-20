@@ -212,6 +212,37 @@ export function occupiedInspectionInDetails(details: string | null | undefined):
 }
 
 /**
+ * A benefit-package visit that is an HVAC inspection.
+ *
+ * In Q2 and Q4 a tenancy on the HVAC plan gets an HVAC inspection instead of an
+ * occupied one, and its services line reads "Filter Change: 20x25x1 + Pest
+ * Control + HVAC Inspection". Only a services line counts -- one joining
+ * services with "+" -- because the completion steps on nearly every visit read
+ * "3.HVAC / Occupied Inspection", and other free text mentions HVAC for reasons
+ * of its own. Of 350 Q3 2026 visits, one had this on its services line.
+ */
+export function hvacInspectionInDetails(details: string | null | undefined): boolean {
+  if (!details) return false;
+  return details.split(/\r?\n/).some((line) => line.includes('+') && /\bhvac\s+insp/i.test(line));
+}
+
+/**
+ * The inspection a benefit-package visit's details book, if any.
+ *
+ * HVAC first: an HVAC visit written the office's way also carries the
+ * completion steps that mention an occupied inspection, and it is the services
+ * line that says which this visit is. Read only for a visit whose title already
+ * typed it a delivery -- see `occupiedInspectionInDetails`.
+ */
+export function benefitPackageInspectionInDetails(
+  details: string | null | undefined,
+): typeof InspectionType.HVAC | typeof InspectionType.OCCUPIED | null {
+  if (hvacInspectionInDetails(details)) return InspectionType.HVAC;
+  if (occupiedInspectionInDetails(details)) return InspectionType.OCCUPIED;
+  return null;
+}
+
+/**
  * Words in a title that mean the office booked an inspection.
  *
  * ── WHY A TITLE HAS TO SAY IT ────────────────────────────────────────────────

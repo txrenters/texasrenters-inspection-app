@@ -21,13 +21,18 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@texasrenters/shared';
+import {
+  REPORTABLE_VISIT_SERVICES,
+  UserRole,
+  type ReportableVisitService,
+} from '@texasrenters/shared';
 import { diskStorage } from 'multer';
 
 import { ChargeService } from '../admin/charge.service';
 import { PetObservationDto } from '../admin/admin.dto';
 import { ApiAuthGuard, Roles, RolesGuard, type AuthenticatedRequest } from '../common/auth';
 import { businessDayFromQuery } from '../common/business-day';
+import { ApplicationError } from '../common/errors';
 import { MobilePushService } from '../realtime/mobile-push.service';
 import { MediaProcessingService } from './media-processing.service';
 import {
@@ -36,6 +41,7 @@ import {
   RemoveMobilePushDeviceDto,
   TechnicianAdditionalVideoDto,
   TechnicianCompleteInspectionDto,
+  TechnicianCouldNotAccessDto,
   TechnicianCreateAreaDto,
   TechnicianFindingsQueryDto,
   TechnicianInspectionListQueryDto,
@@ -43,9 +49,11 @@ import {
   TechnicianNoteDto,
   TechnicianPhotoUploadDto,
   TechnicianReasonDto,
+  TechnicianSaveServicesDto,
   TechnicianUpdateAreaDto,
   TechnicianHomeDto,
   TechnicianLocationBatchDto,
+  TechnicianLocationStatusDto,
 } from './technician.dto';
 import { RouteService } from '../routing/route.service';
 import { TechnicianHomeService } from './technician-home.service';
@@ -97,6 +105,22 @@ export class TechnicianController {
   @Post('locations')
   recordLocations(@Req() request: AuthenticatedRequest, @Body() body: TechnicianLocationBatchDto) {
     return this.locations.record(request.user, body);
+  }
+
+  /**
+   * How this phone is recording location: whether it records with the app
+   * minimised, what the technician has allowed, which update it runs, and how
+   * much is waiting to send. The office sees it beside the technician on the
+   * map, so a marker that stops moving comes with a reason.
+   *
+   * Their own phone only -- the id comes from the token.
+   */
+  @Put('location-status')
+  reportLocationStatus(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: TechnicianLocationStatusDto,
+  ) {
+    return this.locations.recordTrackingStatus(request.user, body);
   }
 
   /**
@@ -168,6 +192,50 @@ export class TechnicianController {
     @Body() body: TechnicianCompleteInspectionDto,
   ) {
     return this.service.completeInspection(request.user, id, body);
+  }
+  /**
+   * The job's checklist as it stands, saved while it is still being walked.
+   *
+   * Every tick, rather than the whole report at submission: the checklist is
+   * answered at the start of the job now, and a phone that dies at noon must
+   * not lose the morning.
+   */
+  @Patch('inspections/:inspectionId/services') saveServices(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: TechnicianSaveServicesDto,
+  ) {
+    return this.service.saveServicesReport(request.user, id, body);
+  }
+  /**
+   * The area a job's filter photographs are filed under, made on the first one.
+   *
+   * Kept beside `service-area/:service`: phones on v2.5.75 ask for it by this
+   * name, and an OTA is not guaranteed to have reached every one of them.
+   */
+  @Post('inspections/:inspectionId/filters-area') filtersArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+  ) {
+    return this.service.filtersArea(request.user, id);
+  }
+  /** The area a service's photographs are filed under: the filters, pest control, or flea treatment. */
+  @Post('inspections/:inspectionId/service-area/:service') serviceArea(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Param('service') service: string,
+  ) {
+    if (!(REPORTABLE_VISIT_SERVICES as readonly string[]).includes(service))
+      throw new ApplicationError(404, 'SERVICE_NOT_FOUND', 'There is no such service on a job.');
+    return this.service.serviceArea(request.user, id, service as ReportableVisitService);
+  }
+  /** Nobody let the technician in: the office books the whole visit again. */
+  @Post('inspections/:inspectionId/no-access') couldNotAccess(
+    @Req() request: AuthenticatedRequest,
+    @Param('inspectionId') id: string,
+    @Body() body: TechnicianCouldNotAccessDto,
+  ) {
+    return this.service.couldNotAccess(request.user, id, body);
   }
   @Get('inspections/:inspectionId/rooms') rooms(
     @Req() request: AuthenticatedRequest,

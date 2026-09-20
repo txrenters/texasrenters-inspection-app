@@ -2,6 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { Prisma } from '@prisma/client';
 import { UserRole } from '@texasrenters/shared';
 
 import type { AuthenticatedUser } from '../src/common/auth';
@@ -168,6 +169,58 @@ describe('technician photo evidence', () => {
     expect(mediaStorage.putFromFile).not.toHaveBeenCalled();
   });
 
+  /**
+   * 2026-09-16: a first upload took 69 seconds on a weak signal, the phone sent
+   * it again, and both passed the key check. The retry lost the insert and got
+   * a 500 although the photo was saved.
+   */
+  it('returns the saved photo when a retry races the upload it repeats, and drops its own copy', async () => {
+    const lostTheRace = new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`idempotencyKey`)', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['idempotencyKey'] },
+    });
+    const { service, prisma, mediaStorage } = build({
+      inspectionPhoto: {
+        // Nothing stored yet when this attempt checked; the first one finished before it wrote.
+        findUnique: jest.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 'photo-1', inspectionAreaId: 'area-1' }),
+        create: jest.fn().mockRejectedValue(lostTheRace),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(photoRecord()),
+      },
+    });
+
+    const result = await service.uploadPhoto(
+      technician,
+      'area-1',
+      { idempotencyKey: 'photo-key-abc123', captureType: 'AREA_OVERVIEW' as never },
+      jpeg(),
+    );
+
+    expect(result).toMatchObject({ id: 'photo-1' });
+    expect(prisma.inspectionPhoto.findUniqueOrThrow).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'photo-1' } }));
+    expect(mediaStorage.delete).toHaveBeenCalledWith(mediaStorage.putFromFile.mock.calls[0][0]);
+  });
+
+  it('still fails an upload on any other unique constraint', async () => {
+    const otherConstraint = new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`id`)', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['id'] },
+    });
+    const { service, mediaStorage } = build({
+      inspectionPhoto: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockRejectedValue(otherConstraint),
+        findUniqueOrThrow: jest.fn(),
+      },
+    });
+
+    await expect(
+      service.uploadPhoto(technician, 'area-1', { idempotencyKey: 'photo-key-abc123', captureType: 'AREA_OVERVIEW' as never }, jpeg()),
+    ).rejects.toBe(otherConstraint);
+    expect(mediaStorage.delete).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a non-image upload', async () => {
     const { service } = build();
     await expect(
@@ -181,6 +234,86 @@ describe('technician photo evidence', () => {
         { ...jpeg(), mimetype: 'application/pdf' },
       ),
     ).rejects.toMatchObject({ status: 415, code: 'PHOTO_TYPE_UNSUPPORTED' });
+  });
+
+  describe('a job photograph that arrives after the checklist was answered', () => {
+    const reportedAt = new Date('2026-09-18T15:00:00.000Z');
+    const filtersArea = { ...area, propertyArea: { name: 'AC filters' } };
+    const waitingReport = {
+      services: { filterChange: { done: true, reason: null, reschedule: false } },
+      filters: [
+        {
+          size: '20x25x1',
+          location: 'hallway',
+          slot: 1,
+          changed: true,
+          reason: null,
+          photoKey: 'photo-key-filter-1',
+          photoId: null,
+          booked: true,
+        },
+      ],
+    };
+
+    function buildJob(options: { area?: unknown; counts?: number[] } = {}) {
+      const counts = [...(options.counts ?? [1])];
+      const inspection = {
+        findUnique: jest.fn().mockResolvedValue({ servicesReport: waitingReport, servicesReportedAt: reportedAt }),
+        updateMany: jest.fn().mockImplementation(() => Promise.resolve({ count: counts.shift() ?? 1 })),
+      };
+      return { inspection, ...build({
+        inspectionArea: { findFirst: jest.fn().mockResolvedValue(options.area ?? filtersArea) },
+        inspection,
+        inspectionPhoto: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue(photoRecord({ id: 'photo-9', inspectionAreaId: 'area-1' })),
+          findUniqueOrThrow: jest.fn(),
+          // What `resolveFilterPhotos` reads: the photograph is now stored under its key.
+          findMany: jest.fn().mockResolvedValue([{ id: 'photo-9', idempotencyKey: 'photo-key-filter-1' }]),
+        },
+      }) };
+    }
+
+    const upload = (service: TechnicianService, key = 'photo-key-filter-1') =>
+      service.uploadPhoto(technician, 'area-1', { idempotencyKey: key, captureType: 'SERIAL_OR_LABEL' as never }, jpeg());
+
+    it('fills in the register that was waiting on its key, without moving the time it was reported', async () => {
+      const { service, inspection } = buildJob();
+      await upload(service);
+
+      expect(inspection.updateMany).toHaveBeenCalledTimes(1);
+      const [{ where, data }] = inspection.updateMany.mock.calls[0];
+      // Only if nothing was saved since it was read.
+      expect(where).toEqual({ id: 'insp-1', servicesReportedAt: reportedAt });
+      expect(data).toEqual({
+        servicesReport: expect.objectContaining({ filters: [expect.objectContaining({ photoId: 'photo-9' })] }),
+      });
+    });
+
+    it('leaves a report alone when nothing in it is waiting on that photograph', async () => {
+      const { service, inspection } = buildJob();
+      await upload(service, 'photo-key-something-else');
+      expect(inspection.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('never overwrites a save that landed in between: it reads again and resolves that', async () => {
+      const { service, inspection } = buildJob({ counts: [0, 1] });
+      await upload(service);
+      expect(inspection.findUnique).toHaveBeenCalledTimes(2);
+      expect(inspection.updateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('still returns the stored photograph when the checklist cannot be updated', async () => {
+      const { service, inspection } = buildJob();
+      inspection.updateMany.mockRejectedValue(new Error('connection reset'));
+      await expect(upload(service)).resolves.toMatchObject({ id: 'photo-9' });
+    });
+
+    it('does not read the job at all for a photograph of an ordinary room', async () => {
+      const { service, inspection } = buildJob({ area: { ...area, propertyArea: { name: 'Kitchen' } } });
+      await upload(service);
+      expect(inspection.findUnique).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a finding link that does not belong to the area', async () => {
