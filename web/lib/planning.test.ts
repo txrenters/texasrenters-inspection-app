@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  attentionOf,
+  attentionText,
   bookedInWords,
   dayClock,
   dayOutsideRules,
@@ -119,6 +121,41 @@ describe('a day against the office’s limits', () => {
 });
 
 /** The office (2026-09-19): "for the q4 we can start as early as september by asking that +-15 days". */
+/**
+ * The office (2026-09-20), beside Jobber's unscheduled appointments: "kaning
+ * naka needs attention pwede nato ni ma latag tanan sa map para makita ni sila
+ * asa dapita?" -- so what each one is waiting for has to be named.
+ */
+describe('what a visit is waiting for', () => {
+  const stop = (extra: Partial<Parameters<typeof attentionOf>[0]> = {}) => ({
+    status: 'PLANNED',
+    unitResolution: 'NO_UNITS',
+    scheduledOn: '2026-10-01T00:00:00.000Z',
+    assignedTechnicianId: 'tech-1',
+    inspectionTypeNeedsReview: false,
+    ...extra,
+  });
+
+  it('names the day before the technician, and nothing for a visit that has both', () => {
+    expect(attentionOf(stop())).toBeNull();
+    expect(attentionOf(stop({ scheduledOn: null, assignedTechnicianId: null }))).toBe('NO_DAY');
+    expect(attentionOf(stop({ assignedTechnicianId: null }))).toBe('NO_TECHNICIAN');
+    expect(attentionOf(stop({ unitResolution: 'UNRESOLVED' }))).toBe('NEEDS_UNIT');
+    expect(attentionOf(stop({ inspectionTypeNeedsReview: true }))).toBe('KIND_TO_CHECK');
+    expect(attentionOf(stop({ status: 'FAILED' }))).toBe('FAILED');
+  });
+
+  it('leaves a published or excluded visit alone', () => {
+    expect(attentionOf(stop({ status: 'PUBLISHED' }))).toBeNull();
+    expect(attentionOf(stop({ status: 'EXCLUDED', scheduledOn: null, assignedTechnicianId: null }))).toBeNull();
+  });
+
+  it('says what each one is waiting for in the words the map uses', () => {
+    expect(attentionText('NO_DAY')).toBe('No day yet');
+    expect(attentionText('NO_TECHNICIAN')).toBe('No technician yet');
+  });
+});
+
 describe('the first day of a plan', () => {
   const Q4 = { year: 2026, quarter: 4 as const };
 
