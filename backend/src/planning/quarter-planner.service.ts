@@ -703,11 +703,16 @@ export class QuarterPlannerService {
     settings: Required<PlanRoutingSettings>,
   ) {
     const rows = await this.prisma.tbpQuarterPlanStop.findMany({
-      where: { planId, organizationId, status: TbpStopStatus.PLANNED },
+      // A published visit is read too, and pinned below. Left out, its day is
+      // invisible here: the planner lays fresh visits over a day that is
+      // already booked, and the day's own row counts only the new ones -- the
+      // office saw "1 visit" on a day the map drew eleven (2026-09-20).
+      where: { planId, organizationId, status: { in: [TbpStopStatus.PLANNED, TbpStopStatus.PUBLISHED] } },
       select: {
         id: true,
         sequence: true,
         zone: true,
+        inspectionId: true,
         inspectionType: true,
         previousTechnicianId: true,
         previousVisitOn: true,
@@ -734,7 +739,11 @@ export class QuarterPlannerService {
         unplaceable.push(row.id);
         continue;
       }
-      if (row.scheduleOverriddenAt && row.technicianOverriddenAt && row.scheduledOn && row.assignedTechnicianId)
+      // Placed by a coordinator, or already an inspection somebody is being
+      // sent to: either way the day and the technician are decided, and routing
+      // measures the day rather than laying it out again.
+      const settled = Boolean(row.inspectionId) || Boolean(row.scheduleOverriddenAt && row.technicianOverriddenAt);
+      if (settled && row.scheduledOn && row.assignedTechnicianId)
         pins.set(row.id, { date: row.scheduledOn.toISOString().slice(0, 10), technicianId: row.assignedTechnicianId });
       stops.push({
         stopId: row.id,
