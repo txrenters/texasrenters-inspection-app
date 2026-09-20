@@ -155,6 +155,20 @@ describe('days of nine, grouped for the least driving', () => {
     expect(crews.map((day) => day.stops.length)).toEqual([8, 2]);
   });
 
+  /**
+   * The office (2026-09-20), looking at visits with no day: sooner a fuller day
+   * than a tenancy nobody visits. Only after everything else, and still inside
+   * the twenty minutes and the six hours.
+   */
+  it('squeezes a visit with nowhere left to go into the day that adds least driving', () => {
+    // Eighteen in a line two kilometres apart -- two days of nine -- and one day to do it in.
+    const { crews, unplaced } = layoutEveryDay(line('s', 18, 2), days(1, ['t1']));
+
+    expect(crews.map((day) => day.stops.length)).toEqual([15]);
+    expect(unplaced.map((entry) => entry.reason)).toEqual(['NO_CAPACITY', 'NO_CAPACITY', 'NO_CAPACITY']);
+    expect(longestLeg(crews[0]!.stops)).toBeLessThanOrEqual(20);
+  });
+
   it('never lays a day on a technician-day a coordinator already took', () => {
     const { crews } = layoutEveryDay(cluster('s', 9), days(3, ['t1']), { taken: new Set([crewKey('2026-10-01', 't1')]) });
 

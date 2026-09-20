@@ -164,9 +164,9 @@ export interface PlanRotation {
 const UNPLACED_MESSAGE: Record<RoutingUnplacedReason, string> = {
   NO_WORKING_DAYS: 'The quarter has no days to plan this visit on.',
   NO_QUALIFIED_TECHNICIAN:
-    'Nobody sent out on this plan can take this visit. Choose who goes out when you rebuild, or give it a day and a technician.',
+    'Nobody sent out on this plan can take this visit. Choose who goes out when you rebuild, or open this visit and give it a day and a technician yourself.',
   NO_CAPACITY:
-    'Every crew member’s day in this visit’s month is already full. Choose more technicians or an earlier start when you rebuild, or give it a day and a technician.',
+    'Every crew member’s day in this visit’s month is already full. Rebuild with more technicians, or open this visit and give it a day and a technician yourself.',
   LONGER_THAN_A_DAY: 'This visit is longer than a whole day on site.',
   NO_TRIP_DAYS:
     'This zone is too far for a day’s drive, and no run of days in a row is free for a trip there, so the office needs to arrange these visits.',

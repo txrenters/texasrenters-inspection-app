@@ -454,6 +454,40 @@ describe('the benefit package plan page', () => {
     await waitFor(() => expect(editStop.mutateAsync).toHaveBeenCalledWith({ stopId: 's2', propertywareUnitId: 'unit-half' }));
   });
 
+  /**
+   * The office (2026-09-20), looking at visits the planner could not place: "how
+   * can we resolve this if we can't assign this?" The visit's own window is where
+   * a day and a technician are given, and the list now says so.
+   */
+  it('opens a visit the planner could not place, to give it a day and a technician', async () => {
+    url.state = { quarter: '2026-4', tab: 'attention', day: '' };
+    const blocked = stop('s1', {
+      status: 'BLOCKED',
+      blockedCode: 'NOT_PLACED',
+      blockedMessage: 'Every crew member’s day in this visit’s month is already full.',
+      scheduledOn: null,
+      positionInDay: null,
+      assignedTechnicianId: null,
+      assignedTechnician: null,
+    });
+    mount({ stops: [blocked] });
+
+    // The menu opens on pointer down, as Radix does it.
+    fireEvent.pointerDown(screen.getByRole('button', { name: /Change the visit at s1 Any St/ }), {
+      button: 0,
+      ctrlKey: false,
+      pointerId: 1,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Give it a day and a technician…' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 's1 Any St' })).toBeTruthy();
+    // The day and the technician are its own controls in the window.
+    expect(within(dialog).getByRole('button', { name: /Change the date/ })).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: /Change the technician/ })).toBeTruthy();
+  });
+
   /** A day starts from home; its driving between the properties is shown apart from the drive from home. */
   it('shows the drive from home and when to leave, apart from the driving between properties', () => {
     mount({ day: { ...DAY, originKind: 'HOME', homeDriveSeconds: 35 * 60, homeDriveMeters: 42_000 } });
