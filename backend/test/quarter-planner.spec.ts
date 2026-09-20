@@ -25,6 +25,8 @@ interface StopRow {
   zone?: string | null;
   /** `YYYY-MM-DD`, the day of its visit last quarter. */
   previousVisitOn?: string | null;
+  /** Set once the visit has been published: it is an inspection somebody is sent to. */
+  inspectionId?: string | null;
 }
 
 interface Point {
@@ -157,6 +159,7 @@ const build = (
           previousVisitOn: row.previousVisitOn ? new Date(`${row.previousVisitOn}T00:00:00.000Z`) : null,
           scheduledOn: row.scheduledOn ? new Date(`${row.scheduledOn}T00:00:00.000Z`) : null,
           assignedTechnicianId: row.assignedTechnicianId ?? null,
+          inspectionId: row.inspectionId ?? null,
           scheduleOverriddenAt: row.scheduleOverriddenAt ?? null,
           technicianOverriddenAt: row.technicianOverriddenAt ?? null,
           onSiteMinutes: row.onSiteMinutes ?? null,
@@ -486,6 +489,43 @@ describe('routing a draft quarter', () => {
    * choice of day or technician is a decision — not something an automation
    * gets to reverse on its next pass.
    */
+  /**
+   * The office (2026-09-20), on a quarter where 321 visits were already
+   * inspections: the day card read "1 visit" and the map drew eleven. Routing
+   * could not see a published visit at all, so it laid fresh ones over a day
+   * that was already booked and then counted only the new ones.
+   */
+  it('leaves a published visit on its day, and does not lay new visits over it', async () => {
+    const published: StopRow = {
+      ...stop('s1', 1),
+      scheduledOn: '2026-10-01',
+      assignedTechnicianId: 'tech-1',
+      inspectionId: 'insp-1',
+    };
+    const { service, stopUpdate, dayCreate } = build([published, stop('s2', 2, 1)], {
+      technicians: [
+        { technicianId: 'tech-1', isPlannable: true },
+        { technicianId: 'tech-2', isPlannable: true, tbpZoneOrder: null },
+      ],
+    });
+
+    const summary = await service.route('org-1', 'plan-1', { holidays: onlyOn('2026-10-02') });
+
+    expect(summary.unplaced).toEqual([]);
+    // It keeps the day it was published on.
+    expect(updateFor(stopUpdate, 's1')).toMatchObject({
+      scheduledOn: new Date('2026-10-01T00:00:00.000Z'),
+      assignedTechnicianId: 'tech-1',
+    });
+    // And its day is counted as the one visit it holds, not as empty.
+    const its = dayCreate.mock.calls
+      .map((call) => call[0].data)
+      .find((day: { date: Date; technicianId: string }) => day.technicianId === 'tech-1' && day.date.toISOString().startsWith('2026-10-01'));
+    expect(its).toMatchObject({ stopCount: 1 });
+    // The other visit went somewhere else rather than on top of it.
+    expect(updateFor(stopUpdate, 's2')!.scheduledOn).not.toEqual(new Date('2026-10-01T00:00:00.000Z'));
+  });
+
   /**
    * A visit a coordinator placed by hand stays on the day and with the
    * technician they chose (the office, 2026-09-16) -- even a day the planner
