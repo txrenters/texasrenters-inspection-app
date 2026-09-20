@@ -13,7 +13,7 @@ const SETTINGS: PlanSettings = {
   maxOnSiteMinutes: 360,
   maxDriveMinutes: 90,
   minStopsPerDay: 9,
-  maxStopsPerDay: 15,
+  maxStopsPerDay: 10,
   maxLegMinutes: 20,
   // The day after Thanksgiving, closed by the office on top of the US holidays.
   holidays: ['2026-11-27'],
@@ -66,7 +66,7 @@ const day = (id: string, date: string, technicianId: string, displayName: string
 const DAYS = [
   day('kevin-oct-1', '2026-10-01', 'kevin', 'Kevin Granados', 9, '2'),
   day('moses-oct-1', '2026-10-01', 'moses', 'Moses Rodriguez', 10, '1'),
-  day('emanuel-oct-2', '2026-10-02', 'emanuel', 'Emanuel Hall', 12, '3'),
+  day('emanuel-oct-2', '2026-10-02', 'emanuel', 'Emanuel Hall', 10, '3'),
   day('moses-oct-6', '2026-10-06', 'moses', 'Moses Rodriguez', 7, '2'),
 ];
 
@@ -131,9 +131,9 @@ describe('the benefit-package calendar', () => {
 
     // A drive of twenty-five minutes between two of its properties.
     expect(screen.getByRole('button', { name: /^Wednesday, October 7: Kevin Granados, 9 visits.*, outside the rules$/ })).toBeTruthy();
-    // Seven visits is a short day, not one against the rules; twelve is the most a day holds.
+    // Seven visits is a short day, not one against the rules; ten is the most a day holds.
     expect(screen.getByRole('button', { name: /^Tuesday, October 6: Moses Rodriguez, 7 visits.*inspecting$/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /^Friday, October 2: Emanuel Hall, 12 visits.*inspecting$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Friday, October 2: Emanuel Hall, 10 visits.*inspecting$/ })).toBeTruthy();
   });
 
   it('shows a plan’s days before the quarter, with the Mondays kept free from its own second week', () => {
@@ -159,17 +159,16 @@ describe('the benefit-package calendar', () => {
   /** The office (2026-09-18): three visits fewer for each move-out or move-in on the day. */
   it('names the move-outs and move-ins a day is built around, and holds it to three visits fewer for each', () => {
     const anchored = {
-      ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 3, '3'),
+      ...day('moses-oct-14', '2026-10-14', 'moses', 'Moses Rodriguez', 4, '3'),
       anchors: [
         { id: 'anchor-1', inspectionId: 'move-out-1', kind: 'MOVE_OUT' },
         { id: 'anchor-2', inspectionId: 'move-out-2', kind: 'MOVE_OUT' },
-        { id: 'anchor-3', inspectionId: 'move-in-1', kind: 'MOVE_IN' },
       ],
     } as unknown as PlanDay;
     render(<PlanCalendar days={[anchored]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
 
-    // Three of them leave room for up to three visits: inside the rules.
-    const button = screen.getByRole('button', { name: /built around 2 move-outs and a move-in, / });
+    // Two of them leave room for up to four visits: inside the rules.
+    const button = screen.getByRole('button', { name: /built around 2 move-outs, / });
     expect(button.getAttribute('aria-label')).not.toContain('outside the rules');
   });
 
@@ -177,6 +176,6 @@ describe('the benefit-package calendar', () => {
     render(<PlanCalendar days={DAYS} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
 
     expect(screen.getByText('2 days · 17 visits')).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'October 2026' }).textContent).toContain('4 technician-days · 38 visits');
+    expect(screen.getByRole('region', { name: 'October 2026' }).textContent).toContain('4 technician-days · 36 visits');
   });
 });

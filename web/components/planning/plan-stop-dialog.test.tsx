@@ -215,8 +215,8 @@ describe('changing a draft visit in its window', () => {
     expect(screen.queryByRole('button', { name: /^Change / })).toBeNull();
   });
 
-  /** The office (2026-09-18): each visit keeps its month of the quarter. */
-  it('says the day of last quarter’s visit and the month of this quarter it keeps', () => {
+  /** The month of last quarter a visit was in orders it this quarter (2026-09-20). */
+  it('says the day of last quarter’s visit and the month of that quarter it was in', () => {
     mount({ stop: stop({ previousVisitOn: '2026-08-11T00:00:00.000Z' }) });
     expect(screen.getByText("Aug 11 · the quarter's second month")).toBeTruthy();
   });
@@ -227,8 +227,8 @@ describe('changing a draft visit in its window', () => {
     expect(screen.getByText("Sep 25 · the quarter's first month")).toBeTruthy();
   });
 
-  it('says a visit new this quarter goes in the month with fewest visits', () => {
+  it('says a visit new this quarter is taken up with the second month’s', () => {
     mount({ stop: stop({ previousVisitOn: null, previousSequence: null, orderSource: 'NEW_ENROLLMENT' }) });
-    expect(screen.getByText('None: it goes in the month with fewest visits')).toBeTruthy();
+    expect(screen.getByText('None: it is taken up with the second month’s')).toBeTruthy();
   });
 });

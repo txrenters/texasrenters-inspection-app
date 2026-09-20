@@ -726,11 +726,14 @@ describe('days built around move-outs and move-ins', () => {
 });
 
 /**
- * The office (2026-09-18): "if on q3 this property is scheduled ... the first
- * month on q3 then on q4 it should be scheduled on the first month also".
+ * The office (2026-09-20): "if a technician can finish the visits as early as
+ * possible that's good, if they can finish it in a month then that's good, we
+ * don't realy need to fill out all the month on each quarter". Until then each
+ * visit was held to the month of the quarter it had last quarter (2026-09-18),
+ * which spread eighteen visits over three months.
  */
-describe('each visit in its month of the quarter', () => {
-  it('keeps the month of the quarter the visit had last quarter, from that month’s first planned day', async () => {
+describe('the quarter finished as early as the crew can', () => {
+  it('fills the first planned days and leaves the rest of the quarter empty', async () => {
     const stops = [
       ...Array.from({ length: 9 }, (_, index) => stop(`july-${index + 1}`, index + 1, index * 0.01, { previousVisitOn: '2026-07-14' })),
       ...Array.from({ length: 9 }, (_, index) => stop(`sept-${index + 1}`, 10 + index, index * 0.01, { previousVisitOn: '2026-09-02' })),
@@ -741,8 +744,7 @@ describe('each visit in its month of the quarter', () => {
 
     expect(summary.unplaced).toEqual([]);
     const dayOf = (id: string) => (updateFor(stopUpdate, id)!.scheduledOn as Date).toISOString().slice(0, 10);
-    expect(new Set(stops.filter((row) => row.id.startsWith('july')).map((row) => dayOf(row.id)))).toEqual(new Set(['2026-10-01']));
-    expect(new Set(stops.filter((row) => row.id.startsWith('sept')).map((row) => dayOf(row.id)))).toEqual(new Set(['2026-12-01']));
+    expect(new Set(stops.map((row) => dayOf(row.id)))).toEqual(new Set(['2026-10-01', '2026-10-02']));
   });
 });
 
