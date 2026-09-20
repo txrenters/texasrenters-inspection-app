@@ -83,6 +83,10 @@ import { TechnicianSkillsService } from './technician-skills.service';
     PropertyGeocodingService,
     InspectionImportService,
     TechnicianSkillsService,
+    // The planner's AI advice resolves the organization's provider through it
+    // (`PlanAdvisorService`). Nothing outside this module could reach it, and
+    // the backend threw at boot rather than starting -- see module-graph.spec.
+    AiProviderSettingsService,
   ],
 })
 export class AdminModule {}
