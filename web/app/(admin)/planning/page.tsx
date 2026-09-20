@@ -1,12 +1,13 @@
 'use client';
 
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
-import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon } from 'lucide-react';
+import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon, SparklesIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
+import { PlanAdviceDialog } from '@/components/planning/plan-advice-dialog';
 import type { AttentionMapStop } from '@/components/planning/plan-attention-map';
 import { PlanBuildDialog, type PlanBuildChoice } from '@/components/planning/plan-build-dialog';
 import { PlanCalendar } from '@/components/planning/plan-calendar';
@@ -53,6 +54,7 @@ import {
   usePlanRotation,
   usePlanStops,
   usePlanningMutations,
+  type PlanAdvice,
   type PlanStatus,
 } from '@/lib/planning-queries';
 import { useUrlState } from '@/lib/url-state';
@@ -113,6 +115,10 @@ export default function PlanningPage() {
   const [choosing, setChoosing] = useState(false);
   // The visit whose details are open, from its pin, its row in a day, or the tables.
   const [openStopId, setOpenStopId] = useState<string | null>(null);
+  // What AI made of the quarter, and the moves it offered (2026-09-20).
+  const [advising, setAdvising] = useState(false);
+  const [advice, setAdvice] = useState<PlanAdvice | null>(null);
+  const [adviceError, setAdviceError] = useState<string | null>(null);
 
   const draft = plan?.status === 'DRAFT';
   const building = mutations.build.isPending;
@@ -202,6 +208,38 @@ export default function PlanningPage() {
     );
   };
 
+  /** Ask AI what it makes of the quarter. It changes nothing until a move is applied. */
+  const ask = () => {
+    if (!plan) return;
+    setAdvice(null);
+    setAdviceError(null);
+    setAdvising(true);
+    mutations.advice.mutate(plan.id, {
+      onSuccess: setAdvice,
+      onError: (error) => setAdviceError(error.message),
+    });
+  };
+
+  const applyAdvice = (moves: { stopId: string; toDate: string; toTechnicianId: string }[]) => {
+    if (!plan) return;
+    mutations.applyAdvice.mutate(
+      { planId: plan.id, moves },
+      {
+        onSuccess: (result) => {
+          setAdvising(false);
+          setAdvice(null);
+          if (result.applied)
+            toast.success(`${result.applied.toLocaleString()} ${result.applied === 1 ? 'visit' : 'visits'} moved`, {
+              description: 'Their days were measured again on Google.',
+            });
+          if (result.refused.length)
+            toast.warning(`${result.refused.length} could not be moved`, { description: result.refused[0]!.refused });
+        },
+        onError: (error) => toast.error('The moves could not be applied', { description: error.message }),
+      },
+    );
+  };
+
   const publish = () => {
     if (!plan) return;
     mutations.publish.mutate(plan.id, {
@@ -251,6 +289,18 @@ export default function PlanningPage() {
                 {building ? <Spinner /> : <RefreshCwIcon />}
                 Rebuild
               </Button>
+              {(days.data?.length ?? 0) > 0 ? (
+                <Button
+                  disabled={building || mutations.advice.isPending}
+                  onClick={ask}
+                  size="sm"
+                  title="Reads the days and says what looks wrong, then offers the moves that keep every rule and shorten the driving."
+                  variant="outline"
+                >
+                  {mutations.advice.isPending ? <Spinner /> : <SparklesIcon />}
+                  Ask AI
+                </Button>
+              ) : null}
               <Button
                 disabled={building || planned.length + unplaced.length === 0}
                 onClick={() => setPublishing(true)}
@@ -513,6 +563,17 @@ export default function PlanningPage() {
         quarter={quarter}
         startsOn={startsOn}
         stop={openStop}
+      />
+
+      <PlanAdviceDialog
+        advice={advice}
+        applying={mutations.applyAdvice.isPending}
+        error={adviceError}
+        label={choice.label}
+        loading={mutations.advice.isPending}
+        onApply={applyAdvice}
+        onOpenChange={setAdvising}
+        open={advising}
       />
 
       <PlanBuildDialog

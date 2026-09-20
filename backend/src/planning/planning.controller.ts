@@ -30,9 +30,11 @@ import { holdRequestOpen } from '../common/long-request';
 import { PrismaService } from '../common/prisma.service';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
 import { toLatLngPath } from '../routing/route.service';
+import { PlanAdvisorService } from './plan-advisor.service';
 import { PlanBuildGuard } from './plan-build-guard';
 import {
   OfficeDetailsImportDto,
+  PlanAdviceApplyDto,
   PlanQuarterDto,
   PlanRoutingSettingsDto,
   PlanStopEditDto,
@@ -127,6 +129,7 @@ export class PlanningController {
     @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
     @Inject(TbpStopEditService) private readonly edits: TbpStopEditService,
     @Inject(PlanBuildGuard) private readonly builds: PlanBuildGuard,
+    @Inject(PlanAdvisorService) private readonly advisor: PlanAdvisorService,
   ) {}
 
   /** Whether the cron is alive and when it next wakes, for the console. */
@@ -650,6 +653,37 @@ export class PlanningController {
     this.builds.refuseWhileBuilding(request.user.organizationId);
     holdRequestOpen(request);
     return this.publisher.publish(request.user, planId);
+  }
+
+  /**
+   * What AI makes of the quarter: what looks wrong, and the moves worth making.
+   *
+   * One call to the provider the organization has configured. Nothing is
+   * changed here -- every move it proposes is judged against the office's own
+   * rules first, and the office applies the ones it wants
+   * (`quarters/:planId/advice/apply`).
+   */
+  @Post('quarters/:planId/advice')
+  @RequirePermissions('planning:publish')
+  @HttpCode(200)
+  advice(@Req() request: AuthenticatedRequest, @Param('planId') planId: string) {
+    this.builds.refuseWhileBuilding(request.user.organizationId);
+    holdRequestOpen(request);
+    return this.advisor.advise(request.user, planId);
+  }
+
+  /** The moves the office took from the advice, each judged again before it is written. */
+  @Post('quarters/:planId/advice/apply')
+  @RequirePermissions('planning:publish')
+  @HttpCode(200)
+  applyAdvice(
+    @Req() request: AuthenticatedRequest,
+    @Param('planId') planId: string,
+    @Body() body: PlanAdviceApplyDto,
+  ) {
+    this.builds.refuseWhileBuilding(request.user.organizationId);
+    holdRequestOpen(request);
+    return this.advisor.apply(request.user, planId, body.moves);
   }
 
   /** A coordinator deciding a stop is an HVAC or an occupied inspection; its day is measured again. */
