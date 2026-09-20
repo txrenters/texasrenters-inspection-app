@@ -89,7 +89,9 @@ const build = (
     auditLog: { create: auditCreate },
   };
 
+  const taskDeleteMany = jest.fn().mockResolvedValue({ count: 1 });
   const prisma = {
+    jobberOutboundTask: { deleteMany: taskDeleteMany },
     tbpQuarterPlanStop: {
       count: jest.fn(({ where }: { where: { unitResolution?: string } }) =>
         Promise.resolve(where.unitResolution ? (options.withoutUnit ?? 0) : (options.blockedCount ?? 0)),
@@ -97,6 +99,7 @@ const build = (
       findMany: jest.fn(({ take }: { take: number }) =>
         Promise.resolve([...remaining.values()].slice(0, take)),
       ),
+      findFirst: jest.fn(({ where }: { where: { id: string } }) => Promise.resolve(remaining.get(where.id) ?? null)),
       update: stopUpdate,
       updateMany: stopUpdateMany,
     },
@@ -121,6 +124,7 @@ const build = (
     auditCreate,
     inspectionUpdate,
     stopUpdateMany,
+    taskDeleteMany,
   };
 };
 
@@ -362,5 +366,52 @@ describe('publishing the quarter’s kinds of visit', () => {
 
     const prisma = (service as unknown as { prisma: { inspection: { findFirst: jest.Mock } } }).prisma;
     expect(prisma.inspection.findFirst.mock.calls[0][0].where.inspectionType).toBe(InspectionType.HVAC);
+  });
+});
+
+/**
+ * The office (2026-09-20) publishes a quarter with visits that have no day --
+ * they go to Jobber's unscheduled work -- and then gives one a day here. The
+ * quarter is past publishing by then, so nothing else would create its
+ * inspection.
+ */
+describe('a visit given its day after the quarter was published', () => {
+  const unscheduled = (overrides: Partial<StopRow> = {}) =>
+    aStop('s1', 1, { scheduledOn: new Date('2026-10-05T00:00:00.000Z'), ...overrides });
+
+  it('creates the inspection and drops the queued unscheduled job', async () => {
+    const { service, taskDeleteMany, outboundCreate } = build([
+      { ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, inspectionId: null, jobberVisitId: null } as StopRow,
+    ]);
+
+    const outcome = await service.placeOne(USER, 's1');
+
+    expect(outcome).toBe('PUBLISHED');
+    expect(creation.insertInspection).toHaveBeenCalledTimes(1);
+    expect(taskDeleteMany.mock.calls[0][0].where).toMatchObject({
+      tbpStopId: 's1',
+      kind: JobberOutboundKind.TBP_JOB_UNSCHEDULED,
+    });
+    // And the ordinary booking is queued in its place.
+    expect(outboundCreate.mock.calls[0][0].data.kind).toBe(JobberOutboundKind.TBP_VISIT_CREATE);
+  });
+
+  /** Its job and visit already exist there; a second would book the same work twice. */
+  it('refuses a visit that is already in Jobber with no day', async () => {
+    const { service } = build([
+      { ...unscheduled(), status: TbpStopStatus.UNSCHEDULED, jobberVisitId: 'visit-9' } as StopRow,
+    ]);
+
+    await expect(service.placeOne(USER, 's1')).rejects.toMatchObject({ code: 'VISIT_IS_IN_JOBBER' });
+    expect(creation.insertInspection).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a visit that still has no day, or one already published', async () => {
+    const withoutDay = build([{ ...unscheduled({ scheduledOn: null }), status: TbpStopStatus.UNSCHEDULED } as StopRow]);
+    const published = build([{ ...unscheduled(), status: TbpStopStatus.PUBLISHED, inspectionId: 'insp-1' } as StopRow]);
+
+    expect(await withoutDay.service.placeOne(USER, 's1')).toBeNull();
+    expect(await published.service.placeOne(USER, 's1')).toBeNull();
+    expect(creation.insertInspection).not.toHaveBeenCalled();
   });
 });

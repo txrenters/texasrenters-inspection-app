@@ -15,6 +15,7 @@ import { PrismaService } from '../common/prisma.service';
 import { benefitPackageInspectionInDetails } from '../integrations/jobber/jobber.visit-type';
 import { QuarterPlannerService } from './quarter-planner.service';
 import { TbpPlanService, planVisitDetails, visitTitle } from './tbp-plan.service';
+import { TbpPublishService } from './tbp-publish.service';
 
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */
 export interface PlanStopEdit {
@@ -33,6 +34,11 @@ export interface PlanStopEditResult {
   id: string;
   /** What changed; empty when the edit changed nothing. */
   changed: (keyof PlanStopEdit)[];
+  /**
+   * The visit became an inspection on the spot: it was given a day on a quarter
+   * that had already been published, so nothing else would have created it.
+   */
+  placed?: boolean;
 }
 
 /** A technician a visit can be given to, for the console's picker. */
@@ -97,6 +103,7 @@ export class TbpStopEditService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(TbpPlanService) private readonly plans: TbpPlanService,
     @Inject(QuarterPlannerService) private readonly planner: QuarterPlannerService,
+    @Inject(TbpPublishService) private readonly publisher: TbpPublishService,
   ) {}
 
   /**
@@ -149,16 +156,26 @@ export class TbpStopEditService {
       },
     });
     if (!stop) throw new ApplicationError(404, 'STOP_NOT_FOUND', 'This visit does not exist.');
-    if (
-      stop.plan.status !== TbpPlanStatus.DRAFT ||
-      stop.inspectionId ||
-      stop.status === TbpStopStatus.PUBLISHED ||
-      stop.status === TbpStopStatus.EXCLUDED
-    )
+    if (stop.inspectionId || stop.status === TbpStopStatus.PUBLISHED || stop.status === TbpStopStatus.EXCLUDED)
       throw new ApplicationError(
         409,
         'STOP_NOT_EDITABLE',
-        'Only a visit in a draft plan that has not been published or left out can be changed.',
+        'This visit has been published or left out, and cannot be changed.',
+      );
+    // A published quarter is still open for the visits it could not place: they
+    // have no inspection, they are Jobber's unscheduled work or nobody's, and
+    // the office gives them a day here (2026-09-20, on a plan whose publish had
+    // failed: "opening this dialougue wont let me edit it"). Only a quarter in
+    // the middle of publishing, or cancelled, is closed to them.
+    if (
+      stop.plan.status !== TbpPlanStatus.DRAFT &&
+      stop.plan.status !== TbpPlanStatus.PUBLISHED &&
+      stop.plan.status !== TbpPlanStatus.PUBLISH_FAILED
+    )
+      throw new ApplicationError(
+        409,
+        'PLAN_NOT_EDITABLE',
+        `This quarter is ${stop.plan.status.toLowerCase()}. Wait for it to finish before changing a visit.`,
       );
 
     const quarter: Quarter = { year: stop.plan.quarterYear, quarter: stop.plan.quarterNumber as Quarter['quarter'] };
@@ -315,7 +332,15 @@ export class TbpStopEditService {
         },
       });
 
-    return { id: stop.id, changed };
+    // A quarter that has already been published: a visit given a day and a
+    // technician here becomes its inspection at once, and its Jobber visit is
+    // queued, because no later publish will come for it (2026-09-20).
+    const placed =
+      stop.plan.status !== TbpPlanStatus.DRAFT && moved && date && technicianId
+        ? await this.publisher.placeOne(user, stop.id)
+        : null;
+
+    return { id: stop.id, changed, ...(placed ? { placed: placed !== 'FAILED' } : {}) };
   }
 
   /**

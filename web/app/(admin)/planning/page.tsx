@@ -121,6 +121,11 @@ export default function PlanningPage() {
   const [adviceError, setAdviceError] = useState<string | null>(null);
 
   const draft = plan?.status === 'DRAFT';
+  // A published quarter is still open for the visits it could not place: they
+  // have no inspection, and giving one a day here is what makes it real
+  // (2026-09-20). The table and the visit's window refuse a published or
+  // excluded visit themselves.
+  const canPlace = canChange && (draft || plan?.status === 'PUBLISHED' || plan?.status === 'PUBLISH_FAILED');
   const building = mutations.build.isPending;
   // Blocked or failed, or on a day but still without the unit it is booked at.
   const attention = (stops.data ?? []).filter(
@@ -138,6 +143,9 @@ export default function PlanningPage() {
   );
   const daysOutsideRules = plan ? (days.data ?? []).filter((day) => dayOutsideRules(day, plan)) : [];
   const planned = (stops.data ?? []).filter((stop) => stop.status === 'PLANNED');
+  // Published to Jobber with no day: theirs to schedule there, or ours to give a
+  // day here (2026-09-20, as Jobber's own Unscheduled list).
+  const unscheduled = (stops.data ?? []).filter((stop) => stop.status === 'UNSCHEDULED');
   // A visit the planner could not place is published too, with no day on it: it
   // goes to Jobber's unscheduled work for the office to put on the calendar
   // there (2026-09-20).
@@ -460,6 +468,9 @@ export default function PlanningPage() {
               <TabsTrigger value="days">Days ({(days.data?.length ?? 0).toLocaleString()})</TabsTrigger>
               <TabsTrigger value="calendar">Calendar</TabsTrigger>
               <TabsTrigger value="visits">Visits ({(stops.data?.length ?? 0).toLocaleString()})</TabsTrigger>
+              {unscheduled.length ? (
+                <TabsTrigger value="unscheduled">Unscheduled ({unscheduled.length.toLocaleString()})</TabsTrigger>
+              ) : null}
               <TabsTrigger value="attention">Needs attention ({attentionIds.size.toLocaleString()})</TabsTrigger>
             </TabsList>
 
@@ -518,7 +529,37 @@ export default function PlanningPage() {
               ) : stops.isError ? (
                 <ErrorState error={stops.error} retry={() => void stops.refetch()} />
               ) : (
-                <PlanStopsTable editable={canChange && draft} onOpen={setOpenStopId} stops={stops.data ?? []} />
+                <PlanStopsTable editable={canPlace} onOpen={setOpenStopId} stops={stops.data ?? []} />
+              )}
+            </TabsContent>
+
+            <TabsContent className="mt-3" value="unscheduled">
+              {unscheduled.length ? (
+                <div className="grid gap-3">
+                  <div className="h-80 lg:h-[30rem]">
+                    <PlanAttentionMap
+                      onSelectStop={setOpenStopId}
+                      planned={plannedMap}
+                      stops={unscheduled.map((stop) => ({ ...onMap(stop), attention: 'NO_DAY' as const }))}
+                    />
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    In Jobber with no day on them, in its Unscheduled list. Give one a day and a technician here and it
+                    becomes an inspection at once; schedule it in Jobber instead and it comes back here with the day it
+                    was given.
+                  </p>
+                  <PlanStopsTable
+                    allStops={stops.data ?? []}
+                    editable={canPlace}
+                    onOpen={setOpenStopId}
+                    stops={unscheduled}
+                  />
+                </div>
+              ) : (
+                <EmptyState
+                  description="Every visit this quarter has a day. A visit published without one waits here, and in Jobber's own unscheduled work."
+                  title="Nothing unscheduled"
+                />
               )}
             </TabsContent>
 
@@ -544,7 +585,7 @@ export default function PlanningPage() {
                   </p>
                   <PlanStopsTable
                     allStops={stops.data ?? []}
-                    editable={canChange && draft}
+                    editable={canPlace}
                     onOpen={setOpenStopId}
                     stops={(stops.data ?? []).filter((stop) => attentionIds.has(stop.id))}
                   />
@@ -558,7 +599,7 @@ export default function PlanningPage() {
       <PlanStopDialog
         closedDays={closedDaysOfQuarter(quarter, plan?.holidays ?? [], startsOn)}
         day={openStopDay}
-        editable={canChange && draft}
+        editable={canPlace}
         onOpenChange={(open) => !open && setOpenStopId(null)}
         quarter={quarter}
         startsOn={startsOn}
