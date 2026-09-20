@@ -59,8 +59,9 @@ import { useUrlState } from '@/lib/url-state';
  * The office's rules, as the planner applies them: whoever was first last
  * quarter is first again; Q2 and Q4 visits are HVAC inspections for tenancies
  * on the HVAC plan; the visits are grouped into days of nine for the least
- * driving, never more than twenty minutes from one property to the next, so
- * the office can add its own up to twelve (2026-09-19); everyone chosen works
+ * driving, never more than twenty minutes from one property to the next, and up
+ * to fifteen where they are within five minutes of each other (2026-09-19 and
+ * -20); everyone chosen works
  * every day from the plan's first until every visit has a day, each taking a
  * group in their zone of the week and moving on each week, with a property
  * within five minutes of a group joining it; a zone too far for a day's drive
@@ -234,7 +235,7 @@ export default function PlanningPage() {
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
-      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next, so you can add up to 3 more by hand; a day holds fewer only where the properties are further apart. Each visit stays in the month of the quarter it had last quarter (July's in October, August's in November, September's in December), and a visit new this quarter goes in the month with fewest. In each month, everyone chosen works every day from its start until that month's visits have a day. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
+      description="Each quarter's Tenant Benefit Package visits, in last quarter's order. Building asks who goes out and the first day, up to 15 days either side of the quarter's. The visits are grouped into days of 9 for the least driving, never more than 20 minutes from one property to the next; a day takes more than 9, up to 15, while the next property is within 5 minutes of it, and holds fewer only where they are further apart. Each visit stays in the month of the quarter it had last quarter (July's in October, August's in November, September's in December), and a visit new this quarter goes in the month with fewest. In each month, everyone chosen works every day from its start until that month's visits have a day. A day with a move-out or move-in is built around it, with 3 visits fewer for each. Each technician takes a group in their zone of the week and moves to the next zone the week after, and a property within 5 minutes of a group joins it whatever its zone. A zone too far for a day's drive is a trip of days in a row for whoever lives nearest. US holidays are off, and Mondays from the second week are kept free for rescheduled visits."
       title="Benefit package plan"
     />
   );
@@ -336,7 +337,7 @@ export default function PlanningPage() {
             ) : null}
             <StatStripItem
               label="Visits a day"
-              value={`${plan.minStopsPerDay}, grouped for the least driving; up to ${plan.maxStopsPerDay} with visits you add`}
+              value={`${plan.minStopsPerDay}, and up to ${plan.maxStopsPerDay} where the properties are within 5 minutes of each other`}
             />
             <StatStripItem
               label="Between properties"

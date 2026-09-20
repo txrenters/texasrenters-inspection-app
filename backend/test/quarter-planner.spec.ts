@@ -1104,7 +1104,8 @@ describe('zones, weeks and Mondays', () => {
       .map((call) => call[0].data)
       .filter((data) => (data.date as Date).toISOString().startsWith('2026-10-01'));
     expect(firstDay.map((data) => data.technicianId).sort()).toEqual(['emanuel', 'kevin', 'moses']);
-    expect(firstDay.map((data) => data.stopCount)).toEqual([9, 9, 9]);
+    // Twelve each: the properties are on top of each other, and six hours of half-hour visits is twelve.
+    expect(firstDay.map((data) => data.stopCount)).toEqual([12, 12, 12]);
   });
 
   it('plans no visit on a Monday from the second week on', async () => {

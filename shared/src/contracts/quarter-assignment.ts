@@ -11,8 +11,14 @@
  *   the properties into 9 and make sure those grouping is the least drive time,
  *   that way we can still add more properties to the schedule". The visits are
  *   cut into groups of nine, each as tight as the properties allow (`groupsOf`),
- *   and a day is one group. The office adds visits of its own by hand, up to
- *   twelve (`maxStopsPerDay`).
+ *   and a day is one group.
+ * - **More than nine where the properties are on top of each other**
+ *   (`maxStopsPerDay`, the office, 2026-09-20): "that should be 9-12-15 if all
+ *   area's is just 2-5 mins away then we can assign at least 15 visits". Past
+ *   its nine a day keeps taking visits, up to fifteen, while each one is within
+ *   five minutes' drive of the day (`closeMinutes`) -- so a day in one
+ *   neighbourhood is twelve or fifteen and a day across a spread-out zone stays
+ *   at nine.
  * - **Never more than twenty minutes between two properties**
  *   (`maxLegMinutes`): "I don't want to see a grouping that from one property to
  *   other property that will get more than 20mins of drive time". A property
@@ -92,8 +98,17 @@ export interface DayLimits {
    * only where the properties are further apart than `maxLegMinutes`.
    */
   minStopsPerDay: number;
-  /** The most visits a day may hold, with the ones the office adds by hand: twelve. */
+  /**
+   * The most visits a day may hold: fifteen (the office, 2026-09-20). Past its
+   * nine a day only takes a visit within `closeMinutes` of it.
+   */
   maxStopsPerDay: number;
+  /**
+   * How near a visit has to be for a day to take it past its nine, in minutes
+   * of estimated drive: five (the office, 2026-09-20, "2-5 mins away").
+   * Absent: `NEIGHBOUR_MINUTES`.
+   */
+  closeMinutes?: number;
   /**
    * The longest drive, by the estimate, between two of a day's properties:
    * twenty minutes (the office, 2026-09-19). Absent: `MAX_LEG_MINUTES`.
@@ -104,18 +119,20 @@ export interface DayLimits {
 /** The longest drive the office allows between two of a day's properties, in minutes (2026-09-19). */
 export const MAX_LEG_MINUTES = 20;
 
+/**
+ * How near, by the estimated drive, a property has to be to a group's visits to
+ * join them from another zone (the office, 2026-09-18), or to be taken past the
+ * day's nine (2026-09-20): five minutes.
+ */
+export const NEIGHBOUR_MINUTES = 5;
+
 export const DEFAULT_DAY_LIMITS: DayLimits = {
   maxOnSiteMinutes: 6 * 60,
   minStopsPerDay: 9,
-  maxStopsPerDay: 12,
+  maxStopsPerDay: 15,
   maxLegMinutes: MAX_LEG_MINUTES,
+  closeMinutes: NEIGHBOUR_MINUTES,
 };
-
-/**
- * How near, by the estimated drive, a property in another zone has to be to a
- * group's visits to join them: five minutes (the office, 2026-09-18).
- */
-export const NEIGHBOUR_MINUTES = 5;
 
 /**
  * The most stops one day can hold, whatever the office's own maximum says.
@@ -188,10 +205,10 @@ export type AnchorSkipReason = 'NOT_A_PLANNED_DAY' | 'TECHNICIAN_NOT_WORKING' | 
 export const ANCHOR_VISITS = 3;
 
 /**
- * The visits a day holds beside its move-outs and move-ins: `min` is what the
- * planner puts on it, nine, and `max` the most it may hold with the office's own
- * additions, twelve -- three fewer at each end for each one, and never fewer
- * than none.
+ * The visits a day holds beside its move-outs and move-ins: `min` is the nine
+ * the planner puts on it, and `max` the fifteen it may reach where the
+ * properties are within five minutes of each other -- three fewer at each end
+ * for each one, and never fewer than none.
  */
 export function dayVisitRange(limits: DayLimits, anchors: number): { min: number; max: number } {
   const fewer = ANCHOR_VISITS * Math.max(0, anchors);
@@ -448,8 +465,9 @@ function cheapestRunInsertion(path: readonly PlannableStop[], run: readonly Plan
 /**
  * A day built around its anchors: the visits nearest them, nearest first, as
  * many as the day takes beside them -- nine, three fewer for each
- * (`dayVisitRange`, the office, 2026-09-18) -- and none that would make a drive
- * between two of the day's stops longer than the office allows.
+ * (`dayVisitRange`, the office, 2026-09-18) -- and more, up to its fifteen, while
+ * the next one is within five minutes of the day (2026-09-20). None that would
+ * make a drive between two of the day's stops longer than the office allows.
  */
 function fillAroundAnchors(
   anchors: readonly DayAnchor[],
@@ -458,19 +476,21 @@ function fillAroundAnchors(
   cost: DriveEstimate,
   drive: DriveEstimate,
 ): { visits: PlannableStop[]; drive: number; onSite: number } {
-  const room = dayVisitRange(limits, anchors.length).min;
+  const range = dayVisitRange(limits, anchors.length);
+  const close = limits.closeMinutes ?? NEIGHBOUR_MINUTES;
   let path = polished(anchors.map(anchorAsStop), cost).path;
   let onSite = anchors.reduce((total, anchor) => total + anchor.onSiteMinutes, 0);
   const visits: PlannableStop[] = [];
   const left = new Set(candidates);
-  while (visits.length < room) {
+  while (visits.length < range.max) {
     let best: { stop: PlannableStop; at: number; added: number } | null = null;
     for (const stop of left) {
       if (onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
       const { at, added } = cheapestInsertion(path, stop, cost);
       if (!overLong(added) && (!best || added < best.added)) best = { stop, at, added };
     }
-    if (!best) break;
+    // Past the visits the day holds beside its move-outs, only one on its doorstep.
+    if (!best || (visits.length >= range.min && best.added > close)) break;
     path = [...path.slice(0, best.at), best.stop, ...path.slice(best.at)];
     onSite += best.stop.onSiteMinutes;
     visits.push(best.stop);
@@ -528,8 +548,12 @@ interface Group {
 
 /** How the visits are grouped into days. */
 interface GroupRules {
-  /** The most visits a group holds: the planner's day. */
+  /** The visits a group holds before it asks how near the next one is: the office's nine. */
   size: number;
+  /** The most a group holds at all, where the properties are close together: the office's fifteen. */
+  most: number;
+  /** How near a visit must be, in minutes, for a group past its nine to take it. */
+  close: number;
   limits: DayLimits;
   /** The estimate, a leg longer than the office allows priced out (`pricedLegs`). */
   cost: DriveEstimate;
@@ -538,6 +562,23 @@ interface GroupRules {
   neighbourMinutes: number;
   /** Whether a group keeps to the zone it started in, neighbours apart. */
   zoned: boolean;
+}
+
+/**
+ * Whether a group has room for a visit that adds `added` minutes of driving: up
+ * to its nine, anything the other rules allow; past that, only a visit within
+ * five minutes of the day (the office, 2026-09-20). `however` takes a visit
+ * that would otherwise be a day of its own, near or not.
+ */
+function hasRoom(members: readonly PlannableStop[], added: number, rules: GroupRules, however = false) {
+  if (members.length >= rules.most) return false;
+  return members.length < rules.size || however || added <= rules.close;
+}
+
+/** Whether a group has room for a run of visits moved together, by the same rule. */
+function hasRoomForRun(members: readonly PlannableStop[], run: number, added: number, rules: GroupRules) {
+  if (members.length + run > rules.most) return false;
+  return members.length + run <= rules.size || added <= rules.close * run;
 }
 
 /** Whether a visit may be in a group: one of its zone, or within the neighbour drive of another of its visits. */
@@ -592,13 +633,13 @@ function grownGroups(pool: readonly PlannableStop[], rules: GroupRules, start: G
     }
     left.delete(seed!);
     const group: Group = { zone: rules.zoned ? zoneOf(seed!) : null, path: [seed!], cost: 0, onSite: seed!.onSiteMinutes };
-    while (group.path.length < rules.size) {
+    while (group.path.length < rules.most) {
       const candidates: { stop: PlannableStop; at: number; added: number }[] = [];
       for (const stop of left) {
         if (group.onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes || !belongs(stop, group.zone, group.path, rules))
           continue;
         const { at, added } = cheapestInsertion(group.path, stop, rules.cost);
-        if (!overLong(added)) candidates.push({ stop, at, added });
+        if (!overLong(added) && hasRoom(group.path, added, rules)) candidates.push({ stop, at, added });
       }
       if (candidates.length === 0) break;
       candidates.sort((left, right) => left.added - right.added || left.stop.stopId.localeCompare(right.stop.stopId));
@@ -656,8 +697,8 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
     group.cost = found.cost;
     group.onSite = stops.reduce((total, stop) => total + stop.onSiteMinutes, 0);
   };
-  const roomFor = (group: Group, stop: PlannableStop) =>
-    group.path.length < size && group.onSite + stop.onSiteMinutes <= limits.maxOnSiteMinutes;
+  const roomFor = (group: Group, stop: PlannableStop, added: number, however = false) =>
+    hasRoom(group.path, added, rules, however) && group.onSite + stop.onSiteMinutes <= limits.maxOnSiteMinutes;
   const allows = (stop: PlannableStop, group: Group) => belongs(stop, group.zone, group.path, rules);
 
   for (const group of groups) set(group, group.path);
@@ -677,8 +718,10 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
         for (const stop of from.path) {
           const saved = removalSaving(from.path, stop, cost);
           for (const to of groups) {
-            if (to === from || to.path.length === 0 || !roomFor(to, stop) || !allows(stop, to)) continue;
-            const estimate = cheapestInsertion(to.path, stop, cost).added - saved;
+            if (to === from || to.path.length === 0 || !allows(stop, to)) continue;
+            const added = cheapestInsertion(to.path, stop, cost).added;
+            if (!roomFor(to, stop, added)) continue;
+            const estimate = added - saved;
             if (estimate >= -SAVING_MINUTES) continue;
             changes.push({
               estimate,
@@ -706,12 +749,13 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
               if (
                 to === from ||
                 to.path.length === 0 ||
-                to.path.length + length > size ||
                 to.onSite + runOnSite > limits.maxOnSiteMinutes ||
                 !run.every((stop) => allows(stop, to))
               )
                 continue;
-              const estimate = cheapestRunInsertion(to.path, run, cost).added - saved;
+              const added = cheapestRunInsertion(to.path, run, cost).added;
+              if (!hasRoomForRun(to.path, length, added, rules)) continue;
+              const estimate = added - saved;
               if (estimate >= -SAVING_MINUTES) continue;
               changes.push({
                 estimate,
@@ -773,7 +817,7 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
    * allowed -- or null when one of them fits nowhere. `anyZone` lets a visit
    * join another zone's group.
    */
-  const sharedOut = (short: Group, anyZone: boolean, room: number) => {
+  const sharedOut = (short: Group, anyZone: boolean, however: boolean) => {
     const joined = new Map<Group, PlannableStop[]>();
     for (const stop of short.path) {
       let target: { group: Group; members: PlannableStop[]; added: number } | null = null;
@@ -781,11 +825,12 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
         if (group === short || group.path.length === 0) continue;
         const members = joined.get(group) ?? group.path;
         const onSite = members.reduce((total, member) => total + member.onSiteMinutes, 0);
-        if (members.length >= room || onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
+        if (onSite + stop.onSiteMinutes > limits.maxOnSiteMinutes) continue;
         if (!anyZone && !belongs(stop, group.zone, members, rules)) continue;
         // Nothing within the longest drive allowed of the group, nothing to try.
         if (!members.some((member) => !overLong(cost(stop, member)))) continue;
         const added = best([...members, stop]).cost - best(members).cost;
+        if (!hasRoom(members, added, rules, however)) continue;
         if (!overLong(added) && (!target || added < target.added)) target = { group, members: [...members, stop], added };
       }
       if (!target) return null;
@@ -796,25 +841,22 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
 
   /**
    * A day fewer wherever a short group's visits all fit in other groups, the
-   * smallest first: in groups of their own zone where they can, and otherwise in
-   * a neighbouring zone's. A group short of nine is what is left over of an
-   * area, and a day of one or two visits is a day nobody wants; joining a group
-   * across the zone's edge keeps every drive inside the office's limit.
+   * smallest first. A group short of nine is what is left over of an area, and
+   * the office's zoning holds for it as for any day -- only one or two visits
+   * left over may cross into a neighbouring zone's day, because a technician
+   * sent out for one visit is a day nobody would plan.
    */
-  const dissolve = (largest: number, room: number) => {
-    for (const anyZone of [false, true])
-      for (const short of groups.filter((group) => group.path.length <= largest).sort((left, right) => left.path.length - right.path.length)) {
-        if (short.path.length === 0 || short.path.length > largest) continue;
-        const joined = sharedOut(short, anyZone, room);
-        if (!joined) continue;
-        for (const [group, members] of joined) set(group, members);
-        set(short, []);
-      }
+  const dissolve = (largest: number, anyZone: boolean, however: boolean) => {
+    for (const short of groups.filter((group) => group.path.length <= largest).sort((left, right) => left.path.length - right.path.length)) {
+      if (short.path.length === 0 || short.path.length > largest) continue;
+      const joined = sharedOut(short, anyZone, however);
+      if (!joined) continue;
+      for (const [group, members] of joined) set(group, members);
+      set(short, []);
+    }
   };
-  dissolve(size - 1, size);
-  // One or two visits left over beside full days join them, up to the office's
-  // twelve: a technician sent out for one visit is a day nobody would plan.
-  dissolve(LEFTOVER_VISITS, Math.min(limits.maxStopsPerDay, MAX_STOPS_PER_DAY));
+  dissolve(size - 1, false, false);
+  dissolve(LEFTOVER_VISITS, true, true);
   search();
 
   return groups.filter((group) => group.path.length > 0);
@@ -1034,7 +1076,17 @@ export function layoutEveryDay(
 
   const crews: AssignedCrew[] = [];
   const zoned = days.some((day) => day.zoneTechnicians);
-  const rules: GroupRules = { size: dayVisitRange(limits, 0).min, limits, cost, drive, neighbourMinutes, zoned };
+  const dayRange = dayVisitRange(limits, 0);
+  const rules: GroupRules = {
+    size: dayRange.min,
+    most: dayRange.max,
+    close: limits.closeMinutes ?? NEIGHBOUR_MINUTES,
+    limits,
+    cost,
+    drive,
+    neighbourMinutes,
+    zoned,
+  };
 
   // 0. Trips, on days fixed before anything else is laid out.
   const crew = [...new Set(days.flatMap((day) => day.technicianIds))];

@@ -13,7 +13,7 @@ const SETTINGS: PlanSettings = {
   maxOnSiteMinutes: 360,
   maxDriveMinutes: 90,
   minStopsPerDay: 9,
-  maxStopsPerDay: 12,
+  maxStopsPerDay: 15,
   maxLegMinutes: 20,
   // The day after Thanksgiving, closed by the office on top of the US holidays.
   holidays: ['2026-11-27'],
