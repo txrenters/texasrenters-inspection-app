@@ -2,10 +2,12 @@
 
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
 import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { OfficeSheetImport } from '@/components/planning/office-sheet-import';
+import type { AttentionMapStop } from '@/components/planning/plan-attention-map';
 import { PlanBuildDialog, type PlanBuildChoice } from '@/components/planning/plan-build-dialog';
 import { PlanCalendar } from '@/components/planning/plan-calendar';
 import { bookedProblem, PlanDays } from '@/components/planning/plan-days';
@@ -28,11 +30,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
 import { formatRelative } from '@/lib/format';
 import {
+  attentionOf,
   bookedInWords,
   dayOutsideRules,
   formatMinutes,
@@ -76,6 +80,12 @@ import { useUrlState } from '@/lib/url-state';
  * title, Details -- and publishes, which creates the inspections and queues
  * their visits for Jobber.
  */
+
+/** Google Maps touches `window` and measures its container, so it is never rendered on the server. */
+const PlanAttentionMap = dynamic(() => import('@/components/planning/plan-attention-map').then((module) => module.PlanAttentionMap), {
+  ssr: false,
+  loading: () => <Skeleton className="h-full w-full rounded-lg" />,
+});
 
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
   DRAFT: { label: 'Draft', variant: 'secondary' },
@@ -135,6 +145,22 @@ export default function PlanningPage() {
     }`;
   });
   const technicians = new Set((days.data ?? []).map((day) => day.technicianId));
+  // Every visit still waiting for something, on one map, with the planned ones
+  // behind them: the office asked to see where they are, as Jobber shows its
+  // unscheduled appointments (2026-09-20).
+  const onMap = (stop: (typeof attention)[number]): AttentionMapStop => ({
+    id: stop.id,
+    address: stop.propertywareUnit?.addressLine1 ?? stop.tenant.addressLine1,
+    city: stop.tenant.city,
+    latitude: stop.latitude,
+    longitude: stop.longitude,
+    attention: attentionOf(stop) ?? 'KIND_TO_CHECK',
+  });
+  const needingMap = (stops.data ?? []).filter((stop) => attentionIds.has(stop.id)).map(onMap);
+  const plannedMap = planned
+    .filter((stop) => !attentionIds.has(stop.id))
+    .map((stop) => ({ ...onMap(stop), attention: null }));
+  const withoutLocation = needingMap.filter((stop) => stop.latitude === null || stop.longitude === null).length;
   const openStop = openStopId ? ((stops.data ?? []).find((stop) => stop.id === openStopId) ?? null) : null;
   const openStopDay = openStopId
     ? ((days.data ?? []).find((day) => day.stops.some((stop) => stop.id === openStopId)) ?? null)
@@ -442,12 +468,24 @@ export default function PlanningPage() {
                   title="Nothing needs attention"
                 />
               ) : (
-                <PlanStopsTable
-                  allStops={stops.data ?? []}
-                  editable={canChange && draft}
-                  onOpen={setOpenStopId}
-                  stops={(stops.data ?? []).filter((stop) => attentionIds.has(stop.id))}
-                />
+                <div className="grid gap-3">
+                  <div className="h-80 lg:h-[30rem]">
+                    <PlanAttentionMap onSelectStop={setOpenStopId} planned={plannedMap} stops={needingMap} />
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    Every visit waiting for something, with the visits already planned behind them in grey. Click one to
+                    give it a day and a technician.
+                    {withoutLocation
+                      ? ` ${withoutLocation.toLocaleString()} ${withoutLocation === 1 ? 'is' : 'are'} not on the map: Propertyware has no location for the property.`
+                      : ''}
+                  </p>
+                  <PlanStopsTable
+                    allStops={stops.data ?? []}
+                    editable={canChange && draft}
+                    onOpen={setOpenStopId}
+                    stops={(stops.data ?? []).filter((stop) => attentionIds.has(stop.id))}
+                  />
+                </div>
               )}
             </TabsContent>
           </Tabs>
