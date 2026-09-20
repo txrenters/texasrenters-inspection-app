@@ -220,7 +220,11 @@ describe('the benefit package plan page', () => {
     expect(build.mutate).not.toHaveBeenCalled();
     expect(within(dialog).getByRole('checkbox', { name: /Moses Rivera/ }).getAttribute('data-state')).toBe('checked');
     expect(within(dialog).getByRole('checkbox', { name: /Amy Wilson/ }).getAttribute('data-state')).toBe('unchecked');
-    expect(within(dialog).getByText(/Up to 15 days either side of Oct 1/)).toBeTruthy();
+    // Fifteen days early, on time, or fifteen days late -- and nothing else asked.
+    expect(within(dialog).getByRole('radio', { name: /15 days early/ }).getAttribute('checked')).toBeNull();
+    expect((within(dialog).getByRole('radio', { name: /On time/ }) as HTMLInputElement).checked).toBe(true);
+    expect(within(dialog).getByText(/Sep 16/)).toBeTruthy();
+    expect(within(dialog).getByText(/Oct 16/)).toBeTruthy();
     expect(within(dialog).queryByText(/minutes a visit|closed days/i)).toBeNull();
 
     // Emanuel is off this quarter, and Amy is sent instead.
@@ -251,6 +255,8 @@ describe('the benefit package plan page', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Rebuild Q4 2026' });
     expect(within(dialog).getByRole('checkbox', { name: /Emanuel Hall/ }).getAttribute('data-state')).toBe('unchecked');
+    // The day it was built from is kept, beside the three the office picks between.
+    expect((within(dialog).getByRole('radio', { name: /As built/ }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild for 2 technicians' }));
 
     expect(build.mutate).toHaveBeenCalledWith(
@@ -258,6 +264,21 @@ describe('the benefit package plan page', () => {
       expect.anything(),
     );
     expect(screen.queryByRole('button', { name: 'Lay out days' })).toBeNull();
+  });
+
+  /** The office (2026-09-19): "the +-15 days if we will apply the +15 or -15 or on time quarter schedule". */
+  it('builds from fifteen days before the quarter when that is chosen', () => {
+    mount({ plans: [] });
+
+    fireEvent.click(screen.getByRole('button', { name: /Build the Q4 2026 plan/ }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /15 days early/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Build for 3 technicians' }));
+
+    expect(build.mutate).toHaveBeenCalledWith(
+      { year: 2026, quarter: 4, technicianIds: ['tech-1', 'tech-2', 'tech-3'], startsOn: '2026-09-16' },
+      expect.anything(),
+    );
   });
 
   /** A build takes minutes (244 s for Q4 2026); a spinner alone read as a hung page. */

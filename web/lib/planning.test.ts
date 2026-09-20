@@ -4,7 +4,6 @@ import {
   bookedInWords,
   dayClock,
   dayOutsideRules,
-  defaultPlanStart,
   formatClock,
   formatMinutes,
   formatShortDay,
@@ -12,8 +11,9 @@ import {
   limitState,
   longestLegSeconds,
   parseCsv,
-  planStartChoice,
+  planStartOptions,
   planStartText,
+  planStartValue,
   quarterChoices,
   readOfficeSheet,
 } from './planning';
@@ -122,18 +122,32 @@ describe('a day against the office’s limits', () => {
 describe('the first day of a plan', () => {
   const Q4 = { year: 2026, quarter: 4 as const };
 
-  it('may be up to fifteen days either side of the quarter’s first day, and never before today', () => {
-    expect(planStartChoice(Q4, '2026-09-10')).toEqual({ min: '2026-09-16', max: '2026-10-16' });
-    expect(planStartChoice(Q4, '2026-09-19')).toEqual({ min: '2026-09-19', max: '2026-10-16' });
-    expect(planStartChoice(Q4, '2026-10-20')).toBeNull();
+  it('is fifteen days early, on time, or fifteen days late', () => {
+    expect(planStartOptions(Q4, null, '2026-09-10').map((option) => [option.label, option.date, option.past])).toEqual([
+      ['15 days early', '2026-09-16', false],
+      ['On time', '2026-10-01', false],
+      ['15 days late', '2026-10-16', false],
+    ]);
   });
 
-  it('offers the plan’s own first day, else the quarter’s, inside the days it may start on', () => {
-    expect(defaultPlanStart(Q4, null, '2026-09-19')).toBe('2026-10-01');
-    expect(defaultPlanStart(Q4, '2026-09-21T00:00:00.000Z', '2026-09-19')).toBe('2026-09-21');
-    // A first day already gone moves up to today.
-    expect(defaultPlanStart(Q4, '2026-09-21', '2026-09-23')).toBe('2026-09-23');
-    expect(defaultPlanStart(Q4, null, '2026-10-20')).toBeNull();
+  /** A start already gone is still offered: the plan begins from it and the days gone are not planned. */
+  it('says which of them are past', () => {
+    expect(planStartOptions(Q4, null, '2026-09-20').map((option) => option.past)).toEqual([true, false, false]);
+  });
+
+  it('keeps a plan’s own first day as a fourth choice, so a rebuild never moves it by accident', () => {
+    const options = planStartOptions(Q4, '2026-09-21T00:00:00.000Z', '2026-09-20');
+
+    expect(options.map((option) => option.value)).toEqual(['EARLY', 'ON_TIME', 'LATE', 'KEPT']);
+    expect(options.at(-1)).toMatchObject({ date: '2026-09-21', label: 'As built' });
+    expect(planStartValue(options, '2026-09-21T00:00:00.000Z')).toBe('KEPT');
+  });
+
+  it('starts a plan that has none on time', () => {
+    const options = planStartOptions(Q4, null, '2026-09-20');
+
+    expect(planStartValue(options, null)).toBe('ON_TIME');
+    expect(planStartValue(options, '2026-09-16')).toBe('EARLY');
   });
 
   it('says the first day in words', () => {

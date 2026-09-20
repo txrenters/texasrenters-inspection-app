@@ -302,6 +302,38 @@ const MAX_IMPROVEMENT_ROUNDS = 2000;
 const CONFIRMED_PER_ROUND = 25;
 
 /**
+ * How many visits next to each other move between groups at once, beside one at
+ * a time: a pair or a run of three left on the wrong day is a detour no single
+ * move undoes, because moving any one of them alone makes its group's drive
+ * longer before it makes it shorter.
+ */
+const RUNS_MOVED = [2, 3];
+
+/**
+ * How many groupings are grown before the one that drives least is kept: the two
+ * ways of starting, then randomised tries of each.
+ *
+ * Growing a group nearest-first is a good guess, not the best answer, and which
+ * guess wins differs from one part of town to the next. The office's priority is
+ * the least driving (2026-09-19), so several are tried and measured.
+ */
+const GROUPINGS_TRIED = 6;
+
+/** How many of the cheapest visits a randomised grouping picks between. */
+const NEXT_VISIT_CHOICES = 3;
+
+/**
+ * The draw a randomised grouping uses, from a fixed start.
+ *
+ * Fixed, so the same quarter always comes out the same: a plan that changed
+ * every time it was rebuilt could not be checked against the last one.
+ */
+function draws(): () => number {
+  let seed = 1;
+  return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+}
+
+/**
  * The most visits left over of an area that join days already holding their
  * nine, up to the office's twelve, rather than make a day of their own.
  */
@@ -384,6 +416,33 @@ function removalSaving(path: readonly PlannableStop[], stop: PlannableStop, cost
   if (at === 0) return cost(path[0]!, path[1]!);
   if (at === path.length - 1) return cost(path[at - 1]!, path[at]!);
   return cost(path[at - 1]!, stop) + cost(stop, path[at + 1]!) - cost(path[at - 1]!, path[at + 1]!);
+}
+
+/** What taking a run of stops out of an open path saves, the rest kept in order. */
+function runRemovalSaving(path: readonly PlannableStop[], at: number, length: number, cost: DriveEstimate) {
+  const before = at > 0 ? path[at - 1]! : null;
+  const after = at + length < path.length ? path[at + length]! : null;
+  // The legs inside the run travel with it, so only the two ends change.
+  let saved = 0;
+  if (before) saved += cost(before, path[at]!);
+  if (after) saved += cost(path[at + length - 1]!, after);
+  if (before && after) saved -= cost(before, after);
+  return saved;
+}
+
+/** Where a run of stops adds least to an open path, either way round, and how much. */
+function cheapestRunInsertion(path: readonly PlannableStop[], run: readonly PlannableStop[], cost: DriveEstimate) {
+  if (path.length === 0) return { added: 0 };
+  let added = Number.POSITIVE_INFINITY;
+  for (const [head, tail] of [
+    [run[0]!, run[run.length - 1]!],
+    [run[run.length - 1]!, run[0]!],
+  ]) {
+    added = Math.min(added, cost(tail, path[0]!), cost(path[path.length - 1]!, head));
+    for (let index = 1; index < path.length; index += 1)
+      added = Math.min(added, cost(path[index - 1]!, head) + cost(tail, path[index]!) - cost(path[index - 1]!, path[index]!));
+  }
+  return { added };
 }
 
 /**
@@ -511,7 +570,7 @@ type GroupStart = 'edge' | 'loneliest';
  * of its zone or a neighbour, until it has its nine or every visit left would
  * need a drive longer than the office allows.
  */
-function grownGroups(pool: readonly PlannableStop[], rules: GroupRules, start: GroupStart): Group[] {
+function grownGroups(pool: readonly PlannableStop[], rules: GroupRules, start: GroupStart, draw: (() => number) | null): Group[] {
   const left = new Set(pool);
   const middle = middleOf(pool);
   const groups: Group[] = [];
@@ -534,18 +593,21 @@ function grownGroups(pool: readonly PlannableStop[], rules: GroupRules, start: G
     left.delete(seed!);
     const group: Group = { zone: rules.zoned ? zoneOf(seed!) : null, path: [seed!], cost: 0, onSite: seed!.onSiteMinutes };
     while (group.path.length < rules.size) {
-      let best: { stop: PlannableStop; at: number; added: number } | null = null;
+      const candidates: { stop: PlannableStop; at: number; added: number }[] = [];
       for (const stop of left) {
         if (group.onSite + stop.onSiteMinutes > rules.limits.maxOnSiteMinutes || !belongs(stop, group.zone, group.path, rules))
           continue;
         const { at, added } = cheapestInsertion(group.path, stop, rules.cost);
-        if (!overLong(added) && (!best || added < best.added)) best = { stop, at, added };
+        if (!overLong(added)) candidates.push({ stop, at, added });
       }
-      if (!best) break;
-      group.path.splice(best.at, 0, best.stop);
-      group.cost += best.added;
-      group.onSite += best.stop.onSiteMinutes;
-      left.delete(best.stop);
+      if (candidates.length === 0) break;
+      candidates.sort((left, right) => left.added - right.added || left.stop.stopId.localeCompare(right.stop.stopId));
+      // The cheapest visit, or one of the cheapest few when this grouping is a randomised try.
+      const taken = candidates[draw ? Math.floor(draw() * Math.min(NEXT_VISIT_CHOICES, candidates.length)) : 0]!;
+      group.path.splice(taken.at, 0, taken.stop);
+      group.cost += taken.added;
+      group.onSite += taken.stop.onSiteMinutes;
+      left.delete(taken.stop);
     }
     groups.push(group);
   }
@@ -628,6 +690,40 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
                 return true;
               },
             });
+          }
+        }
+      }
+
+      // Runs of two or three visits next to each other, moved together.
+      for (const from of groups) {
+        for (const length of RUNS_MOVED) {
+          if (from.path.length <= length) continue;
+          for (let at = 0; at + length <= from.path.length; at += 1) {
+            const run = from.path.slice(at, at + length);
+            const saved = runRemovalSaving(from.path, at, length, cost);
+            const runOnSite = run.reduce((total, stop) => total + stop.onSiteMinutes, 0);
+            for (const to of groups) {
+              if (
+                to === from ||
+                to.path.length === 0 ||
+                to.path.length + length > size ||
+                to.onSite + runOnSite > limits.maxOnSiteMinutes ||
+                !run.every((stop) => allows(stop, to))
+              )
+                continue;
+              const estimate = cheapestRunInsertion(to.path, run, cost).added - saved;
+              if (estimate >= -SAVING_MINUTES) continue;
+              changes.push({
+                estimate,
+                apply: () => {
+                  const rest = from.path.filter((stop) => !run.includes(stop));
+                  if (best(rest).cost + best([...to.path, ...run]).cost + SAVING_MINUTES >= from.cost + to.cost) return false;
+                  set(to, [...to.path, ...run]);
+                  set(from, rest);
+                  return true;
+                },
+              });
+            }
           }
         }
       }
@@ -726,17 +822,28 @@ function improveGroups(groups: Group[], rules: GroupRules): Group[] {
 
 /**
  * What is left of the visits, as the planner's days: grouped from the edge
- * inward, then improved together. Grown from two kinds of start, and the
- * grouping with fewer days kept -- then the one that drives less.
+ * inward, then improved together.
+ *
+ * Several groupings are grown -- both kinds of start, then randomised tries --
+ * and each improved. The one kept is the one that drives least of those that
+ * take the fewest days. Driving is the office's priority (2026-09-19), and days
+ * come first only because a technician's whole day is not worth trading for a
+ * few minutes of it: the office's nine a day settles how many days there are,
+ * and the choice between groupings is then the driving alone.
  */
 function groupsOf(pool: readonly PlannableStop[], rules: GroupRules): Group[] {
-  let chosen: { groups: Group[]; cost: number } | null = null;
   if (pool.length === 0) return [];
-  for (const start of ['edge', 'loneliest'] as const) {
-    const groups = improveGroups(grownGroups(pool, rules, start), rules);
+  const draw = draws();
+  let chosen: { groups: Group[]; cost: number } | null = null;
+  for (let attempt = 0; attempt < GROUPINGS_TRIED; attempt += 1) {
+    const start: GroupStart = attempt % 2 === 0 ? 'edge' : 'loneliest';
+    const groups = improveGroups(grownGroups(pool, rules, start, attempt < 2 ? null : draw), rules);
     const cost = groups.reduce((total, group) => total + group.cost, 0);
-    if (!chosen || groups.length < chosen.groups.length || (groups.length === chosen.groups.length && cost < chosen.cost))
-      chosen = { groups, cost };
+    const better =
+      !chosen ||
+      groups.length < chosen.groups.length ||
+      (groups.length === chosen.groups.length && cost < chosen.cost - 1e-9);
+    if (better) chosen = { groups, cost };
   }
   return chosen!.groups;
 }
