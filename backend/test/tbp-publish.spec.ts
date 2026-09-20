@@ -150,6 +150,28 @@ describe('publishing a reviewed quarter', () => {
   });
 
   /**
+   * The office's Q4 (2026-09-20): 41 of 429 visits were refused with "approve
+   * its areas before creating an inspection", on properties whose tenants are
+   * visited this quarter either way. The same visit arriving from Jobber is
+   * created with the technician surveying the property, and what they capture
+   * is a draft an administrator still approves.
+   */
+  it('lets the technician survey a property whose areas nobody has approved', async () => {
+    const { service } = build([aStop('s1', 1), aStop('s2', 2, { inspectionType: InspectionType.HVAC })]);
+
+    await service.publish(USER, 'plan-1');
+
+    expect(creation.resolveInspectionPlan.mock.calls[0][1]).toMatchObject({
+      inspectionType: InspectionType.OCCUPIED,
+      allowTechnicianAreaCapture: true,
+    });
+    expect(creation.resolveInspectionPlan.mock.calls[1][1]).toMatchObject({
+      inspectionType: InspectionType.HVAC,
+      allowTechnicianAreaCapture: true,
+    });
+  });
+
+  /**
    * The publishing coordinator approved a quarter; they did not choose this
    * property, this day or this technician. Naming them as the creator of four
    * hundred inspections would make the audit trail say something nobody did.
@@ -223,7 +245,7 @@ describe('publishing a reviewed quarter', () => {
     expect(planUpdateMany.mock.calls[0][0].where).toMatchObject({
       id: 'plan-1',
       organizationId: 'org-1',
-      status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED] },
+      status: { in: [TbpPlanStatus.DRAFT, TbpPlanStatus.PUBLISH_FAILED, TbpPlanStatus.PUBLISHED] },
     });
     expect(planUpdateMany.mock.calls[0][0].data.status).toBe(TbpPlanStatus.PUBLISHING);
   });

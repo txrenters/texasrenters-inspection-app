@@ -284,16 +284,30 @@ export class QuarterPlannerService {
       },
     });
     if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'This plan does not exist.');
-    if (plan.status !== TbpPlanStatus.DRAFT)
-      // A published stop is an inspection and a Jobber visit; moving it here
-      // would only make the plan disagree with both.
-      throw new ApplicationError(409, 'PLAN_NOT_DRAFT', 'Only a draft plan can be routed.');
+    // A published stop is an inspection and a Jobber visit; moving it here
+    // would only make the plan disagree with both. So routing only ever lays
+    // out PLANNED stops, and a published quarter is routed again for the visits
+    // it could not create (the office, 2026-09-20: "I should be able to rebuild
+    // it"). A quarter mid-publish or cancelled is left alone.
+    if (
+      plan.status !== TbpPlanStatus.DRAFT &&
+      plan.status !== TbpPlanStatus.PUBLISHED &&
+      plan.status !== TbpPlanStatus.PUBLISH_FAILED
+    )
+      throw new ApplicationError(409, 'PLAN_NOT_DRAFT', 'Only a draft or published plan can be routed.');
 
     const quarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
     const settings = routingSettings(planSettings(plan), input, quarter);
     // A crew chosen now is checked before anything is written.
     const roster = await this.roster(organizationId, settings.technicianIds, input.technicianIds !== undefined);
     await this.prisma.tbpQuarterPlan.update({ where: { id: planId }, data: planColumns(settings) });
+
+    // A visit a publish could not create -- no approved areas, no unit -- is
+    // laid out again with the rest rather than staying failed forever.
+    await this.prisma.tbpQuarterPlanStop.updateMany({
+      where: { planId, organizationId, status: TbpStopStatus.FAILED, inspectionId: null },
+      data: { status: TbpStopStatus.PLANNED, blockedCode: null, blockedMessage: null },
+    });
 
     await this.prisma.tbpQuarterPlanStop.updateMany({
       where: { planId, organizationId, status: TbpStopStatus.BLOCKED, blockedCode: { in: ROUTING_BLOCK_CODES } },

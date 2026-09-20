@@ -170,7 +170,18 @@ export class TbpPlanService {
       },
       select: { id: true, status: true },
     });
-    if (existing && existing.status !== TbpPlanStatus.DRAFT)
+    // A published quarter is regenerated too, for the visits it has not created
+    // yet (the office, 2026-09-20: "I should be able to rebuild it", on a
+    // quarter whose publish had failed). Every stop that already has an
+    // inspection is left exactly as it is -- `editableStop` -- so a rebuild can
+    // only touch what nobody has been sent to yet. A quarter mid-publish or
+    // cancelled is not regenerated.
+    if (
+      existing &&
+      existing.status !== TbpPlanStatus.DRAFT &&
+      existing.status !== TbpPlanStatus.PUBLISHED &&
+      existing.status !== TbpPlanStatus.PUBLISH_FAILED
+    )
       throw new ApplicationError(
         409,
         'PLAN_NOT_DRAFT',

@@ -489,6 +489,18 @@ describe('the benefit package plan page', () => {
   });
 
   /**
+   * The office (2026-09-20), on the quarter whose publish had failed: "I should
+   * be able to rebuild it". A published quarter still has the visits it could
+   * not create, and a rebuild only ever touches those.
+   */
+  it('offers Rebuild and Publish the rest on a quarter that has been published', () => {
+    mount({ plans: [{ ...PLAN, status: 'PUBLISH_FAILED' }] });
+
+    expect(screen.getByRole('button', { name: 'Rebuild' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Publish the rest' })).toBeTruthy();
+  });
+
+  /**
    * The office (2026-09-20), after publishing a quarter with visits that had no
    * day: "then create an unscheduled also in the console". Jobber lists them;
    * so does this.

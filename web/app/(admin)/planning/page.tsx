@@ -284,7 +284,7 @@ export default function PlanningPage() {
               ))}
             </SelectContent>
           </Select>
-          {canChange && draft && plan ? (
+          {canPlace && plan ? (
             <>
               <OfficeSheetImport planId={plan.id} />
               <Button
@@ -320,16 +320,11 @@ export default function PlanningPage() {
                 }
               >
                 <SendIcon />
-                Publish
+                {draft ? 'Publish' : 'Publish the rest'}
               </Button>
             </>
           ) : null}
-          {canChange && plan?.status === 'PUBLISH_FAILED' ? (
-            <Button disabled={mutations.publish.isPending} onClick={() => setPublishing(true)} size="sm">
-              <SendIcon />
-              Publish the rest
-            </Button>
-          ) : null}
+
         </>
       }
       badges={plan ? <Badge variant={STATUS[plan.status].variant}>{STATUS[plan.status].label}</Badge> : null}
