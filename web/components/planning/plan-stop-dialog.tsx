@@ -1,6 +1,6 @@
 'use client';
 
-import { isRescheduleMonday, monthOfQuarter, quarterEnd, quarterStart, type Quarter } from '@texasrenters/shared';
+import { isRescheduleMonday, monthOfQuarter, quarterEnd, quarterFirstDay, type Quarter } from '@texasrenters/shared';
 import Link from 'next/link';
 import { Fragment, useMemo, type ReactNode } from 'react';
 
@@ -36,12 +36,13 @@ const MONTH_OF_QUARTER = ['first', 'second', 'third'];
 /**
  * Its visit last quarter, and the month of this quarter it keeps (the office,
  * 2026-09-18): "Jul 14 · the quarter's first month". A visit with none goes in
- * the month with fewest visits.
+ * the month with fewest visits. The month recorded with the visit wins over the
+ * day's: a plan may start early, so 25 September can be a first month.
  */
-function lastVisitText(previousVisitOn: string | null | undefined) {
+function lastVisitText(previousVisitOn: string | null | undefined, previousVisitMonth?: number | null) {
   if (!previousVisitOn) return 'None: it goes in the month with fewest visits';
   const day = previousVisitOn.slice(0, 10);
-  return `${formatShortDay(day)} · the quarter's ${MONTH_OF_QUARTER[monthOfQuarter(day) - 1]} month`;
+  return `${formatShortDay(day)} · the quarter's ${MONTH_OF_QUARTER[(previousVisitMonth ?? monthOfQuarter(day)) - 1]} month`;
 }
 
 const ORDER_SOURCE: Record<PlanStop['orderSource'], string> = {
@@ -60,11 +61,11 @@ const KIND_OPTIONS: PickOption[] = [
 const WEEKDAY = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' });
 
 /** What a day is, when it is not an ordinary working day for the plan. */
-function dayNote(date: string, quarter: Quarter, closedDays: readonly string[]) {
+function dayNote(date: string, quarter: Quarter, closedDays: readonly string[], startsOn: string | null) {
   const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (weekday === 0 || weekday === 6) return `A ${WEEKDAY.format(new Date(`${date}T00:00:00Z`))}: the office is closed.`;
   if (closedDays.includes(date)) return 'A day the office is closed.';
-  if (isRescheduleMonday(date, quarter)) return 'A Monday kept for rescheduled visits.';
+  if (isRescheduleMonday(date, quarter, startsOn)) return 'A Monday kept for rescheduled visits.';
   return null;
 }
 
@@ -100,6 +101,7 @@ export function PlanStopDialog({
   editable = false,
   quarter = null,
   closedDays = [],
+  startsOn = null,
 }: {
   /** The visit to show; null closes the window. */
   stop: PlanStop | null;
@@ -115,6 +117,8 @@ export function PlanStopDialog({
   quarter?: Quarter | null;
   /** The quarter's closed days, `YYYY-MM-DD`, named when a visit is moved onto one. */
   closedDays?: readonly string[];
+  /** The plan's own first day, `YYYY-MM-DD`, when it is not the quarter's: the earliest a visit can move to. */
+  startsOn?: string | null;
 }) {
   const { editStop } = usePlanningMutations();
   const canEdit = Boolean(
@@ -146,7 +150,7 @@ export function PlanStopDialog({
   const save = (input: PlanStopEdit) => editStop.mutateAsync({ stopId: stop.id, ...input });
   const scheduledOn = stop.scheduledOn ? stop.scheduledOn.slice(0, 10) : null;
   const severalUnits = stop.buildingUnits.length > 1;
-  const note = canEdit && scheduledOn && quarter ? dayNote(scheduledOn, quarter, closedDays) : null;
+  const note = canEdit && scheduledOn && quarter ? dayNote(scheduledOn, quarter, closedDays, startsOn) : null;
   // The last day of the quarter: the day before the next one starts.
   const lastDay = quarter ? new Date(quarterEnd(quarter).getTime() - 86_400_000).toISOString().slice(0, 10) : '';
 
@@ -223,7 +227,7 @@ export function PlanStopDialog({
                       display={dateText}
                       label="the date"
                       max={lastDay}
-                      min={quarterStart(quarter!).toISOString().slice(0, 10)}
+                      min={startsOn ?? quarterFirstDay(quarter!)}
                       onSave={(value) => save({ scheduledOn: value })}
                       value={scheduledOn}
                     />
@@ -354,7 +358,7 @@ export function PlanStopDialog({
                 'Order',
                 `#${stop.sequence}${stop.previousSequence ? ` · #${stop.previousSequence} last quarter` : ` · ${ORDER_SOURCE[stop.orderSource]}`}`,
               ],
-              ['Last visit', lastVisitText(stop.previousVisitOn)],
+              ['Last visit', lastVisitText(stop.previousVisitOn, stop.previousVisitMonth)],
               ['Last technician', stop.previousTechnician?.displayName ?? null],
               ['Placed by', stop.scheduleOverriddenAt || stop.technicianOverriddenAt ? 'A coordinator' : 'The planner'],
             ]}

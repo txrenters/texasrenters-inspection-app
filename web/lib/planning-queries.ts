@@ -22,13 +22,19 @@ export interface PlanSettings {
   occupiedVisitMinutes: number;
   hvacVisitMinutes: number;
   maxOnSiteMinutes: number;
-  /** How far a zone may be from the crew's homes. Not a limit on a day's driving, which is never capped. */
+  /** How far a zone may be from the crew's homes. Not a limit on a day's driving. */
   maxDriveMinutes: number;
-  /** Visits every day holds at least. */
+  /** The visits the planner groups into a day: nine (the office, 2026-09-19). */
   minStopsPerDay: number;
-  /** Visits one day holds at most. */
+  /** The most a day may hold, with the visits the office adds by hand: twelve. */
   maxStopsPerDay: number;
+  /** The longest drive between two of a day's properties, in minutes: twenty. The drive from home is not held to it. */
+  maxLegMinutes: number;
   holidays: string[];
+  /** The plan's first day when it is not the quarter's: up to fifteen days either side of it. */
+  startsOn: string | null;
+  /** Who the coordinator chose to send out; empty, the crew on the technicians' planning profiles. */
+  crewTechnicianIds: string[];
 }
 
 export interface PlanQuarter extends PlanSettings {
@@ -55,6 +61,8 @@ export interface PlanStop {
   previousSequence: number | null;
   /** The day of its visit last quarter, whose month of the quarter this one keeps; null for none. */
   previousVisitOn?: string | null;
+  /** The month of its own quarter that visit was in, 1 to 3, where the day alone cannot say. */
+  previousVisitMonth?: number | null;
   orderSource: 'PRIOR_QUARTER' | 'CARRIED_SKIP' | 'NEW_ENROLLMENT';
   zone: string | null;
   scheduledOn: string | null;
@@ -227,6 +235,18 @@ export interface PlanTechnician {
   hasHome: boolean;
 }
 
+/**
+ * A quarter to build, for the technicians and from the day the coordinator
+ * chose (the office, 2026-09-19). Left out, the plan keeps what it had.
+ */
+export interface PlanBuildInput {
+  year: number;
+  quarter: number;
+  technicianIds?: string[];
+  /** `YYYY-MM-DD`, up to fifteen days either side of the quarter's first day. */
+  startsOn?: string;
+}
+
 /** A coordinator's change to one visit in a draft; anything left out stays as it is. */
 export interface PlanStopEdit {
   /** `YYYY-MM-DD`. */
@@ -324,11 +344,10 @@ export function usePlanningMutations() {
     api<T>(`${PLANNING}${path}`, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 
   return {
-    // A quarter is built with the office's rules as the plan holds them, so the
-    // console sends only which quarter: there is nothing for a coordinator to set.
+    // A quarter is built with the office's rules as the plan holds them, for the
+    // technicians and from the first day the coordinator chose when asked.
     build: useMutation({
-      mutationFn: (input: { year: number; quarter: number }) =>
-        post<{ planId: string; routing: PlanRoutingSummary }>('/quarters', input),
+      mutationFn: (input: PlanBuildInput) => post<{ planId: string; routing: PlanRoutingSummary }>('/quarters', input),
       onSuccess: refresh,
     }),
     importOfficeDetails: useMutation({

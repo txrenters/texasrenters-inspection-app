@@ -3,6 +3,7 @@
 import {
   closedDaysOfQuarter,
   isRescheduleMonday,
+  quarterFirstDay,
   usFederalHolidays,
   weekStartOf,
   zoneNumberOf,
@@ -35,25 +36,30 @@ export interface CalendarMonth {
 }
 
 /**
- * The quarter's three months as weeks of weekdays.
+ * The quarter's three months as weeks of weekdays, and the days before them of
+ * a plan that starts early (the office, 2026-09-19: "for the q4 we can start as
+ * early as september") -- from its first day to the end of that month.
  *
  * Monday to Friday only: nothing is ever planned on a weekend, and five columns
  * leave each day room for every technician out on it.
  */
-export function quarterMonths(quarter: Quarter): CalendarMonth[] {
-  return [0, 1, 2].map((offset) => {
+export function quarterMonths(quarter: Quarter, startsOn?: string | null): CalendarMonth[] {
+  const monthOf = (offset: number, from?: number) => {
     const first = Date.UTC(quarter.year, (quarter.quarter - 1) * 3 + offset, 1);
     const next = Date.UTC(quarter.year, (quarter.quarter - 1) * 3 + offset + 1, 1);
+    const shownFrom = from ?? first;
     const weeks: (string | null)[][] = [];
-    for (let monday = Date.parse(`${weekStartOf(isoDate(first))}T00:00:00Z`); monday < next; monday += 7 * DAY_MS) {
+    for (let monday = Date.parse(`${weekStartOf(isoDate(shownFrom))}T00:00:00Z`); monday < next; monday += 7 * DAY_MS) {
       const week = WEEKDAYS.map((_, day) => {
         const time = monday + day * DAY_MS;
-        return time >= first && time < next ? isoDate(time) : null;
+        return time >= shownFrom && time < next ? isoDate(time) : null;
       });
       if (week.some(Boolean)) weeks.push(week);
     }
     return { key: isoDate(first), label: MONTH.format(first), weeks };
-  });
+  };
+  const early = startsOn && startsOn < quarterFirstDay(quarter) ? [monthOf(-1, Date.parse(`${startsOn}T00:00:00Z`))] : [];
+  return [...early, ...[0, 1, 2].map((offset) => monthOf(offset))];
 }
 
 /** "Zone 2", or "Zones 1, 2" for a day that crosses two. */
@@ -78,6 +84,7 @@ export function PlanCalendar({
   rotation,
   selectedDayId,
   onSelect,
+  startsOn = null,
 }: {
   quarter: Quarter;
   days: PlanDay[];
@@ -85,13 +92,16 @@ export function PlanCalendar({
   rotation?: PlanRotation | null;
   selectedDayId?: string;
   onSelect: (dayId: string) => void;
+  /** The plan's own first day, `YYYY-MM-DD`, when it is not the quarter's. */
+  startsOn?: string | null;
 }) {
   const { year, quarter: number } = quarter;
-  const months = useMemo(() => quarterMonths({ year, quarter: number }), [year, number]);
-  const federal = useMemo(() => new Set(usFederalHolidays(year)), [year]);
+  const months = useMemo(() => quarterMonths({ year, quarter: number }, startsOn), [year, number, startsOn]);
+  // A plan for January can start in December: that year's holidays too.
+  const federal = useMemo(() => new Set([...usFederalHolidays(year - 1), ...usFederalHolidays(year)]), [year]);
   const closed = useMemo(
-    () => new Set(closedDaysOfQuarter({ year, quarter: number }, settings.holidays)),
-    [year, number, settings.holidays],
+    () => new Set(closedDaysOfQuarter({ year, quarter: number }, settings.holidays, startsOn)),
+    [year, number, settings.holidays, startsOn],
   );
 
   // The crew in its zone order first, anyone else after by name: colours follow that order.
@@ -173,7 +183,7 @@ export function PlanCalendar({
                           ? federal.has(date)
                             ? 'US holiday'
                             : 'Closed'
-                          : isRescheduleMonday(date, { year, quarter: number })
+                          : isRescheduleMonday(date, { year, quarter: number }, startsOn)
                             ? 'Kept free'
                             : null;
                         return (

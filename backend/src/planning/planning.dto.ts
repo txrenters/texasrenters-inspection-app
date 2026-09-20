@@ -3,6 +3,7 @@ import { TBP_INSPECTION_TYPES, type TbpInspectionType } from '@texasrenters/shar
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsEnum,
   IsIn,
@@ -34,10 +35,15 @@ export class PlanRoutingSettingsDto {
    * which is kept short and never capped.
    */
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(480) maxDriveMinutes?: number;
-  /** Visits every day holds at least: nine is the office's rule. */
+  /** The visits the planner groups into a day: nine is the office's rule (2026-09-19). */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) minStopsPerDay?: number;
-  /** Visits one day holds at most: twelve is the office's rule. */
+  /** The most a day may hold, with the visits the office adds by hand: twelve is the office's rule. */
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(24) maxStopsPerDay?: number;
+  /**
+   * The longest drive between two of a day's properties, in minutes: twenty is
+   * the office's rule (2026-09-19). The drive from home is not held to it.
+   */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(120) maxLegMinutes?: number;
 
   /**
    * Days the office is closed besides weekends and US federal holidays, as
@@ -49,6 +55,25 @@ export class PlanRoutingSettingsDto {
   @IsString({ each: true })
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { each: true })
   holidays?: string[];
+
+  /**
+   * The plan's first day, `YYYY-MM-DD`: up to fifteen days either side of the
+   * quarter's first (the office, 2026-09-19: "for the q4 we can start as early
+   * as september").
+   */
+  @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) startsOn?: string;
+
+  /**
+   * Who to send out on the plan's days (the office, 2026-09-19: "before
+   * generating ... it should ask for the technicians"). Left out: the plan's
+   * crew as it was, or the benefit-package crew on the planning profiles.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsUUID('all', { each: true })
+  technicianIds?: string[];
 }
 
 export class PlanQuarterDto extends PlanRoutingSettingsDto {

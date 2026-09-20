@@ -12,6 +12,7 @@ import {
   type TbpInspectionType,
   carryForwardOrder,
   detailsNamingInspection,
+  monthOfPlan,
   previousQuarter,
   quarterLabel,
   quarterStart,
@@ -667,16 +668,25 @@ export class TbpPlanService {
     });
 
     const byQuarter = new Map(
-      plans.map((plan) => [
-        `${plan.quarterYear}-${plan.quarterNumber}`,
-        plan.stops.map((stop) => ({
-          tenantExternalId: stop.tenantExternalId,
-          sequence: stop.sequence,
-          technicianId: stop.assignedTechnicianId,
-          // Its day, whose month of the quarter the next quarter's visit keeps.
-          visitedOn: stop.scheduledOn ? stop.scheduledOn.toISOString().slice(0, 10) : null,
-        })),
-      ]),
+      plans.map((plan) => {
+        const planQuarter: Quarter = { year: plan.quarterYear, quarter: plan.quarterNumber as Quarter['quarter'] };
+        return [
+          `${plan.quarterYear}-${plan.quarterNumber}`,
+          plan.stops.map((stop) => {
+            const visitedOn = stop.scheduledOn ? stop.scheduledOn.toISOString().slice(0, 10) : null;
+            return {
+              tenantExternalId: stop.tenantExternalId,
+              sequence: stop.sequence,
+              technicianId: stop.assignedTechnicianId,
+              // Its day, and the month of its own quarter the next quarter's visit
+              // keeps: a day before that quarter -- a plan may start fifteen days
+              // early (2026-09-19) -- was its first month.
+              visitedOn,
+              visitedMonth: visitedOn ? monthOfPlan(visitedOn, planQuarter) : null,
+            };
+          }),
+        ];
+      }),
     );
     return wanted
       .map((entry) => byQuarter.get(`${entry.year}-${entry.quarter}`) ?? [])
@@ -692,7 +702,13 @@ export class TbpPlanService {
     organizationId: string,
     planId: string,
     tenant: PlanTenant,
-    ranked: { sequence: number; previousSequence: number | null; previousVisitOn: string | null; orderSource: string },
+    ranked: {
+      sequence: number;
+      previousSequence: number | null;
+      previousVisitOn: string | null;
+      previousVisitMonth?: number | null;
+      orderSource: string;
+    },
     quarter: Quarter,
     context: { officeDetails: string | null; previousTechnicianId: string | null },
   ) {
@@ -767,6 +783,7 @@ export class TbpPlanService {
     const shared = {
       previousSequence: ranked.previousSequence,
       previousVisitOn: ranked.previousVisitOn ? new Date(`${ranked.previousVisitOn}T00:00:00.000Z`) : null,
+      previousVisitMonth: ranked.previousVisitMonth ?? null,
       orderSource: ranked.orderSource as TbpOrderSource,
       zone: tenant.zone,
       propertywareBuildingId: tenant.propertywareBuildingId,

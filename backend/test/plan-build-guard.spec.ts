@@ -81,11 +81,20 @@ describe('one build of a plan at a time', () => {
 
 describe('building from the console', () => {
   const quarter = { year: 2026, quarter: 4 };
+  /** What routing answers, with the settings the plan was laid out with. */
+  const routed = (settings: Record<string, unknown> = {}) => ({
+    quarter,
+    placed: 3,
+    days: 1,
+    unplaced: [],
+    settings: { technicianIds: [], startsOn: null, maxLegMinutes: 20, ...settings },
+  });
+  const audited = () => ({ auditLog: { create: jest.fn().mockResolvedValue({}) } });
 
   it('holds the request open past the server’s 30-second idle timeout', async () => {
     const plans = { generate: jest.fn().mockResolvedValue({ planId: 'plan-1', stopCount: 3 }) };
-    const planner = { route: jest.fn().mockResolvedValue({ placed: 3, days: 1, unplaced: [] }) };
-    const controller = controllerWith(new PlanBuildGuard(), { plans, planner });
+    const planner = { route: jest.fn().mockResolvedValue(routed()) };
+    const controller = controllerWith(new PlanBuildGuard(), { plans, planner, prisma: audited() });
     const incoming = request();
 
     await expect(controller.generate(incoming as never, quarter as never)).resolves.toMatchObject({
@@ -95,14 +104,41 @@ describe('building from the console', () => {
 
     expect(incoming.setTimeout).toHaveBeenCalledWith(LONG_REQUEST_TIMEOUT_MS);
     expect(LONG_REQUEST_TIMEOUT_MS).toBeGreaterThanOrEqual(10 * 60_000);
-    expect(planner.route).toHaveBeenCalledWith(ORGANIZATION_ID, 'plan-1', {});
+    // Never a day already gone: today, in Texas, goes with the build.
+    expect(planner.route).toHaveBeenCalledWith(ORGANIZATION_ID, 'plan-1', {}, { today: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+  });
+
+  /** The office (2026-09-19): who goes out on a quarter is the coordinator's choice, so it is on the record. */
+  it('records who a build sends out and from which day', async () => {
+    const plans = { generate: jest.fn().mockResolvedValue({ planId: 'plan-1', stopCount: 3 }) };
+    const planner = { route: jest.fn().mockResolvedValue(routed({ technicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21' })) };
+    const prisma = audited();
+    const controller = controllerWith(new PlanBuildGuard(), { plans, planner, prisma });
+
+    await controller.generate(request() as never, { ...quarter, technicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21' } as never);
+
+    expect(planner.route).toHaveBeenCalledWith(
+      ORGANIZATION_ID,
+      'plan-1',
+      { technicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21' },
+      expect.anything(),
+    );
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: ORGANIZATION_ID,
+        action: 'TBP_PLAN_BUILT',
+        entityType: 'TbpQuarterPlan',
+        entityId: 'plan-1',
+        metadata: expect.objectContaining({ quarter: 'Q4 2026', technicianIds: ['tech-1', 'tech-2'], startsOn: '2026-09-21' }),
+      }),
+    });
   });
 
   it('refuses Rebuild clicked again while the first build is still running', async () => {
     const generation = held<{ planId: string }>();
     const plans = { generate: jest.fn(() => generation.promise) };
-    const planner = { route: jest.fn().mockResolvedValue({ placed: 3, days: 1, unplaced: [] }) };
-    const controller = controllerWith(new PlanBuildGuard(), { plans, planner });
+    const planner = { route: jest.fn().mockResolvedValue(routed()) };
+    const controller = controllerWith(new PlanBuildGuard(), { plans, planner, prisma: audited() });
 
     const first = controller.generate(request() as never, quarter as never);
     await expect(controller.generate(request() as never, quarter as never)).rejects.toMatchObject({

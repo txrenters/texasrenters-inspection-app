@@ -14,8 +14,11 @@ const SETTINGS: PlanSettings = {
   maxDriveMinutes: 90,
   minStopsPerDay: 9,
   maxStopsPerDay: 12,
+  maxLegMinutes: 20,
   // The day after Thanksgiving, closed by the office on top of the US holidays.
   holidays: ['2026-11-27'],
+  startsOn: null,
+  crewTechnicianIds: [],
 };
 
 const ROTATION: PlanRotation = {
@@ -78,6 +81,18 @@ describe('the quarter as months of weekdays', () => {
     expect(months[1]!.weeks[0]).toEqual(['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']);
     expect(months[2]!.weeks.at(-1)).toEqual(['2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31', null]);
   });
+
+  /** The office (2026-09-19): "for the q4 we can start as early as september". */
+  it('shows the days before the quarter of a plan that starts early, from its first day', () => {
+    const months = quarterMonths(Q4, '2026-09-23');
+
+    expect(months.map((month) => month.label)).toEqual(['September 2026', 'October 2026', 'November 2026', 'December 2026']);
+    expect(months[0]!.weeks).toEqual([
+      [null, null, '2026-09-23', '2026-09-24', '2026-09-25'],
+      ['2026-09-28', '2026-09-29', '2026-09-30', null, null],
+    ]);
+    expect(quarterMonths(Q4, '2026-10-05').map((month) => month.label)).toEqual(['October 2026', 'November 2026', 'December 2026']);
+  });
 });
 
 describe('the benefit-package calendar', () => {
@@ -110,10 +125,25 @@ describe('the benefit-package calendar', () => {
   });
 
   it('says which days are outside the office’s rules', () => {
-    render(<PlanCalendar days={DAYS} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
+    const long = day('kevin-oct-7', '2026-10-07', 'kevin', 'Kevin Granados', 9, '2');
+    long.stops[4]!.driveSecondsForecast = 25 * 60;
+    render(<PlanCalendar days={[...DAYS, long]} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} />);
 
-    expect(screen.getByRole('button', { name: /^Tuesday, October 6: Moses Rodriguez, 7 visits.*, outside the rules$/ })).toBeTruthy();
+    // A drive of twenty-five minutes between two of its properties.
+    expect(screen.getByRole('button', { name: /^Wednesday, October 7: Kevin Granados, 9 visits.*, outside the rules$/ })).toBeTruthy();
+    // Seven visits is a short day, not one against the rules; twelve is the most a day holds.
+    expect(screen.getByRole('button', { name: /^Tuesday, October 6: Moses Rodriguez, 7 visits.*inspecting$/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /^Friday, October 2: Emanuel Hall, 12 visits.*inspecting$/ })).toBeTruthy();
+  });
+
+  it('shows a plan’s days before the quarter, with the Mondays kept free from its own second week', () => {
+    const early = [day('moses-sep-23', '2026-09-23', 'moses', 'Moses Rodriguez', 9, '1')];
+    render(<PlanCalendar days={early} onSelect={vi.fn()} quarter={Q4} rotation={ROTATION} settings={SETTINGS} startsOn="2026-09-23" />);
+
+    const september = screen.getByRole('region', { name: 'September 2026' });
+    expect(within(september).getByRole('button', { name: /^Wednesday, September 23: Moses Rodriguez, 9 visits/ })).toBeTruthy();
+    // Monday 28 September is the plan's second week.
+    expect(within(september).getAllByText('Kept free')).toHaveLength(1);
   });
 
   it('marks a day built around a move-out', () => {

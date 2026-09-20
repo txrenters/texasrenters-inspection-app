@@ -9,9 +9,9 @@ import { quarterStart, workingDaysOfQuarter, type Quarter } from './quarter-plan
  * on 2, Kevin on 3 and Emanuel on 4. Nobody crosses town, and a tenant sees
  * whoever has their part of it that week.
  *
- * Mondays are kept free of planned visits from the quarter's second week on:
- * that is where the office puts the visits rescheduled from the week before.
- * The first week has nothing to reschedule yet.
+ * Mondays are kept free of planned visits from the plan's second week on: that
+ * is where the office puts the visits rescheduled from the week before. The
+ * first week has nothing to reschedule yet.
  */
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -35,29 +35,38 @@ export function weekStartOf(date: string): string {
 }
 
 /**
- * The week of the quarter a day falls in, counting from 0.
+ * The week of the plan a day falls in, counting from 0.
  *
- * Calendar weeks, Monday to Sunday, so the quarter's first week is whatever is
- * left of the week it starts in: Q4 2026 starts on a Thursday, so its first
- * week is 1-2 October and its second starts on Monday 5 October.
+ * Calendar weeks, Monday to Sunday, from the week the plan starts in: the
+ * quarter's first day, unless the plan starts up to fifteen days either side of
+ * it (`startsOn`, the office, 2026-09-19). So the first week is whatever is left
+ * of the week it starts in: Q4 2026 starts on a Thursday, so its first week is
+ * 1-2 October and its second starts on Monday 5 October.
  */
-export function quarterWeekIndex(date: string, quarter: Quarter): number {
-  const firstMonday = Date.parse(`${weekStartOf(quarterStart(quarter).toISOString().slice(0, 10))}T00:00:00Z`);
+export function quarterWeekIndex(date: string, quarter: Quarter, startsOn?: string | null): number {
+  const first = startsOn ?? quarterStart(quarter).toISOString().slice(0, 10);
+  const firstMonday = Date.parse(`${weekStartOf(first)}T00:00:00Z`);
   return Math.floor((Date.parse(`${date}T00:00:00Z`) - firstMonday) / (7 * MS_PER_DAY));
 }
 
-/** Whether a day is kept free for rescheduled visits: a Monday from the quarter's second week on. */
-export function isRescheduleMonday(date: string, quarter: Quarter): boolean {
-  return new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && quarterWeekIndex(date, quarter) >= 1;
+/** Whether a day is kept free for rescheduled visits: a Monday from the plan's second week on. */
+export function isRescheduleMonday(date: string, quarter: Quarter, startsOn?: string | null): boolean {
+  return new Date(`${date}T00:00:00Z`).getUTCDay() === 1 && quarterWeekIndex(date, quarter, startsOn) >= 1;
 }
 
 /**
- * The days a quarter's planned visits can go on: its working days -- weekdays,
- * less US federal holidays and any day the office names as closed -- less the
- * Mondays kept for rescheduled visits.
+ * The days a quarter's planned visits can go on: its working days from the
+ * plan's first -- weekdays, less US federal holidays and any day the office names
+ * as closed -- less the Mondays kept for rescheduled visits.
  */
-export function plannedVisitDaysOfQuarter(quarter: Quarter, closedDays: readonly string[] = []): string[] {
-  return workingDaysOfQuarter(quarter, closedDays).filter((date) => !isRescheduleMonday(date, quarter));
+export function plannedVisitDaysOfQuarter(
+  quarter: Quarter,
+  closedDays: readonly string[] = [],
+  startsOn?: string | null,
+): string[] {
+  return workingDaysOfQuarter(quarter, closedDays, startsOn).filter(
+    (date) => !isRescheduleMonday(date, quarter, startsOn),
+  );
 }
 
 /**
