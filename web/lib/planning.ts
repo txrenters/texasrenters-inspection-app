@@ -260,6 +260,17 @@ export interface QuarterChoice {
   year: number;
   quarter: number;
   label: string;
+  /**
+   * The quarter has already begun.
+   *
+   * A quarter is planned before it starts -- that is what the fifteen days
+   * either side are for -- so one already under way with no plan was run
+   * somewhere else, and its visits are inspections. Building a plan now would
+   * lay today's tenancies over days that have passed. The office opened Q3
+   * looking for visits a Jobber backfill had just brought in, and was offered
+   * "Build the Q3 2026 plan" (2026-09-21).
+   */
+  started: boolean;
 }
 
 /**
@@ -288,6 +299,7 @@ export function quarterChoices(
       year: entry.year,
       quarter: entry.quarter,
       label: quarterName(entry.year, entry.quarter),
+      started: entry.year < year || (entry.year === year && entry.quarter <= current),
     }));
 }
 
