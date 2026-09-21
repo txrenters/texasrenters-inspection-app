@@ -11,6 +11,7 @@ import {
   type DeletableInspection,
 } from '@/components/inspection-delete-dialog';
 import { ListToolbar, SelectFilter, enumOptions } from '@/components/list-toolbar';
+import { quarterDays, quarterOf, recentQuarters } from '@/lib/planning';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -140,7 +141,15 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     key: 'scheduled',
     header: 'Scheduled',
     hideBelow: 'sm',
-    cell: (row) => formatScheduledDate(row.scheduledAt),
+    // With the quarter under it: a benefit-package visit belongs to one, and
+    // "which quarter was this?" is otherwise date arithmetic done by eye (the
+    // office, 2026-09-21).
+    cell: (row) => (
+      <div className="min-w-0">
+        <div>{formatScheduledDate(row.scheduledAt)}</div>
+        <div className="text-muted-foreground text-xs">{quarterOf(row.scheduledAt)}</div>
+      </div>
+    ),
   },
   {
     key: 'priority',
@@ -232,11 +241,16 @@ export default function InspectionsPage() {
     from: '',
     page: 1,
     q: '',
+    quarter: '',
     status: '',
+    tbp: false,
     to: '',
     type: '',
     unassigned: false,
   });
+  // A quarter chosen here is the day range it covers: the API filters on the
+  // day, and the two ways of saying it must not disagree.
+  const quarterRange = quarterDays(state.quarter);
 
   /**
    * Clears the narrowing filters but keeps `type`, so clearing inside a section
@@ -263,16 +277,17 @@ export default function InspectionsPage() {
     // read as local midnight and drop everything scheduled later that day from
     // the "to" end of the range. Both bounds are widened to cover the whole day
     // the reader picked, which is what a date range means to them.
-    scheduledFrom: dayStart(state.from),
-    scheduledTo: dayEnd(state.to),
+    scheduledFrom: quarterRange ? dayStart(quarterRange.from) : dayStart(state.from),
+    scheduledTo: quarterRange ? dayEnd(quarterRange.to) : dayEnd(state.to),
     unassignedOnly: state.unassigned || undefined,
+    tbpOnly: state.tbp || undefined,
   });
 
   const busy = inspections.isLoading || isSearchPending || inspections.isPlaceholderData;
   // `type` is deliberately not counted here. Opened from the sidebar it is the
   // section you are in, not a filter you left on — so an empty move-out list
   // must not offer "Clear filters", which would silently eject you from it.
-  const hasNarrowingFilters = Boolean(state.q.trim() || state.status || state.unassigned);
+  const hasNarrowingFilters = Boolean(state.q.trim() || state.status || state.unassigned || state.tbp || state.quarter);
   const resultLabel = busy
     ? 'Searching inspections…'
     : `${(inspections.data?.total ?? 0).toLocaleString()} inspections`;
@@ -374,6 +389,20 @@ export default function InspectionsPage() {
           onRemove: () => setState({ unassigned: false, page: 1 }),
         }
       : null,
+    state.tbp
+      ? {
+          label: 'Programme',
+          value: 'Benefit package only',
+          onRemove: () => setState({ tbp: false, page: 1 }),
+        }
+      : null,
+    state.quarter
+      ? {
+          label: 'Quarter',
+          value: state.quarter,
+          onRemove: () => setState({ quarter: '', page: 1 }),
+        }
+      : null,
   ].filter((filter) => filter !== null);
 
   // Counted on the page rather than fetched: this covers the loaded page, which
@@ -455,6 +484,17 @@ export default function InspectionsPage() {
           />
           Unassigned only
         </Label>
+        <Label className="h-9 cursor-pointer gap-2 rounded-md border px-3 text-sm font-normal">
+          <Checkbox checked={state.tbp} onCheckedChange={(checked) => setState({ tbp: checked === true, page: 1 })} />
+          Benefit package only
+        </Label>
+        <SelectFilter
+          allLabel="Any quarter"
+          label="Quarter"
+          onChange={(quarter) => setState({ quarter, page: 1 })}
+          options={recentQuarters().map((quarter) => ({ value: quarter, label: quarter }))}
+          value={state.quarter}
+        />
       </ListToolbar>
 
       {busy ? (

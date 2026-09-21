@@ -44,7 +44,7 @@ import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-
  * Kept as one constant rather than repeated inline so the bootstrap and the
  * classifier cannot end up looking for different things.
  */
-const TBP_TITLE_MARKER = 'tenant benefit package';
+export const TBP_TITLE_MARKER = 'tenant benefit package';
 
 /**
  * The tenancy fields generation needs, and no more.

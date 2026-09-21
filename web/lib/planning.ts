@@ -252,6 +252,47 @@ export function limitState(value: number, limit: number): LimitState {
 /** "Q4 2026". */
 export const quarterName = (year: number, quarter: number) => `Q${quarter} ${year}`;
 
+/**
+ * The quarter a day falls in, as the office writes it: "Q3 2026".
+ *
+ * Read in UTC, like every other day in this console: a visit's day is a date,
+ * and reading it locally would move it across a quarter boundary for anyone
+ * east of Texas.
+ */
+export function quarterOf(day: string | Date | null | undefined): string {
+  if (!day) return '';
+  const at = typeof day === 'string' ? new Date(day) : day;
+  if (Number.isNaN(at.getTime())) return '';
+  return quarterName(at.getUTCFullYear(), Math.floor(at.getUTCMonth() / 3) + 1);
+}
+
+/** The first and last day a quarter covers, from "Q3 2026"; null for anything else. */
+export function quarterDays(label: string): { from: string; to: string } | null {
+  const parsed = /^Q([1-4])\s+(\d{4})$/.exec(label.trim());
+  if (!parsed) return null;
+  const quarter = Number(parsed[1]);
+  const year = Number(parsed[2]);
+  const first = new Date(Date.UTC(year, (quarter - 1) * 3, 1));
+  const last = new Date(Date.UTC(year, quarter * 3, 0));
+  return { from: first.toISOString().slice(0, 10), to: last.toISOString().slice(0, 10) };
+}
+
+/** The quarter under way and the seven before it, newest first. */
+export function recentQuarters(today: Date = new Date()): string[] {
+  let year = today.getUTCFullYear();
+  let quarter = Math.floor(today.getUTCMonth() / 3) + 1;
+  const quarters: string[] = [];
+  for (let step = 0; step < 8; step += 1) {
+    quarters.push(quarterName(year, quarter));
+    quarter -= 1;
+    if (quarter === 0) {
+      quarter = 4;
+      year -= 1;
+    }
+  }
+  return quarters;
+}
+
 /** `2026-4`, the quarter's key in the address bar. */
 export const quarterKey = (year: number, quarter: number) => `${year}-${quarter}`;
 
