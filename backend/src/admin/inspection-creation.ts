@@ -459,18 +459,21 @@ export async function resolveInspectionPlan(
           : approvedAreas;
 
   /**
-   * The same refusal, for the same reason, against a different marker.
+   * A property whose layout records no roof used to be refused here.
    *
-   * A property whose layout records no roof would produce a roof inspection
-   * covering nothing — a scheduling success that reaches the technician as
-   * an empty job. Saying so names the fix: categorise the roof area.
+   * It read as the same kind of problem as an unlaid-out property -- a
+   * scheduling success reaching the technician as an empty job -- and the
+   * message named the fix: categorise the roof area. Nobody ever did, because
+   * no layout in this portfolio has a roof in it. A report import names rooms
+   * and so does the standard template, so *every* roof inspection at a
+   * laid-out property was refused; "5826 Wilkins lane - Roof Inspection" sat in
+   * the held queue from 2026-07-15 until this was noticed on 2026-09-22.
+   *
+   * `roofArea` creates one on demand instead, the way `hvacSystemArea` has
+   * always done for equipment. Every house has a roof; refusing to book one
+   * because nobody drew it was the app asking the office to record something it
+   * already knew.
    */
-  if (areaScope === AreaScope.ROOF_AREAS && approvedAreas.length && !scopedAreas.length)
-    throw new ApplicationError(
-      409,
-      'NO_ROOF_AREAS',
-      'No approved area of this property is recorded as a roof. Set an area’s category to Roof before scheduling a roof inspection.',
-    );
 
   const technicianWillCapture = input.allowTechnicianAreaCapture === true;
   /**
@@ -564,6 +567,15 @@ export async function resolveInspectionPlan(
 export const HVAC_SYSTEM_AREA_NAME = 'HVAC System';
 
 /**
+ * The roof a roof inspection is walked on.
+ *
+ * Created on demand like the HVAC system area, because no floor plan in this
+ * portfolio records one: a report import names rooms and the standard template
+ * names rooms, so every roof inspection at a laid-out property was refused.
+ */
+export const ROOF_AREA_NAME = 'Roof';
+
+/**
  * The `Property` row has to exist before an area can point at it.
  *
  * `PropertyArea.propertyId` carries a *building* id but its foreign key
@@ -623,6 +635,52 @@ async function hvacSystemArea(tx: InspectionCreationClient, plan: InspectionPlan
       environment: AreaEnvironment.INDOOR,
       category: AreaCategory.UTILITY,
       notes: 'Created automatically for HVAC inspections. Not part of the floor plan.',
+    },
+    select: { id: true },
+  });
+  return created.id;
+}
+
+/**
+ * Finds or creates the roof a roof inspection is walked on.
+ *
+ * Every house has one, and no floor plan in this portfolio records it: a report
+ * import names rooms, and the standard template names rooms too, so a roof
+ * inspection at a laid-out property still found nothing categorised ROOF and
+ * was refused -- "5826 Wilkins lane - Roof Inspection", 2026-07-15, sitting in
+ * the held queue ever since.
+ *
+ * The same shape as `hvacSystemArea` and for the same reason: equipment and
+ * structure that exist without anybody drawing them. `source: SYSTEM` keeps it
+ * out of the room counts (`NON_ROOM_SOURCES`), so a property with a roof and
+ * nothing else still reads as having no layout, and an occupied visit is still
+ * seeded its rooms.
+ *
+ * Not added to `STANDARD_PROPERTY_LAYOUT` instead, which was the obvious move
+ * and the wrong one: that list is walked on every occupied visit, and a roof is
+ * not something a technician inspects from inside the kitchen.
+ */
+async function roofArea(tx: InspectionCreationClient, plan: InspectionPlan) {
+  await ensureAreaProperty(tx, plan);
+
+  const where = {
+    propertyId: plan.property.id,
+    unitId: plan.unit?.id ?? null,
+    floorId: null,
+    name: ROOF_AREA_NAME,
+  };
+  const existing = await tx.propertyArea.findFirst({ where, select: { id: true } });
+  if (existing) return existing.id;
+  const created = await tx.propertyArea.create({
+    data: {
+      ...where,
+      inspectionOrder: 0,
+      isRequired: true,
+      status: PropertyAreaStatus.APPROVED,
+      source: 'SYSTEM',
+      environment: AreaEnvironment.OUTDOOR,
+      category: AreaCategory.ROOF,
+      notes: 'Created automatically for roof inspections. Not part of the floor plan.',
     },
     select: { id: true },
   });
@@ -984,6 +1042,14 @@ export async function insertInspection(
       plan.inspectionType === InspectionType.HVAC
         ? await hvacSectionAreas(tx, plan)
         : [await hvacSystemArea(tx, plan)];
+  } else if (areaScopeFor(plan.inspectionType) === AreaScope.ROOF_AREAS) {
+    /**
+     * Whatever the property records as a roof, and a created one when it
+     * records none -- which is every property here. See `roofArea`.
+     */
+    areaIds = plan.scopedAreas.length
+      ? plan.scopedAreas.map((area) => area.id)
+      : [await roofArea(tx, plan)];
   } else {
     /**
      * An occupied visit walks ordinary rooms, so it resolves its areas exactly
