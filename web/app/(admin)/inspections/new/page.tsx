@@ -6,6 +6,7 @@ import {
   InspectionType,
   areaScopeFor,
   booksAnyService,
+  inspectionSeedsStandardLayout,
   isBookableInspectionType,
   visitServicesProblems,
   type AdminProperty,
@@ -296,6 +297,15 @@ function CreateInspectionForm() {
   const hasApprovedAreas = approvedAreas.length > 0;
   const needsAreaSetup =
     Boolean(propertyId) && !propertyAreas.isLoading && !propertyAreas.isError && !hasApprovedAreas;
+  /**
+   * Whether this type is given the standard layout rather than refused.
+   *
+   * The same function the API decides with, so the form cannot disable a
+   * button over a property the server would have accepted. A roof inspection
+   * is the one that still needs a real layout: it covers areas *recorded as a
+   * roof* and the template records none.
+   */
+  const layoutWillBeSeeded = inspectionSeedsStandardLayout(inspectionType);
   // How many of the areas this inspection will cover have a checklist an
   // administrator wrote. Zero is not an error — the technician gets a generated
   // list — but it is worth knowing here, because this is where someone decides
@@ -915,11 +925,18 @@ function CreateInspectionForm() {
              different visual weights left it unclear that they were alternatives
              to the same problem, and the amber kept insisting something was wrong
              after it had been resolved. */
-          <Alert variant={technicianWillCapture ? 'success' : 'warning'}>
+          <Alert variant={technicianWillCapture || layoutWillBeSeeded ? 'success' : 'warning'}>
             <TriangleAlertIcon />
             <AlertTitle>This property has no approved inspection areas</AlertTitle>
             <AlertDescription>
-              <p>Choose how this inspection gets them.</p>
+              {/* Not a warning when the visit can be created anyway: the
+                  standard layout is what it will get, and the choices below are
+                  a better answer rather than a way past a refusal. */}
+              <p>
+                {layoutWillBeSeeded
+                  ? 'It will be given the standard layout — the usual rooms, with their checklists — which an administrator can correct afterwards. Or set it up now:'
+                  : 'Choose how this inspection gets them.'}
+              </p>
 
               {/* First because it keeps the per-area structure the whole review
                   is organised around, where the fallback flattens the property to
@@ -994,7 +1011,10 @@ function CreateInspectionForm() {
               mutation.isPending ||
               propertyAreas.isLoading ||
               (scopeIsChoosable && selectedAreas.length === 0) ||
-              (needsAreaSetup && !technicianWillCapture) ||
+              // Only a type the API would refuse. Everything that walks rooms
+              // is seeded the standard layout instead, so blocking here would
+              // be the console inventing a rule the server does not have.
+              (needsAreaSetup && !technicianWillCapture && !layoutWillBeSeeded) ||
               units.isLoading ||
               (requiresUnit && !unitId) ||
               // Not created while it is still unknown whether it will be booked,

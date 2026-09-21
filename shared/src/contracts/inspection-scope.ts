@@ -112,6 +112,34 @@ export function inspectionRequiresEveryArea(inspectionType: string | null | unde
 }
 
 /**
+ * Whether a visit at a property with no recorded rooms gets the standard layout.
+ *
+ * True for the scopes that walk rooms: an occupied or back-to-market visit
+ * takes the rooms the office picked, a move-in or move-out takes all of them,
+ * and in either case a property nobody has surveyed can be given the template
+ * rather than refused. That refusal -- NO_APPROVED_AREAS -- is what the office
+ * asked to be rid of (2026-09-22): "let's create a template first ... so this
+ * blocker will be fixed".
+ *
+ * False for the two that cannot be answered by a guess. An HVAC visit inspects
+ * equipment and never wanted rooms; a roof inspection covers areas *recorded
+ * as a roof*, and the template records none, so seeding it would produce a
+ * scheduling success that reaches the technician as an empty job.
+ *
+ * Note what this costs on a move-in or move-out: `inspectionRequiresEveryArea`
+ * overrides `PropertyArea.isRequired` there, so a guessed Bedroom 3 at a
+ * one-bedroom property is mandatory and has to be skipped. The office took
+ * that trade knowingly -- "moses will skip them" -- against visits that
+ * otherwise could not be booked at all.
+ */
+export function inspectionSeedsStandardLayout(
+  inspectionType: string | null | undefined,
+): boolean {
+  const scope = areaScopeFor(inspectionType);
+  return scope === AreaScope.CHOSEN || scope === AreaScope.ALL;
+}
+
+/**
  * Nothing requires a completed move-in any more.
  *
  * `inspectionRequiresLifecycleBaseline` used to live here and was the only
