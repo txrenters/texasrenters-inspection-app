@@ -141,6 +141,10 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     key: 'scheduled',
     header: 'Scheduled',
     hideBelow: 'sm',
+    // The list's order, and the only one it has. Clicking turns it around --
+    // the next visits to happen, or the oldest still open (the office,
+    // 2026-09-21: "if I click the sort will rotate from that to newest").
+    sortable: true,
     // With the quarter under it: a benefit-package visit belongs to one, and
     // "which quarter was this?" is otherwise date arithmetic done by eye (the
     // office, 2026-09-21).
@@ -243,6 +247,10 @@ export default function InspectionsPage() {
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [state, setState] = useUrlState({
+    // Empty is newest first, which is what the list has always opened as. Kept
+    // as the absent value rather than a written 'desc' so the ordinary URL
+    // stays clean and an old link still means what it meant.
+    asc: false,
     from: '',
     page: 1,
     q: '',
@@ -287,6 +295,10 @@ export default function InspectionsPage() {
     // September day belongs to Q4; a day range here would disagree with the
     // tag shown on the very rows it returned.
     quarter: state.quarter || undefined,
+    // Sorted by the API, not here: these are twenty rows of 1,533, and
+    // reordering the page in hand would put the oldest row *of this page*
+    // first while calling itself the oldest of the list.
+    scheduledOrder: state.asc ? 'asc' : undefined,
   });
 
   const busy = inspections.isLoading || isSearchPending || inspections.isPlaceholderData;
@@ -622,6 +634,14 @@ export default function InspectionsPage() {
             rowHref={(row) => `/inspections/${row.id}`}
             rowKey={(row) => row.id}
             rows={rows}
+            // Back to page one: page four of newest-first holds nothing a
+            // reader turning the list around was looking for, and the count
+            // above would keep saying 1,533 while the rows underneath changed.
+            sort={{
+              by: 'scheduled',
+              direction: state.asc ? 'asc' : 'desc',
+              onChange: () => setState({ asc: !state.asc, page: 1 }),
+            }}
             selection={
               canDelete
                 ? {

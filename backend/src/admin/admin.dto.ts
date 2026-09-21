@@ -119,6 +119,14 @@ export class InspectionListQueryDto extends PaginationDto {
    * quarter that has none (the office, 2026-09-21: "why there's an HVAC on Q3").
    */
   @IsOptional() @IsString() @Matches(/^Q[1-4] \d{4}$/) quarter?: string;
+  /**
+   * Which end of the calendar the list starts from. Newest first by default.
+   *
+   * The office reads the list both ways -- the next visits to happen, and the
+   * oldest still open -- and got only one of them (2026-09-21: "can we add a
+   * function also in this column that if I click the sort will rotate").
+   */
+  @IsOptional() @IsIn(['asc', 'desc']) scheduledOrder?: string;
 }
 
 /** One filter a booking asks the technician to bring. */

@@ -1,5 +1,6 @@
 'use client';
 
+import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -39,7 +40,30 @@ export type Column<Row> = {
   /** Hidden below this breakpoint. Keeps a wide table readable on a laptop. */
   hideBelow?: 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
+  /**
+   * Makes the header a button that reorders the whole list by this column.
+   *
+   * Only meaningful with the table's `sort` prop, because the order is the
+   * server's: a list is one page of many, and sorting the twenty rows in hand
+   * would reorder the page rather than the list — the wrong answer, silently.
+   */
+  sortable?: boolean;
 };
+
+/**
+ * Which column the list is ordered by, and which way.
+ *
+ * Owned by the page, which keeps it in the URL and sends it to the API, for
+ * the same reason the selected set is: the table is a renderer, and a sort it
+ * held privately would be lost on every navigation and invisible to the
+ * request that actually decides the order.
+ */
+export interface SortState {
+  by: string;
+  direction: 'asc' | 'desc';
+  /** The column's key. The page decides whether that flips or switches column. */
+  onChange: (key: string) => void;
+}
 
 const HIDE_BELOW: Record<NonNullable<Column<unknown>['hideBelow']>, string> = {
   sm: 'hidden sm:table-cell',
@@ -80,6 +104,39 @@ function cellClass<Row>(column: Column<Row>) {
 }
 
 /**
+ * A header that reorders the list, or a plain label.
+ *
+ * `aria-sort` goes on the cell and the arrow is `aria-hidden`: a screen reader
+ * announces the column as ascending or descending from the cell itself, so the
+ * icon would only repeat it — and "arrow down" is not what the reader needs to
+ * hear. The unsorted columns carry a faint two-way chevron that firms up on
+ * hover, which is the only thing saying the header can be clicked at all.
+ */
+function HeaderLabel<Row>({ column, sort }: { column: Column<Row>; sort?: SortState }) {
+  if (!column.sortable || !sort) return <>{column.header}</>;
+  const active = sort.by === column.key;
+  const Arrow = !active ? ChevronsUpDownIcon : sort.direction === 'asc' ? ArrowUpIcon : ArrowDownIcon;
+  return (
+    <button
+      className={cn(
+        'group -mx-1 flex items-center gap-1 rounded px-1 py-0.5',
+        'hover:text-foreground focus-visible:ring-ring/50 focus-visible:ring-2 focus-visible:outline-none',
+        column.numeric && 'ml-auto',
+        active && 'text-foreground',
+      )}
+      onClick={() => sort.onChange(column.key)}
+      type="button"
+    >
+      {column.header}
+      <Arrow
+        aria-hidden
+        className={cn('size-3 shrink-0', !active && 'opacity-40 group-hover:opacity-100')}
+      />
+    </button>
+  );
+}
+
+/**
  * Row selection, supplied by the page rather than held here.
  *
  * The selected set has to outlive the table — a bulk bar above it reads the
@@ -108,12 +165,15 @@ export function DataTable<Row>({
   label,
   actions,
   selection,
+  sort,
   className,
 }: {
   columns: Array<Column<Row>>;
   rows: Row[];
   rowKey: (row: Row) => string;
   selection?: RowSelection;
+  /** Reorders the list. Without it a `sortable` column renders a plain label. */
+  sort?: SortState;
   /**
    * Makes the whole row navigable.
    *
@@ -151,8 +211,21 @@ export function DataTable<Row>({
               </TableHead>
             ) : null}
             {columns.map((column) => (
-              <TableHead key={column.key} scope="col" className={columnClass(column)}>
-                {column.header}
+              <TableHead
+                key={column.key}
+                scope="col"
+                className={columnClass(column)}
+                aria-sort={
+                  sort && column.sortable
+                    ? sort.by === column.key
+                      ? sort.direction === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : 'none'
+                    : undefined
+                }
+              >
+                <HeaderLabel column={column} sort={sort} />
               </TableHead>
             ))}
             {actions ? (

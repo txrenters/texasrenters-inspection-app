@@ -1228,7 +1228,11 @@ export class AdminService {
         relationLoadStrategy: 'join',
         where,
         select,
-        orderBy: { scheduledAt: 'desc' },
+        // `id` breaks the ties, and is not decoration: twenty of these share a
+        // single day -- the whole of a planned day is one date -- and a page
+        // boundary inside such a run is otherwise ordered by nothing at all,
+        // so a row can appear on both page 2 and page 3, or on neither.
+        orderBy: [{ scheduledAt: query.scheduledOrder === 'asc' ? 'asc' : 'desc' }, { id: 'asc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
