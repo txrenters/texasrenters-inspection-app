@@ -49,7 +49,7 @@ import { CaptureChoiceSheet } from '@/src/capture/CaptureChoiceSheet';
 import { asksCaptureChoice, type CapturePreference } from '@/src/capture/capture-intents';
 import { withAxes } from '@/src/capture/condition-answers';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
-import { importFromGallery } from '@/src/media/gallery-import';
+import { importFromGallery, inspectionAllowsGalleryImport } from '@/src/media/gallery-import';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
@@ -360,6 +360,14 @@ export default function AreaDetailScreen() {
     hasEvidence || Boolean(photos.data?.length) || roomFindings.length > 0;
   /** Whether this visit has a photos-or-video question to ask at all. */
   const requiresRecording = inspectionRequiresAreaRecording(item.inspectionType);
+  /**
+   * Whether this visit offers the gallery at all.
+   *
+   * Occupied and HVAC for now, which are the two the request came from. A
+   * move-in or move-out is judged area by area against the other end, so a
+   * photograph nobody can place in time is a different kind of evidence there.
+   */
+  const offersGallery = inspectionAllowsGalleryImport(item.inspectionType);
   /**
    * Opens the camera on this area, asking photos or video first when an
    * occupied area has no answer yet.
@@ -1050,19 +1058,21 @@ export default function AreaDetailScreen() {
           loudest thing on the screen. Offered on every area, including a
           skipped one -- a photograph is how somebody shows why it was skipped.
         */}
-        {importProblem ? (
+        {offersGallery && importProblem ? (
           <Text className="mb-2 text-center text-sm text-destructive">{importProblem}</Text>
         ) : null}
-        <Button
-          accessibilityHint="Opens your photo library to attach photographs to this area"
-          busy={importing}
-          busyLabel="Opening Photos…"
-          className="mb-2"
-          icon={<ImagePlusIcon size={18} className="text-foreground" />}
-          label="Add From Gallery"
-          onPress={importFromLibrary}
-          variant="secondary"
-        />
+        {offersGallery ? (
+          <Button
+            accessibilityHint="Opens your photo library to attach photographs to this area"
+            busy={importing}
+            busyLabel="Opening Photos…"
+            className="mb-2"
+            icon={<ImagePlusIcon size={18} className="text-foreground" />}
+            label="Add From Gallery"
+            onPress={importFromLibrary}
+            variant="secondary"
+          />
+        ) : null}
         <Button
           accessibilityHint={
             isSkipped ? 'Opens the camera and inspects this area after all' : 'Opens the camera'
