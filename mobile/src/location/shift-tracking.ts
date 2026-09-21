@@ -3,6 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import { normaliseMotion } from '@texasrenters/shared';
 import { AppState } from 'react-native';
 
+import { currentBatteryPercent } from './battery';
 import { sendRecordedFixes } from './location-sender';
 import { appendLocationFixes, readLastFixAt } from './location-storage';
 import type { QueuedFix } from './location-queue';
@@ -26,14 +27,26 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
 /**
  * How often a fix is wanted, and how far the technician must move to earn one.
  *
- * Fifteen seconds rather than the minute it used to be. A minute is fine for
- * "which property is she at" and useless for watching somebody move -- a van
- * covers half a mile between fixes, so the console drew a technician
- * teleporting between two points on a road it never showed them taking. The
- * cost is real and worth naming: more frequent fixes mean more battery, on a
- * phone that is also filming video.
+ * Three seconds. A minute was fine for "which property is she at" and useless
+ * for watching somebody move; fifteen was better and still drew a van
+ * teleporting a quarter of a mile at a time down a road the console never
+ * showed. The office asked to watch a technician drive -- speed, heading, where
+ * they are now -- and at motorway speed three seconds is about fifty metres,
+ * which reads as a vehicle following a road rather than hopping along it.
+ *
+ * **This is the Android number.** iOS ignores `timeInterval` and delivers on
+ * `distanceInterval`, so an iPhone in a car has always reported roughly once a
+ * second; what limited it there was how often the queue was drained, which is
+ * `RECORDED_SEND_SPACING_MS`.
+ *
+ * The cost is real and worth naming again: five times the fixes, at `High`
+ * accuracy, on a phone that is also filming video. Google's own Driver SDK
+ * reports every ten seconds by default and Fleet Engine expects five to sixty,
+ * so three is dense by the standards of the industry that does this for a
+ * living -- it is chosen for a handful of vans, not a fleet, and it is the
+ * first line to change if a technician's battery does not last the shift.
  */
-const FIX_INTERVAL_MS = 15_000;
+const FIX_INTERVAL_MS = 3_000;
 const FIX_DISTANCE_M = 10;
 
 /**
@@ -101,10 +114,15 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
   if (!locations?.length) return;
 
+  // Once for the batch, not once per fix: at a fix every three seconds the
+  // charge cannot have moved between two of them. Null when the phone will not
+  // say, which is a different fact from "nearly flat".
+  const batteryPercent = await currentBatteryPercent();
+
   // The device's own clock at the moment of each fix. The API keeps that
   // separately from when it heard about it, so a batch delivered after an
   // outage still draws the route in the order it was walked.
-  const fixes: QueuedFix[] = locations.map(toQueuedFix);
+  const fixes: QueuedFix[] = locations.map((location) => toQueuedFix(location, batteryPercent));
 
   // Queued first, so nothing recorded depends on the send below succeeding.
   await appendLocationFixes(fixes);
@@ -146,9 +164,20 @@ export type ShiftStartResult =
 let foregroundWatch: Location.LocationSubscription | null = null;
 
 /** One fix, in the shape the queue stores. Shared by both modes. */
-function toQueuedFix(location: Location.LocationObject): QueuedFix {
+function toQueuedFix(
+  location: Location.LocationObject,
+  /**
+   * The charge at the moment the batch was delivered.
+   *
+   * Passed in rather than read here, because reading it is asynchronous and
+   * this is called from a `map`. Null means nobody knows -- a simulator, or a
+   * platform that will not answer -- and never "flat".
+   */
+  batteryPercent: number | null = null,
+): QueuedFix {
   return {
     id: fixId(),
+    batteryPercent,
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
     recordedAt: new Date(location.timestamp).toISOString(),
@@ -261,8 +290,12 @@ async function watchInForeground() {
     },
     (location) => {
       // Queued, then sent: the same path the background task uses, so a fix
-      // recorded in either mode reaches the office the same way.
-      void appendLocationFixes([toQueuedFix(location)]).then(() => sendRecordedFixes());
+      // recorded in either mode reaches the office the same way -- including
+      // the charge, which is read per fix here because a foreground watch
+      // delivers one at a time rather than in batches.
+      void currentBatteryPercent()
+        .then((batteryPercent) => appendLocationFixes([toQueuedFix(location, batteryPercent)]))
+        .then(() => sendRecordedFixes());
     },
   );
 }

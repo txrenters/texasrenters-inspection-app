@@ -162,7 +162,12 @@ describe('sending as each fix is recorded', () => {
     expect(mockRequestJson).toHaveBeenCalledTimes(1);
   });
 
-  it('sends at most once every ten seconds', async () => {
+  /**
+   * Five seconds, not ten. This throttle -- not the fix interval -- is what the
+   * console's freshness depends on: a position is at worst this old by the time
+   * it is drawn, and ten seconds is a furlong of motorway.
+   */
+  it('sends at most once every five seconds', async () => {
     // iOS reports every ten metres, several times a second in a car.
     const now = Date.now();
     await appendLocationFixes([fix('a')]);
@@ -170,10 +175,10 @@ describe('sending as each fix is recorded', () => {
 
     await appendLocationFixes([fix('b', 1)]);
     await sendRecordedFixes(now + 2_000);
-    await sendRecordedFixes(now + 9_000);
+    await sendRecordedFixes(now + 4_000);
     expect(mockRequestJson).toHaveBeenCalledTimes(1);
 
-    await sendRecordedFixes(now + 10_000);
+    await sendRecordedFixes(now + 5_000);
     expect(mockRequestJson).toHaveBeenCalledTimes(2);
   });
 

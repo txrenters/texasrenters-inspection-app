@@ -12,6 +12,7 @@
  * - A recording the OS killed stayed "started" -- neither platform can tell a
  *   registered task from a delivering one -- so nothing restarted it.
  */
+import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
 import {
@@ -50,6 +51,10 @@ jest.mock('expo-location', () => ({
   Accuracy: { Balanced: 3, High: 4 },
   ActivityType: { Other: 1 },
 }));
+
+// The native module will not load under jest-expo, and what it answers is
+// pinned in `battery.test.ts`. Half charge, so a fix carries a real number.
+jest.mock('expo-battery', () => ({ getBatteryLevelAsync: async () => 0.5 }));
 
 jest.mock('expo-task-manager', () => ({
   defineTask: jest.fn(),
@@ -157,6 +162,26 @@ describe('starting a shift', () => {
     expect(mockWatchPosition).not.toHaveBeenCalled();
   });
 
+  /**
+   * The numbers the office asked for, pinned.
+   *
+   * Every other assertion here compares against `BACKGROUND_UPDATES` itself, so
+   * none of them would notice these changing. The office (2026-09-22) wants to
+   * watch a technician drive -- speed, heading, where they are now -- and at
+   * fifteen seconds a van teleported a quarter of a mile at a time. Three
+   * seconds is about fifty metres at motorway speed.
+   *
+   * The cost is battery, on a phone that also films video, so loosening this is
+   * a decision somebody should have to make on purpose.
+   */
+  it('takes a fix every three seconds, densely enough to draw a road', () => {
+    expect(BACKGROUND_UPDATES.timeInterval).toBe(3_000);
+    expect(BACKGROUND_UPDATES.distanceInterval).toBe(10);
+    // `High` is satellites. A Wi-Fi or tower fix carries no speed or course at
+    // all, which is most of what the map is for.
+    expect(BACKGROUND_UPDATES.accuracy).toBe(Location.Accuracy.High);
+  });
+
   it('records in the background with location allowed only while using the app', async () => {
     // The bug. "All the time" was required, almost no phone had it, and every
     // drive fell back to a watcher that stops when the app leaves the screen.
@@ -257,6 +282,17 @@ describe('a fix, as it is recorded', () => {
     ]);
     // Queued first, so a send that fails -- or never finishes -- loses nothing.
     expect(order).toEqual(['queued', 'sent']);
+  });
+
+  /**
+   * The column existed from the start and nothing ever filled it in, so every
+   * ping ever stored says null. It answers the question the office asks each
+   * time a trail stops: was the phone dead, or was the app killed?
+   */
+  it('carries how much charge the phone had', async () => {
+    await recordLocationsTask({ data: { locations: [fix] } });
+
+    expect(mockAppendFixes).toHaveBeenCalledWith([expect.objectContaining({ batteryPercent: 50 })]);
   });
 
   it('is nothing to send when the OS delivered nothing', async () => {

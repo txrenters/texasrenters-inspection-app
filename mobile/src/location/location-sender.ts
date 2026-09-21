@@ -45,11 +45,19 @@ const ABANDON_SEND_AFTER_MS = 60_000;
  * The least time between two sends started by recorded fixes.
  *
  * iOS ignores the fix interval and reports every ten metres, which in a car is
- * more than once a second. Sending per fix would be a request a second; this
- * keeps a moving technician to one every ten seconds, which is as live as the
- * console needs.
+ * more than once a second. Sending per fix would be a request a second, so this
+ * is the throttle -- and it, not the fix interval, is what the console's
+ * freshness actually depends on: a position is at worst this old by the time it
+ * is drawn.
+ *
+ * Five seconds rather than ten. Ten was "as live as the console needs" when the
+ * question was which property somebody was at. The question now is where a van
+ * is on a road, and ten seconds is a furlong of motorway. Five matches what
+ * Google's own journey sharing polls at, and costs a technician about twelve
+ * requests a minute while driving -- none at all while parked, because a
+ * stationary phone earns no new fixes to send.
  */
-const RECORDED_SEND_SPACING_MS = 10_000;
+const RECORDED_SEND_SPACING_MS = 5_000;
 
 let flight: { promise: Promise<DrainResult>; startedAt: number } | null = null;
 let lastSendStartedAt = Number.NEGATIVE_INFINITY;
