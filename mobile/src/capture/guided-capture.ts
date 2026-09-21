@@ -53,8 +53,20 @@ export type GuidedCaptureState =
   | 'COMPLETE'
   | 'SENSOR_UNAVAILABLE';
 
+/**
+ * Where a photograph came from, as the server records it.
+ *
+ * `GALLERY_IMPORT` is a photograph the technician picked out of the phone's
+ * own library rather than taking on the walk. Kept distinct from the three
+ * camera sources because it is the one the office cannot assume anything about
+ * -- not when it was taken, not where, not even that it is of this property --
+ * and a report that cannot tell them apart invites exactly that assumption.
+ */
 export type SnapshotCaptureSource =
-  'NATIVE_STILL_DURING_VIDEO' | 'VIDEO_FRAME_EXTRACTION' | 'SEPARATE_PHOTO_CAPTURE';
+  | 'NATIVE_STILL_DURING_VIDEO'
+  | 'VIDEO_FRAME_EXTRACTION'
+  | 'SEPARATE_PHOTO_CAPTURE'
+  | 'GALLERY_IMPORT';
 
 export interface FindingMarker {
   id: string;
