@@ -560,6 +560,14 @@ export interface AdminInspection {
    */
   baselineMissing?: boolean;
   /**
+   * The quarter of the benefit-package programme this visit belongs to.
+   *
+   * Not the quarter its day falls in. A plan may start fifteen days before
+   * its quarter, so Q4's first visits are scheduled in September; the plan
+   * that made them is what decides, then the Jobber title, then the day.
+   */
+  quarter?: string;
+  /**
    * A Jobber visit, whose date only Jobber changes.
    *
    * Present on the detail. The API refuses a new date for one, because the
