@@ -32,7 +32,17 @@ export const DEFAULT_VISIT_TYPE_RULES: Record<InspectionType, string[]> = {
   [InspectionType.MOVE_OUT]: ['move out', 'move-out', 'moveout'],
   [InspectionType.BACK_TO_MARKET]: ['back to market', 'back-to-market', 'btm'],
   [InspectionType.OCCUPIED]: ['occupied', 'periodic', 'routine'],
-  [InspectionType.HVAC]: ['hvac', 'air conditioning', 'ac service'],
+  // `inspect ac` and `inspect a/c` are the office's own wording on a work
+  // order -- "21501 Rustic Elm Dr - Inspect AC - 43901" is a real completed
+  // visit that named an inspection, matched no type at all, and was filed as
+  // finished-and-skipped where nobody would look for it again.
+  [InspectionType.HVAC]: [
+    'hvac',
+    'air conditioning',
+    'ac service',
+    'inspect ac',
+    'inspect a/c',
+  ],
   [InspectionType.ROOF]: ['roof'],
   [InspectionType.SUPRA_LOCKBOX_PLACEMENT]: ['lockbox placement', 'place lockbox', 'supra place'],
   [InspectionType.SUPRA_LOCKBOX_REMOVAL]: ['lockbox removal', 'remove lockbox', 'supra remove'],
@@ -96,6 +106,31 @@ export function resolveVisitType(
     .filter(([, keywords]) => keywords.some((word) => word && haystack.includes(word)))
     .map(([type]) => type);
   if (!matches.length) return { outcome: 'UNKNOWN' };
+
+  /**
+   * The benefit package is the wrapper; the inspection named beside it is the
+   * work.
+   *
+   * "5819 Flower Gate Dr - Zone 2 - Q2 TBP (HVAC Inspection)" matches `tbp` and
+   * `hvac` both, so it read as ambiguous and was dropped -- a completed HVAC
+   * inspection that never reached the console. The programme word says which
+   * scheme paid for the visit, not what the technician did, and the office
+   * writes the actual work in the same breath.
+   *
+   * This is the title-side twin of the rule
+   * `benefitPackageInspectionInDetails` already applies to the *details*, where
+   * "Q3 2026 Tenant Benefit Package" with "+ Occupied Inspection" is upgraded
+   * the same way. Seventy-three of those had been dropped before that landed.
+   *
+   * Only when the delivery is one of exactly two. Three matches is a title
+   * nobody can read confidently, and a guess there is how a move-out gets
+   * filed as a roof.
+   */
+  if (matches.length === 2 && matches.includes(InspectionType.AC_FILTER_DELIVERY)) {
+    const work = matches.find((type) => type !== InspectionType.AC_FILTER_DELIVERY);
+    if (work) return { outcome: 'RESOLVED', inspectionType: work };
+  }
+
   if (matches.length > 1) return { outcome: 'AMBIGUOUS', matches };
   return { outcome: 'RESOLVED', inspectionType: matches[0] };
 }
