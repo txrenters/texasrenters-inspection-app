@@ -23,6 +23,7 @@ import {
   checklistTemplateFor,
   layoutAreasFor,
   inspectionComparesToBaseline,
+  inspectionSeedsStandardLayout,
   keywordsFromLabel,
 } from '@texasrenters/shared';
 
@@ -473,13 +474,26 @@ export async function resolveInspectionPlan(
 
   const technicianWillCapture = input.allowTechnicianAreaCapture === true;
   /**
-   * The floor-plan gate does not apply to an HVAC visit.
+   * The floor-plan gate now applies to almost nothing, and that is the point.
    *
-   * It inspects equipment, not rooms — there is nothing on a floor plan it
-   * needs. Requiring one is what made HVAC unschedulable on every property in
-   * the portfolio.
+   * It never applied to an HVAC visit: that inspects equipment, not rooms, and
+   * requiring a floor plan made HVAC unschedulable on every property in the
+   * portfolio. What remains is the roof scope, which covers areas *recorded as
+   * a roof* — no template records one, so a roof inspection at an unsurveyed
+   * property would be a scheduling success that reaches the technician as an
+   * empty job.
+   *
+   * Every other type walks rooms and is given the standard layout by
+   * `ensureStandardLayout` instead of being refused (the office, 2026-09-22).
+   * The refusal was the last thing standing between a property Propertyware
+   * knows about and a visit somebody wants booked on it.
    */
-  if (areaScope !== AreaScope.HVAC_SYSTEM && !approvedAreas.length && !technicianWillCapture)
+  if (
+    areaScope !== AreaScope.HVAC_SYSTEM &&
+    !inspectionSeedsStandardLayout(input.inspectionType) &&
+    !approvedAreas.length &&
+    !technicianWillCapture
+  )
     throw new ApplicationError(
       409,
       'NO_APPROVED_AREAS',
@@ -825,18 +839,29 @@ async function ensureOccupiedChecklist(tx: InspectionCreationClient, organizatio
  * Jobber sync calls it to validate a visit without writing anything — and this
  * has to create rows. `hvacSystemArea` sits here for exactly the same reason.
  *
- * ── WHY ONLY A CHOSEN SCOPE ──────────────────────────────────────────────────
+ * ── WHICH SCOPES GET IT, AND WHAT IT COSTS ───────────────────────────────────
  *
- * Occupied and back-to-market, not move-in or move-out. On those two the type
- * *overrides* `isRequired`, so every generated area becomes mandatory and a
- * technician at a one-bedroom property would have to skip the rooms this list
- * guessed at. Worse, a move-out is compared to its move-in area by area, and
- * seeding both ends from a guess would produce a comparison against rooms
- * nobody has seen.
+ * Every scope that walks rooms: occupied and back-to-market, and — since
+ * 2026-09-22 — move-in and move-out as well. `inspectionSeedsStandardLayout`
+ * is the rule, shared with the console so the form and the writer cannot
+ * disagree about which visits can be booked.
  *
- * They lose nothing by waiting. The layout written here is the *property's*,
- * permanently — so the first occupied visit establishes it and every later
- * inspection of any type inherits it through the ordinary lookup.
+ * Move-in and move-out were excluded, on two arguments. The first is real and
+ * survives: the type *overrides* `isRequired` there, so a guessed Bedroom 3 at
+ * a one-bedroom property is mandatory and the technician has to skip it. The
+ * office weighed that against the alternative and took it — "moses will skip
+ * them" — because the alternative was the visit not existing.
+ *
+ * The second does not survive: that a move-out compared to its move-in area by
+ * area would be judged against rooms nobody has seen. Both ends now take the
+ * *same* property layout, which is the condition the comparison wants; a room
+ * neither visit walked carries no evidence on either side and the comparison
+ * says so rather than inventing a difference. The properties this reaches have
+ * no move-in on record at all — that is why they have no layout.
+ *
+ * The layout written here is the *property's*, permanently, so whichever visit
+ * arrives first establishes it and every later inspection of any type inherits
+ * it through the ordinary lookup.
  */
 async function ensureStandardLayout(tx: InspectionCreationClient, plan: InspectionPlan) {
   /**
@@ -972,16 +997,16 @@ export async function insertInspection(
     /**
      * A visit that walks rooms, at a property with no rooms recorded.
      *
-     * Only when the scope is CHOSEN and the plan resolved to nothing — an
-     * office selection that came back empty is a property with no approved
-     * layout, which is currently every property in this portfolio. Move-in and
-     * move-out are excluded on purpose; see `ensureStandardLayout`.
+     * A plan that resolved to nothing is a property with no approved layout —
+     * 147 of the 588 active ones. Rather than the refusal that used to stand
+     * here, the visit is given the standard template; see
+     * `ensureStandardLayout` for which scopes and what it costs.
      *
      * After the checklist above, and independent of it: an occupied visit at a
      * property nobody has laid out needs both, and neither reads the other.
      */
     areaIds =
-      areaScopeFor(plan.inspectionType) === AreaScope.CHOSEN && !plan.scopedAreas.length
+      inspectionSeedsStandardLayout(plan.inspectionType) && !plan.scopedAreas.length
         ? (await ensureStandardLayout(tx, plan)).map((area) => area.id)
         : plan.scopedAreas.map((area) => area.id);
   }

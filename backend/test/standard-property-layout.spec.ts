@@ -167,25 +167,52 @@ describe('when the standard layout must not be written', () => {
     expect(create.mock.calls[0][0].data.areas.create).toEqual([{ propertyAreaId: 'real-area' }]);
   });
 
+  /**
+   * A roof inspection covers areas *recorded as a roof*, and the template
+   * records none. Seeding one would be a scheduling success that reaches the
+   * technician as an empty job, so the refusal stands for this type alone.
+   */
+  it('does not guess a layout for a roof inspection', async () => {
+    const { tx, areaCreateMany } = client();
+    await insertInspection(tx, plan(InspectionType.ROOF), details);
+    expect(areaCreateMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A move-in and a move-out are seeded too, since 2026-09-22.
+ *
+ * They were excluded on two arguments. The first is real and the office took
+ * it knowingly: the type overrides `isRequired`, so a guessed Bedroom 3 at a
+ * one-bedroom property is mandatory and has to be skipped — "moses will skip
+ * them", weighed against a visit that could not be booked at all. The second,
+ * that a move-out compared area by area would be judged against rooms nobody
+ * has seen, does not survive: both ends now take the *same* property layout,
+ * and the properties this reaches have no move-in on record at all.
+ */
+describe('a move-in or move-out at a property with no layout', () => {
   it.each([[InspectionType.MOVE_IN], [InspectionType.MOVE_OUT]])(
-    'does not guess a layout for %s',
+    'is given the standard layout for %s',
     async (inspectionType) => {
-      /**
-       * Two reasons, either sufficient. The type overrides `isRequired`, so
-       * every guessed room becomes mandatory and a technician at a one-bedroom
-       * property has to skip the ones this list invented. And a move-out is
-       * compared to its move-in area by area — seeding both ends from a guess
-       * produces a comparison against rooms nobody has seen.
-       *
-       * They lose nothing by waiting: the layout is the property's,
-       * permanently, so the first occupied visit establishes it and these
-       * inherit it through the ordinary lookup.
-       */
-      const { tx, areaCreateMany } = client();
+      const { tx, areaCreateMany, create } = client();
       await insertInspection(tx, plan(inspectionType), details);
-      expect(areaCreateMany).not.toHaveBeenCalled();
+
+      const written = areaCreateMany.mock.calls[0][0].data as { name: string }[];
+      expect(written.map((area) => area.name)).toEqual(
+        STANDARD_PROPERTY_LAYOUT.map((area) => area.name),
+      );
+      expect(create.mock.calls[0][0].data.areas.create).toHaveLength(
+        STANDARD_PROPERTY_LAYOUT.length,
+      );
     },
   );
+
+  it('still leaves a property that already has areas alone', async () => {
+    const { tx, areaCreateMany, create } = client();
+    await insertInspection(tx, plan(InspectionType.MOVE_IN, [{ id: 'real-area' }]), details);
+    expect(areaCreateMany).not.toHaveBeenCalled();
+    expect(create.mock.calls[0][0].data.areas.create).toEqual([{ propertyAreaId: 'real-area' }]);
+  });
 });
 
 /**
