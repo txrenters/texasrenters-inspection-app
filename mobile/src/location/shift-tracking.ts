@@ -77,6 +77,25 @@ export const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
   accuracy: FIX_ACCURACY,
   timeInterval: FIX_INTERVAL_MS,
   distanceInterval: FIX_DISTANCE_M,
+  /**
+   * Tell iOS this is a vehicle following a road.
+   *
+   * It was not set, so iOS assumed `Other` and treated a technician on the
+   * motorway like an app that happened to want a location -- free to suspend
+   * between fixes. `AutomotiveNavigation` is the class iOS gives turn-by-turn
+   * apps: it keeps delivering while the vehicle moves and tunes its own
+   * filtering for road speed.
+   *
+   * On 2026-09-21 a fifty-kilometre drive between 16:16 and 17:47 produced not
+   * one fix, while shorter gaps that day were two to six minutes -- the length
+   * the stall-restart bounds them to. Ninety-one minutes is not that
+   * mechanism failing to recover; it is the OS never delivering in the first
+   * place. This is the option that speaks to that.
+   *
+   * Android ignores it, and `pausesUpdatesAutomatically: false` below still
+   * overrides the auto-pause this activity type would otherwise invite.
+   */
+  activityType: Location.ActivityType.AutomotiveNavigation,
   // Never pause. iOS will otherwise decide a stationary device needs no
   // updates and stop delivering, and a technician working inside one
   // property for an hour looks identical to one who has gone home.

@@ -324,10 +324,17 @@ export function applyPresenceEvent(
 /**
  * How long a connected app may go without a location before it is called out.
  *
- * Ten minutes. A handset reports every few seconds while moving and at least
- * every few minutes standing still, so ten quiet minutes with the app open is
- * not a pause between fixes -- recording has stopped, and the pin on the map
- * is where they were, not where they are.
+ * Ten minutes, and the premise it was written on was wrong. "A handset reports
+ * every few seconds while moving and at least every few minutes standing
+ * still" -- it does not. The task is registered with `distanceInterval: 10`,
+ * so a phone that has not moved ten metres earns no fix at all, however long
+ * it sits there. A technician inside a property for half an hour therefore
+ * produced nothing, and the map called it "Location paused" in warning
+ * colours: on 2026-09-21 Moses moved eleven metres in twenty-three minutes and
+ * the console reported a fault.
+ *
+ * Ten minutes of genuine silence still matters. What changed is how silence is
+ * told apart from stillness -- see `isLocationPaused`.
  */
 export const LOCATION_PAUSED_AFTER_MS = 10 * 60_000;
 
@@ -336,14 +343,34 @@ export const LOCATION_PAUSED_AFTER_MS = 10 * 60_000;
  *
  * The case the map has to say out loud: the technician reads as online, and
  * their pin is somewhere they may have left hours ago.
+ *
+ * **A phone that has reported healthy recording since is not paused.** The
+ * handset sends its own tracking status independently of any fix, so a
+ * technician standing still has an up-to-date `reportedAt` and no new
+ * position -- which is exactly what standing still looks like, and is not a
+ * fault. Without this the warning fired on every inspection long enough to be
+ * worth doing.
  */
 export function isLocationPaused(
-  position: { recordedAt: string; app?: { connected: boolean } | null } | null | undefined,
+  position:
+    | {
+        recordedAt: string;
+        app?: { connected: boolean } | null;
+        tracking?: { recording: string; reportedAt: string } | null;
+      }
+    | null
+    | undefined,
   now = Date.now(),
 ): boolean {
   if (!position?.app?.connected) return false;
   const at = Date.parse(position.recordedAt);
-  return Number.isFinite(at) && now - at > LOCATION_PAUSED_AFTER_MS;
+  if (!Number.isFinite(at) || now - at <= LOCATION_PAUSED_AFTER_MS) return false;
+  const tracking = position.tracking;
+  if (!tracking || tracking.recording === 'OFF') return true;
+  const reportedAt = Date.parse(tracking.reportedAt);
+  // A status as stale as the silence says nothing either way, so the silence
+  // wins: a phone that stopped reporting both is a phone that stopped.
+  return !(Number.isFinite(reportedAt) && now - reportedAt <= LOCATION_PAUSED_AFTER_MS);
 }
 
 /**
