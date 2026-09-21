@@ -266,21 +266,22 @@ export function quarterOf(day: string | Date | null | undefined): string {
   return quarterName(at.getUTCFullYear(), Math.floor(at.getUTCMonth() / 3) + 1);
 }
 
-/** The first and last day a quarter covers, from "Q3 2026"; null for anything else. */
-export function quarterDays(label: string): { from: string; to: string } | null {
-  const parsed = /^Q([1-4])\s+(\d{4})$/.exec(label.trim());
-  if (!parsed) return null;
-  const quarter = Number(parsed[1]);
-  const year = Number(parsed[2]);
-  const first = new Date(Date.UTC(year, (quarter - 1) * 3, 1));
-  const last = new Date(Date.UTC(year, quarter * 3, 0));
-  return { from: first.toISOString().slice(0, 10), to: last.toISOString().slice(0, 10) };
-}
-
-/** The quarter under way and the seven before it, newest first. */
+/**
+ * The quarter after this one, the one under way, and the six before it.
+ *
+ * The next quarter is offered because its visits exist before it starts: a
+ * plan may be built and published fifteen days early, which on 2026-09-21 had
+ * already put 55 Q4 visits on the calendar while the list offered nothing
+ * newer than Q3 (the office: "Q4 2026 is not there").
+ */
 export function recentQuarters(today: Date = new Date()): string[] {
   let year = today.getUTCFullYear();
   let quarter = Math.floor(today.getUTCMonth() / 3) + 1;
+  quarter += 1;
+  if (quarter === 5) {
+    quarter = 1;
+    year += 1;
+  }
   const quarters: string[] = [];
   for (let step = 0; step < 8; step += 1) {
     quarters.push(quarterName(year, quarter));

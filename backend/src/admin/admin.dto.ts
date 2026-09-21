@@ -21,6 +21,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -109,6 +110,15 @@ export class InspectionListQueryDto extends PaginationDto {
    * looking for Q3 in a list of 1,533 inspections).
    */
   @IsOptional() @IsIn(['true', 'false']) tbpOnly?: string;
+  /**
+   * One quarter of the programme, as the office writes it: "Q4 2026".
+   *
+   * Not the same as the days the calendar calls that quarter. A plan may start
+   * fifteen days early, so Q4's first visits fall in September -- 36 HVAC and
+   * 19 occupied of them this year -- and reading them as Q3 puts HVAC in a
+   * quarter that has none (the office, 2026-09-21: "why there's an HVAC on Q3").
+   */
+  @IsOptional() @IsString() @Matches(/^Q[1-4] \d{4}$/) quarter?: string;
 }
 
 /** One filter a booking asks the technician to bring. */

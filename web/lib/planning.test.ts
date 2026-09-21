@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   attentionOf,
-  quarterDays,
   quarterOf,
   recentQuarters,
   attentionText,
@@ -208,18 +207,21 @@ describe('the quarter a visit belongs to', () => {
     expect(quarterOf(null)).toBe('');
   });
 
-  it('gives the days a quarter covers, and nothing for anything else', () => {
-    expect(quarterDays('Q3 2026')).toEqual({ from: '2026-07-01', to: '2026-09-30' });
-    expect(quarterDays('Q1 2027')).toEqual({ from: '2027-01-01', to: '2027-03-31' });
-    expect(quarterDays('last quarter')).toBeNull();
-  });
-
-  it('offers the quarter under way and the seven before it', () => {
+  /**
+   * The office (2026-09-21): "Q4 2026 is not there". It was not, and 55 of its
+   * visits were already booked -- a plan starts up to fifteen days before its
+   * quarter, so the next one is real long before the calendar reaches it.
+   */
+  it('offers the quarter after this one, so a plan published early can be found', () => {
     const quarters = recentQuarters(new Date('2026-09-21T00:00:00.000Z'));
 
-    expect(quarters[0]).toBe('Q3 2026');
-    expect(quarters[1]).toBe('Q2 2026');
-    expect(quarters.at(-1)).toBe('Q4 2024');
+    expect(quarters[0]).toBe('Q4 2026');
+    expect(quarters[1]).toBe('Q3 2026');
+    expect(quarters.at(-1)).toBe('Q1 2025');
+  });
+
+  it('rolls into the next year from Q4', () => {
+    expect(recentQuarters(new Date('2026-11-02T00:00:00.000Z'))[0]).toBe('Q1 2027');
   });
 });
 

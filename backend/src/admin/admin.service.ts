@@ -168,6 +168,58 @@ function rollUpTbp(states: Set<string> | undefined) {
   return [...states][0] as 'ENROLLED' | 'NOT_ENROLLED' | 'NOT_VERIFIED';
 }
 
+/** "Q4 2026", as the office writes a quarter. */
+const quarterLabelOf = (year: number, quarter: number) => `Q${quarter} ${year}`;
+
+/**
+ * The quarter a visit belongs to, which is not always the one its day falls in.
+ *
+ * A quarter's plan may start fifteen days before the quarter does, so Q4's
+ * first visits are scheduled in September. Read off the calendar they land in
+ * Q3 — a quarter whose rule has no HVAC inspections at all — which is how 36
+ * HVAC and 19 occupied visits of the Q4 plan appeared under Q3 2026 (the
+ * office, 2026-09-21: "why there's an HVAC on Q3 ... forgot about the rule?").
+ *
+ * The plan answers first, because it is the thing that decided. A visit the
+ * office booked in Jobber itself has no plan here, and its programme title
+ * names the quarter — the office's own word for it. All 362 of them do.
+ * Anything else is not a programme visit, and the quarter its day falls in is
+ * the only meaning it has: a "Q3 2026" in some other Jobber job's title is not
+ * this programme's quarter and must not be read as one.
+ */
+export function visitQuarter(item: {
+  scheduledAt: Date;
+  jobberVisitTitle?: string | null;
+  tbpPlanStop?: { plan: { quarterYear: number; quarterNumber: number } } | null;
+}): string {
+  if (item.tbpPlanStop)
+    return quarterLabelOf(item.tbpPlanStop.plan.quarterYear, item.tbpPlanStop.plan.quarterNumber);
+  const title = item.jobberVisitTitle ?? '';
+  const named = title.toLowerCase().includes(TBP_TITLE_MARKER)
+    ? /\bQ([1-4])\s+(\d{4})\b/i.exec(title)
+    : null;
+  if (named) return quarterLabelOf(Number(named[2]), Number(named[1]));
+  return quarterLabelOf(
+    item.scheduledAt.getUTCFullYear(),
+    Math.floor(item.scheduledAt.getUTCMonth() / 3) + 1,
+  );
+}
+
+/** One asked-for quarter, with the days the calendar gives it. Null for anything else. */
+export function quarterFilter(label: string | undefined) {
+  const parsed = label ? /^Q([1-4])\s+(\d{4})$/.exec(label.trim()) : null;
+  if (!parsed) return null;
+  const quarter = Number(parsed[1]);
+  const year = Number(parsed[2]);
+  return {
+    quarter,
+    year,
+    label: quarterLabelOf(year, quarter),
+    from: new Date(Date.UTC(year, (quarter - 1) * 3, 1)),
+    to: new Date(Date.UTC(year, quarter * 3, 0, 23, 59, 59, 999)),
+  };
+}
+
 const FROZEN_INSPECTION_STATUSES: InspectionStatus[] = [
   InspectionStatus.COMPLETED,
   InspectionStatus.CANCELLED,
@@ -1030,6 +1082,7 @@ export class AdminService {
   }
 
   async inspections(user: AuthenticatedUser, query: InspectionListQueryDto) {
+    const quarterAsked = quarterFilter(query.quarter);
     const assignmentFilters: Prisma.InspectionWhereInput[] = [
       ...(query.technicianId
         ? [{ assignments: { some: { technicianId: query.technicianId, isCurrent: true } } }]
@@ -1039,6 +1092,39 @@ export class AdminService {
         : []),
       ...(query.assignmentStatus === 'UNASSIGNED' || query.unassignedOnly === 'true'
         ? [{ assignments: { none: { isCurrent: true } } }]
+        : []),
+      // The quarter asked for, decided the same way `visitQuarter` decides the
+      // tag on each row: by the plan first, then the programme title, and only
+      // then by the day. A plan that starts fifteen days early puts its first
+      // visits in the quarter before, and a day range alone would file them
+      // under it -- which is the whole bug.
+      //
+      // The one case the two can differ is a programme-titled visit with no
+      // plan whose title names no quarter: tagged by its day here, matched by
+      // nothing. Postgres could answer it with a regex, Prisma's filters
+      // cannot, and there are none -- all 362 name their quarter.
+      ...(quarterAsked
+        ? [
+            {
+              OR: [
+                { tbpPlanStop: { plan: { quarterYear: quarterAsked.year, quarterNumber: quarterAsked.quarter } } },
+                {
+                  AND: [
+                    { tbpPlanStop: { is: null } },
+                    { jobberVisitTitle: { contains: TBP_TITLE_MARKER, mode: 'insensitive' as const } },
+                    { jobberVisitTitle: { contains: quarterAsked.label, mode: 'insensitive' as const } },
+                  ],
+                },
+                {
+                  AND: [
+                    { tbpPlanStop: { is: null } },
+                    { NOT: { jobberVisitTitle: { contains: TBP_TITLE_MARKER, mode: 'insensitive' as const } } },
+                    { scheduledAt: { gte: quarterAsked.from, lte: quarterAsked.to } },
+                  ],
+                },
+              ],
+            },
+          ]
         : []),
       // A benefit-package visit is one a quarter's plan created, or one booked
       // in Jobber under the programme's name -- the quarters this system did
@@ -1093,6 +1179,9 @@ export class AdminService {
       },
       priority: true,
       scheduledAt: true,
+      // What says which quarter of the programme a visit belongs to.
+      jobberVisitTitle: true,
+      tbpPlanStop: { select: { plan: { select: { quarterYear: true, quarterNumber: true } } } },
       createdAt: true,
       updatedAt: true,
       internalNotes: true,
@@ -1232,6 +1321,8 @@ export class AdminService {
     return this.page(
       items.map((item) => ({
         ...item,
+        /** The quarter of the programme it belongs to, not the one its day falls in. */
+        quarter: visitQuarter(item),
         /**
          * Only ever set on a move-out. On any other type the question is not
          * "missing", it is meaningless — and a false would read as an

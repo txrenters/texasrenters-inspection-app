@@ -11,7 +11,7 @@ import {
   type DeletableInspection,
 } from '@/components/inspection-delete-dialog';
 import { ListToolbar, SelectFilter, enumOptions } from '@/components/list-toolbar';
-import { quarterDays, quarterOf, recentQuarters } from '@/lib/planning';
+import { quarterOf, recentQuarters } from '@/lib/planning';
 import { PageHeader } from '@/components/page-header';
 import { Pagination } from '@/components/pagination';
 import { EmptyState, ErrorState } from '@/components/states';
@@ -144,10 +144,15 @@ const COLUMNS: Array<Column<InspectionRow>> = [
     // With the quarter under it: a benefit-package visit belongs to one, and
     // "which quarter was this?" is otherwise date arithmetic done by eye (the
     // office, 2026-09-21).
+    //
+    // The API's answer, not this row's date. A plan may start fifteen days
+    // before its quarter, so Q4's first visits are scheduled in September, and
+    // reading the day put 36 HVAC visits under a Q3 that has no HVAC in it.
+    // The date is only the fallback, for a row served before the API said.
     cell: (row) => (
       <div className="min-w-0">
         <div>{formatScheduledDate(row.scheduledAt)}</div>
-        <div className="text-muted-foreground text-xs">{quarterOf(row.scheduledAt)}</div>
+        <div className="text-muted-foreground text-xs">{row.quarter || quarterOf(row.scheduledAt)}</div>
       </div>
     ),
   },
@@ -248,10 +253,6 @@ export default function InspectionsPage() {
     type: '',
     unassigned: false,
   });
-  // A quarter chosen here is the day range it covers: the API filters on the
-  // day, and the two ways of saying it must not disagree.
-  const quarterRange = quarterDays(state.quarter);
-
   /**
    * Clears the narrowing filters but keeps `type`, so clearing inside a section
    * returns you to the whole of that type rather than to every inspection ever
@@ -260,7 +261,7 @@ export default function InspectionsPage() {
    * Not `reset` from `useUrlState`, which drops the entire query string.
    */
   const clearFilters = useCallback(
-    () => setState({ from: '', page: 1, q: '', status: '', to: '', unassigned: false }),
+    () => setState({ from: '', page: 1, q: '', quarter: '', status: '', tbp: false, to: '', unassigned: false }),
     [setState],
   );
 
@@ -277,10 +278,15 @@ export default function InspectionsPage() {
     // read as local midnight and drop everything scheduled later that day from
     // the "to" end of the range. Both bounds are widened to cover the whole day
     // the reader picked, which is what a date range means to them.
-    scheduledFrom: quarterRange ? dayStart(quarterRange.from) : dayStart(state.from),
-    scheduledTo: quarterRange ? dayEnd(quarterRange.to) : dayEnd(state.to),
+    scheduledFrom: dayStart(state.from),
+    scheduledTo: dayEnd(state.to),
     unassignedOnly: state.unassigned || undefined,
     tbpOnly: state.tbp || undefined,
+    // The quarter itself, not the days it covers. The API decides membership
+    // by the plan that made the visit, which is the only thing that knows a
+    // September day belongs to Q4; a day range here would disagree with the
+    // tag shown on the very rows it returned.
+    quarter: state.quarter || undefined,
   });
 
   const busy = inspections.isLoading || isSearchPending || inspections.isPlaceholderData;
