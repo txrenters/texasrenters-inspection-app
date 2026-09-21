@@ -100,6 +100,15 @@ export class InspectionListQueryDto extends PaginationDto {
   @IsOptional() @IsDateString() scheduledFrom?: string;
   @IsOptional() @IsDateString() scheduledTo?: string;
   @IsOptional() @IsIn(['true', 'false']) unassignedOnly?: string;
+  /**
+   * Only the benefit-package visits.
+   *
+   * A visit of this programme either came from a quarter's plan or was booked
+   * in Jobber under its name, and both are wanted: the quarters before this
+   * system planned them exist only as the second (the office, 2026-09-21,
+   * looking for Q3 in a list of 1,533 inspections).
+   */
+  @IsOptional() @IsIn(['true', 'false']) tbpOnly?: string;
 }
 
 /** One filter a booking asks the technician to bring. */

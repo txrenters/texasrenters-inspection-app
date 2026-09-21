@@ -34,6 +34,7 @@ import type { AuthenticatedUser } from '../common/auth';
 import { CacheInvalidationService } from '../cache/cache-invalidation.service';
 import { CacheService, type CacheReadOptions } from '../cache/cache.service';
 import { ApplicationError } from '../common/errors';
+import { TBP_TITLE_MARKER } from '../planning/tbp-plan.service';
 import { isAllowedPhotoWidth, resizeImage } from '../common/image-resizing';
 import { resizedPhotoKeyFor, thumbnailKeyFor } from '../common/object-storage';
 import { PrismaService } from '../common/prisma.service';
@@ -1038,6 +1039,19 @@ export class AdminService {
         : []),
       ...(query.assignmentStatus === 'UNASSIGNED' || query.unassignedOnly === 'true'
         ? [{ assignments: { none: { isCurrent: true } } }]
+        : []),
+      // A benefit-package visit is one a quarter's plan created, or one booked
+      // in Jobber under the programme's name -- the quarters this system did
+      // not plan exist only as the second.
+      ...(query.tbpOnly === 'true'
+        ? [
+            {
+              OR: [
+                { tbpPlanStop: { isNot: null } },
+                { jobberVisitTitle: { contains: TBP_TITLE_MARKER, mode: 'insensitive' as const } },
+              ],
+            },
+          ]
         : []),
     ];
     const where: Prisma.InspectionWhereInput = {

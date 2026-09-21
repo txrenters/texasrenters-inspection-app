@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   attentionOf,
+  quarterDays,
+  quarterOf,
+  recentQuarters,
   attentionText,
   bookedInWords,
   dayClock,
@@ -191,6 +194,32 @@ describe('the first day of a plan', () => {
     expect(planStartText(Q4, null)).toBe("Oct 1, the quarter's first day");
     expect(planStartText(Q4, '2026-09-21T00:00:00.000Z')).toBe("Sep 21, 10 days before the quarter's first");
     expect(planStartText(Q4, '2026-10-02')).toBe("Oct 2, 1 day after the quarter's first");
+  });
+});
+
+/**
+ * The office (2026-09-21), looking for Q3's visits among 1,533 inspections:
+ * "add a TBP filter add also the quarter tag and add a filter to it".
+ */
+describe('the quarter a visit belongs to', () => {
+  it('reads a day in UTC, so a quarter boundary does not move with the reader', () => {
+    expect(quarterOf('2026-09-30T23:00:00.000Z')).toBe('Q3 2026');
+    expect(quarterOf('2026-10-01T00:00:00.000Z')).toBe('Q4 2026');
+    expect(quarterOf(null)).toBe('');
+  });
+
+  it('gives the days a quarter covers, and nothing for anything else', () => {
+    expect(quarterDays('Q3 2026')).toEqual({ from: '2026-07-01', to: '2026-09-30' });
+    expect(quarterDays('Q1 2027')).toEqual({ from: '2027-01-01', to: '2027-03-31' });
+    expect(quarterDays('last quarter')).toBeNull();
+  });
+
+  it('offers the quarter under way and the seven before it', () => {
+    const quarters = recentQuarters(new Date('2026-09-21T00:00:00.000Z'));
+
+    expect(quarters[0]).toBe('Q3 2026');
+    expect(quarters[1]).toBe('Q2 2026');
+    expect(quarters.at(-1)).toBe('Q4 2024');
   });
 });
 
