@@ -5,7 +5,7 @@ import type {
   TechnicianPosition,
   TechnicianRoute,
 } from '@texasrenters/shared';
-import { ONLINE_WITHIN_MS } from '@texasrenters/shared';
+import { ONLINE_WITHIN_MS, splitRouteAtPosition } from '@texasrenters/shared';
 import {
   AdvancedMarker,
   APIProvider,
@@ -503,7 +503,11 @@ function Line({
   dashed = false,
   zIndex,
 }: {
-  path: readonly [number, number][];
+  /**
+   * Readonly all the way down, because a trimmed route is a slice of the
+   * shared contract's own `LatLngPath` and nothing here writes to it.
+   */
+  path: readonly (readonly [number, number])[];
   className: string;
   weight: number;
   opacity: number;
@@ -762,15 +766,39 @@ const PropertyLayer = memo(function PropertyLayer({
  */
 const RouteLayer = memo(function RouteLayer({
   currentInspectionIds,
+  position,
   route,
 }: {
   /** The visit under way, from the location trail, so its stop can say so. */
   currentInspectionIds: readonly string[] | null;
+  /**
+   * Where the technician is now, which is where the route is cut.
+   *
+   * From the live position rather than from the route's own origin: the origin
+   * is where they were when the line was last drawn, which is the whole
+   * problem this solves.
+   */
+  position: { latitude: number; longitude: number } | null;
   route: TechnicianRoute | null;
 }) {
   const [openStop, setOpenStop] = useState<string | null>(null);
 
   if (!route) return null;
+
+  /**
+   * The road behind them, and the road still ahead.
+   *
+   * A route is drawn once and reused for minutes, so between redraws its line
+   * kept starting where they *were* -- orange leading back to somewhere they
+   * had already driven. Google Maps consumes the road behind you and the
+   * office asked for the same. The travelled part is not thrown away: it is
+   * drawn in the grey the finished stops use, so the day still reads as one
+   * continuous line.
+   *
+   * Off the line, this gives the whole route back as ahead -- see
+   * `splitRouteAtPosition`. The redraw is what answers being off it.
+   */
+  const { travelled, ahead } = splitRouteAtPosition(route.geometry, position);
 
   const current = new Set(currentInspectionIds ?? []);
   // The first stop still ahead: not the one they are standing at.
@@ -829,16 +857,22 @@ const RouteLayer = memo(function RouteLayer({
         );
       })}
 
-      {route.geometry.length ? (
+      {/* The part of this route already driven, in the same grey as the drives
+          between finished stops -- so the line is continuous and only its
+          colour says which side of the technician it is on. */}
+      {travelled.length > 1 ? (
+        <Line
+          className="map-route-done-line"
+          opacity={0.9}
+          path={travelled}
+          weight={4}
+          zIndex={1}
+        />
+      ) : null}
+      {ahead.length > 1 ? (
         <>
-          <Line
-            className="map-route-casing"
-            opacity={0.9}
-            path={route.geometry}
-            weight={9}
-            zIndex={2}
-          />
-          <Line className="map-route-line" opacity={1} path={route.geometry} weight={4} zIndex={3} />
+          <Line className="map-route-casing" opacity={0.9} path={ahead} weight={9} zIndex={2} />
+          <Line className="map-route-line" opacity={1} path={ahead} weight={4} zIndex={3} />
         </>
       ) : null}
       {(route.geometry.length ? route.stops : []).map((stop, index) => {
@@ -1288,7 +1322,11 @@ export function TechnicianMap({
 
           {/* Under the markers and over the properties: the route is context for
               the pins, not a thing to be read on its own. */}
-          <RouteLayer currentInspectionIds={currentInspectionIds} route={route} />
+          <RouteLayer
+            currentInspectionIds={currentInspectionIds}
+            position={selectedPosition}
+            route={route}
+          />
           <AirTravelLayer route={route} />
 
           <PropertyLayer

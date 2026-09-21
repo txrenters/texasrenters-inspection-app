@@ -89,6 +89,67 @@ export function projectOntoPath(
   return best ? { ...best, totalMeters: travelled } : null;
 }
 
+/**
+ * The route split where the technician has got to: behind them, and ahead.
+ *
+ * A route is drawn once and reused for minutes, so its line keeps starting
+ * where the technician *was*. Google Maps does not do this -- the road you have
+ * driven disappears behind you -- and the office asked for the same
+ * (2026-09-22: "the trail should also be gone with the arrow position like
+ * google map navigation"). Between redraws the orange was a line to somewhere
+ * they had already been.
+ *
+ * `travelled` is given back rather than thrown away so the map can draw it as
+ * the day's history, in the same grey the finished stops use, instead of the
+ * road simply vanishing.
+ *
+ * Two cases deliberately return the whole route as `ahead`:
+ *
+ * - **Off the line.** Past `OFF_ROUTE_M` the nearest point is not where they
+ *   have got to, it is the point of a road they are not on -- trimming to it
+ *   would erase a route they still have to drive every yard of. The redraw is
+ *   what answers that, and until it lands the untrimmed line is the honest
+ *   picture.
+ * - **A route not started.** One drawn from home has no progress along it.
+ *
+ * The cut point is inserted exactly, so the remaining line begins at the
+ * technician rather than at whichever shape point comes next -- which on a
+ * motorway can be hundreds of metres ahead.
+ */
+export function splitRouteAtPosition(
+  geometry: LatLngPath,
+  position: { latitude: number; longitude: number } | null | undefined,
+): { travelled: LatLngPath; ahead: LatLngPath } {
+  if (!position || geometry.length < 2) return { travelled: [], ahead: geometry };
+  const projected = projectOntoPath(position, geometry);
+  if (!projected || projected.offsetMeters > OFF_ROUTE_M)
+    return { travelled: [], ahead: geometry };
+
+  let travelledSoFar = 0;
+  for (let index = 1; index < geometry.length; index += 1) {
+    const a = geometry[index - 1];
+    const b = geometry[index];
+    const length = haversineMeters(
+      { latitude: a[0], longitude: a[1] },
+      { latitude: b[0], longitude: b[1] },
+    );
+    const end = travelledSoFar + length;
+    if (projected.alongMeters <= end || index === geometry.length - 1) {
+      const t = length === 0 ? 0 : Math.max(0, Math.min(1, (projected.alongMeters - travelledSoFar) / length));
+      const cut: readonly [number, number] = [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+      ];
+      return {
+        travelled: [...geometry.slice(0, index), cut],
+        ahead: [cut, ...geometry.slice(index)],
+      };
+    }
+    travelledSoFar = end;
+  }
+  return { travelled: [], ahead: geometry };
+}
+
 export type RerouteReason =
   | 'NO_ROUTE'
   | 'ORIGIN_CHANGED'
