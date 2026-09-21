@@ -26,14 +26,26 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
 /**
  * How often a fix is wanted, and how far the technician must move to earn one.
  *
- * Fifteen seconds rather than the minute it used to be. A minute is fine for
- * "which property is she at" and useless for watching somebody move -- a van
- * covers half a mile between fixes, so the console drew a technician
- * teleporting between two points on a road it never showed them taking. The
- * cost is real and worth naming: more frequent fixes mean more battery, on a
- * phone that is also filming video.
+ * Three seconds. A minute was fine for "which property is she at" and useless
+ * for watching somebody move; fifteen was better and still drew a van
+ * teleporting a quarter of a mile at a time down a road the console never
+ * showed. The office asked to watch a technician drive -- speed, heading, where
+ * they are now -- and at motorway speed three seconds is about fifty metres,
+ * which reads as a vehicle following a road rather than hopping along it.
+ *
+ * **This is the Android number.** iOS ignores `timeInterval` and delivers on
+ * `distanceInterval`, so an iPhone in a car has always reported roughly once a
+ * second; what limited it there was how often the queue was drained, which is
+ * `RECORDED_SEND_SPACING_MS`.
+ *
+ * The cost is real and worth naming again: five times the fixes, at `High`
+ * accuracy, on a phone that is also filming video. Google's own Driver SDK
+ * reports every ten seconds by default and Fleet Engine expects five to sixty,
+ * so three is dense by the standards of the industry that does this for a
+ * living -- it is chosen for a handful of vans, not a fleet, and it is the
+ * first line to change if a technician's battery does not last the shift.
  */
-const FIX_INTERVAL_MS = 15_000;
+const FIX_INTERVAL_MS = 3_000;
 const FIX_DISTANCE_M = 10;
 
 /**

@@ -12,6 +12,7 @@
  * - A recording the OS killed stayed "started" -- neither platform can tell a
  *   registered task from a delivering one -- so nothing restarted it.
  */
+import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 
 import {
@@ -155,6 +156,26 @@ describe('starting a shift', () => {
     });
     expect(mockStartUpdates).not.toHaveBeenCalled();
     expect(mockWatchPosition).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The numbers the office asked for, pinned.
+   *
+   * Every other assertion here compares against `BACKGROUND_UPDATES` itself, so
+   * none of them would notice these changing. The office (2026-09-22) wants to
+   * watch a technician drive -- speed, heading, where they are now -- and at
+   * fifteen seconds a van teleported a quarter of a mile at a time. Three
+   * seconds is about fifty metres at motorway speed.
+   *
+   * The cost is battery, on a phone that also films video, so loosening this is
+   * a decision somebody should have to make on purpose.
+   */
+  it('takes a fix every three seconds, densely enough to draw a road', () => {
+    expect(BACKGROUND_UPDATES.timeInterval).toBe(3_000);
+    expect(BACKGROUND_UPDATES.distanceInterval).toBe(10);
+    // `High` is satellites. A Wi-Fi or tower fix carries no speed or course at
+    // all, which is most of what the map is for.
+    expect(BACKGROUND_UPDATES.accuracy).toBe(Location.Accuracy.High);
   });
 
   it('records in the background with location allowed only while using the app', async () => {
