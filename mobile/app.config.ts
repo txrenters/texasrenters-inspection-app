@@ -92,10 +92,16 @@ const config: ExpoConfig = {
    * `shift-tracking.ts` calls `TaskManager.defineTask` at module scope, so it
    * would have crashed on import rather than degrading.
    *
-   * 1.1.0 fences those builds out: JavaScript published from here can now only
+   * 1.1.0 fenced those builds out: JavaScript published from here can now only
    * reach a build made from this version or later.
+   *
+   * 1.2.0 does the same for `expo-image-picker`, added 2026-09-22 so a
+   * technician can attach photographs from the phone's own gallery. Same trap,
+   * same fence: an update published without this bump would offer the gallery
+   * button to a binary with no picker in it, and the import would throw on the
+   * first tap.
    */
-  version: '1.1.0',
+  version: '1.2.0',
   orientation: 'portrait',
   scheme: 'texasrenters-inspection',
   icon: './assets/icon.png',
@@ -138,6 +144,20 @@ const config: ExpoConfig = {
         cameraPermission:
           'Allow TexasRenters Inspect to capture room-specific inspection evidence.',
         microphonePermission: 'Allow TexasRenters Inspect to record technician narration.',
+      },
+    ],
+    [
+      'expo-image-picker',
+      {
+        /**
+         * Read-only, and the wording says why rather than what.
+         *
+         * `photosPermission` is the only string iOS shows; there is no separate
+         * "add" prompt here because nothing writes to the library. Android's
+         * READ_MEDIA_IMAGES comes from the plugin.
+         */
+        photosPermission:
+          'Allow TexasRenters Inspect to attach photographs you have already taken to the area you are inspecting.',
       },
     ],
     [

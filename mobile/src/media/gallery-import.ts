@@ -1,0 +1,131 @@
+import * as ImagePicker from 'expo-image-picker';
+
+import type { RoomSnapshot } from '../domain/models';
+
+import { buildRoomSnapshot, persistRoomSnapshot } from './local-snapshots';
+
+/**
+ * Photographs a technician already has, attached to the area they are in.
+ *
+ * Moses Rodriguez, 2026-09-18: "The upload button for the pictures would help
+ * so much right now. It does take me a little longer to complete the occupied
+ * inspections." An occupied visit is fifteen minutes and the camera is the
+ * slowest part of it -- a technician who photographed the kitchen on their own
+ * phone a minute earlier had no way to hand that photograph over.
+ *
+ * ── IT JOINS THE ORDINARY PIPELINE ───────────────────────────────────────────
+ *
+ * Picked files are copied into the app's own snapshot folder and built into
+ * `RoomSnapshot`s exactly as the camera's are, so everything downstream is
+ * already written: `UploadQueueRunner` sends them, a failure retries with the
+ * same idempotency key, and a technician with no signal keeps working. Nothing
+ * here talks to the network.
+ *
+ * ── THE TWO THINGS IT DELIBERATELY DOES NOT CLAIM ────────────────────────────
+ *
+ * **A capture time.** `captureTimeToSend` sends `capturedAt` only for a
+ * photograph timed at the shutter, and a library asset's real moment lives in
+ * EXIF with no zone attached. Guessing is how 651 imported reports ended up
+ * stamped wrong, so an imported photograph carries no claim and the server
+ * stamps it with its own receipt, labelled as such. Reading EXIF honestly is a
+ * later job, not a reason to guess now.
+ *
+ * **That it is a photograph of this property.** `GALLERY_IMPORT` records where
+ * it came from, so the office reading a report can tell a shot taken on the
+ * walk from one chosen out of a camera roll.
+ */
+
+/** The reason an import produced nothing, when it is worth telling the technician. */
+export type GalleryImportOutcome =
+  | { status: 'IMPORTED'; snapshots: RoomSnapshot[] }
+  /** The technician closed the picker. Says nothing, because they meant to. */
+  | { status: 'CANCELLED' }
+  /** The library was refused. The only outcome with something for them to do. */
+  | { status: 'DENIED' };
+
+/**
+ * How many an area can take in one go.
+ *
+ * The backend caps `sequenceNumber` at 1000 and an area is a room, not an
+ * album. Twenty is more than any area has ever needed and small enough that a
+ * mis-tap on "select all" does not queue a holiday.
+ */
+export const GALLERY_IMPORT_LIMIT = 20;
+
+export interface GalleryImportInput {
+  inspectionId: string;
+  roomId: string;
+  ownerUserId?: string;
+  /**
+   * Photographs this area already has, so the imported ones number after them.
+   *
+   * The sequence is what orders photographs on the report, and restarting at 1
+   * would interleave an import with the walk it followed.
+   */
+  existingPhotoCount: number;
+  /** Injected by the tests; the picker itself is native and cannot run in one. */
+  picker?: Pick<
+    typeof ImagePicker,
+    'requestMediaLibraryPermissionsAsync' | 'launchImageLibraryAsync'
+  >;
+  persist?: typeof persistRoomSnapshot;
+}
+
+export async function importFromGallery({
+  inspectionId,
+  roomId,
+  ownerUserId,
+  existingPhotoCount,
+  picker = ImagePicker,
+  persist = persistRoomSnapshot,
+}: GalleryImportInput): Promise<GalleryImportOutcome> {
+  const permission = await picker.requestMediaLibraryPermissionsAsync();
+  if (!permission.granted) return { status: 'DENIED' };
+
+  const picked = await picker.launchImageLibraryAsync({
+    // Images only. Video from the library would have to go through the
+    // recording review and Cloudflare Stream, which is a different pipeline
+    // entirely — and it is not what was asked for.
+    mediaTypes: ['images'],
+    allowsMultipleSelection: true,
+    selectionLimit: GALLERY_IMPORT_LIMIT,
+    // Matches the camera's own `takePictureAsync` quality, so an imported
+    // photograph is not visibly better or worse than the ones beside it.
+    quality: 0.82,
+    // No `exif`: nothing here reads it, and asking for it on iOS widens what
+    // the app is handed for no purpose.
+    exif: false,
+  });
+  if (picked.canceled) return { status: 'CANCELLED' };
+
+  const snapshots: RoomSnapshot[] = [];
+  picked.assets.slice(0, GALLERY_IMPORT_LIMIT).forEach((asset, index) => {
+    // `persistRoomSnapshot` *moves* the file. Safe here: the picker hands back
+    // a copy in the app's cache directory, never the library asset itself, so
+    // the technician's own photograph stays in their camera roll.
+    const stored = persist(asset.uri, inspectionId, roomId);
+    snapshots.push(
+      buildRoomSnapshot({
+        ownerUserId,
+        inspectionId,
+        roomId,
+        uri: stored.uri,
+        width: asset.width,
+        height: asset.height,
+        sizeBytes: stored.sizeBytes ?? asset.fileSize,
+        // The area as a whole. A picked photograph has no finding attached to
+        // it and nothing here knows which room feature it shows; the
+        // technician files it against a finding afterwards if it is one.
+        captureType: 'AREA_OVERVIEW',
+        captureSource: 'GALLERY_IMPORT',
+        sequenceNumber: existingPhotoCount + index + 1,
+        // No `clock`, so `captureTimeToSend` sends nothing and the server
+        // stamps its own receipt. See the header.
+        // No `nextAttemptAt` either: the review window exists to let a test
+        // frame be thrown away before it is filed, and nobody picks a test
+        // frame out of their gallery on purpose.
+      }),
+    );
+  });
+  return { status: 'IMPORTED', snapshots };
+}

@@ -7,6 +7,7 @@ import {
   CircleIcon,
   Edit3Icon,
   FileTextIcon,
+  ImagePlusIcon,
   ListChecksIcon,
   PlayCircleIcon,
   RotateCwIcon,
@@ -48,6 +49,7 @@ import { CaptureChoiceSheet } from '@/src/capture/CaptureChoiceSheet';
 import { asksCaptureChoice, type CapturePreference } from '@/src/capture/capture-intents';
 import { withAxes } from '@/src/capture/condition-answers';
 import { useAreaChecklist } from '@/src/capture/use-area-checklist';
+import { importFromGallery } from '@/src/media/gallery-import';
 import { useDemoStore } from '@/src/stores/demo.store';
 import { useChecklistFromSummary } from '@/src/capture/useChecklistFromSummary';
 import { AreaCompletionChecklist } from '@/src/components/AreaCompletionChecklist';
@@ -83,6 +85,7 @@ registerIcons(
   CircleIcon,
   Edit3Icon,
   FileTextIcon,
+  ImagePlusIcon,
   ListChecksIcon,
   PlayCircleIcon,
   RotateCwIcon,
@@ -201,6 +204,17 @@ export default function AreaDetailScreen() {
    */
   const snapshots = useDemoStore((state) => state.snapshots);
   const updateSnapshot = useDemoStore((state) => state.updateSnapshot);
+  const addSnapshot = useDemoStore((state) => state.addSnapshot);
+  const ownerUserId = useDemoStore((state) => state.selectedUserId ?? undefined);
+  /**
+   * Whether the gallery is open, so a second tap cannot start a second import.
+   *
+   * The picker is a native screen and slow to appear on a cold library; the
+   * button has to say it heard the first tap.
+   */
+  const [importing, setImporting] = useState(false);
+  /** What to tell the technician about the last import, when there is anything. */
+  const [importProblem, setImportProblem] = useState<string | null>(null);
   const areaSnapshots = useMemo(
     () => (snapshots ?? []).filter((snapshot) => snapshot.roomId === id),
     [snapshots, id],
@@ -373,6 +387,48 @@ export default function AreaDetailScreen() {
         ? `/camera/${inspectionId}/${id}?recordingType=ADDITIONAL_ISSUE`
         : `/camera/${inspectionId}/${id}`,
     );
+  };
+  /**
+   * Attaches photographs the technician already has to this area.
+   *
+   * Moses Rodriguez, 2026-09-18: "The upload button for the pictures would help
+   * so much right now. It does take me a little longer to complete the occupied
+   * inspections."
+   *
+   * The imported photographs join the ordinary upload queue, so this needs no
+   * network and no new failure handling -- the strip above fills in as they
+   * land, exactly as it does for the camera's. Only a refusal is worth saying
+   * anything about: a technician who closed the picker knows they closed it.
+   */
+  const importFromLibrary = async () => {
+    if (importing) return;
+    setImporting(true);
+    setImportProblem(null);
+    try {
+      const outcome = await importFromGallery({
+        inspectionId,
+        roomId: id,
+        ownerUserId,
+        // After the ones already here, because the sequence is what orders
+        // photographs on the office's report.
+        existingPhotoCount: areaSnapshots.length + (photos.data?.length ?? 0),
+      });
+      if (outcome.status === 'DENIED') {
+        setImportProblem(
+          'TexasRenters Inspect cannot see your photos. Allow photo access in Settings, then try again.',
+        );
+        return;
+      }
+      if (outcome.status === 'CANCELLED') return;
+      outcome.snapshots.forEach(addSnapshot);
+    } catch {
+      // The picker itself failing is rare and not actionable beyond retrying.
+      // Said plainly rather than swallowed: a button that does nothing at all
+      // is the worst outcome for somebody standing in a property.
+      setImportProblem('Those photos could not be added. Try again.');
+    } finally {
+      setImporting(false);
+    }
   };
   const chooseCapture = (mode: CapturePreference) => {
     const opening = captureChoice === 'open';
@@ -986,6 +1042,27 @@ export default function AreaDetailScreen() {
           purpose. Noticing something else in a finished room is normal, and an
           extra clip does not undo the walkthrough.
         */}
+        {/*
+          Photographs the technician already has.
+
+          Under the camera button rather than beside it: this is the second
+          answer, and a full-width secondary keeps the primary action the
+          loudest thing on the screen. Offered on every area, including a
+          skipped one -- a photograph is how somebody shows why it was skipped.
+        */}
+        {importProblem ? (
+          <Text className="mb-2 text-center text-sm text-destructive">{importProblem}</Text>
+        ) : null}
+        <Button
+          accessibilityHint="Opens your photo library to attach photographs to this area"
+          busy={importing}
+          busyLabel="Opening Photos…"
+          className="mb-2"
+          icon={<ImagePlusIcon size={18} className="text-foreground" />}
+          label="Add From Gallery"
+          onPress={importFromLibrary}
+          variant="secondary"
+        />
         <Button
           accessibilityHint={
             isSkipped ? 'Opens the camera and inspects this area after all' : 'Opens the camera'

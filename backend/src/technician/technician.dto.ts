@@ -286,8 +286,21 @@ export class TechnicianPhotoUploadDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20000) height?: number;
   @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{8,128}$/) recordingSessionId?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(7_200_000) videoTimestampMs?: number;
+  /**
+   * Where the photograph came from.
+   *
+   * `GALLERY_IMPORT` is one the technician picked out of the phone's library
+   * rather than taking on the walk (2026-09-22). It carries no capture time --
+   * the app sends one only for a shot timed at the shutter -- so it is stamped
+   * with the server's receipt, and the source is what says why.
+   */
   @IsOptional()
-  @IsIn(['NATIVE_STILL_DURING_VIDEO', 'VIDEO_FRAME_EXTRACTION', 'SEPARATE_PHOTO_CAPTURE'])
+  @IsIn([
+    'NATIVE_STILL_DURING_VIDEO',
+    'VIDEO_FRAME_EXTRACTION',
+    'SEPARATE_PHOTO_CAPTURE',
+    'GALLERY_IMPORT',
+  ])
   captureSource?: string;
   /**
    * When the shutter was pressed, by the phone's clock.
