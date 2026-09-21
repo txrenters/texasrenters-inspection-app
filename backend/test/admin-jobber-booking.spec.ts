@@ -54,7 +54,12 @@ function build({
   links = [{ jobberPropertyId: 'jobber-property-1', jobberAddress: '100 Main Street', propertywareUnitId: null }],
 }: {
   connection?: { status: string } | null;
-  links?: { jobberPropertyId: string; jobberAddress: string | null; propertywareUnitId: string | null }[];
+  links?: {
+    jobberPropertyId: string;
+    jobberAddress: string | null;
+    propertywareUnitId: string | null;
+    lastUsedAt?: string | null;
+  }[];
 } = {}) {
   const tx = {
     propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(property) },
@@ -70,6 +75,10 @@ function build({
     auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
     jobberConnection: { findUnique: jest.fn().mockResolvedValue(connection) },
     jobberPropertyLink: { findMany: jest.fn().mockResolvedValue(links) },
+    // The links are read raw inside the transaction now: which Jobber record
+    // the office used last lives in the visit payloads, which Prisma cannot
+    // aggregate through a relation.
+    $queryRaw: jest.fn().mockResolvedValue(links.map((link) => ({ lastUsedAt: null, ...link }))),
     jobberOutboundTask: { create: jest.fn().mockResolvedValue({ id: 'task-1' }) },
   };
   const prisma = {
@@ -339,7 +348,26 @@ describe('what the console is told before booking', () => {
         ]),
       },
       userProfile: { findFirst: jest.fn().mockResolvedValue({ email: 'tech@example.com' }) },
-      $queryRaw: jest.fn().mockResolvedValue([{ id: 'jobber-user-1' }]),
+      /**
+       * The property links are read raw now -- the day a Jobber record was
+       * last used lives in `JobberVisitImport.payload->>'startAt'`, which
+       * Prisma cannot aggregate through a relation. Told apart from the
+       * technician lookup by the table its SQL names.
+       */
+      $queryRaw: jest.fn((strings: TemplateStringsArray) =>
+        Promise.resolve(
+          strings.join(' ').includes('JobberPropertyLink')
+            ? [
+                {
+                  jobberPropertyId: 'jobber-property-1',
+                  jobberAddress: '100 Main St',
+                  propertywareUnitId: null,
+                  lastUsedAt: null,
+                },
+              ]
+            : [{ id: 'jobber-user-1' }],
+        ),
+      ),
     };
   }
 

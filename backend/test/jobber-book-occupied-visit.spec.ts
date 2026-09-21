@@ -53,7 +53,12 @@ function build({
   environment?: Record<string, string | undefined>;
   task?: ReturnType<typeof bookingTask>;
   inspection?: Record<string, unknown>;
-  links?: { jobberPropertyId: string; jobberAddress: string | null; propertywareUnitId: string | null }[];
+  links?: {
+    jobberPropertyId: string;
+    jobberAddress: string | null;
+    propertywareUnitId: string | null;
+    lastUsedAt?: string | null;
+  }[];
   jobberUsers?: { id: string }[];
 } = {}) {
   const tx = {
@@ -80,8 +85,21 @@ function build({
         ...inspection,
       }),
     },
-    jobberPropertyLink: { findMany: jest.fn().mockResolvedValue(links) },
-    $queryRaw: jest.fn().mockResolvedValue(jobberUsers),
+    /**
+     * Two raw queries now, told apart by their SQL.
+     *
+     * The property links are read raw because the day a Jobber record was last
+     * used lives in `JobberVisitImport.payload->>'startAt'`, which Prisma
+     * cannot aggregate through a relation. The Jobber user lookup was already
+     * raw. A single mock answering both returned the users as links.
+     */
+    $queryRaw: jest.fn((strings: TemplateStringsArray) =>
+      Promise.resolve(
+        strings.join(' ').includes('JobberPropertyLink')
+          ? links.map((link) => ({ lastUsedAt: null, ...link }))
+          : jobberUsers,
+      ),
+    ),
     $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
   };
   const request = jest
@@ -126,7 +144,9 @@ describe('booking a console-created occupied inspection in Jobber', () => {
       },
     });
     // The technician's Jobber id is looked up by their email, lower-cased.
-    expect(prisma.$queryRaw.mock.calls[0]).toContain('tech@example.com');
+    // Across the calls rather than at a fixed one: the property links are read
+    // raw too now, and which runs first is not what this is about.
+    expect(prisma.$queryRaw.mock.calls.flat()).toContain('tech@example.com');
     // Claimed as ours, so the next sync applies changes instead of importing it again.
     expect(tx.inspection.update).toHaveBeenCalledWith({
       where: { id: 'inspection-1' },
@@ -206,10 +226,15 @@ describe('booking a console-created occupied inspection in Jobber', () => {
 });
 
 describe('which Jobber property a visit is booked against', () => {
-  const link = (jobberPropertyId: string, propertywareUnitId: string | null = null) => ({
+  const link = (
+    jobberPropertyId: string,
+    propertywareUnitId: string | null = null,
+    lastUsedAt: string | null = null,
+  ) => ({
     jobberPropertyId,
     jobberAddress: `${jobberPropertyId} address`,
     propertywareUnitId,
+    lastUsedAt,
   });
 
   it("takes the unit's own link first", () => {
@@ -228,6 +253,54 @@ describe('which Jobber property a visit is booked against', () => {
 
   it('refuses two properties it cannot tell apart', () => {
     expect(pickJobberProperty([link('front'), link('back')], 'unit-b')).toEqual({ status: 'AMBIGUOUS' });
+  });
+
+  /**
+   * Sixty-two addresses exist twice in this office's Jobber — the same house
+   * spelled "1103 East Hampton Drive" and "1103 E Hampton Dr". Refusing them
+   * abandoned 61 outbound visits. The office's own rule (2026-09-22): the
+   * record they used most recently is the live one.
+   */
+  it('takes the Jobber record the office used most recently', () => {
+    expect(
+      pickJobberProperty(
+        [link('spelled-out', null, '2026-01-29T14:00:00Z'), link('abbreviated', null, '2026-09-21T14:00:00Z')],
+        null,
+      ),
+    ).toMatchObject({ status: 'LINKED', jobberPropertyId: 'abbreviated' });
+  });
+
+  /** No visit against either is no evidence, and a guess sends somebody to the wrong door. */
+  it('still refuses when neither record has ever been used', () => {
+    expect(pickJobberProperty([link('front'), link('back')], null)).toEqual({ status: 'AMBIGUOUS' });
+  });
+
+  /** Both in use this week is the office's problem to settle, not ours to guess. */
+  it('still refuses when both were last used on the same day', () => {
+    expect(
+      pickJobberProperty(
+        [link('front', null, '2026-09-21T09:00:00Z'), link('back', null, '2026-09-21T09:00:00Z')],
+        null,
+      ),
+    ).toEqual({ status: 'AMBIGUOUS' });
+  });
+
+  /**
+   * One Jobber property can hold two link rows — a building link and a unit
+   * link both pointing at it. Comparing rows rather than properties would read
+   * that as a tie and refuse a house with only one record in use.
+   */
+  it('is not confused by one property holding two links', () => {
+    expect(
+      pickJobberProperty(
+        [
+          link('house', null, '2026-09-21T09:00:00Z'),
+          link('house', 'unit-a', '2026-09-21T09:00:00Z'),
+          link('old-record', null, '2025-03-02T09:00:00Z'),
+        ],
+        null,
+      ),
+    ).toMatchObject({ status: 'LINKED', jobberPropertyId: 'house' });
   });
 
   it('does not borrow another unit’s property', () => {
