@@ -501,6 +501,23 @@ describe('the benefit package plan page', () => {
   });
 
   /**
+   * The office (2026-09-20): "we want to see the scheduled visits too so we
+   * will know how many are scheduled and how many are unscheduled".
+   */
+  it('counts the scheduled visits beside the unscheduled ones', () => {
+    const waiting = stop('s3', {
+      status: 'UNSCHEDULED',
+      scheduledOn: null,
+      assignedTechnicianId: null,
+      assignedTechnician: null,
+    });
+    mount({ stops: [stop('s1'), stop('s2', { status: 'PUBLISHED', inspectionId: 'insp-1' }), waiting] });
+
+    expect(screen.getByRole('tab', { name: 'Scheduled (2)' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Unscheduled (1)' })).toBeTruthy();
+  });
+
+  /**
    * The office (2026-09-20), after publishing a quarter with visits that had no
    * day: "then create an unscheduled also in the console". Jobber lists them;
    * so does this.

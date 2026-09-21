@@ -146,6 +146,11 @@ export default function PlanningPage() {
   // Published to Jobber with no day: theirs to schedule there, or ours to give a
   // day here (2026-09-20, as Jobber's own Unscheduled list).
   const unscheduled = (stops.data ?? []).filter((stop) => stop.status === 'UNSCHEDULED');
+  // On a day, whether or not it has been created yet: what the crew is going
+  // out to. The office wants the two counts side by side (2026-09-20).
+  const scheduled = (stops.data ?? []).filter(
+    (stop) => stop.scheduledOn && (stop.status === 'PLANNED' || stop.status === 'PUBLISHED'),
+  );
   // A visit the planner could not place is published too, with no day on it: it
   // goes to Jobber's unscheduled work for the office to put on the calendar
   // there (2026-09-20).
@@ -463,9 +468,8 @@ export default function PlanningPage() {
               <TabsTrigger value="days">Days ({(days.data?.length ?? 0).toLocaleString()})</TabsTrigger>
               <TabsTrigger value="calendar">Calendar</TabsTrigger>
               <TabsTrigger value="visits">Visits ({(stops.data?.length ?? 0).toLocaleString()})</TabsTrigger>
-              {unscheduled.length ? (
-                <TabsTrigger value="unscheduled">Unscheduled ({unscheduled.length.toLocaleString()})</TabsTrigger>
-              ) : null}
+              <TabsTrigger value="scheduled">Scheduled ({scheduled.length.toLocaleString()})</TabsTrigger>
+              <TabsTrigger value="unscheduled">Unscheduled ({unscheduled.length.toLocaleString()})</TabsTrigger>
               <TabsTrigger value="attention">Needs attention ({attentionIds.size.toLocaleString()})</TabsTrigger>
             </TabsList>
 
@@ -525,6 +529,28 @@ export default function PlanningPage() {
                 <ErrorState error={stops.error} retry={() => void stops.refetch()} />
               ) : (
                 <PlanStopsTable editable={canPlace} onOpen={setOpenStopId} stops={stops.data ?? []} />
+              )}
+            </TabsContent>
+
+            <TabsContent className="mt-3" value="scheduled">
+              {scheduled.length ? (
+                <div className="grid gap-3">
+                  <p className="text-muted-foreground text-xs">
+                    {scheduled.filter((stop) => stop.status === 'PUBLISHED').length.toLocaleString()} of these are
+                    inspections already, booked in Jobber on their day; the rest are waiting for the next publish.
+                  </p>
+                  <PlanStopsTable
+                    allStops={stops.data ?? []}
+                    editable={canPlace}
+                    onOpen={setOpenStopId}
+                    stops={scheduled}
+                  />
+                </div>
+              ) : (
+                <EmptyState
+                  description="No visit has a day yet. Rebuild the quarter to lay them out."
+                  title="Nothing scheduled"
+                />
               )}
             </TabsContent>
 
