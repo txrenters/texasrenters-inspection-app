@@ -1139,7 +1139,15 @@ export class JobberSyncWorker {
     const worked = Boolean(inspection.startedAt) || inspection.status !== InspectionStatus.SCHEDULED;
     if (worked && current) return;
 
-    const resolution = await resolveAssignment(this.prisma, organizationId, visit);
+    /**
+     * `worked` is only ever true here with nobody named -- the guard above
+     * returned otherwise -- so this is exactly the case where the assignment is
+     * history rather than a routing decision, and a technician who has since
+     * left may be recorded. See `resolveAssignment`.
+     */
+    const resolution = await resolveAssignment(this.prisma, organizationId, visit, {
+      includeDeactivated: worked,
+    });
     if (resolution.outcome === 'NO_ASSIGNEE') return;
     if (resolution.outcome === 'UNKNOWN_ASSIGNEE') {
       await this.prisma.jobberVisitImport.updateMany({
