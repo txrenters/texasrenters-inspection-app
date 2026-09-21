@@ -260,6 +260,126 @@ export class JobberMappingService {
    * Jobber — renaming it, giving it a date — or by approving a floor plan. Both
    * are lists of work, but not the same work.
    */
+
+  /**
+   * The people Jobber has assigned work to who are not technicians here.
+   *
+   * The counterpart of the property-link queue, and it exists for the same
+   * reason: until somebody resolves a row, every visit that names that person
+   * arrives unassigned and nobody is told. Seven had accumulated by 2026-09-22
+   * -- six whose technicians had since been deactivated, and one whose account
+   * was activated *after* the sync last looked, so a refusal from 3 September
+   * sat there unrevisited.
+   *
+   * ── WHY THIS IS A QUEUE AND NOT A PROVISIONER ────────────────────────────
+   *
+   * Creating the account is deliberately a person's decision. Jobber's user
+   * list would otherwise decide who can sign into this console -- a
+   * subcontractor, an office administrator, a mistyped address -- and what
+   * they would reach is tenant records and photographs of people's homes.
+   * `TechnicianProvisioningService` already creates an account properly, with
+   * an invitation and an audit row; this only says who is waiting for one.
+   *
+   * ── READ FROM THE VISITS, NOT FROM THE FAILURE MESSAGE ───────────────────
+   *
+   * `unknownAssigneeReason` writes a sentence for a human. Parsing it back
+   * would make that sentence an interface nobody knew they had to keep. The
+   * assignees are in the payloads, so they are read from there and checked
+   * against the same rule `resolveAssignment` applies.
+   */
+  async assigneeQueue(user: AuthenticatedUser, limit = 50) {
+    return this.prisma.$queryRaw<
+      {
+        name: string | null;
+        email: string | null;
+        visits: bigint;
+        /**
+         * Of those, the inspections left with nobody named.
+         *
+         * The number that matters, and narrower than it looks. A Jobber visit
+         * can name several people and `resolveAssignment` takes the first it
+         * recognises, so an unknown assignee beside a known one costs nothing.
+         * Only an inspection with *no* current assignment is work nobody is
+         * answerable for. The rest of a person's visits are cleaning, repairs
+         * and work orders this system never wanted.
+         */
+        unassignedInspections: bigint;
+        lastVisitOn: string | null;
+        accountState: 'NONE' | 'DEACTIVATED' | 'NOT_A_TECHNICIAN';
+      }[]
+    >`
+      WITH assignee AS (
+        SELECT lower(node->'email'->>'raw') AS email,
+               node->'name'->>'full'        AS name,
+               visit.payload->>'startAt'    AS "startAt",
+               visit."inspectionId"         AS "inspectionId"
+          FROM "JobberVisitImport" AS visit,
+               jsonb_array_elements(
+                 CASE WHEN jsonb_typeof(visit.payload->'assignedUsers'->'nodes') = 'array'
+                      THEN visit.payload->'assignedUsers'->'nodes'
+                      ELSE '[]'::jsonb END
+               ) AS node
+         WHERE visit."organizationId" = ${user.organizationId}::uuid
+      )
+      SELECT assignee.name,
+             assignee.email,
+             count(*) AS visits,
+             count(*) FILTER (
+               WHERE assignee."inspectionId" IS NOT NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM "InspectionAssignment" AS held
+                    WHERE held."inspectionId" = assignee."inspectionId"
+                      AND held."isCurrent"
+                 )
+             ) AS "unassignedInspections",
+             max(assignee."startAt") AS "lastVisitOn",
+             CASE
+               WHEN account.id IS NULL THEN 'NONE'
+               WHEN NOT EXISTS (
+                 SELECT 1 FROM "OrganizationMember" AS member
+                  WHERE member."userProfileId" = account.id
+                    AND member."organizationId" = ${user.organizationId}::uuid
+                    AND member.role = 'INSPECTION_TECHNICIAN'
+               ) THEN 'NOT_A_TECHNICIAN'
+               ELSE 'DEACTIVATED'
+             END AS "accountState"
+        FROM assignee
+        LEFT JOIN "UserProfile" AS account ON lower(account.email) = assignee.email
+       WHERE assignee.email IS NOT NULL
+         -- The same rule resolveAssignment applies: an active technician of
+         -- this organization. Anyone it would match is not waiting for anything.
+         -- (No backticks in here: this is a template literal, and one would
+         -- end the query where it stood.)
+         AND NOT (
+           account."isActive" = true
+           AND EXISTS (
+             SELECT 1 FROM "OrganizationMember" AS member
+              WHERE member."userProfileId" = account.id
+                AND member."organizationId" = ${user.organizationId}::uuid
+                AND member.role = 'INSPECTION_TECHNICIAN'
+           )
+         )
+       GROUP BY assignee.name, assignee.email, account.id
+       ORDER BY count(*) FILTER (
+                  WHERE assignee."inspectionId" IS NOT NULL
+                    AND NOT EXISTS (
+                      SELECT 1 FROM "InspectionAssignment" AS held
+                       WHERE held."inspectionId" = assignee."inspectionId"
+                         AND held."isCurrent"
+                    )
+                ) DESC,
+                count(*) DESC, assignee.name
+       LIMIT ${Math.min(limit, 200)}
+    `.then((rows) =>
+      // Postgres counts come back as bigint, which does not survive JSON.
+      rows.map((row) => ({
+        ...row,
+        visits: Number(row.visits),
+        unassignedInspections: Number(row.unassignedInspections),
+      })),
+    );
+  }
+
   async visitImports(
     user: AuthenticatedUser,
     query: { status?: JobberVisitImportStatus; limit?: number },

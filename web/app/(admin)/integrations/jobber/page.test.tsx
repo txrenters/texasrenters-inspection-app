@@ -15,6 +15,7 @@ const hooks = vi.hoisted(() => ({
   useJobberConnection: vi.fn(),
   useJobberQueue: vi.fn(),
   useJobberVisitImports: vi.fn(),
+  useJobberAssignees: vi.fn(),
   useJobberMutations: vi.fn(),
   useLeases: vi.fn(),
   usePropertyOptions: vi.fn(),
@@ -44,6 +45,7 @@ function connected(status = 'CONNECTED') {
   });
   hooks.useJobberQueue.mockReturnValue({ isLoading: false, data: [] });
   hooks.useJobberVisitImports.mockReturnValue({ isLoading: false, data: [] });
+  hooks.useJobberAssignees.mockReturnValue({ isLoading: false, data: [] });
   hooks.useJobberMutations.mockReturnValue({
     authorize: idle,
     disconnect: idle,
