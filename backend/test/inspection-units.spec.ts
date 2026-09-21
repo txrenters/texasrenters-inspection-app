@@ -469,25 +469,71 @@ describe('multi-unit inspection creation', () => {
     expect(createData.areas.create).toEqual([{ propertyAreaId: 'roof' }]);
   });
 
-  it('refuses a roof visit when the property records no roof', async () => {
+  /**
+   * This used to be refused with NO_ROOF_AREAS, and the message named a fix
+   * nobody ever applied: categorise the roof area. No layout in this portfolio
+   * has a roof in it -- a report import names rooms and so does the standard
+   * template -- so *every* roof inspection at a laid-out property was refused,
+   * and one sat in the held queue from 2026-07-15 until it was noticed.
+   *
+   * Every house has a roof. One is created on demand, exactly as an HVAC visit
+   * creates its equipment area.
+   */
+  it('creates the roof when the property records none, rather than refusing', async () => {
     const tx = buildTx({
       propertyArea: {
         findMany: jest
           .fn()
           .mockResolvedValue([{ id: 'hall', hasAirConditioning: false, category: 'INDOOR_ROOM' }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'made-roof' }),
       },
     });
     const service = buildService(tx);
 
-    await expect(
-      service.createInspection(admin, {
-        propertyId: 'building-1',
-        scheduledAt: '2026-08-01T15:00:00.000Z',
-        inspectionType: 'ROOF',
-        priority: 'STANDARD',
-      } as never),
-    ).rejects.toMatchObject({ status: 409, code: 'NO_ROOF_AREAS' });
-    expect(tx.inspection.create).not.toHaveBeenCalled();
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'ROOF',
+      priority: 'STANDARD',
+    } as never);
+
+    // Marked as the app's own, so it stays out of the room counts and an
+    // occupied visit at this property is still seeded its layout.
+    expect(tx.propertyArea.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ name: 'Roof', category: 'ROOF', source: 'SYSTEM' }),
+      }),
+    );
+    expect(tx.inspection.create.mock.calls[0][0].data.areas.create).toEqual([
+      { propertyAreaId: 'made-roof' },
+    ]);
+  });
+
+  /** A property that *does* record a roof is walked on that one, not a new one. */
+  it('walks the roof the property already records', async () => {
+    const tx = buildTx({
+      propertyArea: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'roof', hasAirConditioning: false, category: 'ROOF' }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+    });
+    const service = buildService(tx);
+
+    await service.createInspection(admin, {
+      propertyId: 'building-1',
+      scheduledAt: '2026-08-01T15:00:00.000Z',
+      inspectionType: 'ROOF',
+      priority: 'STANDARD',
+    } as never);
+
+    expect(tx.propertyArea.create).not.toHaveBeenCalled();
+    expect(tx.inspection.create.mock.calls[0][0].data.areas.create).toEqual([
+      { propertyAreaId: 'roof' },
+    ]);
   });
 
   /**

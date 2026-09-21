@@ -108,6 +108,45 @@ describe('matching a Jobber assignee to a technician', () => {
     expect(JSON.stringify(where.memberships)).toContain('INSPECTION_TECHNICIAN');
     expect(JSON.stringify(where.memberships)).toContain('org-1');
   });
+
+  /**
+   * Six completed June visits read "Unassigned" because the three technicians
+   * who walked them have since been deactivated — Jobber knew who did the work
+   * the whole time. On finished work with nobody named, the assignment is a
+   * record of the past rather than a routing decision, so a leaver may be named.
+   */
+  it('names somebody who has since left, when recording finished work', async () => {
+    const prisma = prismaWith([{ id: 'tech-gone', email: 'yromero@txhomemp.com' }]);
+
+    const resolution = await resolveAssignment(
+      prisma,
+      'org-1',
+      visit([{ email: 'yromero@txhomemp.com', name: 'Yoinsel Romero' }]),
+      { includeDeactivated: true },
+    );
+
+    expect(resolution).toMatchObject({ outcome: 'MATCHED' });
+    const where = jest.mocked(prisma.userProfile.findMany).mock.calls[0][0]?.where as Record<
+      string,
+      unknown
+    >;
+    expect(where.isActive).toBeUndefined();
+    // Still this organization's technicians, and nobody else's.
+    expect(JSON.stringify(where.memberships)).toContain('INSPECTION_TECHNICIAN');
+  });
+
+  /** Work still to be done never goes to a leaver: that queue has nobody reading it. */
+  it('still refuses a leaver for work that has not been done', async () => {
+    const prisma = prismaWith([]);
+
+    const resolution = await resolveAssignment(
+      prisma,
+      'org-1',
+      visit([{ email: 'yromero@txhomemp.com', name: 'Yoinsel Romero' }]),
+    );
+
+    expect(resolution).toMatchObject({ outcome: 'UNKNOWN_ASSIGNEE' });
+  });
 });
 
 describe('reading assignees off a visit', () => {

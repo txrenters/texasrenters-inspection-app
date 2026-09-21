@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 
+import type { JobberAssignee } from '@texasrenters/shared';
+
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { JobberSyncStatus } from '@/components/jobber-sync-status';
 import { PageHeader } from '@/components/page-header';
@@ -31,8 +33,16 @@ import {
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePermissions } from '@/lib/auth';
-import { EMPTY, formatCount, formatDateTime, formatRelative, humanize } from '@/lib/format';
 import {
+  EMPTY,
+  formatCount,
+  formatDateTime,
+  formatRelative,
+  formatScheduledDate,
+  humanize,
+} from '@/lib/format';
+import {
+  useJobberAssignees,
   useJobberConnection,
   useJobberMutations,
   useJobberQueue,
@@ -150,12 +160,65 @@ const VISIT_COLUMNS: Column<VisitRow>[] = [
   },
 ];
 
+
+/**
+ * Somebody Jobber assigns work to who cannot be assigned it here.
+ *
+ * Sorted by the only number that costs anything -- inspections left with nobody
+ * named. Most rows read zero, and that is the honest picture: a Jobber visit
+ * can name several people and the first recognised one is assigned, and most of
+ * these people do cleaning and repairs that never become inspections. One
+ * technician had 81 visits and not a single inspection among them.
+ */
+const ASSIGNEE_COLUMNS: Array<Column<JobberAssignee>> = [
+  {
+    key: 'name',
+    header: 'Jobber assignee',
+    primary: true,
+    cell: (row) => (
+      <div className="min-w-0">
+        <div className="font-medium">{row.name ?? 'Unnamed'}</div>
+        <div className="text-muted-foreground truncate text-xs">{row.email ?? 'No email'}</div>
+      </div>
+    ),
+  },
+  {
+    key: 'state',
+    header: 'Why not assignable',
+    cell: (row) => (
+      <StatusBadge
+        value={
+          row.accountState === 'NONE'
+            ? 'NO ACCOUNT'
+            : row.accountState === 'DEACTIVATED'
+              ? 'DEACTIVATED'
+              : 'NOT A TECHNICIAN'
+        }
+      />
+    ),
+  },
+  {
+    key: 'unassigned',
+    header: 'Inspections unassigned',
+    numeric: true,
+    cell: (row) => formatCount(row.unassignedInspections),
+  },
+  { key: 'visits', header: 'Jobber visits', numeric: true, hideBelow: 'sm', cell: (row) => formatCount(row.visits) },
+  {
+    key: 'last',
+    header: 'Last seen',
+    hideBelow: 'md',
+    cell: (row) => (row.lastVisitOn ? formatScheduledDate(row.lastVisitOn) : EMPTY),
+  },
+];
+
 export default function JobberIntegrationPage() {
   const canManage = usePermissions().has('integrations:manage');
   const [state, setState] = useUrlState({ tab: 'queue' });
   const connection = useJobberConnection();
   const queue = useJobberQueue();
   const visits = useJobberVisitImports();
+  const assignees = useJobberAssignees();
   const mutations = useJobberMutations();
   const [linking, setLinking] = useState<QueueRow | null>(null);
   const queueColumns = QUEUE_COLUMNS((row) => setLinking(row), canManage);
@@ -343,6 +406,13 @@ export default function JobberIntegrationPage() {
             Held visits
             {visits.data?.length ? ` (${visits.data.length})` : ''}
           </TabsTrigger>
+          {/* Counted by people, not by inspections: the tab says how many
+              names need a decision, and the column inside says what each one
+              is costing. */}
+          <TabsTrigger value="assignees">
+            People to add
+            {assignees.data?.length ? ` (${assignees.data.length})` : ''}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="queue" className="mt-4">
@@ -360,6 +430,32 @@ export default function JobberIntegrationPage() {
               rowKey={(row) => row.id}
               label="Jobber properties awaiting mapping"
             />
+          )}
+        </TabsContent>
+
+        <TabsContent value="assignees" className="mt-4">
+          {assignees.isLoading ? (
+            <DataTableSkeleton columns={ASSIGNEE_COLUMNS} />
+          ) : assignees.data?.length === 0 ? (
+            <EmptyState
+              title="Everybody Jobber assigns work to is a technician here"
+              description="Somebody appears here the first time Jobber assigns them a visit and this console cannot match them to an active technician."
+            />
+          ) : (
+            <>
+              {/* Said here rather than in a tooltip, because it is the whole
+                  reason this is a list and not an automatic provisioner. */}
+              <p className="text-muted-foreground mb-3 text-sm">
+                Adding somebody is deliberately a decision, not a sync. Create them on the
+                Technicians page and their Jobber visits are assigned from the next sync onwards.
+              </p>
+              <DataTable
+                rows={assignees.data ?? []}
+                columns={ASSIGNEE_COLUMNS}
+                rowKey={(row) => row.email ?? (row.name ?? 'unknown')}
+                label="Jobber assignees who are not technicians here"
+              />
+            </>
           )}
         </TabsContent>
 

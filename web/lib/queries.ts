@@ -60,6 +60,7 @@ import type {
   ProviderReadiness,
   JobberBookingContext,
   JobberConnection,
+  JobberAssignee,
   JobberPropertyLink,
   JobberSyncResult,
   JobberVisitImport,
@@ -171,6 +172,7 @@ export const keys = {
   jobber: ['admin', 'jobber'] as const,
   jobberQueue: ['admin', 'jobber', 'queue'] as const,
   jobberVisitImports: ['admin', 'jobber', 'visit-imports'] as const,
+  jobberAssignees: ['admin', 'jobber', 'assignee-queue'] as const,
   aiSettings: ['admin', 'ai-settings'] as const,
   openApiDocument: ['admin', 'system', 'openapi'] as const,
   apiClientsRoot: ['admin', 'api-clients'] as const,
@@ -925,6 +927,19 @@ export const useJobberQueue = () =>
     queryKey: keys.jobberQueue,
     queryFn: ({ signal }) =>
       api<JobberPropertyLink[]>(`${JOBBER}/property-links/queue?limit=100`, { signal }),
+    refetchInterval: 60_000,
+  });
+
+/**
+ * People Jobber assigns work to who are not technicians here.
+ *
+ * Polled like the other two queues: the sync runs on its own schedule, and a
+ * queue left open would otherwise hide work that arrived since it loaded.
+ */
+export const useJobberAssignees = () =>
+  useQuery({
+    queryKey: keys.jobberAssignees,
+    queryFn: ({ signal }) => api<JobberAssignee[]>(`${JOBBER}/assignee-queue?limit=100`, { signal }),
     refetchInterval: 60_000,
   });
 

@@ -603,12 +603,37 @@ export class JobberSyncWorker {
       namedAnInspection;
 
     if (isComplete && !isRecoverable) {
+      /**
+       * A finished visit that *called itself an inspection* and still could not
+       * be recovered is worth being able to find again.
+       *
+       * Without a code it is one of 494 rows reading SKIPPED_COMPLETE with no
+       * reason -- indistinguishable from the cleaning, the drywall and the
+       * water leaks, which is exactly where three real inspections sat until
+       * somebody went looking (2026-09-22). The status is unchanged, because
+       * the visit genuinely is finished and skipped; only the reason is
+       * recorded, so `failureCode IS NOT NULL` answers "what did we miss".
+       *
+       * Left null for everything else. A completed drywall repair has no
+       * reason to give, and inventing one would bury the three again.
+       */
+      const missedReason = !namedAnInspection
+        ? null
+        : type.outcome === 'AMBIGUOUS'
+          ? 'JOBBER_VISIT_TYPE_AMBIGUOUS'
+          : type.outcome === 'UNKNOWN'
+            ? 'JOBBER_VISIT_TYPE_UNKNOWN'
+            : !visit.property?.id
+              ? 'JOBBER_PROPERTY_UNMATCHED'
+              : 'JOBBER_VISIT_UNSCHEDULED';
       await this.prisma.jobberVisitImport.update({
         where: { id: record.id },
         data: {
           status: JobberVisitImportStatus.SKIPPED_COMPLETE,
-          failureCode: null,
-          failureMessage: null,
+          failureCode: missedReason,
+          failureMessage: missedReason
+            ? 'Finished in Jobber and named an inspection, but could not be typed or placed.'
+            : null,
         },
       });
       result.alreadyComplete += 1;
@@ -1114,7 +1139,15 @@ export class JobberSyncWorker {
     const worked = Boolean(inspection.startedAt) || inspection.status !== InspectionStatus.SCHEDULED;
     if (worked && current) return;
 
-    const resolution = await resolveAssignment(this.prisma, organizationId, visit);
+    /**
+     * `worked` is only ever true here with nobody named -- the guard above
+     * returned otherwise -- so this is exactly the case where the assignment is
+     * history rather than a routing decision, and a technician who has since
+     * left may be recorded. See `resolveAssignment`.
+     */
+    const resolution = await resolveAssignment(this.prisma, organizationId, visit, {
+      includeDeactivated: worked,
+    });
     if (resolution.outcome === 'NO_ASSIGNEE') return;
     if (resolution.outcome === 'UNKNOWN_ASSIGNEE') {
       await this.prisma.jobberVisitImport.updateMany({

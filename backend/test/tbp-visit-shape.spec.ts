@@ -207,7 +207,26 @@ describe('booking a published plan stop in Jobber', () => {
             { jobberPropertyId: 'property-9', jobberAddress: '19803 Bolton Bridge Ln', propertywareUnitId: null },
           ]),
       },
-      $queryRaw: jest.fn().mockResolvedValue([{ id: 'jobber-user-7' }]),
+      /**
+       * The property links are read raw now -- the day a Jobber record was
+       * last used lives in `JobberVisitImport.payload->>'startAt'`, which
+       * Prisma cannot aggregate through a relation. Told apart from the
+       * technician lookup by the table its SQL names.
+       */
+      $queryRaw: jest.fn((strings: TemplateStringsArray) =>
+        Promise.resolve(
+          strings.join(' ').includes('JobberPropertyLink')
+            ? [
+                {
+                  jobberPropertyId: 'property-9',
+                  jobberAddress: '19803 Bolton Bridge Ln',
+                  propertywareUnitId: null,
+                  lastUsedAt: null,
+                },
+              ]
+            : [{ id: 'jobber-user-7' }],
+        ),
+      ),
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
     const request = jest
@@ -339,6 +358,15 @@ describe('a visit published with no day', () => {
             { jobberPropertyId: 'property-9', jobberAddress: '19803 Bolton Bridge Ln', propertywareUnitId: null },
           ]),
       },
+      // Read raw now, for the day the office last used each Jobber record.
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          jobberPropertyId: 'property-9',
+          jobberAddress: '19803 Bolton Bridge Ln',
+          propertywareUnitId: null,
+          lastUsedAt: null,
+        },
+      ]),
       $transaction: jest.fn((work: (client: typeof tx) => unknown) => work(tx)),
     };
     const request = jest

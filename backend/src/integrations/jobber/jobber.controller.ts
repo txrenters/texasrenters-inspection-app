@@ -134,6 +134,19 @@ export class JobberIntegrationController {
     return this.mapping.queue(request.user, query.limit ?? 50);
   }
 
+  /**
+   * People Jobber assigns work to who cannot be assigned here.
+   *
+   * A queue rather than a provisioner: creating the account stays a person's
+   * decision, because Jobber's user list would otherwise decide who can sign
+   * into this console. See `assigneeQueue`.
+   */
+  @Get('assignee-queue')
+  @RequirePermissions('integrations:read')
+  assignees(@Req() request: AuthenticatedRequest, @Query() query: JobberLinkQueueQueryDto) {
+    return this.mapping.assigneeQueue(request.user, query.limit ?? 50);
+  }
+
   /** Visits that did not become inspections, and why. */
   @Get('visit-imports')
   @RequirePermissions('integrations:read')

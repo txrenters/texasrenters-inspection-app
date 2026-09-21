@@ -39,7 +39,14 @@ function client({ seeded = STANDARD_PROPERTY_LAYOUT.map((area, index) => ({
   return {
     tx: {
       property: { upsert },
-      propertyArea: { createMany: areaCreateMany, findMany },
+      propertyArea: {
+        createMany: areaCreateMany,
+        findMany,
+        // A roof inspection finds or creates its one roof area here, the way an
+        // HVAC visit does for equipment.
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'roof-area' }),
+      },
       areaChecklistItem: { createMany: checklistCreateMany },
       inspection: { create },
     } as unknown as InspectionCreationClient,
@@ -168,11 +175,13 @@ describe('when the standard layout must not be written', () => {
   });
 
   /**
-   * A roof inspection covers areas *recorded as a roof*, and the template
-   * records none. Seeding one would be a scheduling success that reaches the
-   * technician as an empty job, so the refusal stands for this type alone.
+   * A roof inspection gets a roof, not fifteen rooms.
+   *
+   * `roofArea` creates one on demand the way `hvacSystemArea` does for
+   * equipment — so the standard layout is still not written here, which is
+   * what this asserts.
    */
-  it('does not guess a layout for a roof inspection', async () => {
+  it('does not guess a room layout for a roof inspection', async () => {
     const { tx, areaCreateMany } = client();
     await insertInspection(tx, plan(InspectionType.ROOF), details);
     expect(areaCreateMany).not.toHaveBeenCalled();

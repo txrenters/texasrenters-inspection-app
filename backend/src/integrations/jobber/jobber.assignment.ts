@@ -54,6 +54,20 @@ export async function resolveAssignment(
   prisma: PrismaService,
   organizationId: string,
   visit: JobberVisit,
+  /**
+   * Whether somebody who has since left may be named.
+   *
+   * True only when the work is already finished and nobody is named against
+   * it, which is the one case where an assignment is a record of the past
+   * rather than a routing decision. Six completed June visits read
+   * "Unassigned" because the three technicians who walked them have since been
+   * deactivated -- Jobber knew who did the work the whole time.
+   *
+   * Never for work still to be done. Sending an inspection to somebody who has
+   * left puts it in a queue nobody looks at, which is what the active check is
+   * there to prevent.
+   */
+  { includeDeactivated = false }: { includeDeactivated?: boolean } = {},
 ): Promise<AssignmentResolution> {
   const assignees = visitAssignees(visit);
   if (!assignees.length) return { outcome: 'NO_ASSIGNEE' };
@@ -70,7 +84,7 @@ export async function resolveAssignment(
   const candidates = await prisma.userProfile.findMany({
     where: {
       email: { in: emails, mode: 'insensitive' },
-      isActive: true,
+      ...(includeDeactivated ? {} : { isActive: true }),
       memberships: {
         some: { organizationId, role: UserRole.INSPECTION_TECHNICIAN },
       },

@@ -1256,6 +1256,33 @@ export interface JobberPropertyLink {
 }
 
 /** A Jobber visit that did not become an inspection, and why. */
+/**
+ * Somebody Jobber assigns work to who cannot be assigned it here.
+ *
+ * A queue rather than a provisioner: creating the account stays a person's
+ * decision, because Jobber's user list would otherwise decide who can sign into
+ * this console, and what they would reach is tenant records and photographs of
+ * people's homes.
+ */
+export interface JobberAssignee {
+  name?: string | null;
+  email?: string | null;
+  /** Every Jobber visit naming them, inspection or not. */
+  visits: number;
+  /**
+   * The inspections left with nobody named, which is the number that matters.
+   *
+   * Narrower than the visit count, and deliberately. A visit can name several
+   * people and the first recognised one is assigned, so an unknown name beside
+   * a known one costs nothing. Most of these people do cleaning and repairs,
+   * which never become inspections at all.
+   */
+  unassignedInspections: number;
+  /** The day of their most recent Jobber visit, or null for unscheduled work. */
+  lastVisitOn?: string | null;
+  accountState: 'NONE' | 'DEACTIVATED' | 'NOT_A_TECHNICIAN';
+}
+
 export interface JobberVisitImport {
   id: string;
   jobberVisitId: string;
