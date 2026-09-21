@@ -26,8 +26,10 @@ import {
   JobberIgnoreLinkDto,
   JobberLinkPropertyDto,
   JobberLinkQueueQueryDto,
+  JobberSyncWindowDto,
   JobberVisitImportQueryDto,
 } from './jobber.dto';
+import { ApplicationError } from '../../common/errors';
 import { JobberError } from './jobber.errors';
 import { JobberMappingService } from './jobber.mapping.service';
 import { JobberOAuthService } from './jobber.oauth.service';
@@ -91,8 +93,17 @@ export class JobberIntegrationController {
   @Post('sync')
   @HttpCode(200)
   @RequirePermissions('integrations:manage')
-  async runSync(@Req() request: AuthenticatedRequest) {
-    const pulled = await this.sync.run(request.user.organizationId);
+  async runSync(@Req() request: AuthenticatedRequest, @Body() body: JobberSyncWindowDto) {
+    // A named slice of the past, or the rolling week. Both days or neither: a
+    // half-given window would silently read as the default and pull nothing of
+    // what was asked for.
+    const over =
+      body.startAfter && body.startBefore
+        ? { startAfter: `${body.startAfter}T00:00:00.000Z`, startBefore: `${body.startBefore}T23:59:59.999Z` }
+        : undefined;
+    if (Boolean(body.startAfter) !== Boolean(body.startBefore))
+      throw new ApplicationError(422, 'INCOMPLETE_WINDOW', 'Give both the first and the last day, or neither.');
+    const pulled = await this.sync.run(request.user.organizationId, over);
     /**
      * Drains the outbox too, and the reason is not convenience.
      *
