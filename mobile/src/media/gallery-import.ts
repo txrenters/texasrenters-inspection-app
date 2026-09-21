@@ -35,6 +35,29 @@ import { buildRoomSnapshot, persistRoomSnapshot } from './local-snapshots';
  * walk from one chosen out of a camera roll.
  */
 
+/**
+ * The visits that offer it, which is not yet all of them.
+ *
+ * Occupied and HVAC only (the office, 2026-09-22: "this request is only
+ * applicable for occupied and HVAC inspection for now"). Those are the two
+ * Moses was talking about -- an occupied walk is the fifteen-minute one, and an
+ * HVAC visit photographs equipment somebody is often already standing in front
+ * of with their own phone out.
+ *
+ * Move-in and move-out are left off deliberately rather than forgotten. They
+ * are the two a comparison is built from, area by area, and a photograph whose
+ * moment and place nobody can vouch for is a different kind of evidence from
+ * one taken on the walk. Widening this is a decision, not an oversight.
+ *
+ * A client rule, not a server one: the API accepts a GALLERY_IMPORT against any
+ * area. What it governs is which screens offer the button.
+ */
+export const GALLERY_IMPORT_TYPES: readonly string[] = ['OCCUPIED', 'HVAC'];
+
+export function inspectionAllowsGalleryImport(inspectionType: string | null | undefined): boolean {
+  return GALLERY_IMPORT_TYPES.includes(inspectionType ?? '');
+}
+
 /** The reason an import produced nothing, when it is worth telling the technician. */
 export type GalleryImportOutcome =
   | { status: 'IMPORTED'; snapshots: RoomSnapshot[] }

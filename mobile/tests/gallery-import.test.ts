@@ -2,6 +2,7 @@ import type { RoomSnapshot } from '../src/domain/models';
 import {
   GALLERY_IMPORT_LIMIT,
   importFromGallery,
+  inspectionAllowsGalleryImport,
   type GalleryImportOutcome,
 } from '../src/media/gallery-import';
 import { captureTimeToSend } from '../src/media/snapshot-upload';
@@ -162,5 +163,28 @@ describe('attaching photographs from the gallery', () => {
     });
 
     expect(outcome).toEqual({ status: 'DENIED' });
+  });
+});
+
+/**
+ * The office, 2026-09-22: "this request is only applicable for occupied and
+ * HVAC inspection for now". Those are the two the request came from.
+ *
+ * Move-in and move-out being off is a decision, not an oversight: they are the
+ * two a comparison is built from area by area, and a photograph whose moment
+ * and place nobody can vouch for is a different kind of evidence there. This
+ * test is what makes widening it deliberate.
+ */
+describe('which visits offer the gallery', () => {
+  it('offers it on an occupied and an HVAC visit', () => {
+    expect(inspectionAllowsGalleryImport('OCCUPIED')).toBe(true);
+    expect(inspectionAllowsGalleryImport('HVAC')).toBe(true);
+  });
+
+  it('does not offer it anywhere else', () => {
+    for (const type of ['MOVE_IN', 'MOVE_OUT', 'BACK_TO_MARKET', 'ROOF', 'AC_FILTER_DELIVERY'])
+      expect(inspectionAllowsGalleryImport(type)).toBe(false);
+    expect(inspectionAllowsGalleryImport(null)).toBe(false);
+    expect(inspectionAllowsGalleryImport(undefined)).toBe(false);
   });
 });
