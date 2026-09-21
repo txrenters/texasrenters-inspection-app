@@ -501,6 +501,20 @@ describe('the benefit package plan page', () => {
   });
 
   /**
+   * The office (2026-09-21), opening Q3 to look for visits a Jobber backfill
+   * had just brought in, and being offered "Build the Q3 2026 plan": "we are
+   * not planning now cause we are fetching".
+   */
+  it('does not offer to plan a quarter that is already under way', () => {
+    url.state = { quarter: '2026-3', tab: 'days', day: '' };
+    mount({ plans: [] });
+
+    expect(screen.getByText('Q3 2026 was run outside this plan')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Build the/ })).toBeNull();
+    expect(screen.getByRole('link', { name: 'See the inspections' })).toBeTruthy();
+  });
+
+  /**
    * The office (2026-09-20): "we want to see the scheduled visits too so we
    * will know how many are scheduled and how many are unscheduled".
    */

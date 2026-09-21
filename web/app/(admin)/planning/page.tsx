@@ -3,6 +3,7 @@
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
 import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon, SparklesIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -358,21 +359,36 @@ export default function PlanningPage() {
       {header}
 
       {!plan ? (
-        <EmptyState
-          description={`Build it from the tenant report: every enrolled tenancy, in ${quarterName(
-            choice.quarter === 1 ? choice.year - 1 : choice.year,
-            choice.quarter === 1 ? 4 : choice.quarter - 1,
-          )}'s order${choice.quarter % 2 === 0 ? ', with HVAC inspections for tenancies on the HVAC plan' : ', each an occupied inspection'}. Nothing is booked until it is published.`}
-          icon={CalendarRangeIcon}
-          title={`No plan for ${choice.label} yet`}
-        >
-          {canChange ? (
-            <Button disabled={building} onClick={() => setChoosing(true)}>
-              {building ? <Spinner /> : <RouteIcon />}
-              Build the {choice.label} plan
+        choice.started ? (
+          // A quarter already under way with no plan was run somewhere else:
+          // its visits are inspections, and a plan built now would lay today's
+          // tenancies over days that have passed (2026-09-21).
+          <EmptyState
+            description={`${choice.label} is already under way and was never planned here. The visits the office ran in it are inspections — open Inspections to see them by their days. A plan built now would lay today's tenancies over days that have passed.`}
+            icon={CalendarRangeIcon}
+            title={`${choice.label} was run outside this plan`}
+          >
+            <Button asChild variant="outline">
+              <Link href="/inspections">See the inspections</Link>
             </Button>
-          ) : null}
-        </EmptyState>
+          </EmptyState>
+        ) : (
+          <EmptyState
+            description={`Build it from the tenant report: every enrolled tenancy, in ${quarterName(
+              choice.quarter === 1 ? choice.year - 1 : choice.year,
+              choice.quarter === 1 ? 4 : choice.quarter - 1,
+            )}'s order${choice.quarter % 2 === 0 ? ', with HVAC inspections for tenancies on the HVAC plan' : ', each an occupied inspection'}. Nothing is booked until it is published.`}
+            icon={CalendarRangeIcon}
+            title={`No plan for ${choice.label} yet`}
+          >
+            {canChange ? (
+              <Button disabled={building} onClick={() => setChoosing(true)}>
+                {building ? <Spinner /> : <RouteIcon />}
+                Build the {choice.label} plan
+              </Button>
+            ) : null}
+          </EmptyState>
+        )
       ) : (
         <div className="grid gap-4">
           {plan.lastError ? (
