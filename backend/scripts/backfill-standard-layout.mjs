@@ -22,6 +22,13 @@
  * Both skip an inspection that already holds rooms, so running them in either
  * order is safe.
  *
+ * ── HOW IT DIFFERS FROM `seed-property-layouts.mjs` ──────────────────────────
+ *
+ * That one sweeps every *property* with no rooms so the refusal at creation
+ * never happens again. This one is about the inspections already scheduled,
+ * whose areas were snapshotted empty and which no property-level seed can
+ * reach. They share `seedStandardLayout`, so the rows they write are identical.
+ *
  * ── WHAT IT WILL NOT TOUCH ───────────────────────────────────────────────────
  *
  * - An inspection that already holds rooms. It has a snapshot, and a snapshot
@@ -50,18 +57,13 @@
  *   node scripts/backfill-standard-layout.mjs            # plan only
  *   node scripts/backfill-standard-layout.mjs --apply    # write
  */
-import {
-  STANDARD_LAYOUT_NOTE,
-  STANDARD_LAYOUT_SOURCE,
-  STANDARD_PROPERTY_LAYOUT,
-  NON_ROOM_SOURCES,
-  areaScopeFor,
-  checklistTemplateFor,
-  keywordsFromLabel,
-  layoutAreasFor,
-} from '@texasrenters/shared';
+import { STANDARD_PROPERTY_LAYOUT, NON_ROOM_SOURCES, areaScopeFor } from '@texasrenters/shared';
 
 import { ownerPrismaClient } from './owner-prisma.mjs';
+// Shared with `seed-property-layouts.mjs`, which sweeps the whole portfolio.
+// Two definitions of what a seeded layout is would be one too many: the
+// lookup here and the write there have to agree about level and provenance.
+import { approvedLayout, seedStandardLayout } from './standard-layout-seed.mjs';
 
 const APPLY = process.argv.includes('--apply');
 // The owner connection, not DATABASE_URL. The application role is subject to
@@ -72,109 +74,6 @@ const prisma = ownerPrismaClient();
 /** Building and unit together, because a unit's layout is its own. */
 const scopeKey = (inspection) =>
   `${inspection.propertywareBuildingId}:${inspection.propertywareUnitId ?? 'whole'}`;
-
-/** The layout an inspection at this scope would be built from today. */
-async function approvedLayout(buildingId, unitId) {
-  const where = { propertyId: buildingId, status: 'APPROVED', archivedAt: null };
-  const unitAreas = unitId
-    ? await prisma.propertyArea.findMany({
-        where: { ...where, unitId },
-        orderBy: { inspectionOrder: 'asc' },
-        select: { id: true, source: true },
-      })
-    : [];
-  const areas = unitAreas.length
-    ? unitAreas
-    : await prisma.propertyArea.findMany({
-        where: { ...where, unitId: null },
-        orderBy: { inspectionOrder: 'asc' },
-        select: { id: true, source: true },
-      });
-  return layoutAreasFor(areas);
-}
-
-/** Writes the standard rooms for a scope, and their room checklists. */
-async function seedLayout(inspection) {
-  const { propertywareBuildingId: buildingId, propertywareUnitId: unitId } = inspection;
-  const building = await prisma.propertywareBuilding.findUnique({
-    where: { id: buildingId },
-    select: {
-      id: true,
-      organizationId: true,
-      name: true,
-      addressLine1: true,
-      city: true,
-      state: true,
-      postalCode: true,
-    },
-  });
-  if (!building) return [];
-
-  // `PropertyArea.propertyId` carries a building id but keys to `Property`, a
-  // separate lazily-populated table. Creating an area first violates the
-  // foreign key — the same trap `hvacSystemArea` documents.
-  await prisma.property.upsert({
-    where: { id: building.id },
-    update: {},
-    create: {
-      id: building.id,
-      organizationId: building.organizationId,
-      name: building.name,
-      addressLine1: building.addressLine1 || 'Address not provided',
-      city: building.city || 'Not provided',
-      state: building.state || 'TX',
-      postalCode: building.postalCode || 'Not provided',
-    },
-  });
-
-  await prisma.propertyArea.createMany({
-    data: STANDARD_PROPERTY_LAYOUT.map((area, index) => ({
-      propertyId: building.id,
-      unitId: unitId ?? null,
-      floorId: null,
-      name: area.name,
-      inspectionOrder: index,
-      isRequired: area.isRequired,
-      status: 'APPROVED',
-      source: STANDARD_LAYOUT_SOURCE,
-      environment: area.environment,
-      category: area.category ?? null,
-      notes: STANDARD_LAYOUT_NOTE,
-    })),
-    // The unique index on (propertyId, unitId, floorId, name) is NULLS NOT
-    // DISTINCT, so a second run over the same scope writes nothing.
-    skipDuplicates: true,
-  });
-
-  const written = await prisma.propertyArea.findMany({
-    where: { propertyId: building.id, unitId: unitId ?? null, status: 'APPROVED' },
-    orderBy: { inspectionOrder: 'asc' },
-    select: { id: true, name: true, category: true, environment: true, source: true },
-  });
-
-  // Deterministic, never the AI generator: this runs over hundreds of
-  // properties unattended, and a provider call per room is both a cost and a
-  // way for the run to die halfway.
-  await prisma.areaChecklistItem.createMany({
-    data: written.flatMap((area) =>
-      checklistTemplateFor({
-        name: area.name,
-        category: area.category,
-        environment: area.environment,
-      }).map((label, index) => ({
-        organizationId: building.organizationId,
-        propertyAreaId: area.id,
-        kind: 'ROOM',
-        label,
-        keywords: keywordsFromLabel(label),
-        sortOrder: index,
-      })),
-    ),
-    skipDuplicates: true,
-  });
-
-  return layoutAreasFor(written);
-}
 
 async function main() {
   const inspections = await prisma.inspection.findMany({
@@ -230,13 +129,20 @@ async function main() {
     const key = scopeKey(inspection);
     if (!layouts.has(key)) {
       let areas = await approvedLayout(
+        prisma,
         inspection.propertywareBuildingId,
         inspection.propertywareUnitId,
       );
       if (!areas.length) {
         console.log(`  seed layout  ${key}  ${inspection.propertywareBuilding?.addressLine1 ?? ''}`);
         seededScopes += 1;
-        areas = APPLY ? await seedLayout(inspection) : STANDARD_PROPERTY_LAYOUT.map(() => null);
+        areas = APPLY
+          ? await seedStandardLayout(
+              prisma,
+              inspection.propertywareBuildingId,
+              inspection.propertywareUnitId,
+            )
+          : STANDARD_PROPERTY_LAYOUT.map(() => null);
       }
       layouts.set(key, areas);
     }
