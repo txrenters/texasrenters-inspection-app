@@ -1,7 +1,20 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import { OFF_ROUTE_M, projectOntoPath } from '@texasrenters/shared';
+
+/**
+ * The least time between two requests for a fresh route.
+ *
+ * Fifteen seconds. A route is drawn from where somebody was when it was asked
+ * for, so by the time it arrives they have moved -- a technician driving away
+ * from their next stop is off every route the moment it lands, and without
+ * this each fix would buy another billed request. Long enough to stop the
+ * loop, short enough that the line never sits wrong for a whole poll.
+ */
+const REROUTE_ASK_EVERY_MS = 15_000;
 
 import { PageHeader } from '@/components/page-header';
 import { EmptyState } from '@/components/states';
@@ -163,6 +176,43 @@ export default function TechnicianMapPage() {
   // person, so doing it for the whole roster to draw one line would be paying
   // for five answers to use one.
   const route = useTechnicianRoute(selectedId ?? '', date, Boolean(selectedId));
+
+  /**
+   * Ask for a new route the moment they leave the drawn one.
+   *
+   * The server already redraws when somebody is more than `OFF_ROUTE_M` from
+   * the line -- that decision is `needsReroute`, and it is the same constant
+   * used here so the two cannot disagree about what "off it" means. What it
+   * cannot do is decide when to be asked: the route is polled every thirty
+   * seconds, which at motorway speed is the better part of a kilometre driven
+   * against a line that already stopped applying. The office watched exactly
+   * that (2026-09-22): "moses is not following the route so it should
+   * recalculate and reroute the lines also just like google maps".
+   *
+   * Positions arrive over the socket every few seconds, so this notices within
+   * one fix. It refetches rather than computing anything: the route is
+   * Google's answer, and the console's job is only to stop waiting for the
+   * poll.
+   *
+   * Throttled to `REROUTE_ASK_EVERY_MS`, which is the guard that matters. A
+   * fresh route is drawn from where they were when it was asked for, so by the
+   * time it arrives they have moved again -- without this, a technician
+   * driving away from their next stop would ask for a new route on every
+   * single fix, and every one of those is a billed request.
+   */
+  const askedForRerouteAt = useRef(0);
+  const drawnRoute = route.data?.geometry;
+  useEffect(() => {
+    if (!selectedId || !drawnRoute || drawnRoute.length < 2) return;
+    const here = positions.data?.find((position) => position.technicianId === selectedId);
+    if (!here) return;
+    const projected = projectOntoPath(here, drawnRoute);
+    if (!projected || projected.offsetMeters <= OFF_ROUTE_M) return;
+    const now = Date.now();
+    if (now - askedForRerouteAt.current < REROUTE_ASK_EVERY_MS) return;
+    askedForRerouteAt.current = now;
+    void route.refetch();
+  }, [drawnRoute, positions.data, route, selectedId]);
 
   /**
    * Only for the selected technician, and only for the day being looked at.
