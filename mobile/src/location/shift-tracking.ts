@@ -3,6 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import { normaliseMotion } from '@texasrenters/shared';
 import { AppState } from 'react-native';
 
+import { currentBatteryPercent } from './battery';
 import { sendRecordedFixes } from './location-sender';
 import { appendLocationFixes, readLastFixAt } from './location-storage';
 import type { QueuedFix } from './location-queue';
@@ -113,10 +114,15 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
   if (!locations?.length) return;
 
+  // Once for the batch, not once per fix: at a fix every three seconds the
+  // charge cannot have moved between two of them. Null when the phone will not
+  // say, which is a different fact from "nearly flat".
+  const batteryPercent = await currentBatteryPercent();
+
   // The device's own clock at the moment of each fix. The API keeps that
   // separately from when it heard about it, so a batch delivered after an
   // outage still draws the route in the order it was walked.
-  const fixes: QueuedFix[] = locations.map(toQueuedFix);
+  const fixes: QueuedFix[] = locations.map((location) => toQueuedFix(location, batteryPercent));
 
   // Queued first, so nothing recorded depends on the send below succeeding.
   await appendLocationFixes(fixes);
@@ -158,9 +164,20 @@ export type ShiftStartResult =
 let foregroundWatch: Location.LocationSubscription | null = null;
 
 /** One fix, in the shape the queue stores. Shared by both modes. */
-function toQueuedFix(location: Location.LocationObject): QueuedFix {
+function toQueuedFix(
+  location: Location.LocationObject,
+  /**
+   * The charge at the moment the batch was delivered.
+   *
+   * Passed in rather than read here, because reading it is asynchronous and
+   * this is called from a `map`. Null means nobody knows -- a simulator, or a
+   * platform that will not answer -- and never "flat".
+   */
+  batteryPercent: number | null = null,
+): QueuedFix {
   return {
     id: fixId(),
+    batteryPercent,
     latitude: location.coords.latitude,
     longitude: location.coords.longitude,
     recordedAt: new Date(location.timestamp).toISOString(),
@@ -273,8 +290,12 @@ async function watchInForeground() {
     },
     (location) => {
       // Queued, then sent: the same path the background task uses, so a fix
-      // recorded in either mode reaches the office the same way.
-      void appendLocationFixes([toQueuedFix(location)]).then(() => sendRecordedFixes());
+      // recorded in either mode reaches the office the same way -- including
+      // the charge, which is read per fix here because a foreground watch
+      // delivers one at a time rather than in batches.
+      void currentBatteryPercent()
+        .then((batteryPercent) => appendLocationFixes([toQueuedFix(location, batteryPercent)]))
+        .then(() => sendRecordedFixes());
     },
   );
 }

@@ -52,6 +52,10 @@ jest.mock('expo-location', () => ({
   ActivityType: { Other: 1 },
 }));
 
+// The native module will not load under jest-expo, and what it answers is
+// pinned in `battery.test.ts`. Half charge, so a fix carries a real number.
+jest.mock('expo-battery', () => ({ getBatteryLevelAsync: async () => 0.5 }));
+
 jest.mock('expo-task-manager', () => ({
   defineTask: jest.fn(),
   isTaskRegisteredAsync: (...args: unknown[]) => mockIsRegistered(...args),
@@ -278,6 +282,17 @@ describe('a fix, as it is recorded', () => {
     ]);
     // Queued first, so a send that fails -- or never finishes -- loses nothing.
     expect(order).toEqual(['queued', 'sent']);
+  });
+
+  /**
+   * The column existed from the start and nothing ever filled it in, so every
+   * ping ever stored says null. It answers the question the office asks each
+   * time a trail stops: was the phone dead, or was the app killed?
+   */
+  it('carries how much charge the phone had', async () => {
+    await recordLocationsTask({ data: { locations: [fix] } });
+
+    expect(mockAppendFixes).toHaveBeenCalledWith([expect.objectContaining({ batteryPercent: 50 })]);
   });
 
   it('is nothing to send when the OS delivered nothing', async () => {
