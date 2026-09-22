@@ -27,8 +27,15 @@ import { PrismaService } from '../common/prisma.service';
  */
 const PROGRESS_CHUNK = 25;
 
-/** Where the console is, for the link a visit's Details carry back to its inspection. */
-function webOrigin(): string {
+/**
+ * Where the console is, for the link a visit's Details carry back to its inspection.
+ *
+ * Exported because anything that rewrites a published visit's Details has to
+ * put the same link back. `refreshFilterSizes` learned that the hard way: it
+ * wrote the bare rendered text and would have stripped the technician's way
+ * into the inspection out of every visit it touched.
+ */
+export function webOrigin(): string {
   return (process.env.WEB_APP_ORIGIN ?? 'http://localhost:5454').replace(/\/$/, '');
 }
 

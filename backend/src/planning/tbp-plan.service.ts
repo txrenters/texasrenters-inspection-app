@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { InspectionType, JobberOutboundKind, TbpPlanStatus, TbpStopStatus, TbpUnitResolution } from '@prisma/client';
+import {
+  InspectionStatus,
+  InspectionType,
+  JobberOutboundKind,
+  TbpPlanStatus,
+  TbpStopStatus,
+  TbpUnitResolution,
+} from '@prisma/client';
 import type { Prisma, TbpOrderSource } from '@prisma/client';
 import {
   MAX_CARRY_BACK_QUARTERS,
@@ -23,6 +30,7 @@ import {
   tbpVisitDetails,
   tenancyZoneLabel,
   unitFilterSizes,
+  withInspectionLink,
 } from '@texasrenters/shared';
 
 import { type AuthenticatedUser, auditActor } from '../common/auth';
@@ -39,6 +47,7 @@ import {
 import { getJobberConfig } from '../integrations/jobber/jobber.config';
 import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
 import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-report';
+import { webOrigin } from './tbp-publish.service';
 
 /**
  * What the office calls the programme, lowercased for the SQL comparison.
@@ -175,6 +184,18 @@ export interface FilterSizeRefresh {
   jobberQueued: number;
   /** Sizes updated, but the Details left as a coordinator wrote them. */
   keptOverridden: number;
+  /** Left alone: the visit has been walked or called off, and is history. */
+  keptFinished: number;
+  /** Left alone: somebody edited this visit's text in the console, and their words win. */
+  keptEditedInConsole: number;
+  /** Left alone: the unit it is booked at is no longer active, so its own sizes cannot be told from the building's. */
+  keptUnresolvedUnit: number;
+  /** Changed here, but this server does not send edits to Jobber. */
+  notSentToJobber: number;
+  /** Stops that threw. The rest still committed. */
+  failed: number;
+  /** Whether Jobber edits are switched off on this server at all. */
+  jobberPushDisabled: boolean;
   /** Still says "Update filter sizes", because the report holds no size to use. */
   stillMissing: TenancyWithoutFilterSize[];
 }
@@ -483,6 +504,9 @@ export class TbpPlanService {
         officeDetails: true,
         propertywareUnitId: true,
         tenant: { select: TENANT_SELECT },
+        // The inspection decides whether this visit may be rewritten at all,
+        // and its Details are what Jobber is actually sent.
+        inspection: { select: { id: true, status: true, jobberVisitDetails: true } },
       },
       orderBy: { id: 'asc' },
     });
@@ -495,18 +519,56 @@ export class TbpPlanService {
       detailsRewritten: 0,
       jobberQueued: 0,
       keptOverridden: 0,
+      keptFinished: 0,
+      keptEditedInConsole: 0,
+      keptUnresolvedUnit: 0,
+      notSentToJobber: 0,
+      failed: 0,
+      jobberPushDisabled: !pushEdits,
       stillMissing: [],
     };
 
     for (const stop of stops) {
       const tenant = stop.tenant;
-      // The unit a coordinator chose, or the one generation resolved: either
-      // way it is recorded on the stop, so the narrowing is read back rather
-      // than matched again.
-      const unit =
-        tenant.propertywareBuildingId && stop.propertywareUnitId
-          ? await this.chosenUnit(organizationId, tenant.propertywareBuildingId, stop.propertywareUnitId)
-          : { unit: null, units: undefined };
+
+      /**
+       * A visit that has been walked, or called off, is history.
+       *
+       * `AdminService.updateJobberVisit` refuses the same two statuses before
+       * writing the same column, and for the same reason: `jobberVisitDetails`
+       * is the record of what the technician was told, and the old text is not
+       * kept anywhere. Rewriting it would destroy that, and the Jobber edit
+       * behind it would be an edit to a visit somebody already completed. The
+       * endpoint takes any plan id, including a quarter that ended months ago,
+       * so this is the ordinary case rather than an unlikely one.
+       */
+      if (
+        stop.inspection &&
+        (stop.inspection.status === InspectionStatus.COMPLETED ||
+          stop.inspection.status === InspectionStatus.CANCELLED)
+      ) {
+        result.keptFinished += 1;
+        continue;
+      }
+
+      /**
+       * The unit a coordinator chose, or the one generation resolved.
+       *
+       * Read back from the stop rather than matched again -- except that a unit
+       * deactivated since generation no longer comes back, and
+       * `stopFilterSizes` would then quietly widen this visit to the whole
+       * building's sizes. For a house of several units that is somebody else's
+       * filter, so the stop is left exactly as the coordinator last saw it and
+       * counted for them to look at.
+       */
+      let unit: Pick<ResolvedUnit, 'unit' | 'units'> = { unit: null, units: undefined };
+      if (tenant.propertywareBuildingId && stop.propertywareUnitId) {
+        unit = await this.chosenUnit(organizationId, tenant.propertywareBuildingId, stop.propertywareUnitId);
+        if (!unit.unit) {
+          result.keptUnresolvedUnit += 1;
+          continue;
+        }
+      }
       const sizes = stopFilterSizes(tenant.hvacFilterSizes, unit);
 
       // What the visit would say. Measured against the rule the writer prints
@@ -525,37 +587,85 @@ export class TbpPlanService {
         sizes.length === stop.hvacFilterSizes.length &&
         sizes.every((size, index) => size === stop.hvacFilterSizes[index]);
       if (same) continue;
-      result.updated += 1;
 
       const details = stop.visitDetailsOverriddenAt
         ? null
         : planVisitDetails({ ...tenant, hvacFilterSizes: sizes }, stop.inspectionType as TbpInspectionType, stop.officeDetails);
       if (details === null) result.keptOverridden += 1;
-      else if (details !== stop.visitDetails) result.detailsRewritten += 1;
 
-      await this.prisma.$transaction(async (tx) => {
-        await tx.tbpQuarterPlanStop.update({
-          where: { id: stop.id },
-          data: { hvacFilterSizes: sizes, ...(details === null ? {} : { visitDetails: details }) },
-        });
-        // A published stop's inspection carries the text Jobber is sent, so it
-        // has to move with the stop or the next push would undo this.
-        if (stop.inspectionId && details !== null) {
-          await tx.inspection.update({
-            where: { id: stop.inspectionId },
-            data: { jobberVisitDetails: details },
+      /**
+       * Whether the words actually changed, as against the sizes behind them.
+       *
+       * A size can move without the line moving -- the office reorders the
+       * cells, or corrects a size the writer never printed -- and Jobber should
+       * not be touched for that. Only a stop whose rendered Details differ
+       * reaches an appointment.
+       */
+      const rewritten = details !== null && details !== stop.visitDetails;
+      if (rewritten) result.detailsRewritten += 1;
+
+      /**
+       * Whether the inspection still says what this plan last wrote.
+       *
+       * A coordinator editing a published visit from the console writes
+       * `Inspection.jobberVisitDetails` directly and never touches the stop, so
+       * `visitDetailsOverriddenAt` is null and there is no flag to read. What
+       * there is, is the text: publish wrote the stop's Details plus the link,
+       * and so does this. Anything else is somebody's own words, and they win.
+       */
+      const link = (text: string) => withInspectionLink(text, `${webOrigin()}/inspections/${stop.inspectionId}`);
+      const consoleEdited =
+        Boolean(stop.inspection) &&
+        stop.visitDetails !== null &&
+        stop.inspection!.jobberVisitDetails !== null &&
+        stop.inspection!.jobberVisitDetails !== stop.visitDetails &&
+        stop.inspection!.jobberVisitDetails !== link(stop.visitDetails);
+      const touchesInspection = rewritten && Boolean(stop.inspectionId) && !consoleEdited;
+      if (rewritten && stop.inspectionId && consoleEdited) result.keptEditedInConsole += 1;
+      // Changed here, and Jobber will not be told, which the office has to know
+      // before it trusts the visit in front of the technician.
+      if (touchesInspection && !pushEdits) result.notSentToJobber += 1;
+
+      /**
+       * One stop at a time, and one stop's failure is not the quarter's.
+       *
+       * Several hundred short transactions cannot be one long one, and a throw
+       * partway through would otherwise leave the quarter half refreshed with
+       * no audit of what moved. Every stop that did move is already committed,
+       * so the count is true either way.
+       */
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.tbpQuarterPlanStop.update({
+            where: { id: stop.id },
+            data: { hvacFilterSizes: sizes, ...(rewritten ? { visitDetails: details } : {}) },
           });
-          if (pushEdits) {
-            const queued = await requestVisitPush(tx, {
-              organizationId,
-              inspectionId: stop.inspectionId,
-              kind: JobberOutboundKind.VISIT_EDIT,
-              requestedById: user.id,
+          if (touchesInspection) {
+            // The link back to the inspection is what the technician follows
+            // out of the Jobber visit. Publish puts it there; writing the bare
+            // rendered text here would take it away again.
+            await tx.inspection.update({
+              where: { id: stop.inspectionId!, organizationId },
+              data: { jobberVisitDetails: link(details!) },
             });
-            if (queued) result.jobberQueued += 1;
+            if (pushEdits) {
+              const queued = await requestVisitPush(tx, {
+                organizationId,
+                inspectionId: stop.inspectionId!,
+                kind: JobberOutboundKind.VISIT_EDIT,
+                requestedById: user.id,
+              });
+              if (queued) result.jobberQueued += 1;
+            }
           }
-        }
-      });
+        });
+        result.updated += 1;
+      } catch (error) {
+        result.failed += 1;
+        this.logger.warn(
+          `Filter sizes could not be refreshed for stop ${stop.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
 
     await this.prisma.auditLog.create({
@@ -573,13 +683,20 @@ export class TbpPlanService {
           detailsRewritten: result.detailsRewritten,
           jobberQueued: result.jobberQueued,
           keptOverridden: result.keptOverridden,
+          keptFinished: result.keptFinished,
+          keptEditedInConsole: result.keptEditedInConsole,
+          keptUnresolvedUnit: result.keptUnresolvedUnit,
+          notSentToJobber: result.notSentToJobber,
+          failed: result.failed,
           stillMissing: result.stillMissing.length,
         },
       },
     });
 
     this.logger.log(
-      `Filter sizes refreshed for plan ${planId}: ${result.updated} of ${result.stops} stops changed, ${result.stillMissing.length} tenancies still hold no size.`,
+      `Filter sizes refreshed for plan ${planId}: ${result.updated} of ${result.stops} stops changed, ` +
+        `${result.keptFinished} already finished, ${result.keptEditedInConsole} edited in the console, ` +
+        `${result.failed} failed, ${result.stillMissing.length} tenancies still hold no size.`,
     );
     return result;
   }

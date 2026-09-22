@@ -272,6 +272,11 @@ export default function PlanningPage() {
             {
               description: [
                 result.jobberQueued ? `${result.jobberQueued.toLocaleString()} sent on to Jobber.` : null,
+                // Said plainly rather than left to be discovered: the visit in
+                // front of the technician still reads the old size.
+                result.notSentToJobber
+                  ? `${result.notSentToJobber.toLocaleString()} changed here only — this server does not send edits to Jobber.`
+                  : null,
                 result.keptOverridden
                   ? `${result.keptOverridden.toLocaleString()} kept the Details a coordinator wrote.`
                   : null,
@@ -281,6 +286,22 @@ export default function PlanningPage() {
             },
           );
         else toast.info('Every visit already had the sizes the tenant report holds');
+        // What it deliberately did not touch. Each of these is a visit the
+        // office may still expect to have changed, so none of them are silent.
+        const left = [
+          result.keptFinished ? `${result.keptFinished.toLocaleString()} already walked or called off` : null,
+          result.keptEditedInConsole ? `${result.keptEditedInConsole.toLocaleString()} edited here by hand` : null,
+          result.keptUnresolvedUnit ? `${result.keptUnresolvedUnit.toLocaleString()} at a unit no longer active` : null,
+        ].filter(Boolean);
+        if (left.length)
+          toast.info(`${left.join(', ')} — left as they are`, {
+            description: 'A finished visit is the record of what the technician was told, and a hand-written note is somebody’s own words.',
+            duration: 12_000,
+          });
+        if (result.failed)
+          toast.error(`${result.failed.toLocaleString()} could not be refreshed`, {
+            description: 'The rest were saved. Run it again — the ones that worked are already up to date.',
+          });
         // The other half of the answer: a refresh cannot invent a size
         // Propertyware does not hold, and naming those is what lets the office
         // fix them at the source.

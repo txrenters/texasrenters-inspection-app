@@ -222,6 +222,16 @@ export interface FilterSizeRefresh {
   detailsRewritten: number;
   jobberQueued: number;
   keptOverridden: number;
+  /** Left alone: the visit has been walked or called off, and is history. */
+  keptFinished: number;
+  /** Left alone: somebody edited this visit's text in the console, and their words win. */
+  keptEditedInConsole: number;
+  /** Left alone: the unit it is booked at is no longer active. */
+  keptUnresolvedUnit: number;
+  /** Changed here, but this server does not send edits to Jobber. */
+  notSentToJobber: number;
+  failed: number;
+  jobberPushDisabled: boolean;
   stillMissing: TenancyWithoutFilterSize[];
 }
 
