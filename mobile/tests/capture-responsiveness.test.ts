@@ -64,6 +64,22 @@ describe('nothing else may swallow the shutter tap', () => {
   });
 });
 
+describe('the controls do not move under the thumb', () => {
+  /**
+   * "Done — rate the room" appears on the first photograph and sits *below* the
+   * controls in a bottom-anchored stack, so taking one shifted the shutter up
+   * by its own height and the band the thumb was resting on became the top of
+   * that button. The second shot of a room either hit nothing or left the
+   * camera. The space is held from the first render instead.
+   */
+  it('reserves the Done row before there is anything in it', () => {
+    // The wrapper carries the spacing; the button inside carries none, so the
+    // stack is the same height whether or not there is anything to press.
+    expect(source).toContain('<View className="mt-4 min-h-12 w-full">');
+    expect(source).not.toContain('className={`mt-4 min-h-12 w-full flex-row');
+  });
+});
+
 describe('a still that never lands', () => {
   /**
    * Everything that releases the button is downstream of `takePictureAsync`,
@@ -102,6 +118,30 @@ describe('the shutter does not wait on filing', () => {
     expect(released).toBeGreaterThan(-1);
     expect(downscaled).toBeGreaterThan(-1);
     expect(released).toBeLessThan(downscaled);
+  });
+
+  /**
+   * Freeing the button was only half of it. The flash, the haptic and the count
+   * sat below the downscale and the write to disk, so a tap produced nothing at
+   * all for a fifth to half a second and only then flashed -- and with the
+   * button already live, a second shot fired into that silence and the first
+   * flash landed during the second capture.
+   */
+  it('confirms the shot before the image is downscaled', () => {
+    // `counted = true` sits with the flash, the haptic and the count, so its
+    // position is the position of everything the technician perceives.
+    const confirmed = source.indexOf('counted = true;');
+    const downscaled = source.indexOf('await downscaleForUpload(');
+    expect(confirmed).toBeGreaterThan(-1);
+    expect(confirmed).toBeLessThan(downscaled);
+  });
+
+  /**
+   * And takes the count back down if the filing then fails, because
+   * `photoCount` feeds `evidenceComplete` in the capture summary.
+   */
+  it('rolls the count back when the photograph could not be filed', () => {
+    expect(source).toContain('if (counted) {');
   });
 
   /**

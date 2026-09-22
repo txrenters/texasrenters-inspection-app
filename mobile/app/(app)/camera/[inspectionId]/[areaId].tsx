@@ -1133,6 +1133,8 @@ export default function RoomCameraScreen() {
     setError(null);
     // Everything that gives the button back is downstream of the await below,
     // so a capture that never settles would keep it. See `CAPTURE_WATCHDOG_MS`.
+    /** Whether the count was already put up, so a failure below can take it down. */
+    let counted = false;
     const watchdog = setTimeout(() => {
       setCapturingPhoto(false);
       void reportError(new Error('A photograph did not return from the camera.'), {
@@ -1160,6 +1162,28 @@ export default function RoomCameraScreen() {
       setCapturingPhoto(false);
       const sequence = photoCountRef.current + 1;
       photoCountRef.current = sequence;
+      /**
+       * Everything the technician can perceive, now rather than at the end.
+       *
+       * Freeing the button was only half of it: the flash, the haptic and the
+       * count all sat below the downscale and the write to disk, so a tap
+       * produced nothing at all for a fifth to half a second on a
+       * full-resolution iPhone frame and only then flashed. With the button
+       * already live, a second shot fired into that silence and the first
+       * flash landed during the second capture -- feedback belonging to a tap
+       * that was no longer the last one.
+       *
+       * The Android marker path above has always done it in this order.
+       */
+      const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
+      setPhotoCount((count) => count + 1);
+      counted = true;
+      if (advancedToFindingContext) setCaptureType('FINDING_CONTEXT');
+      confirmCapture(
+        `Photo ${sequence} saved.${
+          advancedToFindingContext ? ' Next snapshot: finding context.' : ''
+        }`,
+      );
       /**
        * Brought down to the target edge when the camera could not be asked to.
        *
@@ -1213,20 +1237,11 @@ export default function RoomCameraScreen() {
       // the offer rather than stacking one: the control is about the shot just
       // taken, and anything older belongs to the area screen.
       showDiscardable(snapshot);
-      // Feeds evidenceComplete/snapshotCount in the capture summary.
+      // Feeds evidenceComplete/snapshotCount in the capture summary. Pushed
+      // here rather than with the count above because it belongs to the stored
+      // snapshot; `captureType` is this call's own copy and the selector moving
+      // on does not change it.
       snapshotTypesRef.current.push(captureType);
-      setPhotoCount((count) => count + 1);
-      // Capturing an overview advances the selector to finding context.
-      const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
-      if (advancedToFindingContext) setCaptureType('FINDING_CONTEXT');
-      // Haptics alone do not say *what* happened, and the shutter is muted so
-      // it never lands on the inspection audio. Announce the count, and the new
-      // selection when it just changed underneath the technician.
-      confirmCapture(
-        `Photo ${sequence} saved.${
-          advancedToFindingContext ? ' Next snapshot: finding context.' : ''
-        }`,
-      );
       /**
        * Deliberately not uploaded here.
        *
@@ -1275,6 +1290,19 @@ export default function RoomCameraScreen() {
         goBack();
       }
     } catch (cause) {
+      /**
+       * Take the count back down if it went up.
+       *
+       * The confirmation is given the moment the camera hands the picture
+       * over, before it has been downscaled or written, so a failure after
+       * that point would otherwise leave the summary counting a photograph
+       * that does not exist -- `photoCount` feeds `evidenceComplete`. The same
+       * pair `discardPhoto` uses.
+       */
+      if (counted) {
+        setPhotoCount((count) => Math.max(0, count - 1));
+        photoCountRef.current = Math.max(0, photoCountRef.current - 1);
+      }
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
     } finally {
       // Both idempotent: the happy path already did each of these the moment
@@ -1647,20 +1675,37 @@ export default function RoomCameraScreen() {
             <View className="flex-1" />
           </View>
 
-          {photoCount > 0 && !recording && !stopping ? (
-            <Pressable
-              accessibilityHint="Returns to the area to answer its condition questions and submit"
-              accessibilityLabel="Done taking photos"
-              accessibilityRole="button"
-              className={`mt-4 min-h-12 w-full flex-row items-center justify-center gap-2 rounded-xl bg-white px-4 ${PRESS_SURFACE}`}
-              onPress={finishPhotos}
-            >
-              <CheckIcon size={18} className="text-black" />
-              <Text className="text-sm font-bold text-black">
-                {primary === 'PHOTO' ? 'Done — rate the room' : 'Done'}
-              </Text>
-            </Pressable>
-          ) : null}
+          {/*
+            The space is held from the first render, empty.
+
+            This button appears on the first photograph, and it sits *below* the
+            controls in a stack anchored to the bottom -- so taking one shifted
+            the shutter up by its own height, and the band the thumb was resting
+            on became the top of "Done — rate the room". The second shot of a
+            room, which is the ordinary way a room is photographed, either hit
+            nothing or left the camera entirely. The discard offer above the
+            controls was already placed this way and for this reason; this one
+            was not.
+
+            An empty `View` rather than a disabled `Pressable`: nothing should
+            swallow a press in that band before there is anything to press.
+          */}
+          <View className="mt-4 min-h-12 w-full">
+            {photoCount > 0 && !recording && !stopping ? (
+              <Pressable
+                accessibilityHint="Returns to the area to answer its condition questions and submit"
+                accessibilityLabel="Done taking photos"
+                accessibilityRole="button"
+                className={`min-h-12 w-full flex-row items-center justify-center gap-2 rounded-xl bg-white px-4 ${PRESS_SURFACE}`}
+                onPress={finishPhotos}
+              >
+                <CheckIcon size={18} className="text-black" />
+                <Text className="text-sm font-bold text-black">
+                  {primary === 'PHOTO' ? 'Done — rate the room' : 'Done'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       </SafeAreaView>
 
