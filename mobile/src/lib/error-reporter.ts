@@ -1,10 +1,40 @@
 import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
 import { Platform } from 'react-native';
 
 import { deviceId } from '../auth/device-id';
 import { environment } from '../config/environment';
 import { demoStorage } from '../storage/demo-storage';
 import { readErrorLog, subscribeToErrorLog, type LoggedError } from './error-log';
+
+/**
+ * Which JavaScript raised this, for the `buildId` the office reads.
+ *
+ * It used to be `String(Constants.expoConfig.runtimeVersion)`, and the runtime
+ * version is configured as `{ policy: 'appVersion' }` — an object. So every
+ * report this app has ever sent carried the literal string
+ * "[object Object]", which is what the office was looking at on 2026-09-23
+ * while trying to work out which build a filter bug came from.
+ *
+ * The version alone could not have answered it anyway. A store build and an
+ * over-the-air update on top of it are very different code at the same number
+ * (see the Diagnostics screen, which learned this first), so this names the
+ * bundle: the update id, or "embedded" for the one compiled into the binary.
+ * `emergency` is the third state and the only one that is a fault — an update
+ * that failed to load and fell back to the embedded bundle, otherwise
+ * indistinguishable from a plain install.
+ */
+function runningBundle(): string | undefined {
+  try {
+    if (Updates.isEmergencyLaunch) return 'emergency';
+    if (Updates.isEmbeddedLaunch || !Updates.updateId) return 'embedded';
+    return Updates.updateId;
+  } catch {
+    // `expo-updates` throws in Expo Go and in a debug build with updates off.
+    // A report with no bundle named is still worth far more than no report.
+    return undefined;
+  }
+}
 
 /**
  * Sends the log the handset has always kept to somebody who can act on it.
@@ -106,9 +136,7 @@ export async function flushErrorLog(getAccessToken?: () => Promise<string | null
         source: 'MOBILE',
         platform: Platform.OS,
         appVersion: Constants.expoConfig?.version ?? undefined,
-        buildId: Constants.expoConfig?.runtimeVersion
-          ? String(Constants.expoConfig.runtimeVersion)
-          : undefined,
+        buildId: runningBundle(),
         // The single most useful field. Which host this build is talking to is
         // the first question of every report like this, and only the client
         // knows the answer.

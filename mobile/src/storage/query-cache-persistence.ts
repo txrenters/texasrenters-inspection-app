@@ -61,7 +61,14 @@ type StoredCache = {
 // technician had photographed, which is the bug this fixes, shown from the
 // cache instead of from the server. Restored data is not re-validated, so
 // the version is the only thing that discards it.
-const CACHE_SCHEMA_VERSION = 6;
+// 7: filter and service answers carry `photoKey`. Every report already on a
+// device was parsed by a schema that did not name the field, so zod stripped it
+// on the way in and the *stored* copy has no key linking a register to the
+// photograph taken for it. Restored data is never re-validated, so without this
+// the fix would reach only jobs fetched fresh: a technician's open job would
+// still redraw as "Not done yet" over a filter they had photographed, and the
+// next tick would round-trip that back and orphan the image for good.
+const CACHE_SCHEMA_VERSION = 7;
 
 /**
  * Invalidates the whole stored cache when either the shipped version or the
