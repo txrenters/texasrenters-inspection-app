@@ -275,6 +275,31 @@ describe('re-reading a quarter’s filter sizes from the tenant report', () => {
   });
 
   /**
+   * The other half of that rule, and the one nothing pinned.
+   *
+   * Narrowing happens only when the tenancy has a building *and* the stop has a
+   * unit. A tenancy whose building link has since gone -- the nightly sync
+   * re-upserts the row and the address no longer matches -- keeps its stop's
+   * unit id, but there are no sibling units to narrow against, so the stop is
+   * refreshed from the tenancy's whole list rather than left alone. The
+   * maintenance script read this as "unit unresolved" and skipped it, which is
+   * how an estimate that overstated by three could turn round and understate.
+   */
+  it('still refreshes a stop whose tenancy has lost its building link', async () => {
+    const { service, stopUpdate } = harness([
+      stop({ propertywareUnitId: 'unit-1', tenant: tenant(['20x20x1'], { propertywareBuildingId: null }) }),
+    ]);
+
+    const result = await service.refreshFilterSizes(USER, 'plan-1');
+
+    expect(result.keptUnresolvedUnit).toBe(0);
+    expect(result.updated).toBe(1);
+    expect(stopUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ hvacFilterSizes: ['20x20x1'] }) }),
+    );
+  });
+
+  /**
    * A refresh cannot invent a size Propertyware does not hold, and 126
    * tenancies hold nothing but "Not Completed", "UPDATE" or ".". Naming them is
    * the only part of the answer that is any use to the office.
