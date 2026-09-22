@@ -4,6 +4,7 @@ import {
   drainQueue,
   enqueueMutation,
   readQueue,
+  removeMutation,
   type QueuedMutation,
 } from '../../storage/mutation-queue';
 
@@ -151,3 +152,14 @@ export function drainOfflineWrites(send: Sender) {
 }
 
 export { readQueue as readOfflineWrites };
+
+/**
+ * Drops a held write that a later successful one has overtaken.
+ *
+ * The checklist is one document keyed `services:<job>`, so a queued copy is the
+ * whole report as it stood when the signal went. Reconnect, answer two more
+ * registers online, and the drain would then replay that old document over the
+ * top -- putting the job back to the state it was in underground and losing
+ * everything answered since. A write that has been superseded is not owed.
+ */
+export const dropQueuedWrite = (id: string) => removeMutation(id).then(() => undefined);

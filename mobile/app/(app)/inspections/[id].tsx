@@ -126,7 +126,7 @@ export default function JobScreen() {
   const status = inspectionStatusPresentation(item.status);
 
   const toggle = (task: JobTask) => {
-    if (isService(task)) actions.saveServices.mutate(toggledService(item.servicesReport, task.key));
+    if (isService(task)) actions.saveServices.mutate((current) => toggledService(current, task.key));
   };
   const open = (task: JobTask) => {
     if (task.kind === 'FILTERS') router.push(`/job-filters/${id}`);

@@ -30,6 +30,7 @@ import type {
 // `demo-storage`, both of which `offline-record-cache` already loads on the way
 // into `repositories`, so nothing new joins the cycle.
 import { clearQueryCache } from '../storage/query-cache-persistence';
+
 import {
   beginIntent,
   cancelQueries,
@@ -39,6 +40,17 @@ import {
   patchEntity,
   verifyQueries,
 } from './state-consistency';
+
+/**
+ * How the job's checklist is changed: the next report, or how to reach it.
+ *
+ * The function form is the safe one. It is applied when the save actually runs
+ * rather than when the tap happened, so an answer worked out while an earlier
+ * save was still in flight builds on that one instead of overwriting it.
+ */
+export type ServicesReportUpdate =
+  | VisitServicesReport
+  | ((current: VisitServicesReport | null) => VisitServicesReport);
 
 // Socket events, push notifications, app foreground, and mutations are the primary refresh paths.
 // This minute-level poll is only a bounded safety net when realtime delivery is interrupted.
@@ -386,6 +398,10 @@ export function useInspectionActions(id: string) {
     /**
      * A tick on the job's checklist.
      *
+     * Takes either the report to save or, preferably, a function from the job's
+     * current report to the next one — see `saveServices` below for why the
+     * function form is the one that cannot lose an answer.
+     *
      * Not wrapped in `action`, which puts the job into PROCESSING while it
      * runs: a technician ticking pest control is not waiting on the job's
      * state, and flashing "Processing" on the whole job for each tick would
@@ -402,33 +418,46 @@ export function useInspectionActions(id: string) {
        * wait, and it then reads the cache the first one wrote.
        */
       scope: { id: `job-services:${id}` },
-      mutationFn: (servicesReport: VisitServicesReport) =>
-        repositories.inspections.saveServices(id, servicesReport),
       /**
-       * Shown at once, before the server answers: pest control is a checkbox
-       * now (the office, 2026-09-18), and a box that ticks half a second after
-       * the tap reads as broken -- and a quick second tap would be worked out
-       * from the job as it was before the first. A failure puts the server's
-       * copy back (`refresh` below).
+       * An updater, not a report -- and that distinction is the whole fix.
+       *
+       * The scope only serialised the *sending*. Each caller still built its
+       * payload from the job as it stood when the screen last rendered, so two
+       * taps close together both started from the same report and the second
+       * overwrote the first: photograph a filter, add another straight after,
+       * and the photograph was gone. Answering `(current) => next` instead
+       * means the second answer is worked out here, after the first has
+       * landed, from the job as it now is.
+       *
+       * Resolved in `mutationFn` rather than `onMutate` because a scoped
+       * mutation runs both at execute time, and the optimistic write has to
+       * happen from the same resolved value the request carries -- one place,
+       * so the screen and the server cannot be told different things.
        */
-      onMutate: async (servicesReport: VisitServicesReport) => {
+      mutationFn: async (update: ServicesReportUpdate) => {
         await client.cancelQueries({ queryKey: queryKeys.inspection(id) });
-        client.setQueryData(queryKeys.inspection(id), (current?: Inspection) =>
-          current ? { ...current, servicesReport } : current,
+        const current = client.getQueryData<Inspection>(queryKeys.inspection(id))?.servicesReport ?? null;
+        const servicesReport = typeof update === 'function' ? update(current) : update;
+        /**
+         * Shown at once, before the server answers: pest control is a checkbox
+         * now (the office, 2026-09-18), and a box that ticks half a second
+         * after the tap reads as broken. A failure puts the server's copy back
+         * (`refresh` below).
+         */
+        client.setQueryData(queryKeys.inspection(id), (job?: Inspection) =>
+          job ? { ...job, servicesReport } : job,
         );
+        return repositories.inspections.saveServices(id, servicesReport);
       },
       onSuccess: (inspection) => {
         client.setQueryData(queryKeys.inspection(id), inspection);
         void refresh();
       },
-      onError: (error: unknown, servicesReport) => {
-        // Held on the device: the repository has already kept it, so the
-        // screen must show it rather than the answer springing back.
-        if (error instanceof QueuedOfflineError)
-          client.setQueryData(queryKeys.inspection(id), (current?: Inspection) =>
-            current ? { ...current, servicesReport } : current,
-          );
-        else void refresh();
+      onError: (error: unknown) => {
+        // Held on the device: the repository has already kept it and the
+        // optimistic write above still stands, so the screen goes on showing
+        // what was ticked rather than the answer springing back.
+        if (!(error instanceof QueuedOfflineError)) void refresh();
       },
     }),
     /**

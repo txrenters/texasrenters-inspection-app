@@ -41,7 +41,7 @@ import type {
   UploadRepository,
 } from '../contracts';
 import { INSPECTION_PAGE_SIZE } from '../contracts';
-import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
+import { QueuedOfflineError, dropQueuedWrite, queueOnConnectionFailure } from './offline-writes';
 import { technicianRouteSchema } from './technician-route-schema';
 import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
@@ -130,10 +130,30 @@ const filtersAreaSchema = z.object({ areaId: z.string() });
  * written. Permissive about the service keys for the usual reason — the office
  * adding a service must not make a whole job unreadable on the phone.
  */
+/**
+ * `photoKey` is not optional decoration: it is the whole answer in a basement.
+ *
+ * Zod strips what a schema does not name, and neither of these named it. So a
+ * technician photographed a filter, the row showed it, the save came back, and
+ * the key the handset had given the photograph was quietly cut out of the
+ * server's own reply on the way in. `photoId` is still null while the image
+ * sits in the upload queue, so the row fell back to "Not done yet" with the
+ * counter above it still saying the register was done -- reported as "when I
+ * take a picture on the AC filter change there's no indicator that we have
+ * added a photo" (2026-09-23).
+ *
+ * The loss was not only on screen. The next tick round-trips this report
+ * straight back to the API, so the second save told the server the register had
+ * no photograph either, and the link to the image was destroyed for good --
+ * leaving a register that could never be submitted and a photograph belonging
+ * to nothing.
+ */
 const serviceOutcomeSchema = z.object({
   done: z.boolean(),
   reason: z.string().nullable().default(null),
   reschedule: z.boolean().default(false),
+  photoKey: z.string().nullable().default(null),
+  photoId: z.string().nullable().default(null),
 });
 
 const filterOutcomeSchema = z.object({
@@ -143,6 +163,7 @@ const filterOutcomeSchema = z.object({
   changed: z.boolean(),
   reason: z.string().nullable().default(null),
   photoId: z.string().nullable().default(null),
+  photoKey: z.string().nullable().default(null),
   booked: z.boolean().default(false),
 });
 
@@ -923,6 +944,9 @@ export class ApiInspectionRepository implements InspectionRepository {
         ),
       );
       await this.storeInspection(id, saved.inspection);
+      // This report is newer than anything held for this job, so a copy queued
+      // while the signal was gone must not be replayed over it later.
+      await dropQueuedWrite(`services:${id}`);
       return saved.inspection;
     } catch (error) {
       if (!(error instanceof QueuedOfflineError)) throw error;

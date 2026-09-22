@@ -374,6 +374,47 @@ export function withFilterAnswer(
   };
 }
 
+/**
+ * A register the technician found on site, added but not yet answered.
+ *
+ * Adding one used to go through `withFilterAnswer` with
+ * `{ changed: false, reason: 'Found on site' }`, which had two consequences
+ * nobody wanted. The new card drew itself with a red cross reading "Not changed
+ * — Found on site", so a technician who had just successfully added a filter
+ * was looking at what a refusal looks like; and `withFilterAnswer` ticks the
+ * whole AC filter change as done, so merely *finding* a filter claimed the
+ * service had been carried out. Both were reported as adding a filter failing
+ * (2026-09-23).
+ *
+ * So the register is added unanswered: a plain card with Photograph on it,
+ * exactly like one the office listed. `servicesReportProblems` asks nothing of
+ * an unbooked register until it is claimed as changed, so this cannot let an
+ * unphotographed filter through submission either.
+ */
+export function withAddedFilter(
+  report: VisitServicesReport | null | undefined,
+  filter: Pick<BookedFilter, 'size' | 'location' | 'slot'>,
+): VisitServicesReport {
+  const current = report ?? EMPTY_REPORT;
+  const key = filterKey(filter);
+  if ((current.filters ?? []).some((entry) => filterKey(entry) === key)) return current;
+  const added: VisitFilterOutcome = {
+    size: filter.size,
+    location: filter.location,
+    slot: filter.slot,
+    changed: false,
+    reason: null,
+    photoId: null,
+    photoKey: null,
+    booked: false,
+  };
+  return { ...current, filters: [...(current.filters ?? []), added] };
+}
+
+/** Whether a register has actually been answered, as against merely added. */
+export const filterAnswered = (answer: VisitFilterOutcome | undefined): boolean =>
+  Boolean(answer && (answer.changed || answer.reason?.trim()));
+
 /** The report without a register the technician added and then removed. */
 export function withoutFilter(
   report: VisitServicesReport | null | undefined,

@@ -95,4 +95,64 @@ describe('the report stored with a submission', () => {
     expect(Object.keys(stored.services)).toEqual(['filterChange', 'pestControl']);
     expect(stored.filtersInstalled).toEqual([]);
   });
+
+  /**
+   * `servicesReportProblems` reads a *missing* `filters` as an older phone, one
+   * that answers the filter change as a single service, and returns without
+   * checking a register. Dropping the key for an empty array told it exactly
+   * that about a current phone -- so a job where not one register had been
+   * answered went through with the filter change ticked done, and the office
+   * got "Filter Change: done" over two filters nobody had touched.
+   *
+   * The distinction is presence, not length: said nothing, or said there are
+   * none.
+   */
+  it('refuses a submission that answers no register, where an empty list used to pass', () => {
+    expect(() =>
+      servicesReportFor({ jobberVisitDetails: DETAILS }, {
+        services: { filterChange: { done: true }, pestControl: { done: true } },
+        filters: [],
+        filtersInstalled: [],
+      } as never),
+    ).toThrow(/Answer for the/);
+  });
+
+  it('still asks nothing of a phone that never spoke of registers', () => {
+    const stored = servicesReportFor({ jobberVisitDetails: DETAILS }, {
+      services: { filterChange: { done: true }, pestControl: { done: true } },
+      filtersInstalled: ['20x25x1'],
+    } as never) as { filters?: unknown[] };
+
+    expect(stored.filters).toBeUndefined();
+  });
+
+  /**
+   * A register the visit never listed is the technician correcting the office's
+   * record. It is kept -- and `booked` is decided here from the Details, never
+   * taken from the phone, so a client cannot dress a listed register up as one
+   * found on site.
+   */
+  it('keeps a register found on site, and the handset key its photograph has', () => {
+    const stored = servicesReportFor({ jobberVisitDetails: DETAILS }, {
+      services: { filterChange: { done: true }, pestControl: { done: true } },
+      filters: [
+        { size: '20x25x1', location: null, slot: 1, changed: true, photoKey: 'snapshot-1' },
+        { size: '12x12x1', location: null, slot: 1, changed: true, photoKey: 'snapshot-2' },
+        { size: '16x20x1', location: 'attic', slot: 1, changed: true, photoKey: 'snapshot-3', booked: true },
+      ],
+      filtersInstalled: [],
+    } as never) as { filters: { size: string; booked: boolean; photoKey: string | null }[] };
+
+    expect(stored.filters.map((filter) => [filter.size, filter.booked])).toEqual([
+      ['20x25x1', true],
+      ['12x12x1', true],
+      ['16x20x1', false],
+    ]);
+    // All a photograph has until it uploads, and the field that was being lost.
+    expect(stored.filters.map((filter) => filter.photoKey)).toEqual([
+      'snapshot-1',
+      'snapshot-2',
+      'snapshot-3',
+    ]);
+  });
 });

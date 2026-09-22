@@ -838,7 +838,17 @@ export class TechnicianService {
     if (!booked.length && !notes && !answered.length) return null;
     return {
       services,
-      ...(answered.length ? { filters: answered } : {}),
+      /**
+       * Present whenever the phone spoke of registers, even to say there are
+       * none.
+       *
+       * `servicesReportProblems` reads a *missing* `filters` as "an older phone
+       * that answers the filter change as one service" and returns without
+       * checking a single register. Dropping the key for an empty array told it
+       * exactly that about a current phone, so a job where no register had been
+       * answered passed submission with the filter change ticked done.
+       */
+      ...(report.filters !== undefined ? { filters: answered } : {}),
       // The sizes the office reads back. From the per-register answers where
       // the phone sent them, and from the old flat list otherwise.
       filtersInstalled: services.filterChange?.done

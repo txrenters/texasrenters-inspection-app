@@ -51,7 +51,20 @@ export function UpdatePrompt() {
     if (!Updates.isEnabled) return;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
-      void Updates.checkForUpdateAsync().catch(() => undefined);
+      /**
+       * Reported, where this used to swallow it whole.
+       *
+       * A check can fail for a reason that matters and that nothing else will
+       * ever surface: a build fenced out by its runtime version can receive no
+       * update at all, and the phone goes on running month-old JavaScript while
+       * everyone assumes it is current. That cost a night on 2026-09-22, trying
+       * to work out which code a technician's handset was actually running.
+       * Still not shown to the technician — it is not theirs to fix — but the
+       * office can now see it.
+       */
+      void Updates.checkForUpdateAsync().catch((cause) => {
+        void reportError(cause, { source: 'update-check' });
+      });
     });
     return () => subscription.remove();
   }, []);

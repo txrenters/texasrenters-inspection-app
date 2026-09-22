@@ -37,6 +37,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BackGlyph } from '@/src/components/ui/BackGlyph';
 import { Button, PRESS_SURFACE } from '@/src/components/ui';
 import { BottomSheet } from '@/src/components/BottomSheet';
+import { reportError } from '@/src/lib/error-log';
 import { goBack } from '@/src/lib/navigation';
 import { withFilterAnswer, withServicePhoto } from '@/src/utils/job-tasks';
 import { HomeButton } from '@/src/components/HomeButton';
@@ -274,6 +275,24 @@ export default function RoomCameraScreen() {
         slot: Number(filterSlot ?? '1') || 1,
       }
     : null;
+  /**
+   * This screen leaves in the same tick it saves, so nothing here can show a
+   * failure to the technician -- and until now nothing recorded one either.
+   * A photograph whose answer never reached the checklist is the worst kind of
+   * silence: the image is on the device, the register still reads unanswered,
+   * and End job refuses with no account of why. Neither of these is shown; both
+   * reach the office's error log.
+   */
+  const recordAnswerFailed = (cause: unknown) => {
+    if (cause instanceof Error && cause.name === 'QueuedOfflineError') return;
+    void reportError(cause, { source: 'filter-answer-save' });
+  };
+  const recordAnswerSkipped = (kind: 'filter' | 'service') =>
+    void reportError(
+      new Error(`A ${kind} photograph was taken before its job had loaded, so its answer was not recorded.`),
+      { source: 'filter-answer-skipped' },
+    );
+
   /** The service this shot belongs to, when the job screen sent one. */
   const serviceForPhoto =
     servicePhoto === 'pestControl' || servicePhoto === 'fleaTreatment' ? servicePhoto : null;
@@ -1097,22 +1116,24 @@ export default function RoomCameraScreen() {
          */
         if (inspection.data) {
           saveServices.mutate(
-            withFilterAnswer(
-              inspection.data.servicesReport ?? null,
-              filterRegister,
-              { changed: true, photoKey: snapshot.id },
-              { booked: filterBooked !== 'false' },
-            ),
+            (current) =>
+              withFilterAnswer(
+                current,
+                filterRegister,
+                { changed: true, photoKey: snapshot.id },
+                { booked: filterBooked !== 'false' },
+              ),
+            { onError: recordAnswerFailed },
           );
-        }
+        } else recordAnswerSkipped('filter');
         goBack();
       } else if (serviceForPhoto) {
         // The same for a service's optional photograph, on the same condition.
         if (inspection.data) {
-          saveServices.mutate(
-            withServicePhoto(inspection.data.servicesReport ?? null, serviceForPhoto, snapshot.id),
-          );
-        }
+          saveServices.mutate((current) => withServicePhoto(current, serviceForPhoto, snapshot.id), {
+            onError: recordAnswerFailed,
+          });
+        } else recordAnswerSkipped('service');
         goBack();
       }
     } catch (cause) {

@@ -24,8 +24,10 @@ import { registerIcons } from '@/src/lib/icons';
 import { goBack } from '@/src/lib/navigation';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import {
+  filterAnswered,
   filterRows,
   nextFilterSlot,
+  withAddedFilter,
   withFilterAnswer,
   withServiceAnswer,
   withoutFilter,
@@ -211,7 +213,20 @@ export default function JobFiltersScreen() {
   const item = inspection.data;
   const report = item.servicesReport ?? null;
   const rows = filterRows(item.visitDetails, report);
-  const changedTotal = rows.filter((row) => row.answer?.changed).length;
+  /**
+   * Answered, not "changed".
+   *
+   * This counted only registers the technician had changed, so a job where
+   * every filter was answered honestly as *not* changed -- no access to the
+   * cupboard, wrong size brought, filter already clean -- read "0 of 3 done"
+   * with three answered cards underneath it. The number is there to say how
+   * much is left, and a register with a reason on it is not left.
+   */
+  const answeredTotal = rows.filter((row) => filterAnswered(row.answer)).length;
+  /** Of those, the ones with a photograph: what the office asked to see counted. */
+  const photographedTotal = rows.filter(
+    (row) => row.answer?.changed && (row.answer.photoId || row.answer.photoKey),
+  ).length;
 
   const save = (next: Parameters<typeof actions.saveServices.mutate>[0]) => {
     setError(null);
@@ -284,7 +299,7 @@ export default function JobFiltersScreen() {
           </Text>
           <Text className="text-xs text-muted-foreground">
             {rows.length
-              ? `${changedTotal} of ${rows.length} done`
+              ? `${answeredTotal} of ${rows.length} answered · ${photographedTotal} photographed`
               : 'The visit listed no sizes. Add what you find.'}
           </Text>
         </Card>
@@ -310,7 +325,9 @@ export default function JobFiltersScreen() {
              * (2026-09-22). A spinner says it out loud.
              */
             const sending = Boolean(photographed && !answer?.photoId);
-            const refused = Boolean(answer && !answer.changed);
+            // Only a register somebody actually declined, which is what the
+            // reason is. One merely added reads as work still to do.
+            const refused = Boolean(answer && !answer.changed && answer.reason?.trim());
             return (
               <Card className="gap-3" key={`${row.filter.size}-${row.filter.location}-${row.filter.slot}`}>
                 <View className="flex-row items-start gap-3">
@@ -343,7 +360,7 @@ export default function JobFiltersScreen() {
                       className="h-9 w-9 px-0 py-0"
                       icon={<Trash2Icon size={16} className="text-muted-foreground" />}
                       label=""
-                      onPress={() => save(withoutFilter(report, row.filter))}
+                      onPress={() => save((current) => withoutFilter(current, row.filter))}
                       variant="quiet"
                     />
                   ) : null}
@@ -395,7 +412,7 @@ export default function JobFiltersScreen() {
         onClose={() => setNotChanged(null)}
         onSave={(reason) => {
           if (notChanged)
-            save(withFilterAnswer(report, notChanged.filter, { changed: false, reason }));
+            save((current) => withFilterAnswer(current, notChanged.filter, { changed: false, reason }));
           setNotChanged(null);
         }}
         row={notChanged}
@@ -404,26 +421,21 @@ export default function JobFiltersScreen() {
       <AddFilterSheet
         onAdd={(size, location) => {
           setAdding(false);
-          // Added as not changed and unanswered, so the next tap is the
-          // photograph rather than a claim nobody has evidenced.
-          save(
-            withFilterAnswer(
-              report,
+          // Added unanswered, so the next tap is the photograph rather than a
+          // claim nobody has evidenced.
+          save((current) =>
+            withAddedFilter(current, {
+              size,
+              location: location || null,
               // The first slot this size and place has free. Writing 1 here
               // meant a filter matching one the visit already listed answered
               // *that* register instead of adding a row — which is how adding
               // a filter failed silently, with no new row and no error.
-              {
+              slot: nextFilterSlot(item.visitDetails, current, {
                 size,
                 location: location || null,
-                slot: nextFilterSlot(item.visitDetails, report, {
-                  size,
-                  location: location || null,
-                }),
-              },
-              { changed: false, reason: 'Found on site' },
-              { booked: false },
-            ),
+              }),
+            }),
           );
         }}
         onClose={() => setAdding(false)}
@@ -442,7 +454,7 @@ export default function JobFiltersScreen() {
         }
         onAnswer={(next) => {
           setWholeService(false);
-          save(withServiceAnswer(report, 'filterChange', next));
+          save((current) => withServiceAnswer(current, 'filterChange', next));
           if (!next.done) goBack();
         }}
         onClose={() => setWholeService(false)}
