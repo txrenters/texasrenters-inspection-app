@@ -16,7 +16,7 @@
  */
 
 import { quarterLabel, quarterOf } from './quarter-plan.js';
-import { FILTER_SIZE_PATTERN, normalizeFilterSize } from './visit-services.js';
+import { FILTER_SIZE_IN_TEXT, FILTER_SIZE_PATTERN, normalizeFilterSize } from './visit-services.js';
 
 export interface OccupiedVisitFilter {
   size: string;
@@ -365,7 +365,7 @@ export interface BookingPrefill {
 
 /** The filter-location values the report holds that are not places: "UPDATE", "n/a", "TBD", ".". */
 const NOT_A_LOCATION = /^(?:update|not completed|n\/?a|tbd|none|\.+|-+)$/i;
-const SIZE_IN_TEXT = /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?/;
+const SIZE_IN_TEXT = FILTER_SIZE_IN_TEXT;
 
 /**
  * A tenancy's zone as the office writes it in a Jobber title: "Zone 4".

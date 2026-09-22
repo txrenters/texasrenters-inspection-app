@@ -193,6 +193,7 @@ function mount({
     build,
     editStop,
     importOfficeDetails: idle,
+    refreshFilterSizes: idle,
     setType: idle,
     exclude: idle,
     publish: idle,
@@ -316,6 +317,46 @@ describe('the benefit package plan page', () => {
       id: 'plan-build-2026-4',
       description: 'The Q4 2026 plan is already being built, since 1:48 PM Central.',
     });
+  });
+
+  /**
+   * A quarter's filter sizes are frozen when it is built, so a size the office
+   * fills into Propertyware afterwards never reaches the visit on its own. On
+   * 2026-09-22 the office asked why 131 of Q4's visits still said "Update
+   * filter sizes"; this button is the answer, and the count of properties
+   * Propertyware still holds no size for is the other half of it -- no refresh
+   * can invent those, and naming them is what lets the office fix the source.
+   */
+  it('re-reads the filter sizes, and names the properties Propertyware holds none for', () => {
+    const warning = vi.spyOn(toast, 'warning');
+    const success = vi.spyOn(toast, 'success');
+    mount();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filter sizes' }));
+
+    const [planId, handlers] = idle.mutate.mock.calls.at(-1)! as [
+      string,
+      { onSuccess: (result: unknown) => void },
+    ];
+    expect(planId).toBe('plan-1');
+    handlers.onSuccess({
+      planId: 'plan-1',
+      stops: 429,
+      updated: 12,
+      detailsRewritten: 12,
+      jobberQueued: 9,
+      keptOverridden: 0,
+      stillMissing: [{ stopId: 's1', tenancyId: 't1', address: '6341 Del Monte Dr' }],
+    });
+
+    expect(success).toHaveBeenCalledWith(
+      '12 visits took new filter sizes',
+      expect.objectContaining({ description: expect.stringContaining('9 sent on to Jobber') }),
+    );
+    expect(warning).toHaveBeenCalledWith(
+      '1 property has no filter size in Propertyware',
+      expect.objectContaining({ action: expect.objectContaining({ label: 'Copy addresses' }) }),
+    );
   });
 
   /** The office asked for the quarter as a calendar too (2026-09-17). */

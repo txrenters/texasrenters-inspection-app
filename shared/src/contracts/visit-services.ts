@@ -110,6 +110,16 @@ export interface VisitServicesReport {
 /** A filter size as a technician types it: "20x25x1", "12 x 36". */
 export const FILTER_SIZE_PATTERN = /^\s*\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*\d+(?:\.\d+)?)?\s*$/;
 
+/**
+ * A filter size found anywhere in a line: "16x20x1 (1/2 N Main)", "20x25 MEDIA".
+ *
+ * The unanchored twin of `FILTER_SIZE_PATTERN`. A technician types a size on
+ * its own, so the anchored form is right for an answer; the tenant report
+ * writes it with the unit label and the office's notes around it, so the
+ * anchored form matches almost nothing there.
+ */
+export const FILTER_SIZE_IN_TEXT = /(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?/;
+
 export const MAX_SERVICE_REASON = 500;
 
 /** "20 X 25 x 1" becomes "20x25x1", so the office reads one spelling. */
