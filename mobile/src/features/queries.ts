@@ -7,6 +7,7 @@ import type {
   DemoRole,
   FindingStatus,
   Inspection,
+  InspectionRoom,
   InspectionStatus,
   LocalMedia,
 } from '../domain/models';
@@ -485,11 +486,37 @@ export function useRooms(inspectionId: string) {
     enabled: Boolean(inspectionId),
   });
 }
+/**
+ * One area, drawn from the list the technician tapped it in while it loads.
+ *
+ * Opening an area showed a full-screen skeleton for a whole round trip -- and
+ * the area screen is the most repeated tap in a job, once per area with fifteen
+ * on an occupied inspection, plus again on every re-entry after the cache has
+ * dropped it. The fetch is network-first (`cachedApiRecord` only falls back to
+ * disk on a connection error), so a good signal still costs a blank screen and
+ * a bad one costs seconds of it.
+ *
+ * The area is already in memory: the screen it was tapped from renders it out
+ * of `roomsRoot`, parsed by the same schema through the same wrapper. So it is
+ * shown at once and replaced the moment the real one lands.
+ *
+ * `placeholderData` rather than `initialData` deliberately: a placeholder is
+ * never written into the cache and never persisted, so nothing downstream can
+ * mistake the list's slightly older copy for the authority. The completion gate
+ * re-evaluates as the real row arrives, and the server refuses a completion it
+ * has no evidence for regardless.
+ */
 export function useRoom(roomId: string) {
+  const client = useQueryClient();
   return useQuery({
     queryKey: queryKeys.room(roomId),
     queryFn: () => repositories.inspections.room(roomId),
     enabled: Boolean(roomId),
+    placeholderData: () =>
+      client
+        .getQueriesData<InspectionRoom[]>({ queryKey: queryKeys.roomsRoot })
+        .flatMap(([, rooms]) => rooms ?? [])
+        .find((room) => room.id === roomId),
   });
 }
 /**

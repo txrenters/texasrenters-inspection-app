@@ -20,7 +20,6 @@ import {
   ZapOffIcon,
 } from 'lucide-react-native';
 import {
-  ActivityIndicator,
   Animated,
   BackHandler,
   Image,
@@ -103,6 +102,29 @@ const MAX_RECORDING_SECONDS = 10 * 60;
  * again after a mode change is the native module's business, not a promise.
  */
 const CAMERA_REBIND_TIMEOUT_MS = 1_500;
+
+/**
+ * How far two fingers must spread or close before it counts as a pinch.
+ *
+ * Above anything a tap produces -- a thumb rolling on the glass moves a few
+ * points -- and far below a deliberate zoom.
+ */
+const PINCH_SLOP = 12;
+
+/**
+ * How long a still may be in flight before the shutter is handed back.
+ *
+ * `takePictureAsync` is trusted to settle, and mostly it does. When it does not
+ * -- the session interrupted by a call, another app taking the camera, a still
+ * requested during a recording that the photo output never serves -- everything
+ * that releases the button is downstream of that await, including the
+ * `finally`. So the button stayed disabled for the life of the screen.
+ *
+ * Generous, because firing early would let a second capture start while the
+ * first is genuinely still working. By the time this elapses the photograph is
+ * not coming.
+ */
+const CAPTURE_WATCHDOG_MS = 8_000;
 
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
@@ -304,6 +326,15 @@ export default function RoomCameraScreen() {
     filterSize ? 'SERIAL_OR_LABEL' : serviceForPhoto ? 'OTHER' : 'AREA_OVERVIEW',
   );
   const [photoCount, setPhotoCount] = useState(0);
+  /**
+   * The same count, readable synchronously.
+   *
+   * The shutter is free again before a photograph has finished being written,
+   * so two taps in a row overlap and both would read the same `photoCount`
+   * from their own render -- numbering two pieces of evidence identically.
+   * Kept in step with the state above, including when one is discarded.
+   */
+  const photoCountRef = useRef(0);
   /** The shot just taken, while it is still held from upload. */
   const [discardable, setDiscardable] = useState<RoomSnapshot | null>(null);
   /**
@@ -388,12 +419,45 @@ export default function RoomCameraScreen() {
     setZoomLevel(0);
   };
 
-  /** Two fingers zoom; one finger is left alone for every control on the screen. */
+  /**
+   * Two fingers zoom; one finger is left alone for every control on the screen.
+   *
+   * That was the intent, and the implementation over-claimed it. These handlers
+   * are spread over the *root* view and answered in the **capture** phase, so
+   * returning true took the touch before the shutter was ever offered it -- and
+   * the test was only "are there two touches on the glass", which is true of a
+   * technician bracing the phone one-handed in a doorway, a palm on the edge, a
+   * glove making a second contact patch. The shutter tap went to the root view
+   * and simply vanished: no flash, no haptic, nothing. It came and went with
+   * how the phone was being held, and no amount of restarting fixed it,
+   * which is the other half of "it won't touch" (the office, 2026-09-23).
+   *
+   * A pinch is a *movement*, so nothing is claimed on touch-down at all, and a
+   * move is claimed only once the two fingers have actually changed distance by
+   * more than a tap ever would.
+   */
   const pinchStart = useRef<{ distance: number; level: number } | null>(null);
+  /** The two-finger span when the gesture began, to tell a pinch from a steadying hand. */
+  const pinchGate = useRef<number | null>(null);
   const pinch = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
-      onMoveShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
+      onStartShouldSetPanResponderCapture: () => {
+        pinchGate.current = null;
+        return false;
+      },
+      onMoveShouldSetPanResponderCapture: (event) => {
+        const [first, second] = event.nativeEvent.touches;
+        if (event.nativeEvent.touches.length !== 2 || !first || !second) {
+          pinchGate.current = null;
+          return false;
+        }
+        const distance = Math.hypot(first.pageX - second.pageX, first.pageY - second.pageY);
+        if (pinchGate.current === null) {
+          pinchGate.current = distance;
+          return false;
+        }
+        return Math.abs(distance - pinchGate.current) > PINCH_SLOP;
+      },
       onPanResponderGrant: () => {
         pinchStart.current = null;
       },
@@ -619,12 +683,27 @@ export default function RoomCameraScreen() {
    * opens on `video` — every kind but occupied — reaches `recordAsync` by
    * exactly the path it did before, with no wait and no new failure mode.
    *
-   * On timeout it resolves anyway rather than refusing. Whether
+   * On timeout it gives the camera back rather than refusing. Whether
    * `onCameraReady` fires a second time after a mode change is a detail of the
    * native module, and betting a technician's ability to record on it would
    * turn a missing callback into "the record button does nothing". Proceeding
    * is no worse than before: if the binding really has not applied,
    * `recordAsync` reports it through the error path that already exists.
+   *
+   * ── WHY THE TIMEOUT MARKS IT READY ──────────────────────────────────────
+   *
+   * It used to resolve the promise and stop there, leaving `ready` false. But
+   * `ready` is the *only* thing holding the shutter open --
+   * `disabled={!ready || capturingPhoto}` -- and nothing else in this screen
+   * ever sets it true again. So a rebind whose callback never came did not
+   * merely delay a capture: it disabled the capture button for as long as the
+   * screen stayed mounted, and the only way out was to leave and come back.
+   * The office reported exactly that on 2026-09-23 -- "it won't touch... it
+   * touch when I retry and refresh the app" -- and it was intermittent because
+   * it depended on a native callback that usually does fire.
+   *
+   * Reachable from all three rebinds, and worst from the one after a recording
+   * stops: film an area, and the shutter is dead for the rest of the visit.
    */
   const bindCamera = (next: CameraMode) =>
     new Promise<void>((resolve) => {
@@ -632,12 +711,37 @@ export default function RoomCameraScreen() {
       cameraModeRef.current = next;
       setReady(false);
       setCameraMode(next);
-      const timer = setTimeout(resolve, CAMERA_REBIND_TIMEOUT_MS);
+      // `markCameraReady` drains the waiters, so this resolves the promise too.
+      const timer = setTimeout(markCameraReady, CAMERA_REBIND_TIMEOUT_MS);
       readyWaiters.current.push(() => {
         clearTimeout(timer);
         resolve();
       });
     });
+
+  /**
+   * Readiness has a floor, whichever way the camera was bound.
+   *
+   * `bindCamera` arms a fallback for a *rebind*, but it is only ever called for
+   * a mode change and returns early when the mode already matches -- so on a
+   * fresh mount nothing arms anything, and `ready` rests entirely on a native
+   * callback that can be dropped. It is dropped in exactly the flow the office
+   * is running: photograph a filter register, go back, and tap the next one
+   * straight away, so a new camera mounts while the previous session is still
+   * letting go of the device. Both capture controls are then dead until the
+   * screen is left and re-entered.
+   *
+   * So the floor is here rather than in `bindCamera`: whenever the camera is
+   * not ready, it has this long to say so before the controls are handed back
+   * anyway. Enabling a shutter whose camera really did fail is no worse than
+   * before -- `takeSnapshot` still checks the camera is there and surfaces what
+   * goes wrong -- and it is much better than a button that never comes back.
+   */
+  useEffect(() => {
+    if (ready) return;
+    const timer = setTimeout(markCameraReady, CAMERA_REBIND_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [ready]);
 
   /**
    * Settles the camera on the right mode once the room is known.
@@ -889,6 +993,7 @@ export default function RoomCameraScreen() {
     removeSnapshots([snapshot.id]);
     deleteRoomSnapshot(snapshot.uri);
     setPhotoCount((count) => Math.max(0, count - 1));
+    photoCountRef.current = Math.max(0, photoCountRef.current - 1);
     const types = snapshotTypesRef.current;
     const last = types.lastIndexOf(snapshot.captureType ?? 'AREA_OVERVIEW');
     if (last >= 0) types.splice(last, 1);
@@ -905,9 +1010,18 @@ export default function RoomCameraScreen() {
   const renderPhotoControl = (large: boolean) => {
     const look = captureControlLook({ large, stopControl: false });
     const tone = look.glyph ?? undefined;
-    const glyph = capturingPhoto ? (
-      <ActivityIndicator className={tone} />
-    ) : (
+    /**
+     * Always the camera, never a spinner.
+     *
+     * A photograph used to hold the shutter through its downscale and its
+     * write to disk, with an `ActivityIndicator` in place of the icon --
+     * "there's a loader animation on the capture... this will slow us on
+     * taking evidence" (the office, 2026-09-23). A technician photographing a
+     * room takes several in a row and should not be made to wait for the
+     * filing of the last one. The flash and the haptic already say the shot
+     * was taken; the count underneath says how many there are.
+     */
+    const glyph = (
       <Animated.View style={iconTurn}>
         <CameraIcon size={large ? 26 : 24} className={tone} />
       </Animated.View>
@@ -1017,11 +1131,59 @@ export default function RoomCameraScreen() {
     const clock = shutterClock();
     setCapturingPhoto(true);
     setError(null);
+    // Everything that gives the button back is downstream of the await below,
+    // so a capture that never settles would keep it. See `CAPTURE_WATCHDOG_MS`.
+    /** Whether the count was already put up, so a failure below can take it down. */
+    let counted = false;
+    const watchdog = setTimeout(() => {
+      setCapturingPhoto(false);
+      void reportError(new Error('A photograph did not return from the camera.'), {
+        source: 'capture-watchdog',
+      });
+    }, CAPTURE_WATCHDOG_MS);
     try {
       const photo = await camera.takePictureAsync({
         quality: 0.82,
         shutterSound: false,
       });
+      /**
+       * The shutter is free the moment the camera has the picture.
+       *
+       * Everything below -- the downscale, the write to disk, the bookkeeping
+       * -- is filing, not photography, and on a large iPhone image the
+       * downscale alone is most of the wait. Holding the button through it
+       * made the next photograph wait on the last one's paperwork.
+       *
+       * `capturingPhoto` still covers `takePictureAsync` itself, because the
+       * camera really can only take one at a time; the `finally` below is now
+       * only a safety net for the path where the capture threw.
+       */
+      clearTimeout(watchdog);
+      setCapturingPhoto(false);
+      const sequence = photoCountRef.current + 1;
+      photoCountRef.current = sequence;
+      /**
+       * Everything the technician can perceive, now rather than at the end.
+       *
+       * Freeing the button was only half of it: the flash, the haptic and the
+       * count all sat below the downscale and the write to disk, so a tap
+       * produced nothing at all for a fifth to half a second on a
+       * full-resolution iPhone frame and only then flashed. With the button
+       * already live, a second shot fired into that silence and the first
+       * flash landed during the second capture -- feedback belonging to a tap
+       * that was no longer the last one.
+       *
+       * The Android marker path above has always done it in this order.
+       */
+      const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
+      setPhotoCount((count) => count + 1);
+      counted = true;
+      if (advancedToFindingContext) setCaptureType('FINDING_CONTEXT');
+      confirmCapture(
+        `Photo ${sequence} saved.${
+          advancedToFindingContext ? ' Next snapshot: finding context.' : ''
+        }`,
+      );
       /**
        * Brought down to the target edge when the camera could not be asked to.
        *
@@ -1058,7 +1220,7 @@ export default function RoomCameraScreen() {
             ? 'NATIVE_STILL_DURING_VIDEO'
             : 'SEPARATE_PHOTO_CAPTURE',
         clock,
-        sequenceNumber: photoCount + 1,
+        sequenceNumber: sequence,
         /**
          * Not due to send yet.
          *
@@ -1075,20 +1237,11 @@ export default function RoomCameraScreen() {
       // the offer rather than stacking one: the control is about the shot just
       // taken, and anything older belongs to the area screen.
       showDiscardable(snapshot);
-      // Feeds evidenceComplete/snapshotCount in the capture summary.
+      // Feeds evidenceComplete/snapshotCount in the capture summary. Pushed
+      // here rather than with the count above because it belongs to the stored
+      // snapshot; `captureType` is this call's own copy and the selector moving
+      // on does not change it.
       snapshotTypesRef.current.push(captureType);
-      setPhotoCount((count) => count + 1);
-      // Capturing an overview advances the selector to finding context.
-      const advancedToFindingContext = captureType === 'AREA_OVERVIEW';
-      if (advancedToFindingContext) setCaptureType('FINDING_CONTEXT');
-      // Haptics alone do not say *what* happened, and the shutter is muted so
-      // it never lands on the inspection audio. Announce the count, and the new
-      // selection when it just changed underneath the technician.
-      confirmCapture(
-        `Photo ${photoCount + 1} saved.${
-          advancedToFindingContext ? ' Next snapshot: finding context.' : ''
-        }`,
-      );
       /**
        * Deliberately not uploaded here.
        *
@@ -1137,8 +1290,24 @@ export default function RoomCameraScreen() {
         goBack();
       }
     } catch (cause) {
+      /**
+       * Take the count back down if it went up.
+       *
+       * The confirmation is given the moment the camera hands the picture
+       * over, before it has been downscaled or written, so a failure after
+       * that point would otherwise leave the summary counting a photograph
+       * that does not exist -- `photoCount` feeds `evidenceComplete`. The same
+       * pair `discardPhoto` uses.
+       */
+      if (counted) {
+        setPhotoCount((count) => Math.max(0, count - 1));
+        photoCountRef.current = Math.max(0, photoCountRef.current - 1);
+      }
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
     } finally {
+      // Both idempotent: the happy path already did each of these the moment
+      // the camera handed the picture over.
+      clearTimeout(watchdog);
       setCapturingPhoto(false);
     }
   };
@@ -1506,20 +1675,37 @@ export default function RoomCameraScreen() {
             <View className="flex-1" />
           </View>
 
-          {photoCount > 0 && !recording && !stopping ? (
-            <Pressable
-              accessibilityHint="Returns to the area to answer its condition questions and submit"
-              accessibilityLabel="Done taking photos"
-              accessibilityRole="button"
-              className={`mt-4 min-h-12 w-full flex-row items-center justify-center gap-2 rounded-xl bg-white px-4 ${PRESS_SURFACE}`}
-              onPress={finishPhotos}
-            >
-              <CheckIcon size={18} className="text-black" />
-              <Text className="text-sm font-bold text-black">
-                {primary === 'PHOTO' ? 'Done — rate the room' : 'Done'}
-              </Text>
-            </Pressable>
-          ) : null}
+          {/*
+            The space is held from the first render, empty.
+
+            This button appears on the first photograph, and it sits *below* the
+            controls in a stack anchored to the bottom -- so taking one shifted
+            the shutter up by its own height, and the band the thumb was resting
+            on became the top of "Done — rate the room". The second shot of a
+            room, which is the ordinary way a room is photographed, either hit
+            nothing or left the camera entirely. The discard offer above the
+            controls was already placed this way and for this reason; this one
+            was not.
+
+            An empty `View` rather than a disabled `Pressable`: nothing should
+            swallow a press in that band before there is anything to press.
+          */}
+          <View className="mt-4 min-h-12 w-full">
+            {photoCount > 0 && !recording && !stopping ? (
+              <Pressable
+                accessibilityHint="Returns to the area to answer its condition questions and submit"
+                accessibilityLabel="Done taking photos"
+                accessibilityRole="button"
+                className={`min-h-12 w-full flex-row items-center justify-center gap-2 rounded-xl bg-white px-4 ${PRESS_SURFACE}`}
+                onPress={finishPhotos}
+              >
+                <CheckIcon size={18} className="text-black" />
+                <Text className="text-sm font-bold text-black">
+                  {primary === 'PHOTO' ? 'Done — rate the room' : 'Done'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       </SafeAreaView>
 
