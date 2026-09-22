@@ -7,7 +7,7 @@ import {
   Trash2Icon,
   XCircleIcon,
 } from 'lucide-react-native';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -25,6 +25,7 @@ import { goBack } from '@/src/lib/navigation';
 import { useThemeColors } from '@/src/lib/theme-colors';
 import {
   filterRows,
+  nextFilterSlot,
   withFilterAnswer,
   withServiceAnswer,
   withoutFilter,
@@ -184,6 +185,20 @@ export default function JobFiltersScreen() {
   const [wholeService, setWholeService] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The filters area, once, for as long as this job is open.
+   *
+   * `filtersArea` is find-or-create: after the first call the answer can never
+   * change, and the phone was asking again on *every* tap of Photograph --- a
+   * network round trip standing between the tap and the camera, which is what
+   * the office reported as "very slow if I click the photograph again"
+   * (2026-09-22).
+   *
+   * Still resolved on the first tap rather than when the screen opens. The
+   * area is created by that call, and a job whose filters nobody photographs
+   * is meant never to grow one.
+   */
+  const filtersAreaId = useRef<string | null>(null);
 
   if (inspection.isLoading || !inspection.data) {
     return (
@@ -219,7 +234,8 @@ export default function JobFiltersScreen() {
     setOpening(row.label);
     setError(null);
     try {
-      const areaId = await actions.filtersArea.mutateAsync();
+      const areaId = filtersAreaId.current ?? (await actions.filtersArea.mutateAsync());
+      filtersAreaId.current = areaId;
       router.push({
         pathname: '/camera/[inspectionId]/[areaId]',
         params: {
@@ -283,11 +299,24 @@ export default function JobFiltersScreen() {
           {rows.map((row) => {
             const answer = row.answer;
             const photographed = Boolean(answer?.changed && (answer.photoId || answer.photoKey));
+            /**
+             * Taken, but the server has not confirmed it yet.
+             *
+             * `photoKey` is the handset's own id, written the moment the
+             * shutter fires; `photoId` arrives when the upload lands. The row
+             * used to show the same green tick for both and say "sending" in
+             * small grey text underneath, which reads as finished -- the
+             * office saw "no indicator that the photo is uploading"
+             * (2026-09-22). A spinner says it out loud.
+             */
+            const sending = Boolean(photographed && !answer?.photoId);
             const refused = Boolean(answer && !answer.changed);
             return (
               <Card className="gap-3" key={`${row.filter.size}-${row.filter.location}-${row.filter.slot}`}>
                 <View className="flex-row items-start gap-3">
-                  {photographed ? (
+                  {sending ? (
+                    <Loader accessibilityLabel="Sending the photograph" size="sm" />
+                  ) : photographed ? (
                     <CheckCircle2Icon size={20} className="text-chart-3" />
                   ) : refused ? (
                     <XCircleIcon size={20} className="text-chart-4" />
@@ -300,7 +329,7 @@ export default function JobFiltersScreen() {
                       {photographed
                         ? answer?.photoId
                           ? 'Photographed'
-                          : 'Photographed · sending'
+                          : 'Photographed · sending…'
                         : refused
                           ? `Not changed — ${answer?.reason ?? ''}`
                           : row.filter.media
@@ -380,7 +409,18 @@ export default function JobFiltersScreen() {
           save(
             withFilterAnswer(
               report,
-              { size, location: location || null, slot: 1 },
+              // The first slot this size and place has free. Writing 1 here
+              // meant a filter matching one the visit already listed answered
+              // *that* register instead of adding a row — which is how adding
+              // a filter failed silently, with no new row and no error.
+              {
+                size,
+                location: location || null,
+                slot: nextFilterSlot(item.visitDetails, report, {
+                  size,
+                  location: location || null,
+                }),
+              },
               { changed: false, reason: 'Found on site' },
               { booked: false },
             ),

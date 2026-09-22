@@ -2,6 +2,7 @@ import type { VisitFilterOutcome, VisitServicesReport } from '@texasrenters/shar
 
 import {
   filterRows,
+  nextFilterSlot,
   jobChecklistProblems,
   jobTasks,
   toggledService,
@@ -399,5 +400,57 @@ describe('pest control as a checkbox', () => {
     const left = withoutServiceAnswer(both, 'pestControl');
     expect(Object.keys(left.services)).toEqual(['fleaTreatment']);
     expect(left.filters).toEqual([]);
+  });
+});
+
+/**
+ * Adding a filter found on site used to do nothing visible.
+ *
+ * A register is identified by size, place and slot together, and the Add sheet
+ * always wrote slot 1 — so adding one that matched a register the visit
+ * already listed answered *that* register instead of adding a row. The
+ * technician saw no new filter and no error (the office, 2026-09-22).
+ */
+describe('the slot a filter found on site takes', () => {
+  it('steps past the registers the visit already lists', () => {
+    // DETAILS lists 20x25x1 twice upstairs, so slots 1 and 2 are spoken for.
+    expect(nextFilterSlot(DETAILS, null, { size: '20x25x1', location: 'upstairs hallway' })).toBe(3);
+  });
+
+  it('is 1 for a size and place the visit never mentioned', () => {
+    expect(nextFilterSlot(DETAILS, null, { size: '16x20x1', location: 'garage' })).toBe(1);
+  });
+
+  /** Slots are per size *and* place: the same size elsewhere starts again at 1. */
+  it('counts the place, not just the size', () => {
+    expect(nextFilterSlot(DETAILS, null, { size: '20x25x1', location: 'garage' })).toBe(1);
+  });
+
+  it('steps past filters already added as well as booked ones', () => {
+    const report: VisitServicesReport = {
+      services: {},
+      filters: [answer({ size: '16x20x1', location: 'garage', slot: 1 })],
+    } as VisitServicesReport;
+
+    expect(nextFilterSlot(DETAILS, report, { size: '16x20x1', location: 'garage' })).toBe(2);
+  });
+
+  /**
+   * `filterKey` normalises the size; `sameSizeAndPlace` compares the raw
+   * string. Matching the wrong one would leave slot 1 looking free and the
+   * collision alive.
+   */
+  it('matches however the size was typed', () => {
+    expect(nextFilterSlot(DETAILS, null, { size: '20X25X1', location: 'Upstairs Hallway' })).toBe(3);
+  });
+
+  /** A removed filter frees its slot again rather than counting forever. */
+  it('takes the lowest free slot, not the count plus one', () => {
+    const report: VisitServicesReport = {
+      services: {},
+      filters: [answer({ size: '16x20x1', location: 'garage', slot: 2 })],
+    } as VisitServicesReport;
+
+    expect(nextFilterSlot(DETAILS, report, { size: '16x20x1', location: 'garage' })).toBe(1);
   });
 });
