@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
+import * as Updates from 'expo-updates';
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -81,7 +82,43 @@ function DiagnosticRow({
   );
 }
 
+/**
+ * Which JavaScript the app is actually running.
+ *
+ * The app version below is the *binary's* version and says nothing about the
+ * bundle sitting on top of it. A store build and an over-the-air update can be
+ * very different code at the same version number, and on 2026-09-23 that cost a
+ * round trip to work out: a 1.3.0 TestFlight build was installed to try a
+ * navigation screen that had merged forty-nine minutes AFTER that build was
+ * compiled, so the feature was simply not in it. The app reported `1.3.0` and
+ * was telling the truth; there was nothing on this screen that could say the
+ * rest of it.
+ *
+ * `isEmbeddedLaunch` is the distinction that matters: true when the running
+ * bundle is the one compiled into the binary, false when an update has been
+ * downloaded and applied. `updateId` is null in the first case, which is why
+ * that reads as "built into the app" rather than as a missing value -- absent
+ * is the normal state for a fresh install, not a fault.
+ */
+function describeBundle(): { value: string; status: DiagnosticStatus } {
+  if (Updates.isEmergencyLaunch) {
+    return {
+      value: 'Emergency launch — an update failed to load and the built-in bundle was used',
+      status: 'error',
+    };
+  }
+  if (Updates.isEmbeddedLaunch || !Updates.updateId) {
+    return { value: 'Built into the app — no update has been applied', status: 'warning' };
+  }
+  const published = Updates.createdAt ? ` · published ${Updates.createdAt.toLocaleString()}` : '';
+  return { value: `${Updates.updateId}${published}`, status: 'ok' };
+}
+
 export default function DiagnosticsScreen() {
+  // Read once per render rather than memoised: these are module constants that
+  // expo-updates fixes at launch, so there is nothing to recompute and nothing
+  // to depend on.
+  const bundle = describeBundle();
   const uploads = useUploads();
   const isOnline = useNetworkStore((state) => state.isOnline);
   const isMetered = useNetworkStore((state) => state.isMetered);
@@ -276,6 +313,18 @@ export default function DiagnosticsScreen() {
               Constants.expoConfig?.version ?? '0.1.0'
             }`}
             status="ok"
+          />
+          <DiagnosticRow
+            label="JavaScript bundle"
+            value={bundle.value}
+            status={bundle.status}
+          />
+          <DiagnosticRow
+            label="Update channel"
+            value={`${Updates.channel ?? 'none (a development build)'} · runtime ${
+              Updates.runtimeVersion ?? 'unknown'
+            }`}
+            status={Updates.channel ? 'ok' : 'warning'}
           />
           <DiagnosticRow
             label="Data boundary"
