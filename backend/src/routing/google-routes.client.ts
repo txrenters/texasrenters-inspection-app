@@ -54,6 +54,29 @@ const ROUTE_FIELD_MASK =
   'routes.legs.duration,routes.legs.distanceMeters';
 
 /**
+ * The same drive, plus the instructions for driving it. Deliberately separate.
+ *
+ * `routes.legs.steps` moves the request into the Routes API's **Advanced**
+ * billing tier, several times the price of the mask above. That is affordable
+ * for the one leg somebody is actually driving and is not affordable for the
+ * day: `planDay` draws every stop in a single `computeRoutes`, so adding steps
+ * to `ROUTE_FIELD_MASK` would buy turn-by-turn instructions for all ten legs of
+ * a ten-stop day, every time the console redrew a route nobody is on yet.
+ *
+ * Hence two masks and two methods. This one is only ever used by
+ * `routeWithSteps`, which takes exactly two points.
+ *
+ * `routes.legs.polyline` as well as the steps' own: the steps laid end to end
+ * reproduce the leg, but the leg's own line is what gets drawn, and deriving it
+ * by concatenation would make a drawing bug out of a parsing one.
+ */
+const NAVIGATION_FIELD_MASK =
+  'routes.duration,routes.distanceMeters,' +
+  'routes.legs.duration,routes.legs.distanceMeters,routes.legs.polyline.encodedPolyline,' +
+  'routes.legs.steps.navigationInstruction,routes.legs.steps.polyline.encodedPolyline,' +
+  'routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration';
+
+/**
  * Google bills per element, and an element is one origin-destination pair.
  *
  * A technician-day of ten stops plus an origin is 121 elements. A quarter of
@@ -298,6 +321,107 @@ export interface GoogleRoute {
   geometry: [number, number][];
 }
 
+/**
+ * One instruction, still in Google's own words and Google's own vocabulary.
+ *
+ * `maneuver` is left as the raw enum string rather than normalised here.
+ * Mapping it is `maneuverFromGoogle`'s job in `@texasrenters/shared`, and it
+ * needs to know whether a step is the last of the leg -- Google has no arrival
+ * maneuver and leaves the field unset on the final step -- which is a fact
+ * about the list, not about the step. Normalising one step at a time in this
+ * file would have to guess at it.
+ */
+export interface GoogleNavigationStep {
+  /** Google's enum, e.g. `TURN_LEFT`. Absent on the last step of a leg. */
+  maneuver: string | null;
+  instruction: string;
+  distanceMeters: number;
+  /** Free-flow seconds (`staticDuration`), **not** traffic-aware. */
+  durationSeconds: number;
+  /** GeoJSON order, `[lon, lat]`, like every other geometry from this client. */
+  geometry: [number, number][];
+}
+
+/** A single leg with its instructions. `durationSeconds` is traffic-aware. */
+export interface GoogleNavigationLeg {
+  distanceMeters: number;
+  durationSeconds: number;
+  steps: GoogleNavigationStep[];
+  /** GeoJSON order, `[lon, lat]`. */
+  geometry: [number, number][];
+}
+
+/**
+ * Reads a steps-bearing computeRoutes response without trusting it. Exported
+ * for tests.
+ *
+ * The leg's duration is preferred over the route's, and falls back to it: they
+ * are the same number for a two-point request, but only the leg is guaranteed
+ * to be there under a mask that asked for both, and a leg with no duration is
+ * not a leg that takes no time.
+ *
+ * A leg with no steps is refused. Navigation cannot be driven from a line with
+ * no instructions -- `buildLegPath` would measure an empty path and every
+ * distance on the screen would read zero -- so this says it has no answer and
+ * lets the caller show "no route to draw" instead.
+ */
+export function parseNavigationLeg(body: unknown): GoogleNavigationLeg | null {
+  const route = (body as { routes?: unknown[] } | null)?.routes?.[0] as
+    | {
+        duration?: unknown;
+        distanceMeters?: unknown;
+        legs?: {
+          duration?: unknown;
+          distanceMeters?: unknown;
+          polyline?: { encodedPolyline?: unknown };
+          steps?: {
+            distanceMeters?: unknown;
+            staticDuration?: unknown;
+            polyline?: { encodedPolyline?: unknown };
+            navigationInstruction?: { maneuver?: unknown; instructions?: unknown };
+          }[];
+        }[];
+      }
+    | undefined;
+
+  const leg = route?.legs?.[0];
+  if (!route || !leg) return null;
+
+  const steps = (leg.steps ?? []).map((step) => ({
+    maneuver:
+      typeof step?.navigationInstruction?.maneuver === 'string'
+        ? step.navigationInstruction.maneuver
+        : null,
+    // The router's own sentence. Always right even when the enum is not, which
+    // is why an unreadable one becomes an empty string rather than a guess.
+    instruction:
+      typeof step?.navigationInstruction?.instructions === 'string'
+        ? step.navigationInstruction.instructions
+        : '',
+    // Google omits `distanceMeters` entirely when it is zero, which is legal
+    // and happens on the departure step of a route that starts on the line.
+    distanceMeters: typeof step?.distanceMeters === 'number' ? step.distanceMeters : 0,
+    durationSeconds: parseDuration(step?.staticDuration) ?? 0,
+    geometry: decodePolyline(step?.polyline?.encodedPolyline),
+  }));
+  if (!steps.length) return null;
+
+  const durationSeconds = parseDuration(leg.duration) ?? parseDuration(route.duration);
+  if (durationSeconds === null) return null;
+
+  return {
+    distanceMeters:
+      typeof leg.distanceMeters === 'number'
+        ? leg.distanceMeters
+        : typeof route.distanceMeters === 'number'
+          ? route.distanceMeters
+          : 0,
+    durationSeconds,
+    steps,
+    geometry: decodePolyline(leg.polyline?.encodedPolyline),
+  };
+}
+
 @Injectable()
 export class GoogleRoutesClient {
   private readonly logger = new Logger(GoogleRoutesClient.name);
@@ -414,9 +538,76 @@ export class GoogleRoutesClient {
       travelMode: 'DRIVE',
       routingPreference: 'TRAFFIC_AWARE',
       polylineEncoding: 'ENCODED_POLYLINE',
+      // Encoding is not quality, and leaving quality unset is not neutral.
+      //
+      // The Routes API resolves POLYLINE_QUALITY_UNSPECIFIED to **OVERVIEW**: a
+      // deliberately decimated line with corners rounded off and freeway
+      // vertices hundreds of metres apart. That is fine for drawing a day on an
+      // office map, which is all this call ever did before, and it breaks the
+      // moment a handset tries to follow the line. A cloverleaf comes back as a
+      // three-vertex chord; the vehicle's real arc is some 180 m from it, which
+      // is past the off-route threshold for several consecutive fixes -- so the
+      // phone decides the driver has left the route, asks for a new one, and is
+      // handed the same chord back. A reroute loop at every major interchange.
+      //
+      // It costs payload on the day draw, which is why it is stated here rather
+      // than assumed: HIGH_QUALITY returns considerably more vertices.
+      polylineQuality: 'HIGH_QUALITY',
       departureTime: departure.toISOString(),
     });
     return body === null ? null : parseComputedRoute(body);
+  }
+
+  /**
+   * One leg, with the instructions for driving it. Null when unavailable.
+   *
+   * Two points only, and that is the point: this uses `NAVIGATION_FIELD_MASK`,
+   * which is billed at the Advanced tier. Handing it a day's stops would buy
+   * steps for every leg of it -- see the note on that constant.
+   *
+   * `TRAFFIC_AWARE` for the same reason `route` uses it: the leg duration is
+   * the number the driver is shown, and free-flow is optimistic in Houston in a
+   * way that is structurally biased rather than randomly wrong. The per-step
+   * durations are `staticDuration` and are not, which is why the contract in
+   * `navigation.ts` warns against printing them beside the ETA.
+   *
+   * `routingPreference` and the rest match `route` deliberately: a navigation
+   * leg that took a different road from the day route drawn on the same map
+   * would look like a bug in whichever of the two the technician trusted less.
+   */
+  async routeWithSteps(
+    from: GeoPoint,
+    to: GeoPoint,
+    departureTime?: Date,
+  ): Promise<GoogleNavigationLeg | null> {
+    if (!this.configured) return null;
+
+    // Google refuses a departure in the past, and "now" is what navigation
+    // means anyway -- this is the drive being made at this moment.
+    const departure =
+      departureTime && departureTime.getTime() > Date.now()
+        ? departureTime
+        : new Date(Date.now() + 60_000);
+
+    const body = await this.post(ROUTES_URL, NAVIGATION_FIELD_MASK, {
+      origin: waypoint(from).waypoint,
+      destination: waypoint(to).waypoint,
+      travelMode: 'DRIVE',
+      routingPreference: 'TRAFFIC_AWARE',
+      polylineEncoding: 'ENCODED_POLYLINE',
+      // Non-negotiable here: every step boundary, every distance countdown and
+      // every off-route test is measured against this geometry. See the longer
+      // note on the day draw above -- an OVERVIEW polyline makes all three wrong
+      // in the same direction at exactly the places a driver needs them.
+      polylineQuality: 'HIGH_QUALITY',
+      // American English and imperial units, because the instruction strings
+      // are read aloud to a technician in Texas. Everything measured in this
+      // system stays metric; only Google's own prose is localised.
+      languageCode: 'en-US',
+      units: 'IMPERIAL',
+      departureTime: departure.toISOString(),
+    });
+    return body === null ? null : parseNavigationLeg(body);
   }
 
   private async post(

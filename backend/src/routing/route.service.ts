@@ -1,9 +1,12 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InspectionStatus } from '@prisma/client';
 import {
   chooseRouteOrigin,
   type DrawnRoute,
   haversineMeters,
+  maneuverFromGoogle,
+  type NavigationLeg,
+  type NavigationStep,
   needsReroute,
   type RouteLeg,
   type RouteStop,
@@ -123,6 +126,8 @@ function nearestByAir(
 
 @Injectable()
 export class RouteService {
+  private readonly logger = new Logger(RouteService.name);
+
   /**
    * Routes already drawn, per technician per day.
    *
@@ -296,27 +301,23 @@ export class RouteService {
   }
 
   /**
-   * Plan one technician's day.
+   * One technician's work on one Texas day, with where each stop is.
    *
-   * `date` is a plain calendar day because that is the only granularity the
-   * schema has. Everything scheduled for it and still worth visiting is a stop.
+   * Extracted so `navigateLeg` resolves a stop through *exactly* the same query
+   * the day route is built from. That is a security property, not tidiness: the
+   * navigation endpoint takes an inspection id from the handset, and the only
+   * thing that makes taking one safe is that the id is looked up inside this
+   * result -- scoped to the caller's own organization, their own current
+   * assignments, and their own day -- rather than fetched directly. Two copies
+   * of this `where` clause would be two chances for one of them to drift.
    */
-  async planDay(
+  private dayAssignments(
     organizationId: string,
     technicianId: string,
-    date: Date,
-  ): Promise<TechnicianRoute> {
-    /**
-     * The day in Texas, not in UTC.
-     *
-     * UTC midnight is 6 or 7pm Texas the previous evening, so from dinner time
-     * onward a UTC-bounded "today" held tomorrow's stops -- the same bug the
-     * technician dashboard had and lost in #196. It also decides which
-     * positions count as today's, which is now what picks the route's origin.
-     */
-    const { start: dayStart, end: dayEnd } = businessDayBounds(date);
-
-    const assignments = await this.prisma.inspectionAssignment.findMany({
+    dayStart: Date,
+    dayEnd: Date,
+  ) {
+    return this.prisma.inspectionAssignment.findMany({
       where: {
         technicianId,
         isCurrent: true,
@@ -369,6 +370,30 @@ export class RouteService {
         },
       },
     });
+  }
+
+  /**
+   * Plan one technician's day.
+   *
+   * `date` is a plain calendar day because that is the only granularity the
+   * schema has. Everything scheduled for it and still worth visiting is a stop.
+   */
+  async planDay(
+    organizationId: string,
+    technicianId: string,
+    date: Date,
+  ): Promise<TechnicianRoute> {
+    /**
+     * The day in Texas, not in UTC.
+     *
+     * UTC midnight is 6 or 7pm Texas the previous evening, so from dinner time
+     * onward a UTC-bounded "today" held tomorrow's stops -- the same bug the
+     * technician dashboard had and lost in #196. It also decides which
+     * positions count as today's, which is now what picks the route's origin.
+     */
+    const { start: dayStart, end: dayEnd } = businessDayBounds(date);
+
+    const assignments = await this.dayAssignments(organizationId, technicianId, dayStart, dayEnd);
 
     const routable: RouteStop[] = [];
     const unroutable: TechnicianRoute['unroutable'] = [];
@@ -556,6 +581,127 @@ export class RouteService {
     }
 
     return route;
+  }
+
+  /**
+   * The drive to one of the technician's own stops, turn by turn.
+   *
+   * ## Why the id is safe to accept here
+   *
+   * Every other technician endpoint that takes an id is guarded in the service
+   * that owns the record. This one is guarded by *resolution*: the id is never
+   * used to fetch anything. It is looked for inside `dayAssignments`, which is
+   * already scoped to the caller's organization, the caller's own current
+   * assignments and the caller's own Texas day. An id belonging to a colleague,
+   * to another organization, or to tomorrow simply is not in that list, and the
+   * answer is the same as for an id that does not exist: nothing to draw.
+   *
+   * Finished work is refused too. It is not somewhere left to drive to, for the
+   * same reason `VISITABLE` excludes it from the day route -- navigating back
+   * to a property the technician has already handed in would pad the day with a
+   * journey that has no reason to happen.
+   *
+   * ## Nothing is cached
+   *
+   * Unlike `planDay`, which reuses a drawn route until the day changes, a
+   * navigation leg is a statement about *right now*: it is drawn from a live
+   * position, timed against current traffic, and re-asked for the moment the
+   * driver leaves the line. A cache here would hand somebody who has just taken
+   * a wrong turn the route they were on before they took it -- which is the one
+   * answer that is certainly wrong.
+   *
+   * Null for every failure, so the phone can show its "no route to draw"
+   * screen. Nothing here throws.
+   */
+  async navigateLeg(
+    organizationId: string,
+    technicianId: string,
+    toInspectionId: string,
+    from: GeoPoint,
+  ): Promise<NavigationLeg | null> {
+    if (!toInspectionId) return null;
+    if (!Number.isFinite(from.latitude) || !Number.isFinite(from.longitude)) return null;
+
+    // Today, always. A leg is driven now; there is no such thing as navigating
+    // a Tuesday from a Thursday, so this takes no date from the caller.
+    const { start: dayStart, end: dayEnd } = businessDayBounds(new Date());
+    const assignments = await this.dayAssignments(
+      organizationId,
+      technicianId,
+      dayStart,
+      dayEnd,
+    );
+
+    const match = assignments.find(({ inspection }) => inspection.id === toInspectionId);
+    if (!match || isFinished(match.inspection.status)) {
+      // Worth a line: a phone asking to navigate to something that is not on
+      // its day is either a stale screen or somebody trying an id, and the two
+      // look identical from here. Never the id itself -- it names a property.
+      this.logger.warn({
+        event: 'navigation_leg_refused',
+        reason: match ? 'ALREADY_FINISHED' : 'NOT_ON_THIS_TECHNICIANS_DAY',
+        technicianId,
+      });
+      return null;
+    }
+
+    const property = match.inspection.propertywareBuilding ?? match.inspection.property;
+    if (!property?.latitude || !property.longitude) return null;
+    const to: GeoPoint = {
+      latitude: property.latitude.toNumber(),
+      longitude: property.longitude.toNumber(),
+    };
+
+    /**
+     * Google only, in practice and by configuration.
+     *
+     * OSRM can produce steps (`steps=true` on `/route`), and
+     * `maneuverFromOsrm` exists in `@texasrenters/shared` to normalise them --
+     * but `OsrmClient` has no steps-bearing call, and OSRM is not configured on
+     * this deployment at all (see `routing-runs-on-google-not-osrm`). So the
+     * fallback would be dead code on every environment that exists today. When
+     * a deployment does run OSRM, the wiring is: a `routeWithSteps` on
+     * `OsrmClient` and a second branch here.
+     */
+    const drawn = this.google.configured ? await this.google.routeWithSteps(from, to) : null;
+    if (!drawn) return null;
+
+    const steps: NavigationStep[] = drawn.steps.map((step, index) => ({
+      // `isLast` is how ARRIVE happens: Google has no arrival maneuver and
+      // leaves the field unset on the final step, which mapped naively would
+      // make the last instruction of every drive an unknown one.
+      maneuver: maneuverFromGoogle(step.maneuver, index === drawn.steps.length - 1),
+      instruction: step.instruction,
+      // Google does not name the road separately -- the name is inside the
+      // instruction sentence ("Turn left onto Kirby Drive"). Pulling it back
+      // out with a pattern would invent a field on every sentence that did not
+      // match, so this stays null and the screen reads the instruction.
+      roadName: null,
+      distanceMeters: Math.round(step.distanceMeters),
+      durationSeconds: Math.round(step.durationSeconds),
+      // The one flip. `decodePolyline` emits `[lon, lat]` for both routers, and
+      // `toLatLngPath` turns it into the `[lat, lng]` everything downstream --
+      // including every constant in `navigation.ts` -- is written in.
+      polyline: toLatLngPath(step.geometry),
+    }));
+
+    return {
+      toStopId: match.inspection.id,
+      from: [from.latitude, from.longitude],
+      to: [to.latitude, to.longitude],
+      distanceMeters: Math.round(drawn.distanceMeters),
+      durationSeconds: Math.round(drawn.durationSeconds),
+      steps,
+      // The leg's own line when Google drew one, and the steps laid end to end
+      // when it did not. Drawing only: `buildLegPath` measures progress against
+      // the steps regardless, and it drops the duplicated endpoints this
+      // concatenation leaves behind.
+      polyline: drawn.geometry.length
+        ? toLatLngPath(drawn.geometry)
+        : steps.flatMap((step) => step.polyline),
+      source: 'GOOGLE_TRAFFIC',
+      drawnAt: new Date().toISOString(),
+    };
   }
 
   /**
