@@ -2,6 +2,7 @@ import {
   bookedFilters,
   filterKey,
   filterLabel,
+  normalizeFilterSize,
   parseVisitDetails,
   reportableServices,
   servicesReportProblems,
@@ -114,6 +115,47 @@ export function filterRows(
     rows.push({ filter, total: 1, label: filterLabel(filter), answer });
   }
   return rows;
+}
+
+/**
+ * The slot a filter found on site should take.
+ *
+ * A register is identified by `filterKey` -- size, place and slot together --
+ * and the Add sheet always wrote slot 1. So adding a filter that matched a
+ * register the visit already listed did not add anything: it answered that
+ * register instead, marking it unchanged and "Found on site", and the row the
+ * technician expected never appeared. Reported as adding a filter failing
+ * silently (2026-09-22).
+ *
+ * Slots are per size *and* place, which is what `filterLabel` counts for
+ * "(2 of 2)", so two 20x25x1 filters in different rooms are both slot 1 and
+ * that is correct. The lowest free one is taken rather than the count plus
+ * one: a technician who adds two, removes the first and adds another should
+ * get slot 1 back, not slot 3.
+ */
+export function nextFilterSlot(
+  visitDetails: string | null | undefined,
+  report: VisitServicesReport | null | undefined,
+  of: Pick<BookedFilter, 'size' | 'location'>,
+): number {
+  /**
+   * Normalised the way `filterKey` normalises, not the way `sameSizeAndPlace`
+   * compares. That helper tests the raw strings, which is right for counting
+   * "(2 of 2)" off one parsed list, and wrong here: a booked "20X25X1" and a
+   * typed "20x25x1" are one register to `filterKey` and two to it, so slot 1
+   * would look free and the collision would survive the fix.
+   */
+  const place = (filter: Pick<BookedFilter, 'size' | 'location'>) =>
+    `${normalizeFilterSize(filter.size)}|${(filter.location ?? '').trim().toLowerCase()}`;
+  const wanted = place(of);
+  const here = (filter: Pick<BookedFilter, 'size' | 'location'>) => place(filter) === wanted;
+  const taken = new Set<number>();
+  for (const filter of bookedFilters(parseVisitDetails(visitDetails)))
+    if (here(filter)) taken.add(filter.slot);
+  for (const answer of report?.filters ?? []) if (here(answer)) taken.add(answer.slot);
+  let slot = 1;
+  while (taken.has(slot)) slot += 1;
+  return slot;
 }
 
 /** How far through the registers the technician is. */
