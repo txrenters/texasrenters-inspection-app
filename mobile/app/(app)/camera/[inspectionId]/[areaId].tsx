@@ -20,7 +20,6 @@ import {
   ZapOffIcon,
 } from 'lucide-react-native';
 import {
-  ActivityIndicator,
   Animated,
   BackHandler,
   Image,
@@ -304,6 +303,15 @@ export default function RoomCameraScreen() {
     filterSize ? 'SERIAL_OR_LABEL' : serviceForPhoto ? 'OTHER' : 'AREA_OVERVIEW',
   );
   const [photoCount, setPhotoCount] = useState(0);
+  /**
+   * The same count, readable synchronously.
+   *
+   * The shutter is free again before a photograph has finished being written,
+   * so two taps in a row overlap and both would read the same `photoCount`
+   * from their own render -- numbering two pieces of evidence identically.
+   * Kept in step with the state above, including when one is discarded.
+   */
+  const photoCountRef = useRef(0);
   /** The shot just taken, while it is still held from upload. */
   const [discardable, setDiscardable] = useState<RoomSnapshot | null>(null);
   /**
@@ -619,12 +627,27 @@ export default function RoomCameraScreen() {
    * opens on `video` — every kind but occupied — reaches `recordAsync` by
    * exactly the path it did before, with no wait and no new failure mode.
    *
-   * On timeout it resolves anyway rather than refusing. Whether
+   * On timeout it gives the camera back rather than refusing. Whether
    * `onCameraReady` fires a second time after a mode change is a detail of the
    * native module, and betting a technician's ability to record on it would
    * turn a missing callback into "the record button does nothing". Proceeding
    * is no worse than before: if the binding really has not applied,
    * `recordAsync` reports it through the error path that already exists.
+   *
+   * ── WHY THE TIMEOUT MARKS IT READY ──────────────────────────────────────
+   *
+   * It used to resolve the promise and stop there, leaving `ready` false. But
+   * `ready` is the *only* thing holding the shutter open --
+   * `disabled={!ready || capturingPhoto}` -- and nothing else in this screen
+   * ever sets it true again. So a rebind whose callback never came did not
+   * merely delay a capture: it disabled the capture button for as long as the
+   * screen stayed mounted, and the only way out was to leave and come back.
+   * The office reported exactly that on 2026-09-23 -- "it won't touch... it
+   * touch when I retry and refresh the app" -- and it was intermittent because
+   * it depended on a native callback that usually does fire.
+   *
+   * Reachable from all three rebinds, and worst from the one after a recording
+   * stops: film an area, and the shutter is dead for the rest of the visit.
    */
   const bindCamera = (next: CameraMode) =>
     new Promise<void>((resolve) => {
@@ -632,7 +655,8 @@ export default function RoomCameraScreen() {
       cameraModeRef.current = next;
       setReady(false);
       setCameraMode(next);
-      const timer = setTimeout(resolve, CAMERA_REBIND_TIMEOUT_MS);
+      // `markCameraReady` drains the waiters, so this resolves the promise too.
+      const timer = setTimeout(markCameraReady, CAMERA_REBIND_TIMEOUT_MS);
       readyWaiters.current.push(() => {
         clearTimeout(timer);
         resolve();
@@ -889,6 +913,7 @@ export default function RoomCameraScreen() {
     removeSnapshots([snapshot.id]);
     deleteRoomSnapshot(snapshot.uri);
     setPhotoCount((count) => Math.max(0, count - 1));
+    photoCountRef.current = Math.max(0, photoCountRef.current - 1);
     const types = snapshotTypesRef.current;
     const last = types.lastIndexOf(snapshot.captureType ?? 'AREA_OVERVIEW');
     if (last >= 0) types.splice(last, 1);
@@ -905,9 +930,18 @@ export default function RoomCameraScreen() {
   const renderPhotoControl = (large: boolean) => {
     const look = captureControlLook({ large, stopControl: false });
     const tone = look.glyph ?? undefined;
-    const glyph = capturingPhoto ? (
-      <ActivityIndicator className={tone} />
-    ) : (
+    /**
+     * Always the camera, never a spinner.
+     *
+     * A photograph used to hold the shutter through its downscale and its
+     * write to disk, with an `ActivityIndicator` in place of the icon --
+     * "there's a loader animation on the capture... this will slow us on
+     * taking evidence" (the office, 2026-09-23). A technician photographing a
+     * room takes several in a row and should not be made to wait for the
+     * filing of the last one. The flash and the haptic already say the shot
+     * was taken; the count underneath says how many there are.
+     */
+    const glyph = (
       <Animated.View style={iconTurn}>
         <CameraIcon size={large ? 26 : 24} className={tone} />
       </Animated.View>
@@ -1023,6 +1057,21 @@ export default function RoomCameraScreen() {
         shutterSound: false,
       });
       /**
+       * The shutter is free the moment the camera has the picture.
+       *
+       * Everything below -- the downscale, the write to disk, the bookkeeping
+       * -- is filing, not photography, and on a large iPhone image the
+       * downscale alone is most of the wait. Holding the button through it
+       * made the next photograph wait on the last one's paperwork.
+       *
+       * `capturingPhoto` still covers `takePictureAsync` itself, because the
+       * camera really can only take one at a time; the `finally` below is now
+       * only a safety net for the path where the capture threw.
+       */
+      setCapturingPhoto(false);
+      const sequence = photoCountRef.current + 1;
+      photoCountRef.current = sequence;
+      /**
        * Brought down to the target edge when the camera could not be asked to.
        *
        * `pictureSize` caps the capture itself, and on Android it does. On iOS
@@ -1058,7 +1107,7 @@ export default function RoomCameraScreen() {
             ? 'NATIVE_STILL_DURING_VIDEO'
             : 'SEPARATE_PHOTO_CAPTURE',
         clock,
-        sequenceNumber: photoCount + 1,
+        sequenceNumber: sequence,
         /**
          * Not due to send yet.
          *
@@ -1085,7 +1134,7 @@ export default function RoomCameraScreen() {
       // it never lands on the inspection audio. Announce the count, and the new
       // selection when it just changed underneath the technician.
       confirmCapture(
-        `Photo ${photoCount + 1} saved.${
+        `Photo ${sequence} saved.${
           advancedToFindingContext ? ' Next snapshot: finding context.' : ''
         }`,
       );
