@@ -115,24 +115,33 @@ async function main() {
       const printable = (sizes) => sizes.filter((size) => FILTER_SIZE_IN_TEXT.test(size));
       let differ = 0;
       let finished = 0;
+      let unresolved = 0;
       const missing = [];
       for (const stop of stops) {
         if (stop.inspection && (stop.inspection.status === 'COMPLETED' || stop.inspection.status === 'CANCELLED')) {
           finished += 1;
           continue;
         }
-        const siblings = stop.tenant.propertywareBuildingId
-          ? (unitsOf.get(stop.tenant.propertywareBuildingId) ?? [])
-          : [];
-        const chosen = stop.propertywareUnitId
-          ? siblings.find((unit) => unit.id === stop.propertywareUnitId)
-          : undefined;
-        // A stop whose unit is no longer active is one the service leaves alone.
-        if (stop.propertywareUnitId && !chosen) continue;
-        const live = stopFilterSizes(
-          stop.tenant.hvacFilterSizes,
-          chosen ? { unit: chosen, units: siblings } : { unit: null, units: undefined },
-        );
+        /**
+         * The service's condition, to the letter.
+         *
+         * It narrows only when the tenancy has a building AND the stop has a
+         * unit, and only skips when the unit cannot be resolved *within* that
+         * building. Skipping whenever the unit was merely not found would drop
+         * a stop whose tenancy has since lost its building link -- one the
+         * service still refreshes, from the whole tenancy's sizes.
+         */
+        let unit = { unit: null, units: undefined };
+        if (stop.tenant.propertywareBuildingId && stop.propertywareUnitId) {
+          const siblings = unitsOf.get(stop.tenant.propertywareBuildingId) ?? [];
+          const chosen = siblings.find((candidate) => candidate.id === stop.propertywareUnitId);
+          if (!chosen) {
+            unresolved += 1;
+            continue;
+          }
+          unit = { unit: chosen, units: siblings };
+        }
+        const live = stopFilterSizes(stop.tenant.hvacFilterSizes, unit);
         if (!printable(live).length) missing.push(stop.tenant.addressLine1 ?? '(no address)');
         const same =
           live.length === stop.hvacFilterSizes.length &&
@@ -143,6 +152,7 @@ async function main() {
       console.log(`  stops                        ${stops.length}`);
       console.log(`  would take new sizes         ${differ}`);
       console.log(`  already walked or called off ${finished}   (left alone)`);
+      console.log(`  unit no longer active        ${unresolved}   (left alone)`);
       console.log(`  no size in Propertyware      ${missing.length}`);
       if (missing.length) {
         console.log('\n  the office fills these in at the source:');
