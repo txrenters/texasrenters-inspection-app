@@ -14,6 +14,7 @@ import {
   Put,
   Query,
   Req,
+  Res,
   StreamableFile,
   UploadedFile,
   UseGuards,
@@ -21,6 +22,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import {
   REPORTABLE_VISIT_SERVICES,
   UserRole,
@@ -55,10 +57,36 @@ import {
   TechnicianLocationBatchDto,
   TechnicianLocationStatusDto,
 } from './technician.dto';
+import {
+  isTileInRange,
+  MapTilesClient,
+  MAP_TILE_TYPES,
+  type MapTileOptions,
+  type MapTileType,
+} from '../routing/map-tiles.client';
 import { RouteService } from '../routing/route.service';
 import { TechnicianHomeService } from './technician-home.service';
 import { TechnicianLocationService } from './technician-location.service';
 import { TechnicianService, type UploadedRoomVideo } from './technician.service';
+
+/**
+ * Which map the phone asked for, with anything unrecognised read as the
+ * ordinary one.
+ *
+ * Unrecognised rather than refused on purpose: these arrive as query strings
+ * from a handset that may be several OTA updates behind, and a technician
+ * driving somewhere should get a light road map rather than a 400 because a
+ * newer name for a map type was added after their build.
+ */
+function tileOptions(mapType?: string, theme?: string, traffic?: string): MapTileOptions {
+  return {
+    mapType: (MAP_TILE_TYPES as readonly string[]).includes(mapType ?? '')
+      ? (mapType as MapTileType)
+      : 'roadmap',
+    theme: theme === 'dark' ? 'dark' : 'light',
+    traffic: traffic === '1' || traffic === 'true',
+  };
+}
 
 @ApiTags('Technician mobile application')
 @ApiBearerAuth()
@@ -71,6 +99,7 @@ export class TechnicianController {
     private readonly mobilePush: MobilePushService,
     private readonly locations: TechnicianLocationService,
     private readonly routes: RouteService,
+    private readonly mapTiles: MapTilesClient,
     private readonly mediaProcessing: MediaProcessingService,
     private readonly charges: ChargeService,
     private readonly homes: TechnicianHomeService,
@@ -100,6 +129,106 @@ export class TechnicianController {
       request.user.id,
       businessDayFromQuery(date),
     );
+  }
+
+  /**
+   * The drive to one of their own stops, turn by turn.
+   *
+   * Guarded exactly like `route` above, and it takes an id only because
+   * `navigateLeg` refuses to *fetch* by it: the id is looked for inside the
+   * technician's own day, so a colleague's inspection resolves to nothing
+   * rather than to a route. See the note on that method.
+   *
+   * `lat`/`lng` are where the phone is now, which is where the leg is drawn
+   * from -- deliberately not the last position the handset uploaded, because
+   * the location queue can be minutes behind on a bad signal and a leg drawn
+   * from a mile back tells somebody to turn where they have already turned.
+   *
+   * Answers 200 with a null body when no route could be drawn: no key, an
+   * outage, a property that never geocoded, an id that is not on the day. The
+   * app has a designed screen for that, and an exception would show it a crash
+   * instead of a sentence.
+   */
+  @Get('navigation/leg')
+  navigationLeg(
+    @Req() request: AuthenticatedRequest,
+    @Query('to') to?: string,
+    @Query('lat') lat?: string,
+    @Query('lng') lng?: string,
+  ) {
+    return this.routes.navigateLeg(request.user.organizationId, request.user.id, to ?? '', {
+      latitude: Number(lat),
+      longitude: Number(lng),
+    });
+  }
+
+  /**
+   * One basemap tile, fetched with our key and handed on.
+   *
+   * The phone cannot hold the key -- a bare `fetch` from React Native proves no
+   * application identity, so an application-restricted key is useless there and
+   * an unrestricted one in the bundle is a published key. So the tile comes
+   * through here, where the technician is already authenticated.
+   *
+   * `z`, `x` and `y` are validated before the upstream URL is built. They are
+   * path segments from a handset, and an unchecked one is a string pasted into
+   * a request we then make with our own key on it.
+   *
+   * The upstream `Cache-Control` and `ETag` are passed through untouched rather
+   * than replaced. Google's terms require clients to respect the lifetime it
+   * sets, so lengthening it would be a licensing decision and shortening it
+   * would bill us for tiles the phone already has.
+   */
+  @Get('map-tiles/:z/:x/:y')
+  async mapTile(
+    @Param('z') z: string,
+    @Param('x') x: string,
+    @Param('y') y: string,
+    @Res() response: Response,
+    @Query('mapType') mapType?: string,
+    @Query('theme') theme?: string,
+    @Query('traffic') traffic?: string,
+  ) {
+    const zoom = Number(z);
+    const column = Number(x);
+    const row = Number(y);
+    if (!isTileInRange(zoom, column, row))
+      throw new ApplicationError(400, 'TILE_OUT_OF_RANGE', 'That is not a tile that can exist.');
+
+    const tile = await this.mapTiles.tile(zoom, column, row, tileOptions(mapType, theme, traffic));
+    if (!tile)
+      // Not a 500: the map being unavailable is a degraded screen, not an
+      // incident, and the app draws the route on a blank field rather than
+      // failing the drive.
+      throw new ApplicationError(
+        503,
+        'MAP_TILE_UNAVAILABLE',
+        'The map could not be loaded right now.',
+      );
+
+    response.setHeader('Content-Type', tile.contentType);
+    if (tile.cacheControl) response.setHeader('Cache-Control', tile.cacheControl);
+    if (tile.etag) response.setHeader('ETag', tile.etag);
+    response.setHeader('Content-Length', tile.bytes.length);
+    response.end(tile.bytes);
+  }
+
+  /**
+   * Who the map data belongs to, for the line the map is required to show.
+   *
+   * Separate from the tiles because it is one string per session rather than
+   * one per tile, and because showing it is not optional: Google's terms make
+   * the attribution a condition of drawing their tiles at all. It therefore
+   * always answers with something, falling back to the minimum Google states
+   * rather than leaving the screen with nothing to display.
+   */
+  @Get('map-attribution')
+  async mapAttribution(
+    @Query('mapType') mapType?: string,
+    @Query('theme') theme?: string,
+    @Query('traffic') traffic?: string,
+  ) {
+    return { attribution: await this.mapTiles.attribution(tileOptions(mapType, theme, traffic)) };
   }
 
   @Post('locations')

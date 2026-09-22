@@ -77,6 +77,58 @@ export function buster() {
 }
 
 /**
+ * Answers that must never come back from disk, whatever their age.
+ *
+ * `technician-route-schema.ts` says the day route is "deliberately not cached
+ * for offline use". That was true of the *record* cache and false of this one:
+ * `shouldDehydrateQuery` below filtered on status and nothing else, so every
+ * successful query was written, `['day-route']` included, and
+ * `restoreQueryCache` hydrated it back without revalidating it. The comment and
+ * the behaviour had disagreed for as long as both existed.
+ *
+ * The reason the schema gives is the reason here. A route is a statement about
+ * where somebody is right now. Served from an hour-old cache it is not stale
+ * data, it is wrong data: it would open the morning by sending a technician to
+ * a stop they finished yesterday afternoon, with a drive time and an order that
+ * look exactly as authoritative as a real one. The navigation leg is the same
+ * claim at a finer grain — turn-by-turn instructions for a drive that is over.
+ *
+ * Nothing is lost by dropping them. Both are refetched the moment their screen
+ * mounts; what goes is the wrong first paint, not the data.
+ *
+ * Matched on the key's first element, so every `['navigation-leg', stopId]`
+ * goes with it. Keep in step with `queryKeys` in `features/queries.ts`.
+ */
+const NEVER_PERSISTED_QUERY_ROOTS: readonly string[] = ['day-route', 'navigation-leg'];
+
+function isPersistableQueryKey(queryKey: unknown): boolean {
+  const root = Array.isArray(queryKey) ? (queryKey[0] as unknown) : queryKey;
+  return typeof root !== 'string' || !NEVER_PERSISTED_QUERY_ROOTS.includes(root);
+}
+
+/**
+ * Strips volatile queries from a payload on the way back in, as well as on the
+ * way out.
+ *
+ * Filtering only the write would leave every handset that has already run this
+ * version holding a stored route until its cache expired — and the buster
+ * cannot help, because bumping it throws away the technician's whole warm start
+ * to solve one key. Filtering both ends cleans those caches on the next launch
+ * and costs nothing.
+ */
+function withoutVolatileQueries(state: unknown): unknown {
+  if (!state || typeof state !== 'object') return state;
+  const queries = (state as { queries?: unknown }).queries;
+  if (!Array.isArray(queries)) return state;
+  return {
+    ...(state as object),
+    queries: queries.filter((query) =>
+      isPersistableQueryKey((query as { queryKey?: unknown } | null)?.queryKey),
+    ),
+  };
+}
+
+/**
  * Scopes stored data to the signed-in technician.
  *
  * Two technicians sharing a device must never see each other's assignments, so
@@ -117,7 +169,7 @@ export async function restoreQueryCache(client: QueryClient): Promise<boolean> {
       await demoStorage.removeItem(key);
       return false;
     }
-    hydrate(client, payload.state);
+    hydrate(client, withoutVolatileQueries(payload.state));
     return true;
   } catch {
     // A truncated or hand-edited payload must not wedge every future launch.
@@ -142,8 +194,13 @@ export function persistQueryCache(client: QueryClient): () => void {
       // Errors and in-flight queries are worthless on the next launch, and a
       // persisted failure would be restored as a screen that looks broken
       // before a single request has been made.
+      // A route or a leg is never written, however successful — see
+      // NEVER_PERSISTED_QUERY_ROOTS. Filtering on status alone was the whole
+      // reason the day route reached disk at all.
       shouldDehydrateQuery: (query) =>
-        query.state.status === 'success' && query.state.data !== undefined,
+        query.state.status === 'success' &&
+        query.state.data !== undefined &&
+        isPersistableQueryKey(query.queryKey),
       // Never: a restored pending mutation would re-fire a write the technician
       // already made — a duplicate finding, or a second submitted room.
       shouldDehydrateMutation: () => false,

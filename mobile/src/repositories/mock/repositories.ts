@@ -1,3 +1,5 @@
+import type { NavigationLeg } from '@texasrenters/shared';
+
 import type {
   AddAreaInput,
   AuthRepository,
@@ -18,6 +20,7 @@ import type { DemoRole, DemoUser, Finding, InspectionRoom, LocalMedia } from '..
 import { useDemoStore } from '../../stores/demo.store';
 import { isRoomSummary } from '../../utils/ai-review';
 import { demoUsers, inspections, properties, rooms } from './data';
+import { houstonNavigationLeg } from './nav-fixtures';
 
 async function mockDelay() {
   if (process.env.NODE_ENV === 'test') return;
@@ -102,7 +105,51 @@ export class MockInspectionRepository implements InspectionRepository {
       totalDistanceMeters: 0,
       totalDurationSeconds: 0,
       unroutable: [],
+      geometry: [],
+      history: { stops: [], geometry: [] },
+      originKind: null,
+      originOutsideServiceArea: false,
+      airTravel: null,
     };
+  }
+  /**
+   * The Houston fixture, so the navigation screen can be driven with no backend.
+   *
+   * A leg, unlike the day route above, *can* honestly be faked: it is a drawn
+   * line, not a measurement of where somebody is, and every judgement the screen
+   * makes about it is arithmetic that works the same on a fixture as on a real
+   * one. The route above stays empty for the opposite reason -- an invented
+   * drive time would look exactly like a real one with nothing to say it was
+   * not.
+   *
+   * `from` is the caller's actual position and `drawnAt` is now, because the
+   * screen distinguishes a fresh leg from a held one by that field. The
+   * polyline still starts at the fixture's own origin: demo mode is not
+   * pretending to have routed from where the phone is.
+   */
+  async navigationLeg(
+    toInspectionId: string,
+    from: { latitude: number; longitude: number },
+  ): Promise<NavigationLeg | null> {
+    await mockDelay();
+    ensureMockAvailable();
+    return {
+      ...houstonNavigationLeg,
+      toStopId: toInspectionId,
+      from: [from.latitude, from.longitude],
+      drawnAt: new Date().toISOString(),
+    };
+  }
+  /**
+   * No tiles in demo mode.
+   *
+   * Mirrors `MockMediaRepository.playback`: there is no Google account behind a
+   * demo build, so the honest answer is that the map cannot be drawn. The
+   * screen shows the route line on a plain background and says so, which is
+   * also what a deployment with no map credentials gets.
+   */
+  async mapSession() {
+    return null;
   }
   async dashboard() {
     await mockDelay();

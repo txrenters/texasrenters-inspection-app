@@ -32,6 +32,8 @@ import type {
   InspectionListFilters,
   InspectionPage,
   InspectionRepository,
+  MapSessionOptions,
+  MapTileSession,
   MediaRepository,
   PropertyRepository,
   TechnicianDayRoute,
@@ -41,12 +43,18 @@ import type {
 import { INSPECTION_PAGE_SIZE } from '../contracts';
 import { QueuedOfflineError, queueOnConnectionFailure } from './offline-writes';
 import { technicianRouteSchema } from './technician-route-schema';
+import { mapAttributionSchema, navigationLegSchema } from './navigation-schema';
 import { flushRoomSnapshotsNow } from '../../media/room-snapshot-flush';
 import { runStreamUpload, type StreamUploadSession } from '../../media/stream-upload-runner';
 import type { VideoPlaybackResponse } from '../../media/playback-source';
 import type { ClosingComments } from '../../utils/closing-comments';
 import { resolveApiUrl } from '@texasrenters/shared';
-import type { InspectionType, ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
+import type {
+  InspectionType,
+  NavigationLeg,
+  ReportableVisitService,
+  VisitServicesReport,
+} from '@texasrenters/shared';
 
 import { z } from 'zod';
 
@@ -626,7 +634,23 @@ export async function requestJson(
       if (response.status >= 500) throw new ApiConnectionError(message);
       throw new Error(message);
     }
-    return response.status === 204 ? undefined : response.json();
+    /**
+     * An empty body is not a parse error.
+     *
+     * This read `status === 204 ? undefined : response.json()`, which is only
+     * half the rule: Nest answers **200 with no body at all** for a handler
+     * that returns nothing, and `DELETE /technician/notification-devices` is
+     * exactly that. `response.json()` on an empty body throws
+     * "JSON Parse error: Unexpected end of input" — reported from a real
+     * iPhone on 1.2.0, 2026-09-22 — and the caller treated it as a failed
+     * request, so the push token was never cleared and the phone went on
+     * believing it was registered.
+     *
+     * Read as text first and parse only what is there. Any status can carry an
+     * empty body, so the check is the body rather than the code.
+     */
+    const body = await response.text();
+    return body ? (JSON.parse(body) as unknown) : undefined;
   }
   throw new ApiConnectionError(
     'Cannot connect to the TexasRenters API. Check the server and retry.',
@@ -758,6 +782,74 @@ export class ApiInspectionRepository implements InspectionRepository {
   }
   async route(): Promise<TechnicianDayRoute> {
     return technicianRouteSchema.parse(await getJson('/api/v1/technician/route'));
+  }
+  /**
+   * The drive to one stop, turn by turn.
+   *
+   * No `cachedApiRecord` around it, and that is the same decision `route` above
+   * makes for the same reason: a leg is a statement about where somebody is
+   * *right now*. Served from an hour-old cache it is not stale data, it is
+   * wrong data, and it would read out turns for a drive that is already over.
+   * No signal means no turn-by-turn, which is honest — the day route's stop
+   * list is what the screen falls back to.
+   *
+   * The destination is sent as the inspection id rather than a coordinate: the
+   * server already holds the property's position and is the authority on it, so
+   * a handset holding a stale one cannot navigate somebody to an address the
+   * office has since corrected.
+   */
+  async navigationLeg(
+    toInspectionId: string,
+    from: { latitude: number; longitude: number },
+  ): Promise<NavigationLeg | null> {
+    const query = new URLSearchParams({
+      to: toInspectionId,
+      lat: String(from.latitude),
+      lng: String(from.longitude),
+    });
+    // `?? null` because an empty body now reads as `undefined` rather than
+    // throwing — see `requestJson`. The schema accepts null and not undefined,
+    // and "the router would not draw it" must not surface as a parse error.
+    return navigationLegSchema.parse(
+      (await getJson(`/api/v1/technician/navigation/leg?${query.toString()}`)) ?? null,
+    );
+  }
+  /**
+   * Where to fetch map tiles, and what to print beside them.
+   *
+   * The template points at our own backend. Google's key stays on the server:
+   * one in the bundle is one published to every handset, and it cannot be
+   * rotated without a store release — the same reasoning that keeps the
+   * geocoding key off the browser key. The tile request carries this
+   * technician's session header, exactly as the floor-plan document does.
+   */
+  async mapSession(options: MapSessionOptions): Promise<MapTileSession | null> {
+    const baseUrl = environment.apiBaseUrl;
+    if (!baseUrl) return null;
+    const query = new URLSearchParams({
+      mapType: options.mapType,
+      theme: options.theme,
+      traffic: String(options.traffic),
+    });
+    const body = mapAttributionSchema.parse(
+      (await getJson(`/api/v1/technician/map-attribution?${query.toString()}`)) ?? null,
+    );
+    if (!body) return null;
+    // Read once, here, rather than per tile: a viewport is tens of images and
+    // `getSession` can touch the keychain, which on a locked iPhone is the one
+    // call in this file that is genuinely expensive. A session lasts far longer
+    // than the two-week tile session it is fetching, and the map remounts on
+    // every navigation start, so a token that does rotate is picked up then.
+    const session = await getSession();
+    if (!session) return null;
+    return {
+      // `{z}/{x}/{y}` are the map's own placeholders, so they are concatenated
+      // rather than passed through URLSearchParams, which percent-encodes the
+      // braces and hands the tile route three literal `%7Bz%7D`s.
+      tileUrlTemplate: `${resolveApiUrl(baseUrl, '/api/v1/technician/map-tiles')}/{z}/{x}/{y}?${query.toString()}`,
+      attribution: body.attribution,
+      tileHeaders: { authorization: `Bearer ${session.accessToken}` },
+    };
   }
   async listPage(filters: InspectionListFilters = {}): Promise<InspectionPage> {
     const page = filters.page ?? 1;

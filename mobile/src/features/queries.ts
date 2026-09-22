@@ -56,6 +56,16 @@ const ACTIVE_INSPECTION_PAGE_SIZE = 100;
 
 export const queryKeys = {
   dayRoute: ['day-route'] as const,
+  /**
+   * Keep the root string in step with `NEVER_PERSISTED_QUERY_ROOTS` in
+   * `src/storage/query-cache-persistence.ts`. Both of these describe where
+   * somebody is *right now*; restored from disk an hour later they are not
+   * stale, they are wrong, and they would steer a technician to a stop they
+   * have already finished.
+   */
+  navigationLeg: (toStopId: string) => ['navigation-leg', toStopId] as const,
+  mapSession: (mapType: string, theme: string, traffic: boolean) =>
+    ['map-session', mapType, theme, traffic] as const,
   all: [] as const,
   demoUsers: ['demoUsers'] as const,
   currentUser: ['currentUser'] as const,
@@ -177,6 +187,40 @@ export function useDayRoute() {
     refetchIntervalInBackground: false,
     // A failed route is not worth hammering: the technician still has the
     // stops, they are simply unordered.
+    retry: 1,
+  });
+}
+
+/**
+ * The basemap's tile URL and the attribution that must be shown with it.
+ *
+ * Held for an hour because the underlying Google session token lasts a
+ * fortnight and is minted on the server — this query exists to carry the
+ * *bearer* token alongside it, and that is what actually goes stale. Refetching
+ * on focus would re-read the keychain every time the technician comes back to
+ * the screen at a red light, for a value that has not changed.
+ *
+ * Null is a legitimate answer, not an error: demo mode has no backend, and a
+ * missing basemap degrades to the route drawn on a plain surface rather than to
+ * a broken screen.
+ */
+export function useMapSession(options: {
+  mapType: 'roadmap' | 'satellite' | 'terrain';
+  theme: 'light' | 'dark';
+  traffic: boolean;
+  enabled?: boolean;
+}) {
+  return useQuery({
+    queryKey: queryKeys.mapSession(options.mapType, options.theme, options.traffic),
+    queryFn: () =>
+      repositories.inspections.mapSession({
+        mapType: options.mapType,
+        theme: options.theme,
+        traffic: options.traffic,
+      }),
+    enabled: options.enabled ?? true,
+    staleTime: 60 * 60_000,
+    refetchOnWindowFocus: false,
     retry: 1,
   });
 }

@@ -55,6 +55,12 @@ export default function AppLayout() {
         <Stack.Screen name="recording-review/[inspectionId]/[areaId]" />
         <Stack.Screen name="diagnostics" />
         <Stack.Screen name="home-address" />
+        {/* `gestureEnabled: false` is the whole reason this screen carries
+            options at all. The default iOS back-swipe from the left edge pops
+            the screen, and a thumb resting on a phone in a windscreen cradle
+            does exactly that — dropping the driver out of navigation mid-leg,
+            at speed, with no confirmation. */}
+        <Stack.Screen name="navigate" options={{ animation: 'fade', gestureEnabled: false }} />
       </Stack>
     </>
   );

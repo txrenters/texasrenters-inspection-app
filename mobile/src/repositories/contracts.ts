@@ -1,4 +1,8 @@
-import type { ReportableVisitService, VisitServicesReport } from '@texasrenters/shared';
+import type {
+  NavigationLeg,
+  ReportableVisitService,
+  VisitServicesReport,
+} from '@texasrenters/shared';
 
 import type { VideoPlaybackResponse } from '../media/playback-source';
 import type { ClosingComments } from '../utils/closing-comments';
@@ -150,6 +154,12 @@ export interface DayRouteLeg {
   durationSeconds: number;
 }
 
+/** One point of a drawn line, **`[latitude, longitude]`**. Latitude first, always. */
+export type LatLngPoint = [number, number];
+
+/** Which kind of starting point a route was drawn from. */
+export type RouteOriginKind = 'LIVE' | 'LAST_KNOWN' | 'HOME';
+
 export interface TechnicianDayRoute {
   technicianId: string;
   /** `recordedAt` is null for a route from home, which has no moment to date. */
@@ -159,14 +169,92 @@ export interface TechnicianDayRoute {
   totalDistanceMeters: number;
   totalDurationSeconds: number;
   /** Carried, not dropped: the inspection is still theirs, the address is not on a map. */
-  unroutable: { inspectionId: string; propertyName: string }[];
+  unroutable: {
+    inspectionId: string;
+    propertyName: string;
+    /** Why. Absent from a server too old to say which of the two it was. */
+    reason?: 'NO_COORDINATES' | 'OUTSIDE_SERVICE_AREA';
+  }[];
   /** Which router timed the drive; absent from a server too old to say. */
   source?: 'GOOGLE_TRAFFIC' | 'OSRM_FREE_FLOW' | null;
+  /**
+   * The drive itself, along the road. Empty when it could not be drawn -- the
+   * stops and the times are still worth having without the line.
+   *
+   * The server has been sending this all along; the phone's schema was
+   * dropping it on the floor. Every field from here down is optional or
+   * defaulted for the reason set out in `technician-route-schema.ts`: one
+   * missing required field refuses the whole route, and `route()` has no cache
+   * to fall back on.
+   */
+  geometry: LatLngPoint[];
+  /** The day so far: finished stops in order, and the drive through them. */
+  history: { stops: DayRouteStop[]; geometry: LatLngPoint[] };
+  /** A route from home is a different claim from a route from where they stand. */
+  originKind?: RouteOriginKind | null;
+  /** A position was reported and refused -- not the same as none being reported. */
+  originOutsideServiceArea: boolean;
+  /** Straight-line distance when no road route is possible. Carries no duration. */
+  airTravel?: { inspectionId: string; distanceMeters: number } | null;
+}
+
+/** How the technician wants the map drawn. */
+export interface MapSessionOptions {
+  mapType: 'roadmap' | 'satellite' | 'terrain';
+  theme: 'light' | 'dark';
+  traffic: boolean;
+}
+
+/**
+ * Where to fetch map tiles, and what has to be printed beside them.
+ *
+ * `tileUrlTemplate` points at **our** backend, never at the provider: it holds
+ * the credential, so nothing in the bundle does. `{z}`, `{x}` and `{y}` are
+ * left for the map to fill in. The request still needs this technician's
+ * session header on it, exactly as the floor-plan document does.
+ */
+export interface MapTileSession {
+  tileUrlTemplate: string;
+  attribution: string;
+  /**
+   * Sent with every tile request.
+   *
+   * The tile route is proxied through our own API so that Google's key stays on
+   * the server — a key in the bundle is a key anybody can read out of it. That
+   * makes every tile an authenticated request, and a bare `<Image source={{uri}}>`
+   * sends no credential: the whole map would answer 401 and render as an empty
+   * grid with a route floating over it.
+   *
+   * Headers rather than a query parameter, because a credential in a URL ends up
+   * in logs, in the image cache key, and in any crash report that captures it.
+   */
+  tileHeaders: Readonly<Record<string, string>>;
 }
 
 export interface InspectionRepository {
   /** Ordered stops for today. Never served from cache — see the API repository. */
   route(): Promise<TechnicianDayRoute>;
+  /**
+   * The drive to one stop, turn by turn, from where the technician is now.
+   *
+   * Bought a leg at a time rather than for the whole day: a ten-stop Houston
+   * day is several hundred steps, each with its own polyline, for nine legs
+   * nobody is driving yet. Null when the stop has no coordinate, or the router
+   * will not draw it — a state to report, not an error to throw.
+   *
+   * Never cached, for the same reason `route` is not.
+   */
+  navigationLeg(
+    toInspectionId: string,
+    from: { latitude: number; longitude: number },
+  ): Promise<NavigationLeg | null>;
+  /**
+   * Where to fetch map tiles from, and the attribution to print.
+   *
+   * Null when the deployment has no map credentials, which is a thing to say on
+   * screen rather than a failure.
+   */
+  mapSession(options: MapSessionOptions): Promise<MapTileSession | null>;
   dashboard(): Promise<DashboardSummary>;
   listPage(filters?: InspectionListFilters): Promise<InspectionPage>;
   list(filters?: InspectionListFilters): Promise<Inspection[]>;
