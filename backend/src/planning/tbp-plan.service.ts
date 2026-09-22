@@ -95,7 +95,7 @@ type PlanTenant = Prisma.PropertywareTenantGetPayload<{ select: typeof TENANT_SE
  * change next door's filter, so only a null (nothing labelled at all) falls
  * back.
  */
-const stopFilterSizes = (sizes: readonly string[], unit: Pick<ResolvedUnit, 'unit' | 'units'>): string[] =>
+export const stopFilterSizes = (sizes: readonly string[], unit: Pick<ResolvedUnit, 'unit' | 'units'>): string[] =>
   unit.unit && unit.units ? (unitFilterSizes(sizes, unit.unit, unit.units) ?? [...sizes]) : [...sizes];
 
 interface ResolvedUnit {
