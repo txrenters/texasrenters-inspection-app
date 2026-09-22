@@ -67,6 +67,7 @@ import { useInspection, useInspectionActions, useRoom } from '@/src/features/que
 import { inspectionRequiresAreaRecording } from '@texasrenters/shared';
 import { announce } from '@/src/lib/announce';
 import { frameClock, shutterClock } from '@/src/media/capture-clock';
+import { downscaleForUpload } from '@/src/media/downscale';
 import { buildRecordingDraft, persistRecording } from '@/src/media/local-recordings';
 import {
   buildRoomSnapshot,
@@ -1002,14 +1003,33 @@ export default function RoomCameraScreen() {
         quality: 0.82,
         shutterSound: false,
       });
-      const stored = persistRoomSnapshot(photo.uri, inspectionId, areaId);
+      /**
+       * Brought down to the target edge when the camera could not be asked to.
+       *
+       * `pictureSize` caps the capture itself, and on Android it does. On iOS
+       * the offered sizes come back as preset *names* -- "photo", "high" --
+       * which carry no resolution, so nothing parses, the prop is left unset,
+       * and every iPhone photograph is taken at the sensor's full resolution.
+       * Production on 2026-09-22: camera photographs averaging 1.83 MB and
+       * reaching 3840 pixels wide, with single uploads taking 20 to 82
+       * seconds.
+       *
+       * A no-op whenever the capture size did its job, so Android pays
+       * nothing and keeps the better mechanism.
+       */
+      const sized = await downscaleForUpload({
+        uri: photo.uri,
+        width: photo.width,
+        height: photo.height,
+      });
+      const stored = persistRoomSnapshot(sized.uri, inspectionId, areaId);
       const snapshot = buildRoomSnapshot({
         ownerUserId,
         inspectionId,
         roomId: areaId,
         uri: stored.uri,
-        width: photo.width,
-        height: photo.height,
+        width: sized.width,
+        height: sized.height,
         sizeBytes: stored.sizeBytes,
         captureType,
         recordingSessionId: captureSessionIdRef.current,
