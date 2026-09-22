@@ -24,6 +24,7 @@
 
 import type { QuarterNumber } from './quarter-plan.js';
 import { OCCUPIED_COMPLETION_STEPS, bookingFromTenancy } from './visit-details-writer.js';
+import { FILTER_SIZE_IN_TEXT } from './visit-services.js';
 
 export const TBP_INSPECTION_TYPES = ['OCCUPIED', 'HVAC'] as const;
 export type TbpInspectionType = (typeof TBP_INSPECTION_TYPES)[number];
@@ -231,6 +232,34 @@ function unitLabel(entry: string): { text: string; unit: string } | null {
   const dash = inner.lastIndexOf(' - ');
   const note = dash === -1 ? '' : inner.slice(0, dash).trim();
   return { text: note ? `${match[1]!.trim()} (${note})` : match[1]!.trim(), unit: dash === -1 ? inner : inner.slice(dash + 3) };
+}
+
+/**
+ * Whether one of the tenant report's four filter-size cells says anything.
+ *
+ * The four columns always exist, so the office types something into every one
+ * of them whether or not the home has four filters. Storing whatever it types
+ * made an array of junk read as an array of sizes: `hvacFilterSizes` is not
+ * empty, so a tenancy with nothing but "Not Completed" in it looks, to any
+ * query that counts entries, exactly like one with a real 20x25x1.
+ *
+ * This used to be a deny-list of the placeholders somebody had seen -- "n/a",
+ * "none", "tbd". It could only ever cover what was already known, and the
+ * office had since typed "Not Completed" (295 cells), "UPDATE" (31), "." (16),
+ * "Uknown" (12) and the names of rooms, none of which were on it. So it asks
+ * the other question instead, which does not need maintaining: is there a size
+ * in there?
+ *
+ * An entry with no size but a unit label is still kept -- "reusable window AC
+ * unit (no need to change - 1/4 N Main)" is how the office records a unit that
+ * has no filter to change, and `unitFilterSizes` needs it to know that unit is
+ * spoken for. Drop it and that unit falls back to the whole building's sizes,
+ * sending a technician to change a filter belonging to next door.
+ */
+export function filterSizeEntry(entry: string): boolean {
+  const text = entry.trim();
+  if (!text) return false;
+  return FILTER_SIZE_IN_TEXT.test(text) || unitLabel(text) !== null;
 }
 
 /**

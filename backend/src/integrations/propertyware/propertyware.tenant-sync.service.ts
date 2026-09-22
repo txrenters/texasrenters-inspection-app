@@ -7,6 +7,8 @@ import {
   matchBuildingWithFallback,
   normalizeAddressKey,
 } from '../jobber/jobber.address';
+import { FILTER_SIZE_IN_TEXT } from '@texasrenters/shared';
+
 import { PORTFOLIO_VISIBLE } from '../../admin/inspection-creation';
 import { PrismaService } from '../../common/prisma.service';
 import { getPropertywareConfig } from './propertyware.config';
@@ -20,6 +22,15 @@ export interface TenantSyncResult {
   matchedToBuilding: number;
   unmatchedAddress: number;
   deactivated: number;
+  /**
+   * Tenancies the report holds no usable filter size for.
+   *
+   * Counted because the four filter-size columns are optional: renamed in
+   * Propertyware, they stop matching and every tenancy quietly loses its sizes
+   * while the run still reports success. A number that jumps from a hundred and
+   * some to all of them says which of the two happened.
+   */
+  withoutFilterSize: number;
 }
 
 /**
@@ -90,6 +101,7 @@ export class PropertywareTenantSyncService {
       matchedToBuilding: 0,
       unmatchedAddress: 0,
       deactivated: 0,
+      withoutFilterSize: rows.filter((row) => !row.hvacFilterSizes.some((size) => FILTER_SIZE_IN_TEXT.test(size))).length,
     };
     const seenAt = new Date();
     const seen: string[] = [];

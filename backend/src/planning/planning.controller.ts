@@ -635,6 +635,21 @@ export class PlanningController {
   }
 
   /**
+   * Re-read this quarter's filter sizes from the tenant report.
+   *
+   * Asked for rather than automatic, and allowed on a published quarter, which
+   * is the case it exists for: the office fills a missing size into
+   * Propertyware and needs the visits a technician is already holding to catch
+   * up. See `TbpPlanService.refreshFilterSizes`.
+   */
+  @Post('quarters/:planId/filter-sizes')
+  @RequirePermissions('planning:publish')
+  @HttpCode(200)
+  refreshFilterSizes(@Req() request: AuthenticatedRequest, @Param('planId') planId: string) {
+    return this.plans.refreshFilterSizes(request.user, planId);
+  }
+
+  /**
    * Turn the draft into real inspections.
    *
    * Synchronous, and that is a deliberate limit rather than an oversight. A few

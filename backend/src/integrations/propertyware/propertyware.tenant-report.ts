@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { filterSizeEntry } from '@texasrenters/shared';
+
 import {
   propertywareLeaseReportSchema,
   tenantReportColumns,
@@ -77,14 +79,12 @@ const value = (raw: string | undefined) => {
 };
 
 /**
- * Placeholders the office types into a field it is not using.
- *
  * The four filter-size columns always exist, so a home with one filter reads
- * `16x25x1, N/A, N/A, N/A`. Storing those would make every property look like
- * it has four filters and put "N/A" in front of a technician holding a filter.
+ * `16x25x1, N/A, N/A, N/A` -- and the office fills the spare cells with
+ * whatever is to hand. `filterSizeEntry` keeps the ones that say something;
+ * see it for why this is no longer a list of known placeholders.
  */
-const PLACEHOLDERS = new Set(['n/a', 'na', 'none', '-', '--', 'tbd', 'unknown']);
-const isPlaceholder = (raw: string) => PLACEHOLDERS.has(raw.trim().toLowerCase());
+const filterSizesOf = (cells: (string | null)[]) => cells.filter((cell): cell is string => Boolean(cell) && filterSizeEntry(cell!));
 
 export function parseTenantReport(payload: unknown): TenantReportRow[] {
   const report = propertywareLeaseReportSchema.safeParse(payload);
@@ -129,9 +129,7 @@ export function parseTenantReport(payload: unknown): TenantReportRow[] {
         managementPlan: opt(record, 'managementPlan'),
         hvacPlan: opt(record, 'hvacPlan'),
         hvacFilterLocation: opt(record, 'hvacFilterLocation'),
-        hvacFilterSizes: [1, 2, 3, 4]
-          .map((n) => opt(record, `hvacFilterSize${n}`))
-          .filter((size): size is string => Boolean(size) && !isPlaceholder(size!)),
+        hvacFilterSizes: filterSizesOf([1, 2, 3, 4].map((n) => opt(record, `hvacFilterSize${n}`))),
         // Left as written: these arrive as free text in this report, including
         // values like "Never" that no date parse would survive.
         lastFilterDelivery: opt(record, 'lastFilterDelivery'),

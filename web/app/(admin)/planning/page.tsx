@@ -1,7 +1,7 @@
 'use client';
 
 import { closedDaysOfQuarter, zoneNumberOf, type Quarter } from '@texasrenters/shared';
-import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon, SparklesIcon } from 'lucide-react';
+import { CalendarRangeIcon, RefreshCwIcon, RouteIcon, SendIcon, SparklesIcon, WindIcon } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
@@ -254,6 +254,58 @@ export default function PlanningPage() {
     );
   };
 
+  /**
+   * Re-read the quarter's filter sizes from the tenant report.
+   *
+   * A quarter freezes its sizes when it is built, so a size the office fills
+   * into Propertyware afterwards never reaches the visit by itself. Offered on
+   * a published quarter too, which is the case it exists for -- those are the
+   * visits a technician is already holding.
+   */
+  const refreshFilterSizes = () => {
+    if (!plan) return;
+    mutations.refreshFilterSizes.mutate(plan.id, {
+      onSuccess: (result) => {
+        if (result.updated)
+          toast.success(
+            `${result.updated.toLocaleString()} ${result.updated === 1 ? 'visit' : 'visits'} took new filter sizes`,
+            {
+              description: [
+                result.jobberQueued ? `${result.jobberQueued.toLocaleString()} sent on to Jobber.` : null,
+                result.keptOverridden
+                  ? `${result.keptOverridden.toLocaleString()} kept the Details a coordinator wrote.`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' '),
+            },
+          );
+        else toast.info('Every visit already had the sizes the tenant report holds');
+        // The other half of the answer: a refresh cannot invent a size
+        // Propertyware does not hold, and naming those is what lets the office
+        // fix them at the source.
+        if (result.stillMissing.length)
+          toast.warning(
+            `${result.stillMissing.length.toLocaleString()} ${result.stillMissing.length === 1 ? 'property has' : 'properties have'} no filter size in Propertyware`,
+            {
+              description: 'Copy the list and fill the sizes in there; refresh again after the nightly sync.',
+              duration: 15_000,
+              action: {
+                label: 'Copy addresses',
+                onClick: () => {
+                  void navigator.clipboard
+                    .writeText(result.stillMissing.map((tenancy) => tenancy.address).join('\n'))
+                    .then(() => toast.success('Addresses copied'))
+                    .catch(() => toast.error('The addresses could not be copied'));
+                },
+              },
+            },
+          );
+      },
+      onError: (error) => toast.error('The filter sizes could not be refreshed', { description: error.message }),
+    });
+  };
+
   const publish = () => {
     if (!plan) return;
     mutations.publish.mutate(plan.id, {
@@ -302,6 +354,16 @@ export default function PlanningPage() {
               >
                 {building ? <Spinner /> : <RefreshCwIcon />}
                 Rebuild
+              </Button>
+              <Button
+                disabled={building || mutations.refreshFilterSizes.isPending}
+                onClick={refreshFilterSizes}
+                size="sm"
+                title="Reads every visit's filter sizes from the tenant report as it stands now, published visits included, and says which properties Propertyware still holds no size for. Details a coordinator wrote keep their words."
+                variant="outline"
+              >
+                {mutations.refreshFilterSizes.isPending ? <Spinner /> : <WindIcon />}
+                Filter sizes
               </Button>
               {(days.data?.length ?? 0) > 0 ? (
                 <Button

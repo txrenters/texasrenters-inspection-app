@@ -207,6 +207,24 @@ export interface OfficeDetailsImport {
   stopsWithoutOfficeDetails: number;
 }
 
+/** A visit whose filter size Propertyware does not hold, for the office to chase. */
+export interface TenancyWithoutFilterSize {
+  stopId: string;
+  tenancyId: string;
+  address: string;
+}
+
+/** What re-reading a quarter's filter sizes from the tenant report changed. */
+export interface FilterSizeRefresh {
+  planId: string;
+  stops: number;
+  updated: number;
+  detailsRewritten: number;
+  jobberQueued: number;
+  keptOverridden: number;
+  stillMissing: TenancyWithoutFilterSize[];
+}
+
 export interface PlanDayRoute {
   source: string | null;
   /** `[lat, lng]`, between the day's stops. Empty when nothing could draw the day. */
@@ -391,6 +409,14 @@ export function usePlanningMutations() {
     importOfficeDetails: useMutation({
       mutationFn: ({ planId, rows }: { planId: string; rows: OfficeSheetRow[] }) =>
         post<OfficeDetailsImport>(`/quarters/${planId}/office-details`, { rows }),
+      onSuccess: refresh,
+    }),
+    // Re-reads every visit's filter sizes from the tenant report as it stands
+    // now. A quarter's sizes are frozen when it is built, so a size the office
+    // fills into Propertyware afterwards never reaches the visit on its own --
+    // this is what carries it the last step, published visits included.
+    refreshFilterSizes: useMutation({
+      mutationFn: (planId: string) => post<FilterSizeRefresh>(`/quarters/${planId}/filter-sizes`),
       onSuccess: refresh,
     }),
     setType: useMutation({

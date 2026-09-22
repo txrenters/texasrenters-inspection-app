@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { InspectionType, TbpPlanStatus, TbpStopStatus, TbpUnitResolution } from '@prisma/client';
+import { InspectionType, JobberOutboundKind, TbpPlanStatus, TbpStopStatus, TbpUnitResolution } from '@prisma/client';
 import type { Prisma, TbpOrderSource } from '@prisma/client';
 import {
   MAX_CARRY_BACK_QUARTERS,
@@ -10,6 +10,7 @@ import {
   type RotationCandidate,
   type TbpInspectionReason,
   type TbpInspectionType,
+  FILTER_SIZE_IN_TEXT,
   carryForwardOrder,
   detailsNamingInspection,
   monthOfPlan,
@@ -35,6 +36,8 @@ import {
   matchBuildingWithFallback,
   normalizeAddressKey,
 } from '../integrations/jobber/jobber.address';
+import { getJobberConfig } from '../integrations/jobber/jobber.config';
+import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
 import { isTbpEnrolled } from '../integrations/propertyware/propertyware.tenant-report';
 
 /**
@@ -72,6 +75,19 @@ const TENANT_SELECT = {
 } satisfies Prisma.PropertywareTenantSelect;
 
 type PlanTenant = Prisma.PropertywareTenantGetPayload<{ select: typeof TENANT_SELECT }>;
+
+/**
+ * The filter sizes one stop is for: the building's, narrowed to the unit's own
+ * where the office labels the building's by unit.
+ *
+ * `unitFilterSizes` returning an empty list is an answer, not a miss -- a unit
+ * whose building lists sizes, all of them labelled for its neighbours, has none
+ * of its own. Falling back to the building's there would send a technician to
+ * change next door's filter, so only a null (nothing labelled at all) falls
+ * back.
+ */
+const stopFilterSizes = (sizes: readonly string[], unit: Pick<ResolvedUnit, 'unit' | 'units'>): string[] =>
+  unit.unit && unit.units ? (unitFilterSizes(sizes, unit.unit, unit.units) ?? [...sizes]) : [...sizes];
 
 interface ResolvedUnit {
   unitId: string | null;
@@ -139,6 +155,29 @@ export interface OfficeDetailsImport {
 
 /** The most rows one sheet may hold: the programme is a few hundred tenancies. */
 export const MAX_OFFICE_DETAILS_ROWS = 2000;
+
+/** A visit whose filter size Propertyware does not hold, for the office to chase. */
+export interface TenancyWithoutFilterSize {
+  stopId: string;
+  tenancyId: string;
+  address: string;
+}
+
+/** What re-reading a quarter's filter sizes from the tenant report changed. */
+export interface FilterSizeRefresh {
+  planId: string;
+  stops: number;
+  /** Stops whose frozen sizes were out of date. */
+  updated: number;
+  /** Of those, the ones whose visit Details were rewritten from the new sizes. */
+  detailsRewritten: number;
+  /** Published visits queued for the corrected text in Jobber. */
+  jobberQueued: number;
+  /** Sizes updated, but the Details left as a coordinator wrote them. */
+  keptOverridden: number;
+  /** Still says "Update filter sizes", because the report holds no size to use. */
+  stillMissing: TenancyWithoutFilterSize[];
+}
 
 @Injectable()
 export class TbpPlanService {
@@ -397,6 +436,152 @@ export class TbpPlanService {
     });
 
     return summary;
+  }
+
+  /**
+   * Re-reads every stop's filter sizes from the tenant report as it stands now.
+   *
+   * A stop freezes its filter sizes when the quarter is generated, on purpose:
+   * the console shows, and Jobber receives, exactly what a coordinator
+   * reviewed. The cost of that is what the office reported on 2026-09-22 --
+   * 131 of Q4's visits say "Update filter sizes", the office puts the size into
+   * Propertyware, the nightly sync stores it, and the visit goes on saying
+   * "Update filter sizes" forever, because nothing was ever able to thaw the
+   * snapshot. There was no refresh of any kind: not a button, not an endpoint,
+   * not a script.
+   *
+   * So the freeze stays and this is the thaw, asked for rather than automatic.
+   * Details a coordinator wrote are never rewritten -- their sizes are updated
+   * underneath so the next edit starts from the truth, but the words are
+   * theirs. A published stop is included, which is the whole point: those are
+   * the visits a technician will be handed. Its Jobber visit is queued for the
+   * corrected text, and its inspection carries the same.
+   *
+   * `stillMissing` is the other half of the answer. A refresh cannot invent a
+   * size Propertyware does not hold, and 126 tenancies hold nothing but "Not
+   * Completed", "UPDATE" or ".". Naming them here is what lets the office fix
+   * them at the source instead of finding out one visit at a time.
+   */
+  async refreshFilterSizes(user: AuthenticatedUser, planId: string): Promise<FilterSizeRefresh> {
+    const { organizationId } = user;
+    const plan = await this.prisma.tbpQuarterPlan.findFirst({
+      where: { id: planId, organizationId },
+      select: { id: true },
+    });
+    if (!plan) throw new ApplicationError(404, 'PLAN_NOT_FOUND', 'That quarter plan does not exist.');
+
+    const stops = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: { planId, organizationId, status: { not: TbpStopStatus.EXCLUDED } },
+      select: {
+        id: true,
+        status: true,
+        inspectionId: true,
+        inspectionType: true,
+        hvacFilterSizes: true,
+        visitDetails: true,
+        visitDetailsOverriddenAt: true,
+        officeDetails: true,
+        propertywareUnitId: true,
+        tenant: { select: TENANT_SELECT },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    const pushEdits = getJobberConfig().pushEditsEnabled;
+    const result: FilterSizeRefresh = {
+      planId,
+      stops: stops.length,
+      updated: 0,
+      detailsRewritten: 0,
+      jobberQueued: 0,
+      keptOverridden: 0,
+      stillMissing: [],
+    };
+
+    for (const stop of stops) {
+      const tenant = stop.tenant;
+      // The unit a coordinator chose, or the one generation resolved: either
+      // way it is recorded on the stop, so the narrowing is read back rather
+      // than matched again.
+      const unit =
+        tenant.propertywareBuildingId && stop.propertywareUnitId
+          ? await this.chosenUnit(organizationId, tenant.propertywareBuildingId, stop.propertywareUnitId)
+          : { unit: null, units: undefined };
+      const sizes = stopFilterSizes(tenant.hvacFilterSizes, unit);
+
+      // What the visit would say. Measured against the rule the writer prints
+      // by, not by counting the array: an entry with no size in it -- a note
+      // about a reusable filter -- is kept on the tenancy but printed by
+      // nothing, so an array holding only those is a visit still asking the
+      // office to update the filter sizes.
+      if (!sizes.some((size) => FILTER_SIZE_IN_TEXT.test(size)))
+        result.stillMissing.push({
+          stopId: stop.id,
+          tenancyId: tenant.id,
+          address: tenant.addressLine1 ?? '(no address on the tenancy)',
+        });
+
+      const same =
+        sizes.length === stop.hvacFilterSizes.length &&
+        sizes.every((size, index) => size === stop.hvacFilterSizes[index]);
+      if (same) continue;
+      result.updated += 1;
+
+      const details = stop.visitDetailsOverriddenAt
+        ? null
+        : planVisitDetails({ ...tenant, hvacFilterSizes: sizes }, stop.inspectionType as TbpInspectionType, stop.officeDetails);
+      if (details === null) result.keptOverridden += 1;
+      else if (details !== stop.visitDetails) result.detailsRewritten += 1;
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.tbpQuarterPlanStop.update({
+          where: { id: stop.id },
+          data: { hvacFilterSizes: sizes, ...(details === null ? {} : { visitDetails: details }) },
+        });
+        // A published stop's inspection carries the text Jobber is sent, so it
+        // has to move with the stop or the next push would undo this.
+        if (stop.inspectionId && details !== null) {
+          await tx.inspection.update({
+            where: { id: stop.inspectionId },
+            data: { jobberVisitDetails: details },
+          });
+          if (pushEdits) {
+            const queued = await requestVisitPush(tx, {
+              organizationId,
+              inspectionId: stop.inspectionId,
+              kind: JobberOutboundKind.VISIT_EDIT,
+              requestedById: user.id,
+            });
+            if (queued) result.jobberQueued += 1;
+          }
+        }
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId,
+        ...auditActor(user),
+        action: 'TBP_PLAN_FILTER_SIZES_REFRESHED',
+        entityType: 'TbpQuarterPlan',
+        entityId: planId,
+        // Counts, and how many tenancies still hold no size. Never the sizes or
+        // the addresses themselves.
+        metadata: {
+          stops: result.stops,
+          updated: result.updated,
+          detailsRewritten: result.detailsRewritten,
+          jobberQueued: result.jobberQueued,
+          keptOverridden: result.keptOverridden,
+          stillMissing: result.stillMissing.length,
+        },
+      },
+    });
+
+    this.logger.log(
+      `Filter sizes refreshed for plan ${planId}: ${result.updated} of ${result.stops} stops changed, ${result.stillMissing.length} tenancies still hold no size.`,
+    );
+    return result;
   }
 
   /**
@@ -774,9 +959,7 @@ export class TbpPlanService {
         }
       : tbpInspectionFor(quarter.quarter, tenant);
 
-    // In a building of several units, the unit's own filter sizes, where the
-    // office labels the building's by unit.
-    const sizes = unit.unit && unit.units ? (unitFilterSizes(tenant.hvacFilterSizes, unit.unit, unit.units) ?? tenant.hvacFilterSizes) : tenant.hvacFilterSizes;
+    const sizes = stopFilterSizes(tenant.hvacFilterSizes, unit);
     const sized = { ...tenant, hvacFilterSizes: sizes };
     // A coordinator's title and Details are sent as written; only the
     // inspection on the Details' services line follows a new kind of visit.
