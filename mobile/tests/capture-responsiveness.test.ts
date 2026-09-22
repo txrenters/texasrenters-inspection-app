@@ -33,6 +33,50 @@ describe('the shutter cannot latch itself off', () => {
     expect(source.match(/setReady\(false\)/g)).toHaveLength(1);
     expect(source.match(/setReady\(true\)/g)).toHaveLength(1);
   });
+
+  /**
+   * The rebind fallback is not enough on its own: `bindCamera` only runs for a
+   * mode *change* and returns early when the mode already matches, so a fresh
+   * mount arms nothing and readiness rests entirely on a native callback. That
+   * callback is dropped in the flow the office runs -- photograph a filter
+   * register, go back, tap the next one straight away, and a new camera mounts
+   * while the previous session is still releasing the device.
+   */
+  it('gives the camera back even when nothing rebound it', () => {
+    expect(source).toMatch(/if \(ready\) return;\s*\n\s*const timer = setTimeout\(markCameraReady, CAMERA_REBIND_TIMEOUT_MS\);/);
+  });
+});
+
+describe('nothing else may swallow the shutter tap', () => {
+  /**
+   * The pinch handlers are spread over the *root* view and answered in the
+   * capture phase, so claiming a gesture takes the touch before the shutter is
+   * offered it. The test used to be "are there two touches on the glass", which
+   * is true of a hand steadying the phone -- and the tap vanished with no flash
+   * and no haptic. Not cured by restarting, because it follows the grip.
+   */
+  it('claims nothing on touch-down', () => {
+    expect(source).toMatch(/onStartShouldSetPanResponderCapture: \(\) => \{\s*\n\s*pinchGate\.current = null;\s*\n\s*return false;/);
+  });
+
+  it('claims a move only once the fingers have really changed distance', () => {
+    expect(source).toContain('Math.abs(distance - pinchGate.current) > PINCH_SLOP');
+  });
+});
+
+describe('a still that never lands', () => {
+  /**
+   * Everything that releases the button is downstream of `takePictureAsync`,
+   * including the `finally` -- so a capture that never settles kept the shutter
+   * for the life of the screen. Same shape as the readiness latch, on the other
+   * half of the `disabled` expression.
+   */
+  it('hands the shutter back rather than holding it forever', () => {
+    expect(source).toContain('CAPTURE_WATCHDOG_MS');
+    expect(source).toMatch(/const watchdog = setTimeout\(/);
+    // Cleared on the happy path and again in the finally; both idempotent.
+    expect(source.match(/clearTimeout\(watchdog\)/g)).toHaveLength(2);
+  });
 });
 
 describe('the shutter does not wait on filing', () => {

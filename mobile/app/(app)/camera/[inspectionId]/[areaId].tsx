@@ -103,6 +103,29 @@ const MAX_RECORDING_SECONDS = 10 * 60;
  */
 const CAMERA_REBIND_TIMEOUT_MS = 1_500;
 
+/**
+ * How far two fingers must spread or close before it counts as a pinch.
+ *
+ * Above anything a tap produces -- a thumb rolling on the glass moves a few
+ * points -- and far below a deliberate zoom.
+ */
+const PINCH_SLOP = 12;
+
+/**
+ * How long a still may be in flight before the shutter is handed back.
+ *
+ * `takePictureAsync` is trusted to settle, and mostly it does. When it does not
+ * -- the session interrupted by a call, another app taking the camera, a still
+ * requested during a recording that the photo output never serves -- everything
+ * that releases the button is downstream of that await, including the
+ * `finally`. So the button stayed disabled for the life of the screen.
+ *
+ * Generous, because firing early would let a second capture start while the
+ * first is genuinely still working. By the time this elapses the photograph is
+ * not coming.
+ */
+const CAPTURE_WATCHDOG_MS = 8_000;
+
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -396,12 +419,45 @@ export default function RoomCameraScreen() {
     setZoomLevel(0);
   };
 
-  /** Two fingers zoom; one finger is left alone for every control on the screen. */
+  /**
+   * Two fingers zoom; one finger is left alone for every control on the screen.
+   *
+   * That was the intent, and the implementation over-claimed it. These handlers
+   * are spread over the *root* view and answered in the **capture** phase, so
+   * returning true took the touch before the shutter was ever offered it -- and
+   * the test was only "are there two touches on the glass", which is true of a
+   * technician bracing the phone one-handed in a doorway, a palm on the edge, a
+   * glove making a second contact patch. The shutter tap went to the root view
+   * and simply vanished: no flash, no haptic, nothing. It came and went with
+   * how the phone was being held, and no amount of restarting fixed it,
+   * which is the other half of "it won't touch" (the office, 2026-09-23).
+   *
+   * A pinch is a *movement*, so nothing is claimed on touch-down at all, and a
+   * move is claimed only once the two fingers have actually changed distance by
+   * more than a tap ever would.
+   */
   const pinchStart = useRef<{ distance: number; level: number } | null>(null);
+  /** The two-finger span when the gesture began, to tell a pinch from a steadying hand. */
+  const pinchGate = useRef<number | null>(null);
   const pinch = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
-      onMoveShouldSetPanResponderCapture: (event) => event.nativeEvent.touches.length === 2,
+      onStartShouldSetPanResponderCapture: () => {
+        pinchGate.current = null;
+        return false;
+      },
+      onMoveShouldSetPanResponderCapture: (event) => {
+        const [first, second] = event.nativeEvent.touches;
+        if (event.nativeEvent.touches.length !== 2 || !first || !second) {
+          pinchGate.current = null;
+          return false;
+        }
+        const distance = Math.hypot(first.pageX - second.pageX, first.pageY - second.pageY);
+        if (pinchGate.current === null) {
+          pinchGate.current = distance;
+          return false;
+        }
+        return Math.abs(distance - pinchGate.current) > PINCH_SLOP;
+      },
       onPanResponderGrant: () => {
         pinchStart.current = null;
       },
@@ -662,6 +718,30 @@ export default function RoomCameraScreen() {
         resolve();
       });
     });
+
+  /**
+   * Readiness has a floor, whichever way the camera was bound.
+   *
+   * `bindCamera` arms a fallback for a *rebind*, but it is only ever called for
+   * a mode change and returns early when the mode already matches -- so on a
+   * fresh mount nothing arms anything, and `ready` rests entirely on a native
+   * callback that can be dropped. It is dropped in exactly the flow the office
+   * is running: photograph a filter register, go back, and tap the next one
+   * straight away, so a new camera mounts while the previous session is still
+   * letting go of the device. Both capture controls are then dead until the
+   * screen is left and re-entered.
+   *
+   * So the floor is here rather than in `bindCamera`: whenever the camera is
+   * not ready, it has this long to say so before the controls are handed back
+   * anyway. Enabling a shutter whose camera really did fail is no worse than
+   * before -- `takeSnapshot` still checks the camera is there and surfaces what
+   * goes wrong -- and it is much better than a button that never comes back.
+   */
+  useEffect(() => {
+    if (ready) return;
+    const timer = setTimeout(markCameraReady, CAMERA_REBIND_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [ready]);
 
   /**
    * Settles the camera on the right mode once the room is known.
@@ -1051,6 +1131,14 @@ export default function RoomCameraScreen() {
     const clock = shutterClock();
     setCapturingPhoto(true);
     setError(null);
+    // Everything that gives the button back is downstream of the await below,
+    // so a capture that never settles would keep it. See `CAPTURE_WATCHDOG_MS`.
+    const watchdog = setTimeout(() => {
+      setCapturingPhoto(false);
+      void reportError(new Error('A photograph did not return from the camera.'), {
+        source: 'capture-watchdog',
+      });
+    }, CAPTURE_WATCHDOG_MS);
     try {
       const photo = await camera.takePictureAsync({
         quality: 0.82,
@@ -1068,6 +1156,7 @@ export default function RoomCameraScreen() {
        * camera really can only take one at a time; the `finally` below is now
        * only a safety net for the path where the capture threw.
        */
+      clearTimeout(watchdog);
       setCapturingPhoto(false);
       const sequence = photoCountRef.current + 1;
       photoCountRef.current = sequence;
@@ -1188,6 +1277,9 @@ export default function RoomCameraScreen() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.');
     } finally {
+      // Both idempotent: the happy path already did each of these the moment
+      // the camera handed the picture over.
+      clearTimeout(watchdog);
       setCapturingPhoto(false);
     }
   };
