@@ -2,6 +2,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import type { RoomSnapshot } from '../domain/models';
 
+import { downscaleForUpload } from './downscale';
 import { buildRoomSnapshot, persistRoomSnapshot } from './local-snapshots';
 
 /**
@@ -92,6 +93,8 @@ export interface GalleryImportInput {
     'requestMediaLibraryPermissionsAsync' | 'launchImageLibraryAsync'
   >;
   persist?: typeof persistRoomSnapshot;
+  /** Injected by the tests; the resize is native and cannot run in one. */
+  downscale?: typeof downscaleForUpload;
 }
 
 export async function importFromGallery({
@@ -101,6 +104,7 @@ export async function importFromGallery({
   existingPhotoCount,
   picker = ImagePicker,
   persist = persistRoomSnapshot,
+  downscale = downscaleForUpload,
 }: GalleryImportInput): Promise<GalleryImportOutcome> {
   const permission = await picker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) return { status: 'DENIED' };
@@ -122,20 +126,33 @@ export async function importFromGallery({
   if (picked.canceled) return { status: 'CANCELLED' };
 
   const snapshots: RoomSnapshot[] = [];
-  picked.assets.slice(0, GALLERY_IMPORT_LIMIT).forEach((asset, index) => {
+  for (const [index, asset] of picked.assets.slice(0, GALLERY_IMPORT_LIMIT).entries()) {
+    /**
+     * Brought down to the size the camera aims for, before anything is queued.
+     *
+     * The picker hands back whatever the camera roll holds. Measured on
+     * production: imports averaging **6.38 MB** against the camera's 1.83, and
+     * a single photograph taking 20 to 82 seconds to upload -- which is what
+     * made a technician's submit appear to hang. `quality` above does not
+     * help: it applies to JPEG encoding, and the first two imports were PNG
+     * screenshots.
+     */
+    const sized = await downscale({ uri: asset.uri, width: asset.width, height: asset.height });
     // `persistRoomSnapshot` *moves* the file. Safe here: the picker hands back
     // a copy in the app's cache directory, never the library asset itself, so
     // the technician's own photograph stays in their camera roll.
-    const stored = persist(asset.uri, inspectionId, roomId);
+    const stored = persist(sized.uri, inspectionId, roomId);
     snapshots.push(
       buildRoomSnapshot({
         ownerUserId,
         inspectionId,
         roomId,
         uri: stored.uri,
-        width: asset.width,
-        height: asset.height,
-        sizeBytes: stored.sizeBytes ?? asset.fileSize,
+        width: sized.width,
+        height: sized.height,
+        // The asset's own byte count describes the file the picker handed
+        // over, which is not the one being queued once it has been resized.
+        sizeBytes: stored.sizeBytes,
         // The area as a whole. A picked photograph has no finding attached to
         // it and nothing here knows which room feature it shows; the
         // technician files it against a finding afterwards if it is one.
@@ -149,6 +166,6 @@ export async function importFromGallery({
         // frame out of their gallery on purpose.
       }),
     );
-  });
+  }
   return { status: 'IMPORTED', snapshots };
 }

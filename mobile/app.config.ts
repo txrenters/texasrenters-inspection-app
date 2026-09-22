@@ -95,13 +95,20 @@ const config: ExpoConfig = {
    * 1.1.0 fenced those builds out: JavaScript published from here can now only
    * reach a build made from this version or later.
    *
-   * 1.2.0 does the same for `expo-image-picker`, added 2026-09-22 so a
+   * 1.2.0 did the same for `expo-image-picker`, added 2026-09-22 so a
    * technician can attach photographs from the phone's own gallery. Same trap,
    * same fence: an update published without this bump would offer the gallery
    * button to a binary with no picker in it, and the import would throw on the
    * first tap.
+   *
+   * 1.3.0 for `expo-image-manipulator`, which brings a photograph down to the
+   * long edge the camera aims for. `pictureSize` caps the capture on Android
+   * and cannot on iOS -- the offered sizes come back as preset names with no
+   * resolution in them -- so every iPhone photograph went up at full sensor
+   * resolution, and a gallery import never met the cap at all. Measured:
+   * uploads of one photograph taking 20 to 82 seconds.
    */
-  version: '1.2.0',
+  version: '1.3.0',
   orientation: 'portrait',
   scheme: 'texasrenters-inspection',
   icon: './assets/icon.png',
