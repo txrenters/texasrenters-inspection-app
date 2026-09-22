@@ -385,10 +385,27 @@ let keepAwakeModule: Promise<KeepAwakeModule | null> | null = null;
 function loadKeepAwake(): Promise<KeepAwakeModule | null> {
   keepAwakeModule ??= (async () => {
     try {
-      // Assembled rather than written out, so no bundler can resolve it. See
-      // the note above -- a literal here would break the build outright.
-      const name = ['expo', 'keep', 'awake'].join('-');
-      return (await import(name)) as KeepAwakeModule;
+      // A literal, and the reason is the exact opposite of what stood here.
+      //
+      // This was assembled at runtime (`['expo','keep','awake'].join('-')`) on
+      // the theory that a specifier no bundler could resolve was the safe
+      // choice. Metro does not treat that as a warning -- it refuses outright:
+      //
+      //   SyntaxError: Invalid call at line 391: import(name)
+      //
+      // which failed `expo export` and took the whole CI build down with it.
+      // Jest never runs Metro, so every test passed and nothing local caught it.
+      //
+      // The literal is safe. `expo` itself declares `expo-keep-awake` as a
+      // dependency, so it resolves here and is already autolinked into every
+      // installed binary -- there is no runtime version to bump and no OTA that
+      // can reach a build without it.
+      //
+      // The `try` stays, because the risk it guards is real and is at the call,
+      // not the import: an Expo module whose native side is missing throws when
+      // it is used. A phone that cannot hold the screen awake dims mid-drive,
+      // which is a poor experience and not a crash.
+      return (await import('expo-keep-awake')) as KeepAwakeModule;
     } catch {
       return null;
     }
