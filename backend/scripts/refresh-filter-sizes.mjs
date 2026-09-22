@@ -36,7 +36,7 @@ const dist = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const { NestFactory } = require('@nestjs/core');
 const { AppModule } = require(join(dist, 'app.module.js'));
 const { PrismaService } = require(join(dist, 'common', 'prisma.service.js'));
-const { TbpPlanService } = require(join(dist, 'planning', 'tbp-plan.service.js'));
+const { TbpPlanService, stopFilterSizes } = require(join(dist, 'planning', 'tbp-plan.service.js'));
 const { withSystemTenant } = require(join(dist, 'database', 'tenant-context.js'));
 const { FILTER_SIZE_IN_TEXT } = require('@texasrenters/shared');
 
@@ -86,10 +86,32 @@ async function main() {
         select: {
           hvacFilterSizes: true,
           visitDetailsOverriddenAt: true,
-          tenant: { select: { addressLine1: true, hvacFilterSizes: true } },
+          propertywareUnitId: true,
+          tenant: {
+            select: { addressLine1: true, hvacFilterSizes: true, propertywareBuildingId: true },
+          },
           inspection: { select: { status: true } },
         },
       });
+      /**
+       * The units, so this narrows the way the service narrows.
+       *
+       * Without it the estimate was simply wrong: it compared the building's
+       * whole list against the stop's frozen one and reported three visits as
+       * out of date at a property where the unit's own sizes had not moved at
+       * all. A dry run that overstates is worse than none -- the office reads
+       * it and expects three visits to change.
+       */
+      const units = await prisma.propertywareUnit.findMany({
+        where: { organizationId, isActive: true },
+        select: { id: true, buildingId: true, name: true, addressLine1: true },
+      });
+      const unitsOf = new Map();
+      for (const unit of units) {
+        const list = unitsOf.get(unit.buildingId) ?? [];
+        list.push(unit);
+        unitsOf.set(unit.buildingId, list);
+      }
       const printable = (sizes) => sizes.filter((size) => FILTER_SIZE_IN_TEXT.test(size));
       let differ = 0;
       let finished = 0;
@@ -99,7 +121,18 @@ async function main() {
           finished += 1;
           continue;
         }
-        const live = stop.tenant.hvacFilterSizes;
+        const siblings = stop.tenant.propertywareBuildingId
+          ? (unitsOf.get(stop.tenant.propertywareBuildingId) ?? [])
+          : [];
+        const chosen = stop.propertywareUnitId
+          ? siblings.find((unit) => unit.id === stop.propertywareUnitId)
+          : undefined;
+        // A stop whose unit is no longer active is one the service leaves alone.
+        if (stop.propertywareUnitId && !chosen) continue;
+        const live = stopFilterSizes(
+          stop.tenant.hvacFilterSizes,
+          chosen ? { unit: chosen, units: siblings } : { unit: null, units: undefined },
+        );
         if (!printable(live).length) missing.push(stop.tenant.addressLine1 ?? '(no address)');
         const same =
           live.length === stop.hvacFilterSizes.length &&
@@ -124,21 +157,22 @@ async function main() {
     if (!actorId && !actorEmail) {
       // Rather than a bare refusal: the audit row for a quarter of real
       // appointments has to name somebody who exists, so show who it could be.
-      const candidates = await prisma.user.findMany({
-        where: { organizationId, isActive: true },
-        select: { id: true, displayName: true, authUser: { select: { email: true } } },
+      const candidates = await prisma.userProfile.findMany({
+        where: { isActive: true, memberships: { some: { organizationId } } },
+        select: { id: true, displayName: true, email: true },
         orderBy: { createdAt: 'asc' },
         take: 20,
       });
       console.log('Pass --actor <userId> or --actor-email <email>. Active users:');
-      for (const user of candidates)
-        console.log(`  ${user.id}  ${user.displayName} <${user.authUser?.email ?? 'no email'}>`);
+      for (const user of candidates) console.log(`  ${user.id}  ${user.displayName} <${user.email}>`);
       return;
     }
-    const actor = await prisma.user.findFirst({
+    // `UserProfile`, not `User` -- the console account carries its own email and
+    // reaches its organization through `memberships`.
+    const actor = await prisma.userProfile.findFirst({
       where: {
-        organizationId,
-        ...(actorId ? { id: actorId } : { authUser: { email: { equals: actorEmail, mode: 'insensitive' } } }),
+        memberships: { some: { organizationId } },
+        ...(actorId ? { id: actorId } : { email: { equals: actorEmail, mode: 'insensitive' } }),
       },
       select: { id: true, displayName: true },
     });
@@ -179,6 +213,11 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  // The stack, not just the message: this runs against production and a bare
+  // "Cannot read properties of undefined" says nothing about where.
+  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
   process.exitCode = 1;
+  // The application context boots the workers too, and a Jobber sync mid-retry
+  // would hold the process open long after this has said its piece.
+  process.exit(1);
 });
