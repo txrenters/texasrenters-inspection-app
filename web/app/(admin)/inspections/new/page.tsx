@@ -8,6 +8,7 @@ import {
   booksAnyService,
   inspectionSeedsStandardLayout,
   isBookableInspectionType,
+  layoutAreasFor,
   visitServicesProblems,
   type AdminProperty,
 } from '@texasrenters/shared';
@@ -288,12 +289,31 @@ function CreateInspectionForm() {
   // Written whether or not the visit is booked here, so checked either way.
   const servicesProblems = bookable ? visitServicesProblems(servicesFromForm(bookingFormState)) : [];
 
-  const approvedAreas =
+  /**
+   * Exactly what the server will accept, decided by the server's own function.
+   *
+   * This listed every approved area and the server scopes an inspection with
+   * `layoutAreasFor`, which is not the same set. It drops the areas that are
+   * not rooms -- an HVAC visit's A/C unit, filters, thermostat and attic all
+   * live on the property as `SYSTEM` areas -- and, once a real floor plan or
+   * an imported report has arrived, the standard template's guesses too.
+   *
+   * Two symptoms, one cause. The occupied form offered "AC filters", "Filters",
+   * "A/C unit" and "Thermostat" as rooms to walk, next to a phone that has a
+   * dedicated AC Filter Change screen for exactly that work. And clearing any
+   * single area sent the list of ids explicitly for the first time -- with
+   * everything ticked the form sends none and the server quietly uses its own
+   * set -- so the rejected ids finally surfaced, as
+   * "Select only approved areas belonging to this property" on an untouched
+   * form where every area shown really did belong to the property.
+   */
+  const approvedAreas = layoutAreasFor(
     propertyAreas.data?.filter(
       (area) =>
         area.status === 'APPROVED' &&
         (unitId ? !area.unitId || area.unitId === unitId : !area.unitId),
-    ) ?? [];
+    ) ?? [],
+  );
   const hasApprovedAreas = approvedAreas.length > 0;
   const needsAreaSetup =
     Boolean(propertyId) && !propertyAreas.isLoading && !propertyAreas.isError && !hasApprovedAreas;

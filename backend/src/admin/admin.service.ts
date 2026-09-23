@@ -15,11 +15,14 @@ import {
 } from '@prisma/client';
 
 import {
+  AreaScope,
   LEASE_EXPIRING_SOON_DAYS,
+  areaScopeFor,
   bookingFromTenancy,
   booksAnyService,
   daysUntilLeaseEnd,
   isBookableInspectionType,
+  layoutAreasFor,
   jobberBookingProblems,
   jobberBookingText,
   leaseExpiryStatus,
@@ -2651,15 +2654,35 @@ export class AdminService {
     const unitAreas = inspection.propertywareUnitId
       ? await this.prisma.propertyArea.findMany({
           where: { ...areaFilter, unitId: inspection.propertywareUnitId },
-          select: { id: true, name: true },
+          select: { id: true, name: true, source: true },
         })
       : [];
-    const eligible = unitAreas.length
+    const onTheProperty = unitAreas.length
       ? unitAreas
       : await this.prisma.propertyArea.findMany({
           where: { ...areaFilter, unitId: null },
-          select: { id: true, name: true },
+          select: { id: true, name: true, source: true },
         });
+
+    /**
+     * A room walk can only take rooms.
+     *
+     * `layoutAreasFor` is what scopes an inspection at creation, and this did
+     * not use it -- so every area on the property was addable here, including
+     * the ones that are not rooms. An HVAC visit's subjects live on the
+     * property as `SYSTEM` areas, and "AC filters", "Filters", "A/C unit",
+     * "Thermostat" and "Attic" were being added to occupied inspections
+     * through this route: 25 such rows across live inspections, none of them
+     * ever photographed, next to a phone that has its own AC Filter Change
+     * screen for that work.
+     *
+     * Only for the types that walk rooms. An HVAC or roof visit resolves its
+     * own subjects -- `hvacSystemArea`, or the roof category -- and filtering
+     * those here would leave them nothing to add.
+     */
+    const scope = areaScopeFor(inspection.inspectionType);
+    const walksRooms = scope === AreaScope.ALL || scope === AreaScope.CHOSEN;
+    const eligible = walksRooms ? layoutAreasFor(onTheProperty) : onTheProperty;
     const eligibleById = new Map(eligible.map((area) => [area.id, area]));
 
     /**

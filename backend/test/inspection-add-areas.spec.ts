@@ -208,3 +208,74 @@ describe('adding areas to an inspection already under way', () => {
     });
   });
 });
+
+/**
+ * A room walk can only take rooms.
+ *
+ * An HVAC visit's subjects live on the property as `SYSTEM` areas — "A/C
+ * unit", "Filters", "AC filters", "Thermostat", "Attic". They are approved and
+ * they do belong to the property, so nothing here refused them, and they were
+ * being added to occupied inspections: 25 such rows across live inspections,
+ * none ever photographed, next to a phone that has its own AC Filter Change
+ * screen for that work.
+ *
+ * `layoutAreasFor` already drew this line — inspection *creation* has always
+ * used it. This route did not, which is the whole of the bug.
+ */
+describe('areas that are not rooms', () => {
+  const ROOM = { id: 'area-room', name: 'Kitchen', source: 'STANDARD_TEMPLATE' };
+  const SYSTEM = { id: 'area-system', name: 'AC filters', source: 'SYSTEM' };
+
+  const forType = (inspectionType: string) => ({
+    inspection: {
+      id: INSPECTION_ID,
+      status: 'IN_PROGRESS',
+      inspectionType,
+      finalizedAt: null,
+      propertywareBuildingId: 'bld-1',
+      propertywareUnitId: null,
+    },
+    approvedAreas: [ROOM, SYSTEM],
+  });
+
+  it('refuses an HVAC area on an occupied inspection', async () => {
+    const { service } = buildService(forType('OCCUPIED'));
+
+    await expect(
+      service.addInspectionAreas(admin, INSPECTION_ID, { propertyAreaIds: [SYSTEM.id] }),
+    ).rejects.toThrow(/approved areas belonging to this property/);
+  });
+
+  it('still takes an ordinary room on the same inspection', async () => {
+    const { service, createMany } = buildService(forType('OCCUPIED'));
+
+    await service.addInspectionAreas(admin, INSPECTION_ID, { propertyAreaIds: [ROOM.id] });
+
+    expect(createMany.mock.calls[0]![0].data).toEqual([
+      { inspectionId: INSPECTION_ID, propertyAreaId: ROOM.id },
+    ]);
+  });
+
+  it('refuses it on a move-out too, where the scope is every area', async () => {
+    const { service } = buildService(forType('MOVE_OUT'));
+
+    await expect(
+      service.addInspectionAreas(admin, INSPECTION_ID, { propertyAreaIds: [SYSTEM.id] }),
+    ).rejects.toThrow(/approved areas belonging to this property/);
+  });
+
+  /**
+   * The line is drawn for room walks only. An HVAC visit's subjects are
+   * exactly these areas, and filtering them here would leave that visit with
+   * nothing it is allowed to add.
+   */
+  it('allows it on an HVAC visit, whose subject it is', async () => {
+    const { service, createMany } = buildService(forType('HVAC'));
+
+    await service.addInspectionAreas(admin, INSPECTION_ID, { propertyAreaIds: [SYSTEM.id] });
+
+    expect(createMany.mock.calls[0]![0].data).toEqual([
+      { inspectionId: INSPECTION_ID, propertyAreaId: SYSTEM.id },
+    ]);
+  });
+});
