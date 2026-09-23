@@ -67,6 +67,21 @@ describe('removing leaked areas', () => {
     expect(walks).not.toContain('ROOF');
   });
 
+  /**
+   * A wrong area is a smaller problem than no area.
+   *
+   * One move-in in production has exactly one area and it is the leaked one.
+   * Removing it leaves a technician opening a visit with nothing to walk, and
+   * leaves the move-out that will be compared against it with counterparts
+   * that never resolve.
+   */
+  it('never empties an inspection', () => {
+    const source = readFileSync(join(root, 'scripts', 'remove-leaked-system-areas.mjs'), 'utf8');
+
+    expect(source).toContain('wouldEmpty');
+    expect(source).toContain('it is the only area this inspection has');
+  });
+
   /** Reporting is the default; deleting takes a deliberate flag. */
   it('reports unless it is told to apply', () => {
     const source = readFileSync(join(root, 'scripts', 'remove-leaked-system-areas.mjs'), 'utf8');

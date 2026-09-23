@@ -80,7 +80,7 @@ async function main() {
     }
 
     const kept = [];
-    const removable = [];
+    let removable = [];
     for (const area of leaked) {
       if (area.inspection.finalizedAt) {
         kept.push({ area, because: 'the inspection is finalized' });
@@ -100,6 +100,36 @@ async function main() {
       if (holds) kept.push({ area, because: `it holds ${holds}` });
       else removable.push(area);
     }
+
+    /**
+     * Never leave an inspection with no areas at all.
+     *
+     * One move-in in production has exactly one area and it is the leaked
+     * one. Removing it would turn a scheduling success into an empty job --
+     * a technician opening a visit with nothing to walk -- and for a move-in
+     * it would also leave the move-out that will be compared against it with
+     * counterparts that never resolve.
+     *
+     * A wrong area is a smaller problem than no area, so the inspection keeps
+     * it and is reported instead. Whoever reads that line can give the visit a
+     * real layout, which is a decision this script has no business making.
+     */
+    const totals = new Map();
+    for (const row of await prisma.inspectionArea.groupBy({
+      by: ['inspectionId'],
+      where: { inspectionId: { in: [...new Set(removable.map((area) => area.inspectionId))] } },
+      _count: { _all: true },
+    }))
+      totals.set(row.inspectionId, row._count._all);
+
+    const wouldEmpty = new Set();
+    for (const [inspectionId, total] of totals) {
+      const removing = removable.filter((area) => area.inspectionId === inspectionId).length;
+      if (removing >= total) wouldEmpty.add(inspectionId);
+    }
+    for (const area of removable.filter((row) => wouldEmpty.has(row.inspectionId)))
+      kept.push({ area, because: 'it is the only area this inspection has' });
+    removable = removable.filter((area) => !wouldEmpty.has(area.inspectionId));
 
     const byName = new Map();
     for (const area of removable) {
