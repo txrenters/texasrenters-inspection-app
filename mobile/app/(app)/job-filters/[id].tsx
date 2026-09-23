@@ -232,9 +232,17 @@ export default function JobFiltersScreen() {
     setError(null);
     actions.saveServices.mutate(next, {
       // A held answer is kept on the device, which the mutation has already
-      // written into the cached job. Anything else is worth saying out loud.
+      // written into the cached job. Anything else is worth saying out loud --
+      // and it is not retried: what reaches here is the server refusing the
+      // answer or failing on it, neither of which the queue will send again.
+      // Saying "it will retry" told a technician to walk away from an answer
+      // that had not been saved and was not going to be.
       onError: (caught) =>
-        setError(caught instanceof Error && caught.name === 'QueuedOfflineError' ? null : 'Could not save that. It will retry.'),
+        setError(
+          caught instanceof Error && caught.name === 'QueuedOfflineError'
+            ? null
+            : 'That did not save. Try again.',
+        ),
     });
   };
 

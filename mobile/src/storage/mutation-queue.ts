@@ -108,9 +108,19 @@ export async function recordAttempt(id: string): Promise<QueuedMutation[]> {
  * Stops at the first failure rather than working through the rest: the usual
  * reason a send fails is that the network went away again, and hammering the
  * remaining entries only burns attempts against a connection that is gone.
+ *
+ * `isRetryable` separates that from a send the server *answered*. Waiting
+ * cannot change a refusal, and an entry that will never be accepted must not
+ * sit at the head of the queue stalling everything behind it for the eight
+ * reconnects it takes to burn the ceiling — a technician's held skips and
+ * notes would go nowhere because one submission was already in. Refused
+ * entries are dropped and the drain carries on, because a refusal says
+ * nothing about the connection. Defaults to retrying everything, which is
+ * what a caller with no view of its own errors should get.
  */
 export async function drainQueue(
   send: (entry: QueuedMutation) => Promise<void>,
+  isRetryable: (error: unknown) => boolean = () => true,
 ): Promise<{ sent: number; remaining: number }> {
   let sent = 0;
   for (const entry of await readQueue()) {
@@ -118,7 +128,11 @@ export async function drainQueue(
       await send(entry);
       await removeMutation(entry.id);
       sent += 1;
-    } catch {
+    } catch (error) {
+      if (!isRetryable(error)) {
+        await removeMutation(entry.id);
+        continue;
+      }
       await recordAttempt(entry.id);
       break;
     }

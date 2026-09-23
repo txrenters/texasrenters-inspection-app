@@ -528,10 +528,13 @@ async function createStreamUploadSession(input: {
      * Reported as an ApiConnectionError so the queue treats it as transient and
      * keeps the recording, and so the offline cache path recognises it.
      */
-    const reason = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error ? error.message : String(error);
+    // `transport`: this is the fetch itself rejecting, so nothing was answered
+    // and nothing arrived. A status from this endpoint is handled below.
     throw new ApiConnectionError(
-      `Could not reach ${new URL(url).host} to start the upload (${reason}). ` +
+      `Could not reach ${new URL(url).host} to start the upload (${cause}). ` +
         'The recording is safe on this device and will retry.',
+      'transport',
     );
   }
   if (response.status === 503) return null;
@@ -635,9 +638,11 @@ export async function requestJson(
       if (controller.signal.aborted && !options.signal?.aborted)
         throw new ApiConnectionError(
           'The TexasRenters API did not respond in time. Check the server and retry.',
+          'timeout',
         );
       throw new ApiConnectionError(
         'Cannot connect to the TexasRenters API. Check the server and retry.',
+        'transport',
       );
     } finally {
       clearTimeout(timeout);
@@ -652,7 +657,18 @@ export async function requestJson(
       // 403 is deliberately excluded: that is a permissions problem, and
       // signing out would hide it behind a misleading login prompt.
       if (response.status === 401) throw new SessionExpiredError();
-      if (response.status >= 500) throw new ApiConnectionError(message);
+      // 502/503/504 come from the edge, which answers them precisely because it
+      // could not reach the app behind it — the same judgement the fallback
+      // above already makes about these three codes. The request was never
+      // processed, so it is safe to hold and send again. Any other 5xx is the
+      // app's own answer: it got the request and failed on it, which may well
+      // be what it does every time, and holding that is how a write is retried
+      // forever against something that will never change.
+      if (response.status >= 500)
+        throw new ApiConnectionError(
+          message,
+          [502, 503, 504].includes(response.status) ? 'unavailable' : 'fault',
+        );
       throw new Error(message);
     }
     /**
@@ -673,8 +689,12 @@ export async function requestJson(
     const body = await response.text();
     return body ? (JSON.parse(body) as unknown) : undefined;
   }
+  // Every base URL was tried and none answered. Only reachable for a GET or a
+  // HEAD: `hasFallback` requires `canFallback`, so a write never continues past
+  // its first base URL and leaves this loop by returning or throwing above.
   throw new ApiConnectionError(
     'Cannot connect to the TexasRenters API. Check the server and retry.',
+    'transport',
   );
 }
 

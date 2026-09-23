@@ -5,10 +5,40 @@ import { demoStorage } from './demo-storage';
 
 const CACHE_PREFIX = 'texasrenters-offline-records-v1';
 
+/**
+ * Why a request produced no answer this app can act on.
+ *
+ * All four are `ApiConnectionError` because the read path treats them the
+ * same way on purpose: a screen falls back to its cached record whether the
+ * radio is off or the API is throwing, and blaming the technician's input for
+ * an outage is the bug `ApiHomeRepository.set` documents. The write path
+ * cannot afford that shrug — holding a write says "we could not be reached",
+ * and only some of these mean it — so the cause travels with the error rather
+ * than being inferred from its message. See `classifyWriteFailure`.
+ */
+export type ApiConnectionReason =
+  /** Nothing came back: fetch rejected. No route, no DNS, no TLS, radio off. */
+  | 'transport'
+  /** Our own 15-second deadline fired. Nothing says whether it arrived. */
+  | 'timeout'
+  /** 502/503/504 — the edge answered because it could not reach the app. */
+  | 'unavailable'
+  /** The app itself answered 5xx. It received the request and failed on it. */
+  | 'fault';
+
 export class ApiConnectionError extends Error {
-  constructor(message: string) {
+  readonly reason: ApiConnectionReason;
+
+  // Required rather than defaulted, in the spirit of the queue's own senders
+  // being written out one per line: a default is a decision nobody has to
+  // make, and the whole bug was that this distinction had never been made.
+  // Whichever value were chosen, the site that skipped it would be silently
+  // classified — and the one to fear is a write held against an answer that
+  // is never going to change.
+  constructor(message: string, reason: ApiConnectionReason) {
     super(message);
     this.name = 'ApiConnectionError';
+    this.reason = reason;
   }
 }
 
