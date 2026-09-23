@@ -30,7 +30,9 @@ const mockRequestForeground = jest.fn();
 const mockRequestBackground = jest.fn();
 const mockStartUpdates = jest.fn();
 const mockReadLastKept = jest.fn(async () => null as unknown);
-const mockRememberKept = jest.fn(async () => undefined);
+// Takes its arguments, because the mock below spreads into it: a zero-arity
+// stub typechecks under jest (babel strips the types) and fails under `tsc`.
+const mockRememberKept = jest.fn(async (..._args: unknown[]) => undefined);
 // Defaults at declaration, not only in `beforeEach`: that hook calls
 // `stopShiftTracking()` on its first line, before any of the assignments
 // below have run, so a mock with no implementation returns undefined and the
