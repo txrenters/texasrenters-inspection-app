@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CalendarRange,
   ClipboardCheck,
+  Clock,
   DoorOpen,
   FileWarning,
   Gauge,
@@ -144,6 +145,16 @@ export const adminNavigation: AdminNavigationGroup[] = [
         title: 'Move-ins & move-outs',
         href: '/lease-schedule',
         icon: DoorOpen,
+        permission: 'inspections:read',
+      },
+      {
+        // Beside the work rather than under People: this is what the work came
+        // to, and the office reads it against the jobs on the same screen. The
+        // hours a technician is paid for, read from where they actually were
+        // rather than from a button they may have forgotten to press.
+        title: 'Timesheet',
+        href: '/timesheet',
+        icon: Clock,
         permission: 'inspections:read',
       },
       {
