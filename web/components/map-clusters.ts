@@ -39,6 +39,42 @@ export function projectToPixels(latitude: number, longitude: number, zoom: numbe
 }
 
 /**
+ * How many metres one screen pixel covers, here.
+ *
+ * The same Web Mercator scale `projectToPixels` uses, read the other way
+ * round. "Here" is the point of it: Mercator stretches east-west with
+ * latitude, so a pixel is a different distance in Houston than at the equator,
+ * and a ring drawn from a fixed pixel size would be the wrong size on the
+ * ground. Earth's equatorial circumference over the world's width in pixels.
+ */
+export function metersPerPixel(latitude: number, zoom: number) {
+  const clamped = Math.max(-85.05112878, Math.min(85.05112878, latitude));
+  return (40_075_016.686 * Math.cos((clamped * Math.PI) / 180)) / (256 * 2 ** zoom);
+}
+
+/**
+ * Below this many pixels across, a geofence ring is not worth drawing.
+ *
+ * A 40m circle at metropolitan zoom is under a pixel wide, so hundreds of them
+ * would cost a real overlay each and say nothing — the pin is already there
+ * and already says where the property is. Roughly a marker's width, which is
+ * about where a circle stops being a smudge and starts being a size somebody
+ * can compare against the building under it.
+ */
+export const RING_MIN_DIAMETER_PX = 24;
+
+/**
+ * Whether this radius is large enough on screen to mean anything.
+ *
+ * Asked about the radius rather than the zoom so that a 6m geofence and a 100m
+ * one each appear at the zoom where they become legible, instead of both
+ * turning on at one number picked for the default.
+ */
+export function ringIsLegible(radiusMeters: number, latitude: number, zoom: number) {
+  return (radiusMeters * 2) / metersPerPixel(latitude, zoom) >= RING_MIN_DIAMETER_PX;
+}
+
+/**
  * How close two pins must be, in screen pixels, before they merge.
  *
  * Sized to the marker rather than the map: a property pin is 24px wide, so

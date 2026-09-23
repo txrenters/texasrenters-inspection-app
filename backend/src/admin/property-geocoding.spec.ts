@@ -1,4 +1,8 @@
-import { parseCensusResponse } from './property-geocoding.service';
+import { SEGMENT_DEFAULTS } from '@texasrenters/shared';
+
+import type { AuthenticatedUser } from '../common/auth';
+import type { PrismaService } from '../common/prisma.service';
+import { PropertyGeocodingService, parseCensusResponse } from './property-geocoding.service';
 
 /**
  * A real Census reply, trimmed to the fields that are read.
@@ -65,5 +69,119 @@ describe('parseCensusResponse', () => {
 
   it('tolerates a match with no coordinates at all', () => {
     expect(parseCensusResponse({ result: { addressMatches: [{ matchedAddress: 'x' }] } })).toBeNull();
+  });
+});
+
+/**
+ * The circle the console draws, and the number behind it.
+ *
+ * `positions` stopped being only a list of pins the moment the hours started
+ * being computed from a distance. What it says about a property is now the
+ * rule a technician is paid by, so the two ways it can be quietly wrong -- a
+ * radius that is not the one in force, and a centre that is not where the time
+ * is measured -- are worth pinning.
+ */
+describe('positions', () => {
+  const BUILDING = {
+    id: 'b-1',
+    name: 'Copper Hollow',
+    addressLine1: '10054 Copper Hollow Ln',
+    city: 'Houston',
+    state: 'TX',
+    postalCode: '77044',
+    latitude: decimal(29.87451),
+    longitude: decimal(-95.18234),
+    geocodePrecision: 'ROOFTOP',
+    geofence: null,
+  };
+
+  /** Prisma hands back `Decimal`; the contract is numbers. */
+  function decimal(value: number) {
+    return { toNumber: () => value };
+  }
+
+  const USER = { organizationId: 'org-1' } as AuthenticatedUser;
+
+  function serviceFor(rows: unknown[]) {
+    const prisma = {
+      propertywareBuilding: { findMany: jest.fn().mockResolvedValue(rows) },
+    } as unknown as PrismaService;
+    return new PropertyGeocodingService(prisma);
+  }
+
+  it('falls back to the default radius where the office has set none', async () => {
+    const [position] = await serviceFor([BUILDING]).positions(USER);
+
+    // Not null, and not zero. Every property has an answer, because a missing
+    // radius drawn as nothing would read as "nowhere counts as on site".
+    expect(position?.enterRadiusMeters).toBe(SEGMENT_DEFAULTS.enterRadiusMeters);
+    expect(position?.exitRadiusMeters).toBe(SEGMENT_DEFAULTS.exitRadiusMeters);
+    expect(position?.geofenceMoved).toBe(false);
+  });
+
+  it('uses the radius the office set instead of the default', async () => {
+    const [position] = await serviceFor([
+      {
+        ...BUILDING,
+        geofence: {
+          latitude: null,
+          longitude: null,
+          enterRadiusMeters: 90,
+          exitRadiusMeters: 120,
+        },
+      },
+    ]).positions(USER);
+
+    expect(position?.enterRadiusMeters).toBe(90);
+    expect(position?.exitRadiusMeters).toBe(120);
+  });
+
+  /**
+   * The correction winning over the lookup.
+   *
+   * Somebody stood at the property and moved the centre. Drawing the circle on
+   * the geocoder's pin instead would show a boundary the hours are not
+   * measured from — right where a technician disputes them.
+   */
+  it('draws on the centre the office moved it to, and says it was moved', async () => {
+    const [position] = await serviceFor([
+      {
+        ...BUILDING,
+        geofence: {
+          latitude: decimal(29.875),
+          longitude: decimal(-95.183),
+          enterRadiusMeters: 40,
+          exitRadiusMeters: 60,
+        },
+      },
+    ]).positions(USER);
+
+    expect(position?.latitude).toBe(29.875);
+    expect(position?.longitude).toBe(-95.183);
+    expect(position?.geofenceMoved).toBe(true);
+  });
+
+  /**
+   * A half-written geofence is not a moved one.
+   *
+   * The radii can be set without ever touching the centre, which is the
+   * ordinary case. Treating that row as moved would read a null coordinate as
+   * a position and drop the property into the Atlantic at 0,0.
+   */
+  it('keeps the geocoded pin when only the radius was set', async () => {
+    const [position] = await serviceFor([
+      {
+        ...BUILDING,
+        geofence: {
+          latitude: null,
+          longitude: null,
+          enterRadiusMeters: 90,
+          exitRadiusMeters: 120,
+        },
+      },
+    ]).positions(USER);
+
+    expect(position?.latitude).toBe(29.87451);
+    expect(position?.geofenceMoved).toBe(false);
   });
 });

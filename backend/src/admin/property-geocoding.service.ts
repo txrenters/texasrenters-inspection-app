@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
+  SEGMENT_DEFAULTS,
   type GeocodePrecision,
   geocodableAddress,
   isWorthReplacing,
@@ -269,6 +270,10 @@ export class PropertyGeocodingService {
         latitude: true,
         longitude: true,
         geocodePrecision: true,
+        // The office's own answer for this property, where it has given one.
+        geofence: {
+          select: { latitude: true, longitude: true, enterRadiusMeters: true, exitRadiusMeters: true },
+        },
       },
       orderBy: { name: 'asc' },
     });
@@ -279,17 +284,31 @@ export class PropertyGeocodingService {
     // The address parts are nullable on a synced record and not on the
     // contract, so they fall back to empty rather than being dropped — a pin
     // with a thin popup is still a property somebody can find.
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      addressLine1: row.addressLine1 ?? '',
-      city: row.city ?? '',
-      state: row.state ?? '',
-      postalCode: row.postalCode ?? '',
-      latitude: row.latitude?.toNumber() ?? 0,
-      longitude: row.longitude?.toNumber() ?? 0,
-      geocodePrecision: (row.geocodePrecision as GeocodePrecision | null) ?? null,
-    }));
+    return rows.map((row) => {
+      /**
+       * The geofence centre wins over the geocoder's pin.
+       *
+       * They are usually the same point, and where they are not it is because
+       * somebody stood at the property and corrected it -- which is a better
+       * answer than an address lookup. The map draws the circle where the time
+       * is actually measured, or it would be showing a rule nobody is applying.
+       */
+      const moved = Boolean(row.geofence?.latitude && row.geofence?.longitude);
+      return {
+        id: row.id,
+        name: row.name,
+        addressLine1: row.addressLine1 ?? '',
+        city: row.city ?? '',
+        state: row.state ?? '',
+        postalCode: row.postalCode ?? '',
+        latitude: (moved ? row.geofence?.latitude : row.latitude)?.toNumber() ?? 0,
+        longitude: (moved ? row.geofence?.longitude : row.longitude)?.toNumber() ?? 0,
+        geocodePrecision: (row.geocodePrecision as GeocodePrecision | null) ?? null,
+        enterRadiusMeters: row.geofence?.enterRadiusMeters ?? SEGMENT_DEFAULTS.enterRadiusMeters,
+        exitRadiusMeters: row.geofence?.exitRadiusMeters ?? SEGMENT_DEFAULTS.exitRadiusMeters,
+        geofenceMoved: moved,
+      };
+    });
   }
 
   /**

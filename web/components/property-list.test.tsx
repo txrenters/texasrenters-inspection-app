@@ -25,6 +25,9 @@ function makeProperties(count: number): PropertyPosition[] {
     latitude: 29.7 + index / 10_000,
     longitude: -95.4 - index / 10_000,
     geocodePrecision: null,
+    enterRadiusMeters: 40,
+    exitRadiusMeters: 60,
+    geofenceMoved: false,
   }));
 }
 

@@ -60,6 +60,7 @@
   --color-map-route-done: var(--map-route-done);
   --color-map-route-next: var(--map-route-next);
   --color-map-air: var(--map-air);
+  --color-map-geofence: var(--map-geofence);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
@@ -203,6 +204,15 @@
   /* Air travel. Deliberately not the route blue: this is a journey nobody
      drove and nobody planned, and it must not be mistaken for the road line. */
   --map-air: oklch(0.55 0.16 25);
+  /* How close counts as on site, drawn to scale.
+
+     The map's orange, and the same hue as the route on purpose: both are
+     statements about the working day rather than about a place, and the eye
+     already reads orange here as "this is about the technician's time". Its
+     own token even so, so the route can be recoloured without silently
+     moving what a geofence looks like. The shapes are what tell them apart --
+     a thin line along roads against a filled circle sitting on one pin. */
+  --map-geofence: oklch(0.7 0.19 52);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);
@@ -387,6 +397,13 @@
 
 .map-air-line {
   stroke: var(--map-air);
+}
+
+/* Read off a probe element by `GeofenceRing`, the same way the route lines are.
+ * Google paints its circles through options rather than CSS, so the token has
+ * to be resolved in JavaScript before it can be handed over. */
+.map-geofence-ring {
+  stroke: var(--map-geofence);
 }
 
 /* Google's info window, made to follow the theme.
