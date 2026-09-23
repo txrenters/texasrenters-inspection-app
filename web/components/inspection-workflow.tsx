@@ -1,6 +1,6 @@
 'use client';
 
-import type { AdminInspection } from '@texasrenters/shared';
+import { layoutAreasFor, type AdminInspection } from '@texasrenters/shared';
 import { useMemo, useState, type FormEvent } from 'react';
 
 import { RequestEvidenceDialog } from '@/components/evidence-request/RequestEvidenceDialog';
@@ -510,7 +510,26 @@ export function AddAreasDialog({
   const [selected, setSelected] = useState<string[]>([]);
 
   const candidates = useMemo(() => {
-    const approved = (areas.data ?? []).filter((area) => area.status === 'APPROVED');
+    /**
+     * The same rule the server scopes an inspection with.
+     *
+     * This listed every approved area, which is not the set the server will
+     * accept: `layoutAreasFor` drops the ones that are not rooms -- an HVAC
+     * visit's A/C unit, filters, thermostat and attic all live on the property
+     * as `SYSTEM` areas -- and drops the standard template once a real floor
+     * plan or an imported report has arrived.
+     *
+     * Missed when the create form was fixed, and it fails worse here. There the
+     * ids only went up once somebody cleared a box; this dialog sends exactly
+     * what was ticked, so offering an area the server refuses turns into
+     * "Select only approved areas belonging to this property" on a dialog where
+     * every area shown does belong to the property. 4207 Hardy St, which has
+     * four such areas beside its fifteen rooms, is where that would have been
+     * met first.
+     */
+    const approved = layoutAreasFor(
+      (areas.data ?? []).filter((area) => area.status === 'APPROVED'),
+    );
     const scope = unitId
       ? approved.filter((area) => area.unitId === unitId)
       : ([] as typeof approved);
