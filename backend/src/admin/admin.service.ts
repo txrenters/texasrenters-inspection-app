@@ -17,6 +17,7 @@ import {
 import {
   AreaScope,
   LEASE_EXPIRING_SOON_DAYS,
+  SEGMENT_DEFAULTS,
   areaScopeFor,
   bookingFromTenancy,
   booksAnyService,
@@ -871,6 +872,11 @@ export class AdminService {
         category: true,
         manualTotalArea: true,
         manualAreaUnit: true,
+        // How close counts as being at this property. Read here so the page
+        // that sets it does not need a second request to know the current one.
+        geofence: {
+          select: { enterRadiusMeters: true, exitRadiusMeters: true, latitude: true, longitude: true },
+        },
         portfolio: { select: { id: true, externalId: true, name: true } },
         units: {
           where: { isActive: true },
@@ -910,14 +916,36 @@ export class AdminService {
       },
     });
     if (!property) throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'Property was not found.');
-    const { totalArea, areaUnits, category, manualTotalArea, manualAreaUnit, updatedAt, ...rest } =
-      property;
+    const {
+      totalArea,
+      areaUnits,
+      category,
+      manualTotalArea,
+      manualAreaUnit,
+      updatedAt,
+      geofence,
+      ...rest
+    } = property;
     // The relevant lease for a unit is its active lease; a unit with none reads
     // "No relevant lease" (null) rather than an invented status.
     const relevantLease = new Map(property.leases.map((lease) => [lease.unitId, lease]));
     return {
       ...rest,
       category,
+      /**
+       * Always answered, never null.
+       *
+       * A property with no row of its own is on the defaults, which is a real
+       * answer rather than an absence -- and a page that had to know about the
+       * defaults to render "40 m" would be a second place for them to live.
+       * `set` is what separates "nobody has decided" from "somebody chose 40".
+       */
+      geofence: {
+        enterRadiusMeters: geofence?.enterRadiusMeters ?? SEGMENT_DEFAULTS.enterRadiusMeters,
+        exitRadiusMeters: geofence?.exitRadiusMeters ?? SEGMENT_DEFAULTS.exitRadiusMeters,
+        centreMoved: Boolean(geofence?.latitude && geofence?.longitude),
+        set: Boolean(geofence),
+      },
       totalArea: this.buildingTotalArea({
         totalArea,
         areaUnits,

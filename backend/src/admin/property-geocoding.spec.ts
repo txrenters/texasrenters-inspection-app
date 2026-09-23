@@ -185,3 +185,143 @@ describe('positions', () => {
     expect(position?.geofenceMoved).toBe(false);
   });
 });
+
+/**
+ * Setting how close counts as being there.
+ *
+ * The table had no writer until now, so every property in the portfolio ran on
+ * 40 m in / 60 m out whether that suited a suburban house or a forty-unit
+ * complex. The number decides what a technician is paid, so what this refuses
+ * matters as much as what it stores.
+ */
+describe('setting a property geofence', () => {
+  const USER = { id: 'admin-1', organizationId: 'org-1', principalType: 'USER' } as AuthenticatedUser;
+
+  function harness(building: unknown = { id: 'b-1' }) {
+    const upsert = jest.fn().mockImplementation(({ create, update }) => {
+      const data = update ?? create;
+      return Promise.resolve({
+        enterRadiusMeters: data.enterRadiusMeters,
+        exitRadiusMeters: data.exitRadiusMeters,
+        latitude: data.latitude === null ? null : { toNumber: () => data.latitude },
+        longitude: data.longitude === null ? null : { toNumber: () => data.longitude },
+      });
+    });
+    const deleteMany = jest.fn().mockResolvedValue({ count: 1 });
+    const auditCreate = jest.fn().mockResolvedValue({});
+    const prisma = {
+      propertywareBuilding: { findFirst: jest.fn().mockResolvedValue(building) },
+      propertyGeofence: { upsert, deleteMany },
+      auditLog: { create: auditCreate },
+    } as unknown as PrismaService;
+    return { service: new PropertyGeocodingService(prisma), upsert, deleteMany, auditCreate };
+  }
+
+  it('stores the distances the office chose', async () => {
+    const { service, upsert } = harness();
+
+    const result = await service.setGeofence(USER, 'b-1', {
+      enterRadiusMeters: 120,
+      exitRadiusMeters: 160,
+    });
+
+    expect(upsert.mock.calls[0]![0].create).toMatchObject({
+      enterRadiusMeters: 120,
+      exitRadiusMeters: 160,
+      updatedById: 'admin-1',
+    });
+    expect(result).toMatchObject({ enterRadiusMeters: 120, geofenceMoved: false });
+  });
+
+  /**
+   * The gap between the two is the hysteresis. Without it a technician near
+   * the edge is clocked in and out on noise, and an hour on site becomes a
+   * column of one-minute rows.
+   */
+  it('refuses a departure distance that is not larger than the arrival one', async () => {
+    const { service, upsert } = harness();
+
+    await expect(
+      service.setGeofence(USER, 'b-1', { enterRadiusMeters: 60, exitRadiusMeters: 60 }),
+    ).rejects.toThrow(/larger than the arrival distance/);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  /** The office asked for 6 m; the handsets cannot measure it. */
+  it('refuses a radius tighter than the handsets can measure', async () => {
+    const { service } = harness();
+
+    await expect(
+      service.setGeofence(USER, 'b-1', { enterRadiusMeters: 6, exitRadiusMeters: 30 }),
+    ).rejects.toThrow(/between 10 and 500/);
+  });
+
+  /**
+   * Half a centre is not a position. Written through, a null longitude beside
+   * a real latitude would read as "moved" and put the property at sea.
+   */
+  it('refuses half a centre', async () => {
+    const { service } = harness();
+
+    await expect(
+      service.setGeofence(USER, 'b-1', {
+        enterRadiusMeters: 40,
+        exitRadiusMeters: 60,
+        latitude: 29.76,
+      }),
+    ).rejects.toThrow(/both a latitude and a longitude/);
+  });
+
+  it('records a moved centre and says the centre moved', async () => {
+    const { service, upsert } = harness();
+
+    const result = await service.setGeofence(USER, 'b-1', {
+      enterRadiusMeters: 40,
+      exitRadiusMeters: 60,
+      latitude: 29.76,
+      longitude: -95.37,
+    });
+
+    expect(upsert.mock.calls[0]![0].create).toMatchObject({ latitude: 29.76, longitude: -95.37 });
+    expect(result.geofenceMoved).toBe(true);
+  });
+
+  it('refuses a property in another organization', async () => {
+    const { service } = harness(null);
+
+    await expect(
+      service.setGeofence(USER, 'b-1', { enterRadiusMeters: 40, exitRadiusMeters: 60 }),
+    ).rejects.toThrow(/was not found/);
+  });
+
+  /** It decides what somebody is paid, so somebody's name is on it. */
+  it('audits the distances and who set them', async () => {
+    const { service, auditCreate } = harness();
+
+    await service.setGeofence(USER, 'b-1', { enterRadiusMeters: 90, exitRadiusMeters: 120 });
+
+    expect(auditCreate.mock.calls[0]![0].data).toMatchObject({
+      action: 'PROPERTY_GEOFENCE_SET',
+      actorUserId: 'admin-1',
+      metadata: { enterRadiusMeters: 90, exitRadiusMeters: 120, centreMoved: false },
+    });
+  });
+
+  /**
+   * Clearing deletes the row rather than writing the defaults into it, so
+   * "nobody decided" and "somebody chose the default" stay different — a later
+   * change to the default should move the first and leave the second.
+   */
+  it('clears back to the defaults by removing the row', async () => {
+    const { service, deleteMany } = harness();
+
+    const result = await service.clearGeofence(USER, 'b-1');
+
+    expect(deleteMany).toHaveBeenCalled();
+    expect(result).toEqual({
+      enterRadiusMeters: SEGMENT_DEFAULTS.enterRadiusMeters,
+      exitRadiusMeters: SEGMENT_DEFAULTS.exitRadiusMeters,
+      geofenceMoved: false,
+    });
+  });
+});

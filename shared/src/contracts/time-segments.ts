@@ -82,6 +82,56 @@ export interface SegmentResult {
  *
  * Measured against a month of real jobs on 2026-09-23 rather than chosen.
  */
+/**
+ * What the office is allowed to set a property's radius to.
+ *
+ * Here rather than in the API so the console can refuse a number before it is
+ * sent, the server can refuse it again, and the phone reads the same rule --
+ * three places that must not disagree about what a geofence is.
+ *
+ * **10 m floor.** The handsets report a median accuracy of 3 m and 73% of
+ * fixes at 6 m or better, but 9.5% are worse than 25 m. A radius tighter than
+ * the error it is measured with does not record a shorter visit, it records
+ * *no* visit — which is how 20 m lost 15 of 37 jobs outright in the replay.
+ * The office asked for 6 m; this is why the answer was no.
+ *
+ * **500 m ceiling.** Past that a circle stops describing a property and starts
+ * describing its neighbourhood, and a technician working next door would be
+ * billed to this one.
+ */
+export const GEOFENCE_RADIUS_BOUNDS = { minMeters: 10, maxMeters: 500 } as const;
+
+/**
+ * Why a proposed geofence is not allowed, or null when it is.
+ *
+ * Returns the sentence a person should read, not a code: the office is the
+ * only caller that acts on it, and every caller here would otherwise write its
+ * own wording for the same rule.
+ */
+export function geofenceRadiusProblem(enterRadiusMeters: number, exitRadiusMeters: number): string | null {
+  const { minMeters, maxMeters } = GEOFENCE_RADIUS_BOUNDS;
+  for (const [what, value] of [
+    ['arrival', enterRadiusMeters],
+    ['departure', exitRadiusMeters],
+  ] as const) {
+    if (!Number.isInteger(value))
+      return `Give the ${what} distance in whole metres.`;
+    if (value < minMeters || value > maxMeters)
+      return `The ${what} distance has to be between ${minMeters} and ${maxMeters} metres.`;
+  }
+  /**
+   * The gap is the whole point, not a formality.
+   *
+   * Equal radii put a technician standing near the edge in and out of the
+   * property every time a fix wobbles, which is exactly the flapping the two
+   * numbers exist to prevent -- and each flap ends one segment and starts
+   * another, so an hour on site becomes a column of one-minute rows.
+   */
+  if (exitRadiusMeters <= enterRadiusMeters)
+    return 'The departure distance has to be larger than the arrival distance, or the clock will start and stop every time a position wobbles.';
+  return null;
+}
+
 export const SEGMENT_DEFAULTS = {
   /**
    * 40 m in, 60 m out.

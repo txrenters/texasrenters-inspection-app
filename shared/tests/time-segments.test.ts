@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   SEGMENT_DEFAULTS,
+  geofenceRadiusProblem,
   computeSegments,
   secondsIn,
   type SegmentFix,
@@ -217,5 +218,57 @@ describe('the settings are the measured ones', () => {
 
   it('ignores fixes vaguer than 25 m, far tighter than the map allows', () => {
     expect(SEGMENT_DEFAULTS.maxAccuracyMeters).toBe(25);
+  });
+});
+
+/**
+ * What the office may set a property's radius to.
+ *
+ * The rule lives in shared because three places ask it — the console before it
+ * sends, the server before it writes, and the phone when it reads a geofence
+ * back. Three copies of "is this sensible" is how they come to disagree.
+ */
+describe('a geofence the office proposes', () => {
+  const ok = (enter: number, exit: number) => geofenceRadiusProblem(enter, exit);
+
+  it('accepts the defaults', () => {
+    expect(ok(SEGMENT_DEFAULTS.enterRadiusMeters, SEGMENT_DEFAULTS.exitRadiusMeters)).toBeNull();
+  });
+
+  it('accepts a wide one, for a property on a large lot', () => {
+    expect(ok(150, 200)).toBeNull();
+  });
+
+  /**
+   * The gap is the whole point of having two numbers. Equal radii flap a
+   * technician in and out on noise, and each flap ends one segment and starts
+   * another — an hour on site becomes a column of one-minute rows.
+   */
+  it('refuses a departure distance that is not larger than the arrival one', () => {
+    expect(ok(40, 40)).toMatch(/larger than the arrival distance/);
+    expect(ok(60, 40)).toMatch(/larger than the arrival distance/);
+  });
+
+  /**
+   * The office asked for 6 m. A radius tighter than the error it is measured
+   * with does not record a shorter visit, it records no visit — 20 m lost 15 of
+   * 37 jobs outright in the replay.
+   */
+  it('refuses a radius tighter than the handsets can measure', () => {
+    expect(ok(6, 30)).toMatch(/between 10 and 500/);
+  });
+
+  it('refuses one so wide it would bill the neighbours', () => {
+    expect(ok(40, 900)).toMatch(/between 10 and 500/);
+  });
+
+  it('refuses a fraction of a metre', () => {
+    expect(ok(40.5, 60)).toMatch(/whole metres/);
+  });
+
+  /** Says which of the two is wrong, because the office has to fix one of them. */
+  it('names the distance it is complaining about', () => {
+    expect(ok(5, 60)).toContain('arrival');
+    expect(ok(40, 5_000)).toContain('departure');
   });
 });

@@ -140,10 +140,27 @@ export interface PropertyLeaseSummary {
   summary: string; // compact, e.g. "3 active leases · 1 ending within 60 days · 2 vacant units"
 }
 
+/**
+ * How close a technician has to be for this property to count as visited.
+ *
+ * Always present on a property detail, never null: one without a row of its
+ * own is on `SEGMENT_DEFAULTS`, which is a real answer rather than an absence.
+ * `set` is what separates "nobody has decided this" from "somebody chose the
+ * default", and only the first should move if the default ever changes.
+ */
+export interface AdminPropertyGeofence {
+  enterRadiusMeters: number;
+  exitRadiusMeters: number;
+  /** The office has put the centre somewhere other than the geocoded pin. */
+  centreMoved: boolean;
+  set: boolean;
+}
+
 export interface AdminProperty {
   id: string;
   externalId: string;
   name: string;
+  geofence?: AdminPropertyGeofence;
   addressLine1?: string | null;
   addressLine2?: string | null;
   city?: string | null;

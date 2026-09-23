@@ -7,6 +7,7 @@ import { useParams } from 'next/navigation';
 import { DataTable, type Column } from '@/components/data-table';
 import { FloorPlanManager } from '@/components/floor-plan-manager';
 import { PageHeader } from '@/components/page-header';
+import { PropertyGeofenceCard } from '@/components/property-geofence-card';
 import { EmptyState, ErrorState, PageSkeleton } from '@/components/states';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -221,6 +222,15 @@ export default function PropertyDetailPage() {
           </dd>
         </Card>
       </dl>
+
+      {/*
+        Above the units, because it is a property-wide setting and because it
+        is the one thing on this page a technician's pay depends on. Only where
+        the server sent it, so an older API does not render an empty card.
+      */}
+      {item.geofence ? (
+        <PropertyGeofenceCard geofence={item.geofence} propertyId={item.id} />
+      ) : null}
 
       <Card className="mt-4">
         <CardHeader className="flex-row items-center justify-between">

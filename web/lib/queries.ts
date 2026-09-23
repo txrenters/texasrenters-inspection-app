@@ -1393,6 +1393,47 @@ export function useAdminMutations() {
           ]);
       },
     }),
+    /**
+     * How close a technician has to be for this property to count as visited.
+     *
+     * Invalidates the property rather than patching it: this is the number the
+     * hours are computed from, and a card showing one radius while the server
+     * held another would be worse than a moment's delay.
+     */
+    setPropertyGeofence: useMutation({
+      mutationFn: ({
+        propertyId,
+        ...body
+      }: {
+        propertyId: string;
+        enterRadiusMeters: number;
+        exitRadiusMeters: number;
+        latitude?: number | null;
+        longitude?: number | null;
+      }) =>
+        api<{ enterRadiusMeters: number; exitRadiusMeters: number; geofenceMoved: boolean }>(
+          `/api/v1/admin/properties/${propertyId}/geofence`,
+          { method: 'PUT', body: JSON.stringify(body) },
+        ),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({ queryKey: keys.property(variables.propertyId) });
+        void client.invalidateQueries({ queryKey: keys.propertyLocations });
+      },
+    }),
+
+    /** Back to the defaults, and back onto the geocoded pin. */
+    clearPropertyGeofence: useMutation({
+      mutationFn: ({ propertyId }: { propertyId: string }) =>
+        api<{ enterRadiusMeters: number; exitRadiusMeters: number; geofenceMoved: boolean }>(
+          `/api/v1/admin/properties/${propertyId}/geofence`,
+          { method: 'DELETE' },
+        ),
+      onSuccess: (_data, variables) => {
+        void client.invalidateQueries({ queryKey: keys.property(variables.propertyId) });
+        void client.invalidateQueries({ queryKey: keys.propertyLocations });
+      },
+    }),
+
     createFallbackPropertyArea: useMutation({
       mutationFn: ({ propertyId }: { propertyId: string }) =>
         api<AdminPropertyArea>(`/api/v1/admin/properties/${propertyId}/areas/fallback`, {
