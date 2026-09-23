@@ -97,6 +97,7 @@ import {
   UpdateAdminInspectionDto,
   UpdateAiProviderDto,
   UpdateAiRoutingDto,
+  SetPropertyGeofenceDto,
   UpdateAreaChecklistItemDto,
   UpdateAreaMarkerDto,
   UpdatePropertyAreaDto,
@@ -1013,6 +1014,35 @@ export class AdminController {
    * property's location is part of the property, not a separate secret, and it
    * is on the tenancy agreement long before it reaches this console.
    */
+  /**
+   * Set a property's own arrival and departure distances.
+   *
+   * `properties:manage` rather than an inspections grant: this is a fact about
+   * the property, set once and read by every visit to it afterwards. It does
+   * decide what a technician is paid, which is why it is audited.
+   */
+  @Put('properties/:propertyId/geofence')
+  @ApiTags(CONSOLE_MAP_TAG)
+  @RequirePermissions('properties:manage')
+  setPropertyGeofence(
+    @Req() request: AuthenticatedRequest,
+    @Param('propertyId') propertyId: string,
+    @Body() body: SetPropertyGeofenceDto,
+  ) {
+    return this.propertyGeocoding.setGeofence(request.user, propertyId, body);
+  }
+
+  /** Back to the defaults, and back onto the geocoded pin. */
+  @Delete('properties/:propertyId/geofence')
+  @ApiTags(CONSOLE_MAP_TAG)
+  @RequirePermissions('properties:manage')
+  clearPropertyGeofence(
+    @Req() request: AuthenticatedRequest,
+    @Param('propertyId') propertyId: string,
+  ) {
+    return this.propertyGeocoding.clearGeofence(request.user, propertyId);
+  }
+
   @Get('property-locations')
   @ApiTags(CONSOLE_MAP_TAG)
   @RequirePermissions('properties:read')

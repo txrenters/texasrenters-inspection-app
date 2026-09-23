@@ -3,12 +3,14 @@ import {
   SEGMENT_DEFAULTS,
   type GeocodePrecision,
   geocodableAddress,
+  geofenceRadiusProblem,
   isWorthReplacing,
   needsGeocoding,
   type PropertyPosition,
 } from '@texasrenters/shared';
 
-import type { AuthenticatedUser } from '../common/auth';
+import { type AuthenticatedUser, auditActor } from '../common/auth';
+import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
 import { withSystemTenant } from '../database/tenant-context';
 import { GOOGLE_GEOCODE_SOURCE, GoogleGeocodingClient } from './google-geocoding.client';
@@ -252,6 +254,131 @@ export class PropertyGeocodingService {
    * Rows without a coordinate are absent rather than sent with nulls: a map has
    * nothing to do with a property it cannot place.
    */
+  /**
+   * Set how close a technician has to be for this property to count as visited.
+   *
+   * Until this existed the table had no writer at all, so every property in the
+   * portfolio ran on `SEGMENT_DEFAULTS` -- 40 m in, 60 m out -- and an office
+   * looking at a ring drawn over a twelve-acre lot or a forty-unit complex had
+   * no way to say otherwise. The radius decides what a technician is paid, so
+   * it needs to be theirs to set.
+   *
+   * The centre is optional and separate. A property's own coordinates stay
+   * exactly as the geocoder left them, because the map, the routing and the
+   * drive-time estimates all read those; this overrides the centre **for time
+   * only**, for the five properties in 589 that are not rooftop-geocoded and
+   * for the ones where the pin lands on the wrong side of a boundary.
+   */
+  async setGeofence(
+    user: AuthenticatedUser,
+    buildingId: string,
+    input: {
+      enterRadiusMeters: number;
+      exitRadiusMeters: number;
+      latitude?: number | null;
+      longitude?: number | null;
+    },
+  ) {
+    const problem = geofenceRadiusProblem(input.enterRadiusMeters, input.exitRadiusMeters);
+    if (problem) throw new ApplicationError(422, 'INVALID_GEOFENCE', problem);
+
+    /**
+     * A centre is both coordinates or neither.
+     *
+     * One of the two is not a position. Written half-set it would read as
+     * "moved" to `positions`, which tests both -- and a null longitude with a
+     * real latitude would put the property in the Gulf of Guinea.
+     */
+    const hasLatitude = input.latitude !== undefined && input.latitude !== null;
+    const hasLongitude = input.longitude !== undefined && input.longitude !== null;
+    if (hasLatitude !== hasLongitude)
+      throw new ApplicationError(
+        422,
+        'INVALID_GEOFENCE_CENTRE',
+        'Give both a latitude and a longitude, or neither.',
+      );
+
+    const building = await this.prisma.propertywareBuilding.findFirst({
+      where: { id: buildingId, organizationId: user.organizationId },
+      select: { id: true },
+    });
+    if (!building)
+      throw new ApplicationError(404, 'PROPERTY_NOT_FOUND', 'That property was not found.');
+
+    const centre = hasLatitude
+      ? { latitude: input.latitude!, longitude: input.longitude! }
+      : { latitude: null, longitude: null };
+    const data = {
+      enterRadiusMeters: input.enterRadiusMeters,
+      exitRadiusMeters: input.exitRadiusMeters,
+      ...centre,
+      updatedById: user.id,
+    };
+    const saved = await this.prisma.propertyGeofence.upsert({
+      where: { buildingId },
+      create: { organizationId: user.organizationId, buildingId, ...data },
+      update: data,
+      select: { enterRadiusMeters: true, exitRadiusMeters: true, latitude: true, longitude: true },
+    });
+
+    // Audited because it decides what somebody is paid. The numbers, not the
+    // coordinates: where a property is, is not a secret, but it is also not
+    // what anybody reads this row to find out.
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.organizationId,
+        ...auditActor(user),
+        action: 'PROPERTY_GEOFENCE_SET',
+        entityType: 'PropertywareBuilding',
+        entityId: buildingId,
+        metadata: {
+          enterRadiusMeters: saved.enterRadiusMeters,
+          exitRadiusMeters: saved.exitRadiusMeters,
+          centreMoved: hasLatitude,
+        },
+      },
+    });
+
+    return {
+      enterRadiusMeters: saved.enterRadiusMeters,
+      exitRadiusMeters: saved.exitRadiusMeters,
+      geofenceMoved: Boolean(saved.latitude && saved.longitude),
+    };
+  }
+
+  /**
+   * Put a property back on the defaults, and back on its geocoded pin.
+   *
+   * Deletes the row rather than writing 40 and 60 into it, so "nobody has
+   * decided this" and "somebody decided the default" stay different states --
+   * the second is a judgement worth keeping, and a later change to the default
+   * should move the first and not the second.
+   */
+  async clearGeofence(user: AuthenticatedUser, buildingId: string) {
+    const { count } = await this.prisma.propertyGeofence.deleteMany({
+      where: { buildingId, organizationId: user.organizationId },
+    });
+    if (count)
+      await this.prisma.auditLog.create({
+        data: {
+          organizationId: user.organizationId,
+          ...auditActor(user),
+          action: 'PROPERTY_GEOFENCE_CLEARED',
+          entityType: 'PropertywareBuilding',
+          entityId: buildingId,
+          metadata: {
+            enterRadiusMeters: SEGMENT_DEFAULTS.enterRadiusMeters,
+            exitRadiusMeters: SEGMENT_DEFAULTS.exitRadiusMeters,
+          },
+        },
+      });
+    return {
+      enterRadiusMeters: SEGMENT_DEFAULTS.enterRadiusMeters,
+      exitRadiusMeters: SEGMENT_DEFAULTS.exitRadiusMeters,
+      geofenceMoved: false,
+    };
+  }
+
   async positions(user: AuthenticatedUser): Promise<PropertyPosition[]> {
     const rows = await this.prisma.propertywareBuilding.findMany({
       where: {

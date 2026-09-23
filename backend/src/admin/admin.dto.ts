@@ -724,3 +724,26 @@ export class SetSkillRequirementDto {
 export class SkillCatalogQueryDto {
   @IsOptional() @IsIn(['true', 'false']) includeInactive?: string;
 }
+
+/**
+ * How close a technician has to be for a property to count as visited.
+ *
+ * The numbers are bounded in `shared` rather than here, by
+ * `geofenceRadiusProblem`, so the console can refuse a value before it is sent
+ * and the phone reads the same rule. The decorators below only guarantee the
+ * shape; the service asks shared whether the values make sense.
+ */
+export class SetPropertyGeofenceDto {
+  @IsInt() enterRadiusMeters!: number;
+  @IsInt() exitRadiusMeters!: number;
+
+  /**
+   * An optional centre, for time only.
+   *
+   * Both or neither. The property's own coordinates are left exactly as the
+   * geocoder set them, because the map, the routing and the drive-time
+   * estimates all read those.
+   */
+  @IsOptional() @IsNumber() @Min(-90) @Max(90) latitude?: number | null;
+  @IsOptional() @IsNumber() @Min(-180) @Max(180) longitude?: number | null;
+}
