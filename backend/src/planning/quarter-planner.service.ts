@@ -3,6 +3,7 @@ import {
   DriveTimeSource,
   InspectionStatus,
   InspectionType,
+  JobberOutboundKind,
   PlanOriginKind,
   TbpPlanStatus,
   TbpStopStatus,
@@ -45,6 +46,7 @@ import { TechnicianSkillsService } from '../admin/technician-skills.service';
 import { businessInstant } from '../common/business-day';
 import { ApplicationError } from '../common/errors';
 import { PrismaService } from '../common/prisma.service';
+import { requestVisitPush } from '../integrations/jobber/jobber.outbound';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
 import type { GeoPoint } from '../routing/osrm.client';
 import { OsrmClient } from '../routing/osrm.client';
@@ -127,6 +129,59 @@ export interface PlanRoutingSettings {
 export interface RouteOptions {
   /** Today, `YYYY-MM-DD` in Texas. A draft is never laid out on a day already gone. */
   today?: string;
+
+  /**
+   * Lay out the visits that are already booked, rather than pinning them.
+   *
+   * Off by default, and that default is the safe one: a published stop is an
+   * inspection and usually a Jobber visit, and moving one changes the day a
+   * technician has been told to turn up. Routing therefore *measures* booked
+   * days rather than rebuilding them.
+   *
+   * On, it is a real rebuild — the office asking for the whole quarter to be
+   * grouped again because the first grouping was not good enough. Q4 2026 was
+   * laid out at 6.5 visits a day across 55 days where the same visits pack
+   * into 33 days of twelve for 4% more driving, and the only way to collect
+   * that is to move visits that are already booked.
+   *
+   * What it will not move is in `movableInspection`: work that is done, being
+   * reviewed, cancelled, or placed on a day by a person by hand.
+   */
+  movePublishedVisits?: boolean;
+
+  /**
+   * Who asked, for the audit on every visit a rebuild moves.
+   *
+   * Moving a booked visit changes the day a technician was told to turn up,
+   * so the row that records it names a person. Null where the scheduler ran
+   * it rather than somebody -- which cannot happen with
+   * `movePublishedVisits`, because nothing sets both.
+   */
+  actorId?: string | null;
+}
+
+/**
+ * Whether a booked visit may be moved by a rebuild.
+ *
+ * The line is drawn at whether anybody has acted on it yet. A scheduled visit
+ * is a promise about a future day and a promise can be changed; a visit
+ * somebody has walked, or is reviewing, or cancelled, is a record, and a
+ * record is not the planner's to rewrite. `finalizedAt` is checked as well as
+ * the status because it is the thing that freezes the evidence.
+ */
+export function movableInspection(inspection: {
+  status: InspectionStatus;
+  finalizedAt: Date | null;
+}): boolean {
+  return inspection.status === InspectionStatus.SCHEDULED && inspection.finalizedAt === null;
+}
+
+/** A booked visit as it stood before a rebuild, to compare against after. */
+interface BookedVisit {
+  inspectionId: string;
+  /** `YYYY-MM-DD`, or null for a booked visit with no day yet. */
+  date: string | null;
+  technicianId: string | null;
 }
 
 export type RoutingUnplacedReason = UnplacedReason;
@@ -323,7 +378,12 @@ export class QuarterPlannerService {
         data: { onSiteMinutes: minutes },
       });
 
-    const { stops, pins } = await this.plannableStops(organizationId, planId, settings);
+    const { stops, pins } = await this.plannableStops(
+      organizationId,
+      planId,
+      settings,
+      options.movePublishedVisits,
+    );
     const limits: DayLimits = {
       maxOnSiteMinutes: settings.maxOnSiteMinutes,
       minStopsPerDay: settings.minStopsPerDay,
@@ -380,7 +440,22 @@ export class QuarterPlannerService {
     const crews = [...measured, ...byHand].sort(
       (left, right) => left.date.localeCompare(right.date) || left.technicianId.localeCompare(right.technicianId),
     );
+    /**
+     * Where each booked visit stood before the layout, so the change can be
+     * found afterwards. Read only for a rebuild, and only for the visits a
+     * rebuild is allowed to move.
+     */
+    const before = options.movePublishedVisits
+      ? await this.bookedVisitDays(organizationId, planId)
+      : new Map<string, BookedVisit>();
+
     await this.persist(organizationId, planId, crews, unplaced);
+
+    // The inspections and Jobber visits behind the stops the layout moved.
+    const moved = options.movePublishedVisits
+      ? await this.rebookMovedVisits(organizationId, planId, before, options.actorId ?? null)
+      : 0;
+    if (moved) this.logger.log({ event: 'tbp_visits_rebooked', planId, moved });
 
     const summary: RoutingSummary = {
       planId,
@@ -701,6 +776,7 @@ export class QuarterPlannerService {
     organizationId: string,
     planId: string,
     settings: Required<PlanRoutingSettings>,
+    movePublishedVisits = false,
   ) {
     const rows = await this.prisma.tbpQuarterPlanStop.findMany({
       // A published visit is read too, and pinned below. Left out, its day is
@@ -724,6 +800,9 @@ export class QuarterPlannerService {
         onSiteMinutes: true,
         onSiteMinutesOverriddenAt: true,
         propertywareBuilding: { select: { latitude: true, longitude: true } },
+        // Only read for a rebuild, and it decides whether a booked visit is
+        // still the planner's to move: see `movableInspection`.
+        inspection: { select: { status: true, finalizedAt: true } },
       },
       orderBy: { sequence: 'asc' },
     });
@@ -739,10 +818,22 @@ export class QuarterPlannerService {
         unplaceable.push(row.id);
         continue;
       }
-      // Placed by a coordinator, or already an inspection somebody is being
-      // sent to: either way the day and the technician are decided, and routing
-      // measures the day rather than laying it out again.
-      const settled = Boolean(row.inspectionId) || Boolean(row.scheduleOverriddenAt && row.technicianOverriddenAt);
+      /**
+       * Placed by a coordinator, or already an inspection somebody is being
+       * sent to: either way the day and the technician are decided, and routing
+       * measures the day rather than laying it out again.
+       *
+       * On a rebuild the second of those stops holding. The office has asked
+       * for the quarter to be grouped again, and a booked visit nobody has
+       * acted on yet is exactly what has to move for that to mean anything --
+       * so an inspection only pins its stop while it is past the point of
+       * being moved. A coordinator's own choice pins either way: that is a
+       * person's decision about a particular visit, not the planner's.
+       */
+      const booked = movePublishedVisits
+        ? Boolean(row.inspection && !movableInspection(row.inspection))
+        : Boolean(row.inspectionId);
+      const settled = booked || Boolean(row.scheduleOverriddenAt && row.technicianOverriddenAt);
       if (settled && row.scheduledOn && row.assignedTechnicianId)
         pins.set(row.id, { date: row.scheduledOn.toISOString().slice(0, 10), technicianId: row.assignedTechnicianId });
       stops.push({
@@ -984,6 +1075,154 @@ export class QuarterPlannerService {
       homeDriveMeters: homeLeg,
       durationSource: DriveTimeSource.HAVERSINE,
     };
+  }
+
+  /**
+   * Where every movable booked visit stands right now.
+   *
+   * Taken before the layout so the rebuild can tell which visits it actually
+   * moved. Comparing afterwards rather than trusting the layout's own output
+   * keeps this honest about one thing in particular: a visit the layout put
+   * back on the day it was already on must not be reported to Jobber as a
+   * reschedule, because nothing about it changed.
+   */
+  private async bookedVisitDays(organizationId: string, planId: string) {
+    const rows = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: {
+        planId,
+        organizationId,
+        status: TbpStopStatus.PUBLISHED,
+        inspectionId: { not: null },
+        // A day a person chose is theirs; a rebuild never touches it, so it is
+        // not read here either.
+        scheduleOverriddenAt: null,
+      },
+      select: {
+        id: true,
+        inspectionId: true,
+        scheduledOn: true,
+        assignedTechnicianId: true,
+        inspection: { select: { status: true, finalizedAt: true } },
+      },
+    });
+    const before = new Map<string, BookedVisit>();
+    for (const row of rows)
+      if (row.inspection && movableInspection(row.inspection) && row.inspectionId)
+        before.set(row.id, {
+          inspectionId: row.inspectionId,
+          date: row.scheduledOn?.toISOString().slice(0, 10) ?? null,
+          technicianId: row.assignedTechnicianId,
+        });
+    return before;
+  }
+
+  /**
+   * Move the inspection and the Jobber visit behind every stop the layout moved.
+   *
+   * The office's rule, in their words: the visit is not deleted and made
+   * again, its day is changed. So the inspection keeps its id, its evidence,
+   * its Jobber visit and its place in any comparison -- only `scheduledAt`
+   * moves, and Jobber is told through the same reschedule path the console
+   * uses when somebody changes one visit by hand.
+   *
+   * A technician change is a second thing and is sent as one: Jobber's visit
+   * and its assignment are separate, and a reschedule that silently reassigned
+   * would leave the old technician's calendar wrong.
+   */
+  private async rebookMovedVisits(
+    organizationId: string,
+    planId: string,
+    before: ReadonlyMap<string, BookedVisit>,
+    actorId: string | null,
+  ) {
+    if (!before.size) return 0;
+    const after = await this.prisma.tbpQuarterPlanStop.findMany({
+      where: { id: { in: [...before.keys()] } },
+      select: { id: true, scheduledOn: true, assignedTechnicianId: true },
+    });
+
+    let moved = 0;
+    for (const row of after) {
+      const was = before.get(row.id);
+      if (!was) continue;
+      const date = row.scheduledOn?.toISOString().slice(0, 10) ?? null;
+      // A stop the layout could not place keeps its booking rather than losing
+      // a day it already has: an unplaced visit is a problem to look at, not a
+      // reason to strand a technician's calendar entry.
+      if (!date || !row.assignedTechnicianId) continue;
+      const dayMoved = date !== was.date;
+      const technicianChanged = row.assignedTechnicianId !== was.technicianId;
+      if (!dayMoved && !technicianChanged) continue;
+
+      await this.prisma.$transaction(async (tx) => {
+        if (dayMoved)
+          await tx.inspection.update({
+            where: { id: was.inspectionId },
+            data: { scheduledAt: row.scheduledOn! },
+          });
+
+        if (technicianChanged) {
+          // The old assignment is ended rather than edited, so the record says
+          // who was going to go and who is going now.
+          await tx.inspectionAssignment.updateMany({
+            where: { inspectionId: was.inspectionId, isCurrent: true },
+            data: {
+              isCurrent: false,
+              status: 'UNASSIGNED',
+              endedAt: new Date(),
+              endedById: actorId,
+              reason: 'The quarter was grouped again.',
+            },
+          });
+          await tx.inspectionAssignment.create({
+            data: {
+              inspectionId: was.inspectionId,
+              technicianId: row.assignedTechnicianId!,
+              assignedById: actorId,
+              isCurrent: true,
+            },
+          });
+        }
+
+        // `requestVisitPush` is a no-op for a visit that never reached Jobber,
+        // so this needs no guard of its own.
+        if (dayMoved)
+          await requestVisitPush(tx, {
+            organizationId,
+            inspectionId: was.inspectionId,
+            kind: JobberOutboundKind.VISIT_RESCHEDULE,
+            requestedById: actorId,
+          });
+        if (technicianChanged)
+          await requestVisitPush(tx, {
+            organizationId,
+            inspectionId: was.inspectionId,
+            kind: JobberOutboundKind.VISIT_ASSIGN,
+            requestedById: actorId,
+          });
+
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            actorUserId: actorId,
+            actorApiClientId: null,
+            action: 'TBP_VISIT_REBOOKED',
+            entityType: 'Inspection',
+            entityId: was.inspectionId,
+            // The days, so a technician asking why their week changed can be
+            // told what it was and what it became.
+            metadata: {
+              planId,
+              from: was.date,
+              to: date,
+              technicianChanged,
+            },
+          },
+        });
+      });
+      moved += 1;
+    }
+    return moved;
   }
 
   private async persist(

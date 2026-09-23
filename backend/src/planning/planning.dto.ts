@@ -2,6 +2,7 @@ import { TbpStopStatus } from '@prisma/client';
 import { TBP_INSPECTION_TYPES, type TbpInspectionType } from '@texasrenters/shared';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
@@ -44,6 +45,21 @@ export class PlanRoutingSettingsDto {
    * the office's rule (2026-09-19). The drive from home is not held to it.
    */
   @IsOptional() @Type(() => Number) @IsInt() @Min(5) @Max(120) maxLegMinutes?: number;
+
+  /**
+   * Group the visits that are already booked again, rather than leaving them
+   * where they are.
+   *
+   * Off unless asked for. A booked visit is an inspection and usually a Jobber
+   * visit on a technician's calendar, so routing normally measures those days
+   * rather than rebuilding them. This is the office saying the whole quarter
+   * should be grouped again -- their Q4 came out at 6.5 visits a day over 55
+   * days where the same visits pack into 33 days of twelve.
+   *
+   * Work that is done, being reviewed or cancelled never moves, nor does a day
+   * a coordinator set by hand.
+   */
+  @IsOptional() @IsBoolean() movePublishedVisits?: boolean;
 
   /**
    * Days the office is closed besides weekends and US federal holidays, as
