@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TimesheetPage from './page';
@@ -24,6 +24,7 @@ const permissions = vi.hoisted(() => ({ allowed: true }));
 vi.mock('@/lib/auth', () => ({ usePermissions: () => ({ has: () => permissions.allowed }) }));
 
 const idle = { mutate: vi.fn(), isPending: false };
+const fill = { mutate: vi.fn(), isPending: false };
 
 const SHEET = {
   from: '2026-09-10',
@@ -72,7 +73,12 @@ const SHEET = {
 
 function mount(sheet: unknown = SHEET) {
   hooks.useTimesheet.mockReturnValue({ isLoading: false, isError: false, data: sheet, refetch: vi.fn() });
-  hooks.useTimesheetActions.mockReturnValue({ recompute: idle, adjust: idle, resolveGap: idle });
+  hooks.useTimesheetActions.mockReturnValue({
+    recompute: idle,
+    adjust: idle,
+    resolveGap: idle,
+    fillHours: fill,
+  });
   return render(<TimesheetPage />);
 }
 
@@ -188,5 +194,51 @@ describe('settling a stretch', () => {
       expect.objectContaining({ gapId: 'gap-1', creditedMinutes: undefined }),
       expect.anything(),
     );
+  });
+});
+
+/**
+ * The jobs that finished before their hours were being read.
+ *
+ * Nothing else goes back for them — a submission reads its own job, the sweep
+ * looks a few hours back — so if this control is missing the page opens empty
+ * on its first day with nothing anybody can press about it.
+ */
+describe('filling in missing hours', () => {
+  it('reads the range the office is looking at, not some other one', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Fill in missing hours/ }));
+
+    expect(fill.mutate).toHaveBeenCalledWith(
+      { from: SHEET.from, to: SHEET.to },
+      expect.anything(),
+    );
+  });
+
+  it('says plainly what it could not measure', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Fill in missing hours/ }));
+    // The page renders what the server reported, so drive its callback.
+    const onSuccess = fill.mutate.mock.calls[0]![1].onSuccess as (r: unknown) => void;
+    act(() => onSuccess({ considered: 5, measured: 3, unmeasurable: 2, more: false }));
+
+    expect(screen.getByText(/2 could not be measured/)).toBeInTheDocument();
+  });
+
+  it('says when there is more of the range left to do', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /Fill in missing hours/ }));
+    const onSuccess = fill.mutate.mock.calls[0]![1].onSuccess as (r: unknown) => void;
+    act(() => onSuccess({ considered: 100, measured: 100, unmeasurable: 0, more: true }));
+
+    expect(screen.getByText(/press again/)).toBeInTheDocument();
+  });
+
+  /** It writes, so it is the office's to press. */
+  it('is not offered to somebody who may only read', () => {
+    permissions.allowed = false;
+    mount();
+
+    expect(screen.queryByRole('button', { name: /Fill in missing hours/ })).not.toBeInTheDocument();
   });
 });

@@ -9,7 +9,12 @@ import {
   RequirePermissions,
   type AuthenticatedRequest,
 } from '../common/auth';
-import { AdjustSegmentDto, ResolveGapDto, TimesheetQueryDto } from './time-tracking.dto';
+import {
+  AdjustSegmentDto,
+  FillHoursDto,
+  ResolveGapDto,
+  TimesheetQueryDto,
+} from './time-tracking.dto';
 import { TimeTrackingService } from './time-tracking.service';
 
 export const TIME_TRACKING_TAG = 'Time tracking';
@@ -37,6 +42,22 @@ export class TimeTrackingController {
   @HttpCode(200)
   recompute(@Req() request: AuthenticatedRequest, @Param('inspectionId') inspectionId: string) {
     return this.time.recomputeForInspection(request.user, inspectionId);
+  }
+
+  /**
+   * Read the hours of jobs in this range that have none.
+   *
+   * For the jobs that were submitted before any of this existed, and for
+   * anything the sweep could not reach. It only fills where there is nothing,
+   * so it cannot move an hour somebody has already been paid for.
+   *
+   * `inspections:manage`, like the single-job recompute: it writes.
+   */
+  @Post('fill-hours')
+  @RequirePermissions('inspections:manage')
+  @HttpCode(200)
+  fillHours(@Req() request: AuthenticatedRequest, @Body() body: FillHoursDto) {
+    return this.time.fillMissingHours(request.user, body);
   }
 
   /**

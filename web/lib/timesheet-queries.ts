@@ -107,6 +107,22 @@ export function useTimesheetActions() {
       onSuccess: refresh,
     }),
 
+    /**
+     * Read the hours of jobs in this range that have none.
+     *
+     * For the jobs submitted before any of this existed. It fills only where
+     * there is nothing, so it cannot move an hour already paid, and pressing
+     * it again does the remainder rather than the same work.
+     */
+    fillHours: useMutation({
+      mutationFn: (body: { from: string; to: string }) =>
+        api<{ considered: number; measured: number; unmeasurable: number; more: boolean }>(
+          `${TIME_TRACKING}/fill-hours`,
+          { method: 'POST', body: JSON.stringify(body) },
+        ),
+      onSuccess: refresh,
+    }),
+
     /** Correct a segment the trail got wrong. The reason is required. */
     adjust: useMutation({
       mutationFn: ({

@@ -71,6 +71,8 @@ export default function TimesheetPage() {
 
   const [adjusting, setAdjusting] = useState<TimesheetSegment | null>(null);
   const [settling, setSettling] = useState<TimesheetGap | null>(null);
+  /** What the last fill found, in the office's words rather than counts. */
+  const [filled, setFilled] = useState<string | null>(null);
 
   if (sheet.isLoading) return <PageSkeleton />;
   if (sheet.isError) return <ErrorState error={sheet.error} retry={() => void sheet.refetch()} />;
@@ -227,7 +229,50 @@ export default function TimesheetPage() {
             All technicians
           </Button>
         ) : null}
+        {/*
+          Jobs finished before any of this existed have no hours against them,
+          and nothing else will ever go back for them: a submission reads its
+          own job, and the sweep only looks a few hours back. Without this the
+          page opens empty on its first day and there is nothing anybody can
+          press about it.
+
+          It fills only where there is nothing, so it cannot move an hour
+          somebody has already been paid — which is what makes it safe to leave
+          in the toolbar rather than behind a warning.
+        */}
+        {canChange ? (
+          <Button
+            disabled={actions.fillHours.isPending}
+            onClick={() =>
+              actions.fillHours.mutate(
+                { from: range.from, to: range.to },
+                {
+                  onSuccess: (result) =>
+                    setFilled(
+                      result.considered === 0
+                        ? 'Every job in these days already has its hours.'
+                        : [
+                            `Read ${result.measured} of ${result.considered} jobs.`,
+                            result.unmeasurable
+                              ? `${result.unmeasurable} could not be measured — no coordinates, or nobody assigned.`
+                              : '',
+                            result.more ? 'More of this range is left; press again.' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' '),
+                    ),
+                },
+              )
+            }
+            size="sm"
+            variant="secondary"
+          >
+            {actions.fillHours.isPending ? 'Reading the trail…' : 'Fill in missing hours'}
+          </Button>
+        ) : null}
       </div>
+
+      {filled ? <p className="text-muted-foreground -mt-2 pb-4 text-xs">{filled}</p> : null}
 
       <StatGroup columns="grid-cols-1 sm:grid-cols-3">
         <Stat label="On site" value={asHours(onsiteTotal)} />
@@ -280,7 +325,7 @@ export default function TimesheetPage() {
           />
         ) : (
           <EmptyState
-            description="Either nobody was working, or the trail never reached the properties. Read a job's time again to find out which."
+            description="Either nobody was working, or these jobs finished before their hours were being read. Fill in missing hours to find out which."
             title="Nothing recorded in these days"
           />
         )}

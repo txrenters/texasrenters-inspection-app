@@ -275,3 +275,87 @@ describe('settling a gap', () => {
     ).rejects.toThrow(/nothing to credit/);
   });
 });
+
+/**
+ * Filling in the jobs that finished before any of this existed.
+ *
+ * Every job from now on has its hours read when it is submitted. Nothing goes
+ * back for the ones already submitted, so without this the timesheet opens
+ * empty on its first day. What is pinned here is the boundary that makes it
+ * safe to leave in the toolbar: it fills where there is nothing and never
+ * rewrites what is already there.
+ */
+describe('filling in missing hours', () => {
+  const fillHarness = (rows: unknown[], recompute = jest.fn().mockResolvedValue({ onsiteSeconds: 3_600 })) => {
+    const findMany = jest.fn().mockResolvedValue(rows);
+    const prisma = { inspection: { findMany } } as unknown as PrismaService;
+    const service = new TimeTrackingService(prisma);
+    // The single-job path is exercised by its own spec; here it is the thing
+    // being orchestrated, so it is stood in for.
+    service.recomputeAutomatically = recompute;
+    return { service, findMany, recompute };
+  };
+
+  const job = (id: string) => ({ id });
+
+  /**
+   * The boundary. A job that already has segments is not touched, which is
+   * what stops this moving an hour somebody has already been paid for.
+   */
+  it('looks only at jobs with no segments at all', async () => {
+    const { service, findMany } = fillHarness([job('insp-1')]);
+
+    await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(findMany.mock.calls[0]![0].where.timeSegments).toEqual({ none: {} });
+  });
+
+  it('reads each of them', async () => {
+    const { service, recompute } = fillHarness([job('insp-1'), job('insp-2')]);
+
+    const result = await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(recompute).toHaveBeenCalledWith('org-1', 'insp-1');
+    expect(result).toMatchObject({ considered: 2, measured: 2, unmeasurable: 0 });
+  });
+
+  /** One unmeasurable job must not end the run: the rest are other people's pay. */
+  it('counts what it could not measure and carries on', async () => {
+    const recompute = jest.fn().mockResolvedValueOnce(null).mockResolvedValue({ onsiteSeconds: 60 });
+    const { service } = fillHarness([job('insp-1'), job('insp-2')], recompute);
+
+    const result = await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(recompute).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ considered: 2, measured: 1, unmeasurable: 1 });
+  });
+
+  /**
+   * Capped, and it says so rather than reporting a clean run over a range it
+   * only partly read — which would look exactly like "there was nothing else".
+   */
+  it('says when there is more of the range left', async () => {
+    const { service } = fillHarness(Array.from({ length: 101 }, (_, i) => job(`insp-${i}`)));
+
+    const result = await service.fillMissingHours(USER, { from: '2026-01-01', to: '2026-12-31' });
+
+    expect(result.considered).toBe(100);
+    expect(result.more).toBe(true);
+  });
+
+  it('works forward through the range so pressing again does the remainder', async () => {
+    const { service, findMany } = fillHarness([job('insp-1')]);
+
+    await service.fillMissingHours(USER, { from: '2026-09-01', to: '2026-09-30' });
+
+    expect(findMany.mock.calls[0]![0].orderBy).toEqual({ submittedAt: 'asc' });
+  });
+
+  it('refuses a range that runs backwards, like the timesheet does', async () => {
+    const { service } = fillHarness([]);
+
+    await expect(
+      service.fillMissingHours(USER, { from: '2026-09-30', to: '2026-09-01' }),
+    ).rejects.toThrow(/before the first/);
+  });
+});

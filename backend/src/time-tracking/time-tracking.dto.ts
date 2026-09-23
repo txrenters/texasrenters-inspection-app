@@ -12,6 +12,19 @@ export class TimesheetQueryDto {
 }
 
 /**
+ * The stretch of days to fill in.
+ *
+ * Its own class rather than reusing the timesheet's, because that one carries
+ * a technician filter this must not have: filling one person's missing hours
+ * and leaving their colleagues' unread would put two different questions on
+ * one page and make the totals mean different things per row.
+ */
+export class FillHoursDto {
+  @IsString() @MaxLength(10) from!: string;
+  @IsString() @MaxLength(10) to!: string;
+}
+
+/**
  * An administrator correcting a segment.
  *
  * Both ends are required even when only one moves, because a correction that

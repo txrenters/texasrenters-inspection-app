@@ -286,13 +286,91 @@ export class TimeTrackingService {
    * them: an unsettled gap is time the trail could not account for, and a
    * timesheet that quietly omits it is the failure this feature exists to stop.
    */
-  async timesheet(user: AuthenticatedUser, query: { technicianId?: string; from: string; to: string }) {
-    const { organizationId } = user;
+  /**
+   * Read the hours of jobs in this range that have none.
+   *
+   * Every job submitted from now on has its hours read when it is submitted,
+   * and again by the sweep for six hours after. Nothing reads the ones that
+   * were already submitted before any of that existed -- so without this the
+   * timesheet opens empty on its first day and stays empty for every job
+   * behind it, which is exactly the impression that makes people go back to
+   * asking the technician.
+   *
+   * **Only jobs with no segments at all.** That makes it a fill rather than a
+   * rewrite: it cannot quietly move an hour somebody has already been paid
+   * for, and pressing it twice does the remainder rather than the same work
+   * again. A single job that needs re-reading -- because its pin was wrong and
+   * somebody has since fixed it -- has its own endpoint, where the intent to
+   * overwrite is explicit.
+   *
+   * Capped, and it says so. The trail is read per job, so an unbounded range
+   * would be a request that runs for minutes and times out having done some
+   * unknowable part of the work.
+   */
+  private static readonly BACKFILL_LIMIT = 100;
+
+  /**
+   * A pair of calendar days as an instant either side of them.
+   *
+   * Shared by the timesheet and the backfill so the two cannot disagree about
+   * what a day is -- a range that meant one thing when reading and another
+   * when filling would leave a job permanently just outside both.
+   */
+  private rangeFor(query: { from: string; to: string }) {
     const from = new Date(`${query.from}T00:00:00.000Z`);
     const to = new Date(`${query.to}T23:59:59.999Z`);
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()))
       throw new ApplicationError(422, 'BAD_DATES', 'Give the dates as YYYY-MM-DD.');
     if (to < from) throw new ApplicationError(422, 'BAD_RANGE', 'The last day is before the first.');
+    return { from, to };
+  }
+
+
+  async fillMissingHours(user: AuthenticatedUser, query: { from: string; to: string }) {
+    const { organizationId } = user;
+    const { from, to } = this.rangeFor(query);
+
+    const due = await this.prisma.inspection.findMany({
+      where: {
+        organizationId,
+        submittedAt: { gte: from, lte: to },
+        timeSegments: { none: {} },
+      },
+      select: { id: true },
+      // Oldest first, so pressing it repeatedly walks forward through the
+      // range rather than redoing the same newest hundred.
+      orderBy: { submittedAt: 'asc' },
+      take: TimeTrackingService.BACKFILL_LIMIT + 1,
+    });
+    const batch = due.slice(0, TimeTrackingService.BACKFILL_LIMIT);
+
+    let measured = 0;
+    for (const inspection of batch) {
+      // Sequential, and one failure does not end the run: a property with no
+      // coordinates is an ordinary thing to find, and stopping there would
+      // leave every job after it unread with nothing said about why.
+      const result = await this.recomputeAutomatically(organizationId, inspection.id);
+      if (result) measured += 1;
+    }
+
+    return {
+      considered: batch.length,
+      measured,
+      /**
+       * Jobs whose hours could not be read at all -- no coordinates, or nobody
+       * assigned. Reported rather than hidden, because they are the ones that
+       * will never appear on a timesheet until somebody fixes the property or
+       * the assignment, and a silent zero here looks identical to "done".
+       */
+      unmeasurable: batch.length - measured,
+      /** True when the cap was hit and there is more of this range to do. */
+      more: due.length > TimeTrackingService.BACKFILL_LIMIT,
+    };
+  }
+
+  async timesheet(user: AuthenticatedUser, query: { technicianId?: string; from: string; to: string }) {
+    const { organizationId } = user;
+    const { from, to } = this.rangeFor(query);
 
     const scope = query.technicianId ? { technicianId: query.technicianId } : {};
     const [segments, gaps] = await Promise.all([
