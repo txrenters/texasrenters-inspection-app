@@ -57,6 +57,7 @@ import { ApplicationError } from '../common/errors';
 import { businessDayBounds } from '../common/business-day';
 import { captureTimeForUpload, sha256OfFile } from '../common/photo-capture-time';
 import { PrismaService } from '../common/prisma.service';
+import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { enqueueJobberCompletion } from '../integrations/jobber/jobber.outbound';
 import { tenancyOnFile } from '../admin/tenancy-on-file';
 import { AiProviderSettingsService } from '../admin/ai-provider-settings.service';
@@ -482,6 +483,11 @@ export class TechnicianService {
     @Optional()
     @Inject(AiProviderSettingsService)
     private readonly aiSettings?: AiProviderSettingsService,
+    // Optional and appended for the same reason as the two above. Absent, a
+    // submitted job simply waits for the sweep to read its hours.
+    @Optional()
+    @Inject(TimeTrackingService)
+    private readonly timeTracking?: TimeTrackingService,
   ) {}
 
   /**
@@ -1218,6 +1224,20 @@ export class TechnicianService {
       // own devices; nothing reached the administrators, so a submitted
       // inspection sat in the queue until somebody happened to reload.
       const property = updated.propertywareBuilding?.name ?? updated.propertywareUnit?.name ?? null;
+      /**
+       * Read this job's hours from the trail, now that the work is finished.
+       *
+       * Not awaited, and deliberately. This is the last thing between a
+       * technician pressing the button and the screen letting go of them, and
+       * the office's standing requirement is that the app is instant -- there
+       * are properties waiting. The hours are for somebody reading a timesheet
+       * later, so they can arrive a second later too.
+       *
+       * Nothing here can fail the submission: `recomputeAutomatically` reports
+       * rather than throws, and the sweep reads the job again for the next six
+       * hours in case the handset was still flushing its trail when this ran.
+       */
+      void this.timeTracking?.recomputeAutomatically(user.organizationId, id);
       void this.technicianEvents?.publishOrganizationNotification(user.organizationId, {
         kind: 'INSPECTION_SUBMITTED',
         title: 'Inspection submitted',

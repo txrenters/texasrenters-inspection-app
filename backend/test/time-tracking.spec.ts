@@ -246,3 +246,81 @@ describe('when the trail cannot answer', () => {
     expect(categories(createSegments)).toContain('ONSITE');
   });
 });
+
+/**
+ * The same recompute, with nobody behind it.
+ *
+ * Runs when a technician submits and again from the sweep, so the office never
+ * has to remember to ask. Two things make it different from the request-driven
+ * one, and both matter on a table somebody is paid from: it reports rather
+ * than throws, and the audit says which of the two it was.
+ */
+describe('recomputing without a person', () => {
+  it('reads the job and writes its segments', async () => {
+    const { service, createSegments } = harness([...at(0, 300, 500, 12), ...at(330, 3_600, 5)]);
+
+    const result = await service.recomputeAutomatically('org-1', 'insp-1');
+
+    expect(result?.onsiteSeconds).toBeGreaterThan(0);
+    expect(categories(createSegments)).toContain('ONSITE');
+  });
+
+  /**
+   * Never mistakable for somebody's decision.
+   *
+   * Two null actor columns already mean "no person", but they mean that for an
+   * anonymous write too. The action name is what separates a recompute an
+   * administrator asked for from one that simply happened.
+   */
+  it('audits itself as automatic, with no actor', async () => {
+    const { service, auditCreate } = harness([...at(0, 3_600, 5)]);
+
+    await service.recomputeAutomatically('org-1', 'insp-1');
+
+    expect(auditCreate.mock.calls[0]![0].data).toMatchObject({
+      action: 'TIME_SEGMENTS_RECOMPUTED_AUTOMATICALLY',
+      actorUserId: null,
+      actorApiClientId: null,
+    });
+  });
+
+  it('still names the person when one asked for it', async () => {
+    const { service, auditCreate } = harness([...at(0, 3_600, 5)]);
+
+    await service.recomputeForInspection(USER, 'insp-1');
+
+    expect(auditCreate.mock.calls[0]![0].data).toMatchObject({
+      action: 'TIME_SEGMENTS_RECOMPUTED',
+      actorUserId: 'admin-1',
+    });
+  });
+
+  /**
+   * A job that cannot be measured is an ordinary fact, not an emergency.
+   *
+   * The request-driven path tells an administrator why, because they asked.
+   * Thrown from a sweep it would stop every job behind it in the list, which
+   * is other people's hours.
+   */
+  it('reports rather than throws when the property has no coordinates', async () => {
+    const { service } = harness([...at(0, 3_600, 5)], {
+      building: { id: 'b1', latitude: null, longitude: null, geofence: null },
+    });
+
+    await expect(service.recomputeAutomatically('org-1', 'insp-1')).resolves.toBeNull();
+  });
+
+  it('reports rather than throws when nobody is assigned', async () => {
+    const { service } = harness([...at(0, 3_600, 5)], { technicianId: null });
+
+    await expect(service.recomputeAutomatically('org-1', 'insp-1')).resolves.toBeNull();
+  });
+
+  it('writes nothing when it could not measure', async () => {
+    const { service, createSegments } = harness([...at(0, 3_600, 5)], { technicianId: null });
+
+    await service.recomputeAutomatically('org-1', 'insp-1');
+
+    expect(createSegments).not.toHaveBeenCalled();
+  });
+});

@@ -69,7 +69,49 @@ export class TimeTrackingService {
    * office the difference between this and the buttons without a second query.
    */
   async recomputeForInspection(user: AuthenticatedUser, inspectionId: string) {
-    const { organizationId } = user;
+    return this.recomputeWithin(user.organizationId, inspectionId, user);
+  }
+
+  /**
+   * The same recompute, with nobody behind it.
+   *
+   * Run when a technician submits and again by the sweep, because a job's
+   * hours must not depend on an administrator remembering to ask for them.
+   * Where the request-driven one throws -- no coordinates, nobody assigned --
+   * this reports and moves on: those are ordinary facts about a job, and a
+   * scheduled run that threw on the first of them would stop recomputing every
+   * job after it.
+   *
+   * Returns null when it could not measure, so a caller can count that.
+   */
+  async recomputeAutomatically(organizationId: string, inspectionId: string) {
+    try {
+      return await this.recomputeWithin(organizationId, inspectionId, null);
+    } catch (error) {
+      const reason = error instanceof ApplicationError ? error.code : 'UNEXPECTED';
+      this.logger.warn({
+        event: 'time_segments_not_recomputed',
+        inspectionId,
+        reason,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * `actor` is null for an automatic run, and the audit says which it was.
+   *
+   * Two null actor columns already mean "no person", but they mean that for an
+   * anonymous write too. The action name is what separates a recompute
+   * somebody asked for from one that simply happened -- and on a table these
+   * hours are paid from, that distinction is the point of auditing at all.
+   */
+  private async recomputeWithin(
+    organizationId: string,
+    inspectionId: string,
+    actor: AuthenticatedUser | null,
+  ) {
     const inspection = await this.prisma.inspection.findFirst({
       where: { id: inspectionId, organizationId },
       select: {
@@ -194,8 +236,8 @@ export class TimeTrackingService {
     await this.prisma.auditLog.create({
       data: {
         organizationId,
-        ...auditActor(user),
-        action: 'TIME_SEGMENTS_RECOMPUTED',
+        ...(actor ? auditActor(actor) : { actorUserId: null, actorApiClientId: null }),
+        action: actor ? 'TIME_SEGMENTS_RECOMPUTED' : 'TIME_SEGMENTS_RECOMPUTED_AUTOMATICALLY',
         entityType: 'Inspection',
         entityId: inspectionId,
         // Counts and durations only: never the coordinates themselves.

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { DatabaseModule } from '../database/database.module';
 import { TimeTrackingController } from './time-tracking.controller';
+import { TimeTrackingScheduler } from './time-tracking.scheduler';
 import { TimeTrackingService } from './time-tracking.service';
 
 /**
@@ -14,7 +15,7 @@ import { TimeTrackingService } from './time-tracking.service';
 @Module({
   imports: [DatabaseModule],
   controllers: [TimeTrackingController],
-  providers: [TimeTrackingService],
+  providers: [TimeTrackingService, TimeTrackingScheduler],
   exports: [TimeTrackingService],
 })
 export class TimeTrackingModule {}
