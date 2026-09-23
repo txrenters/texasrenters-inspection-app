@@ -7,27 +7,99 @@ import {
   removeMutation,
   type QueuedMutation,
 } from '../../storage/mutation-queue';
+import { useNetworkStore } from '../../stores/network.store';
+
+/** Why a write is being held, in the only terms a technician can act on. */
+export type HeldReason =
+  /** The device could not reach us. Working offline; it goes when signal does. */
+  | 'offline'
+  /** Signal is fine — we did not take it. Nothing to go looking for. */
+  | 'server';
 
 /**
- * A write that was held because the device is offline.
+ * A write that was held rather than lost.
  *
  * Distinct from the connection error it replaces so a screen can say the work
  * is kept rather than that it failed — those are different things to be told
  * while standing in somebody's basement.
+ *
+ * `reason` is the difference between "go and find signal" and "signal is fine,
+ * this one is ours": the app told a technician on full bars that their work
+ * would send "when you are back", which sends them hunting for a network that
+ * was never the problem. `OfflineBanner` keys off the same connectivity flag,
+ * so an `offline` hold agrees with what is already on screen and a `server`
+ * hold no longer contradicts a banner that is not showing.
  */
 export class QueuedOfflineError extends Error {
-  constructor() {
-    super('Saved on this device. It will send when you are back on a network.');
+  readonly reason: HeldReason;
+
+  constructor(reason: HeldReason = 'offline') {
+    super(
+      reason === 'offline'
+        ? 'Saved on this device. It will send when you are back on a network.'
+        : 'Saved on this device. The TexasRenters server has not taken it yet — it will keep trying.',
+    );
     this.name = 'QueuedOfflineError';
+    this.reason = reason;
+  }
+}
+
+/** Hold the write and say why, or let the failure through to the technician. */
+export type WriteFailure = { hold: false } | { hold: true; reason: HeldReason };
+
+/**
+ * What actually counts as "we could not be reached".
+ *
+ * This used to be `error instanceof ApiConnectionError`, which is every 5xx as
+ * well — so an online phone talking to an API that was up and throwing 500s
+ * was told its work would send "when you are back on a network", and the entry
+ * was replayed against an answer that was never going to change. That is the
+ * case this function's predecessor argued against in its own comment about
+ * 4xx, and a repeatable 500 has the same property: it is worse, because a
+ * refusal at least fails in front of the technician, while a held write fails
+ * eight drains later with nobody watching.
+ *
+ * The line is whether the request could still land unchanged:
+ *
+ * - `transport` — nothing left the handset. Held, and it really is offline.
+ * - `unavailable` — 502/503/504. The edge answered because it could not reach
+ *   the app, so the request was never processed; a deploy is thirty seconds of
+ *   this and holding is what makes it invisible. Held, but not as "offline".
+ * - `timeout` — held either way. We cannot tell a crawling connection from a
+ *   hung endpoint, and the two possible mistakes are not equal: hold a hung
+ *   endpoint's write and it is retried a bounded number of times, surface a
+ *   weak signal's and a technician loses work in exactly the basement the
+ *   queue exists for. Connectivity picks the wording only, never whether the
+ *   work is kept, so the store being up to a probe-interval stale is harmless.
+ * - `fault` — a 500 the app produced itself. It received the request and chose
+ *   that answer, and may choose it again for this payload forever. Surfaced,
+ *   so the technician sees it now, the office's error log gets it, and nothing
+ *   quietly throws the work away later.
+ *
+ * Anything that is not an `ApiConnectionError` is a 4xx or a schema failure —
+ * the server refusing the request — and has always been surfaced here.
+ */
+export function classifyWriteFailure(error: unknown, isOnline: boolean): WriteFailure {
+  if (!(error instanceof ApiConnectionError)) return { hold: false };
+  switch (error.reason) {
+    case 'transport':
+      return { hold: true, reason: 'offline' };
+    case 'unavailable':
+      return { hold: true, reason: 'server' };
+    case 'timeout':
+      return { hold: true, reason: isOnline ? 'server' : 'offline' };
+    case 'fault':
+      return { hold: false };
   }
 }
 
 /**
- * Sends a write, holding it for later if the network is gone.
+ * Sends a write, holding it for later if it could still land unchanged.
  *
- * Only `ApiConnectionError` is queued. A 4xx is the server refusing the
- * request, and queueing that would retry forever against an answer that will
- * never change — the entry has to fail here so the technician can correct it.
+ * See `classifyWriteFailure` for which failures those are. A held write throws
+ * `QueuedOfflineError`, which every caller treats as a success it must mirror
+ * into the offline cache; a surfaced one throws the server's own error, which
+ * they let through so the screen rolls back to what was really stored.
  */
 export async function queueOnConnectionFailure<T>(
   entry: { id: string; kind: string; payload: Record<string, unknown> },
@@ -36,9 +108,13 @@ export async function queueOnConnectionFailure<T>(
   try {
     return await send();
   } catch (error) {
-    if (!(error instanceof ApiConnectionError)) throw error;
+    // The app's own definition of online: NetInfo probes `/api/v1/health`, so
+    // this already means "can we reach the backend" rather than "is there a
+    // radio". Read here rather than through a hook — this runs in a repository.
+    const held = classifyWriteFailure(error, useNetworkStore.getState().isOnline);
+    if (!held.hold) throw error;
     await enqueueMutation(entry);
-    throw new QueuedOfflineError();
+    throw new QueuedOfflineError(held.reason);
   }
 }
 
@@ -139,6 +215,22 @@ const SENDERS: Record<string, (payload: Record<string, unknown>, send: Sender) =
 
 type Sender = (path: string, method: string, body: unknown) => Promise<unknown>;
 
+/**
+ * Whether a failed replay is worth another go.
+ *
+ * The old enqueue rule, moved to the side it was always right for. Held here,
+ * there is no technician to correct anything and no screen to fail in front
+ * of, so the only question left is whether the entry could ever be accepted —
+ * and every `ApiConnectionError`, a 500 included, could be. Anything else is a
+ * refusal: a job already submitted, an area that no longer exists, a body the
+ * route will not take. `job-no-access` documents exactly this, and until now
+ * the drain retried those eight times instead of dropping them.
+ *
+ * A 500 that keeps coming is still bounded — `QUEUE_ENTRY_MAX_ATTEMPTS` ends
+ * it — and outlasting a bad deploy is worth more than the attempts it spends.
+ */
+const isWorthReplaying = (error: unknown) => error instanceof ApiConnectionError;
+
 /** Replays what is waiting. Returns how many went out and how many remain. */
 export function drainOfflineWrites(send: Sender) {
   return drainQueue(async (entry: QueuedMutation) => {
@@ -148,7 +240,7 @@ export function drainOfflineWrites(send: Sender) {
     // handle until it burns through its attempts.
     if (!sender) return;
     await sender(entry.payload, send);
-  });
+  }, isWorthReplaying);
 }
 
 export { readQueue as readOfflineWrites };
