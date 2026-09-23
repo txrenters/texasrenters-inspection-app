@@ -25,7 +25,14 @@ import { CameraDirector, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
 import { greatCirclePath, pathMidpoint } from '@/lib/great-circle';
-import { clusterByGrid, inBox, padBox, zoomToIsolate, type Box } from '@/components/map-clusters';
+import {
+  clusterByGrid,
+  inBox,
+  padBox,
+  ringIsLegible,
+  zoomToIsolate,
+  type Box,
+} from '@/components/map-clusters';
 import { formatDistance, formatDuration } from '@/lib/format';
 import { useContinuousRotation, useGlide } from '@/lib/map-animation';
 import { drawsAsDriving, motionOf, type Motion } from '@/lib/technician-motion';
@@ -608,6 +615,79 @@ function AccuracyRing({
 }
 
 /**
+ * How close a technician has to be before the time counts as on site.
+ *
+ * Drawn because this is the number the hours are computed from, and until now
+ * it existed only as a column. An office deciding whether a technician was
+ * really at a property is reading a radius they cannot see against a building
+ * they can — and a replay over 37 real jobs showed the geometry is not the
+ * hard part, coverage is. Two circles, because the rule has two numbers: the
+ * inner one is the distance that starts the clock, the outer one the distance
+ * that has to be crossed before it stops. That gap is deliberate — it is what
+ * keeps a technician standing still at the edge of a driveway from being
+ * clocked in and out every time a fix wobbles — and drawing only one of them
+ * would show a boundary the software does not actually have.
+ */
+function GeofenceRing({
+  latitude,
+  longitude,
+  enterRadiusMeters,
+  exitRadiusMeters,
+  dim,
+}: {
+  latitude: number;
+  longitude: number;
+  enterRadiusMeters: number;
+  exitRadiusMeters: number;
+  dim: boolean;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map) return;
+    // Same probe as the route lines: Google styles overlays through options,
+    // so the token has to be resolved before it can be handed over.
+    const probe = document.createElement('span');
+    probe.className = 'map-geofence-ring';
+    probe.style.display = 'none';
+    document.body.append(probe);
+    const orange = strokeFrom(getComputedStyle(probe));
+    probe.remove();
+
+    const center = { lat: latitude, lng: longitude };
+    // Under the pin and under the routes. The circle is context for what is
+    // drawn on top of it, and a fill that covered a technician's marker would
+    // hide the one thing somebody opened the map to find.
+    const shared = { map, center, clickable: false, strokeColor: orange, fillColor: orange };
+    const enter = new google.maps.Circle({
+      ...shared,
+      radius: enterRadiusMeters,
+      strokeOpacity: dim ? 0.3 : 0.85,
+      strokeWeight: 2,
+      fillOpacity: dim ? 0.04 : 0.12,
+      zIndex: 2,
+    });
+    // Outline only. Filling both would read as one solid blob whose edge is
+    // the outer number, which is the opposite of what the gap means.
+    const exit = new google.maps.Circle({
+      ...shared,
+      radius: exitRadiusMeters,
+      strokeOpacity: dim ? 0.15 : 0.4,
+      strokeWeight: 1,
+      fillOpacity: 0,
+      zIndex: 1,
+    });
+
+    return () => {
+      enter.setMap(null);
+      exit.setMap(null);
+    };
+  }, [map, latitude, longitude, enterRadiusMeters, exitRadiusMeters, dim]);
+
+  return null;
+}
+
+/**
  * Every property, grouped when the pins would overlap.
  *
  * Clustered because this is a portfolio of hundreds: drawn individually at
@@ -706,6 +786,19 @@ const PropertyLayer = memo(function PropertyLayer({
 
         return (
           <Fragment key={cluster.key}>
+            {/* Only on a property standing alone, and only once it is big
+             * enough on screen to be a size rather than a smudge. A badge's
+             * coordinate is the average of what it holds, so a circle drawn
+             * there would be centred on nobody's building. */}
+            {single && ringIsLegible(single.enterRadiusMeters, single.latitude, zoom) ? (
+              <GeofenceRing
+                dim={dim}
+                enterRadiusMeters={single.enterRadiusMeters}
+                exitRadiusMeters={single.exitRadiusMeters}
+                latitude={single.latitude}
+                longitude={single.longitude}
+              />
+            ) : null}
             <AdvancedMarker
               onClick={() => {
                 if (single) {
@@ -734,6 +827,16 @@ const PropertyLayer = memo(function PropertyLayer({
                     <br />
                     {single.addressLine1}
                     {single.city ? `, ${single.city}` : null}
+                    <br />
+                    {/* The number the hours come from, in words, beside the
+                     * circle drawing it. Saying the centre was moved matters
+                     * as much as the radius: a ring sitting off the building
+                     * is a correction somebody made, not a geocoder's mistake,
+                     * and without this line it reads as a bug. */}
+                    <span className="text-muted-foreground text-xs">
+                      On site within {single.enterRadiusMeters}m
+                      {single.geofenceMoved ? ' · centre set by the office' : null}
+                    </span>
                   </>
                 ) : (
                   <span className="font-medium">{cluster.members.length} properties here</span>

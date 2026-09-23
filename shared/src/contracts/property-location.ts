@@ -118,4 +118,25 @@ export interface PropertyPosition {
   latitude: number;
   longitude: number;
   geocodePrecision: GeocodePrecision | null;
+
+  /**
+   * How close a technician has to be for the time to count as on site.
+   *
+   * Travels with the pin because the two are read together and mean nothing
+   * apart: a radius is a statement about a point, and the console draws them as
+   * one shape. `SEGMENT_DEFAULTS` where the office has not set its own, so every
+   * property has an answer and none of them is null.
+   */
+  enterRadiusMeters: number;
+  exitRadiusMeters: number;
+
+  /**
+   * True where the office has moved the centre off the geocoder's pin.
+   *
+   * Worth saying on the map rather than leaving to be inferred. Five of 589
+   * active properties are not rooftop-geocoded, and a circle drawn somewhere
+   * other than the building is a correction somebody made rather than a
+   * coordinate the geocoder produced.
+   */
+  geofenceMoved: boolean;
 }

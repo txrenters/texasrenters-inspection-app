@@ -6,7 +6,9 @@ import {
   clusterByGrid,
   type Clusterable,
   inBox,
+  metersPerPixel,
   padBox,
+  ringIsLegible,
   zoomToIsolate,
 } from './map-clusters';
 
@@ -268,5 +270,55 @@ describe('drawing only what is near the screen', () => {
     expect(inBox({ latitude: 0, longitude: 175 }, pacific)).toBe(true);
     expect(inBox({ latitude: 0, longitude: -175 }, pacific)).toBe(true);
     expect(inBox({ latitude: 0, longitude: 0 }, pacific)).toBe(false);
+  });
+});
+
+/**
+ * When a geofence is worth drawing.
+ *
+ * The circle is the number a technician's hours are computed from, so the rule
+ * that hides it has to hide it only where it would say nothing. The failure to
+ * avoid is silent: 586 sub-pixel circles at city zoom, each a real Google
+ * overlay repositioned on every frame, which is the same stutter clustering
+ * the pins was introduced to fix.
+ */
+describe('drawing a geofence to scale', () => {
+  const HOUSTON = 29.76;
+
+  it('measures a pixel smaller the further in you zoom', () => {
+    expect(metersPerPixel(HOUSTON, 16)).toBeLessThan(metersPerPixel(HOUSTON, 14));
+    // Each level halves it, exactly.
+    expect(metersPerPixel(HOUSTON, 15) / metersPerPixel(HOUSTON, 16)).toBeCloseTo(2, 6);
+  });
+
+  /**
+   * Mercator stretches east-west with latitude, so the same zoom covers less
+   * ground further from the equator. A rule written off zoom alone would draw
+   * a Houston ring at a size it never has on the ground.
+   */
+  it('measures a pixel as less ground further from the equator', () => {
+    expect(metersPerPixel(HOUSTON, 16)).toBeLessThan(metersPerPixel(0, 16));
+  });
+
+  it('draws the default radius once somebody has zoomed to a street', () => {
+    expect(ringIsLegible(40, HOUSTON, 17)).toBe(true);
+  });
+
+  it('draws nothing at the zoom the whole portfolio fits in', () => {
+    expect(ringIsLegible(40, HOUSTON, 11)).toBe(false);
+  });
+
+  /**
+   * Asked about the radius, not the zoom. A 6m geofence and a 100m one become
+   * legible at different zooms, and one threshold picked for the default would
+   * either hide the small one for good or draw the large one as a smudge.
+   */
+  it('shows a wide geofence sooner than a tight one', () => {
+    const zoom = 14;
+
+    expect(ringIsLegible(150, HOUSTON, zoom)).toBe(true);
+    expect(ringIsLegible(6, HOUSTON, zoom)).toBe(false);
+    // And the tight one does arrive, further in.
+    expect(ringIsLegible(6, HOUSTON, 19)).toBe(true);
   });
 });

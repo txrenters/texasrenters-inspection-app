@@ -8,6 +8,7 @@ import { ComparisonService } from '../admin/comparison.service';
 import { FloorPlanStorageService } from '../admin/floor-plan-storage.service';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { RoutingModule } from '../routing/routing.module';
+import { TimeTrackingModule } from '../time-tracking/time-tracking.module';
 import { InspectionMediaStorageService } from './inspection-media-storage.service';
 import { MediaProcessingService } from './media-processing.service';
 import { CloudflareStreamService } from '../media/cloudflare-stream.service';
@@ -20,7 +21,9 @@ import { TechnicianService } from './technician.service';
 import { TrackingStatusStore } from './tracking-status.store';
 
 @Module({
-  imports: [RealtimeModule, RoutingModule],
+  // TimeTracking so a submitted job's hours are read from the trail without
+  // anybody asking. It imports only the database, so there is no cycle.
+  imports: [RealtimeModule, RoutingModule, TimeTrackingModule],
   controllers: [TechnicianController],
   providers: [
     TechnicianService,

@@ -350,6 +350,10 @@ enum ChargeSource {
 }
 
 model Organization {
+  propertyGeofences PropertyGeofence[]
+  timeSegments      TimeSegment[]
+  timeAdjustments   TimeAdjustment[]
+  trackingGaps      TrackingGap[]
   id                   String                            @id @default(uuid()) @db.Uuid
   name                 String
   createdAt            DateTime                          @default(now())
@@ -468,6 +472,11 @@ model AiUsageEvent {
 }
 
 model UserProfile {
+  geofencesUpdated     PropertyGeofence[] @relation("GeofenceUpdatedBy")
+  timeSegments         TimeSegment[]      @relation("TimeSegmentTechnician")
+  timeAdjustmentsMade  TimeAdjustment[]   @relation("TimeAdjustmentAdmin")
+  trackingGaps         TrackingGap[]      @relation("TrackingGapTechnician")
+  trackingGapsResolved TrackingGap[]      @relation("TrackingGapResolvedBy")
   id                   String                   @id @default(uuid()) @db.Uuid
   authUserId           String                   @unique
   email                String                   @unique
@@ -1171,6 +1180,8 @@ model BaselineMedia {
 }
 
 model Inspection {
+  timeSegments TimeSegment[]
+  trackingGaps TrackingGap[]
   id                         String                  @id @default(uuid()) @db.Uuid
   organizationId             String                  @db.Uuid
   propertyId                 String?                 @db.Uuid
@@ -1388,6 +1399,7 @@ model PropertywarePortfolioOwner {
 }
 
 model PropertywareBuilding {
+  geofence PropertyGeofence?
   tbpPlanStops TbpQuarterPlanStop[]
   id                  String                 @id @default(uuid()) @db.Uuid
   organizationId      String                 @db.Uuid
@@ -3458,4 +3470,170 @@ model LeaseScheduledInspection {
 
   @@unique([leaseId, inspectionType])
   @@index([organizationId, outcome, scheduledOn])
+}
+
+/// What counts as being at a property, per property.
+///
+/// A geofence rather than the building's own coordinates, because the two
+/// answer different questions: `propertyware_buildings.latitude` is where the
+/// roof is, and this is how close a technician has to be for the time to be
+/// billed. The radii start from `SEGMENT_DEFAULTS` and are editable per
+/// property, because a flat, a farm and a house on a corner plot are not the
+/// same shape.
+///
+/// A property with no row here uses the defaults. A row exists once somebody
+/// has changed something or corrected the pin.
+model PropertyGeofence {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  buildingId     String @unique @db.Uuid
+
+  /// Overrides the building's own coordinates when the geocode is wrong.
+  ///
+  /// Five of 589 active properties are not rooftop-geocoded, and a technician
+  /// standing at the door is the best correction available -- so the console
+  /// and the phone can both set this, and the building's own pin is left alone
+  /// for the map and the routing that read it.
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  enterRadiusMeters Int @default(40)
+  exitRadiusMeters  Int @default(60)
+
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  building     PropertywareBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  updatedBy    UserProfile?         @relation("GeofenceUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+}
+
+/// A stretch of a technician's day, as the trail accounts for it.
+///
+/// Derived, never typed. Recomputed from `TechnicianLocationPing` whenever the
+/// rule or a property's pin changes, which is why nothing here is the only copy
+/// of anything: the raw fixes remain the record, and this is the reading of
+/// them. That is also what lets a corrected geofence fix last week's invoice
+/// rather than only next week's.
+///
+/// What a segment is *worth* is not here. Whether driving time is paid to a
+/// technician or billed to a homeowner is a business rule applied on top, and
+/// baking it in would mean re-deriving history every time the office changed
+/// its mind.
+model TimeSegment {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  technicianId   String @db.Uuid
+  /// The job this belongs to. Off-site time is still attributed to the job it
+  /// happened during -- a technician driving to a supplier is driving for that
+  /// visit.
+  inspectionId String @db.Uuid
+
+  category  TimeSegmentCategory
+  startedAt DateTime
+  endedAt   DateTime
+  /// Stored rather than derived, so a query can sum it without arithmetic on
+  /// two timestamps and a time zone.
+  durationSeconds Int
+
+  source TimeSegmentSource @default(AUTOMATIC)
+
+  /// Set when an administrator has changed this segment. The original is kept
+  /// in `TimeAdjustment`, never overwritten.
+  adjustedAt DateTime?
+
+  /// Why this segment is worth a second look: a gap beside it, a mocked
+  /// location, a length nobody would expect. Null when it is ordinary.
+  flag String?
+
+  computedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("TimeSegmentTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+  inspection   Inspection   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  adjustments  TimeAdjustment[]
+
+  @@index([organizationId, technicianId, startedAt])
+  @@index([inspectionId, category])
+}
+
+enum TimeSegmentCategory {
+  ONSITE
+  DRIVING
+  GENERAL
+}
+
+enum TimeSegmentSource {
+  /// Computed from the trail.
+  AUTOMATIC
+  /// Created by an administrator where the trail could not answer.
+  MANUAL
+}
+
+/// An administrator changing a segment, and why.
+///
+/// The whole point of the automatic tracker is that the number is not somebody's
+/// recollection -- so when a person does overrule it, that has to be visible
+/// rather than indistinguishable from what the trail said. The previous value is
+/// kept here, not overwritten there.
+model TimeAdjustment {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  segmentId      String @db.Uuid
+  adminId        String @db.Uuid
+
+  /// Both ends as they stood, so the change is legible without joining history.
+  beforeStartedAt       DateTime
+  beforeEndedAt         DateTime
+  beforeDurationSeconds Int
+  afterStartedAt        DateTime
+  afterEndedAt          DateTime
+  afterDurationSeconds  Int
+
+  /// Required. An adjustment with no account of itself is the problem it is
+  /// meant to solve.
+  reason String
+
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  segment      TimeSegment  @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  admin        UserProfile  @relation("TimeAdjustmentAdmin", fields: [adminId], references: [id])
+
+  @@index([organizationId, createdAt])
+}
+
+/// A stretch the trail cannot account for.
+///
+/// Recorded so that a phone that died, was left in a van or was killed by a
+/// power manager produces a question rather than a zero. A technician who did
+/// four hours of real work the tracker did not see must not simply go unpaid,
+/// and this is what puts that in front of a person.
+model TrackingGap {
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  technicianId   String @db.Uuid
+  inspectionId   String? @db.Uuid
+
+  startedAt       DateTime
+  endedAt         DateTime
+  durationSeconds Int
+
+  /// Cleared once somebody has decided what it was.
+  resolvedAt   DateTime?
+  resolvedById String?   @db.Uuid
+  resolution   String?
+
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  technician   UserProfile  @relation("TrackingGapTechnician", fields: [technicianId], references: [id], onDelete: Cascade)
+  inspection   Inspection?  @relation(fields: [inspectionId], references: [id], onDelete: SetNull)
+  resolvedBy   UserProfile? @relation("TrackingGapResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, resolvedAt, startedAt])
 }
