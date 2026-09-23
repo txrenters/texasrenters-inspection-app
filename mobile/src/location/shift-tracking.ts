@@ -1,11 +1,11 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { normaliseMotion } from '@texasrenters/shared';
+import { haversineMeters, normaliseMotion } from '@texasrenters/shared';
 import { AppState } from 'react-native';
 
 import { currentBatteryPercent } from './battery';
 import { sendRecordedFixes } from './location-sender';
-import { appendLocationFixes, readLastFixAt } from './location-storage';
+import { appendLocationFixes, readLastFixAt, readLastKeptFix, rememberKeptFix } from './location-storage';
 import type { QueuedFix } from './location-queue';
 
 /**
@@ -39,6 +39,10 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
  * second; what limited it there was how often the queue was drained, which is
  * `RECORDED_SEND_SPACING_MS`.
  *
+ * `FIX_DISTANCE_M` is no longer given to the OS. It is the distance
+ * `keepWorthwhile` thins by, which is the same rule applied one step later --
+ * see `STATIONARY_HEARTBEAT_MS` for why it had to move.
+ *
  * The cost is real and worth naming again: five times the fixes, at `High`
  * accuracy, on a phone that is also filming video. Google's own Driver SDK
  * reports every ten seconds by default and Fleet Engine expects five to sixty,
@@ -48,6 +52,29 @@ export const SHIFT_LOCATION_TASK = 'texasrenters-shift-location';
  */
 const FIX_INTERVAL_MS = 3_000;
 const FIX_DISTANCE_M = 10;
+
+/**
+ * How long a standing technician may go unrecorded.
+ *
+ * `distanceInterval` used to carry this rule, and it cannot: it is a filter on
+ * *movement*, so a phone that does not move produces nothing at all. On iOS
+ * that is the only gate there is, because `timeInterval` is ignored. A
+ * technician who parks, walks in and works for forty minutes recorded not one
+ * fix, and the trail showed them arriving and then simply ceasing to exist.
+ *
+ * Measured on 2026-09-23 against a month of real work: of 37 jobs replayed,
+ * **7 had no fix within 100 metres of the property at all** -- closest
+ * approaches of 500 m, 600 m, 2 km, 3.2 km -- for visits the technician had
+ * demonstrably attended. Nothing downstream can bill time from a trail with
+ * the middle of every visit missing.
+ *
+ * So the OS filter is off and this thins instead, which is the same rule plus
+ * a floor: keep a fix that moved, and keep one every half minute regardless.
+ * Half a minute because the time tracker needs several fixes inside a
+ * ninety-second dwell to call an arrival, and three is enough to outvote one
+ * bad one.
+ */
+const STATIONARY_HEARTBEAT_MS = 30_000;
 
 /**
  * `High`, which is satellites, rather than the `Balanced` this used to be.
@@ -76,7 +103,22 @@ const FIX_ACCURACY = Location.Accuracy.High;
 export const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
   accuracy: FIX_ACCURACY,
   timeInterval: FIX_INTERVAL_MS,
-  distanceInterval: FIX_DISTANCE_M,
+  /**
+   * No movement filter. The thinning happens in the task instead.
+   *
+   * This was `FIX_DISTANCE_M`, and a filter on distance cannot express "and
+   * also tell me every half minute when they are standing still" -- which is
+   * exactly the case a time tracker is built to measure. See
+   * `STATIONARY_HEARTBEAT_MS`.
+   *
+   * The battery cost is smaller than it looks: the receiver is already running
+   * at `High` for the interval above, and this only stops the OS discarding
+   * what it has already computed. It does mean the task is woken more often,
+   * so the thinning below keeps what reaches the queue and the wire at very
+   * nearly what it was before -- a moving technician produces exactly the same
+   * fixes as it always did.
+   */
+  distanceInterval: 0,
   /**
    * Tell iOS this is a vehicle following a road.
    *
@@ -118,6 +160,42 @@ export const BACKGROUND_UPDATES: Location.LocationTaskOptions = {
   },
 };
 
+/**
+ * Which of the delivered fixes are worth keeping.
+ *
+ * The rule the OS used to apply, plus the floor it could not: a fix is kept
+ * when it is `FIX_DISTANCE_M` from the last one kept, **or** when
+ * `STATIONARY_HEARTBEAT_MS` has passed since that one. A moving technician
+ * therefore produces exactly what they always did -- the distance test is the
+ * same test, against the same distance -- and a standing one now produces two
+ * fixes a minute instead of none.
+ *
+ * Compared against the last *kept* fix rather than the previous delivered one,
+ * or a slow walk would be thinned away a metre at a time.
+ */
+export async function keepWorthwhile(delivered: readonly QueuedFix[]): Promise<QueuedFix[]> {
+  if (!delivered.length) return [];
+  let last = await readLastKeptFix();
+  const kept: QueuedFix[] = [];
+
+  for (const fix of delivered) {
+    const at = Date.parse(fix.recordedAt);
+    if (!Number.isFinite(at)) continue;
+    if (last) {
+      const moved = haversineMeters(
+        { latitude: last.latitude, longitude: last.longitude },
+        { latitude: fix.latitude, longitude: fix.longitude },
+      );
+      if (moved < FIX_DISTANCE_M && at - last.at < STATIONARY_HEARTBEAT_MS) continue;
+    }
+    kept.push(fix);
+    last = { latitude: fix.latitude, longitude: fix.longitude, at };
+  }
+
+  if (last) await rememberKeptFix(last);
+  return kept;
+}
+
 /** Same shape the camera uses for snapshot ids — no new dependency for this. */
 function fixId() {
   return `fix-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -141,7 +219,9 @@ TaskManager.defineTask(SHIFT_LOCATION_TASK, async ({ data, error }) => {
   // The device's own clock at the moment of each fix. The API keeps that
   // separately from when it heard about it, so a batch delivered after an
   // outage still draws the route in the order it was walked.
-  const fixes: QueuedFix[] = locations.map((location) => toQueuedFix(location, batteryPercent));
+  const delivered: QueuedFix[] = locations.map((location) => toQueuedFix(location, batteryPercent));
+  const fixes = await keepWorthwhile(delivered);
+  if (!fixes.length) return;
 
   // Queued first, so nothing recorded depends on the send below succeeding.
   await appendLocationFixes(fixes);

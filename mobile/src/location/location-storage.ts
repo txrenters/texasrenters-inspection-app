@@ -88,6 +88,52 @@ async function rememberLastFix(fixes: readonly QueuedFix[]) {
   }
 }
 
+/**
+ * The last fix actually kept, with where it was.
+ *
+ * Separate from `LAST_FIX_KEY`, which answers "is the recording alive" and
+ * needs only a time. This answers "has the technician moved since", which is
+ * what decides whether the next fix is worth keeping, so it has to carry the
+ * position too.
+ *
+ * Written from the background task, which on Android may be a process the OS
+ * started with no app on screen, so it lives in the key-value store rather
+ * than in memory: a module variable would be empty on the first batch after
+ * every one of those launches, and the thinning would start again from nothing.
+ */
+const LAST_KEPT_KEY = 'texasrenters-location-last-kept-v1';
+
+export interface KeptFix {
+  latitude: number;
+  longitude: number;
+  at: number;
+}
+
+export async function readLastKeptFix(): Promise<KeptFix | null> {
+  try {
+    const raw = await locationKeyValueStore.getItem(LAST_KEPT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<KeptFix>;
+    return typeof parsed.latitude === 'number' &&
+      typeof parsed.longitude === 'number' &&
+      Number.isFinite(parsed.at)
+      ? (parsed as KeptFix)
+      : null;
+  } catch {
+    // Unreadable is the same as never written: the next fix is kept, which
+    // costs one extra row and never costs a fix.
+    return null;
+  }
+}
+
+export async function rememberKeptFix(fix: KeptFix) {
+  try {
+    await locationKeyValueStore.setItem(LAST_KEPT_KEY, JSON.stringify(fix));
+  } catch {
+    // As above: losing this makes the next batch slightly denser, nothing worse.
+  }
+}
+
 /** Epoch milliseconds of the last recorded fix, or null if there has never been one. */
 export async function readLastFixAt(): Promise<number | null> {
   try {

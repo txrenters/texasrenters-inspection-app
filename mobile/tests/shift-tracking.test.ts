@@ -19,6 +19,7 @@ import {
   BACKGROUND_UPDATES,
   ensureShiftTracking,
   isShiftTrackingActive,
+  keepWorthwhile,
   STALLED_AFTER_MS,
   startShiftTracking,
   stopShiftTracking,
@@ -28,6 +29,8 @@ const mockHasServices = jest.fn();
 const mockRequestForeground = jest.fn();
 const mockRequestBackground = jest.fn();
 const mockStartUpdates = jest.fn();
+const mockReadLastKept = jest.fn(async () => null as unknown);
+const mockRememberKept = jest.fn(async () => undefined);
 // Defaults at declaration, not only in `beforeEach`: that hook calls
 // `stopShiftTracking()` on its first line, before any of the assignments
 // below have run, so a mock with no implementation returns undefined and the
@@ -75,6 +78,8 @@ jest.mock('react-native', () => ({
 jest.mock('../src/location/location-storage', () => ({
   appendLocationFixes: (...args: unknown[]) => mockAppendFixes(...args),
   readLastFixAt: () => mockReadLastFixAt(),
+  readLastKeptFix: () => mockReadLastKept(),
+  rememberKeptFix: (...args: unknown[]) => mockRememberKept(...args),
 }));
 
 jest.mock('../src/location/location-sender', () => ({
@@ -176,10 +181,24 @@ describe('starting a shift', () => {
    */
   it('takes a fix every three seconds, densely enough to draw a road', () => {
     expect(BACKGROUND_UPDATES.timeInterval).toBe(3_000);
-    expect(BACKGROUND_UPDATES.distanceInterval).toBe(10);
     // `High` is satellites. A Wi-Fi or tower fix carries no speed or course at
     // all, which is most of what the map is for.
     expect(BACKGROUND_UPDATES.accuracy).toBe(Location.Accuracy.High);
+  });
+
+  /**
+   * This used to assert `distanceInterval` was 10, and that number was the
+   * cause of the gap the time-tracker work found: a filter on *movement*
+   * records nothing at all from a phone that is not moving, and on iOS it is
+   * the only gate there is. A month of real jobs replayed on 2026-09-23 had 7
+   * of 37 visits with no fix within 100 m of the property the technician had
+   * demonstrably attended.
+   *
+   * The thinning moved into `keepWorthwhile`, which applies the same distance
+   * and adds a floor. The OS is now asked for everything.
+   */
+  it('asks the OS for every fix, and thins them itself', () => {
+    expect(BACKGROUND_UPDATES.distanceInterval).toBe(0);
   });
 
   it('records in the background with location allowed only while using the app', async () => {
@@ -471,5 +490,96 @@ describe('the two recorders', () => {
     await stopShiftTracking();
 
     expect(mockStopUpdates).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Which fixes reach the queue.
+ *
+ * The rule the OS used to apply, plus the floor it could not express. A moving
+ * technician must produce exactly what they always did -- anything else is a
+ * regression in the map and the routing that read this trail long before the
+ * time tracker existed -- and a standing one must stop producing nothing.
+ */
+describe('thinning what the OS delivers', () => {
+  const at = (seconds: number) => new Date(Date.UTC(2026, 8, 23, 9, 0, seconds)).toISOString();
+  /** Roughly 11 m per 0.0001 degrees of latitude in Texas. */
+  const fixAt = (seconds: number, metresNorth = 0) => ({
+    id: `fix-${seconds}-${metresNorth}`,
+    latitude: 29.76 + metresNorth / 111_320,
+    longitude: -95.37,
+    recordedAt: at(seconds),
+    accuracyMeters: 5,
+    batteryPercent: 80,
+    headingDegrees: null,
+    speedMetersPerSecond: null,
+  });
+
+  beforeEach(() => {
+    mockReadLastKept.mockResolvedValue(null);
+    mockRememberKept.mockClear();
+  });
+
+  it('keeps the first fix it ever sees', async () => {
+    const kept = await keepWorthwhile([fixAt(0)]);
+    expect(kept).toHaveLength(1);
+  });
+
+  /** The old behaviour, unchanged: ten metres earns a fix. */
+  it('keeps a fix that moved far enough', async () => {
+    mockReadLastKept.mockResolvedValue({ latitude: 29.76, longitude: -95.37, at: Date.parse(at(0)) });
+
+    const kept = await keepWorthwhile([fixAt(3, 40)]);
+
+    expect(kept).toHaveLength(1);
+  });
+
+  it('drops one that moved barely at all, seconds after the last', async () => {
+    mockReadLastKept.mockResolvedValue({ latitude: 29.76, longitude: -95.37, at: Date.parse(at(0)) });
+
+    const kept = await keepWorthwhile([fixAt(3, 1), fixAt(6, 2)]);
+
+    expect(kept).toHaveLength(0);
+  });
+
+  /**
+   * The point of the change. A technician standing inside a property moves
+   * nothing, and the tracker still has to be able to say they are there.
+   */
+  it('keeps one every half minute from a phone that has not moved', async () => {
+    mockReadLastKept.mockResolvedValue({ latitude: 29.76, longitude: -95.37, at: Date.parse(at(0)) });
+
+    // Ten minutes of a phone on a kitchen counter, a fix every three seconds.
+    const standing = Array.from({ length: 200 }, (_, index) => fixAt(index * 3, 0));
+    const kept = await keepWorthwhile(standing);
+
+    // Six hundred seconds at one every thirty.
+    expect(kept.length).toBeGreaterThanOrEqual(19);
+    expect(kept.length).toBeLessThanOrEqual(21);
+  });
+
+  /** Thinned against the last kept fix, or a slow walk vanishes a metre at a time. */
+  it('does not let a slow walk thin itself away', async () => {
+    mockReadLastKept.mockResolvedValue({ latitude: 29.76, longitude: -95.37, at: Date.parse(at(0)) });
+
+    // A metre every three seconds: under the distance each time, but it adds up.
+    const walk = Array.from({ length: 30 }, (_, index) => fixAt((index + 1) * 3, index + 1));
+    const kept = await keepWorthwhile(walk);
+
+    expect(kept.length).toBeGreaterThan(1);
+  });
+
+  it('remembers where it left off, for the next batch', async () => {
+    await keepWorthwhile([fixAt(0), fixAt(3, 40)]);
+
+    expect(mockRememberKept).toHaveBeenCalledWith(
+      expect.objectContaining({ at: Date.parse(at(3)) }),
+    );
+  });
+
+  it('writes nothing when the whole batch is thinned away', async () => {
+    mockReadLastKept.mockResolvedValue({ latitude: 29.76, longitude: -95.37, at: Date.parse(at(0)) });
+
+    expect(await keepWorthwhile([fixAt(3, 1)])).toHaveLength(0);
   });
 });
