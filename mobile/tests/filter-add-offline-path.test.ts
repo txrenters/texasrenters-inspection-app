@@ -1,14 +1,22 @@
 /**
- * Diagnosis scratch test (2026-09-23): does the offline-queue path explain
- * "an added AC filter only appears after restarting the app"?
+ * Started as a diagnosis scratch test (2026-09-23): does the offline-queue
+ * path explain "an added AC filter only appears after restarting the app"?
  *
- * Keep or delete freely — this asserts current behaviour, not a requirement.
+ * The first half found a second bug and no longer asserts current behaviour:
+ * the queue held a write for *any* `ApiConnectionError`, a 500 included, so a
+ * phone on full bars was told its work would send "when you are back on a
+ * network". `classifyWriteFailure` narrowed that, and these cases became the
+ * requirement — see `offline-write-classification.test.ts` for the full rule
+ * and `api-failure-reasons.test.ts` for the causes it runs on.
+ *
+ * The react-query half below is the filter bug itself, and stands as written.
  */
 import { QueryClient } from '@tanstack/react-query';
 
 import { ApiConnectionError } from '../src/storage/offline-record-cache';
 import { QueuedOfflineError, queueOnConnectionFailure } from '../src/repositories/api/offline-writes';
 import { reconcileMobileState } from '../src/features/state-consistency';
+import { useNetworkStore } from '../src/stores/network.store';
 import { filterRows, withAddedFilter } from '../src/utils/job-tasks';
 
 const mockStore = new Map<string, string>();
@@ -27,27 +35,46 @@ jest.mock('../src/storage/demo-storage', () => ({
 
 jest.mock('../src/media/room-snapshot-flush', () => ({ flushRoomSnapshotsNow: async () => undefined }));
 
-beforeEach(() => mockStore.clear());
+beforeEach(() => {
+  mockStore.clear();
+  // The phone in the bug report: full bars, and an API that is answering.
+  useNetworkStore.setState({ isOnline: true, isResolved: true });
+});
 
 const entry = { id: 'services:job-1', kind: 'job-services', payload: { inspectionId: 'job-1' } };
+const queue = () => mockStore.get('texasrenters-mutation-queue-v1');
 
-describe('queueOnConnectionFailure queues on more than "the device is offline"', () => {
-  it('queues a 5xx, which requestJson reports as ApiConnectionError while online', async () => {
+describe('what queueOnConnectionFailure treats as "the device could not reach us"', () => {
+  it('does NOT queue a 500 — the app answered, and may answer the same forever', async () => {
+    const fault = new ApiConnectionError('TexasRenters API request failed (500).', 'fault');
+
     await expect(
       queueOnConnectionFailure(entry, async () => {
-        throw new ApiConnectionError('TexasRenters API request failed (500).');
+        throw fault;
       }),
-    ).rejects.toBeInstanceOf(QueuedOfflineError);
-    expect(JSON.parse(mockStore.get('texasrenters-mutation-queue-v1')!)).toHaveLength(1);
+      // The server's own error reaches the technician, rather than a promise
+      // that the work will send once they find a network they never lost.
+    ).rejects.toBe(fault);
+    expect(queue()).toBeUndefined();
   });
 
-  it('queues a 15s timeout abort the same way', async () => {
+  it('queues a 503, because the edge answered it without reaching the app', async () => {
     await expect(
       queueOnConnectionFailure(entry, async () => {
-        throw new ApiConnectionError('The TexasRenters API did not respond in time.');
+        throw new ApiConnectionError('TexasRenters API request failed (503).', 'unavailable');
       }),
-    ).rejects.toBeInstanceOf(QueuedOfflineError);
-    expect(JSON.parse(mockStore.get('texasrenters-mutation-queue-v1')!)).toHaveLength(1);
+      // Held so a deploy stays invisible — but described as ours, not theirs.
+    ).rejects.toMatchObject({ name: 'QueuedOfflineError', reason: 'server' });
+    expect(JSON.parse(queue()!)).toHaveLength(1);
+  });
+
+  it('queues a 15s timeout abort, without calling an online phone offline', async () => {
+    await expect(
+      queueOnConnectionFailure(entry, async () => {
+        throw new ApiConnectionError('The TexasRenters API did not respond in time.', 'timeout');
+      }),
+    ).rejects.toMatchObject({ name: 'QueuedOfflineError', reason: 'server' });
+    expect(JSON.parse(queue()!)).toHaveLength(1);
   });
 
   it('does NOT queue a 4xx (plain Error)', async () => {
@@ -56,7 +83,7 @@ describe('queueOnConnectionFailure queues on more than "the device is offline"',
         throw new Error('TexasRenters API request failed (400).');
       }),
     ).rejects.not.toBeInstanceOf(QueuedOfflineError);
-    expect(mockStore.get('texasrenters-mutation-queue-v1')).toBeUndefined();
+    expect(queue()).toBeUndefined();
   });
 });
 

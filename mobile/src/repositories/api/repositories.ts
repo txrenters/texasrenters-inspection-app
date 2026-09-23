@@ -528,10 +528,13 @@ async function createStreamUploadSession(input: {
      * Reported as an ApiConnectionError so the queue treats it as transient and
      * keeps the recording, and so the offline cache path recognises it.
      */
-    const reason = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error ? error.message : String(error);
+    // `transport`: this is the fetch itself rejecting, so nothing was answered
+    // and nothing arrived. A status from this endpoint is handled below.
     throw new ApiConnectionError(
-      `Could not reach ${new URL(url).host} to start the upload (${reason}). ` +
+      `Could not reach ${new URL(url).host} to start the upload (${cause}). ` +
         'The recording is safe on this device and will retry.',
+      'transport',
     );
   }
   if (response.status === 503) return null;

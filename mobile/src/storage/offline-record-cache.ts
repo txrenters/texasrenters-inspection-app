@@ -29,10 +29,13 @@ export type ApiConnectionReason =
 export class ApiConnectionError extends Error {
   readonly reason: ApiConnectionReason;
 
-  // Defaults to the case with no ambiguity, so a new caller that has not
-  // thought about the distinction gets the honest answer rather than an
-  // accidental promise that the server is coming back.
-  constructor(message: string, reason: ApiConnectionReason = 'transport') {
+  // Required rather than defaulted, in the spirit of the queue's own senders
+  // being written out one per line: a default is a decision nobody has to
+  // make, and the whole bug was that this distinction had never been made.
+  // Whichever value were chosen, the site that skipped it would be silently
+  // classified — and the one to fear is a write held against an answer that
+  // is never going to change.
+  constructor(message: string, reason: ApiConnectionReason) {
     super(message);
     this.name = 'ApiConnectionError';
     this.reason = reason;

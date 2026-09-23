@@ -33,6 +33,10 @@ export type HeldReason =
 export class QueuedOfflineError extends Error {
   readonly reason: HeldReason;
 
+  // Defaulted, unlike `ApiConnectionError`'s: that one decides whether a write
+  // is held at all, so leaving it out has to be impossible. This one only
+  // picks the wording, `queueOnConnectionFailure` always passes it, and the
+  // basement is the case a test constructing one by hand means.
   constructor(reason: HeldReason = 'offline') {
     super(
       reason === 'offline'
@@ -45,7 +49,7 @@ export class QueuedOfflineError extends Error {
 }
 
 /** Hold the write and say why, or let the failure through to the technician. */
-export type WriteFailure = { hold: false } | { hold: true; reason: HeldReason };
+export type HoldDecision = { hold: false } | { hold: true; reason: HeldReason };
 
 /**
  * What actually counts as "we could not be reached".
@@ -79,7 +83,7 @@ export type WriteFailure = { hold: false } | { hold: true; reason: HeldReason };
  * Anything that is not an `ApiConnectionError` is a 4xx or a schema failure —
  * the server refusing the request — and has always been surfaced here.
  */
-export function classifyWriteFailure(error: unknown, isOnline: boolean): WriteFailure {
+export function classifyWriteFailure(error: unknown, isOnline: boolean): HoldDecision {
   if (!(error instanceof ApiConnectionError)) return { hold: false };
   switch (error.reason) {
     case 'transport':
