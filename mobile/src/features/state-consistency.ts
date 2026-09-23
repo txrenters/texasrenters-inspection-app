@@ -154,13 +154,33 @@ function reconcile(previous: unknown, incoming: unknown): unknown {
     if (guard?.tombstone) return TOMBSTONED;
     if (guard) {
       const revision = entityRevision(incoming);
-      if (
-        guard.state === 'VERIFYING' &&
-        guard.authoritativeRevision !== null &&
-        revision !== null &&
-        revision >= guard.authoritativeRevision
-      )
-        guards.delete(incoming.id);
+      /**
+       * A guard that is verifying, and whose revision cannot be compared,
+       * counts as verified.
+       *
+       * The test used to require two real revisions. A technician's inspection
+       * carries neither `updatedAt` nor `version` -- the backend's
+       * `technicianInspectionSummarySelect` sends neither -- so `entityRevision`
+       * is null for it, the condition could never be satisfied, and a VERIFYING
+       * guard went on spreading its shadow over every write to that job for the
+       * whole thirty seconds it lived.
+       *
+       * That is one of the two reasons a filter added just after Start job
+       * disappeared (the office, 2026-09-23). `completeIntent` arms the guard
+       * with the job as it then stood; the optimistic write adds the filter;
+       * `applyGuard` spreads the old job straight back over it. The row was
+       * saved either way, so reopening the app showed it -- the guards live in
+       * a module-level map that only a fresh process clears.
+       *
+       * A guard still holds back a payload that is genuinely older, because
+       * that case has two real revisions to compare. What it may no longer do
+       * is outlive its mutation on a comparison that can never be made.
+       */
+      const verified =
+        guard.authoritativeRevision === null ||
+        revision === null ||
+        revision >= guard.authoritativeRevision;
+      if (guard.state === 'VERIFYING' && verified) guards.delete(incoming.id);
       else return applyGuard(incoming, guard);
     }
     if (isOlderRevision(incoming, previous)) return previous;

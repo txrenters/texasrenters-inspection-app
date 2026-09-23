@@ -420,22 +420,40 @@ export function useInspectionActions(id: string) {
        */
       scope: { id: `job-services:${id}` },
       /**
-       * An updater, not a report -- and that distinction is the whole fix.
+       * An updater, not a report -- and that distinction is still the fix for
+       * the lost answer.
        *
        * The scope only serialised the *sending*. Each caller still built its
        * payload from the job as it stood when the screen last rendered, so two
        * taps close together both started from the same report and the second
        * overwrote the first: photograph a filter, add another straight after,
-       * and the photograph was gone. Answering `(current) => next` instead
-       * means the second answer is worked out here, after the first has
-       * landed, from the job as it now is.
+       * and the photograph was gone. Answering `(current) => next` means the
+       * second answer is worked out from the job as it then is.
        *
-       * Resolved in `mutationFn` rather than `onMutate` because a scoped
-       * mutation runs both at execute time, and the optimistic write has to
-       * happen from the same resolved value the request carries -- one place,
-       * so the screen and the server cannot be told different things.
+       * **The resolving and the optimistic write belong in `onMutate`, not in
+       * `mutationFn`, and that correction is what makes an added filter appear
+       * at once.** The note here used to claim a scoped mutation "runs both at
+       * execute time". It does not. `onMutate` runs at execute time; the scope
+       * gate sits *after* it, and `mutationFn` is not entered at all until the
+       * mutation before it in the scope has settled (query-core `mutation.ts`
+       * awaits `onMutate`, then `retryer.start()` calls `pause()` instead of
+       * `run()` while `canRun()` is false).
+       *
+       * So with the write inside `mutationFn`, this happened, and the office
+       * reported it on 2026-09-23: a technician photographs a filter -- the
+       * camera fires this same scoped mutation and goes straight back -- then
+       * taps Add while that PATCH is still in flight. The second mutation is
+       * created and immediately paused, the optimistic write never runs, and no
+       * row appears. Nothing is lost: the report is saved, so closing and
+       * reopening the app showed it, which is exactly how it was described.
+       *
+       * `mutationFn` cannot read what `onMutate` returned -- in v5 its second
+       * argument carries only `{client, meta, mutationKey}` -- so it reads the
+       * cache, which is now the accumulator every queued tap has written to in
+       * turn. Each request therefore still sends the report as it stands when
+       * its turn comes.
        */
-      mutationFn: async (update: ServicesReportUpdate) => {
+      onMutate: async (update: ServicesReportUpdate) => {
         await client.cancelQueries({ queryKey: queryKeys.inspection(id) });
         const current = client.getQueryData<Inspection>(queryKeys.inspection(id))?.servicesReport ?? null;
         const servicesReport = typeof update === 'function' ? update(current) : update;
@@ -448,6 +466,14 @@ export function useInspectionActions(id: string) {
         client.setQueryData(queryKeys.inspection(id), (job?: Inspection) =>
           job ? { ...job, servicesReport } : job,
         );
+      },
+      mutationFn: async () => {
+        const servicesReport =
+          client.getQueryData<Inspection>(queryKeys.inspection(id))?.servicesReport ?? null;
+        // `onMutate` has already written this, so an absent report means the
+        // job itself was never in the cache -- there is nothing to send and
+        // sending null would erase the checklist.
+        if (!servicesReport) throw new Error('That job is not loaded, so its checklist was not saved.');
         return repositories.inspections.saveServices(id, servicesReport);
       },
       onSuccess: (inspection) => {
