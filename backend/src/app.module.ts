@@ -23,6 +23,7 @@ import { OpenApiModule } from './openapi/openapi.module';
 import { TechnicianModule } from './technician/technician.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { PlanningModule } from './planning/planning.module';
+import { TimeTrackingModule } from './time-tracking/time-tracking.module';
 
 // The in-memory vertical-slice stack — seeded demo data, mock transcription and
 // analysis providers, and their own webhook endpoints — used to be registered
@@ -51,6 +52,7 @@ import { PlanningModule } from './planning/planning.module';
     MediaModule,
     RealtimeModule,
     PlanningModule,
+    TimeTrackingModule,
     OpenApiModule,
     GatewayModule,
     ClientErrorsModule,
