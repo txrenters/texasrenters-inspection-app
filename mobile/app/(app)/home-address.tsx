@@ -34,10 +34,21 @@ registerIcons(CheckCircle2Icon, HomeIcon, MapPinIcon);
  * host, because it showed one message for every kind of failure. A 400 from the
  * API carries the server's own reason ("could not be found precisely") and is
  * shown as written; anything that never reached the server says so instead.
+ *
+ * `fault` is the same mistake one step along. A 500 is the app's own answer, so
+ * the request did reach the office and came back — the phone's signal was never
+ * in question, and "try again when you have signal" sends a technician on full
+ * bars hunting for a network they never lost. That is the lie
+ * `classifyWriteFailure` took out of the write queue, and `ApiHomeRepository.set`
+ * does not go through the queue — so it has to be taken out here separately.
+ * The other three never reached the office, or cannot be shown to have, and
+ * keep the wording that says so.
  */
 export function homeSaveErrorMessage(error: unknown): string {
   if (error instanceof ApiConnectionError)
-    return 'Could not reach the office right now. Your address was not changed — try again when you have signal.';
+    return error.reason === 'fault'
+      ? 'The office could not save your address. Nothing was changed, and your connection is fine — try again in a few minutes.'
+      : 'Could not reach the office right now. Your address was not changed — try again when you have signal.';
   if (error instanceof Error && error.message) return error.message;
   return 'Your address could not be saved.';
 }
