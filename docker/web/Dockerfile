@@ -55,6 +55,15 @@ ARG NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 ENV NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 ARG NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
 ENV NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID=$NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
+
+# Mapbox, which draws the plan's day groups.
+#
+# A `pk.` token is public by design -- it ships in the bundle like the Maps key
+# above -- so the protection is a URL restriction in the Mapbox account, not
+# secrecy. Baked in here because a NEXT_PUBLIC_* value is frozen at build: it
+# cannot be corrected later over ssh, only by building again.
+ARG NEXT_PUBLIC_MAPBOX_TOKEN
+ENV NEXT_PUBLIC_MAPBOX_TOKEN=$NEXT_PUBLIC_MAPBOX_TOKEN
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_ENABLE_DEMO_DATA=$NEXT_PUBLIC_ENABLE_DEMO_DATA
 ENV NEXT_TELEMETRY_DISABLED=1

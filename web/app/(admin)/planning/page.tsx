@@ -90,6 +90,12 @@ const PlanAttentionMap = dynamic(() => import('@/components/planning/plan-attent
   loading: () => <Skeleton className="h-full w-full rounded-lg" />,
 });
 
+/** Mapbox measures its container too, so this is client-only for the same reason. */
+const PlanGroupsMap = dynamic(() => import('@/components/planning/plan-groups-map').then((module) => module.PlanGroupsMap), {
+  ssr: false,
+  loading: () => <Skeleton className="h-full w-full rounded-lg" />,
+});
+
 const STATUS: Record<PlanStatus, { label: string; variant: 'secondary' | 'info' | 'success' | 'destructive' | 'outline' }> = {
   DRAFT: { label: 'Draft', variant: 'secondary' },
   PUBLISHING: { label: 'Publishing', variant: 'info' },
@@ -116,6 +122,13 @@ export default function PlanningPage() {
   const [choosing, setChoosing] = useState(false);
   // The visit whose details are open, from its pin, its row in a day, or the tables.
   const [openStopId, setOpenStopId] = useState<string | null>(null);
+  /**
+   * The day being read on the Groups map, `YYYY-MM-DD`.
+   *
+   * Only the map uses it: clicking a circle picks its day out from the others
+   * so the office can follow one while comparing it against its neighbours.
+   */
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   // What AI made of the quarter, and the moves it offered (2026-09-20).
   const [advising, setAdvising] = useState(false);
   const [advice, setAdvice] = useState<PlanAdvice | null>(null);
@@ -569,8 +582,32 @@ export default function PlanningPage() {
               <TabsTrigger value="visits">Visits ({(stops.data?.length ?? 0).toLocaleString()})</TabsTrigger>
               <TabsTrigger value="scheduled">Scheduled ({scheduled.length.toLocaleString()})</TabsTrigger>
               <TabsTrigger value="unscheduled">Unscheduled ({unscheduled.length.toLocaleString()})</TabsTrigger>
+              <TabsTrigger value="groups">Groups</TabsTrigger>
               <TabsTrigger value="attention">Needs attention ({attentionIds.size.toLocaleString()})</TabsTrigger>
             </TabsList>
+
+            {/*
+              The quarter as the office sketched it: one numbered circle per
+              day, sized to reach that day's properties. A wide circle is a day
+              spread across the county; two overlapping circles are two days
+              covering the same ground, which is a day that could be saved.
+            */}
+            <TabsContent className="mt-3" value="groups">
+              <div className="grid gap-3">
+                <div className="h-80 lg:h-[34rem]">
+                  <PlanGroupsMap
+                    onSelectDay={setSelectedDate}
+                    selectedDate={selectedDate}
+                    stops={(stops.data ?? []).map((stop) => ({
+                      id: stop.id,
+                      latitude: stop.latitude ?? Number.NaN,
+                      longitude: stop.longitude ?? Number.NaN,
+                      scheduledOn: stop.scheduledOn,
+                    }))}
+                  />
+                </div>
+              </div>
+            </TabsContent>
 
             <TabsContent className="mt-3" value="days">
               {days.isLoading ? (
