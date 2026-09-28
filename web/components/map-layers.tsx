@@ -124,13 +124,17 @@ export const GroupingRadiusLayer = memo(function GroupingRadiusLayer({
           // Low, and deliberately so: two overlapping circles read as a darker
           // patch, which is exactly the signal. At a heavier fill the whole of
           // west Houston is one green slab and says nothing.
-          'fill-opacity': 0.08,
+          'fill-opacity': 0.12,
         }}
         type="fill"
       />
       <Layer
         id="grouping-radius-outline"
-        paint={{ 'line-color': green, 'line-opacity': 0.35, 'line-width': 1 }}
+        // Firmer than the fill, and firmer than it used to be. On satellite
+        // imagery a faint edge disappeared into the photograph, and the edge is
+        // what tells you where one circle ends and the next begins -- which is
+        // the whole reading when two of them overlap.
+        paint={{ 'line-color': green, 'line-opacity': 0.7, 'line-width': 1.5 }}
         type="line"
       />
     </Source>

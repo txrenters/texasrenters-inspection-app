@@ -224,8 +224,14 @@
      than a ring, because a pile of hard outlines is unreadable and the
      overlaps are the whole point.
 
-     Not the technician green either: that one means a person on this map. */
-  --map-grouping: oklch(0.72 0.16 155);
+     Not the technician green either: that one means a person on this map.
+
+     Darkened from 0.72 at the office's request. These are read on satellite
+     imagery -- the map type they rebuild a quarter on -- and a light green at
+     a faint fill simply vanished into a photograph of east Texas. A deeper
+     green holds its own against grass, tree cover and rooftops alike, and the
+     overlaps still read because the fill is what stacks, not the hue. */
+  --map-grouping: oklch(0.45 0.14 155);
 
   --chart-1: oklch(0.52 0.15 262);
   --chart-2: oklch(0.52 0.13 190);
