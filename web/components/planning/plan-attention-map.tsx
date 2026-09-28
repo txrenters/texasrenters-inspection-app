@@ -3,9 +3,10 @@
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 import { useTheme } from 'next-themes';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import Map, { Marker, NavigationControl, useMap } from 'react-map-gl/mapbox';
 
+import { useMapFailure } from '@/components/map-error';
 import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { attentionText, type AttentionKind } from '@/lib/planning';
 
@@ -132,8 +133,7 @@ export function PlanAttentionMap({
 }) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === 'dark';
-  const [failed, setFailed] = useState(false);
-  const onError = useCallback(() => setFailed(true), []);
+  const [failure, onError] = useMapFailure();
 
   const needing = useMemo(() => placedOnly(stops), [stops]);
   const behind = useMemo(() => placedOnly(planned), [planned]);
@@ -146,13 +146,7 @@ export function PlanAttentionMap({
 
   const tokenProblem = mapboxTokenProblem(MAPBOX_TOKEN);
   if (tokenProblem) return <Unavailable>{tokenProblem}</Unavailable>;
-  if (failed)
-    return (
-      <Unavailable>
-        Mapbox would not load this map. If it keeps happening, check that the token is still valid
-        and that this site is allowed on it.
-      </Unavailable>
-    );
+  if (failure) return <Unavailable>{failure}</Unavailable>;
 
   return (
     <Map

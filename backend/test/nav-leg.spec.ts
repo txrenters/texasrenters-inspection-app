@@ -123,7 +123,7 @@ function service(options: { leg?: typeof googleLeg | null; configured?: boolean 
   const osrm = { configured: false };
 
   return {
-    service: new RouteService(prisma as never, osrm as never, google as never),
+    service: new RouteService(prisma as never, osrm as never, google as never, {} as never),
     asked,
     calls,
   };

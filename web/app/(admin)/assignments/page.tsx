@@ -17,6 +17,7 @@ import { INSPECTION_TYPE_CHILDREN } from '@/lib/admin-navigation';
 import { EMPTY, formatDateTime, humanize } from '@/lib/format';
 import { usePermissions } from '@/lib/auth';
 import { useAssignments, useTechnicians } from '@/lib/queries';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
 
 type AssignmentRow = NonNullable<ReturnType<typeof useAssignments>['data']>['items'][number];
@@ -84,29 +85,41 @@ const COLUMNS: Array<Column<AssignmentRow>> = [
 export default function AssignmentsPage() {
   const canAssign = usePermissions().has('inspections:assign');
   const [creating, setCreating] = useState(false);
-  const [state, setState, reset] = useUrlState({ page: 1, technician: '', status: '', type: '' });
+  const [state, setState, reset] = useUrlState({
+    page: 1,
+    q: '',
+    technician: '',
+    status: '',
+    type: '',
+  });
+
+  // Debounced, like every other list in the console: the field owns its text so
+  // typing stays smooth, and the request waits for the typing to stop.
+  const debouncedSearch = useDebouncedValue(state.q);
+  const isSearchPending = state.q.trim() !== debouncedSearch.trim();
 
   const assignments = useAssignments({
     page: state.page,
     pageSize: 20,
+    search: debouncedSearch,
     technicianId: state.technician,
     assignmentStatus: state.status,
     inspectionType: state.type,
   });
   const technicians = useTechnicians({ page: 1, pageSize: 100 });
 
-  const busy = assignments.isLoading || assignments.isPlaceholderData;
+  const busy = assignments.isLoading || isSearchPending || assignments.isPlaceholderData;
   // `type` is not counted. It is the section rather than a filter, so an empty
   // one must not offer "Clear filters" — that would eject somebody out of the
   // section they had just opened.
-  const hasActiveFilters = Boolean(state.technician || state.status);
+  const hasActiveFilters = Boolean(state.q.trim() || state.technician || state.status);
   // The heading comes from the sidebar's own label, so the two cannot drift and
   // there is no second nine-entry table of copy to keep in step.
   const section = state.type
     ? INSPECTION_TYPE_CHILDREN.find((child) => child.type === state.type)
     : undefined;
   const resultLabel = busy
-    ? 'Filtering assignment history…'
+    ? 'Searching assignments…'
     : `${(assignments.data?.total ?? 0).toLocaleString()} assignment records`;
 
   const technicianName = technicians.data?.items.find(
@@ -180,12 +193,12 @@ export default function AssignmentsPage() {
           </>
         }
         onClear={reset}
-        // Assignment history has no free-text search on the API, so the search
-        // box is omitted rather than shown as a control that does nothing.
-        onSearch={() => undefined}
+        onSearch={(q) => setState({ q, page: 1 })}
+        pending={isSearchPending}
         resultLabel={resultLabel}
-        search=""
-        searchLabel="Search assignments"
+        search={state.q}
+        searchLabel="Search property or unit"
+        searchPlaceholder="Search assignments…"
       />
 
       {busy ? (
@@ -197,9 +210,11 @@ export default function AssignmentsPage() {
           description={
             state.status === 'UNASSIGNED'
               ? 'Every inspection currently has a technician assignment.'
-              : hasActiveFilters
-                ? 'Adjust the filters to see matching assignment history.'
-                : 'Assignment history will appear after an inspection is assigned.'
+              : state.q.trim()
+                ? `No assignment is at a property matching “${state.q.trim()}”.`
+                : hasActiveFilters
+                  ? 'Adjust the filters to see matching assignment history.'
+                  : 'Assignment history will appear after an inspection is assigned.'
           }
           icon={WorkflowIcon}
           title={

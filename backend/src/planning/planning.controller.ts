@@ -29,6 +29,7 @@ import { ApplicationError } from '../common/errors';
 import { holdRequestOpen } from '../common/long-request';
 import { PrismaService } from '../common/prisma.service';
 import { GoogleRoutesClient } from '../routing/google-routes.client';
+import { MapboxDirectionsClient } from '../routing/mapbox-directions.client';
 import { toLatLngPath } from '../routing/route.service';
 import { PlanAdvisorService } from './plan-advisor.service';
 import { PlanBuildGuard } from './plan-build-guard';
@@ -65,6 +66,8 @@ interface DrawnDay {
   geometry: LatLng[];
   homeGeometry: LatLng[];
   legs: { durationSeconds: number; distanceMeters: number }[];
+  /** Which router drew it, cached with the line so a hit does not claim the wrong one. */
+  source: 'MAPBOX_FREE_FLOW' | 'GOOGLE_TRAFFIC_AWARE';
 }
 
 /**
@@ -127,6 +130,7 @@ export class PlanningController {
     @Inject(TbpPublishService) private readonly publisher: TbpPublishService,
     @Inject(TbpPlanScheduler) private readonly scheduler: TbpPlanScheduler,
     @Inject(GoogleRoutesClient) private readonly google: GoogleRoutesClient,
+    @Inject(MapboxDirectionsClient) private readonly mapbox: MapboxDirectionsClient,
     @Inject(TbpStopEditService) private readonly edits: TbpStopEditService,
     @Inject(PlanBuildGuard) private readonly builds: PlanBuildGuard,
     @Inject(PlanAdvisorService) private readonly advisor: PlanAdvisorService,
@@ -514,20 +518,38 @@ export class PlanningController {
 
     const key = `${day.id}:${start ? `${start.latitude},${start.longitude};` : ''}${points.map((point) => point.id).join(',')}`;
     const cached = this.drawnDays.get(key);
-    if (cached) return { source: 'GOOGLE_TRAFFIC_AWARE', home, ...cached };
+    if (cached) return { home, ...cached };
 
     const date = day.date.toISOString().slice(0, 10);
-    const drawn = await this.google.route(start ? [start, ...points] : points, businessInstant(date, '09:00:00'));
+    const waypoints = start ? [start, ...points] : points;
+    /**
+     * Mapbox draws the road, and Google is the fallback rather than the other
+     * way round.
+     *
+     * The office was reading a quarter against straight lines between its
+     * stops: the day map draws whatever geometry arrives, this asked Google,
+     * and that account's billing had lapsed -- so every day came back undrawn
+     * and the console said so in small grey text above a map of chords across
+     * Houston.
+     */
+    const viaMapbox = this.mapbox.configured ? await this.mapbox.route(waypoints) : null;
+    const drawn =
+      viaMapbox ?? (await this.google.route(waypoints, businessInstant(date, '09:00:00')));
     if (!drawn) return undrawn;
+    const source = viaMapbox ? ('MAPBOX_FREE_FLOW' as const) : ('GOOGLE_TRAFFIC_AWARE' as const);
 
     // `[lat, lng]`, the order a map draws in; Google's decoder gives `[lon, lat]`.
     const path = toLatLngPath(drawn.geometry);
     const line: DrawnDay = start
-      ? { ...splitAtFirstStop(path, points[0]!, drawn.legs[0]?.distanceMeters), legs: drawn.legs.slice(1) }
-      : { geometry: path, homeGeometry: [], legs: drawn.legs };
+      ? {
+          ...splitAtFirstStop(path, points[0]!, drawn.legs[0]?.distanceMeters),
+          legs: drawn.legs.slice(1),
+          source,
+        }
+      : { geometry: path, homeGeometry: [], legs: drawn.legs, source };
     if (this.drawnDays.size >= MAX_DRAWN_DAYS) this.drawnDays.delete(this.drawnDays.keys().next().value!);
     this.drawnDays.set(key, line);
-    return { source: 'GOOGLE_TRAFFIC_AWARE', home, ...line };
+    return { home, ...line };
   }
 
   /**

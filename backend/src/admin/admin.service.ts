@@ -49,6 +49,7 @@ import {
   requireBuilding,
   resolveInspectionPlan,
 } from './inspection-creation';
+import { assignmentPropertySearch } from './assignment-search';
 import {
   DEMO_PROPERTY_LIMIT,
   DEMO_SOURCE_SYSTEM,
@@ -3444,9 +3445,18 @@ export class AdminService {
   }
 
   async assignments(user: AuthenticatedUser, query: AssignmentListQueryDto) {
+    /**
+     * Free text, matched against the property the visit is at.
+     *
+     * The rule and the reasoning live in `assignment-search.ts`, because this
+     * list is two queries -- the assignments, and the inspections nobody is on
+     * -- and the filter has to be identical on both.
+     */
+    const matchesSearch = assignmentPropertySearch(query.search);
     const assignmentWhere: Prisma.InspectionAssignmentWhereInput = {
       inspection: {
         organizationId: user.organizationId,
+        ...matchesSearch,
         ...(query.inspectionId ? { id: query.inspectionId } : {}),
         ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),
         ...(query.inspectionStatus ? { status: query.inspectionStatus as InspectionStatus } : {}),
@@ -3517,6 +3527,10 @@ export class AdminService {
     } satisfies Prisma.InspectionAssignmentSelect;
     const unassignedWhere: Prisma.InspectionWhereInput = {
       organizationId: user.organizationId,
+      // The same filter, against the other half of this list. Unassigned rows
+      // come from a separate query, so leaving it off here would let every
+      // unassigned visit through a search that had narrowed everything else.
+      ...matchesSearch,
       ...(query.inspectionId ? { id: query.inspectionId } : {}),
       assignments: { none: { isCurrent: true } },
       ...(query.propertyId ? { propertywareBuildingId: query.propertyId } : {}),

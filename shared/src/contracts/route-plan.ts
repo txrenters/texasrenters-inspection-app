@@ -284,8 +284,17 @@ export interface RouteLeg {
   durationSeconds: number;
 }
 
-/** Which router timed a drawn route. See `TechnicianRoute.source`. */
-export type RouteTimingSource = 'GOOGLE_TRAFFIC' | 'OSRM_FREE_FLOW';
+/**
+ * Which router timed a drawn route. See `TechnicianRoute.source`.
+ *
+ * The three are not interchangeable and the difference is worth carrying:
+ * Google's times include traffic, and the other two are free-flow -- the road
+ * network at its speed limits. Mapbox is free-flow because it is asked for
+ * `driving` rather than `driving-traffic`: a plan for November should not be
+ * shaped by whatever a Tuesday afternoon on I-45 happens to look like, and a
+ * quarter rebuilt twice should come back the same.
+ */
+export type RouteTimingSource = 'GOOGLE_TRAFFIC' | 'OSRM_FREE_FLOW' | 'MAPBOX_FREE_FLOW';
 
 /**
  * A technician's day, in the order it should be driven.

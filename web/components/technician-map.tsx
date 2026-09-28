@@ -24,6 +24,7 @@ import { useTheme } from 'next-themes';
 import { CameraDirector, MAP_OVERLAY_ATTRIBUTE, type CameraFocus } from '@/components/map-camera';
 import { pointsToFit } from '@/components/map-bounds';
 import { useMapStroke } from '@/components/map-colors';
+import { useMapFailure } from '@/components/map-error';
 import { MAPBOX_TOKEN, mapboxTokenProblem } from '@/components/mapbox-token';
 import { circleFeature, featureCollection, lineFeature } from '@/components/map-geometry';
 import { RecenterControl, TechnicianHud } from '@/components/technician-hud';
@@ -1007,14 +1008,13 @@ export function TechnicianMap({
   const [mapPreferences, setMapPreferences] = useMapPreferences();
 
   /**
-   * Mapbox refusing us, said rather than drawn.
+   * Mapbox refusing us, said rather than drawn -- but only when it really has.
    *
-   * A revoked or restricted token fails the style request, and what is left is
-   * an empty rectangle with an explanation only the browser console has. That
-   * is exactly the state this console was in for a day.
+   * See `map-error.ts`: this used to treat every error Mapbox reported as
+   * fatal, which took the whole map away over a tile that failed to load or a
+   * source touched during a style swap.
    */
-  const [failed, setFailed] = useState(false);
-  const onError = useCallback(() => setFailed(true), []);
+  const [failure, onError] = useMapFailure();
 
   // Fit to everything, technicians and properties alike, rather than centring
   // on a fixed point: this office works one metropolitan area today, but a
@@ -1143,11 +1143,8 @@ export function TechnicianMap({
 
   return (
     <div className="relative h-full w-full">
-      {failed ? (
-        <MapUnavailable>
-          Mapbox would not load this map. If it keeps happening, check that the token is still valid
-          and that this site is allowed on it.
-        </MapUnavailable>
+      {failure ? (
+        <MapUnavailable>{failure}</MapUnavailable>
       ) : (
         <Map
           initialViewState={FALLBACK_VIEW}

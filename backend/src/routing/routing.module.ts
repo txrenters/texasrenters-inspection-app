@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { GoogleRoutesClient } from './google-routes.client';
+import { MapboxDirectionsClient } from './mapbox-directions.client';
 import { MapTilesClient } from './map-tiles.client';
 import { OsrmClient } from './osrm.client';
 import { RouteService } from './route.service';
@@ -25,7 +26,7 @@ import { RouteService } from './route.service';
  * authenticated against it.
  */
 @Module({
-  providers: [GoogleRoutesClient, MapTilesClient, OsrmClient, RouteService],
-  exports: [GoogleRoutesClient, MapTilesClient, OsrmClient, RouteService],
+  providers: [GoogleRoutesClient, MapboxDirectionsClient, MapTilesClient, OsrmClient, RouteService],
+  exports: [GoogleRoutesClient, MapboxDirectionsClient, MapTilesClient, OsrmClient, RouteService],
 })
 export class RoutingModule {}
