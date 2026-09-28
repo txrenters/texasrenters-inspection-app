@@ -21,25 +21,37 @@ import { memo } from 'react';
 
 import { useContinuousRotation } from '@/lib/map-animation';
 
-export function MarkerShadow() {
-  return (
-    <defs>
-      <filter height="180%" id="pin-shadow" width="180%" x="-40%" y="-40%">
-        <feDropShadow dx="0" dy="1" floodOpacity="0.35" stdDeviation="1" />
-      </filter>
-    </defs>
-  );
-}
+/**
+ * The shadow that lifts a marker off the map, as a class.
+ *
+ * **It used to be an SVG filter, and that was a bug that hid the markers.**
+ * Every pin rendered its own `<defs><filter id="pin-shadow">`, and an SVG id is
+ * global to the document however many times it is declared -- so every pin
+ * referencing it by url resolved to whichever copy happened to be first in
+ * the DOM. When that marker unmounted, which happens constantly as the map
+ * pans and re-clusters, the reference dangled. Chrome follows SVG 1.1 there:
+ * an element whose filter cannot be resolved **is not rendered at all**.
+ *
+ * So the coloured body of each pin disappeared and only the white glyph inside
+ * it survived, leaving pale ghosts scattered over the map -- reported as "the
+ * marking on the map for each property is broken", which it was.
+ *
+ * A CSS drop-shadow needs no id, so there is nothing to collide and nothing to
+ * dangle. The two planning maps had already been drawn this way.
+ *
+ * The value is written out rather than using `drop-shadow-sm`, which is far
+ * lighter (0.05 against 0.35): these sit on satellite imagery, where the shadow
+ * is most of what separates a marker from the ground under it.
+ */
+const SHADOW = 'drop-shadow-[0_1px_1px_rgba(0,0,0,0.35)]';
 
 /** A teardrop pin with a house in it, anchored at its point. */
 export const PropertyPin = memo(function PropertyPin({ dim = false }: { dim?: boolean }) {
   return (
-    <svg height="32" opacity={dim ? 0.25 : 1} viewBox="0 0 24 32" width="24">
-      <MarkerShadow />
+    <svg className={SHADOW} height="32" opacity={dim ? 0.25 : 1} viewBox="0 0 24 32" width="24">
       <path
         className="fill-map-property"
         d="M12 1.5c-5.5 0-10 4.4-10 9.9 0 7.4 10 19.1 10 19.1s10-11.7 10-19.1c0-5.5-4.5-9.9-10-9.9z"
-        filter="url(#pin-shadow)"
         stroke="#fff"
         strokeWidth="2"
       />
@@ -104,8 +116,7 @@ export const TechnicianPin = memo(function TechnicianPin({
     /* 0.45 rather than 0.3. At 0.3 an online marker's colour was too faint to
        separate from the stale one, so the dimming was itself reading as
        offline -- the same bug by a different route. */
-    <svg height="44" opacity={dim ? 0.45 : 1} viewBox="0 0 44 44" width="44">
-      <MarkerShadow />
+    <svg className={SHADOW} height="44" opacity={dim ? 0.45 : 1} viewBox="0 0 44 44" width="44">
       {live ? (
         <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="11" />
       ) : null}
@@ -129,15 +140,7 @@ export const TechnicianPin = memo(function TechnicianPin({
         </g>
       )}
       <g transform="translate(8,8)">
-        <circle
-          className={fill}
-          cx="14"
-          cy="14"
-          filter="url(#pin-shadow)"
-          r="11"
-          stroke="#fff"
-          strokeWidth="2.5"
-        />
+        <circle className={fill} cx="14" cy="14" r="11" stroke="#fff" strokeWidth="2.5" />
         <circle cx="14" cy="11.1" fill="#fff" r="2.9" />
         <path d="M8.1 20.4c0-3.2 2.7-5.2 5.9-5.2s5.9 2 5.9 5.2z" fill="#fff" />
       </g>
@@ -168,12 +171,11 @@ export const DrivingPin = memo(function DrivingPin({
 }) {
   const rotation = useContinuousRotation(heading);
   return (
-    <svg height="44" opacity={dim ? 0.45 : 1} viewBox="0 0 44 44" width="44">
-      <MarkerShadow />
+    <svg className={SHADOW} height="44" opacity={dim ? 0.45 : 1} viewBox="0 0 44 44" width="44">
       {stopped ? null : (
         <circle className="map-technician-pulse fill-map-technician" cx="22" cy="22" r="13" />
       )}
-      <circle cx="22" cy="22" fill="#fff" filter="url(#pin-shadow)" r="14.5" />
+      <circle cx="22" cy="22" fill="#fff" r="14.5" />
       <path
         className="fill-map-technician"
         d="M22 9.5 L30 31.5 L22 26.8 L14 31.5 Z"
