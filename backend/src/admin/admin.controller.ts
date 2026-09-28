@@ -198,6 +198,22 @@ export class AdminController {
   properties(@Req() request: AuthenticatedRequest, @Query() query: PropertyListQueryDto) {
     return this.service.properties(request.user, query);
   }
+  /**
+   * Creates one demo property, for demonstrating the app.
+   *
+   * `properties:manage` rather than `properties:read`, because it writes into
+   * the table every other surface reads from — see `demo-property.ts` for what
+   * keeps it out of the Propertyware sync's way. No body: the fixture is fixed,
+   * so there is nothing for a caller to get wrong.
+   *
+   * Declared before `properties/:propertyId` for readability only; the two are
+   * different methods and Nest never confuses them.
+   */
+  @Post('properties/demo')
+  @RequirePermissions('properties:manage')
+  createDemoProperty(@Req() request: AuthenticatedRequest) {
+    return this.service.createDemoProperty(request.user);
+  }
   @Get('properties/:propertyId')
   @RequirePermissions('properties:read')
   property(@Req() request: AuthenticatedRequest, @Param('propertyId') id: string) {

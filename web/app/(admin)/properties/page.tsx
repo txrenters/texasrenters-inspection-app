@@ -1,8 +1,10 @@
 'use client';
 
-import { Building2Icon } from 'lucide-react';
+import { isDemoProperty } from '@texasrenters/shared';
+import { Building2Icon, PlusIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
+import { toast } from 'sonner';
 
 import { DataTable, DataTableSkeleton, type Column } from '@/components/data-table';
 import { ListToolbar } from '@/components/list-toolbar';
@@ -14,15 +16,37 @@ import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { usePermissions } from '@/lib/auth';
 import { EMPTY, formatAddress, formatRelative } from '@/lib/format';
-import { usePortfolios, useProperties } from '@/lib/queries';
+import { useAdminMutations, usePortfolios, useProperties } from '@/lib/queries';
 import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { useUrlState } from '@/lib/url-state';
 
 type PropertyRow = NonNullable<ReturnType<typeof useProperties>['data']>['items'][number];
 
 const COLUMNS: Array<Column<PropertyRow>> = [
-  { key: 'name', header: 'Property', primary: true, cell: (row) => row.name },
+  {
+    key: 'name',
+    header: 'Property',
+    primary: true,
+    /**
+     * The badge is on the name, not in a column of its own.
+     *
+     * Every other row on this page is a house somebody lives in, and a demo
+     * property has to be unmistakable at the point somebody reads its name —
+     * including in the property picker on the inspection form, which shows the
+     * same field. A separate column would be the first thing hidden on a narrow
+     * screen, which is exactly when the mistake gets made.
+     */
+    cell: (row) => (
+      <span className="flex items-center gap-1.5">
+        {row.name}
+        {/* `warning`, not a neutral tone: this says "not a real house", which is
+            the one thing a reader must not skim past. */}
+        {isDemoProperty(row) ? <Badge variant="warning">Demo</Badge> : null}
+      </span>
+    ),
+  },
   { key: 'address', header: 'Address', cell: (row) => formatAddress(row), hideBelow: 'md' },
   {
     key: 'portfolio',
@@ -106,6 +130,8 @@ export default function PropertiesPage() {
     occupancy: '',
   });
   const [portfolioSearch, setPortfolioSearch] = useState('');
+  const canManage = usePermissions().has('properties:manage');
+  const createDemoProperty = useAdminMutations().createDemoProperty;
 
   const debouncedSearch = useDebouncedValue(state.q);
   const isSearchPending = state.q.trim() !== debouncedSearch.trim();
@@ -165,11 +191,48 @@ export default function PropertiesPage() {
         ? `${total} vacant properties`
         : `${total} active properties`;
 
+  /**
+   * The server's own message on failure, not a generic one.
+   *
+   * Both refusals this can return say something the person can act on — the
+   * limit is reached, or the property already exists and the list needs a
+   * refresh. Replacing them with "something went wrong" would throw away the
+   * only two useful sentences here.
+   */
+  const addDemoProperty = () =>
+    createDemoProperty.mutate(undefined, {
+      onSuccess: (property) => toast.success(`${property.name} is ready to inspect.`),
+      onError: (error) =>
+        toast.error(
+          error instanceof Error ? error.message : 'The demo property could not be created.',
+        ),
+    });
+
   return (
     <>
       <PageHeader
-        title="Properties"
+        /**
+         * The one action on this page that writes a property.
+         *
+         * Gated on `properties:manage` because it writes into the table every
+         * other surface reads from, and hidden rather than disabled for anyone
+         * without it — a button that cannot be pressed invites a support
+         * question, and nothing here explains the permission.
+         */
+        actions={
+          canManage ? (
+            <Button
+              disabled={createDemoProperty.isPending}
+              onClick={addDemoProperty}
+              variant="outline"
+            >
+              <PlusIcon />
+              {createDemoProperty.isPending ? 'Adding…' : 'Add demo property'}
+            </Button>
+          ) : null
+        }
         description="Active normalized Propertyware properties available for inspections."
+        title="Properties"
       />
 
       {/* Occupancy, not management status. Every tab is already limited to

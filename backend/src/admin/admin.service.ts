@@ -49,6 +49,11 @@ import {
   requireBuilding,
   resolveInspectionPlan,
 } from './inspection-creation';
+import {
+  DEMO_PROPERTY_LIMIT,
+  DEMO_SOURCE_SYSTEM,
+  demoPropertyFixture,
+} from './demo-property';
 import { inspectionEvidenceTimes, inspectionSpan } from './inspection-timing';
 import { tenancyOnFile } from './tenancy-on-file';
 import { jobberUserIdForEmail, linkedJobberProperty } from '../integrations/jobber/jobber.booking';
@@ -690,6 +695,11 @@ export class AdminService {
           state: true,
           postalCode: true,
           sourceStatus: true,
+          // Which system the row came from, so the console can label a demo
+          // property as one. Everything on this page is a real house somebody
+          // lives in apart from these, and the difference has to be visible
+          // rather than inferred from a name somebody could rename.
+          sourceSystem: true,
           isActive: true,
           lastSyncedAt: true,
           updatedAt: true,
@@ -720,6 +730,124 @@ export class AdminService {
       leaseSummary: this.leaseSummary(units, leases),
     }));
     return this.page(shaped, total, query);
+  }
+
+  /**
+   * Creates one demo property for this organization.
+   *
+   * The only write path into `propertyware_buildings` outside the Propertyware
+   * sync, and it exists so the office can demonstrate the app — the console and
+   * the phone, end to end — without booking a visit at a real tenant's home and
+   * leaving the evidence in the portfolio afterwards. `demo-property.ts` carries
+   * the reasoning and the fixture; the isolation is `sourceSystem`, which no
+   * sync query matches.
+   *
+   * Written outside a transaction on purpose: there is one row to write, and
+   * the audit entry that follows is a record of something that already happened
+   * — rolling the property back because the log failed would leave the office
+   * with neither. The audit write is awaited rather than fired and forgotten, so
+   * a failure to record who did this surfaces as a failed request instead of
+   * silently leaving an unattributed property in the portfolio.
+   */
+  async createDemoProperty(user: AuthenticatedUser) {
+    const existing = await this.prisma.propertywareBuilding.count({
+      where: { organizationId: user.organizationId, sourceSystem: DEMO_SOURCE_SYSTEM },
+    });
+    if (existing >= DEMO_PROPERTY_LIMIT)
+      throw new ApplicationError(
+        409,
+        'DEMO_PROPERTY_LIMIT_REACHED',
+        `This organization already holds ${DEMO_PROPERTY_LIMIT} demo properties. Deactivate one before adding another.`,
+      );
+
+    /**
+     * Counted, including any that were deactivated, so a sequence number is
+     * never reused — the unique key is on `externalId` and ignores `isActive`,
+     * so numbering from the *active* count would collide with a demo property
+     * somebody had taken out rather than producing the next one.
+     */
+    const fixture = demoPropertyFixture(existing + 1);
+    const created = await this.prisma.propertywareBuilding
+      .create({
+        data: { organizationId: user.organizationId, ...fixture },
+        select: {
+          id: true,
+          externalId: true,
+          name: true,
+          addressLine1: true,
+          addressLine2: true,
+          city: true,
+          state: true,
+          postalCode: true,
+          sourceStatus: true,
+          sourceSystem: true,
+          isActive: true,
+          lastSyncedAt: true,
+          updatedAt: true,
+          totalArea: true,
+          areaUnits: true,
+          category: true,
+          manualTotalArea: true,
+          manualAreaUnit: true,
+          portfolio: { select: { id: true, name: true, externalId: true } },
+          _count: { select: { units: true, inspections: true } },
+        },
+      })
+      .catch((error: unknown) => {
+        /**
+         * Two clicks on the button, or two coordinators at once. Both requests
+         * read the same count and compose the same `externalId`, and the unique
+         * key on `(organizationId, sourceSystem, externalId)` rejects the
+         * second — which is the behaviour we want, because the alternative is
+         * two identical demo properties. Reported as a conflict rather than a
+         * 500, so the console can say something true about it.
+         */
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        )
+          throw new ApplicationError(
+            409,
+            'DEMO_PROPERTY_EXISTS',
+            'That demo property already exists. Refresh the list to see it.',
+          );
+        throw error;
+      });
+
+    await this.audit(
+      this.prisma,
+      user,
+      'demo_property.created',
+      created.id,
+      { name: created.name, externalId: created.externalId, sourceSystem: created.sourceSystem },
+      'PropertywareBuilding',
+    );
+
+    /**
+     * The properties list is cached per organization, and the search results
+     * under a second namespace, so both have to be bumped or the new property
+     * is invisible until the entry expires. `dashboard` carries the property
+     * count on the landing page and would disagree with the list beside it.
+     */
+    await Promise.all([
+      this.cacheInvalidation?.bump('properties', user.organizationId),
+      this.cacheInvalidation?.bump('propertySearch', user.organizationId),
+      this.cacheInvalidation?.bump('dashboard', user.organizationId),
+    ]);
+
+    /**
+     * The same shape a list row has, so nothing downstream needs a second case
+     * for a property that arrived this way — the console names it in a toast and
+     * refetches, but a script or a later caller reading `totalArea` off it gets
+     * the field where it expects it. A new demo property has no units and no
+     * leases, and `leaseSummary` of nothing is the honest answer to that rather
+     * than an absent field.
+     */
+    return {
+      ...created,
+      totalArea: this.buildingTotalArea(created),
+      leaseSummary: this.leaseSummary([], []),
+    };
   }
 
   // Normalizes a Propertyware area unit label to a compact display form.
@@ -864,6 +992,9 @@ export class AdminService {
         state: true,
         postalCode: true,
         sourceStatus: true,
+        // Read here as well as in the list, so the badge does not disappear the
+        // moment somebody clicks through from one to the other.
+        sourceSystem: true,
         isActive: true,
         lastSyncedAt: true,
         updatedAt: true,

@@ -1713,6 +1713,25 @@ export function useAdminMutations() {
         refreshFloorPlan(variables.propertyId);
       },
     }),
+    /**
+     * A property to demonstrate the app with, instead of somebody's real home.
+     *
+     * No body: the fixture is fixed on the server, so there is nothing for the
+     * console to get wrong and nothing to keep in step with it.
+     *
+     * The list is invalidated rather than patched. The server sorts properties
+     * by name and pages them twenty at a time, so where a new one belongs is
+     * the server's answer, not one this can compute — inserting it into the open
+     * page would put it at a position it does not hold, and it would move on the
+     * next fetch.
+     */
+    createDemoProperty: useMutation({
+      mutationFn: () =>
+        api<AdminProperty>('/api/v1/admin/properties/demo', { method: 'POST' }),
+      onSuccess: () => {
+        void verifyAffectedQueries(client, [keys.propertiesRoot, keys.dashboard]);
+      },
+    }),
     createTechnician: useMutation({
       mutationFn: (input: { email: string; displayName: string }) =>
         api<CreatedTechnicianAccount>('/api/v1/admin/technicians', {

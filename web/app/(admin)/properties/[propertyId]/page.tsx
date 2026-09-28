@@ -1,6 +1,6 @@
 'use client';
 
-import { leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
+import { isDemoProperty, leaseExpiryLabel, leaseExpiryStatus } from '@texasrenters/shared';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
@@ -164,6 +164,10 @@ export default function PropertyDetailPage() {
             <StatusBadge value="INACTIVE" />
           )
         }
+        /* Carried over from the list, because this is the screen the Create
+           inspection button is on — the last place somebody should discover
+           they have been looking at a demo property is after booking a visit. */
+        badges={isDemoProperty(item) ? <Badge variant="warning">Demo</Badge> : null}
         description={formatAddress(item)}
         title={item.name}
       />

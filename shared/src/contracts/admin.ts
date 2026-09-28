@@ -156,6 +156,21 @@ export interface AdminPropertyGeofence {
   set: boolean;
 }
 
+/**
+ * The `sourceSystem` of a property the console created to demonstrate the app,
+ * rather than one the Propertyware sync brought in.
+ *
+ * Shared because both ends need the same word: the backend writes it as the
+ * isolation boundary the sync is scoped away from, and the console reads it to
+ * label the row. A demo property that looked like a real one on the properties
+ * page would be the whole risk of having this feature at all.
+ */
+export const DEMO_PROPERTY_SOURCE_SYSTEM = 'demo';
+
+/** Whether this property is a demo fixture rather than a managed home. */
+export const isDemoProperty = (property: { sourceSystem?: string | null }) =>
+  property.sourceSystem === DEMO_PROPERTY_SOURCE_SYSTEM;
+
 export interface AdminProperty {
   id: string;
   externalId: string;
@@ -167,6 +182,15 @@ export interface AdminProperty {
   state?: string | null;
   postalCode?: string | null;
   sourceStatus?: string | null;
+  /**
+   * Which system this property came from — `propertyware` for the portfolio,
+   * `demo` for one the console created to demonstrate the app.
+   *
+   * Present so a demo property can be labelled as one. It is not a name or a
+   * flag somebody can edit into agreement: it is the same column the sync is
+   * scoped to, so a row that says `demo` is a row no sync will ever touch.
+   */
+  sourceSystem?: string | null;
   isActive: boolean;
   lastSyncedAt: string;
   /**
